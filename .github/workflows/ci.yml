@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  server-api:
+    name: Server API & OpenAPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: node pnpm
+
+      - name: Install server/api dependencies
+        run: pnpm -C server/api install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm -C server/api format:check
+
+      - name: Typecheck & unit tests
+        run: pnpm -C server/api check
+
+      - name: Build
+        run: pnpm -C server/api build
+
+      - name: Verify OpenAPI spec is up to date
+        run: pnpm -C server/api openapi:check
+
+  secrets:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: gitleaks
+
+      - name: Scan for secrets
+        run: gitleaks git --no-banner --redact --verbose

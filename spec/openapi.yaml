@@ -1,0 +1,4392 @@
+openapi: 3.1.0
+info:
+  title: Gradiated Training & Serving API
+  version: 0.1.0
+components:
+  schemas:
+    TrainableModel:
+      type: object
+      properties:
+        id:
+          type: string
+        adapters:
+          type: array
+          items:
+            type: string
+        default_for:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipeKind"
+        price_per_million_tokens_usd:
+          type: number
+          exclusiveMinimum: 0
+        max_context_tokens:
+          type: integer
+          exclusiveMinimum: 0
+        template_revision:
+          type: string
+        calibrated_lrs:
+          type: object
+          additionalProperties:
+            type: number
+            exclusiveMinimum: 0
+      required:
+        - id
+        - adapters
+        - default_for
+        - price_per_million_tokens_usd
+        - max_context_tokens
+        - template_revision
+        - calibrated_lrs
+    RecipeKind:
+      type: string
+      enum:
+        - sft
+        - dpo
+        - router
+        - decision
+        - cartridge
+        - embedding
+        - distill
+        - reward
+        - grpo
+    Problem:
+      type: object
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        code:
+          type: string
+          minLength: 1
+          maxLength: 80
+        request_id:
+          type: string
+          minLength: 1
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - code
+        - request_id
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        prefix:
+          type: string
+          minLength: 1
+        scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKeyScope"
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - name
+        - prefix
+        - scopes
+        - created_at
+        - revoked_at
+    ApiKeyScope:
+      type: string
+      enum:
+        - admin
+        - datasets:read
+        - datasets:write
+        - runs:read
+        - runs:write
+        - artifacts:read
+        - artifacts:write
+        - deployments:write
+        - feedback:write
+        - env:serve
+        - trainer:worker
+    CreateApiKeyRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKeyScope"
+          minItems: 1
+      required:
+        - name
+        - scopes
+    Dataset:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        record_count:
+          type: integer
+          minimum: 0
+        storage_key:
+          type: string
+          minLength: 1
+        metadata:
+          type: object
+          additionalProperties: {}
+          default: {}
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - name
+        - record_count
+        - storage_key
+        - created_at
+        - updated_at
+    PushDatasetRequest:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetRecord"
+          minItems: 1
+          maxItems: 50000
+        metadata:
+          type: object
+          additionalProperties: {}
+      required:
+        - records
+    DatasetRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        group_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        tools:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        prompt:
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ChatMessage"
+        chosen:
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ChatMessage"
+        rejected:
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ChatMessage"
+        query:
+          type: string
+        positive:
+          type: string
+        negatives:
+          type: array
+          items:
+            type: string
+        state: {}
+        questions:
+          type: object
+          additionalProperties: {}
+        expected_output: {}
+        scores:
+          type: object
+          additionalProperties:
+            type: number
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+        metadata:
+          type: object
+          additionalProperties: {}
+    ChatMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum:
+            - system
+            - user
+            - assistant
+            - tool
+        content:
+          type:
+            - string
+            - "null"
+        tool_calls:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        tool_call_id:
+          type: string
+        name:
+          type: string
+        train:
+          type: boolean
+      required:
+        - role
+    RenderDatasetResponse:
+      type: object
+      properties:
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        model:
+          type: string
+        template_revision:
+          type: string
+        examples:
+          type: array
+          items:
+            type: object
+            properties:
+              record_id:
+                type: string
+              template_revision:
+                type: string
+              total_tokens:
+                type: integer
+                minimum: 0
+              trained_tokens:
+                type: integer
+                minimum: 0
+              trained_fraction:
+                type: number
+                minimum: 0
+                maximum: 1
+              spans:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    text:
+                      type: string
+                    trained:
+                      type: boolean
+                    tokens:
+                      type: integer
+                      minimum: 0
+                  required:
+                    - text
+                    - trained
+                    - tokens
+            required:
+              - record_id
+              - template_revision
+              - total_tokens
+              - trained_tokens
+              - trained_fraction
+              - spans
+      required:
+        - dataset
+        - model
+        - template_revision
+        - examples
+    RenderDatasetRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+          maxLength: 160
+          default: qwen/qwen3-8b
+        train_on:
+          type: string
+          enum:
+            - last
+            - all_assistant
+          default: last
+        thinking:
+          type: string
+          enum:
+            - auto
+            - on
+            - off
+          default: auto
+        preserve_thinking:
+          type: boolean
+          default: false
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 3
+    PlanRunResponse:
+      type: object
+      properties:
+        resolved_config:
+          $ref: "#/components/schemas/ResolvedRunConfig"
+        estimated_steps:
+          type: integer
+          minimum: 0
+        estimated_tokens:
+          type: integer
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+        trained_token_fraction:
+          type: number
+          minimum: 0
+          maximum: 1
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - resolved_config
+        - estimated_steps
+        - estimated_tokens
+        - estimated_cost_usd
+        - trained_token_fraction
+        - warnings
+    ResolvedRunConfig:
+      type: object
+      properties:
+        rule_version:
+          type: string
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        recipe_kind:
+          $ref: "#/components/schemas/RecipeKind"
+        model:
+          type: string
+        template_revision:
+          type: string
+        adapter:
+          anyOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - lora
+                rank:
+                  type: integer
+                  minimum: 1
+                  maximum: 256
+                  default: 32
+                alpha:
+                  type: integer
+                  minimum: 1
+                  maximum: 512
+                  default: 32
+                merge_on_export:
+                  type: boolean
+                  default: false
+              required:
+                - kind
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - prefix_kv
+                num_tokens:
+                  type: integer
+                  minimum: 16
+                  maximum: 4096
+                  default: 256
+              required:
+                - kind
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - frozen_head
+              required:
+                - kind
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - encoder_full
+              required:
+                - kind
+        lr:
+          type: number
+          exclusiveMinimum: 0
+        lr_source:
+          type: string
+        batch_size:
+          type: integer
+          minimum: 1
+        epochs:
+          type: integer
+          minimum: 1
+        schedule:
+          type: string
+          enum:
+            - linear
+            - cosine
+            - constant
+        warmup:
+          type: number
+        train_on:
+          type: string
+          enum:
+            - last
+            - all_assistant
+        thinking:
+          type: string
+          enum:
+            - auto
+            - on
+            - off
+        preserve_thinking:
+          type: boolean
+        reduction:
+          type: string
+          enum:
+            - per_example
+            - per_token
+        select:
+          type: string
+          enum:
+            - best
+            - last
+        checkpoint_every_steps:
+          type: integer
+          minimum: 1
+        checkpoint_ttl_days:
+          type: integer
+          minimum: 1
+        split:
+          type: object
+          properties:
+            strategy:
+              type: string
+              enum:
+                - by_session
+                - by_group
+                - random
+            eval_fraction:
+              type: number
+            seed:
+              type: integer
+            train_records:
+              type: integer
+              minimum: 0
+            eval_records:
+              type: integer
+              minimum: 0
+          required:
+            - strategy
+            - eval_fraction
+            - seed
+            - train_records
+            - eval_records
+        recipe_params:
+          type: object
+          additionalProperties: {}
+      required:
+        - rule_version
+        - dataset
+        - name
+        - recipe_kind
+        - model
+        - template_revision
+        - adapter
+        - lr
+        - lr_source
+        - batch_size
+        - epochs
+        - schedule
+        - warmup
+        - train_on
+        - thinking
+        - preserve_thinking
+        - reduction
+        - select
+        - checkpoint_every_steps
+        - checkpoint_ttl_days
+        - split
+        - recipe_params
+    PlanRunRequest:
+      type: object
+      properties:
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        recipe:
+          $ref: "#/components/schemas/RecipeSpec"
+        split:
+          $ref: "#/components/schemas/SplitSpec"
+        max_cost_usd:
+          type: number
+          exclusiveMinimum: 0
+      required:
+        - dataset
+        - name
+        - recipe
+    RecipeSpec:
+      type: object
+      properties:
+        kind:
+          $ref: "#/components/schemas/RecipeKind"
+        model:
+          type: string
+          minLength: 1
+          maxLength: 160
+        adapter:
+          $ref: "#/components/schemas/AdapterSpec"
+        lr:
+          anyOf:
+            - type: string
+              enum:
+                - auto
+            - type: number
+              exclusiveMinimum: 0
+          default: auto
+        lr_scale:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 100
+          default: 1
+        batch_size:
+          type: integer
+          minimum: 1
+          maximum: 4096
+        epochs:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 1
+        schedule:
+          type: string
+          enum:
+            - linear
+            - cosine
+            - constant
+          default: linear
+        warmup:
+          type: number
+          minimum: 0
+          maximum: 0.5
+          default: 0.03
+        train_on:
+          type: string
+          enum:
+            - last
+            - all_assistant
+          default: last
+        thinking:
+          type: string
+          enum:
+            - auto
+            - on
+            - off
+          default: auto
+        preserve_thinking:
+          type: boolean
+          default: false
+        reduction:
+          type: string
+          enum:
+            - per_example
+            - per_token
+          default: per_example
+        select:
+          type: string
+          enum:
+            - best
+            - last
+          default: best
+        checkpoint_ttl_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          default: 30
+        beta:
+          type: number
+          exclusiveMinimum: 0
+        models:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 160
+        max_quality_drop:
+          type: number
+          minimum: 0
+          maximum: 0.5
+        context_text:
+          type: string
+        context_uri:
+          type: string
+        num_tokens:
+          type: integer
+          minimum: 16
+          maximum: 4096
+        temp:
+          type: number
+          exclusiveMinimum: 0
+        teacher:
+          type: string
+          minLength: 1
+          maxLength: 160
+        env_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        group_size:
+          type: integer
+          minimum: 2
+          maximum: 64
+      required:
+        - kind
+    AdapterSpec:
+      oneOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - lora
+            rank:
+              type: integer
+              minimum: 1
+              maximum: 256
+              default: 32
+            alpha:
+              type: integer
+              minimum: 1
+              maximum: 512
+              default: 32
+            merge_on_export:
+              type: boolean
+              default: false
+          required:
+            - kind
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - prefix_kv
+            num_tokens:
+              type: integer
+              minimum: 16
+              maximum: 4096
+              default: 256
+          required:
+            - kind
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - frozen_head
+          required:
+            - kind
+    SplitSpec:
+      type: object
+      properties:
+        strategy:
+          type: string
+          enum:
+            - by_session
+            - by_group
+            - random
+          default: by_session
+        eval_fraction:
+          type: number
+          minimum: 0
+          maximum: 0.5
+        seed:
+          type: integer
+          default: 42
+    Run:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        dataset_id:
+          type: string
+          minLength: 1
+        dataset_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        recipe_kind:
+          $ref: "#/components/schemas/RecipeKind"
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        resolved_config:
+          $ref: "#/components/schemas/ResolvedRunConfig"
+        max_cost_usd:
+          type:
+            - number
+            - "null"
+          exclusiveMinimum: 0
+        tokens_processed:
+          type: integer
+          minimum: 0
+        cost_usd:
+          type: number
+          minimum: 0
+        current_step:
+          type: integer
+          minimum: 0
+        total_steps:
+          type: integer
+          minimum: 0
+        metrics_history:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricPoint"
+        eval_report:
+          type:
+            - object
+            - "null"
+          additionalProperties: {}
+        artifact_id:
+          type:
+            - string
+            - "null"
+        error:
+          type:
+            - string
+            - "null"
+        worker_id:
+          type:
+            - string
+            - "null"
+        lease_expires_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - name
+        - dataset_id
+        - dataset_name
+        - recipe_kind
+        - status
+        - resolved_config
+        - max_cost_usd
+        - tokens_processed
+        - cost_usd
+        - current_step
+        - total_steps
+        - metrics_history
+        - eval_report
+        - artifact_id
+        - error
+        - worker_id
+        - lease_expires_at
+        - created_at
+        - updated_at
+    RunStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - paused
+        - completed
+        - failed
+        - cancelled
+        - stopped_budget
+    MetricPoint:
+      type: object
+      properties:
+        step:
+          type: integer
+          minimum: 0
+        loss:
+          type: number
+        eval_loss:
+          type: number
+        eval_metric:
+          type: number
+        grad_norm:
+          type: number
+        lr:
+          type: number
+        tokens_per_sec:
+          type: number
+        tokens:
+          type: integer
+          minimum: 0
+        cost_usd:
+          type: number
+          minimum: 0
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - step
+        - loss
+        - tokens
+        - cost_usd
+        - timestamp
+    ResumeRunRequest:
+      type: object
+      properties:
+        max_cost_usd:
+          type: number
+          exclusiveMinimum: 0
+    Checkpoint:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        step:
+          type: integer
+          minimum: 0
+        eval_score:
+          type:
+            - number
+            - "null"
+        storage_key:
+          type: string
+          minLength: 1
+        sha256:
+          type: string
+          minLength: 64
+          maxLength: 64
+        size_bytes:
+          type: integer
+          minimum: 0
+        metadata:
+          type: object
+          additionalProperties: {}
+        expires_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - run_id
+        - step
+        - eval_score
+        - storage_key
+        - sha256
+        - size_bytes
+        - metadata
+        - expires_at
+        - created_at
+    Artifact:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        version:
+          type: string
+          minLength: 1
+        run_id:
+          type:
+            - string
+            - "null"
+        checkpoint_id:
+          type:
+            - string
+            - "null"
+        base_model:
+          type: string
+          minLength: 1
+        recipe_kind:
+          $ref: "#/components/schemas/RecipeKind"
+        format:
+          $ref: "#/components/schemas/ArtifactFormat"
+        storage_key:
+          type: string
+          minLength: 1
+        sha256:
+          type: string
+          minLength: 64
+          maxLength: 64
+        size_bytes:
+          type: integer
+          minimum: 0
+        manifest:
+          type: object
+          additionalProperties: {}
+        eval_report:
+          type:
+            - object
+            - "null"
+          additionalProperties: {}
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - name
+        - version
+        - run_id
+        - checkpoint_id
+        - base_model
+        - recipe_kind
+        - format
+        - storage_key
+        - sha256
+        - size_bytes
+        - manifest
+        - eval_report
+        - created_at
+    ArtifactFormat:
+      type: string
+      enum:
+        - peft_lora
+        - cartridge
+        - encoder_safetensors
+        - router_bundle
+        - decision_bundle
+    PromoteCheckpointRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+    ClaimJobRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        lease_seconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          default: 180
+      required:
+        - worker_id
+    ReportRunProgress:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+        metric:
+          $ref: "#/components/schemas/MetricPoint"
+        lease_seconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          default: 180
+      required:
+        - worker_id
+        - metric
+    RegisterCheckpointRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+        step:
+          type: integer
+          minimum: 0
+        eval_score:
+          type:
+            - number
+            - "null"
+        payload_base64:
+          type: string
+          minLength: 1
+          maxLength: 33554432
+        metadata:
+          type: object
+          additionalProperties: {}
+          default: {}
+      required:
+        - worker_id
+        - step
+        - payload_base64
+    CompleteRunRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - completed
+            - failed
+            - stopped_budget
+        format:
+          $ref: "#/components/schemas/ArtifactFormat"
+        artifact_base64:
+          type: string
+          minLength: 1
+          maxLength: 33554432
+        manifest:
+          type: object
+          additionalProperties: {}
+        eval_report:
+          type: object
+          additionalProperties: {}
+        tokens_processed:
+          type: integer
+          minimum: 0
+        cost_usd:
+          type: number
+          minimum: 0
+        error:
+          type: string
+          maxLength: 4000
+      required:
+        - worker_id
+        - status
+    Deployment:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        model_id:
+          type: string
+          minLength: 1
+        active_artifact_id:
+          type: string
+          minLength: 1
+        previous_artifact_id:
+          type:
+            - string
+            - "null"
+        fallback_model:
+          type:
+            - string
+            - "null"
+        explore_rate:
+          type: number
+          minimum: 0
+          maximum: 0.5
+        status:
+          type: string
+          enum:
+            - active
+            - disabled
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - name
+        - model_id
+        - active_artifact_id
+        - previous_artifact_id
+        - fallback_model
+        - explore_rate
+        - status
+        - created_at
+        - updated_at
+    DeployArtifactRequest:
+      type: object
+      properties:
+        artifact:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        fallback:
+          type: string
+          minLength: 1
+          maxLength: 160
+        explore_rate:
+          type: number
+          minimum: 0
+          maximum: 0.5
+          default: 0
+      required:
+        - artifact
+    RouteResponse:
+      type: object
+      properties:
+        inference_id:
+          type: string
+          minLength: 1
+        deployment:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        artifact_id:
+          type: string
+          minLength: 1
+        model:
+          type: string
+          minLength: 1
+        is_exploration:
+          type: boolean
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        scores:
+          type: object
+          additionalProperties:
+            type: number
+      required:
+        - inference_id
+        - deployment
+        - artifact_id
+        - model
+        - is_exploration
+        - confidence
+        - scores
+    RouteRequest:
+      type: object
+      properties:
+        deployment:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+          minItems: 1
+        tools:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+      required:
+        - deployment
+        - messages
+    EmbedResponse:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+                minimum: 0
+              embedding:
+                type: array
+                items:
+                  type: number
+            required:
+              - index
+              - embedding
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+              minimum: 0
+            total_tokens:
+              type: integer
+              minimum: 0
+          required:
+            - prompt_tokens
+            - total_tokens
+      required:
+        - model
+        - data
+        - usage
+    EmbedRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+        input:
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+              minItems: 1
+              maxItems: 256
+      required:
+        - model
+        - input
+    FeedbackRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        inference_id:
+          type:
+            - string
+            - "null"
+        session_id:
+          type:
+            - string
+            - "null"
+        deployment_name:
+          type:
+            - string
+            - "null"
+        idempotency_key:
+          type: string
+          minLength: 1
+        score:
+          type:
+            - number
+            - "null"
+        expected_output: {}
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - inference_id
+        - session_id
+        - deployment_name
+        - idempotency_key
+        - score
+        - metrics
+        - created_at
+    RecordFeedbackRequest:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/FeedbackEventInput"
+          minItems: 1
+          maxItems: 1000
+      required:
+        - events
+    FeedbackEventInput:
+      type: object
+      properties:
+        inference_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        deployment_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 200
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        expected_output: {}
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+      required:
+        - idempotency_key
+    PlanEvalResponse:
+      type: object
+      properties:
+        task_source_kind:
+          type: string
+          enum:
+            - dataset
+            - env
+            - benchmarks
+        estimated_tasks:
+          type: integer
+          minimum: 0
+        estimated_model_calls:
+          type: integer
+          minimum: 0
+        estimated_judge_calls:
+          type: integer
+          minimum: 0
+        estimated_cost_usd:
+          type: number
+          minimum: 0
+        judge_models:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - task_source_kind
+        - estimated_tasks
+        - estimated_model_calls
+        - estimated_judge_calls
+        - estimated_cost_usd
+        - judge_models
+        - warnings
+    PlanEvalRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          default: eval-run
+        models:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          minItems: 1
+          maxItems: 16
+        baseline:
+          type: string
+          minLength: 1
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        env_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        tasks:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        benchmarks:
+          type: array
+          items:
+            $ref: "#/components/schemas/BenchmarkSpec"
+          minItems: 1
+        rubric:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalRubricItem"
+          minItems: 1
+          default:
+            - name: non_empty
+              kind: validator
+              weight: 1
+              validator: non_empty
+        samples:
+          type: integer
+          minimum: 1
+          maximum: 32
+          default: 1
+        pass_threshold:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0.8
+        max_cost_usd:
+          type: number
+          exclusiveMinimum: 0
+      required:
+        - models
+    BenchmarkSpec:
+      type: object
+      properties:
+        name:
+          type: string
+          enum:
+            - ifeval
+            - gsm8k
+            - mmlu-pro
+            - gpqa-diamond
+            - humaneval
+            - livecodebench
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          default: 200
+      required:
+        - name
+    EvalRubricItem:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        kind:
+          type: string
+          enum:
+            - regex
+            - validator
+            - code
+            - judge
+        weight:
+          type: number
+          exclusiveMinimum: 0
+          default: 1
+        pattern:
+          type: string
+          maxLength: 256
+        validator:
+          type: string
+          enum:
+            - json
+            - non_empty
+            - exact_match
+        model:
+          type: string
+          minLength: 1
+          maxLength: 160
+        prompt:
+          type: string
+          maxLength: 4000
+      required:
+        - name
+        - kind
+    EvalRun:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        status:
+          type: string
+          enum:
+            - completed
+            - failed
+        models:
+          type: array
+          items:
+            type: string
+        baseline:
+          type:
+            - string
+            - "null"
+        task_source:
+          type: object
+          additionalProperties: {}
+        rubric:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalRubricItem"
+        samples:
+          type: integer
+          minimum: 1
+        pass_threshold:
+          type: number
+          minimum: 0
+          maximum: 1
+        judge_models:
+          type: array
+          items:
+            type: string
+        summary:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalModelSummary"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalTaskOutcome"
+        total_cost_usd:
+          type: number
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - name
+        - status
+        - models
+        - baseline
+        - task_source
+        - rubric
+        - samples
+        - pass_threshold
+        - judge_models
+        - summary
+        - results
+        - total_cost_usd
+        - created_at
+    EvalModelSummary:
+      type: object
+      properties:
+        model:
+          type: string
+        overall:
+          type: number
+        ci_low:
+          type: number
+        ci_high:
+          type: number
+        pass_at_k:
+          type: object
+          additionalProperties:
+            type: number
+        vs_baseline:
+          type:
+            - object
+            - "null"
+          properties:
+            delta:
+              type: number
+            ci_low:
+              type: number
+            ci_high:
+              type: number
+          required:
+            - delta
+            - ci_low
+            - ci_high
+        tokens_per_task:
+          type: number
+        cost_per_1k_tasks_usd:
+          type: number
+      required:
+        - model
+        - overall
+        - ci_low
+        - ci_high
+        - pass_at_k
+        - vs_baseline
+        - tokens_per_task
+        - cost_per_1k_tasks_usd
+    EvalTaskOutcome:
+      type: object
+      properties:
+        task_id:
+          type: string
+        model:
+          type: string
+        score:
+          type: number
+        passed:
+          type: boolean
+        sample_scores:
+          type: array
+          items:
+            type: number
+        judge_model:
+          type:
+            - string
+            - "null"
+        record:
+          $ref: "#/components/schemas/DatasetRecord"
+      required:
+        - task_id
+        - model
+        - score
+        - passed
+        - sample_scores
+        - judge_model
+        - record
+    EnvWorkerRegister:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        worker_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+        concurrency:
+          type: integer
+          minimum: 1
+          maximum: 512
+          default: 4
+      required:
+        - name
+        - worker_id
+    EnvTaskDispatch:
+      type: object
+      properties:
+        env_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        task:
+          type: object
+          additionalProperties: {}
+        model_id:
+          type: string
+          minLength: 1
+        system_prompt:
+          type: string
+        timeout_s:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          default: 120
+      required:
+        - env_name
+        - task
+        - model_id
+    EnvTaskResult:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+        score:
+          type:
+            - number
+            - "null"
+        scores:
+          type: object
+          additionalProperties:
+            type: number
+          default: {}
+        trajectory:
+          type: object
+          additionalProperties: {}
+        error:
+          type: string
+          maxLength: 4000
+      required:
+        - worker_id
+  parameters: {}
+paths:
+  /v1/models:
+    get:
+      operationId: listModels
+      summary: List trainable base models
+      tags:
+        - Models
+      responses:
+        "200":
+          description: Trainable catalog models.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrainableModel"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/keys:
+    post:
+      operationId: createApiKey
+      summary: Create a scoped API key
+      tags:
+        - Keys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApiKeyRequest"
+      responses:
+        "201":
+          description: Created API key (secret returned once).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    $ref: "#/components/schemas/ApiKey"
+                  secret:
+                    type: string
+                required:
+                  - key
+                  - secret
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      operationId: listApiKeys
+      summary: List scoped API keys
+      tags:
+        - Keys
+      responses:
+        "200":
+          description: Workspace keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApiKey"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/keys/{id}:
+    delete:
+      operationId: revokeApiKey
+      summary: Revoke a scoped API key
+      tags:
+        - Keys
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Revoked API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKey"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets:
+    get:
+      operationId: listDatasets
+      summary: List datasets
+      tags:
+        - Datasets
+      responses:
+        "200":
+          description: Datasets.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Dataset"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets/{name}:
+    get:
+      operationId: getDataset
+      summary: Get a dataset by name
+      tags:
+        - Datasets
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+      responses:
+        "200":
+          description: Dataset metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dataset"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets/{name}/records:
+    post:
+      operationId: pushDatasetRecords
+      summary: Create or append records to a dataset
+      tags:
+        - Datasets
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PushDatasetRequest"
+      responses:
+        "200":
+          description: Updated dataset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dataset"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      operationId: listDatasetRecords
+      summary: Read records from a dataset
+      tags:
+        - Datasets
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: Dataset records slice.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dataset:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                    pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+                  total:
+                    type: integer
+                    minimum: 0
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DatasetRecord"
+                required:
+                  - dataset
+                  - total
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets/{name}/render:
+    post:
+      operationId: renderDataset
+      summary: Preview chat template rendering and loss masks
+      tags:
+        - Datasets
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenderDatasetRequest"
+      responses:
+        "200":
+          description: Rendered examples.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RenderDatasetResponse"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/runs/plan:
+    post:
+      operationId: planRun
+      summary: Dry-run a training recipe at zero cost
+      tags:
+        - Runs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanRunRequest"
+      responses:
+        "200":
+          description: Resolved defaults and cost estimate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanRunResponse"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/runs:
+    post:
+      operationId: createRun
+      summary: Create and enqueue a training run
+      tags:
+        - Runs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanRunRequest"
+      responses:
+        "202":
+          description: Enqueued training run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      operationId: listRuns
+      summary: List training runs
+      tags:
+        - Runs
+      responses:
+        "200":
+          description: Training runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Run"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/runs/{id}:
+    get:
+      operationId: getRun
+      summary: Get a training run
+      tags:
+        - Runs
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Training run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/runs/{id}/metrics:
+    get:
+      operationId: listRunMetrics
+      summary: Fetch training step metrics for a run
+      tags:
+        - Runs
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: -1
+            default: -1
+          required: false
+          name: after_step
+          in: query
+      responses:
+        "200":
+          description: Training step metrics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  status:
+                    $ref: "#/components/schemas/RunStatus"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MetricPoint"
+                required:
+                  - run_id
+                  - status
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/runs/{id}/cancel:
+    post:
+      operationId: cancelRun
+      summary: Cancel a training run
+      tags:
+        - Runs
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Cancelled training run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/runs/{id}/resume:
+    post:
+      operationId: resumeRun
+      summary: Resume a stopped or failed training run
+      tags:
+        - Runs
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResumeRunRequest"
+      responses:
+        "200":
+          description: Re-queued training run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/runs/{id}/checkpoints:
+    get:
+      operationId: listRunCheckpoints
+      summary: List checkpoints saved during a run
+      tags:
+        - Checkpoints
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Checkpoints.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Checkpoint"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/checkpoints/{id}/promote:
+    post:
+      operationId: promoteCheckpoint
+      summary: Promote an intermediate checkpoint into a permanent artifact
+      tags:
+        - Checkpoints
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PromoteCheckpointRequest"
+      responses:
+        "201":
+          description: Promoted artifact.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/claim:
+    post:
+      operationId: claimTrainerJob
+      summary: Claim the next queued training run for execution
+      tags:
+        - TrainerJobs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimJobRequest"
+      responses:
+        "200":
+          description: Claimed run and dataset records, or null when idle.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run:
+                    allOf:
+                      - $ref: "#/components/schemas/Run"
+                      - type:
+                          - object
+                          - "null"
+                  records:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DatasetRecord"
+                required:
+                  - run
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/progress:
+    post:
+      operationId: reportTrainerProgress
+      summary: Report training step metrics and renew worker lease
+      tags:
+        - TrainerJobs
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportRunProgress"
+      responses:
+        "200":
+          description: Updated run and stop flag.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run:
+                    $ref: "#/components/schemas/Run"
+                  should_stop:
+                    type: boolean
+                required:
+                  - run
+                  - should_stop
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/checkpoints:
+    post:
+      operationId: registerTrainerCheckpoint
+      summary: Upload and register an intermediate checkpoint
+      tags:
+        - TrainerJobs
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterCheckpointRequest"
+      responses:
+        "201":
+          description: Stored checkpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/complete:
+    post:
+      operationId: completeTrainerJob
+      summary: Finish a training run and publish its immutable artifact
+      tags:
+        - TrainerJobs
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteRunRequest"
+      responses:
+        "200":
+          description: Completed run and optional artifact.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run:
+                    $ref: "#/components/schemas/Run"
+                  artifact:
+                    allOf:
+                      - $ref: "#/components/schemas/Artifact"
+                      - type:
+                          - object
+                          - "null"
+                required:
+                  - run
+                  - artifact
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/artifacts:
+    get:
+      operationId: listArtifacts
+      summary: List immutable artifacts
+      tags:
+        - Artifacts
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: false
+          name: name
+          in: query
+      responses:
+        "200":
+          description: Artifacts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Artifact"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/artifacts/{id}:
+    get:
+      operationId: getArtifact
+      summary: Get an artifact by ID or name@latest
+      tags:
+        - Artifacts
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Artifact metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/artifacts/{id}/download:
+    get:
+      operationId: downloadArtifact
+      summary: Download an artifact archive
+      tags:
+        - Artifacts
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Artifact binary archive.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/deployments:
+    post:
+      operationId: deployArtifact
+      summary: Deploy or update an artifact under a stable model name
+      tags:
+        - Deployments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeployArtifactRequest"
+      responses:
+        "200":
+          description: Active deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Deploy disabled in self-hosted mode.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      operationId: listDeployments
+      summary: List active deployments
+      tags:
+        - Deployments
+      responses:
+        "200":
+          description: Deployments.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Deployment"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/deployments/{name}:
+    get:
+      operationId: getDeployment
+      summary: Get deployment status and feedback summary
+      tags:
+        - Deployments
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+      responses:
+        "200":
+          description: Deployment status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deployment:
+                    $ref: "#/components/schemas/Deployment"
+                  feedback_count:
+                    type: integer
+                    minimum: 0
+                  average_score:
+                    type:
+                      - number
+                      - "null"
+                required:
+                  - deployment
+                  - feedback_count
+                  - average_score
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/route:
+    post:
+      operationId: routeRequest
+      summary: Ask a deployed model router which model to call
+      tags:
+        - Serving
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RouteRequest"
+      responses:
+        "200":
+          description: Routing decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RouteResponse"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/embeddings:
+    post:
+      operationId: createEmbeddings
+      summary: Generate embeddings from a deployed embedding artifact
+      tags:
+        - Serving
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmbedRequest"
+      responses:
+        "200":
+          description: Normalized embeddings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbedResponse"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/feedback:
+    post:
+      operationId: recordFeedback
+      summary: Record deduplicated outcome scores and gold corrections
+      tags:
+        - Feedback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordFeedbackRequest"
+      responses:
+        "200":
+          description: Recorded feedback events.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted:
+                    type: integer
+                    minimum: 0
+                  deduplicated:
+                    type: integer
+                    minimum: 0
+                  records:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FeedbackRecord"
+                required:
+                  - accepted
+                  - deduplicated
+                  - records
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals/plan:
+    post:
+      operationId: planEval
+      summary: Estimate tasks, model/judge calls, and cost before running an eval
+      tags:
+        - Evals
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanEvalRequest"
+      responses:
+        "200":
+          description: Estimated eval plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanEvalResponse"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals:
+    post:
+      operationId: createEval
+      summary: Run a standalone evaluation across models, tasks, and a rubric
+      tags:
+        - Evals
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanEvalRequest"
+      responses:
+        "201":
+          description: Completed evaluation run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvalRun"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      operationId: listEvals
+      summary: List evaluation runs
+      tags:
+        - Evals
+      responses:
+        "200":
+          description: Evaluation runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvalRun"
+                required:
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals/{id}:
+    get:
+      operationId: getEval
+      summary: Get an evaluation run by ID
+      tags:
+        - Evals
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Evaluation run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvalRun"
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals/{id}/failures:
+    get:
+      operationId: listEvalFailures
+      summary: List failing task records from an evaluation run for mining
+      tags:
+        - Evals
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: string
+          required: false
+          name: model
+          in: query
+        - schema:
+            type:
+              - number
+              - "null"
+            minimum: 0
+            maximum: 1
+            default: 0.8
+          required: false
+          name: threshold
+          in: query
+      responses:
+        "200":
+          description: Failing task outcomes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eval_id:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvalTaskOutcome"
+                required:
+                  - eval_id
+                  - data
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/env-workers/register:
+    post:
+      operationId: registerEnvWorker
+      summary: Register or heartbeat an outbound `grad env serve` worker
+      tags:
+        - Environments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvWorkerRegister"
+      responses:
+        "200":
+          description: Registered environment worker.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                    pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+                  worker_id:
+                    type: string
+                  concurrency:
+                    type: integer
+                  last_heartbeat_at:
+                    type: string
+                required:
+                  - name
+                  - worker_id
+                  - concurrency
+                  - last_heartbeat_at
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/env-workers/tasks:
+    post:
+      operationId: dispatchEnvTask
+      summary: Dispatch an evaluation or rollout task to a connected `grad env serve` worker
+      tags:
+        - Environments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvTaskDispatch"
+      responses:
+        "202":
+          description: Queued environment task.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  env_name:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                    pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+                  status:
+                    type: string
+                  active_workers:
+                    type: integer
+                    minimum: 0
+                required:
+                  - id
+                  - env_name
+                  - status
+                  - active_workers
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/env-workers/{name}/claim:
+    post:
+      operationId: claimEnvTask
+      summary: Long-poll for the next task assigned to a `grad env serve` worker
+      tags:
+        - Environments
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                worker_id:
+                  type: string
+                  minLength: 1
+                wait_ms:
+                  type: integer
+                  minimum: 0
+                  maximum: 30000
+                  default: 0
+              required:
+                - worker_id
+      responses:
+        "200":
+          description: Claimed environment task or null.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task:
+                    type:
+                      - object
+                      - "null"
+                    additionalProperties: {}
+                required:
+                  - task
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/env-workers/tasks/{id}/complete:
+    post:
+      operationId: completeEnvTask
+      summary: Submit scored trajectory output for an environment task
+      tags:
+        - Environments
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvTaskResult"
+      responses:
+        "200":
+          description: Completed environment task.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/env-workers/tasks/{id}:
+    get:
+      operationId: getEnvTask
+      summary: Inspect an environment task and its result
+      tags:
+        - Environments
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Environment task.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+        "400":
+          description: Bad request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+webhooks: {}
