@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+.env
+.env.*
+!.env.example
+.grad-data/
+.agents/runtime/
+*.log
+.DS_Store
