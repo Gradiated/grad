@@ -1131,6 +1131,10 @@ export const createRunLifecycle = (
 
     resume: async (workspaceId, id, maxCostUsd) => {
       const run = await loadRun(workspaceId, id);
+      // A replayed resume (lost response, SDK retry) gets the current state.
+      if (run.status === "queued" || run.status === "running") {
+        return publicRun(run);
+      }
       if (
         !["stopped_budget", "stopped_balance", "failed", "cancelled"].includes(
           run.status,

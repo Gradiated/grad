@@ -398,6 +398,8 @@ export const registerRunRoutes = (
       operationId: "resumeRun",
       summary:
         "Resume a stopped, failed or cancelled run from its latest checkpoint",
+      description:
+        "A run that is already queued or running is returned as it is, so a retried resume is a no-op.",
       tags,
       request: {
         params: IdParamSchema,

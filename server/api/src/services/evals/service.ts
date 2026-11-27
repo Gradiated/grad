@@ -1083,6 +1083,8 @@ export const createEvalService = (
 
     cancel: async (workspaceId, id) => {
       const record = await load(workspaceId, id);
+      // A replayed cancel (lost response, SDK retry) gets the current state.
+      if (record.status === "cancelled") return toPublic(record);
       const updated = await store.evals.update(
         id,
         {

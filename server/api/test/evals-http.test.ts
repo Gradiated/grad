@@ -133,7 +133,8 @@ describe("evals HTTP API", () => {
     const twice = await h.t.json<Json>(`/v1/evals/${created.id}/cancel`, {
       method: "POST",
     });
-    expect(twice.status).toBe(409);
+    expect(twice.status).toBe(200);
+    expect(twice.body.status).toBe("cancelled");
 
     const invalid = await h.t.json<Json>("/v1/evals", {
       body: { models: [], dataset: "qa" },

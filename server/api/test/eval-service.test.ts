@@ -357,6 +357,10 @@ describe("eval service", () => {
 
     const done = await evals.get(WORKSPACE_A, created.id);
     expect(done.summary[0]?.overall).toBeCloseTo((0.5 + 0.5 + 1) / 3, 3);
+    await expect(evals.cancel(WORKSPACE_A, created.id)).rejects.toMatchObject({
+      status: 409,
+      code: "eval_not_cancellable",
+    });
   });
 
   it("never leaves an eval stuck in awaiting_scores: maintenance finalizes or times it out", async () => {
@@ -519,12 +523,9 @@ describe("eval service", () => {
     const cancelled = await t.services.evals.cancel(WORKSPACE_A, created.id);
     expect(cancelled.status).toBe("cancelled");
     expect(cancelled.completed_at).not.toBeNull();
-    await expect(
-      t.services.evals.cancel(WORKSPACE_A, created.id),
-    ).rejects.toMatchObject({
-      status: 409,
-      code: "eval_not_cancellable",
-    });
+    // A replayed cancel (r8 A5) gets the current state, not 409.
+    const again = await t.services.evals.cancel(WORKSPACE_A, created.id);
+    expect(again).toMatchObject({ id: created.id, status: "cancelled" });
     expect(await t.services.evals.drain()).toBe(0);
 
     const page = await t.services.evals.list(WORKSPACE_A, { limit: 10 });

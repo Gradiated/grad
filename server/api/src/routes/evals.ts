@@ -278,6 +278,8 @@ export const registerEvalRoutes = (
       path: "/v1/evals/{id}/cancel",
       operationId: "cancelEval",
       summary: "Cancel a queued, running or awaiting_scores evaluation",
+      description:
+        "An eval that is already cancelled is returned as it is, so a retried cancel is a no-op.",
       tags: ["Evals"],
       request: { params: IdParamSchema },
       responses: {

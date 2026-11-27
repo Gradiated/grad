@@ -344,13 +344,14 @@ describe("grad-server HTTP API", () => {
     await denied.close();
   });
 
-  it("resume refuses runs that are still queued or finalizing", async () => {
+  it("resume replays on an active run and refuses one still finalizing", async () => {
     const run = await createSftRun(t);
+    // A replayed resume (r8 A5) gets the current state, not 409.
     const queued = await t.json(`/v1/runs/${run.id}/resume`, {
       method: "POST",
     });
-    expect(queued.status).toBe(409);
-    expect(queued.body).toMatchObject({ code: "run_not_resumable" });
+    expect(queued.status).toBe(200);
+    expect(queued.body).toMatchObject({ id: run.id, status: "queued" });
     const worker = new FakeWorker(t);
     await worker.claim();
     await t.json(`/v1/runs/${run.id}/cancel`, { method: "POST" });
