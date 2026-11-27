@@ -157,7 +157,7 @@ Six recipes. Each one has calibrated defaults (learning rate, batch size, schedu
 
 What every run gives you:
 
-- **Datasets from anywhere.** Push records or a `.jsonl`/`.json`/`.parquet` file, sync trace exports through built-in connectors, or pull a Hugging Face dataset server-side with `client.datasets.from_hf(...)`. Datasets are versioned, and every run pins the version it trained on.
+- **Datasets from anywhere.** Push records or a `.jsonl`/`.json`/`.parquet` file (trace exports from OpenAI, OTel, Langfuse, PostHog, Braintrust and LangSmith are detected automatically), or pull a Hugging Face dataset server-side with `client.datasets.from_hf(...)`. Datasets are versioned, and every run pins the version it trained on.
 - **Cost before compute.** `runs.plan(...)` (`grad train --dry-run`) returns the resolved recipe, data warnings, token count and price. `max_cost_usd` is a hard cap: the run stops and keeps its checkpoint.
 - **Real weights.** LLM runs train LoRA adapters (or PrefixKV cartridges). Downloads are SHA-256-verified PEFT directories (`adapter_config.json`, `adapter_model.safetensors`) that load straight into vLLM or SGLang. `SFTRecipe(merge_on_export=True)` exports merged safetensors instead.
 - **Checkpoints and resume.** Checkpoints are kept for 30 days (best and final forever); `runs.resume(...)` continues a stopped run, and any checkpoint can be promoted to an artifact.
