@@ -713,12 +713,22 @@ export interface ArtifactRepository {
     artifactId: string,
     holder: string,
   ): Promise<boolean>;
+  /**
+   * The blob lock on `key` until the enclosing transaction ends (call inside
+   * one). A row that will reference a blob takes it shared and then checks
+   * the object exists; deleting an unreferenced blob takes it exclusively
+   * and re-checks the references, so a delete never removes an object that
+   * a row committed alongside it references.
+   */
+  lockBlob(key: string, mode: "shared" | "exclusive"): Promise<void>;
   /** A release's pins, oldest first. */
   pins(workspaceId: string, artifactId: string): Promise<ArtifactPin[]>;
   /**
    * Deletes an unpinned release (and clears its run's artifact_id). Returns
    * null when it doesn't exist, its pins when it is pinned (nothing is
    * deleted), else its storage key when no other row references the object.
+   * It holds that key's blob lock exclusively, so delete the object before
+   * the enclosing transaction commits.
    */
   deleteRelease(
     workspaceId: string,

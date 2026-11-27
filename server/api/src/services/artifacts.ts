@@ -42,6 +42,41 @@ export const artifactPinned = (
     `Artifact '${id}' is pinned by ${describePins(pins)}, so it can't be deleted. Unpublish it there first (that removes the pin).`,
   );
 
+/**
+ * Call inside the transaction that inserts a row referencing the blob `key`
+ * (a release): holds it against deletes until that transaction ends, and
+ * says whether the object is there. Checking before taking the lock could
+ * pass just as a delete removes it.
+ */
+export const holdBlob = async (
+  deps: Pick<AppDependencies, "store" | "storage">,
+  key: string,
+): Promise<boolean> => {
+  await deps.store.artifacts.lockBlob(key, "shared");
+
+  return (await deps.storage.head(key)) !== null;
+};
+
+/**
+ * Deletes the blob `key` unless a row references it, under the blob lock (a
+ * release created on it meanwhile keeps it). Returns whether it was deleted.
+ */
+export const deleteUnreferencedBlob = (
+  deps: Pick<AppDependencies, "store" | "storage">,
+  key: string,
+): Promise<boolean> =>
+  deps.store.transaction(async (tx) => {
+    await tx.artifacts.lockBlob(key, "exclusive");
+    if ((await deps.store.unreferencedKeys([key])).length === 0) return false;
+    await deps.storage.delete(key);
+
+    return true;
+  });
+
+/** Postgres foreign_key_violation: the row a pin names was deleted meanwhile. */
+const isForeignKeyViolation = (error: unknown): boolean =>
+  (error as { code?: unknown } | null)?.code === "23503";
+
 export const createArtifactService = (
   deps: AppDependencies,
 ): ArtifactService => {
@@ -60,28 +95,33 @@ export const createArtifactService = (
   return {
     delete: async (workspaceId, reference) => {
       const { id } = await load(workspaceId, reference);
-      const result = await store.artifacts.deleteRelease(workspaceId, id);
-      if (!result) throw notFound("artifact", reference);
-      if (result.pins.length > 0) throw artifactPinned(id, result.pins);
-      // Best effort: the orphaned-blob sweep deletes what this misses.
-      if (result.orphanKey) {
-        await storage.delete(result.orphanKey).catch((error: unknown) => {
-          log("warn", "artifact blob delete failed", {
-            artifact: id,
-            error,
+      await store.transaction(async (tx) => {
+        const result = await tx.artifacts.deleteRelease(workspaceId, id);
+        if (!result) throw notFound("artifact", reference);
+        if (result.pins.length > 0) throw artifactPinned(id, result.pins);
+        // Under the blob lock, before the commit: a release created on the
+        // same bundle meanwhile waits and then finds it gone (and copies or
+        // uploads it again). Best effort: the orphaned-blob sweep deletes
+        // what this misses.
+        if (result.orphanKey) {
+          await storage.delete(result.orphanKey).catch((error: unknown) => {
+            log("warn", "artifact blob delete failed", {
+              artifact: id,
+              error,
+            });
           });
-        });
-      }
+        }
+      });
     },
 
     pin: async (workspaceId, reference, holder, reason) => {
       const { id } = await load(workspaceId, reference);
-      const pinned = await store.artifacts.pin({
-        workspaceId,
-        artifactId: id,
-        holder,
-        reason,
-      });
+      const pinned = await store.artifacts
+        .pin({ workspaceId, artifactId: id, holder, reason })
+        .catch((error: unknown) => {
+          if (isForeignKeyViolation(error)) return null;
+          throw error;
+        });
       // Deleted between the read and the pin.
       if (!pinned) throw notFound("artifact", reference);
 

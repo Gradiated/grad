@@ -19,9 +19,14 @@ import type {
   ImportJobRecord,
 } from "../store/types.js";
 import { leaseLost, RELEASE, fenceOf } from "./jobs.js";
-import { toPublicArtifact } from "./artifacts.js";
+import { holdBlob, toPublicArtifact } from "./artifacts.js";
 import type { SecretUse, SourceService } from "./sources.js";
-import { artifactKey, stagingKey, type UploadService } from "./uploads.js";
+import {
+  artifactKey,
+  stagingKey,
+  uploadIncomplete,
+  type UploadService,
+} from "./uploads.js";
 
 type CreateBody = z.infer<typeof CreateArtifactImportRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
@@ -321,6 +326,9 @@ export const createArtifactImportService = (
       const now = clock.now().toISOString();
 
       return store.transaction(async (tx) => {
+        if (!(await holdBlob(deps, blob.key))) {
+          throw uploadIncomplete(blob.sha256);
+        }
         const release = await tx.artifacts.createRelease({
           workspaceId: job.workspace_id,
           name: artifact.name,

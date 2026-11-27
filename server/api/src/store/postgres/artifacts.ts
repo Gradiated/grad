@@ -255,6 +255,14 @@ export const createArtifactRepository = (
         [workspaceId, artifactId, holder],
       )
     ).length > 0,
+  lockBlob: async (key, mode) => {
+    await db.query(
+      mode === "shared"
+        ? "SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))"
+        : "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [`blob:${key}`],
+    );
+  },
   pins: async (workspaceId, artifactId) =>
     (
       await db.query(
@@ -284,6 +292,11 @@ export const createArtifactRepository = (
         )
       ).map(toArtifactPin);
       if (pins.length > 0) return { pins, orphanKey: null };
+      // Before the reference check: a release being created on the same
+      // bundle (it holds the lock shared) commits first and is seen below.
+      await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `blob:${row.storage_key}`,
+      ]);
       await db.query(
         "DELETE FROM grad_artifacts WHERE kind = 'release' AND workspace_id = $1 AND id = $2",
         [workspaceId, id],

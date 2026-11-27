@@ -87,7 +87,7 @@ const sha256OfStream = async (
   return hash.digest("hex");
 };
 
-const notReceived = (uploadId: string): ApiError =>
+export const uploadIncomplete = (uploadId: string): ApiError =>
   conflict(
     "upload_incomplete",
     `Upload '${uploadId}' has not been received yet; PUT the file to its upload URL first.`,
@@ -127,7 +127,7 @@ export const createUploadService = (deps: AppDependencies): UploadService => {
       }
       const key = keyFor(uploadId);
       const head = await storage.head(key);
-      if (!head) throw notReceived(uploadId);
+      if (!head) throw uploadIncomplete(uploadId);
       // The store verified the signed checksum on PUT and HEAD reports it
       // back; a backend that keeps no checksum gets the bytes hashed here.
       const sha =

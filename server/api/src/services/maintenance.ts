@@ -7,6 +7,7 @@ import type { EvalService } from "./evals/service.js";
 import type { JobQueue } from "./jobs.js";
 import type { RunLifecycle } from "./runs.js";
 import type { SourceService } from "./sources.js";
+import { deleteUnreferencedBlob } from "./artifacts.js";
 import { ARTIFACTS_PREFIX, type UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
 import type { WorkspaceLifecycle } from "./workspaces.js";
@@ -105,8 +106,11 @@ export const createMaintenance = (
             /^ws\/[^/]+\/jobs\//.test(key),
         ),
       );
-      for (const key of orphans) await deps.storage.delete(key);
-      deleted += orphans.length;
+      // Each re-checked under its blob lock: a release created on it since
+      // the check above keeps it.
+      for (const key of orphans) {
+        if (await deleteUnreferencedBlob(deps, key)) deleted += 1;
+      }
     }
     if (orphanCursors.size === 0) {
       nextOrphanPass = now.getTime() + ORPHAN_PASS_INTERVAL_MS;

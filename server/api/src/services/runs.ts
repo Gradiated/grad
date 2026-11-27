@@ -91,8 +91,13 @@ import {
   toMetricPoint,
   toRunEvent,
 } from "./run-events.js";
-import { toPublicArtifact } from "./artifacts.js";
-import { artifactKey, jobBlobKey, type UploadService } from "./uploads.js";
+import { holdBlob, toPublicArtifact } from "./artifacts.js";
+import {
+  artifactKey,
+  jobBlobKey,
+  uploadIncomplete,
+  type UploadService,
+} from "./uploads.js";
 
 export { toPublicArtifact };
 import type { AttemptUsage, UsageService } from "./usage.js";
@@ -1353,7 +1358,8 @@ export const createRunLifecycle = (
       ) {
         throw notFound("checkpoint", checkpointId);
       }
-      if (checkpoint.format === null) {
+      const { format } = checkpoint;
+      if (format === null) {
         throw conflict(
           "checkpoint_not_exportable",
           `Checkpoint '${checkpointId}' holds training state only (the recipe did not export it as an artifact); promote the run's final artifact or a checkpoint with a format.`,
@@ -1367,28 +1373,35 @@ export const createRunLifecycle = (
       // name): promoting twice returns the first release.
       const storageKey = artifactKey(workspaceId, checkpoint.sha256);
       await storage.copy(checkpoint.storage_key, storageKey);
-      const artifact = await store.artifacts.createRelease({
-        workspaceId,
-        name: releaseName,
-        runId: run.id,
-        sourceId: checkpoint.id,
-        baseModel: run.resolved_config.model,
-        recipeKind: run.recipe_kind,
-        format: checkpoint.format,
-        storageKey,
-        sha256: checkpoint.sha256,
-        sizeBytes: checkpoint.size_bytes,
-        manifest: {
-          ...checkpoint.metadata,
-          schema: "grad.artifact/1",
-          run_id: run.id,
-          provenance: { source: "run", run_id: run.id },
-          promoted_from_checkpoint: checkpoint.id,
-          step: checkpoint.step,
-          attempt: checkpoint.attempt,
-          resolved_config: run.resolved_config,
-        },
-        evalReport: null,
+      const artifact = await store.transaction(async (tx) => {
+        // A delete of another release on this bundle removed it since the copy.
+        if (!(await holdBlob(deps, storageKey))) {
+          await storage.copy(checkpoint.storage_key, storageKey);
+        }
+
+        return tx.artifacts.createRelease({
+          workspaceId,
+          name: releaseName,
+          runId: run.id,
+          sourceId: checkpoint.id,
+          baseModel: run.resolved_config.model,
+          recipeKind: run.recipe_kind,
+          format,
+          storageKey,
+          sha256: checkpoint.sha256,
+          sizeBytes: checkpoint.size_bytes,
+          manifest: {
+            ...checkpoint.metadata,
+            schema: "grad.artifact/1",
+            run_id: run.id,
+            provenance: { source: "run", run_id: run.id },
+            promoted_from_checkpoint: checkpoint.id,
+            step: checkpoint.step,
+            attempt: checkpoint.attempt,
+            resolved_config: run.resolved_config,
+          },
+          evalReport: null,
+        });
       });
 
       return toPublicArtifact(artifact);
@@ -1615,6 +1628,9 @@ export const createRunLifecycle = (
       }
 
       const result = await store.transaction(async (tx) => {
+        if (blob && !(await holdBlob(deps, blob.key))) {
+          throw uploadIncomplete(blob.sha256);
+        }
         const artifact = blob
           ? await tx.artifacts.createRelease({
               workspaceId: run.workspace_id,
