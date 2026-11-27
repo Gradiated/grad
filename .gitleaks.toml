@@ -1,0 +1,12 @@
+# Default gitleaks rules plus an allowlist for test fixtures that carry fake,
+# clearly non-functional provider keys (e.g. "sk-test-0123456789").
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake credentials in test fixtures (provider stubs, wire fixtures captured from the throwaway test stack)"
+paths = [
+  '''^server/trainer/tests/fixtures/providers/''',
+  '''^tests/fixtures/wire/''',
+  '''^sdks/typescript/test/''',
+]
