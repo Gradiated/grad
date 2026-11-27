@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 306 126" width="306" height="126" role="img" aria-label="grad">
+  <title>grad</title>
+  <g fill="none" stroke="#eadcc2" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="40" cy="60" r="26"/>
+    <path d="M66 34V92A26 26 0 0 1 19 107"/>
+    <path d="M96 86V60A26 26 0 0 1 122 34"/>
+    <circle cx="170" cy="60" r="26"/>
+    <path d="M196 34V86"/>
+    <circle cx="244" cy="60" r="26"/>
+    <path d="M270 8V86"/>
+  </g>
+  <circle cx="292" cy="80.5" r="7" fill="#d8803f"/>
+</svg>
