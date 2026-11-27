@@ -20,6 +20,7 @@ import {
   ApiError,
   conflict,
   errorMessage,
+  forbidden,
   invalid,
   notFound,
 } from "../../errors.js";
@@ -778,6 +779,19 @@ export const createEvalService = (
       checkpoint?.targets,
     );
     if (mode === "eval") assertNonEmptyPlan(plan);
+    // Evals and dataset.score() spend on the platform's inference and judge
+    // endpoints: the same start-time balance check as runs.
+    const check = await deps.billing.checkCanStartRun(
+      workspaceId,
+      plan.response.estimated_cost_usd,
+    );
+    if (!check.allowed) {
+      throw forbidden(
+        "billing_denied",
+        check.reason ??
+          `Insufficient balance to start this ${mode === "score" ? "scoring job" : "eval"}.`,
+      );
+    }
 
     return store.evals.create({
       workspaceId,

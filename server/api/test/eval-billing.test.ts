@@ -31,6 +31,41 @@ describe("eval billing", () => {
     h = undefined;
   });
 
+  it("checks the balance before an eval or dataset.score() starts (r8 P1-4)", async () => {
+    const asked: Array<[string, number]> = [];
+    h = await makeEvalHarness({
+      billing: {
+        checkCanStartRun: async (workspaceId, estimatedCostUsd) => {
+          asked.push([workspaceId, estimatedCostUsd]);
+          return { allowed: false, reason: "Balance exhausted." };
+        },
+      },
+    });
+    const { t } = h;
+    await seedDataset(t, "qa", qaRecords(3));
+    const ev = await t.json("/v1/evals", {
+      body: { models: ["qwen/qwen3-8b"], dataset: "qa" },
+    });
+    expect([ev.status, ev.body.code, ev.body.detail]).toEqual([
+      403,
+      "billing_denied",
+      "Balance exhausted.",
+    ]);
+    const scored = await t.json("/v1/datasets/qa/score", {
+      body: {
+        rubric: [{ name: "j", kind: "judge", model: "qwen/qwen3-32b" }],
+      },
+    });
+    expect([scored.status, scored.body.code]).toEqual([403, "billing_denied"]);
+    expect(asked).toHaveLength(2);
+    expect(asked[0]?.[0]).toBe(WORKSPACE_A);
+    expect(asked[0]?.[1]).toBeGreaterThan(0);
+    expect(await t.deps.store.evals.list(WORKSPACE_A, { limit: 10 })).toEqual({
+      data: [],
+      next_cursor: null,
+    });
+  });
+
   it("plans an estimate and bills a finished eval once for what ran", async () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
