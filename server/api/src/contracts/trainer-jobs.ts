@@ -213,6 +213,8 @@ export const WORKER_STAT_PHASES = [
   "uploading",
   "completing",
   "importing",
+  "waiting_for_capacity",
+  "waiting_for_inference",
 ] as const;
 
 export const WorkerStatsSchema = z

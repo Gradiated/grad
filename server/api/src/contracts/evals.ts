@@ -215,6 +215,13 @@ export const EvalRunSchema = z
         "Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.",
     }),
     error: z.string().nullable(),
+    waiting_reason: z
+      .enum(["capacity_unavailable", "inference_unavailable"])
+      .nullable()
+      .openapi({
+        description:
+          "While running: the eval's model calls are waiting, either for capacity (a serving pool at zero that has not woken yet) or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.",
+      }),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
     completed_at: IsoTimestampSchema.nullable(),

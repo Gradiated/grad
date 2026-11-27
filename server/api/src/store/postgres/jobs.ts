@@ -393,7 +393,8 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
            UPDATE grad_jobs
            SET status = 'running', attempt = attempt + 1, worker_id = $6, worker_key = $7,
                lease_expires_at = $8::timestamptz, lease_seconds = $9, updated_at = $10::timestamptz,
-               billed_through = 0, billed_cost = 0, billed_at = $10::timestamptz
+               billed_through = 0, billed_cost = 0, billed_at = $10::timestamptz,
+               payload = payload - 'worker_stats'
            WHERE id = (SELECT id FROM locked)
            RETURNING *`,
           [

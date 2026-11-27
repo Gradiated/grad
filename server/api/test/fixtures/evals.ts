@@ -49,6 +49,7 @@ export const startEvalWorker = (
     fetch?: typeof fetch;
     outageRetryMs?: number;
     outageMaxMs?: number;
+    capacityMaxMs?: number;
   } = {},
 ): TestEvalWorker => {
   const regex = createRegexEvaluator();
@@ -69,6 +70,9 @@ export const startEvalWorker = (
     // (the attempt is handed back) unless the test waits it out.
     outageRetryMs: options.outageRetryMs ?? 1,
     outageMaxMs: options.outageMaxMs ?? 0,
+    ...(options.capacityMaxMs !== undefined
+      ? { capacityMaxMs: options.capacityMaxMs }
+      : {}),
   });
 
   return {

@@ -951,9 +951,11 @@ type EvalRun struct {
 	// ScoredDatasetVersion Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.
 	ScoredDatasetVersion *int    `json:"scored_dataset_version"`
 	Error                *string `json:"error"`
-	CreatedAt            string  `json:"created_at"`
-	UpdatedAt            string  `json:"updated_at"`
-	CompletedAt          *string `json:"completed_at"`
+	// WaitingReason While running: the eval's model calls are waiting, either for capacity (a serving pool at zero that has not woken yet) or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.
+	WaitingReason *EvalRunWaitingReason `json:"waiting_reason"`
+	CreatedAt     string                `json:"created_at"`
+	UpdatedAt     string                `json:"updated_at"`
+	CompletedAt   *string               `json:"completed_at"`
 }
 
 // EvalRunProgress is generated from the OpenAPI schema.
@@ -976,6 +978,15 @@ type EvalRunTaskSourceKind string
 // Values of EvalRunTaskSourceKind.
 const (
 	EvalRunTaskSourceKindDataset EvalRunTaskSourceKind = "dataset"
+)
+
+// EvalRunWaitingReason is an enumeration of allowed values.
+type EvalRunWaitingReason string
+
+// Values of EvalRunWaitingReason.
+const (
+	EvalRunWaitingReasonCapacityUnavailable  EvalRunWaitingReason = "capacity_unavailable"
+	EvalRunWaitingReasonInferenceUnavailable EvalRunWaitingReason = "inference_unavailable"
 )
 
 // EvalStatus is an enumeration of allowed values.

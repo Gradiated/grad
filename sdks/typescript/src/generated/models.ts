@@ -500,6 +500,8 @@ export interface EvalRun {
   /** Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed. */
   scoredDatasetVersion: number | null;
   error: string | null;
+  /** While running: the eval's model calls are waiting, either for capacity (a serving pool at zero that has not woken yet) or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise. */
+  waitingReason: ("capacity_unavailable" | "inference_unavailable") | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;

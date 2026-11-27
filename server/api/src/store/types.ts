@@ -255,6 +255,8 @@ export interface JobFields<S extends string = JobStatus> {
   traceparent: string | null;
   /** `source`: an import a source sync started. */
   origin: "api" | "source";
+  /** The phase the worker's last heartbeat named (payload.worker_stats). */
+  worker_phase: string | null;
 }
 
 export type JobRow = JobFields;

@@ -68,6 +68,7 @@ export const runWorker = async (args: readonly string[]): Promise<void> => {
     regex,
     concurrency: env.EVAL_CONCURRENCY,
     leaseSeconds: env.GRAD_LEASE_SECONDS,
+    capacityMaxMs: env.GRAD_EVAL_CAPACITY_WAIT_SECONDS * 1000,
   });
 
   log("info", "grad-server eval worker started", {

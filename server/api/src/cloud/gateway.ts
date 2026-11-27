@@ -8,13 +8,18 @@ import { cloudRequest, cloudUrl, detailOf, isOk } from "./http.js";
  * OpenAI-compatible API with grad's gateway service credential and says, per
  * call, which workspace it acts for and that it is eval traffic: the gateway
  * serves it in its low-priority eval lane (429 under pressure; the client
- * backs off) and bills the tokens itself, tagged with the eval.
+ * backs off; `503 capacity_unavailable` with Retry-After when a pool at zero
+ * did not wake in time, which the eval worker waits out) and bills the
+ * tokens itself, tagged with the eval.
  */
 export const GATEWAY_HEADERS = {
   workspace: "X-Gradiated-Workspace",
   source: "X-Gradiated-Source",
   evalId: "X-Gradiated-Eval-Id",
 } as const;
+
+/** The gateway's 600 s cold-start wait plus a minute for the answer itself. */
+export const GATEWAY_TIMEOUT_MS = 660_000;
 
 export const createGatewayInference = (options: {
   baseUrl: string;
@@ -24,7 +29,10 @@ export const createGatewayInference = (options: {
   const client = createOpenAICompatibleClient({
     baseUrl: cloudUrl("GRAD_CLOUD_GATEWAY_URL", options.baseUrl),
     apiKey: options.token,
-    timeoutMs: 120_000,
+    // A call that finds its pool at zero is held while the pool wakes (the
+    // gateway's GATEWAY_EVAL_COLD_START_WAIT_SECONDS, 600 s) before it
+    // answers 503 capacity_unavailable: never abort it first.
+    timeoutMs: GATEWAY_TIMEOUT_MS,
     // The eval lane sheds load with 429: back off for up to ~30 s.
     maxAttempts: 6,
     retryDelayMs: 1_000,

@@ -443,6 +443,13 @@ const WorkerEnvironmentSchema = z.object({
   GRAD_POLL_INTERVAL_S: z.coerce.number().min(0.05).max(60).default(1),
   /** Concurrent generations per eval. */
   EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
+  /** How long an eval waits for capacity (503 capacity_unavailable) before it fails. */
+  GRAD_EVAL_CAPACITY_WAIT_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(86_400)
+    .default(1800),
   ...EndpointShape,
 });
 

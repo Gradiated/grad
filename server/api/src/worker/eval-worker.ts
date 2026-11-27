@@ -13,6 +13,7 @@ import {
   recordPromptAndResponse,
 } from "../records.js";
 import {
+  CapacityUnavailable,
   InferenceOutage,
   isInferenceUnavailable,
 } from "../services/evals/inference.js";
@@ -66,6 +67,13 @@ export interface EvalWorkerOptions {
   outageRetryMs?: number;
   /** After this long down, the attempt is handed back (default 10 min). */
   outageMaxMs?: number;
+  /**
+   * `503 capacity_unavailable` (a pool at zero that did not wake): the call
+   * waits the response's Retry-After (at most 5 min) and retries in place,
+   * for at most this long in all (default 30 min, GRAD_EVAL_CAPACITY_WAIT_SECONDS);
+   * then the eval fails with the outage as its error. Never counted as an attempt.
+   */
+  capacityMaxMs?: number;
 }
 
 export interface EvalWorker {
@@ -80,35 +88,60 @@ export interface EvalWorker {
 const TASK_PAGE = 200;
 const DEFAULT_LEASE_SECONDS = 180;
 const OUTAGE_RETRY_MAX_MS = 30_000;
+const CAPACITY_RETRY_MAX_MS = 300_000;
+
+/** What a waiting call waits for; the heartbeat reports it as the worker's phase. */
+export type EvalWait = "capacity_unavailable" | "inference_unavailable";
+
+/** The eval's `waiting_reason` comes back from these heartbeat phases. */
+export const WAIT_PHASES = {
+  capacity_unavailable: "waiting_for_capacity",
+  inference_unavailable: "waiting_for_inference",
+} as const satisfies Record<EvalWait, string>;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Waits out an inference outage: a call that failed only because the
- * endpoint was down retries in place, so an outage never becomes a stored
- * error or a zero judge score. Gives up (InferenceOutage) when `halted()` or
- * after `maxMs` down.
+ * endpoint was down, or had no capacity, retries in place, so an outage
+ * never becomes a stored error or a zero judge score. Gives up
+ * (InferenceOutage) when `halted()`, or after `maxMs` down (`capacityMaxMs`
+ * while the answer is capacity_unavailable). `onWait` hears what the call
+ * waits for, and null once it is answered.
  */
 const patient = (
   client: ChatCompletionClient,
   halted: () => boolean,
-  retryMs: number,
-  maxMs: number,
+  limits: { retryMs: number; maxMs: number; capacityMaxMs: number },
+  onWait: (wait: EvalWait | null) => void,
 ): ChatCompletionClient => ({
   complete: async (input) => {
     const since = Date.now();
     for (let i = 0; ; i += 1) {
       try {
-        return await client.complete(input);
+        const result = await client.complete(input);
+        if (i > 0) onWait(null);
+        return result;
       } catch (error) {
-        if (!isInferenceUnavailable(error)) throw error;
-        if (halted() || Date.now() - since >= maxMs) {
+        const capacity = error instanceof CapacityUnavailable;
+        if (!capacity && !isInferenceUnavailable(error)) throw error;
+        const down = Date.now() - since;
+        if (
+          halted() ||
+          down >= (capacity ? limits.capacityMaxMs : limits.maxMs)
+        ) {
           throw new InferenceOutage(
-            `inference unavailable for ${Math.round((Date.now() - since) / 1000)} s: ${errorMessage(error)}`,
+            `${capacity ? "no capacity" : "inference unavailable"} for ${Math.round(down / 1000)} s: ${errorMessage(error)}`,
+            capacity,
           );
         }
-        await sleep(Math.min(OUTAGE_RETRY_MAX_MS, retryMs * 2 ** i));
+        onWait(capacity ? "capacity_unavailable" : "inference_unavailable");
+        await sleep(
+          capacity
+            ? Math.min(CAPACITY_RETRY_MAX_MS, error.retryAfterMs)
+            : Math.min(OUTAGE_RETRY_MAX_MS, limits.retryMs * 2 ** i),
+        );
       }
     }
   },
@@ -242,12 +275,22 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
   let stopping = false;
   // The attempt in progress halted (cancelled, lease lost) or the worker stopping.
   let halted = () => stopping;
+  // What the attempt's calls wait for; reported on the next heartbeat.
+  let waiting: EvalWait | null = null;
+  let onWait = (wait: EvalWait | null) => {
+    waiting = wait;
+  };
+  const limits = {
+    retryMs: options.outageRetryMs ?? 2_000,
+    maxMs: options.outageMaxMs ?? 600_000,
+    capacityMaxMs: options.capacityMaxMs ?? 1_800_000,
+  };
   const wait = (client: ChatCompletionClient) =>
     patient(
       client,
       () => halted(),
-      options.outageRetryMs ?? 2_000,
-      options.outageMaxMs ?? 600_000,
+      limits,
+      (w) => onWait(w),
     );
   const inference: InferenceClients = {
     models: counted(wait(options.inference.models), () => counts, "model"),
@@ -415,7 +458,9 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     halted = () => halt !== null || stopping || outage !== null;
     const beat = async () => {
       try {
-        const res = await client.heartbeat(ref, { phase: "evaluating" });
+        const res = await client.heartbeat(ref, {
+          phase: waiting === null ? "evaluating" : WAIT_PHASES[waiting],
+        });
         if (res.should_stop) halt ??= "cancelled";
       } catch (error) {
         if (error instanceof LeaseLost) halt = "lost";
@@ -425,6 +470,13 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     // work is unref'd (the regex sandbox thread), so the worker can't exit
     // mid-eval. Cleared when the attempt ends.
     const heartbeat = setInterval(() => void beat(), (leaseSeconds * 1000) / 3);
+    // A change in what the calls wait for shows on the eval at once.
+    waiting = null;
+    onWait = (wait) => {
+      if (wait === waiting) return;
+      waiting = wait;
+      void beat();
+    };
 
     // Outputs go out in batches; one send at a time.
     let buffer: OutputInput[] = [];
@@ -510,14 +562,24 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       }
       if (halt === "lost") return "lease_lost";
       if (outage && halt === null && !stopping) {
-        // Counted against MAX_ATTEMPTS; the next attempt resumes after the
-        // outputs already stored.
-        await client.complete(ref, {
-          status: "abandoned",
-          reason: "worker_error",
-          error: outage.message.slice(0, 4000),
-        });
-        return "handed_back";
+        // No capacity through the whole wait: the eval fails (one attempt,
+        // never retried into more cold starts). Any other outage hands the
+        // attempt back, counted against MAX_ATTEMPTS; the next attempt
+        // resumes after the outputs already stored.
+        await client.complete(
+          ref,
+          outage.capacity
+            ? {
+                status: "failed",
+                error: `capacity_unavailable: ${outage.message}`.slice(0, 4000),
+              }
+            : {
+                status: "abandoned",
+                reason: "worker_error",
+                error: outage.message.slice(0, 4000),
+              },
+        );
+        return outage.capacity ? "failed" : "handed_back";
       }
 
       // A graceful stop (deploy, scale-down) hands the eval back: the next
@@ -561,6 +623,10 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     } finally {
       clearInterval(heartbeat);
       halted = () => stopping;
+      waiting = null;
+      onWait = (wait) => {
+        waiting = wait;
+      };
     }
   };
 

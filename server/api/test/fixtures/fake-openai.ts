@@ -23,8 +23,12 @@ export interface FakeOpenAI {
   requests: FakeChatRequest[];
   /** Per-model responder; falls back to `defaultResponder`. */
   setModel: (model: string, responder: FakeResponder) => void;
-  /** Fail the next `count` requests with HTTP `status`. */
-  failNext: (count: number, status?: number) => void;
+  /** Fail the next `count` requests with HTTP `status` (and an error `code` / `Retry-After`). */
+  failNext: (
+    count: number,
+    status?: number,
+    options?: { code?: string; retryAfter?: string },
+  ) => void;
   close: () => Promise<void>;
 }
 
@@ -85,7 +89,12 @@ export const startFakeOpenAI = async (
 ): Promise<FakeOpenAI> => {
   const requests: FakeChatRequest[] = [];
   const responders = new Map<string, FakeResponder>();
-  let failures: { count: number; status: number } = { count: 0, status: 503 };
+  let failures: {
+    count: number;
+    status: number;
+    code?: string | undefined;
+    retryAfter?: string | undefined;
+  } = { count: 0, status: 503 };
 
   const server: Server = createServer((req, res) => {
     void (async () => {
@@ -103,8 +112,20 @@ export const startFakeOpenAI = async (
 
       if (failures.count > 0) {
         failures.count -= 1;
-        res.writeHead(failures.status, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "injected failure" } }));
+        res.writeHead(failures.status, {
+          "Content-Type": "application/json",
+          ...(failures.retryAfter
+            ? { "Retry-After": failures.retryAfter }
+            : {}),
+        });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: "injected failure",
+              ...(failures.code ? { code: failures.code } : {}),
+            },
+          }),
+        );
         return;
       }
 
@@ -153,8 +174,8 @@ export const startFakeOpenAI = async (
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
     setModel: (model, responder) => responders.set(model, responder),
-    failNext: (count, status = 503) => {
-      failures = { count, status };
+    failNext: (count, status = 503, extra = {}) => {
+      failures = { count, status, ...extra };
     },
     close: () =>
       new Promise<void>((resolve) => {

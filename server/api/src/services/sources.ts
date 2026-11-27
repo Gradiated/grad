@@ -389,7 +389,7 @@ export const createSourceService = (
             log("warn", "scheduled source sync not started", {
               source_id: source.id,
               workspace_id: source.workspace_id,
-              error: errorMessage(error),
+              error,
             });
           });
         await tx.sources.update(source.id, {

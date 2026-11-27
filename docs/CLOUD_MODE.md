@@ -186,13 +186,24 @@ X-Gradiated-Eval-Id: ev_…
 - The gateway authorizes and bills the call as that workspace in its
   low-priority eval lane (its own rate limit, never autoscaling demand, shed
   first with 429). The worker retries 408, 425, 429 and 5xx six times with
-  backoff from 1 s. If the gateway is still down after that (an outage,
-  `capacity_unavailable`, a full lane), the call waits and retries in place
-  (2 s doubling to 30 s) while the worker keeps its lease: an outage is never
-  stored as an output error or a zero judge score. After 10 minutes down the
-  worker hands the attempt back (`abandoned`, counted against `MAX_ATTEMPTS`);
-  the next attempt resumes after the outputs already stored, and an eval whose
-  gateway stays down through every attempt fails with the outage as its error.
+  backoff from 1 s (at least the response's `Retry-After`, up to 60 s). If
+  the gateway is still down after that (an outage, a full lane), the call
+  waits and retries in place (2 s doubling to 30 s) while the worker keeps its
+  lease: an outage is never stored as an output error or a zero judge score.
+  After 10 minutes down the worker hands the attempt back (`abandoned`,
+  counted against `MAX_ATTEMPTS`); the next attempt resumes after the outputs
+  already stored, and an eval whose gateway stays down through every attempt
+  fails with the outage as its error.
+- Cold pools: a call that finds its model's pool at zero is held by the
+  gateway while the pool wakes (up to 600 s, so the worker's gateway timeout
+  is 660 s), then answered `503 capacity_unavailable` with `Retry-After: 30`.
+  The worker never retries that inside the client: the call sleeps the
+  `Retry-After` (at most 5 min) and tries again, keeping its lease and its
+  attempt, for up to `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (default 1800) in all.
+  Meanwhile `GET /v1/evals/{id}` shows `waiting_reason: "capacity_unavailable"`
+  (`"inference_unavailable"` during an outage) and the worker's heartbeat
+  phase is `waiting_for_capacity`. Past the wait the eval fails once with
+  `capacity_unavailable: …` as its error; no attempt is spent on it.
 - Models: catalog ids as they are (`qwen/qwen3-8b`, judges such as
   `anthropic/claude-sonnet-5-5`). An artifact target (`name@version`) is
   published as an eval-only Version when the eval is created:

@@ -5,7 +5,12 @@ import { createCloudAuth } from "../src/cloud/auth.js";
 import { createAuthView, type AuthView } from "../src/cloud/auth-view.js";
 import { createJwtVerifier } from "../src/cloud/jwt.js";
 import { PlanEvalRequestSchema } from "../src/contracts.js";
+import { GATEWAY_TIMEOUT_MS } from "../src/cloud/gateway.js";
 import { ApiError } from "../src/errors.js";
+import {
+  CapacityUnavailable,
+  createOpenAICompatibleClient,
+} from "../src/services/evals/inference.js";
 import {
   makeTestApp,
   TEST_JUDGE,
@@ -31,7 +36,7 @@ import {
   startFakeCloudApi,
   type FakeCloudApi,
 } from "./fixtures/fake-cloud-api.js";
-import { judgeResponder } from "./fixtures/fake-openai.js";
+import { judgeResponder, startFakeOpenAI } from "./fixtures/fake-openai.js";
 import { postgresUrl } from "./fixtures/postgres.js";
 import { createSftRun, FakeWorker, sftRecords } from "./fixtures/worker.js";
 
@@ -152,6 +157,146 @@ describe("chaos: the inference gateway down during an eval", () => {
       { limit: 100 },
     );
     expect(outputs.data).toHaveLength(0);
+  });
+});
+
+describe("chaos: no capacity for an eval's model (503 capacity_unavailable)", () => {
+  let h: EvalHarness | undefined;
+
+  afterEach(async () => {
+    await h?.close();
+    h = undefined;
+  });
+
+  const judgedEval = async (t: EvalHarness["t"]) =>
+    createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      PlanEvalRequestSchema.parse({
+        models: ["qwen/qwen3-8b"],
+        dataset: "qa",
+        rubric: [{ name: "quality", kind: "judge", model: TEST_JUDGE }],
+      }),
+    );
+
+  it("waits out Retry-After in place, shows waiting_reason, keeps attempt 1 and stores no error outputs", async () => {
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(3));
+    fake.setModel("qwen/qwen3-8b", () => ({ content: "answer" }));
+    fake.setModel(TEST_JUDGE, judgeResponder(0.9));
+    const created = await judgedEval(t);
+
+    // The gateway's cold-start answer: no retry storm inside the client (one
+    // request per answer), the worker sleeps Retry-After between them.
+    fake.failNext(2, 503, { code: "capacity_unavailable", retryAfter: "1" });
+    const worker = startEvalWorker(t, fakeInference(fake), {
+      concurrency: 1,
+      capacityMaxMs: 60_000,
+    });
+    const started = Date.now();
+    const drained = worker.drain();
+
+    let seen: string | null = null;
+    for (let i = 0; i < 100 && seen === null; i += 1) {
+      seen = (await t.services.evals.get(WORKSPACE_A, created.id))
+        .waiting_reason;
+      if (seen === null) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(seen).toBe("capacity_unavailable");
+
+    expect(await drained).toBe(1);
+    await worker.close();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
+
+    const done = await t.services.evals.get(WORKSPACE_A, created.id);
+    expect([done.status, done.error, done.waiting_reason]).toEqual([
+      "completed",
+      null,
+      null,
+    ]);
+    const job = await t.deps.store.jobs.getById(created.id);
+    expect(job).toMatchObject({ attempt: 1, failed_attempts: 0 });
+    // 2 refused calls, then 3 generations and 3 judge calls.
+    expect(fake.requests).toHaveLength(8);
+    const outputs = await t.deps.store.evals.listOutputs(
+      created.id,
+      {},
+      { limit: 100 },
+    );
+    expect(outputs.data.map((o) => [o.error, o.scores.quality])).toEqual([
+      [null, 0.9],
+      [null, 0.9],
+      [null, 0.9],
+    ]);
+  });
+
+  it("no capacity past GRAD_EVAL_CAPACITY_WAIT_SECONDS fails the eval once, without burning attempts", async () => {
+    h = await makeEvalHarness({ maxAttempts: 3 });
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(3));
+    const created = await judgedEval(t);
+
+    fake.failNext(1_000, 503, {
+      code: "capacity_unavailable",
+      retryAfter: "0",
+    });
+    const worker = startEvalWorker(t, fakeInference(fake), {
+      concurrency: 1,
+      capacityMaxMs: 200,
+    });
+    expect(await worker.drain()).toBe(1);
+    await worker.close();
+
+    const done = await t.services.evals.get(WORKSPACE_A, created.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatch(/^capacity_unavailable: no capacity for/);
+    const job = await t.deps.store.jobs.getById(created.id);
+    expect(job).toMatchObject({ attempt: 1 });
+    const outputs = await t.deps.store.evals.listOutputs(
+      created.id,
+      {},
+      { limit: 100 },
+    );
+    expect(outputs.data).toHaveLength(0);
+  });
+
+  it("the client honours Retry-After on its own retries and never retries capacity_unavailable itself", async () => {
+    const fake = await startFakeOpenAI();
+    try {
+      fake.setModel("m", () => ({ content: "ok" }));
+      const client = createOpenAICompatibleClient({
+        baseUrl: fake.baseUrl,
+        retryDelayMs: 1,
+        maxAttempts: 3,
+      });
+      const call = () =>
+        client.complete({
+          model: "m",
+          workspace: WORKSPACE_A,
+          messages: [{ role: "user", content: "hi" }],
+          temperature: 0,
+          max_tokens: 8,
+        });
+
+      fake.failNext(1, 429, { retryAfter: "1" });
+      const started = Date.now();
+      expect((await call()).text).toBe("ok");
+      expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+
+      fake.failNext(1, 503, { code: "capacity_unavailable", retryAfter: "7" });
+      const before = fake.requests.length;
+      const error = await call().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(CapacityUnavailable);
+      expect((error as CapacityUnavailable).retryAfterMs).toBe(7_000);
+      expect(fake.requests.length - before).toBe(1);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it("the Cloud gateway client outwaits the gateway's 600 s cold-start hold", () => {
+    expect(GATEWAY_TIMEOUT_MS).toBeGreaterThan(600_000);
   });
 });
 

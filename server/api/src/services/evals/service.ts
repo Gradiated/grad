@@ -241,6 +241,14 @@ export const createEvalService = (
     total_cost_usd: record.total_cost_usd,
     scored_dataset_version: record.scored_dataset_version,
     error: record.error,
+    waiting_reason:
+      record.status !== "running"
+        ? null
+        : record.worker_phase === "waiting_for_capacity"
+          ? "capacity_unavailable"
+          : record.worker_phase === "waiting_for_inference"
+            ? "inference_unavailable"
+            : null,
     created_at: record.created_at,
     updated_at: record.updated_at,
     completed_at: record.finished_at,

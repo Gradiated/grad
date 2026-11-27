@@ -38,8 +38,39 @@ class CallError extends Error {
     message: string,
     readonly reason: InferenceErrorReason,
     readonly retryable: boolean,
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
+  }
+}
+
+/** A Retry-After header (seconds or an HTTP date) in ms; null when absent or unparseable. */
+const retryAfterMs = (response: Response): number | null => {
+  const value = response.headers.get("retry-after")?.trim();
+  if (!value) return null;
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  const at = Date.parse(value);
+
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+};
+
+/** The longest Retry-After the client's own retries honour. */
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * `503 capacity_unavailable`: the model has no capacity (the Cloud gateway's
+ * eval lane found its pool at zero and it did not wake within the gateway's
+ * own wait). Not retried by the client: the caller waits `retryAfterMs` and
+ * tries again later.
+ */
+export class CapacityUnavailable extends ApiError {
+  readonly reason = "capacity_unavailable" as const;
+
+  constructor(
+    readonly retryAfterMs: number,
+    detail: string,
+  ) {
+    super(503, "capacity_unavailable", "No capacity for the model", detail);
   }
 }
 
@@ -78,14 +109,24 @@ export class InferenceError extends ApiError {
 
 /** The reason of a failed call (`server_error` for anything unclassified). */
 export const inferenceErrorReason = (error: unknown): InferenceErrorReason =>
-  error instanceof InferenceError ? error.reason : "server_error";
+  error instanceof InferenceError || error instanceof CapacityUnavailable
+    ? error.reason
+    : "server_error";
 
 /** The endpoint stayed unreachable, overloaded or 5xx through every retry: a transient outage, not the model's answer. */
 export const isInferenceUnavailable = (error: unknown): boolean =>
   error instanceof ApiError && error.code === "inference_unavailable";
 
 /** A call given up during an inference outage (or a stop): nothing about the task is known. */
-export class InferenceOutage extends Error {}
+export class InferenceOutage extends Error {
+  constructor(
+    message: string,
+    /** The endpoint answered capacity_unavailable to the end. */
+    readonly capacity = false,
+  ) {
+    super(message);
+  }
+}
 
 const parseCompletion = (body: unknown): ChatCompletionResult => {
   const payload = (body ?? {}) as {
@@ -120,8 +161,10 @@ const parseCompletion = (body: unknown): ChatCompletionResult => {
 /**
  * Client for any OpenAI-compatible `/chat/completions` endpoint (vLLM,
  * SGLang, the Gradiated gateway). Retries 429/5xx/network errors with
- * exponential backoff; when they persist, ApiError(503,
- * inference_unavailable); any other failure is ApiError(502, inference_error).
+ * exponential backoff (at least the response's Retry-After, up to 60 s);
+ * when they persist, ApiError(503, inference_unavailable). `503
+ * capacity_unavailable` is thrown at once as CapacityUnavailable; any other
+ * failure is ApiError(502, inference_error).
  */
 export const createOpenAICompatibleClient = (
   options: OpenAICompatibleOptions,
@@ -170,10 +213,18 @@ export const createOpenAICompatibleClient = (
 
     const text = await response.text();
     if (!response.ok) {
+      const detail = `HTTP ${response.status}: ${text.slice(0, 300)}`;
+      if (response.status === 503 && text.includes("capacity_unavailable")) {
+        throw new CapacityUnavailable(
+          retryAfterMs(response) ?? 30_000,
+          `Model '${request.model}' at ${baseUrl}: ${detail}`,
+        );
+      }
       throw new CallError(
-        `HTTP ${response.status}: ${text.slice(0, 300)}`,
+        detail,
         reasonOfStatus(response.status, text),
         RETRYABLE.has(response.status),
+        retryAfterMs(response),
       );
     }
 
@@ -195,13 +246,19 @@ export const createOpenAICompatibleClient = (
         try {
           return await attempt(request);
         } catch (error) {
+          if (error instanceof CapacityUnavailable) throw error;
           lastError = error;
           if (
             !(error instanceof CallError && error.retryable) ||
             i === maxAttempts - 1
           )
             break;
-          await sleep(retryDelayMs * 2 ** i);
+          await sleep(
+            Math.max(
+              retryDelayMs * 2 ** i,
+              Math.min(MAX_RETRY_AFTER_MS, error.retryAfterMs ?? 0),
+            ),
+          );
         }
       }
 

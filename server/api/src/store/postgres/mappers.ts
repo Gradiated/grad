@@ -94,13 +94,19 @@ export const toJob = <S extends string>(r: Row): JobFields<S> => ({
 /** The telemetry fields a job keeps in its payload. */
 export const jobTelemetry = (
   r: Row,
-): { traceparent: string | null; origin: "api" | "source" } => {
+): {
+  traceparent: string | null;
+  origin: "api" | "source";
+  worker_phase: string | null;
+} => {
   const p = j<Record<string, unknown>>(r.payload, {});
   const source = j<Record<string, unknown>>(p.source, {});
+  const stats = j<Record<string, unknown>>(p.worker_stats, {});
 
   return {
     traceparent: typeof p.traceparent === "string" ? p.traceparent : null,
     origin: typeof source.source_id === "string" ? "source" : "api",
+    worker_phase: typeof stats.phase === "string" ? stats.phase : null,
   };
 };
 
