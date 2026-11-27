@@ -81,6 +81,10 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
     expect(release?.storage_key).toBe(
       artifactKey(WORKSPACE_A, sha256Hex("ckpt-five")),
     );
+    // The copy keeps a full-object SHA-256 checksum equal to the recorded one.
+    expect((await t.deps.storage.head(release!.storage_key))?.sha256).toBe(
+      release?.sha256,
+    );
     expect(release?.provenance).toEqual({
       source: "run",
       run_id: run.id,

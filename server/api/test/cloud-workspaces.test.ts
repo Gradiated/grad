@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -223,8 +223,8 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
 
   it("resolves and pins artifacts for serving; a delete keeps pinned bundles until they are unpinned", async () => {
     await setup();
-    const sha = "ab".repeat(32);
-    const key = `artifacts/${WORKSPACE_A}/${sha}.grad.tar.gz`;
+    const sha = createHash("sha256").update("bundle").digest("hex");
+    const key = `artifacts/${WORKSPACE_A}/${sha}`;
     await t.deps.storage.put(key, Buffer.from("bundle"));
     const release = (name: string, format: "peft_lora" | "reference") =>
       t.deps.store.artifacts.createRelease({
@@ -278,12 +278,41 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
     expect(resolved.status).toBe(200);
     const body = (await resolved.json()) as {
       artifact: { id: string; sha256: string; manifest: unknown };
+      object: Record<string, unknown>;
       download_url: string;
     };
     expect(body.artifact).toMatchObject({ id: artifact.id, sha256: sha });
+    // The stored object's full-object checksum is the recorded sha256.
+    expect(body.object).toEqual({
+      key,
+      sha256: sha,
+      checksum_sha256: Buffer.from(sha, "hex").toString("base64"),
+      checksum_type: "FULL_OBJECT",
+      size_bytes: 6,
+    });
     expect(body.artifact).not.toHaveProperty("storage_key");
     expect(await (await fetch(body.download_url)).text()).toBe("bundle");
     expect((await call("GET", "missing@1")).status).toBe(404);
+    // A bundle whose stored checksum isn't the recorded sha256 is never handed out.
+    const tampered = await t.deps.store.artifacts.createRelease({
+      workspaceId: WORKSPACE_A,
+      name: "support-tampered",
+      runId: null,
+      sourceId: null,
+      baseModel: "test/tiny-qwen3",
+      recipeKind: "sft",
+      format: "peft_lora",
+      storageKey: key,
+      sha256: "ab".repeat(32),
+      sizeBytes: 6,
+      manifest: {},
+      evalReport: null,
+    });
+    const refused = await call("GET", tampered.id);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { code: string }).code).toBe(
+      "artifact_checksum_mismatch",
+    );
     expect((await call("GET", reference.id)).status).toBe(409);
     expect(
       (

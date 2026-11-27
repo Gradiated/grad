@@ -99,6 +99,10 @@ describe("artifact registry: layout, provenance, uploads, imports, pins", () => 
     expect(row?.storage_key).toBe(
       artifactKey(WORKSPACE_A, sha256Hex("trained-bundle")),
     );
+    // S3 keeps the bundle's full-object SHA-256: the recorded sha256.
+    expect((await t.deps.storage.head(row!.storage_key))?.sha256).toBe(
+      artifact.sha256,
+    );
   });
 
   it("reads releases written before provenance as source=run", async () => {
@@ -301,6 +305,10 @@ describe("artifact registry: layout, provenance, uploads, imports, pins", () => 
     expect(
       (await t.deps.store.artifacts.get(WORKSPACE_A, artifact.id))?.storage_key,
     ).toBe(artifactKey(WORKSPACE_A, sha256Hex("bundled-upload")));
+    expect(
+      (await t.deps.storage.head(artifactKey(WORKSPACE_A, artifact.sha256)))
+        ?.sha256,
+    ).toBe(artifact.sha256);
     const polled = await t.json<Json>(
       `/v1/artifact-imports/${created.body.id}`,
     );

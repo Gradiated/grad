@@ -132,11 +132,22 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
     return artifact;
   };
 
-  // Serving's view of an artifact: its metadata and manifest, and a
-  // short-lived presigned GET of the bundle (verify sha256).
+  // Serving's view of an artifact: its metadata and manifest, the stored
+  // object (key and its full-object SHA-256 checksum, which S3 recorded on
+  // the checksummed PUT or copy and HEAD reports), and a short-lived
+  // presigned GET of the bundle.
   app.get("/internal/v1/workspaces/:ws/artifacts/:id", async (c) => {
     const { workspaceId } = await authorize(c, deps.jwt, "artifacts:pin");
     const artifact = await release(workspaceId, c.req.param("id"));
+    const head = await storage.head(artifact.storage_key);
+    if (!head || head.sha256 !== artifact.sha256) {
+      throw new ApiError(
+        409,
+        "artifact_checksum_mismatch",
+        "Artifact checksum unavailable",
+        `The stored bundle of '${artifact.id}' has no full-object SHA-256 checksum equal to its recorded sha256 (${head ? (head.sha256 ?? "none") : "missing object"}).`,
+      );
+    }
     const expiresAt = new Date(
       clock.now().getTime() + RESOLVE_URL_SECONDS * 1000,
     );
@@ -144,6 +155,16 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
     return c.json(
       {
         artifact: toPublicArtifact(artifact),
+        object: {
+          key: artifact.storage_key,
+          sha256: artifact.sha256,
+          // As S3 returns it (x-amz-checksum-sha256, ChecksumMode=ENABLED).
+          checksum_sha256: Buffer.from(artifact.sha256, "hex").toString(
+            "base64",
+          ),
+          checksum_type: "FULL_OBJECT",
+          size_bytes: head.sizeBytes,
+        },
         download_url: await storage.presignDownload(
           artifact.storage_key,
           RESOLVE_URL_SECONDS,

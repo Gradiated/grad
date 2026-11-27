@@ -167,6 +167,24 @@ describe("ObjectStore contract: S3 (SeaweedFS)", () => {
     expect(await store.head(uniqueKey("missing.bin"))).toBeNull();
   });
 
+  it("copies server-side with a full-object SHA-256 checksum, leaving an existing target alone", async () => {
+    const from = uniqueKey("copy-src.bin");
+    const to = uniqueKey("copy-dst.bin");
+    const data = randomBytes(4096);
+    await store.put(from, data);
+    await store.copy(from, to);
+
+    expect(await store.head(to)).toEqual({
+      sizeBytes: data.byteLength,
+      sha256: sha(data),
+    });
+    expect(Buffer.compare(Buffer.from(await store.get(to)), data)).toBe(0);
+    await store.copy(from, to); // content-addressed: a repeat is a no-op
+    await expect(
+      store.copy(uniqueKey("missing.bin"), uniqueKey("x.bin")),
+    ).rejects.toBeInstanceOf(ObjectNotFoundError);
+  });
+
   it("lists keys under a prefix older than a cutoff", async () => {
     const prefix = uniqueKey("sweep");
     await store.put(`${prefix}/a/one.bin`, Buffer.from("1"));

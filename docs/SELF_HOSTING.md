@@ -188,7 +188,7 @@ The bucket's prefixes:
 | `ws/<workspace>/datasets/...` | Dataset parts (`.jsonl.gz`) | Kept |
 | `uploads/<workspace>/<sha256>` | Staged dataset files and artifact uploads | 7 days |
 
-Serving needs only `artifacts/`: a read-only role scoped to that prefix can load every released artifact, and checkpoints are never servable until promoted. The maintenance tick deletes staged files under `uploads/` after 7 days, and job blobs and released bundles that no record references (a pinned artifact always has its record).
+Serving needs only `artifacts/`: a read-only role scoped to that prefix can load every released artifact, and checkpoints are never servable until promoted. Every object there carries a full-object SHA-256 checksum equal to the artifact's recorded `sha256` (the worker's PUT is signed with `x-amz-checksum-sha256`, and a promote's CopyObject uses `ChecksumAlgorithm=SHA256`; there are no multipart uploads), so a reader gets it from a `HEAD` with `ChecksumMode=ENABLED` without hashing the bundle. The maintenance tick deletes staged files under `uploads/` after 7 days, and job blobs and released bundles that no record references (a pinned artifact always has its record).
 
 ### Artifact uploads and imports
 
