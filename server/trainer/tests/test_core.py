@@ -220,6 +220,14 @@ class ModelResolutionTests(TempDirCase):
         self.assertEqual(resolve_model("baai/bge-small-en-v1.5").family, "encoder")
         with self.assertRaisesRegex(ModelUnavailableError, "offline"):
             resolve_model("qwen/qwen3-8b")
+        # r8 P2-22: a model id never reaches outside the mirror.
+        private = mirror.parent / f"{mirror.name}-private"
+        private.mkdir()
+        self.addCleanup(shutil.rmtree, private, True)
+        (private / "config.json").write_text("{}")
+        for model_id in (f"../{private.name}", f"x/../../{private.name}", str(private), "qwen//qwen3-0.6b"):
+            with self.subTest(model_id=model_id), self.assertRaises(ModelUnavailableError):
+                resolve_model(model_id)
 
     def test_dev_models_build_once_and_mark_artifacts_test_only(self) -> None:
         from grad_trainer import dev_models

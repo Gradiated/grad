@@ -133,8 +133,14 @@ def _sync_s3_prefix(uri: str, dest: Path) -> bool:
     return found
 
 
+def _mirror_name(name: str) -> bool:
+    """A model id or repo usable as a path under the mirror: no empty, '.' or '..' segments,
+    so a job's model id can't name a directory outside it."""
+    return "\\" not in name and all(part not in ("", ".", "..") for part in name.split("/"))
+
+
 def _from_mirror(model_id: str, repo: str | None, mirror: str) -> ResolvedModel | None:
-    names = [model_id] + ([repo] if repo else [])
+    names = [n for n in [model_id] + ([repo] if repo else []) if _mirror_name(n)]
     if mirror.startswith("s3://"):
         cache = Path(os.environ.get("GRAD_MODELS_CACHE", Path.home() / ".cache" / "grad" / "models"))
         for name in names:
