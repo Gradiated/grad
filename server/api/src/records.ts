@@ -252,8 +252,17 @@ export const recordPromptAndReference = (
     : null;
 };
 
+/**
+ * A {prompt, chosen, rejected} pair. Like the trainer (recipes/dpo.py), the
+ * prompt may instead be `messages`, or the shared opening turns of `chosen`
+ * and `rejected` when both are conversations (TRL's implicit-prompt format).
+ */
 const isPreferencePair = (r: DatasetRecord): boolean =>
-  r.prompt !== undefined && r.chosen !== undefined && r.rejected !== undefined;
+  r.chosen !== undefined &&
+  r.rejected !== undefined &&
+  (r.prompt !== undefined ||
+    r.messages !== undefined ||
+    (Array.isArray(r.chosen) && Array.isArray(r.rejected)));
 
 export interface RouterLabelOptions {
   /** Score name that measures quality (`scores[rubric]`). */

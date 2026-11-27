@@ -601,6 +601,20 @@ describe("record helpers", () => {
   });
 
   it("counts usable records per recipe", () => {
+    const turn = (role: "user" | "assistant", content: string) => ({
+      role,
+      content,
+    });
+    // TRL's implicit-prompt pairs: the shared opening turns are the prompt.
+    expect(
+      assessRecipeUsability("dpo", [
+        {
+          chosen: [turn("user", "q"), turn("assistant", "good")],
+          rejected: [turn("user", "q"), turn("assistant", "bad")],
+        },
+        { chosen: "good", rejected: "bad" },
+      ]).usable,
+    ).toBe(1);
     expect(assessRecipeUsability("cartridge", [{ prompt: "q" }]).usable).toBe(
       1,
     );
