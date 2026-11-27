@@ -1500,8 +1500,9 @@ fn eval_commands() {
     assert!(
         r.stdout.contains("sql-agent@latest")
             && r.stdout.contains("+15.0%")
-            && r.stdout.contains("86.0%"),
-        "{}",
+            && r.stdout.contains("86.0%")
+            && r.stdout.contains("cost $0.40"),
+        "eval billing is shown: {}",
         r.stdout
     );
     let body = srv.last("POST", "/v1/evals").unwrap().json();
@@ -1516,7 +1517,7 @@ fn eval_commands() {
         &["eval", "--models", "a", "--dataset", "d", "--dry-run"],
     );
     expect(&r, 0);
-    assert!(r.stdout.contains("model calls"));
+    assert!(r.stdout.contains("model calls") && r.stdout.contains("est. cost"), "{}", r.stdout);
     let r = run(
         sb.grad(u),
         &["eval", "plan", "--models", "a", "--dataset", "d"],

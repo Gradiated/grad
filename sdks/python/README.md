@@ -3,7 +3,7 @@
 The Python SDK for the Gradiated training platform: push datasets, preview and launch managed
 fine-tuning runs, evaluate models, download PEFT adapters, deploy, route and record feedback.
 
-- Zero runtime dependencies (Python 3.11+); sync `Grad` and native asyncio `AsyncGrad`.
+- Python 3.11+, one dependency (`httpx`); a blocking `Grad` client (from asyncio, call it via `asyncio.to_thread`).
 - Typed objects with a `.raw` escape hatch, `py.typed`, typed errors, retries with backoff.
 - Works against Gradiated Cloud or a self-hosted `grad-server`.
 
@@ -17,7 +17,7 @@ export GRADIATED_API_KEY=grad_...
 
 ```python
 from grad import Grad
-from grad.recipes import SFTRecipe
+from grad.recipes import DPORecipe, SFTRecipe
 
 client = Grad()  # reads GRADIATED_API_KEY and GRADIATED_BASE_URL
 
@@ -71,23 +71,17 @@ Every error subclasses `grad.GradError`. HTTP errors are `grad.GradAPIError` sub
 `PaginationLoopError` instead of looping. Features documented for later waves raise
 `NotAvailableInV0Error` with an alternative.
 
-## Async
+## Continued training and idempotent calls
 
 ```python
-import asyncio
-from grad import AsyncGrad
-from grad.recipes import SFTRecipe
-
-async def main() -> None:
-    async with AsyncGrad() as client:
-        ds = await client.datasets.push("sql-quickstart", [{"prompt": "2+2?", "completion": "4"}])
-        run = await client.runs.create(dataset=ds, name="sql-helper", recipe=SFTRecipe(), max_cost_usd=5)
-        await run.wait()
-        async for point in client.runs.metrics(run.id):
-            print(point.step, point.loss)
-
-asyncio.run(main())
+sft = client.runs.create(dataset="sql-sft", name="sql-helper", recipe=SFTRecipe()).wait()
+dpo = client.runs.create(dataset="sql-prefs", name="sql-helper", recipe=DPORecipe(model=sft.artifact),
+                         idempotency_key="sql-helper-dpo-1").wait()
 ```
+
+`runs.create`, `evals.create` and `deploy` send a fresh `Idempotency-Key` per call (reused by
+its retries); pass `idempotency_key=` to make a retry from another process return the first call's
+result instead of starting a second run.
 
 ## Development
 
@@ -95,7 +89,7 @@ asyncio.run(main())
 PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests
 ```
 
-Unit tests use a scripted fake transport and the shared wire fixtures in `tests/fixtures/wire`.
+Unit tests use a scripted fake `httpx` transport and the shared wire fixtures in `tests/fixtures/wire`.
 `test_live.py` runs these snippets against `tests/harness/stack.ts`; it skips unless
 `server/api/node_modules` exists (`pnpm -C server/api install --frozen-lockfile`), and the Cloud
 deploy flow also needs `GRAD_TRAINER_PYTHON` (a Python with torch, transformers and peft). The
