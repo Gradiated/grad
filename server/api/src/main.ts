@@ -5,6 +5,7 @@ import { serve } from "@hono/node-server";
 import { createGradApp } from "./app.js";
 import { buildDependencies, log } from "./bootstrap.js";
 import { parseServerEnvironment } from "./environment.js";
+import { runMigrations } from "./migrations.js";
 import { gracefulShutdown } from "./shutdown.js";
 
 // A stray rejection is a bug to log, not a reason to take the replica down.
@@ -60,9 +61,16 @@ const main = async () => {
   process.once("SIGINT", () => void shutdown("SIGINT"));
 };
 
-main().catch((error: unknown) => {
-  log("error", "grad-server failed to start", {
-    error: error instanceof Error ? error.message : String(error),
-  });
-  process.exit(1);
-});
+const migrateOnly = async () => {
+  const applied = await runMigrations(process.env.DATABASE_URL);
+  log("info", "grad-server migrations applied", { applied });
+};
+
+(process.argv[2] === "migrate" ? migrateOnly() : main()).catch(
+  (error: unknown) => {
+    log("error", "grad-server failed to start", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exit(1);
+  },
+);

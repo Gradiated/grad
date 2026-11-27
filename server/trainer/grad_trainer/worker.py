@@ -1,6 +1,6 @@
 """grad-server trainer worker: protocol v1 client (``grad.trainer-protocol/1``).
 
-The worker claims ``train`` and ``import`` jobs, keeps the lease alive from a
+The worker claims ``train`` and ``import`` jobs (GRAD_WORKER_KINDS narrows that), keeps the lease alive from a
 background heartbeat thread, moves weights through upload tickets (presigned
 S3 PUTs or the server's streaming blob proxy), and finishes every attempt with
 ``/complete`` so the server can bill it.
@@ -31,7 +31,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, BinaryIO, Callable
+from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
@@ -41,6 +41,7 @@ from .sources import redact
 from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
+JOB_KINDS = ("train", "import")
 RECORDS_BATCH_LIMIT = 10_000
 _CHUNK = 1024 * 1024
 
@@ -326,7 +327,14 @@ class TrainerWorker:
         heartbeat_interval_s: float | None = None,
         client: ProtocolClient | None = None,
         complete_attempts: int = 8,
+        kinds: Sequence[str] = JOB_KINDS,
     ) -> None:
+        unknown = sorted(set(kinds) - set(JOB_KINDS))
+        if not kinds or unknown:
+            raise ValueError(
+                f"Job kinds must be a non-empty subset of {', '.join(JOB_KINDS)}; got {list(kinds)}."
+            )
+        self.kinds = [k for k in JOB_KINDS if k in kinds]
         self.client = client or ProtocolClient(server_url, api_key)
         self.worker_id = worker_id or (
             f"trainer-{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(3)}"
@@ -356,7 +364,7 @@ class TrainerWorker:
         payload: dict[str, Any] = {
             "worker_id": self.worker_id,
             "lease_seconds": self.lease_seconds,
-            "kinds": ["train", "import"],
+            "kinds": self.kinds,
         }
         if self.recipes:
             payload["recipes"] = self.recipes
@@ -377,6 +385,7 @@ class TrainerWorker:
             return None
 
         state = _JobState(job_id=str(job["id"]), attempt=int(job["attempt"]))
+        _log(f"claimed {job.get('kind', 'train')} job {state.job_id} attempt {state.attempt}")
         if self._shutdown.is_set():
             state.request_stop("shutdown")
         self._current = state
@@ -789,8 +798,13 @@ class TrainerWorker:
         )
 
 
-def main() -> None:
-    env = os.environ
+def worker_from_env(env: Mapping[str, str]) -> TrainerWorker:
+    """The worker `grad-trainer` runs, configured from the environment.
+
+    GRAD_WORKER_KINDS (comma-separated, default ``train,import``) picks the jobs it claims:
+    GPU pods take ``train``; CPU pods take ``import`` (imports and source syncs, the only
+    jobs that carry workspace secrets).
+    """
     server_url = (
         env.get("GRAD_SERVER_URL")
         or env.get("GRADIATED_BASE_URL")
@@ -801,15 +815,21 @@ def main() -> None:
         or env.get("GRAD_API_KEY")
         or env.get("GRADIATED_API_KEY")
     )
-    worker = TrainerWorker(
+    kinds = [k.strip() for k in env.get("GRAD_WORKER_KINDS", "").split(",") if k.strip()]
+    return TrainerWorker(
         server_url=server_url,
         api_key=api_key,
         worker_id=env.get("GRAD_WORKER_ID") or None,
         lease_seconds=int(env.get("GRAD_LEASE_SECONDS", "180")),
         poll_interval_s=float(env.get("GRAD_POLL_INTERVAL_S", "1.0")),
         workdir=env.get("GRAD_WORKDIR") or None,
+        kinds=kinds or JOB_KINDS,
     )
-    _log(f"worker '{worker.worker_id}' polling {worker.client.base_url}")
+
+
+def main() -> None:
+    worker = worker_from_env(os.environ)
+    _log(f"worker '{worker.worker_id}' ({','.join(worker.kinds)}) polling {worker.client.base_url}")
     sys.exit(worker.serve_forever())
 
 

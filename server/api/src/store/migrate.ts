@@ -97,6 +97,29 @@ const applyPending = async (
   return ran;
 };
 
+/** Versions in `dir` not yet applied to the database (all of them on a fresh one). */
+export const pendingMigrations = async (
+  pool: Pool,
+  options: { schema?: string | undefined; dir?: string } = {},
+): Promise<string[]> => {
+  const migrations = await loadMigrations(options.dir);
+  const table = options.schema
+    ? `${quoteIdent(options.schema)}.grad_schema_migrations`
+    : "grad_schema_migrations";
+  const { rows } = await pool.query<{ exists: boolean }>(
+    "SELECT to_regclass($1) IS NOT NULL AS exists",
+    [table],
+  );
+  if (!rows[0]?.exists) return migrations.map((m) => m.version);
+  const applied = new Set(
+    (
+      await pool.query<{ version: string }>(`SELECT version FROM ${table}`)
+    ).rows.map((r) => r.version),
+  );
+
+  return migrations.map((m) => m.version).filter((v) => !applied.has(v));
+};
+
 /**
  * Applies pending migrations in order, each in its own transaction, under a
  * session advisory lock so concurrently booting replicas never race. Re-running

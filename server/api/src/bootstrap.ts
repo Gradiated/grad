@@ -20,6 +20,7 @@ import type { ServerEnvironment } from "./environment.js";
 import { createOpenAICompatibleClient } from "./services/evals/inference.js";
 import { createRegexEvaluator } from "./services/evals/regex.js";
 import type { InferenceClients } from "./services/evals/types.js";
+import { assertMigrated } from "./migrations.js";
 import { LocalObjectStore } from "./storage/local.js";
 import { S3ObjectStore } from "./storage/s3.js";
 import { createBlobSigner } from "./storage/signer.js";
@@ -62,7 +63,8 @@ export const buildDependencies = async (
     connectionString: env.DATABASE_URL,
     clock,
   });
-  await store.migrate();
+  if (env.MIGRATE_ON_BOOT) await store.migrate();
+  else await assertMigrated(env.DATABASE_URL);
   // Lease times follow the database clock: sync now and every minute.
   await clock.sync(store.dbNow);
   setInterval(() => {

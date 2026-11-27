@@ -23,6 +23,7 @@ from grad_trainer.worker import (
     ServerError,
     TrainerWorker,
     WorkerAuthError,
+    worker_from_env,
 )
 
 KEY = "grad_worker_key"
@@ -119,8 +120,10 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_happy_path_train(self) -> None:
         srv = self.server(jobs=[train_job()])
         runner = StubRunner()
-        result = self.worker(srv, runner).run_once()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            result = self.worker(srv, runner).run_once()
         self.assertEqual(result["status"], "completed")
+        self.assertIn("claimed train job run_1 attempt 1", err.getvalue())
 
         claim = srv.bodies("claim")[0]
         self.assertEqual(
@@ -513,6 +516,18 @@ class WorkerProtocolTests(unittest.TestCase):
         runner = StubRunner(checkpoint_at=None)
         self.worker(srv, runner).run_once()
         self.assertEqual(runner.calls[0]["records"], [{"id": "t1", "messages": [{"role": "user", "content": "q"}], "scores": {"thumbs": 1.0}}])
+
+    def test_kinds_from_the_environment(self) -> None:
+        srv = self.server()
+        worker = worker_from_env(
+            {"GRAD_SERVER_URL": srv.base_url, "TRAINER_API_KEY": KEY, "GRAD_WORKER_KINDS": " import, "}
+        )
+        self.assertEqual(worker.kinds, ["import"])
+        self.assertIsNone(worker.claim())
+        self.assertEqual(json.loads(srv.calls("claim")[0].body)["kinds"], ["import"])
+        self.assertEqual(worker_from_env({"GRAD_SERVER_URL": srv.base_url}).kinds, ["train", "import"])
+        with self.assertRaisesRegex(ValueError, "subset of train, import"):
+            worker_from_env({"GRAD_WORKER_KINDS": "train,eval"})
 
     def test_idle_claim_returns_none(self) -> None:
         srv = self.server()
