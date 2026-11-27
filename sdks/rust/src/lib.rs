@@ -1,353 +1,391 @@
-//! Idiomatic Rust SDK wrapping the OpenAPI-generated `GeneratedClient`.
+//! Rust SDK for the Gradiated `grad` training and serving platform.
+//!
+//! ```no_run
+//! # async fn demo() -> grad_sdk::Result<()> {
+//! use grad_sdk::{Client, RecipeKind, RecipeSpec, RunRequest};
+//!
+//! // Reads GRADIATED_API_KEY / GRADIATED_BASE_URL, then the `grad login` config file.
+//! let client = Client::new();
+//! let plan = client
+//!     .runs()
+//!     .plan(&RunRequest::new("support-prod", "support-router", RecipeSpec::new(RecipeKind::Router)))
+//!     .await?;
+//! println!("~${:.2} for {} steps", plan.estimated_cost_usd, plan.estimated_steps);
+//! # Ok(()) }
+//! ```
+//!
+//! Resources hang off [`Client`]: [`Client::datasets`], [`Client::runs`],
+//! [`Client::artifacts`], [`Client::deployments`], [`Client::evals`], ...
+//! Every call returns [`Result`] with a typed [`Error`]. `generated` is the
+//! OpenAPI-generated low-level transport, kept as an unstable escape hatch.
 
+pub mod config;
+pub mod download;
+pub mod error;
 pub mod generated;
+pub mod models;
+pub mod recipes;
+mod resources;
+pub mod sse;
+mod transport;
+mod util;
 
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::fmt;
 use std::time::Duration;
 
-pub use generated::{ApiError, GeneratedClient};
+pub use config::{ConfigFile, ConfigInputs, Profile, ResolvedConfig, Source};
+pub use download::{DownloadOptions, DownloadedArtifact, ExtractLimits};
+pub use error::{ApiErrorBody, Error, Result};
+pub use models::*;
+pub use resources::*;
+pub use sse::{MetricEvent, MetricStream, SseEvent, SseParser};
+pub use util::sha256_hex;
 
+/// Default total timeout of one JSON request.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default number of retries for retryable failures.
+pub const DEFAULT_MAX_RETRIES: u32 = 2;
+
+/// Client for the grad API. Cheap to clone; clones share one connection pool.
 #[derive(Clone)]
-pub struct GradClient {
-    pub wire: GeneratedClient,
+pub struct Client {
+    transport: transport::Transport,
+    resolved: ResolvedConfig,
 }
 
-impl fmt::Debug for GradClient {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GradClient")
-            .field("wire", &"[REDACTED]")
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("base_url", &self.transport.base_url)
+            .field(
+                "api_key",
+                &self.transport.api_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("timeout", &self.transport.timeout)
+            .field("max_retries", &self.transport.max_retries)
             .finish()
     }
 }
 
-pub mod recipes {
-    use serde_json::{json, Value};
-
-    pub fn sft(model: Option<&str>) -> Value {
-        let mut obj = json!({ "kind": "sft" });
-        if let Some(m) = model {
-            obj["model"] = json!(m);
-        }
-        obj
-    }
-
-    pub fn dpo(model: Option<&str>, beta: f64) -> Value {
-        let mut obj = json!({ "kind": "dpo", "beta": beta });
-        if let Some(m) = model {
-            obj["model"] = json!(m);
-        }
-        obj
-    }
-
-    pub fn router(models: Vec<&str>, max_quality_drop: f64) -> Value {
-        json!({ "kind": "router", "models": models, "max_quality_drop": max_quality_drop })
-    }
-
-    pub fn decision(model: Option<&str>) -> Value {
-        let mut obj = json!({ "kind": "decision" });
-        if let Some(m) = model {
-            obj["model"] = json!(m);
-        }
-        obj
-    }
-
-    pub fn cartridge(model: Option<&str>, context_text: Option<&str>, num_tokens: u32) -> Value {
-        let mut obj = json!({ "kind": "cartridge", "num_tokens": num_tokens });
-        if let Some(m) = model {
-            obj["model"] = json!(m);
-        }
-        if let Some(ctx) = context_text {
-            obj["context_text"] = json!(ctx);
-        }
-        obj
-    }
-
-    pub fn embedding(model: Option<&str>, temp: f64) -> Value {
-        let mut obj = json!({ "kind": "embedding", "temp": temp });
-        if let Some(m) = model {
-            obj["model"] = json!(m);
-        }
-        obj
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl GradClient {
-    pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Self {
-        Self {
-            wire: GeneratedClient::new(base_url, api_key),
+/// Builder for [`Client`] with eager validation.
+#[derive(Debug, Clone, Default)]
+pub struct ClientBuilder {
+    inputs: ConfigInputs,
+    timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+    max_retries: Option<u32>,
+    retry_base: Option<Duration>,
+}
+
+impl ClientBuilder {
+    /// Base URL (default: env `GRADIATED_BASE_URL`, then config file, then `https://api.gradiated.com`).
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.inputs.base_url = Some(url.into());
+        self
+    }
+
+    /// API key (default: env `GRADIATED_API_KEY`, then config file).
+    pub fn api_key(mut self, key: impl Into<String>) -> Self {
+        self.inputs.api_key = Some(key.into());
+        self
+    }
+
+    /// Use a named profile from the config file (wins over the environment).
+    pub fn profile(mut self, name: impl Into<String>) -> Self {
+        self.inputs.profile = Some(name.into());
+        self
+    }
+
+    /// Read the config file from `path` instead of the default location.
+    pub fn config_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.inputs.config_path = Some(path.into());
+        self
+    }
+
+    /// Ignore `GRADIATED_*` environment variables.
+    pub fn ignore_env(mut self, yes: bool) -> Self {
+        self.inputs.ignore_env = yes;
+        self
+    }
+
+    /// Ignore the config file.
+    pub fn ignore_config_file(mut self, yes: bool) -> Self {
+        self.inputs.ignore_file = yes;
+        self
+    }
+
+    /// Total timeout of one JSON request (default 60 s). Downloads and SSE are not bounded by it.
+    pub fn timeout(mut self, d: Duration) -> Self {
+        self.timeout = Some(d);
+        self
+    }
+
+    /// TCP/TLS connect timeout (default 10 s).
+    pub fn connect_timeout(mut self, d: Duration) -> Self {
+        self.connect_timeout = Some(d);
+        self
+    }
+
+    /// Maximum idle time between reads of a response body (default 120 s).
+    pub fn read_timeout(mut self, d: Duration) -> Self {
+        self.read_timeout = Some(d);
+        self
+    }
+
+    /// Retries for retryable failures (default 2).
+    pub fn max_retries(mut self, n: u32) -> Self {
+        self.max_retries = Some(n);
+        self
+    }
+
+    /// Base delay of the retry backoff (default 500 ms).
+    pub fn retry_base_delay(mut self, d: Duration) -> Self {
+        self.retry_base = Some(d);
+        self
+    }
+
+    /// Resolve configuration and build the client.
+    pub fn build(self) -> Result<Client> {
+        let resolved = config::resolve(&self.inputs)?;
+        let base = config::validate_base_url(&resolved.base_url)?;
+        let http = transport::build_http(
+            self.connect_timeout.unwrap_or(Duration::from_secs(10)),
+            self.read_timeout.unwrap_or(Duration::from_secs(120)),
+        );
+        Ok(Client {
+            transport: transport::Transport {
+                http,
+                base: Some(base),
+                base_url: resolved.base_url.clone(),
+                api_key: resolved.api_key.clone(),
+                timeout: self.timeout.unwrap_or(DEFAULT_TIMEOUT),
+                max_retries: self.max_retries.unwrap_or(DEFAULT_MAX_RETRIES),
+                retry_base: self.retry_base.unwrap_or(Duration::from_millis(500)),
+                deferred: None,
+                auth_hint: resolved.note.clone(),
+            },
+            resolved,
+        })
+    }
+}
+
+impl Client {
+    /// A client configured from the environment and the config file.
+    ///
+    /// Configuration problems (a malformed config file, an invalid
+    /// `GRADIATED_BASE_URL`) are reported by the first request; use
+    /// [`Client::builder`] to get them eagerly.
+    pub fn new() -> Self {
+        match Client::builder().build() {
+            Ok(c) => c,
+            Err(e) => Client::broken(e.to_string()),
         }
     }
 
-    pub fn from_env() -> Self {
-        let base_url =
-            std::env::var("GRAD_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-        let api_key = std::env::var("GRAD_API_KEY").ok();
-        Self::new(base_url, api_key)
+    /// A builder for explicit configuration.
+    pub fn builder() -> ClientBuilder {
+        ClientBuilder::default()
     }
 
-    pub async fn list_models(&self) -> Result<Value, ApiError> {
-        self.wire.list_models().await
-    }
-
-    pub async fn list_datasets(&self) -> Result<Value, ApiError> {
-        self.wire.list_datasets(&[]).await
-    }
-
-    pub async fn push_dataset(&self, name: &str, records: Vec<Value>) -> Result<Value, ApiError> {
-        let body = json!({ "records": records });
-        self.wire.push_dataset_records(name, &body).await
-    }
-
-    pub async fn render_dataset(&self, name: &str, body: &Value) -> Result<Value, ApiError> {
-        self.wire.render_dataset(name, body).await
-    }
-
-    pub async fn plan_run(
-        &self,
-        dataset: &str,
-        name: &str,
-        recipe: Value,
-        max_cost_usd: Option<f64>,
-    ) -> Result<Value, ApiError> {
-        let mut body = json!({ "dataset": dataset, "name": name, "recipe": recipe });
-        if let Some(cap) = max_cost_usd {
-            body["max_cost_usd"] = json!(cap);
+    fn broken(msg: String) -> Self {
+        Client {
+            transport: transport::Transport {
+                http: transport::build_http(Duration::from_secs(10), Duration::from_secs(120)),
+                base: None,
+                base_url: config::DEFAULT_BASE_URL.into(),
+                api_key: None,
+                timeout: DEFAULT_TIMEOUT,
+                max_retries: DEFAULT_MAX_RETRIES,
+                retry_base: Duration::from_millis(500),
+                deferred: Some(msg),
+                auth_hint: None,
+            },
+            resolved: ResolvedConfig {
+                base_url: config::DEFAULT_BASE_URL.into(),
+                base_url_source: Source::Default,
+                api_key: None,
+                api_key_source: Source::Unset,
+                profile: config::DEFAULT_PROFILE.into(),
+                config_path: None,
+                note: None,
+            },
         }
-        self.wire.plan_run(&body).await
     }
 
-    pub async fn create_run(
-        &self,
-        dataset: &str,
-        name: &str,
-        recipe: Value,
-        max_cost_usd: Option<f64>,
-    ) -> Result<Value, ApiError> {
-        let mut body = json!({ "dataset": dataset, "name": name, "recipe": recipe });
-        if let Some(cap) = max_cost_usd {
-            body["max_cost_usd"] = json!(cap);
+    /// Use this API key.
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        self.transport.api_key = Some(key.clone());
+        self.transport.auth_hint = None;
+        self.resolved.api_key = Some(key);
+        self.resolved.api_key_source = Source::Argument;
+        self
+    }
+
+    /// Use this base URL.
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        let url = config::normalize_base_url(&url.into());
+        match config::validate_base_url(&url) {
+            Ok(base) => {
+                // A key that came from a profile stays bound to that profile's server.
+                if let Source::Profile(_) = self.resolved.api_key_source {
+                    if url != self.resolved.base_url {
+                        self.transport.api_key = None;
+                        self.resolved.api_key = None;
+                        self.resolved.api_key_source = Source::Unset;
+                    }
+                }
+                if self
+                    .transport
+                    .deferred
+                    .as_deref()
+                    .is_some_and(|m| m.contains("base URL"))
+                {
+                    self.transport.deferred = None;
+                }
+                self.transport.base = Some(base);
+            }
+            Err(e) => self.transport.deferred = Some(e.to_string()),
         }
-        self.wire.create_run(&body).await
+        self.transport.base_url = url.clone();
+        self.resolved.base_url = url;
+        self.resolved.base_url_source = Source::Argument;
+        self
     }
 
-    pub async fn list_runs(&self) -> Result<Value, ApiError> {
-        self.wire.list_runs(&[]).await
+    /// Total timeout of one JSON request.
+    pub fn with_timeout(mut self, d: Duration) -> Self {
+        self.transport.timeout = d;
+        self
     }
 
-    pub async fn get_run(&self, id: &str) -> Result<Value, ApiError> {
-        self.wire.get_run(id).await
+    /// Retries for retryable failures.
+    pub fn with_max_retries(mut self, n: u32) -> Self {
+        self.transport.max_retries = n;
+        self
     }
 
-    pub async fn list_run_metrics(&self, id: &str, after_step: i64) -> Result<Value, ApiError> {
-        self.wire
-            .list_run_metrics(id, &[("after_step", after_step.to_string())])
+    /// The base URL requests go to.
+    pub fn base_url(&self) -> &str {
+        &self.transport.base_url
+    }
+
+    /// Whether an API key is configured.
+    pub fn has_api_key(&self) -> bool {
+        self.transport.api_key.is_some()
+    }
+
+    /// How the configuration was resolved (sources, profile, config path).
+    pub fn resolved_config(&self) -> &ResolvedConfig {
+        &self.resolved
+    }
+
+    /// Low-level generated client sharing this client's base URL and key.
+    /// Unstable: it follows the OpenAPI spec 1:1 and has no retries.
+    pub fn wire(&self) -> generated::GeneratedClient {
+        generated::GeneratedClient::new(
+            self.transport.base_url.clone(),
+            self.transport.api_key.clone(),
+        )
+    }
+
+    pub(crate) fn t(&self) -> &transport::Transport {
+        &self.transport
+    }
+
+    /// `GET /health/ready`: whether the server and its database are ready.
+    pub async fn health(&self) -> Result<serde_json::Value> {
+        let mut req = transport::Req::get("/health/ready");
+        req.auth = false;
+        self.transport.json(req).await
+    }
+
+    pub fn models(&self) -> Models<'_> {
+        Models { c: self }
+    }
+    pub fn keys(&self) -> Keys<'_> {
+        Keys { c: self }
+    }
+    pub fn datasets(&self) -> Datasets<'_> {
+        Datasets { c: self }
+    }
+    pub fn imports(&self) -> Imports<'_> {
+        Imports { c: self }
+    }
+    pub fn runs(&self) -> Runs<'_> {
+        Runs { c: self }
+    }
+    pub fn checkpoints(&self) -> Checkpoints<'_> {
+        Checkpoints { c: self }
+    }
+    pub fn artifacts(&self) -> Artifacts<'_> {
+        Artifacts { c: self }
+    }
+    pub fn deployments(&self) -> Deployments<'_> {
+        Deployments { c: self }
+    }
+    pub fn evals(&self) -> Evals<'_> {
+        Evals { c: self }
+    }
+    pub fn feedback(&self) -> Feedback<'_> {
+        Feedback { c: self }
+    }
+    pub fn env_workers(&self) -> EnvWorkers<'_> {
+        EnvWorkers { c: self }
+    }
+
+    /// Ask a deployed router which model should answer (`POST /v1/route`).
+    pub async fn route(&self, req: &RouteRequest) -> Result<RouteDecision> {
+        self.transport
+            .json(transport::Req::post("/v1/route").json(serde_json::to_value(req).map_err(enc)?))
             .await
     }
 
-    pub async fn cancel_run(&self, id: &str) -> Result<Value, ApiError> {
-        self.wire.cancel_run(id).await
+    /// Embed text with a deployed embedding artifact (`POST /v1/embeddings`).
+    pub async fn embeddings(&self, model: &str, input: Vec<String>) -> Result<EmbeddingsResponse> {
+        self.transport
+            .json(
+                transport::Req::post("/v1/embeddings")
+                    .json(serde_json::json!({ "model": model, "input": input })),
+            )
+            .await
     }
+}
 
-    pub async fn resume_run(&self, id: &str, max_cost_usd: Option<f64>) -> Result<Value, ApiError> {
-        let body = match max_cost_usd {
-            Some(cap) => json!({ "max_cost_usd": cap }),
-            None => json!({}),
-        };
-        self.wire.resume_run(id, Some(&body)).await
-    }
-
-    pub async fn wait_run(
-        &self,
-        id: &str,
-        poll_interval: Duration,
-        timeout: Duration,
-    ) -> Result<Value, ApiError> {
-        let interval = poll_interval.max(Duration::from_millis(50));
-        let deadline = std::time::Instant::now() + timeout;
-        loop {
-            let run = self.get_run(id).await?;
-            let status = run.get("status").and_then(|v| v.as_str()).unwrap_or("");
-            if matches!(status, "completed" | "failed" | "cancelled" | "stopped_budget") {
-                return Ok(run);
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(ApiError {
-                    status: 0,
-                    code: "timeout".to_string(),
-                    title: "Wait timeout".to_string(),
-                    detail: format!("Timed out waiting for run '{}'.", id),
-                    request_id: String::new(),
-                });
-            }
-            tokio::time::sleep(interval).await;
-        }
-    }
-
-    pub async fn list_artifacts(&self, name: Option<&str>) -> Result<Value, ApiError> {
-        let query: Vec<(&str, String)> = match name {
-            Some(n) => vec![("name", n.to_string())],
-            None => vec![],
-        };
-        self.wire.list_artifacts(&query).await
-    }
-
-    pub async fn get_artifact(&self, reference: &str) -> Result<Value, ApiError> {
-        self.wire.get_artifact(reference).await
-    }
-
-    pub async fn download_artifact(&self, reference: &str) -> Result<Vec<u8>, ApiError> {
-        let (bytes, expected_sha) = self.wire.download_artifact(reference).await?;
-        let expected = expected_sha
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
-            .ok_or_else(|| ApiError {
-                status: 0,
-                code: "missing_checksum".to_string(),
-                title: "Missing checksum".to_string(),
-                detail: "Artifact download missing valid X-Artifact-Sha256 header.".to_string(),
-                request_id: String::new(),
-            })?;
-
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let actual = hex::encode(hasher.finalize());
-        if actual != expected {
-            return Err(ApiError {
-                status: 0,
-                code: "checksum_mismatch".to_string(),
-                title: "Artifact checksum mismatch".to_string(),
-                detail: format!("expected {}, got {}", expected, actual),
-                request_id: String::new(),
-            });
-        }
-        Ok(bytes)
-    }
-
-    pub async fn deploy(
-        &self,
-        artifact: &str,
-        name: Option<&str>,
-        fallback: Option<&str>,
-        explore_rate: f64,
-    ) -> Result<Value, ApiError> {
-        let mut body = json!({ "artifact": artifact, "explore_rate": explore_rate });
-        if let Some(n) = name {
-            body["name"] = json!(n);
-        }
-        if let Some(fb) = fallback {
-            body["fallback"] = json!(fb);
-        }
-        self.wire.deploy_artifact(&body).await
-    }
-
-    pub async fn list_deployments(&self) -> Result<Value, ApiError> {
-        self.wire.list_deployments(&[]).await
-    }
-
-    pub async fn get_deployment(&self, name: &str) -> Result<Value, ApiError> {
-        self.wire.get_deployment(name).await
-    }
-
-    pub async fn route(
-        &self,
-        deployment: &str,
-        messages: Vec<Value>,
-        session_id: Option<&str>,
-    ) -> Result<Value, ApiError> {
-        let mut body = json!({ "deployment": deployment, "messages": messages });
-        if let Some(sid) = session_id {
-            body["session_id"] = json!(sid);
-        }
-        self.wire.route_request(&body).await
-    }
-
-    pub async fn embed(&self, model: &str, input: Vec<String>) -> Result<Value, ApiError> {
-        let body = json!({ "model": model, "input": input });
-        self.wire.create_embeddings(&body).await
-    }
-
-    pub async fn record_feedback(&self, events: Vec<Value>) -> Result<Value, ApiError> {
-        let body = json!({ "events": events });
-        self.wire.record_feedback(&body).await
-    }
-
-    pub async fn plan_eval(&self, body: &Value) -> Result<Value, ApiError> {
-        self.wire.plan_eval(body).await
-    }
-
-    pub async fn create_eval(&self, body: &Value) -> Result<Value, ApiError> {
-        self.wire.create_eval(body).await
-    }
-
-    pub async fn list_eval_failures(
-        &self,
-        eval_id: &str,
-        model: Option<&str>,
-        threshold: f64,
-    ) -> Result<Value, ApiError> {
-        let mut query = vec![("threshold", threshold.to_string())];
-        if let Some(m) = model {
-            query.push(("model", m.to_string()));
-        }
-        self.wire.list_eval_failures(eval_id, &query).await
-    }
-
-    pub async fn create_api_key(&self, name: &str, scopes: Vec<String>) -> Result<Value, ApiError> {
-        let body = json!({ "name": name, "scopes": scopes });
-        self.wire.create_api_key(&body).await
-    }
-
-    pub async fn list_api_keys(&self) -> Result<Value, ApiError> {
-        self.wire.list_api_keys(&[]).await
-    }
-
-    pub async fn revoke_api_key(&self, id: &str) -> Result<Value, ApiError> {
-        self.wire.revoke_api_key(id).await
-    }
+pub(crate) fn enc(e: serde_json::Error) -> Error {
+    Error::InvalidInput(format!("could not encode request: {}", e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
     #[test]
-    fn debug_redacts_api_key() {
-        let client = GradClient::new("http://127.0.0.1:8080", Some("grad_super_secret".into()));
-        let dbg = format!("{:?}", client);
-        assert!(!dbg.contains("grad_super_secret"));
+    fn debug_never_prints_the_key() {
+        let c = Client::builder()
+            .ignore_env(true)
+            .ignore_config_file(true)
+            .base_url("http://127.0.0.1:1")
+            .api_key("grad_super_secret")
+            .build()
+            .unwrap();
+        let dbg = format!("{:?} {:?}", c, c.resolved_config());
+        assert!(!dbg.contains("grad_super_secret"), "{}", dbg);
         assert!(dbg.contains("REDACTED"));
     }
 
-    #[tokio::test]
-    async fn downloads_artifact_and_verifies_sha256_fail_closed() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let payload = b"rust-artifact-bytes";
-        let mut hasher = Sha256::new();
-        hasher.update(payload);
-        let expected_sha = hex::encode(hasher.finalize()).to_uppercase();
-
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = socket.read(&mut buf).await;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nX-Artifact-Sha256: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                expected_sha,
-                payload.len()
-            );
-            socket.write_all(resp.as_bytes()).await.unwrap();
-            socket.write_all(payload).await.unwrap();
-        });
-
-        let client = GradClient::new(format!("http://{}", addr), Some("grad_rs".to_string()));
-        let bytes = client.download_artifact("demo@latest").await.unwrap();
-        assert_eq!(bytes, payload);
-        server.await.unwrap();
+    #[test]
+    fn new_defers_configuration_errors() {
+        let c = Client::new().with_base_url("not a url");
+        assert!(c.transport.deferred.is_some());
+        let c = c.with_base_url("http://127.0.0.1:9");
+        assert!(c.transport.deferred.is_none());
+        assert_eq!(c.base_url(), "http://127.0.0.1:9");
     }
 }
