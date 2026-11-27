@@ -1,0 +1,55 @@
+{
+  "ok": true,
+  "data": {
+    "resolved_config": {
+      "rule_version": "auto@2",
+      "dataset": "support-prod",
+      "dataset_version": 3,
+      "name": "support-router",
+      "recipe_kind": "router",
+      "model": "qwen/qwen3-0.6b",
+      "template_revision": "",
+      "adapter": {
+        "kind": "lora",
+        "rank": 32
+      },
+      "lr": 0.0005,
+      "lr_source": "auto",
+      "batch_size": 128,
+      "epochs": 1,
+      "schedule": "cosine",
+      "warmup": 0.03,
+      "train_on": "last",
+      "thinking": "auto",
+      "preserve_thinking": false,
+      "reduction": "per_example",
+      "select": "best",
+      "checkpoint_every_steps": 50,
+      "checkpoint_ttl_days": 30,
+      "split": {
+        "strategy": "by_session",
+        "eval_fraction": 0.15,
+        "seed": 42,
+        "train_records": 4097,
+        "eval_records": 723
+      },
+      "recipe_params": {
+        "models": [
+          "qwen/qwen3-8b",
+          "qwen/qwen3-32b"
+        ]
+      }
+    },
+    "dataset_version": 3,
+    "usable_records": 4820,
+    "total_records": 4820,
+    "estimated_steps": 33,
+    "estimated_tokens": 1100000,
+    "estimated_cost_usd": 0.165,
+    "price_per_million_tokens": 0.15,
+    "trained_token_fraction": 0.62,
+    "warnings": [
+      "3 records have no scores"
+    ]
+  }
+}

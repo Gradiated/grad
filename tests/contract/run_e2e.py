@@ -306,14 +306,21 @@ def main() -> None:
         )
 
         # --- 4. Rust `grad` CLI E2E ---
-        grad_bin = REPO_ROOT / "target" / "debug" / "grad"
-        if not grad_bin.exists():
-            subprocess.run(
-                ["cargo", "build", "--bin", "grad"],
-                cwd=str(REPO_ROOT),
-                timeout=180,
-                check=True,
-            )
+        # Always (re)build: cargo is incremental, and a stale binary hides regressions.
+        subprocess.run(
+            ["cargo", "build", "--bin", "grad"],
+            cwd=str(REPO_ROOT),
+            timeout=600,
+            check=True,
+        )
+        target_dir = Path(os.environ.get("CARGO_TARGET_DIR", REPO_ROOT / "target"))
+        grad_bin = Path(os.environ.get("GRAD_BIN", target_dir / "debug" / "grad"))
+        child_env = {
+            **child_env,
+            "GRADIATED_BASE_URL": base_url,
+            "XDG_CONFIG_HOME": str(tmp_dir / "xdg"),
+        }
+        child_env.pop("GRADIATED_PROFILE", None)
 
         # Negative test: invalid Python target rejected cleanly by `grad env serve`
         bad_env = subprocess.run(
@@ -407,18 +414,19 @@ def main() -> None:
                 "--recipe",
                 "sft",
                 "--dry-run",
+                "--json",
             ],
             env=child_env,
             text=True,
         )
-        assert json.loads(dry_out)["estimated_steps"] >= 1
+        assert json.loads(dry_out)["data"]["estimated_steps"] >= 1
 
         yaml_out = subprocess.check_output(
             [str(grad_bin), "runs", "inspect", run_ids["support-sft"], "--yaml"],
             env=child_env,
             text=True,
         )
-        assert "recipe_kind: sft" in yaml_out
+        assert "recipe: sft" in yaml_out
 
         cli_dl_path = tmp_dir / "cli-dl.grad.tar.gz"
         subprocess.run(
@@ -427,7 +435,7 @@ def main() -> None:
                 "artifacts",
                 "download",
                 artifacts["support-sft"],
-                "--out",
+                "--archive",
                 str(cli_dl_path),
             ],
             env=child_env,
@@ -444,11 +452,12 @@ def main() -> None:
                 "support-router",
                 "--prompt",
                 "Reset password?",
+                "--json",
             ],
             env=child_env,
             text=True,
         )
-        assert "model" in json.loads(route_out)
+        assert "model" in json.loads(route_out)["data"]
         print("[cli-e2e] PASS")
         print("ALL CROSS-LANGUAGE CONTRACT E2E CHECKS PASSED!")
     finally:

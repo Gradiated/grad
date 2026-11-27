@@ -202,11 +202,12 @@ jobs:
           go tool cover -func=cover.out | awk '/^total:/ { sub("%", "", $3); print "Go SDK coverage: " $3 "%"; if ($3 + 0 < 85) exit 1 }'
 
       - name: Test Rust SDK
-        run: cargo test --package grad-sdk
+        run: cargo test --locked --package grad-sdk
 
   cli-and-e2e:
     name: Rust CLI & Cross-Language E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -222,10 +223,25 @@ jobs:
           pnpm -C sdks/typescript install --frozen-lockfile
           pnpm -C sdks/typescript build
 
-      - name: Test and build Rust workspace (grad-sdk + grad CLI)
+      - name: Lint Rust workspace (grad-sdk + grad CLI)
         run: |
-          cargo test --workspace
-          cargo build --bin grad
+          cargo fmt --check --package grad-cli
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      # Unit + mock-server tests, CLI integration tests (assert_cmd) and the live
+      # quickstart against tests/harness/stack.ts (server/api deps are installed
+      # above; the torch/Cloud live test skips without GRAD_TRAINER_PYTHON).
+      - name: Test Rust workspace with a coverage gate
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked --version 0.9.2
+          cargo llvm-cov --locked --workspace \
+            --ignore-filename-regex 'generated\.rs|/tests/' \
+            --fail-under-lines 85
+          cargo build --locked --bin grad
+
+      - name: grad local up compose file is valid
+        run: docker compose -f cli/assets/docker-compose.yml config --quiet
 
       - name: Run full cross-language E2E contract suite (Python + TS + Go + Rust CLI)
         run: python3 tests/contract/run_e2e.py
