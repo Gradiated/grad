@@ -1,12 +1,17 @@
 //! Full-screen follower for a training run (`grad train --wait`, `grad runs watch`).
 //!
-//! [`Model`] folds the run, its metric stream and its checkpoints into view
-//! state; [`draw`] renders it (pure, snapshot-tested with `TestBackend`);
-//! [`follow`] owns the terminal. Colour is a handful of named ANSI colours on
-//! the terminal's own background, so the user's theme decides how they look
-//! on light and dark terminals; secondary text is dimmed, never greyed by RGB.
+//! [`Model`] folds the run, its lifecycle events and its checkpoints into
+//! view state; [`draw`] renders it (pure, snapshot-tested with `TestBackend`);
+//! [`follow`] owns the terminal.
+//!
+//! Look: a calm, mostly monochrome screen in the spirit of bottom and gitui.
+//! Text uses the terminal's own foreground on its own background; secondary
+//! text is dimmed (never greyed by RGB), so light and dark themes both work.
+//! One accent (cyan) marks what is moving (spinner, progress, train loss),
+//! magenta the eval series; green, yellow and red only carry state (done,
+//! attention, failure). `NO_COLOR` drops the colours.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{IsTerminal, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
@@ -18,7 +23,7 @@ use grad_sdk::{
     Checkpoint, Client, Error as SdkError, ListParams, MetricEvent, MetricPoint, Run, RunStatus,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
@@ -31,6 +36,8 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::commands::train::{fmt_duration, parse_ts};
 use crate::output::{compact, num, pct, thousands, usd, CliError};
+
+use wire::{AttemptKind, Gpu, Phase, RunEvent};
 
 // ---------------------------------------------------------------- palette
 
@@ -65,6 +72,7 @@ fn bold() -> Style {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tone {
     Plain,
+    Quiet,
     Good,
     Warn,
     Bad,
@@ -74,9 +82,162 @@ impl Tone {
     fn style(self) -> Style {
         match self {
             Tone::Plain => Style::new(),
+            Tone::Quiet => dim(),
             Tone::Good => fg(GOOD),
             Tone::Warn => fg(WARN),
             Tone::Bad => fg(BAD),
+        }
+    }
+}
+
+// ---------------------------------------------------------------- wire
+
+/// The run lifecycle events of `GET /v1/runs/{id}/events`, in the shapes
+/// agreed with the lifecycle work (review/r5-coordination.md: `phase`,
+/// `metric`, `checkpoint`, `attempt`, `warning`, `log`, `completed`).
+///
+/// Until the Rust SDK exposes `runs().events(id, true)`, the driver maps
+/// today's metrics stream (`metric`, `completed`) into these and derives the
+/// phase from the run's status; the render tests replay a recording of the
+/// events endpoint. When the SDK's `RunEvent` lands, these types give way to
+/// it and only [`pump_stream`] changes.
+pub(crate) mod wire {
+    use grad_sdk::{MetricPoint, Run};
+    use serde::Deserialize;
+
+    #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+    #[serde(default)]
+    pub struct Meta {
+        pub seq: i64,
+        pub attempt: i64,
+        pub timestamp: String,
+    }
+
+    /// `queued` .. `completing`; training, evaluating and checkpointing repeat.
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Phase {
+        Queued,
+        WaitingForCompute,
+        Starting,
+        LoadingModel,
+        Training,
+        Evaluating,
+        Checkpointing,
+        Uploading,
+        Completing,
+        #[serde(other)]
+        Other,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    pub struct Gpu {
+        pub name: String,
+        #[serde(default)]
+        pub memory_gb: f64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum AttemptKind {
+        Started,
+        Interrupted,
+        GaveUp,
+        #[serde(other)]
+        Other,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    pub enum RunEvent {
+        Phase {
+            #[serde(flatten)]
+            meta: Meta,
+            phase: Phase,
+            #[serde(default)]
+            workers_online: Option<i64>,
+            #[serde(default)]
+            autoscaling: Option<bool>,
+            #[serde(default)]
+            gpu: Option<Gpu>,
+        },
+        Metric {
+            #[serde(flatten)]
+            meta: Meta,
+            metric: MetricPoint,
+        },
+        Checkpoint {
+            #[serde(flatten)]
+            meta: Meta,
+            step: i64,
+        },
+        Attempt {
+            #[serde(flatten)]
+            meta: Meta,
+            event: AttemptKind,
+            #[serde(default)]
+            step: Option<i64>,
+            #[serde(default)]
+            resume_step: Option<i64>,
+            #[serde(default)]
+            max_attempts: i64,
+            #[serde(default)]
+            message: String,
+        },
+        Warning {
+            #[serde(flatten)]
+            meta: Meta,
+            message: String,
+        },
+        Log {
+            #[serde(flatten)]
+            meta: Meta,
+            message: String,
+        },
+        Completed {
+            #[serde(flatten)]
+            meta: Meta,
+            run: Box<Run>,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+
+    impl RunEvent {
+        pub fn meta(&self) -> Option<&Meta> {
+            match self {
+                RunEvent::Phase { meta, .. }
+                | RunEvent::Metric { meta, .. }
+                | RunEvent::Checkpoint { meta, .. }
+                | RunEvent::Attempt { meta, .. }
+                | RunEvent::Warning { meta, .. }
+                | RunEvent::Log { meta, .. }
+                | RunEvent::Completed { meta, .. } => Some(meta),
+                RunEvent::Unknown => None,
+            }
+        }
+
+        /// A point of today's metrics stream as a `metric` event.
+        pub fn metric(p: MetricPoint) -> RunEvent {
+            let meta = Meta {
+                seq: p.seq,
+                attempt: p.attempt,
+                timestamp: p.timestamp.clone(),
+            };
+            RunEvent::Metric { meta, metric: p }
+        }
+
+        /// The metrics stream's final status as a `completed` event.
+        pub fn completed(r: Run) -> RunEvent {
+            let meta = Meta {
+                seq: 0,
+                attempt: r.attempt,
+                timestamp: r.finished_at.clone().unwrap_or_default(),
+            };
+            RunEvent::Completed {
+                meta,
+                run: Box::new(r),
+            }
         }
     }
 }
@@ -114,6 +275,27 @@ pub enum Action {
     Cancel,
 }
 
+/// The server's lifecycle phase, once it reports one.
+#[derive(Debug, Clone)]
+struct Life {
+    phase: Phase,
+    since: i64,
+    workers_online: Option<i64>,
+    autoscaling: Option<bool>,
+    gpu: Option<Gpu>,
+}
+
+/// What the phase line shows.
+#[derive(Debug, Clone, PartialEq)]
+struct PhaseView {
+    /// Stable per phase: a new key restarts the "for" clock and logs the label.
+    key: &'static str,
+    label: String,
+    /// Secondary text after the label, e.g. where a new attempt resumes.
+    note: Option<String>,
+    tone: Tone,
+}
+
 const MAX_SAMPLES: usize = 4000;
 const MAX_LOG: usize = 500;
 
@@ -127,13 +309,24 @@ pub struct Model {
     /// (epoch ms, step, tokens) of recent points in the current attempt.
     window: VecDeque<(i64, i64, i64)>,
     tok_per_sec: Option<f64>,
+    /// Set once the server reports phases; until then the phase is derived.
+    life: Option<Life>,
     phase_key: &'static str,
     phase_since: i64,
+    /// (attempt, step it resumes from; None = from scratch) after an interruption.
+    resume: Option<(i64, Option<i64>)>,
+    /// The highest attempt whose interruption is in the log.
+    logged_attempt: i64,
+    /// The highest attempt whose "Training" is in the log.
+    trained_attempt: i64,
+    warnings: HashSet<String>,
     started: i64,
     now: i64,
     tick: usize,
     link: Link,
     notice: Option<(Tone, String)>,
+    /// A checkpoint was written: the driver refetches the list.
+    pub checkpoints_stale: bool,
     pub show_logs: bool,
     pub help: bool,
     pub confirm: bool,
@@ -149,29 +342,33 @@ impl Model {
             seen_seq: 0,
             window: VecDeque::new(),
             tok_per_sec: None,
-            phase_key: "",
+            life: None,
+            phase_key: "queued",
             phase_since: started,
+            resume: None,
+            logged_attempt: 0,
+            trained_attempt: 0,
+            warnings: HashSet::new(),
             started,
             now,
             tick: 0,
             link: Link::Live,
             notice: None,
+            checkpoints_stale: false,
             show_logs: false,
             help: false,
             confirm: false,
             run,
         };
-        m.push_log(started, Tone::Plain, "Run created".into());
-        if m.run.status != RunStatus::Queued {
-            m.push_log(now, Tone::Plain, m.status_text());
+        m.push_log(started, Tone::Quiet, "Run created".into());
+        if m.run.status.is_terminal() {
+            let text = m.status_text();
+            m.push_log(now, m.status_tone(), text);
         }
         if let Some(p) = m.run.latest_metric.clone() {
             m.apply_metric(p);
         }
-        m.phase_key = m.phase().0;
-        if m.run.status != RunStatus::Queued {
-            m.phase_since = now;
-        }
+        m.sync_phase();
         m
     }
 
@@ -189,11 +386,42 @@ impl Model {
         self.log.push_back(LogLine { at, tone, text });
     }
 
+    fn warn_once(&mut self, at: i64, text: String) {
+        if self.warnings.insert(text.clone()) {
+            self.push_log(at, Tone::Warn, text);
+        }
+    }
+
+    /// Restart the phase clock on a new phase and log the ones worth a line.
     fn sync_phase(&mut self) {
-        let key = self.phase().0;
-        if key != self.phase_key {
-            self.phase_key = key;
-            self.phase_since = self.now;
+        let v = self.phase();
+        if v.key == self.phase_key {
+            return;
+        }
+        self.phase_key = v.key;
+        self.phase_since = self.life.as_ref().map_or(self.now, |l| l.since);
+        let worth = match v.key {
+            "waiting" | "starting" | "loading" | "uploading" => true,
+            "training" => self.trained_attempt < self.run.attempt.max(1),
+            _ => false,
+        };
+        if v.key == "training" {
+            self.trained_attempt = self.run.attempt.max(1);
+        }
+        if worth {
+            let at = self.phase_since;
+            self.push_log(at, Tone::Quiet, v.label);
+        }
+    }
+
+    fn status_tone(&self) -> Tone {
+        match self.run.status {
+            RunStatus::Completed => Tone::Good,
+            RunStatus::Failed => Tone::Bad,
+            RunStatus::Cancelled | RunStatus::StoppedBudget | RunStatus::StoppedBalance => {
+                Tone::Warn
+            }
+            _ => Tone::Plain,
         }
     }
 
@@ -201,7 +429,7 @@ impl Model {
         let r = &self.run;
         match &r.status {
             RunStatus::Queued => "Queued".into(),
-            RunStatus::Running => format!("Attempt {}/{} started", r.attempt, r.max_attempts),
+            RunStatus::Running => format!("Running, attempt {}", attempt_of(r)),
             RunStatus::Completed => "Run completed".into(),
             RunStatus::Failed => format!(
                 "Run failed{}",
@@ -230,40 +458,89 @@ impl Model {
             .max()
     }
 
-    fn interrupted(&mut self, new_attempt: i64) {
+    /// Move to attempt `n`. Servers without lifecycle events don't say why
+    /// the last attempt ended, so the log says only where the next resumes.
+    fn new_attempt(&mut self, n: i64) {
+        if n <= self.run.attempt {
+            return;
+        }
         let old = self.run.attempt;
-        let at = self.run.current_step;
-        let from = match self.resume_step(at) {
-            Some(s) => format!("resuming from step {}", thousands(s)),
-            None => "restarting from step 0".into(),
-        };
-        self.push_log(
-            self.now,
-            Tone::Warn,
-            format!(
-                "Attempt {} interrupted at step {}; attempt {}/{} {}",
-                old,
-                thousands(at),
-                new_attempt,
-                self.run.max_attempts,
-                from
-            ),
-        );
-        self.run.attempt = new_attempt;
+        if self.life.is_none() && self.logged_attempt < old {
+            let at = self.run.current_step;
+            let from = self.resume_step(at);
+            self.resume = Some((n, from));
+            let next = match from {
+                Some(s) => format!("resumes from step {}", thousands(s)),
+                None => "starts from step 0".into(),
+            };
+            self.push_log(
+                self.now,
+                Tone::Warn,
+                format!(
+                    "Attempt {} was interrupted at step {}; attempt {} {}",
+                    old,
+                    thousands(at),
+                    n,
+                    next
+                ),
+            );
+        }
+        self.logged_attempt = self.logged_attempt.max(old);
+        self.run.attempt = n;
         self.window.clear();
+        self.tok_per_sec = None;
     }
 
-    /// Fold a fresh run object (from polling or the final status event).
+    fn set_phase(
+        &mut self,
+        phase: Phase,
+        at: i64,
+        ev: Option<(Option<i64>, Option<bool>, Option<Gpu>)>,
+    ) {
+        // Evaluating and checkpointing interrupt training briefly, and
+        // waiting_for_compute only says a queued run is still unclaimed:
+        // one clock for each family.
+        let family = |a: &Phase, b: &Phase| {
+            let train = |p: &Phase| {
+                matches!(
+                    p,
+                    Phase::Training | Phase::Evaluating | Phase::Checkpointing
+                )
+            };
+            let queue = |p: &Phase| matches!(p, Phase::Queued | Phase::WaitingForCompute);
+            (train(a) && train(b)) || (queue(a) && queue(b))
+        };
+        let prev = self.life.take();
+        let same = prev.as_ref().is_some_and(|l| l.phase == phase);
+        let since = prev
+            .as_ref()
+            .filter(|l| same || family(&l.phase, &phase))
+            .map_or(at, |l| l.since);
+        let (workers_online, autoscaling, gpu) = match ev {
+            Some(x) => x,
+            None => (None, None, prev.filter(|_| same).and_then(|l| l.gpu)),
+        };
+        self.life = Some(Life {
+            phase,
+            since,
+            workers_online,
+            autoscaling,
+            gpu,
+        });
+    }
+
+    /// Fold a fresh run object (from polling or the final status).
     pub fn apply_run(&mut self, r: Run) {
         if r.attempt > self.run.attempt {
-            self.interrupted(r.attempt);
+            self.new_attempt(r.attempt);
         }
         let changed = r.status != self.run.status;
         let streamed_step = self
-            .last_point_step()
+            .samples
+            .last()
+            .map(|s| s.step)
             .filter(|_| r.attempt == self.run.attempt);
-        let cost = self.run.cost_usd;
-        let tokens = self.run.tokens_processed;
+        let (cost, tokens) = (self.run.cost_usd, self.run.tokens_processed);
         self.run = r;
         if let Some(s) = streamed_step {
             self.run.current_step = self.run.current_step.max(s);
@@ -272,49 +549,47 @@ impl Model {
             self.run.cost_usd = self.run.cost_usd.max(cost);
             self.run.tokens_processed = self.run.tokens_processed.max(tokens);
         }
-        // Requeues are told by the interruption line; the first queue by "Run created".
-        if changed && self.run.status != RunStatus::Queued {
-            let tone = match self.run.status {
-                RunStatus::Completed => Tone::Good,
-                RunStatus::Failed => Tone::Bad,
-                RunStatus::Cancelled | RunStatus::StoppedBudget | RunStatus::StoppedBalance => {
-                    Tone::Warn
-                }
-                _ => Tone::Plain,
-            };
+        if changed && self.run.status.is_terminal() {
             let text = self.status_text();
-            self.push_log(self.now, tone, text);
-            if self.run.status.is_terminal() {
-                if let Some(rep) = &self.run.eval_report {
-                    for w in rep.warnings.clone() {
-                        self.push_log(self.now, Tone::Warn, w);
-                    }
-                }
+            self.push_log(self.now, self.status_tone(), text);
+            let warnings = self
+                .run
+                .eval_report
+                .as_ref()
+                .map(|r| r.warnings.clone())
+                .unwrap_or_default();
+            for w in warnings {
+                self.warn_once(self.now, w);
             }
         }
         self.sync_phase();
     }
 
-    fn last_point_step(&self) -> Option<i64> {
-        self.samples.last().map(|s| s.step)
-    }
-
-    /// Fold one streamed metric point (duplicates by `seq` are ignored).
+    /// Fold one metric point (duplicates by `seq` are ignored).
     pub fn apply_metric(&mut self, m: MetricPoint) {
         if m.seq <= self.seen_seq {
             return;
         }
         self.seen_seq = m.seq;
         if m.attempt > self.run.attempt {
-            self.interrupted(m.attempt);
+            self.new_attempt(m.attempt);
         }
         if self.run.status == RunStatus::Queued {
             self.run.status = RunStatus::Running;
-            let text = self.status_text();
-            self.push_log(self.now, Tone::Plain, text);
+        }
+        // A step means training has begun, whatever the worker reported.
+        let before = self.life.as_ref().is_some_and(|l| {
+            matches!(
+                l.phase,
+                Phase::Queued | Phase::WaitingForCompute | Phase::Starting | Phase::LoadingModel
+            )
+        });
+        if before {
+            let at = parse_ts(&m.timestamp).unwrap_or(self.now);
+            self.set_phase(Phase::Training, at, None);
         }
         // A resumed attempt replays steps after its checkpoint: drop the overlap.
-        if self.last_point_step().is_some_and(|s| m.step <= s) {
+        if self.samples.last().is_some_and(|s| m.step <= s.step) {
             self.samples.retain(|s| s.step < m.step);
         }
         self.samples.push(Sample {
@@ -337,7 +612,10 @@ impl Model {
             self.window.push_back((ms, m.step, m.tokens));
         }
         self.tok_per_sec = m.tokens_per_sec.or_else(|| self.rate(|w| w.2));
-        if m.eval_loss.is_some() || m.eval_metrics.is_some() {
+        if eval_loss(&m).is_some() || m.eval_metrics.is_some() {
+            self.checkpoints_stale = true;
+        }
+        if has_recipe_metrics(&m) {
             let text = eval_line(&m);
             self.push_log(self.now, Tone::Plain, text);
         }
@@ -345,6 +623,80 @@ impl Model {
         self.run.cost_usd = self.run.cost_usd.max(m.cost_usd);
         self.run.tokens_processed = self.run.tokens_processed.max(m.tokens);
         self.run.latest_metric = Some(m);
+        self.sync_phase();
+    }
+
+    /// Fold one lifecycle event.
+    pub fn apply_event(&mut self, ev: RunEvent) {
+        let at = ev
+            .meta()
+            .and_then(|m| parse_ts(&m.timestamp))
+            .unwrap_or(self.now);
+        match ev {
+            RunEvent::Phase {
+                meta,
+                phase,
+                workers_online,
+                autoscaling,
+                gpu,
+            } => {
+                if meta.attempt > self.run.attempt {
+                    self.new_attempt(meta.attempt);
+                }
+                if self.run.status == RunStatus::Queued
+                    && !matches!(phase, Phase::Queued | Phase::WaitingForCompute)
+                {
+                    self.run.status = RunStatus::Running;
+                }
+                self.set_phase(phase, at, Some((workers_online, autoscaling, gpu)));
+            }
+            RunEvent::Attempt {
+                meta,
+                event,
+                step,
+                resume_step,
+                max_attempts,
+                message,
+            } => {
+                if max_attempts > 0 {
+                    self.run.max_attempts = max_attempts;
+                }
+                let n = meta.attempt;
+                match event {
+                    AttemptKind::Interrupted | AttemptKind::GaveUp => {
+                        if let Some(s) = step {
+                            self.run.current_step = self.run.current_step.max(s);
+                        }
+                        let gave_up = event == AttemptKind::GaveUp;
+                        if !gave_up {
+                            self.resume = Some((n + 1, resume_step));
+                        }
+                        if n > self.logged_attempt || gave_up {
+                            self.logged_attempt = self.logged_attempt.max(n);
+                            let tone = if gave_up { Tone::Bad } else { Tone::Warn };
+                            self.push_log(at, tone, sentence(&message));
+                        }
+                    }
+                    _ => {
+                        if n > self.run.attempt {
+                            self.new_attempt(n);
+                        }
+                        if n > 1 {
+                            if resume_step.is_some() || self.resume.is_none_or(|r| r.0 != n) {
+                                self.resume = Some((n, resume_step));
+                            }
+                            self.push_log(at, Tone::Plain, sentence(&message));
+                        }
+                    }
+                }
+            }
+            RunEvent::Warning { message, .. } => self.warn_once(at, message),
+            RunEvent::Log { message, .. } => self.push_log(at, Tone::Quiet, sentence(&message)),
+            RunEvent::Checkpoint { .. } => self.checkpoints_stale = true,
+            RunEvent::Metric { metric, .. } => self.apply_metric(metric),
+            RunEvent::Completed { run, .. } => self.apply_run(*run),
+            RunEvent::Unknown => {}
+        }
         self.sync_phase();
     }
 
@@ -474,6 +826,16 @@ impl Model {
             .map(|(c, _)| c.id.as_str())
     }
 
+    /// The checkpoints' selection metric, for the panel's column head.
+    fn score_name(&self) -> String {
+        self.checkpoints
+            .iter()
+            .find_map(|c| c.metadata.get("metric_name").and_then(|v| v.as_str()))
+            .map(|s| s.replace('_', " "))
+            .unwrap_or_else(|| "score".into())
+    }
+
+    /// Has the current attempt streamed a step yet?
     fn attempt_points(&self) -> bool {
         self.run
             .latest_metric
@@ -481,35 +843,109 @@ impl Model {
             .is_some_and(|m| m.attempt == self.run.attempt)
     }
 
-    /// (stable key, label, tone) of the current phase.
-    fn phase(&self) -> (&'static str, String, Tone) {
-        let r = &self.run;
-        match &r.status {
-            RunStatus::Completed => ("completed", "Completed".into(), Tone::Good),
-            RunStatus::Failed => ("failed", "Failed".into(), Tone::Bad),
-            RunStatus::Cancelled => ("cancelled", "Cancelled".into(), Tone::Warn),
-            RunStatus::StoppedBudget => ("stopped", "Stopped at the cost cap".into(), Tone::Warn),
-            RunStatus::StoppedBalance => ("stopped", "Stopped: out of balance".into(), Tone::Warn),
-            RunStatus::Queued if r.attempt > 1 || !self.samples.is_empty() => (
-                "requeued",
-                "Requeued · waiting for a GPU".into(),
-                Tone::Warn,
-            ),
-            RunStatus::Queued => ("queued", "Waiting for a GPU".into(), Tone::Plain),
-            RunStatus::Running if !self.attempt_points() && r.attempt > 1 => (
-                "resuming",
-                match self.resume_step(r.current_step) {
-                    Some(s) => format!("Resuming from step {}", thousands(s)),
-                    None => "Restarting from step 0".into(),
-                },
-                Tone::Warn,
-            ),
-            RunStatus::Running if !self.attempt_points() => {
-                ("starting", "Starting".into(), Tone::Plain)
-            }
-            RunStatus::Running => ("training", "Training".into(), Tone::Plain),
-            RunStatus::Other(s) => ("other", s.replace('_', " "), Tone::Plain),
+    /// Where the current attempt resumes, while it hasn't trained yet.
+    fn resume_note(&self) -> Option<String> {
+        let (n, from) = self.resume?;
+        if n != self.run.attempt || self.attempt_points() {
+            return None;
         }
+        Some(match from {
+            Some(s) => format!("resuming from step {}", thousands(s)),
+            None => "starting again from step 0".into(),
+        })
+    }
+
+    fn phase(&self) -> PhaseView {
+        let v = |key, label: &str, tone| PhaseView {
+            key,
+            label: label.to_string(),
+            note: None,
+            tone,
+        };
+        let r = &self.run;
+        let done = match &r.status {
+            RunStatus::Completed => Some(v("completed", "Completed", Tone::Good)),
+            RunStatus::Failed => Some(v("failed", "Failed", Tone::Bad)),
+            RunStatus::Cancelled => Some(v("cancelled", "Cancelled", Tone::Warn)),
+            RunStatus::StoppedBudget => Some(v("stopped", "Stopped at the cost cap", Tone::Warn)),
+            RunStatus::StoppedBalance => Some(v("stopped", "Stopped: out of balance", Tone::Warn)),
+            RunStatus::Other(s) => Some(v("other", &s.replace('_', " "), Tone::Plain)),
+            RunStatus::Queued | RunStatus::Running => None,
+        };
+        if let Some(d) = done {
+            return d;
+        }
+        let mut view = match &self.life {
+            Some(l) => match &l.phase {
+                Phase::Queued => v(
+                    "queued",
+                    &waiting_label(l.workers_online, l.autoscaling),
+                    Tone::Plain,
+                ),
+                Phase::WaitingForCompute => v(
+                    "waiting",
+                    &waiting_label(l.workers_online, l.autoscaling),
+                    Tone::Plain,
+                ),
+                Phase::Starting => v("starting", &starting_label(l.gpu.as_ref()), Tone::Plain),
+                Phase::LoadingModel => v("loading", "Loading the model", Tone::Plain),
+                Phase::Training => v("training", "Training", Tone::Plain),
+                Phase::Evaluating => v("evaluating", "Evaluating", Tone::Plain),
+                Phase::Checkpointing => v("checkpointing", "Saving a checkpoint", Tone::Plain),
+                Phase::Uploading => v("uploading", "Uploading the artifact", Tone::Plain),
+                Phase::Completing => v("completing", "Finishing up", Tone::Plain),
+                Phase::Other => v("other", "Working", Tone::Plain),
+            },
+            // Servers without phases: the status and the stream tell enough.
+            None if r.status == RunStatus::Queued => v("queued", "Waiting for a GPU", Tone::Plain),
+            None if !self.attempt_points() => v("starting", "Starting", Tone::Plain),
+            None => v("training", "Training", Tone::Plain),
+        };
+        if let Some(n) = self.resume_note() {
+            view.note = Some(n);
+            view.tone = Tone::Warn;
+        }
+        view
+    }
+}
+
+/// `3/10`, or just `12` once reclaimed GPUs (which don't count) pass the cap.
+fn attempt_of(r: &Run) -> String {
+    if r.attempt <= r.max_attempts {
+        format!("{}/{}", r.attempt, r.max_attempts)
+    } else {
+        r.attempt.to_string()
+    }
+}
+
+/// "Waiting for a GPU (0 workers online)".
+fn waiting_label(workers: Option<i64>, autoscaling: Option<bool>) -> String {
+    match workers {
+        None => "Waiting for a GPU".into(),
+        Some(0) if autoscaling == Some(true) => "Waiting for a GPU (a worker is starting)".into(),
+        Some(n) => format!(
+            "Waiting for a GPU ({} worker{} online{})",
+            n,
+            if n == 1 { "" } else { "s" },
+            if n > 0 { ", all busy" } else { "" }
+        ),
+    }
+}
+
+fn starting_label(gpu: Option<&Gpu>) -> String {
+    match gpu {
+        Some(g) if g.memory_gb > 0.0 => format!("Starting on {} ({:.0} GB)", g.name, g.memory_gb),
+        Some(g) => format!("Starting on {}", g.name),
+        None => "Starting".into(),
+    }
+}
+
+/// Capitalise a server message for the log.
+fn sentence(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
     }
 }
 
@@ -520,6 +956,14 @@ fn eval_loss(m: &MetricPoint) -> Option<f64> {
             .as_ref()
             .and_then(|e| e.get("eval_loss").copied().flatten())
     })
+}
+
+/// An eval step with metrics beyond the loss the chart already shows.
+fn has_recipe_metrics(m: &MetricPoint) -> bool {
+    m.eval_metrics
+        .iter()
+        .flatten()
+        .any(|(k, v)| k != "eval_loss" && v.is_some())
 }
 
 /// `Eval at step N · loss x · <recipe metrics>` for an eval step.
@@ -584,10 +1028,10 @@ fn clock(s: i64) -> String {
 /// Render the whole screen.
 pub fn draw(f: &mut Frame, m: &Model) {
     let area = f.area();
-    if area.width >= 80 && area.height >= 22 {
+    if area.width >= 80 && area.height >= 24 {
         wide(f, area, m);
     } else {
-        narrow(f, area, m);
+        compact_view(f, area, m);
     }
     if m.help {
         help(f, area, m);
@@ -600,7 +1044,7 @@ fn sep() -> Span<'static> {
     Span::styled("  ·  ", dim())
 }
 
-/// Left and right content on one row.
+/// Left and right content on one row; the right side wins when both don't fit.
 fn row(f: &mut Frame, area: Rect, left: Line, right: Line) {
     let rw = (right.width() as u16).min(area.width);
     let [l, r] = Layout::horizontal([Constraint::Min(0), Constraint::Length(rw)]).areas(area);
@@ -608,38 +1052,63 @@ fn row(f: &mut Frame, area: Rect, left: Line, right: Line) {
     f.render_widget(Paragraph::new(right), r);
 }
 
-fn header_lines(m: &Model) -> (Line<'static>, Line<'static>, Line<'static>) {
+/// `label value` with a dimmed label.
+fn kv(label: &str, value: String) -> Vec<Span<'static>> {
+    vec![Span::styled(format!("{} ", label), dim()), Span::raw(value)]
+}
+
+fn elapsed(m: &Model) -> i64 {
     let r = &m.run;
-    let title = Line::from(vec![
-        Span::styled(r.name.clone(), bold()),
-        Span::raw("  "),
-        Span::styled(r.id.clone(), dim()),
-    ]);
     let end = r
         .finished_at
         .as_deref()
         .and_then(parse_ts)
         .filter(|_| r.status.is_terminal())
         .unwrap_or(m.now);
-    let started = Line::from(vec![
-        Span::styled("started ", dim()),
-        Span::raw(format!("{} UTC", crate::output::when(&r.created_at))),
-        sep(),
-        Span::raw(fmt_duration((end - m.started).max(0))),
-    ]);
-    let config = Line::from(vec![
-        Span::styled(r.recipe_kind.to_string(), fg(ACCENT)),
-        sep(),
-        Span::raw(r.resolved_config.model.clone()),
-        sep(),
-        Span::raw(r.dataset_name.clone()),
-        Span::styled(format!("@{}", r.dataset_version), dim()),
-    ]);
-    (title, started, config)
+    (end - m.started).max(0)
 }
 
+fn title(m: &Model) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(m.run.name.clone(), bold()),
+        Span::raw("  "),
+        Span::styled(m.run.id.clone(), dim()),
+    ])
+}
+
+fn config_spans(m: &Model, labelled: bool) -> Vec<Span<'static>> {
+    let r = &m.run;
+    let data = format!("{}@{}", r.dataset_name, r.dataset_version);
+    if !labelled {
+        return vec![
+            Span::raw(r.recipe_kind.to_string()),
+            sep(),
+            Span::raw(r.resolved_config.model.clone()),
+            sep(),
+            Span::raw(data),
+        ];
+    }
+    let mut s = kv("recipe", r.recipe_kind.to_string());
+    s.push(Span::raw("   "));
+    s.extend(kv("model", r.resolved_config.model.clone()));
+    s.push(Span::raw("   "));
+    s.extend(kv("dataset", data));
+    s
+}
+
+fn header(f: &mut Frame, a: Rect, b: Rect, m: &Model) {
+    let started = Line::from(kv(
+        "started",
+        format!("{} UTC", crate::output::when(&m.run.created_at)),
+    ));
+    row(f, a, title(m), started);
+    let el = Line::from(kv("elapsed", fmt_duration(elapsed(m))));
+    row(f, b, Line::from(config_spans(m, true)), el);
+}
+
+/// `⠼ Training  for 10s  ·  resuming from step 640`, and `attempt 2/10`.
 fn phase_line(m: &Model) -> (Line<'static>, Line<'static>) {
-    let (_, label, tone) = m.phase();
+    let v = m.phase();
     let icon = match m.run.status {
         RunStatus::Completed => Span::styled("✓", fg(GOOD)),
         RunStatus::Failed => Span::styled("✗", fg(BAD)),
@@ -648,32 +1117,37 @@ fn phase_line(m: &Model) -> (Line<'static>, Line<'static>) {
         }
         _ => Span::styled(
             SPINNER[m.tick % SPINNER.len()],
-            if tone == Tone::Plain {
+            if v.tone == Tone::Plain {
                 fg(ACCENT)
             } else {
-                tone.style()
+                v.tone.style()
             },
         ),
     };
-    let mut left = vec![
-        icon,
-        Span::raw(" "),
-        Span::styled(label, tone.style().add_modifier(Modifier::BOLD)),
-    ];
+    let label_style = match v.tone {
+        Tone::Plain | Tone::Warn => bold(),
+        t => t.style().add_modifier(Modifier::BOLD),
+    };
+    let mut left = vec![icon, Span::raw(" "), Span::styled(v.label, label_style)];
     if !m.run.status.is_terminal() {
         left.push(Span::styled(
             format!("  for {}", fmt_duration((m.now - m.phase_since).max(0))),
             dim(),
         ));
     }
-    if let (RunStatus::Failed, Some(e)) = (&m.run.status, &m.run.error) {
-        left.push(Span::styled(format!("  {}", e), fg(BAD)));
+    if let Some(n) = v.note {
+        left.push(sep());
+        left.push(Span::styled(n, fg(WARN)));
     }
-    let a = if m.run.attempt > 0 {
+    if let (RunStatus::Failed, Some(e)) = (&m.run.status, &m.run.error) {
+        left.push(sep());
+        left.push(Span::styled(e.clone(), fg(BAD)));
+    }
+    let attempt = if m.run.attempt > 0 {
         Line::from(vec![
             Span::styled("attempt ", dim()),
             Span::styled(
-                format!("{}/{}", m.run.attempt, m.run.max_attempts),
+                attempt_of(&m.run),
                 if m.run.attempt > 1 {
                     fg(WARN)
                 } else {
@@ -684,7 +1158,7 @@ fn phase_line(m: &Model) -> (Line<'static>, Line<'static>) {
     } else {
         Line::default()
     };
-    (Line::from(left), a)
+    (Line::from(left), attempt)
 }
 
 /// `━━━━━───` of `width` cells.
@@ -745,7 +1219,11 @@ fn gauges(m: &Model, width: u16, suffixes: bool) -> [Line<'static>; 2] {
             thousands(r.total_steps)
         ),
         ratio: (r.total_steps > 0).then(|| r.current_step as f64 / r.total_steps as f64),
-        fill: fg(ACCENT),
+        fill: if r.status == RunStatus::Completed {
+            fg(GOOD)
+        } else {
+            fg(ACCENT)
+        },
         suffix: if suffixes { pace(m) } else { Vec::new() },
     };
     let cap = r.max_cost_usd.filter(|c| *c > 0.0);
@@ -772,10 +1250,10 @@ fn gauges(m: &Model, width: u16, suffixes: bool) -> [Line<'static>; 2] {
         match g.ratio.filter(|_| bw >= 6) {
             Some(x) => {
                 spans.extend(bar(x, bw, g.fill));
-                spans.push(Span::raw(format!(
-                    "{:>5.0}%",
-                    (x * 100.0).clamp(0.0, 100.0).floor()
-                )));
+                spans.push(Span::styled(
+                    format!("{:>5.0}%", (x * 100.0).clamp(0.0, 100.0).floor()),
+                    dim(),
+                ));
             }
             None if !g.suffix.is_empty() => spans.push(Span::raw(" ".repeat(bw + 6))),
             None => {}
@@ -798,7 +1276,7 @@ fn panel(title: &str) -> Block<'static> {
 }
 
 fn wide(f: &mut Frame, area: Rect, m: &Model) {
-    let area = area.inner(ratatui::layout::Margin::new(1, 0));
+    let area = area.inner(Margin::new(1, 0));
     let [head, cfg, _, phase, _, step, cost, _, body, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -812,36 +1290,33 @@ fn wide(f: &mut Frame, area: Rect, m: &Model) {
         Constraint::Length(1),
     ])
     .areas(area);
-    let (title, started, config) = header_lines(m);
-    row(f, head, title, started);
-    f.render_widget(Paragraph::new(config), cfg);
+    header(f, head, cfg, m);
     let (p, a) = phase_line(m);
     row(f, phase, p, a);
     let [g1, g2] = gauges(m, step.width, true);
     f.render_widget(Paragraph::new(g1), step);
     f.render_widget(Paragraph::new(g2), cost);
     if m.show_logs {
-        events(f, body, m, "Events (l to close)");
+        events(f, body, m, "Events");
     } else {
         let panels_h = (body.height / 3).clamp(5, 10);
-        let [chart_a, lr_a, panels] = Layout::vertical([
-            Constraint::Min(5),
+        let [chart, panels] =
+            Layout::vertical([Constraint::Min(6), Constraint::Length(panels_h)]).areas(body);
+        loss_panel(f, chart, m);
+        let [ck, _, ev] = Layout::horizontal([
+            Constraint::Length(34),
             Constraint::Length(1),
-            Constraint::Length(panels_h),
+            Constraint::Min(20),
         ])
-        .areas(body);
-        let plot = loss_chart(f, chart_a, m);
-        lr_line(f, lr_a, m, plot);
-        let [ck, ev] =
-            Layout::horizontal([Constraint::Length(34), Constraint::Min(20)]).areas(panels);
+        .areas(panels);
         checkpoints(f, ck, m);
         events(f, ev, m, "Events");
     }
     footer(f, foot, m, false);
 }
 
-fn narrow(f: &mut Frame, area: Rect, m: &Model) {
-    let [head, cfg, phase, step, cost, pace_a, loss, _, rest, foot] = Layout::vertical([
+fn compact_view(f: &mut Frame, area: Rect, m: &Model) {
+    let [head, cfg, phase, step, cost, pace_a, loss, rule, rest, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -854,12 +1329,13 @@ fn narrow(f: &mut Frame, area: Rect, m: &Model) {
         Constraint::Length(1),
     ])
     .areas(area);
-    let (title, _, config) = header_lines(m);
-    f.render_widget(Paragraph::new(title), head);
-    f.render_widget(Paragraph::new(config), cfg);
+    f.render_widget(Paragraph::new(title(m)), head);
+    f.render_widget(Paragraph::new(Line::from(config_spans(m, false))), cfg);
     let (mut p, a) = phase_line(m);
-    p.spans.push(Span::raw("  "));
-    p.spans.extend(a.spans);
+    if !a.spans.is_empty() {
+        p.spans.push(sep());
+        p.spans.extend(a.spans);
+    }
     f.render_widget(Paragraph::new(p), phase);
     let [g1, g2] = gauges(m, step.width, false);
     f.render_widget(Paragraph::new(g1), step);
@@ -871,28 +1347,34 @@ fn narrow(f: &mut Frame, area: Rect, m: &Model) {
     stats.extend(tokens(m));
     stats.insert(0, Span::raw(" ".repeat(6)));
     f.render_widget(Paragraph::new(Line::from(stats)), pace_a);
-    // loss  0.412  best eval 0.455  ▁▂▃▅▆▇
+    // loss  0.412  best 0.455 @ 640  ▇▆▅▄▃▂▁
     let mut spans = vec![Span::styled(format!("{:<6}", "loss"), dim())];
     if let Some(s) = m.samples.last() {
         spans.push(Span::styled(num(s.loss), fg(ACCENT)));
     }
-    if let Some((_, e)) = m.best_eval() {
-        spans.push(Span::styled("  best eval ", dim()));
+    if let Some((step, e)) = m.best_eval() {
+        spans.push(Span::styled("  best ", dim()));
         spans.push(Span::styled(num(e), fg(EVAL)));
+        spans.push(Span::styled(format!(" @ {}", thousands(step)), dim()));
     }
-    let used: usize = spans.iter().map(Span::width).sum::<usize>() + 2;
+    let used = width_of(&spans) as u16 + 2;
     let [txt, spark] =
-        Layout::horizontal([Constraint::Length(used as u16), Constraint::Min(0)]).areas(loss);
+        Layout::horizontal([Constraint::Length(used), Constraint::Min(0)]).areas(loss);
     f.render_widget(Paragraph::new(Line::from(spans)), txt);
     let data = series(m.samples.iter().map(|s| s.loss), spark.width as usize);
     f.render_widget(Sparkline::default().data(&data).style(fg(ACCENT)), spark);
-    if m.show_logs || rest.height >= 2 {
+    if rest.height >= 1 {
+        f.render_widget(
+            Paragraph::new(Span::styled("─".repeat(rule.width as usize), dim())),
+            rule,
+        );
         log_lines(f, rest, m);
     }
     footer(f, foot, m, true);
 }
 
-/// Values scaled to 1..=100 for a sparkline, resampled to `width` buckets.
+/// Values scaled to 8..=100 for a sparkline (so the lowest still shows as
+/// `▁`), resampled to `width` buckets.
 fn series(values: impl Iterator<Item = f64>, width: usize) -> Vec<u64> {
     let v: Vec<f64> = values.filter(|x| x.is_finite()).collect();
     if v.is_empty() || width == 0 {
@@ -911,45 +1393,51 @@ fn series(values: impl Iterator<Item = f64>, width: usize) -> Vec<u64> {
     let span = (hi - lo).max(f64::EPSILON);
     means
         .iter()
-        .map(|x| 1 + ((x - lo) / span * 99.0).round() as u64)
+        .map(|x| 8 + ((x - lo) / span * 92.0).round() as u64)
         .collect()
 }
 
-/// Draws the loss chart; returns its plot columns (x, width) and x range so
-/// the lr sparkline below can line up with it.
-fn loss_chart(f: &mut Frame, area: Rect, m: &Model) -> Option<(u16, u16, f64, f64)> {
-    let mut legend = Vec::new();
+/// `━ train 0.6194   ━ eval 0.6195   ● best 0.6195 @ 640`.
+fn legend(m: &Model) -> Line<'static> {
+    let mut l = Vec::new();
+    let mut item = |mark: Span<'static>, name: &str, value: String| {
+        l.push(Span::raw(if l.is_empty() { " " } else { "   " }));
+        l.push(mark);
+        l.push(Span::styled(format!(" {} ", name), dim()));
+        l.push(Span::raw(value));
+    };
     if let Some(s) = m.samples.last() {
-        legend.push(Span::raw(" "));
-        legend.push(Span::styled("━ ", fg(ACCENT)));
-        legend.push(Span::styled("train ", dim()));
-        legend.push(Span::raw(num(s.loss)));
+        item(Span::styled("━", fg(ACCENT)), "train", num(s.loss));
     }
     if let Some(e) = m.samples.iter().rev().find_map(|s| s.eval) {
-        legend.push(Span::raw("   "));
-        legend.push(Span::styled("━ ", fg(EVAL)));
-        legend.push(Span::styled("eval ", dim()));
-        legend.push(Span::raw(num(e)));
+        item(Span::styled("━", fg(EVAL)), "eval", num(e));
     }
-    let best = m.best_eval();
-    if let Some((step, e)) = best {
-        legend.push(Span::raw("   "));
-        legend.push(Span::styled("● ", fg(GOOD)));
-        legend.push(Span::styled("best ", dim()));
-        legend.push(Span::raw(format!("{} @ {}", num(e), thousands(step))));
+    if let Some((step, e)) = m.best_eval() {
+        item(
+            Span::styled("●", fg(GOOD)),
+            "best",
+            format!("{} @ {}", num(e), thousands(step)),
+        );
     }
-    if !legend.is_empty() {
-        legend.push(Span::raw(" "));
+    if !l.is_empty() {
+        l.push(Span::raw(" "));
     }
-    let block = panel("Loss").title(Line::from(legend).right_aligned());
+    Line::from(l).right_aligned()
+}
+
+/// The loss panel: a braille chart without axis lines (dim tick labels on
+/// the left and below), the lr as a sparkline on the panel's last row.
+fn loss_panel(f: &mut Frame, area: Rect, m: &Model) {
+    let block = panel("Loss").title(legend(m));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
     if m.samples.is_empty() {
-        let msg = if m.run.status == RunStatus::Queued {
-            "The chart starts with the first training step."
-        } else {
-            "Waiting for the first step…"
-        };
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+        let msg =
+            if m.run.status == RunStatus::Queued || matches!(m.phase().key, "queued" | "waiting") {
+                "The chart starts with the first training step."
+            } else {
+                "Waiting for the first step…"
+            };
         let [_, mid, _] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(1),
@@ -957,9 +1445,21 @@ fn loss_chart(f: &mut Frame, area: Rect, m: &Model) -> Option<(u16, u16, f64, f6
         ])
         .areas(inner);
         f.render_widget(Paragraph::new(msg).style(dim()).centered(), mid);
-        return None;
+        return;
     }
-    let width = area.width.saturating_sub(12).max(10) as usize * 2;
+    let lrs: Vec<f64> = m.samples.iter().filter_map(|s| s.lr).collect();
+    let extra = 1 + u16::from(!lrs.is_empty());
+    if inner.height < extra + 2 || inner.width < 12 {
+        return;
+    }
+    let [plot_rows, x_row, lr_row] = Layout::vertical([
+        Constraint::Min(2),
+        Constraint::Length(1),
+        Constraint::Length(extra - 1),
+    ])
+    .areas(inner);
+
+    let width = inner.width.saturating_sub(8).max(10) as usize * 2;
     let stride = m.samples.len().div_ceil(width).max(1);
     let mut train: Vec<(f64, f64)> = m
         .samples
@@ -977,17 +1477,36 @@ fn loss_chart(f: &mut Frame, area: Rect, m: &Model) -> Option<(u16, u16, f64, f6
         .iter()
         .filter_map(|s| s.eval.map(|e| (s.step as f64, e)))
         .collect();
-    let best_pt: Vec<(f64, f64)> = best.map(|(s, e)| vec![(s as f64, e)]).unwrap_or_default();
+    let best: Vec<(f64, f64)> = m
+        .best_eval()
+        .map(|(s, e)| vec![(s as f64, e)])
+        .unwrap_or_default();
     let ys = train.iter().chain(eval.iter()).map(|p| p.1);
     let (lo, hi) = ys.fold((f64::MAX, f64::MIN), |(a, b), y| (a.min(y), b.max(y)));
     let pad = ((hi - lo) * 0.08).max(1e-6);
     let (lo, hi) = ((lo - pad).max(0.0_f64.min(lo)), hi + pad);
     let x0 = m.samples.first().map(|s| s.step).unwrap_or(0).min(0) as f64;
-    let x1 = (m
-        .run
-        .total_steps
-        .max(m.samples.last().map(|s| s.step).unwrap_or(1)))
-    .max(1) as f64;
+    let last_step = m.samples.last().map(|s| s.step).unwrap_or(1);
+    let x1 = m.run.total_steps.max(last_step).max(1) as f64;
+
+    // Y tick labels: top, middle (when there's room) and bottom.
+    let mut ticks = vec![(0, hi), (plot_rows.height - 1, lo)];
+    if plot_rows.height >= 5 {
+        ticks.push((plot_rows.height / 2, (hi + lo) / 2.0));
+    }
+    let labels: Vec<(u16, String)> = ticks
+        .into_iter()
+        .map(|(r, y)| (r, num(round3(y))))
+        .collect();
+    let lw = labels.iter().map(|l| l.1.len() as u16).max().unwrap_or(0);
+    let lw = lw.min(inner.width / 4);
+    let [ycol, plot] =
+        Layout::horizontal([Constraint::Length(lw + 1), Constraint::Min(1)]).areas(plot_rows);
+    for (r, l) in labels {
+        let at = Rect::new(ycol.x, ycol.y + r, lw, 1);
+        f.render_widget(Paragraph::new(Span::styled(l, dim())).right_aligned(), at);
+    }
+
     let mut sets = vec![Dataset::default()
         .marker(Marker::Braille)
         .graph_type(GraphType::Line)
@@ -1006,31 +1525,47 @@ fn loss_chart(f: &mut Frame, area: Rect, m: &Model) -> Option<(u16, u16, f64, f6
                 .marker(Marker::Dot)
                 .graph_type(GraphType::Scatter)
                 .style(fg(GOOD).add_modifier(Modifier::BOLD))
-                .data(&best_pt),
+                .data(&best),
         );
     }
-    let ylabels = [num(round3(lo)), num(round3(hi))];
-    let inner = block.inner(area);
-    let label_w = ylabels.iter().map(|l| l.len() as u16).max().unwrap_or(0);
-    let plot_x = inner.x + label_w.min(inner.width / 3) + 1;
-    let plot = (plot_x, inner.right().saturating_sub(plot_x), x0, x1);
     let chart = Chart::new(sets)
-        .block(block)
         .legend_position(None)
-        .x_axis(
-            Axis::default()
-                .bounds([x0, x1])
-                .style(dim())
-                .labels([thousands(x0 as i64), thousands(x1 as i64)]),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([lo, hi])
-                .style(dim())
-                .labels(ylabels),
+        .x_axis(Axis::default().bounds([x0, x1]))
+        .y_axis(Axis::default().bounds([lo, hi]));
+    f.render_widget(chart, plot);
+
+    // X tick labels under the plot: first and last step, "step" between.
+    let xl = Rect::new(plot.x, x_row.y, plot.width, 1);
+    let [a, b, c] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(4),
+        Constraint::Fill(1),
+    ])
+    .areas(xl);
+    f.render_widget(Paragraph::new(Span::styled(thousands(x0 as i64), dim())), a);
+    f.render_widget(Paragraph::new(Span::styled("step", dim())), b);
+    f.render_widget(
+        Paragraph::new(Span::styled(thousands(x1 as i64), dim())).right_aligned(),
+        c,
+    );
+
+    // lr: a sparkline over the steps run so far, its latest value after it.
+    if let Some(last) = lrs.last().copied() {
+        f.render_widget(
+            Paragraph::new(Span::styled("lr", dim())).right_aligned(),
+            Rect::new(ycol.x, lr_row.y, lw, 1),
         );
-    f.render_widget(chart, area);
-    Some(plot)
+        let frac = ((last_step as f64 - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0);
+        let value = format!(" {}", num(last));
+        let sw = ((plot.width as f64 * frac).round() as u16)
+            .max(1)
+            .min(plot.width.saturating_sub(value.len() as u16));
+        let data = series(lrs.into_iter(), sw as usize);
+        let spark = Rect::new(plot.x, lr_row.y, data.len() as u16, 1);
+        f.render_widget(Sparkline::default().data(&data).style(dim()), spark);
+        let val = Rect::new(spark.right(), lr_row.y, value.len() as u16, 1).intersection(lr_row);
+        f.render_widget(Paragraph::new(Span::styled(value, dim())), val);
+    }
 }
 
 fn round3(x: f64) -> f64 {
@@ -1041,37 +1576,11 @@ fn round3(x: f64) -> f64 {
     (x * mag).round() / mag
 }
 
-/// The learning rate as a sparkline under the chart's plot, spanning the
-/// same steps.
-fn lr_line(f: &mut Frame, area: Rect, m: &Model, plot: Option<(u16, u16, f64, f64)>) {
-    let lrs: Vec<f64> = m.samples.iter().filter_map(|s| s.lr).collect();
-    let (Some(last), Some((px, pw, x0, x1)), Some(s)) =
-        (lrs.last().copied(), plot, m.samples.last())
-    else {
-        return;
-    };
-    let frac = ((s.step as f64 - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0);
-    let value = format!(" {}", num(last));
-    let sw = ((pw as f64 * frac).round() as u16)
-        .max(1)
-        .min(pw.saturating_sub(value.len() as u16));
-    let label = Rect::new(area.x, area.y, px.saturating_sub(area.x + 1), 1);
-    f.render_widget(
-        Paragraph::new(Span::styled("lr", dim())).right_aligned(),
-        label,
-    );
-    let spark = Rect::new(px, area.y, sw, 1);
-    let data = series(lrs.into_iter(), sw as usize);
-    f.render_widget(Sparkline::default().data(&data).style(dim()), spark);
-    let val = Rect::new(px + data.len() as u16, area.y, value.len() as u16, 1).intersection(area);
-    f.render_widget(Paragraph::new(Span::styled(value, dim())), val);
-}
-
 fn checkpoints(f: &mut Frame, area: Rect, m: &Model) {
     let block = panel("Checkpoints");
     let rows = block.inner(area).height as usize;
     let mut lines = vec![Line::styled(
-        format!("{:>7}  {:<9}", "step", "score"),
+        format!("{:>7}  {}", "step", m.score_name()),
         dim(),
     )];
     if m.checkpoints.is_empty() {
@@ -1080,15 +1589,16 @@ fn checkpoints(f: &mut Frame, area: Rect, m: &Model) {
     let skip = m.checkpoints.len().saturating_sub(rows.saturating_sub(1));
     let best = m.best_checkpoint();
     for c in m.checkpoints.iter().skip(skip) {
+        let is_best = best == Some(c.id.as_str());
         let mut spans = vec![
-            Span::raw(format!("{:>7}", thousands(c.step))),
+            Span::styled(format!("{:>7}", thousands(c.step)), dim()),
             Span::raw("  "),
-            Span::raw(format!(
-                "{:<9}",
-                c.eval_score.map(num).unwrap_or_else(|| "-".into())
-            )),
+            Span::styled(
+                format!("{:<9}", c.eval_score.map(num).unwrap_or_else(|| "-".into())),
+                if is_best { bold() } else { Style::new() },
+            ),
         ];
-        if best == Some(c.id.as_str()) {
+        if is_best {
             spans.push(Span::styled("● best", fg(GOOD)));
         } else if c.r#final {
             spans.push(Span::styled("final", dim()));
@@ -1121,15 +1631,15 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     rows
 }
 
-/// One log entry as rows: `  12:05  text`, continuation rows indented.
+/// One log entry as rows: `  00:12  text`, continuation rows indented.
 fn log_rows(m: &Model, l: &LogLine, width: usize) -> Vec<Line<'static>> {
-    const GUTTER: usize = 9;
+    const GUTTER: usize = 8;
     wrap(&l.text, width.saturating_sub(GUTTER))
         .into_iter()
         .enumerate()
         .map(|(i, row)| {
             let lead = if i == 0 {
-                format!("{:>7}  ", clock(l.at - m.started))
+                format!("{:>6}  ", clock(l.at - m.started))
             } else {
                 " ".repeat(GUTTER)
             };
@@ -1168,7 +1678,7 @@ fn footer(f: &mut Frame, area: Rect, m: &Model, short: bool) {
     let key = |k: &'static str, what: &'static str| {
         vec![
             Span::styled(k, bold()),
-            Span::styled(format!(" {}   ", what), dim()),
+            Span::styled(format!(" {}  ", what), dim()),
         ]
     };
     let mut left: Vec<Span> = Vec::new();
@@ -1179,6 +1689,7 @@ fn footer(f: &mut Frame, area: Rect, m: &Model, short: bool) {
     left.extend(key("l", if m.show_logs { "chart" } else { "logs" }));
     left.extend(key("?", "help"));
     if let Some((tone, text)) = &m.notice {
+        left.push(Span::raw(" "));
         left.push(Span::styled(text.clone(), tone.style()));
     }
     let right = match &m.link {
@@ -1334,8 +1845,7 @@ impl Drop for Term {
 }
 
 enum Msg {
-    Metric(Box<MetricPoint>),
-    Finished(Box<Run>),
+    Event(Box<RunEvent>),
     Run(Box<Run>),
     Checkpoints(Vec<Checkpoint>),
     Link(Option<String>),
@@ -1352,7 +1862,8 @@ fn fatal(e: &SdkError) -> bool {
     )
 }
 
-/// The SSE stream, reconnecting with Last-Event-ID for as long as we follow.
+/// The run's live stream (SSE), reconnecting with Last-Event-ID for as long
+/// as we follow. Today that is the metrics stream; see [`wire`].
 async fn pump_stream(c: Client, id: String, tx: UnboundedSender<Msg>, polling: Arc<AtomicBool>) {
     let mut last: Option<String> = None;
     let mut failures: u32 = 0;
@@ -1367,10 +1878,10 @@ async fn pump_stream(c: Client, id: String, tx: UnboundedSender<Msg>, polling: A
                 Some(Ok(MetricEvent::Metric(p))) => {
                     failures = 0;
                     let _ = tx.send(Msg::Link(None));
-                    let _ = tx.send(Msg::Metric(p));
+                    let _ = tx.send(Msg::Event(Box::new(RunEvent::metric(*p))));
                 }
                 Some(Ok(MetricEvent::Finished(r))) => {
-                    let _ = tx.send(Msg::Finished(r));
+                    let _ = tx.send(Msg::Event(Box::new(RunEvent::completed(*r))));
                     return;
                 }
                 Some(Err(e)) => {
@@ -1409,6 +1920,16 @@ fn short_err(e: &SdkError) -> String {
     }
 }
 
+async fn fetch_checkpoints(c: &Client, id: &str, tx: &UnboundedSender<Msg>) {
+    let p = ListParams {
+        limit: Some(100),
+        cursor: None,
+    };
+    if let Ok(page) = c.runs().checkpoints(id, &p).await {
+        let _ = tx.send(Msg::Checkpoints(page.data));
+    }
+}
+
 /// Polls the run (status, attempt, cost) and its checkpoints.
 async fn pump_poll(c: Client, id: String, tx: UnboundedSender<Msg>, polling: Arc<AtomicBool>) {
     let mut i: u64 = 0;
@@ -1419,7 +1940,7 @@ async fn pump_poll(c: Client, id: String, tx: UnboundedSender<Msg>, polling: Arc
                 queued = r.status == RunStatus::Queued;
                 if polling.load(Ordering::SeqCst) {
                     if let Some(p) = &r.latest_metric {
-                        let _ = tx.send(Msg::Metric(Box::new(p.clone())));
+                        let _ = tx.send(Msg::Event(Box::new(RunEvent::metric(p.clone()))));
                     }
                 }
                 let terminal = r.status.is_terminal();
@@ -1429,13 +1950,7 @@ async fn pump_poll(c: Client, id: String, tx: UnboundedSender<Msg>, polling: Arc
                 }
                 let _ = tx.send(Msg::Link(None));
                 if refresh && !queued {
-                    let p = ListParams {
-                        limit: Some(100),
-                        cursor: None,
-                    };
-                    if let Ok(page) = c.runs().checkpoints(&id, &p).await {
-                        let _ = tx.send(Msg::Checkpoints(page.data));
-                    }
+                    fetch_checkpoints(&c, &id, &tx).await;
                 }
                 if terminal {
                     return;
@@ -1500,6 +2015,7 @@ pub async fn follow(c: &Client, run: &Run, timeout: Duration) -> Result<Outcome,
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let deadline = Instant::now() + timeout;
     let mut terminal_seen: Option<Instant> = None;
+    let mut fetched = Instant::now();
     let result = loop {
         if let Err(e) = term.draw(&model) {
             break Err(CliError::from(e));
@@ -1519,16 +2035,18 @@ pub async fn follow(c: &Client, run: &Run, timeout: Duration) -> Result<Outcome,
         let mut out = None;
         while let Some(msg) = next.take() {
             match msg {
-                Msg::Metric(p) => model.apply_metric(*p),
+                Msg::Event(ev) => {
+                    let done = matches!(*ev, RunEvent::Completed { .. });
+                    model.apply_event(*ev);
+                    if done {
+                        out = Some(Ok(Outcome::Finished(model.run.clone())));
+                    }
+                }
                 Msg::Run(r) => {
                     if r.status.is_terminal() && terminal_seen.is_none() {
                         terminal_seen = Some(Instant::now());
                     }
                     model.apply_run(*r);
-                }
-                Msg::Finished(r) => {
-                    model.apply_run(*r);
-                    out = Some(Ok(Outcome::Finished(model.run.clone())));
                 }
                 Msg::Checkpoints(list) => model.apply_checkpoints(list),
                 Msg::Link(e) => {
@@ -1569,6 +2087,13 @@ pub async fn follow(c: &Client, run: &Run, timeout: Duration) -> Result<Outcome,
         if let Some(o) = out {
             let _ = term.draw(&model);
             break o;
+        }
+        // New checkpoints: refetch the list (best flags, scores), at most every 2 s.
+        if model.checkpoints_stale && fetched.elapsed() >= Duration::from_secs(2) {
+            model.checkpoints_stale = false;
+            fetched = Instant::now();
+            let (c, id, tx) = (c.clone(), model.run.id.clone(), tx.clone());
+            tokio::spawn(async move { fetch_checkpoints(&c, &id, &tx).await });
         }
     };
     stop.store(true, Ordering::SeqCst);

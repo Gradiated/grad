@@ -1,12 +1,13 @@
- support-sft  run_c932533fbc670fc82bf20da3                   started 2026-11-27 13:45 UTC  ·  2m10s
- sft  ·  test/tiny-qwen3  ·  support-prod@1
+ support-sft  run_c0eec7e24c43a921208e88c2                             started 2026-11-27 14:11 UTC
+ recipe sft   model test/tiny-qwen3   dataset support-prod@1                          elapsed 2m10s
 
- ⠙ Waiting for a GPU  for 2m10s
+ ⠸ Waiting for a GPU (0 workers online)  for 2m10s                                     attempt 1/10
 
  step  0 / 1,062       ────────────────────────────────────────────────────────    0%
  cost  $0.00 / $0.05   ────────────────────────────────────────────────────────    0%   0 tokens
 
  ╭ Loss ──────────────────────────────────────────────────────────────────────────────────────────╮
+ │                                                                                                │
  │                                                                                                │
  │                                                                                                │
  │                                                                                                │
@@ -19,12 +20,11 @@
  │                                                                                                │
  │                                                                                                │
  ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
-
- ╭ Checkpoints ───────────────────╮╭ Events ──────────────────────────────────────────────────────╮
- │    step  score                 ││   00:00  Run created                                         │
- │    none yet                    ││                                                              │
- │                                ││                                                              │
- │                                ││                                                              │
- │                                ││                                                              │
- ╰────────────────────────────────╯╰──────────────────────────────────────────────────────────────╯
- q detach   c cancel   l logs   ? help                                                       ● live
+ ╭ Checkpoints ───────────────────╮ ╭ Events ─────────────────────────────────────────────────────╮
+ │    step  score                 │ │  00:00  Run created                                         │
+ │    none yet                    │ │  00:00  Waiting for a GPU (0 workers online)                │
+ │                                │ │                                                             │
+ │                                │ │                                                             │
+ │                                │ │                                                             │
+ ╰────────────────────────────────╯ ╰─────────────────────────────────────────────────────────────╯
+ q detach  c cancel  l logs  ? help                                                          ● live

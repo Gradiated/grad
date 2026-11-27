@@ -5,7 +5,7 @@
 use super::*;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 fn fixture() -> Value {
@@ -19,8 +19,41 @@ fn run_from(v: &Value) -> Run {
     serde_json::from_value(v.clone()).unwrap()
 }
 
+fn events(fx: &Value) -> Vec<RunEvent> {
+    serde_json::from_value(fx["events"].clone()).unwrap()
+}
+
+fn kind(e: &RunEvent) -> &'static str {
+    match e {
+        RunEvent::Phase { .. } => "phase",
+        RunEvent::Metric { .. } => "metric",
+        RunEvent::Checkpoint { .. } => "checkpoint",
+        RunEvent::Attempt { .. } => "attempt",
+        RunEvent::Warning { .. } => "warning",
+        RunEvent::Log { .. } => "log",
+        RunEvent::Completed { .. } => "completed",
+        RunEvent::Unknown => "unknown",
+    }
+}
+
 fn metrics(fx: &Value) -> Vec<MetricPoint> {
-    serde_json::from_value(fx["metrics"].clone()).unwrap()
+    events(fx)
+        .into_iter()
+        .filter_map(|e| match e {
+            RunEvent::Metric { metric, .. } => Some(metric),
+            _ => None,
+        })
+        .collect()
+}
+
+fn final_run(fx: &Value) -> Run {
+    events(fx)
+        .into_iter()
+        .find_map(|e| match e {
+            RunEvent::Completed { run, .. } => Some(*run),
+            _ => None,
+        })
+        .unwrap()
 }
 
 fn checkpoints_upto(fx: &Value, step: i64) -> Vec<Checkpoint> {
@@ -32,21 +65,74 @@ fn epoch(ts: &str) -> i64 {
     parse_ts(ts).unwrap()
 }
 
-/// Replay the recording up to `step` the way the driver would.
+/// Feed one event the way the driver does (a checkpoint event refetches the list).
+fn feed(m: &mut Model, fx: &Value, ev: RunEvent) {
+    if let Some(at) = ev.meta().map(|e| epoch(&e.timestamp)) {
+        m.tick(at);
+    }
+    let step = match &ev {
+        RunEvent::Checkpoint { step, .. } => *step,
+        _ => 0,
+    };
+    m.apply_event(ev);
+    if m.checkpoints_stale {
+        m.checkpoints_stale = false;
+        if step > 0 {
+            m.apply_checkpoints(checkpoints_upto(fx, step));
+        }
+    }
+}
+
+/// An event shaped like the recording's, from JSON fields.
+fn event(fx: &Value, at_secs: i64, attempt: i64, body: Value) -> RunEvent {
+    let created = epoch(fx["queued"]["created_at"].as_str().unwrap());
+    let mut v = body;
+    v["run_id"] = fx["queued"]["id"].clone();
+    v["attempt"] = attempt.into();
+    v["timestamp"] = fmt_ts(created + at_secs).into();
+    serde_json::from_value(v).unwrap()
+}
+
+fn fmt_ts(epoch: i64) -> String {
+    // Days-from-civil inverse, enough for test timestamps.
+    let (days, secs) = (epoch.div_euclid(86_400), epoch.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(mo <= 2);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z",
+        y,
+        mo,
+        d,
+        secs / 3600,
+        secs % 3600 / 60,
+        secs % 60
+    )
+}
+
+/// Replay the recorded events up to training step `step` (all of them,
+/// `completed` included, for `i64::MAX`).
 fn replay(fx: &Value, step: i64) -> Model {
     let queued = run_from(&fx["queued"]);
     let mut m = Model::new(queued.clone(), epoch(&queued.created_at));
-    let mut running = queued;
-    running.status = RunStatus::Running;
-    m.apply_run(running);
-    for p in metrics(fx).into_iter().filter(|p| p.step <= step) {
-        m.tick(epoch(&p.timestamp));
-        let eval = p.eval_metrics.is_some();
-        let at = p.step;
-        m.apply_metric(p);
-        if eval {
-            m.apply_checkpoints(checkpoints_upto(fx, at));
+    m.apply_run(queued);
+    for ev in events(fx) {
+        let past = match &ev {
+            RunEvent::Metric { metric, .. } => metric.step > step,
+            RunEvent::Checkpoint { step: s, .. } => *s > step,
+            RunEvent::Completed { .. } | RunEvent::Warning { .. } => step != i64::MAX,
+            _ => false,
+        };
+        if past {
+            continue;
         }
+        feed(&mut m, fx, ev);
     }
     m
 }
@@ -89,6 +175,27 @@ fn snapshot(name: &str, b: &Buffer) {
     assert_palette(b);
 }
 
+/// docs/CLI_TUI.md shows the wide and narrow snapshots as its first two
+/// `text` blocks; `GRAD_UPDATE_SNAPSHOTS=1` rewrites them.
+fn doc_capture(block: usize, text: &str) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/CLI_TUI.md");
+    let doc = std::fs::read_to_string(&path).unwrap();
+    let mut parts: Vec<String> = doc.split("```text\n").map(str::to_string).collect();
+    let i = block + 1;
+    let end = parts[i].find("```").unwrap();
+    if std::env::var("GRAD_UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
+        parts[i] = format!("{}{}", text, &parts[i][end..]);
+        std::fs::write(&path, parts.join("```text\n")).unwrap();
+        return;
+    }
+    assert_eq!(
+        &parts[i][..end],
+        text,
+        "docs/CLI_TUI.md capture {} is stale",
+        block
+    );
+}
+
 /// Light/dark safety: never paint a background, and use only named ANSI
 /// colours the terminal theme maps.
 fn assert_palette(b: &Buffer) {
@@ -110,17 +217,149 @@ fn assert_palette(b: &Buffer) {
     }
 }
 
+fn label(m: &Model) -> String {
+    m.phase().label
+}
+
+fn log_texts(m: &Model) -> Vec<String> {
+    m.log.iter().map(|l| l.text.clone()).collect()
+}
+
+#[test]
+fn recorded_events_decode() {
+    let evs = events(&fixture());
+    let kinds: HashSet<&str> = evs.iter().map(kind).collect();
+    for k in [
+        "phase",
+        "metric",
+        "checkpoint",
+        "attempt",
+        "warning",
+        "completed",
+    ] {
+        assert!(kinds.contains(k), "the recording has a {} event", k);
+    }
+    let unknown: RunEvent =
+        serde_json::from_value(json!({"type": "future_thing", "seq": 1})).unwrap();
+    assert_eq!(
+        unknown,
+        RunEvent::Unknown,
+        "unknown event types are ignored"
+    );
+    let mut m = replay(&fixture(), 40);
+    let n = m.log.len();
+    m.apply_event(unknown);
+    assert_eq!(m.log.len(), n);
+}
+
 #[test]
 fn waiting_for_a_gpu() {
     let fx = fixture();
     let queued = run_from(&fx["queued"]);
     let mut m = Model::new(queued.clone(), epoch(&queued.created_at));
+    m.apply_run(queued.clone());
+    assert_eq!(
+        label(&m),
+        "Waiting for a GPU",
+        "before the server says more"
+    );
+    feed(&mut m, &fx, events(&fx).remove(0));
+    assert_eq!(label(&m), "Waiting for a GPU (0 workers online)");
+    // As the server reports it when no worker claims the run within 45 s.
+    let waiting = json!({"type": "phase", "seq": 2, "phase": "waiting_for_compute",
+        "step": 0, "workers_online": 0, "autoscaling": false, "gpu": null});
+    feed(&mut m, &fx, event(&fx, 45, 1, waiting));
     m.tick(epoch(&queued.created_at) + 130);
     let b = render(&m, 100, 30);
     snapshot("waiting", &b);
     let t = text(&b);
-    assert!(t.contains("Waiting for a GPU  for 2m10s"), "{}", t);
+    assert!(
+        t.contains("Waiting for a GPU (0 workers online)  for 2m10s"),
+        "one clock across queued and waiting_for_compute:\n{}",
+        t
+    );
     assert!(t.contains("The chart starts with the first training step."));
+    assert_eq!(
+        log_texts(&m),
+        ["Run created", "Waiting for a GPU (0 workers online)"],
+        "logged once, not per poll"
+    );
+
+    // Two busy workers, then scale-from-zero.
+    let busy = json!({"type": "phase", "seq": 3, "phase": "waiting_for_compute",
+        "step": 0, "workers_online": 2, "autoscaling": false, "gpu": null});
+    feed(&mut m, &fx, event(&fx, 140, 1, busy));
+    assert_eq!(label(&m), "Waiting for a GPU (2 workers online, all busy)");
+    let scaling = json!({"type": "phase", "seq": 4, "phase": "waiting_for_compute",
+        "step": 0, "workers_online": 0, "autoscaling": true, "gpu": null});
+    feed(&mut m, &fx, event(&fx, 150, 1, scaling));
+    assert_eq!(label(&m), "Waiting for a GPU (a worker is starting)");
+    assert_eq!(m.log.len(), 2);
+}
+
+#[test]
+fn phases_from_the_server() {
+    let fx = fixture();
+    let queued = run_from(&fx["queued"]);
+    let mut m = Model::new(queued.clone(), epoch(&queued.created_at));
+    feed(&mut m, &fx, events(&fx).remove(0));
+    let gpu = json!({"name": "NVIDIA H100 80GB HBM3", "memory_gb": 79.6});
+    let steps = [
+        (
+            json!({"type": "phase", "seq": 5, "phase": "starting", "step": 0, "gpu": gpu}),
+            "Starting on NVIDIA H100 80GB HBM3 (80 GB)",
+        ),
+        (
+            json!({"type": "phase", "seq": 6, "phase": "loading_model", "step": 0}),
+            "Loading the model",
+        ),
+        (
+            json!({"type": "phase", "seq": 7, "phase": "training", "step": 0}),
+            "Training",
+        ),
+        (
+            json!({"type": "phase", "seq": 8, "phase": "evaluating", "step": 20}),
+            "Evaluating",
+        ),
+        (
+            json!({"type": "phase", "seq": 9, "phase": "checkpointing", "step": 20}),
+            "Saving a checkpoint",
+        ),
+        (
+            json!({"type": "phase", "seq": 10, "phase": "training", "step": 20}),
+            "Training",
+        ),
+        (
+            json!({"type": "phase", "seq": 11, "phase": "uploading", "step": 40}),
+            "Uploading the artifact",
+        ),
+        (
+            json!({"type": "phase", "seq": 12, "phase": "completing", "step": 40}),
+            "Finishing up",
+        ),
+        (
+            json!({"type": "phase", "seq": 13, "phase": "new_phase", "step": 40}),
+            "Working",
+        ),
+    ];
+    for (i, (body, want)) in steps.into_iter().enumerate() {
+        feed(&mut m, &fx, event(&fx, 10 + i as i64, 1, body));
+        assert_eq!(label(&m), want);
+    }
+    let training = m.log.iter().filter(|l| l.text == "Training").count();
+    assert_eq!(training, 1, "training is logged once per attempt");
+    assert!(log_texts(&m).contains(&"Starting on NVIDIA H100 80GB HBM3 (80 GB)".to_string()));
+    assert!(
+        !log_texts(&m).iter().any(|l| l == "Evaluating"),
+        "eval cycles stay out of the log"
+    );
+    assert_eq!(
+        starting_label(Some(&Gpu {
+            name: "L4".into(),
+            memory_gb: 0.0
+        })),
+        "Starting on L4"
+    );
 }
 
 #[test]
@@ -129,23 +368,32 @@ fn wide_layout_mid_run() {
     let b = render(&m, 100, 30);
     snapshot("wide", &b);
     let t = text(&b);
-    let doc = include_str!("../../../docs/CLI_TUI.md");
-    assert!(
-        doc.contains(&t) || std::env::var("GRAD_UPDATE_SNAPSHOTS").is_ok(),
-        "docs/CLI_TUI.md shows an outdated capture; paste tests/snapshots/tui/wide.txt"
-    );
+    doc_capture(0, &t);
     assert!(t.contains("support-sft"));
-    assert!(t.contains("sft  ·  test/tiny-qwen3  ·  support-prod@1"));
+    assert!(t.contains("recipe sft   model test/tiny-qwen3   dataset support-prod@1"));
     assert!(t.contains("Training"));
     assert!(t.contains("640 / 1,062"));
     assert!(t.contains("ETA"));
     assert!(t.contains("$0.05"), "the cost cap is shown");
-    assert!(t.contains("best"));
-    assert!(t.contains("Eval at step 640 · loss"));
+    assert!(t.contains("best 0.6195 @ 640"));
+    assert!(
+        t.contains("eval loss"),
+        "the checkpoints' metric names the column"
+    );
     assert!(
         t.contains("640  0.6195   ● best"),
         "best so far, by metric_mode=min"
     );
+    assert!(t.contains("lr "), "the lr sparkline");
+    assert!(
+        !t.contains("Eval at step"),
+        "plain eval losses stay in the chart"
+    );
+    assert!(!t.contains("│0.") && !t.contains("└─"), "no axis lines");
+    // The classic 80x24 terminal keeps the full layout.
+    let b = render(&m, 80, 24);
+    snapshot("standard", &b);
+    assert!(text(&b).contains("╭ Checkpoints"));
 }
 
 #[test]
@@ -154,65 +402,151 @@ fn narrow_layout_degrades_to_compact() {
     let b = render(&m, 60, 18);
     snapshot("narrow", &b);
     let t = text(&b);
+    doc_capture(1, &t);
     assert!(!t.contains("╭"), "no panels in the compact layout:\n{}", t);
     assert!(t.contains("q detach"));
+    assert!(t.contains("best 0.6195 @ 640"));
+}
+
+/// A reclaimed GPU as the worker and server report it.
+fn reclaim(fx: &Value, m: &mut Model) {
+    let t0 = m.now - m.started;
+    let gpu = json!({"name": "NVIDIA H100 80GB HBM3", "memory_gb": 79.6});
+    for (dt, attempt, body) in [
+        (
+            0,
+            1,
+            json!({"type": "log", "seq": 900, "step": 652,
+            "message": "SIGTERM: saving an emergency checkpoint at step 652"}),
+        ),
+        (
+            1,
+            1,
+            json!({"type": "attempt", "seq": 901, "event": "interrupted",
+            "reason": "compute_reclaimed", "step": 652, "resume_step": 652, "max_attempts": 10,
+            "message": "attempt 1 interrupted at step 652: the GPU was reclaimed; resuming from step 652 on a new worker"}),
+        ),
+        (
+            1,
+            2,
+            json!({"type": "phase", "seq": 902, "phase": "queued", "step": 652,
+            "workers_online": 0, "autoscaling": false}),
+        ),
+        (
+            20,
+            2,
+            json!({"type": "attempt", "seq": 903, "event": "started",
+            "resume_step": 652, "max_attempts": 10,
+            "message": "attempt 2 started, resuming from step 652"}),
+        ),
+        (
+            20,
+            2,
+            json!({"type": "phase", "seq": 904, "phase": "starting", "step": 652, "gpu": gpu}),
+        ),
+    ] {
+        feed(m, fx, event(fx, t0 + dt, attempt, body));
+    }
 }
 
 #[test]
 fn interrupted_and_resumed() {
     let fx = fixture();
     let mut m = replay(&fx, 652);
-    let base = m.now;
     m.link(Some("connection dropped".into()));
-    let mut r = m.run.clone();
-    r.attempt = 2;
-    r.status = RunStatus::Queued;
-    m.tick(base + 5);
-    m.apply_run(r.clone());
+    reclaim(&fx, &mut m);
+    let t0 = m.now;
     m.link(None);
-    assert_eq!(m.phase().0, "requeued");
-    m.tick(base + 25);
-    r.status = RunStatus::Running;
-    m.apply_run(r);
-    assert_eq!(m.phase().1, "Resuming from step 640");
-    for mut p in metrics(&fx)
-        .into_iter()
-        .filter(|p| p.step > 640 && p.step <= 664)
-    {
-        p.attempt = 2;
-        p.seq += 10_000;
-        m.tick(base + 30);
-        m.apply_metric(p);
-    }
+    m.tick(t0 + 3);
+    let v = m.phase();
+    assert_eq!(v.label, "Starting on NVIDIA H100 80GB HBM3 (80 GB)");
+    assert_eq!(v.note.as_deref(), Some("resuming from step 652"));
+    assert_eq!(v.tone, Tone::Warn);
     let b = render(&m, 100, 30);
     snapshot("interrupted", &b);
     let t = text(&b);
-    let max = m.run.max_attempts;
-    assert!(t.contains(&format!("attempt 2/{}", max)));
-    let line = format!(
-        "Attempt 1 interrupted at step 652; attempt 2/{} resuming from step 640",
-        max
-    );
-    assert!(m.log.iter().any(|l| l.text == line && l.tone == Tone::Warn));
-    assert!(t.contains("Attempt 1 interrupted at step 652"));
-    assert!(t.contains("Reconnected"));
-    assert!(m
-        .log
-        .iter()
-        .any(|l| l.text == "Connection lost (connection dropped); reconnecting"));
+    assert!(t.contains("attempt 2/10"));
     assert!(
-        m.samples.windows(2).all(|w| w[0].step < w[1].step),
-        "replayed steps replace the interrupted attempt's"
+        t.contains("Attempt 1 interrupted at step 652: the GPU was"),
+        "{}",
+        t
     );
+    assert!(t.contains("Attempt 2 started, resuming from step 652"));
+    assert!(t.contains("Reconnected"));
+    assert!(log_texts(&m).contains(&"Connection lost (connection dropped); reconnecting".into()));
+
+    // The poller's run object then shows attempt 2: no second line.
+    let n = m.log.len();
+    let mut r = m.run.clone();
+    r.attempt = 2;
+    m.apply_run(r);
+    assert_eq!(m.log.len(), n);
+
+    // Training resumes: replayed steps replace the interrupted attempt's.
+    for mut p in metrics(&fx)
+        .into_iter()
+        .filter(|p| p.step > 640 && p.step <= 700)
+    {
+        p.attempt = 2;
+        p.seq += 10_000;
+        m.apply_metric(p);
+    }
+    assert_eq!(
+        m.phase(),
+        PhaseView {
+            key: "training",
+            label: "Training".into(),
+            note: None,
+            tone: Tone::Plain
+        }
+    );
+    assert!(m.samples.windows(2).all(|w| w[0].step < w[1].step));
+    assert_eq!(
+        m.log.iter().filter(|l| l.text == "Training").count(),
+        2,
+        "once per attempt"
+    );
+
+    // An attempt that gives up is logged in red.
+    let gave_up = json!({"type": "attempt", "seq": 990, "event": "gave_up",
+        "reason": "lease_lost", "step": 700, "max_attempts": 10,
+        "message": "attempt 2 ended: the worker was lost; no attempts left"});
+    feed(&mut m, &fx, event(&fx, t0 + 60, 2, gave_up));
+    assert_eq!(m.log.back().unwrap().tone, Tone::Bad);
+}
+
+#[test]
+fn interruptions_are_worded_neutrally() {
+    let fx = fixture();
+    let mut m = replay(&fx, 652);
+    reclaim(&fx, &mut m);
+    let mut all = log_texts(&m).join("\n");
+    for (w, h) in [(100, 30), (60, 18)] {
+        all.push_str(&text(&render(&m, w, h)));
+    }
+    // A server without lifecycle events: only the attempt number changes.
+    let mut old = replay(&fx, 652);
+    old.life = None;
+    old.apply_checkpoints(checkpoints_upto(&fx, 640));
+    let mut r = old.run.clone();
+    r.attempt = 2;
+    old.apply_run(r);
+    all.push_str(&log_texts(&old).join("\n"));
+    all.push_str(&text(&render(&old, 100, 30)));
+    let lower = all.to_lowercase();
+    for word in ["spot", "preempt", "gpu-hour", "gpu hour"] {
+        assert!(!lower.contains(word), "{:?} in:\n{}", word, all);
+    }
+    assert!(all.contains("Attempt 1 was interrupted at step 652; attempt 2 resumes from step 640"));
+    assert_eq!(old.phase().note.as_deref(), Some("resuming from step 640"));
 }
 
 #[test]
 fn finished_run() {
     let fx = fixture();
     let mut m = replay(&fx, i64::MAX);
-    let fin = run_from(&fx["final"]);
+    let fin = final_run(&fx);
     m.tick(epoch(fin.finished_at.as_deref().unwrap()));
-    m.apply_run(fin);
     m.apply_checkpoints(checkpoints_upto(&fx, i64::MAX));
     let b = render(&m, 100, 30);
     snapshot("finished", &b);
@@ -224,21 +558,30 @@ fn finished_run() {
         "the server's best checkpoint is marked"
     );
     assert!(!t.contains("c cancel"), "no cancel key once the run ended");
-    assert!(
-        t.contains("not deployable"),
-        "eval report warnings are logged"
+    assert!(!t.contains("● live"), "no link state once the run ended");
+    assert_eq!(
+        m.log
+            .iter()
+            .filter(|l| l.text.contains("not deployable"))
+            .count(),
+        1,
+        "the warning event and the eval report's copy are logged once"
     );
 }
 
 #[test]
 fn logs_help_and_confirm_overlays() {
-    let mut m = replay(&fixture(), 640);
+    let fx = fixture();
+    let mut m = replay(&fx, 640);
+    for i in 0..30 {
+        let body = json!({"type": "log", "seq": 2000 + i, "step": 640, "message": format!("worker line {}", i)});
+        feed(&mut m, &fx, event(&fx, 10, 1, body));
+    }
     m.key(KeyCode::Char('l'), KeyModifiers::NONE);
     let t = text(&render(&m, 100, 30));
-    assert!(t.contains("Events (l to close)"));
     assert!(t.contains("l chart"));
     assert!(
-        t.matches("Eval at step").count() > 10,
+        t.matches("Worker line").count() > 15,
         "the full log uses the whole body:\n{}",
         t
     );
@@ -294,20 +637,32 @@ fn keys() {
     assert_eq!(m.key(KeyCode::Char('z'), none), Action::None);
 
     let mut done = m;
-    done.apply_run(run_from(&fx["final"]));
+    done.apply_run(final_run(&fx));
     assert_eq!(done.key(KeyCode::Char('c'), none), Action::None);
     assert!(!done.confirm, "a finished run can't be cancelled");
 }
 
 #[test]
 fn tiny_terminals_do_not_panic() {
-    let m = replay(&fixture(), 640);
-    for (w, h) in [(1, 1), (20, 6), (30, 3), (79, 21), (80, 22), (200, 60)] {
-        let b = render(&m, w, h);
-        assert_palette(&b);
+    let fx = fixture();
+    let m = replay(&fx, 640);
+    let mut fin = replay(&fx, i64::MAX);
+    fin.apply_checkpoints(checkpoints_upto(&fx, i64::MAX));
+    for (w, h) in [
+        (1, 1),
+        (20, 6),
+        (30, 3),
+        (79, 23),
+        (80, 24),
+        (80, 12),
+        (200, 60),
+    ] {
+        assert_palette(&render(&m, w, h));
+        assert_palette(&render(&fin, w, h));
     }
-    let empty = Model::new(run_from(&fixture()["queued"]), 0);
+    let empty = Model::new(run_from(&fx["queued"]), 0);
     render(&empty, 25, 8);
+    render(&empty, 100, 30);
 }
 
 #[test]
@@ -328,12 +683,31 @@ fn stream_bookkeeping() {
     assert!(m.eta().unwrap() >= 0);
     assert_eq!(m.best_eval().unwrap().0, 200, "loss falls on this run");
 
-    // A queued run whose first metric arrives flips to running.
+    // Today's metrics stream: a queued run whose first metric arrives trains.
     let mut q = Model::new(run_from(&fx["queued"]), 0);
-    assert_eq!(q.phase().1, "Waiting for a GPU");
-    q.apply_metric(metrics(&fx).remove(0));
+    assert_eq!(label(&q), "Waiting for a GPU");
+    q.apply_run(Run {
+        status: RunStatus::Running,
+        ..run_from(&fx["queued"])
+    });
+    assert_eq!(label(&q), "Starting");
+    q.apply_event(RunEvent::metric(metrics(&fx).remove(0)));
     assert_eq!(q.run.status, RunStatus::Running);
-    assert_eq!(q.phase().1, "Training");
+    assert_eq!(label(&q), "Training");
+    assert_eq!(log_texts(&q), ["Run created", "Starting", "Training"]);
+
+    // An eval step or a checkpoint asks for the checkpoint list.
+    let mut q = Model::new(run_from(&fx["queued"]), 0);
+    let p = metrics(&fx)
+        .into_iter()
+        .find(|p| eval_loss(p).is_some())
+        .unwrap();
+    q.apply_metric(p);
+    assert!(q.checkpoints_stale);
+
+    // A reattached run that already ended logs its status.
+    let ended = Model::new(final_run(&fx), 0);
+    assert!(log_texts(&ended).contains(&"Run completed".into()));
 
     // The sample buffer stays bounded and keeps every eval point.
     let mut big = Model::new(run_from(&fx["queued"]), 0);
@@ -346,6 +720,10 @@ fn stream_bookkeeping() {
     }
     assert!(big.samples.len() <= MAX_SAMPLES);
     assert_eq!(big.samples.iter().filter(|s| s.eval.is_some()).count(), 4);
+    for _ in 0..MAX_LOG + 5 {
+        big.push_log(0, Tone::Plain, "x".into());
+    }
+    assert_eq!(big.log.len(), MAX_LOG);
 }
 
 #[test]
@@ -368,7 +746,7 @@ fn link_states() {
 #[test]
 fn terminal_statuses() {
     let fx = fixture();
-    for (status, label) in [
+    for (status, want) in [
         (RunStatus::Failed, "Failed"),
         (RunStatus::Cancelled, "Cancelled"),
         (RunStatus::StoppedBudget, "Stopped at the cost cap"),
@@ -380,9 +758,9 @@ fn terminal_statuses() {
         r.status = status;
         r.error = Some("CUDA out of memory".into());
         m.apply_run(r);
-        assert_eq!(m.phase().1, label);
+        assert_eq!(label(&m), want);
         let t = text(&render(&m, 100, 30));
-        assert!(t.contains(label), "{}", t);
+        assert!(t.contains(want), "{}", t);
     }
     let mut m = replay(&fx, 300);
     let mut r = m.run.clone();
@@ -402,16 +780,24 @@ fn terminal_statuses() {
         .iter()
         .any(|c| c.fg == Color::Yellow && c.symbol() == "━"));
 
-    // A restart with no checkpoint says so.
-    let mut m = Model::new(run_from(&fx["queued"]), 0);
+    // A restart with no checkpoint says so (servers without phases).
+    let mut q = run_from(&fx["queued"]);
+    q.attempt = 1;
+    let mut m = Model::new(q, 0);
     let mut r = m.run.clone();
     (r.attempt, r.status) = (2, RunStatus::Running);
     m.apply_run(r);
-    assert_eq!(m.phase().1, "Restarting from step 0");
-    assert!(m
-        .log
+    assert_eq!(
+        m.phase().note.as_deref(),
+        Some("starting again from step 0")
+    );
+    assert!(log_texts(&m)
         .iter()
-        .any(|l| l.text.contains("restarting from step 0")));
+        .any(|l| l.contains("attempt 2 starts from step 0")));
+
+    // Reclaims don't count toward max_attempts, so the attempt can pass it.
+    m.run.attempt = 12;
+    assert!(text(&render(&m, 100, 30)).contains("attempt 12"));
 }
 
 #[test]
@@ -476,7 +862,7 @@ fn helpers() {
     assert_eq!(clock(65), "01:05");
     assert_eq!(clock(3725), "1:02:05");
     assert_eq!(clock(-3), "00:00");
-    assert_eq!(series([1.0, 2.0, 3.0].into_iter(), 3), vec![1, 51, 100]);
+    assert_eq!(series([1.0, 2.0, 3.0].into_iter(), 3), vec![8, 54, 100]);
     assert_eq!(
         series((0..10).map(f64::from), 4).len(),
         4,
@@ -485,7 +871,7 @@ fn helpers() {
     assert_eq!(wrap("aa bb cc", 5), vec!["aa bb", "cc"]);
     assert_eq!(wrap("abcdefgh", 3), vec!["abc", "def", "gh"]);
     assert_eq!(wrap("", 3), vec![""]);
-    assert_eq!(series([1.0, 1.0].into_iter(), 4), vec![1, 1]);
+    assert_eq!(series([1.0, 1.0].into_iter(), 4), vec![8, 8]);
     assert!(series(std::iter::empty(), 4).is_empty());
     assert_eq!(round3(0.123456), 0.123);
     assert_eq!(round3(1234.5), 1230.0);
@@ -536,8 +922,11 @@ fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>) -> Vec<String> {
     let mut out = Vec::new();
     while let Ok(m) = rx.try_recv() {
         out.push(match m {
-            Msg::Metric(p) => format!("metric {}", p.seq),
-            Msg::Finished(r) => format!("finished {}", r.status),
+            Msg::Event(e) => match *e {
+                RunEvent::Metric { metric, .. } => format!("metric {}", metric.seq),
+                RunEvent::Completed { run, .. } => format!("finished {}", run.status),
+                other => kind(&other).to_string(),
+            },
             Msg::Run(r) => format!("run {}", r.status),
             Msg::Checkpoints(c) => format!("checkpoints {}", c.len()),
             Msg::Link(None) => "up".into(),
@@ -555,8 +944,11 @@ const SSE: &str = "text/event-stream";
 #[tokio::test]
 async fn stream_resumes_after_drops_with_last_event_id() {
     let fx = fixture();
-    let metric = format!("event: metric\nid: 1\ndata: {}\n\n", fx["metrics"][0]);
-    let status = format!("event: status\ndata: {}\n\n", fx["final"]);
+    // Today's metrics stream: `metric` carries a MetricPoint, `status` the final Run.
+    let point = serde_json::to_string(&metrics(&fx)[0]).unwrap();
+    let fin = serde_json::to_string(&final_run(&fx)).unwrap();
+    let metric = format!("event: metric\nid: 1\ndata: {}\n\n", point);
+    let status = format!("event: status\ndata: {}\n\n", fin);
     // 1: one metric, then the body ends; 2: ends at once (the SDK gives up and
     // the pump reconnects itself); 3: the final status.
     let (url, server) = serve(vec![
@@ -576,10 +968,10 @@ async fn stream_resumes_after_drops_with_last_event_id() {
     assert_eq!(
         drain(&mut rx),
         [
-            "up",
-            "metric 1",
-            "down connection dropped",
-            "finished completed"
+            "up".to_string(),
+            format!("metric {}", metrics(&fx)[0].seq),
+            "down connection dropped".into(),
+            "finished completed".into(),
         ]
     );
     let heads = server.await.unwrap();
@@ -613,9 +1005,10 @@ async fn stream_falls_back_to_polling_or_stops_on_fatal_errors() {
 #[tokio::test]
 async fn poller_reports_the_run_and_checkpoints_until_it_ends() {
     let fx = fixture();
-    let page = serde_json::json!({ "data": fx["checkpoints"], "next_cursor": null });
+    let page = json!({ "data": fx["checkpoints"], "next_cursor": null });
+    let fin = serde_json::to_string(&final_run(&fx)).unwrap();
     let (url, server) = serve(vec![
-        (200, "application/json", fx["final"].to_string()),
+        (200, "application/json", fin.clone()),
         (200, "application/json", page.to_string()),
     ])
     .await;
@@ -623,7 +1016,7 @@ async fn poller_reports_the_run_and_checkpoints_until_it_ends() {
     let polling = Arc::new(AtomicBool::new(true));
     pump_poll(client(&url), "run_x".into(), tx, polling).await;
     let n = fx["checkpoints"].as_array().unwrap().len();
-    let last_seq = fx["final"]["latest_metric"]["seq"].as_i64().unwrap();
+    let last_seq = final_run(&fx).latest_metric.unwrap().seq;
     assert_eq!(
         drain(&mut rx),
         [

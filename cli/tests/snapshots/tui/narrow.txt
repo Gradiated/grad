@@ -1,18 +1,18 @@
-support-sft  run_c932533fbc670fc82bf20da3
+support-sft  run_c0eec7e24c43a921208e88c2
 sft  ·  test/tiny-qwen3  ·  support-prod@1
-⠙ Training  for 7s  attempt 1/10
+⠼ Training  for 10s  ·  attempt 1/10
 step  640 / 1,062       ━━━━━━━━━━━━━━━━━━────────────   60%
 cost  $0.0096 / $0.05   ━━━━━━────────────────────────   19%
-      256.4k tok/s  ·  ETA 4s  ·  9.6k tokens
-loss  0.6194  best eval 0.6195  █▇▇▆▆▆▅▅▅▄▄▄▃▃▃▂▂▂▁▁▁▁▁
+      262.7k tok/s  ·  ETA 7s  ·  9.6k tokens
+loss  0.6194  best 0.6195 @ 640  █▇▇▆▆▆▅▅▅▄▄▄▃▃▃▃▂▂▂▂▁▁▁▁
+────────────────────────────────────────────────────────────
+ 00:00  Run created
+ 00:00  Starting
+ 00:00  Training
 
-  00:06  Eval at step 480 · loss 0.632
-  00:06  Eval at step 500 · loss 0.6302
-  00:06  Eval at step 520 · loss 0.6285
-  00:06  Eval at step 540 · loss 0.6268
-  00:07  Eval at step 560 · loss 0.6253
-  00:07  Eval at step 580 · loss 0.6237
-  00:07  Eval at step 600 · loss 0.6223
-  00:07  Eval at step 620 · loss 0.6209
-  00:07  Eval at step 640 · loss 0.6195
-q detach   c cancel   l logs   ? help
+
+
+
+
+
+q detach  c cancel  l logs  ? help

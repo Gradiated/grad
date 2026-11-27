@@ -594,6 +594,11 @@ fn live_tui_follows_detaches_and_cancels_a_run() {
         "frames use synchronized updates"
     );
     assert!(out.contains("tui-short"), "the header names the run");
+    assert!(out.contains("Training"), "the phase line");
+    assert!(
+        !out.to_lowercase().contains("spot"),
+        "interruptions are worded neutrally"
+    );
     let tail = after_tui(&out);
     assert!(tail.contains("✓ Trained test/tiny-qwen3 sft"), "{}", tail);
     assert!(tail.contains("✓ Exported artifact tui-short@"), "{}", tail);
