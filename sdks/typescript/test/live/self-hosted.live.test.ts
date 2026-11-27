@@ -173,6 +173,15 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
     expect((await exports.records().all()).map((r) => r.id)).toEqual(["long"]);
   });
 
+  it("queues a pinned benchmark import", async () => {
+    const gsm8k = await grad.datasets.fromBenchmark("gsm8k", { limit: 5, wait: false });
+    expect(gsm8k.name).toBe("gsm8k-5");
+    const jobs = await grad.imports.list().all();
+    const job = jobs.find((j) => j.dataset === "gsm8k-5");
+    expect(job?.source).toMatchObject({ kind: "hf", repo: "openai/gsm8k", split: "test", benchmark: "gsm8k", limit: 5 });
+    expect(String(job?.source.revision)).toMatch(/^[0-9a-f]{40}$/);
+  });
+
   it("retries a POST whose response was lost and gets the server's replay", async () => {
     // The fault proxy lets the server commit the first attempt, then answers 503. The
     // retry carries the same Idempotency-Key, so the server replays 201 instead of 409.

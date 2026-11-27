@@ -389,6 +389,22 @@ Example:
         #[command(flatten)]
         wait: ImportWaitArgs,
     },
+    /// Import a built-in benchmark at a pinned revision (evals on it default to its answer check)
+    #[command(after_help = "\
+Benchmarks: gsm8k, mmlu, mmlu_pro, arc_challenge. Example:
+  grad datasets import benchmark gsm8k --limit 200")]
+    Benchmark {
+        /// gsm8k, mmlu, mmlu_pro or arc_challenge
+        benchmark: String,
+        /// Import the first N problems (the same ones every time)
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Target dataset name (default: <benchmark>-<limit>, or <benchmark>)
+        #[arg(long)]
+        name: Option<String>,
+        #[command(flatten)]
+        wait: ImportWaitArgs,
+    },
 }
 
 #[derive(Args, Debug, Clone)]

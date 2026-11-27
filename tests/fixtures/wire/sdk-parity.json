@@ -309,6 +309,20 @@
           "rec_c"
         ]
       }
+    },
+    {
+      "case": "import_benchmark",
+      "method": "POST",
+      "path": "/v1/datasets/gsm8k-test-200/imports",
+      "idempotency_key": null,
+      "body": {
+        "source": {
+          "kind": "benchmark",
+          "benchmark": "gsm8k",
+          "limit": 200
+        },
+        "connector": "auto"
+      }
     }
   ],
   "responses": {

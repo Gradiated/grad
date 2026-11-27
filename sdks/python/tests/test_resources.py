@@ -252,6 +252,24 @@ class DatasetTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             dataset.filter({"resolved": ">=0.8"})
 
+    def test_from_benchmark(self) -> None:
+        job = fixture("python-import-queued.json")
+        done = {**job, "status": "completed", "imported_count": 200}
+        client, sender, _ = make_client(
+            {
+                "POST /v1/datasets/gsm8k-200/imports": json_reply(job, 202),
+                f"GET /v1/imports/{job['id']}": json_reply(done),
+                "GET /v1/datasets/gsm8k-200": json_reply({**DATASET, "name": "gsm8k-200", "record_count": 200}),
+                "POST /v1/datasets/mmlu/imports": json_reply(job, 202),
+                "GET /v1/datasets/mmlu": json_reply({**DATASET, "name": "mmlu"}),
+            }
+        )
+        gsm8k = client.datasets.from_benchmark("gsm8k", limit=200)
+        self.assertEqual((gsm8k.name, gsm8k.record_count), ("gsm8k-200", 200))
+        self.assertEqual(sender.sent[0].json, {"source": {"kind": "benchmark", "benchmark": "gsm8k", "limit": 200}, "connector": "auto"})
+        client.datasets.from_benchmark("mmlu", wait=False)
+        self.assertEqual(sender.sent[-2].json["source"], {"kind": "benchmark", "benchmark": "mmlu"})
+
     def test_from_hf(self) -> None:
         job = fixture("python-import-queued.json")
         done = {**job, "status": "completed", "imported_count": 2000}

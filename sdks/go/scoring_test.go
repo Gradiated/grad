@@ -121,3 +121,41 @@ func TestDatasetFilterByFieldsAndByFunction(t *testing.T) {
 		t.Fatal("a missing dataset must fail")
 	}
 }
+
+func TestFromBenchmarkImportsAndWaits(t *testing.T) {
+	ctx := context.Background()
+	queued := wireMap(t, "import-job-queued.json")
+	done := map[string]any{}
+	for k, v := range queued {
+		done[k] = v
+	}
+	done["status"] = "completed"
+	dataset := wireMap(t, "dataset.json")
+	dataset["name"] = "gsm8k-200"
+	f := newFake(t, map[string]route{
+		"POST /v1/datasets/gsm8k-200/imports":      jsonValue(202, queued),
+		"GET /v1/imports/" + queued["id"].(string): jsonValue(200, done),
+		"GET /v1/datasets/gsm8k-200":               jsonValue(200, dataset),
+		"POST /v1/datasets/mmlu/imports":           jsonValue(202, queued),
+		"POST /v1/datasets/arc/imports":            jsonValue(202, queued),
+	})
+	c, _ := f.client()
+	ds, err := c.Datasets.FromBenchmark(ctx, grad.BenchmarkGSM8K, grad.BenchmarkOptions{Limit: 200})
+	if err != nil || ds.Name != "gsm8k-200" {
+		t.Fatalf("dataset %v %v", ds, err)
+	}
+	body := f.last("POST", "/v1/datasets/gsm8k-200/imports").JSON(t)
+	want := map[string]any{"source": map[string]any{"kind": "benchmark", "benchmark": "gsm8k", "limit": 200.0}, "connector": "auto"}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("body %v", body)
+	}
+	if _, err := c.Datasets.ImportBenchmark(ctx, grad.BenchmarkMMLU, grad.BenchmarkOptions{}).Result(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Datasets.ImportBenchmark(ctx, grad.BenchmarkARCChallenge, grad.BenchmarkOptions{Name: "arc"}).Result(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Datasets.FromBenchmark(ctx, grad.BenchmarkMMLUPro, grad.BenchmarkOptions{}); err == nil {
+		t.Fatal("a failing import must fail")
+	}
+}

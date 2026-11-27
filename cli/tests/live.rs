@@ -416,6 +416,26 @@ fn live_self_hosted_quickstart() {
         o.stdout
     );
 
+    // A built-in benchmark import is queued with its pinned source.
+    let o = grad(
+        &home,
+        &[
+            "--json",
+            "datasets",
+            "import",
+            "benchmark",
+            "gsm8k",
+            "--limit",
+            "5",
+            "--no-wait",
+        ],
+        &[],
+    );
+    ok(&o);
+    let job: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert_eq!(job["data"]["dataset"], "gsm8k-5", "{}", o.stdout);
+    assert_eq!(job["data"]["source"]["benchmark"], "gsm8k", "{}", o.stdout);
+
     // Scoped keys: a runs:read key cannot push data (exit 3).
     let o = grad(
         &home,

@@ -4,6 +4,7 @@ import type {
   DatasetRecord,
   HfColumnMapping,
   ImportJob as ImportJobData,
+  ImportSource,
   RenderDatasetRequest,
   RenderDatasetResponse,
 } from "../generated/models.js";
@@ -351,8 +352,35 @@ export const hfDatasetName = (repo: string, split = "train"): string =>
     .slice(0, 64)
     .replace(/[-.]+$/, "");
 
+export type BenchmarkName = Extract<ImportSource, { kind: "benchmark" }>["benchmark"];
+
+export interface FromBenchmarkOptions extends WaitOptions {
+  /** Import the first N problems (the same ones every time). */
+  limit?: number;
+  /** Dataset name (default `<benchmark>-<limit>`, or `<benchmark>`). */
+  name?: string;
+  /** `false` returns once the import is queued (default: wait for it). */
+  wait?: boolean;
+}
+
 export class DatasetsResource {
   constructor(private readonly core: Core) {}
+
+  /**
+   * Imports a built-in benchmark (`gsm8k`, `mmlu`, `mmlu_pro`, `arc_challenge`)
+   * from Hugging Face at a pinned revision with fixed prompts; an eval on it
+   * without a rubric uses the benchmark's answer check.
+   */
+  async fromBenchmark(benchmark: BenchmarkName, options: FromBenchmarkOptions = {}): Promise<Dataset> {
+    const { limit, name, wait, ...waitOptions } = options;
+    const target = name ?? (limit !== undefined ? `${benchmark}-${limit}` : benchmark);
+    const job = await this.core.api.createDatasetImport(target, {
+      source: { kind: "benchmark", benchmark, ...(limit !== undefined ? { limit } : {}) },
+      connector: "auto",
+    });
+    if (wait !== false) await new ImportJob(this.core, job).wait(waitOptions);
+    return this.get(target);
+  }
 
   /** Creates an empty dataset (409 ConflictError if the name exists). */
   async create(name: string, options: { metadata?: Record<string, unknown> } & RequestOptions = {}): Promise<Dataset> {

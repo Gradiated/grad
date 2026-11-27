@@ -271,6 +271,29 @@ class Datasets(_Resource):
             job.wait(timeout=timeout)
         return self.get(ds_name)
 
+    def from_benchmark(
+        self,
+        benchmark: str,
+        *,
+        limit: int | None = None,
+        name: str | None = None,
+        wait: bool = True,
+        timeout: float | None = None,
+    ) -> Dataset:
+        """Import a built-in benchmark (``"gsm8k"``, ``"mmlu"``, ``"mmlu_pro"``, ``"arc_challenge"``)
+        from Hugging Face at a pinned revision, with fixed prompts and its answer check: an eval
+        on the dataset without ``rubric=`` scores with it. ``limit`` takes the first N problems;
+        the dataset is named ``<benchmark>-<limit>`` (or ``<benchmark>``) unless ``name`` is given.
+        """
+        ds_name = h.check_slug(name or (f"{benchmark}-{limit}" if limit else benchmark), "dataset name")
+        source: dict[str, Any] = {"kind": "benchmark", "benchmark": benchmark}
+        if limit is not None:
+            source["limit"] = limit
+        job = ImportJob.from_api(self._wire.create_dataset_import(ds_name, {"source": source, "connector": "auto"}), self._client)
+        if wait:
+            job.wait(timeout=timeout)
+        return self.get(ds_name)
+
     def score(
         self,
         dataset: Any,

@@ -110,6 +110,7 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "filter_dataset_fields": lambda: client.datasets.filter(
             "support-logs", scores={"quality": ">=0.8"}, metadata={"env": "prod"}, created_after=datetime.date(2026, 11, 1), version=2, name="support-good"
         ),
+        "import_benchmark": lambda: client.datasets.from_benchmark("gsm8k", limit=200, name="gsm8k-test-200", wait=False),
         "filter_dataset_ids": lambda: client.datasets.filter("support-logs", ids=["rec_a", "rec_c"]),
         "deploy": lambda: client.deploy(artifact, name="support", fallback="test/tiny-qwen3", explore_rate=0.1, idempotency_key="parity-deploy-key"),
     }
@@ -123,7 +124,8 @@ class ParityTests(unittest.TestCase):
         for case in PARITY["requests"]:
             with self.subTest(case=case["case"]):
                 table[case["case"]]()
-                sent = sender.sent[-1]
+                # The last request to the case's endpoint (a helper may read the result back).
+                sent = next(s for s in reversed(sender.sent) if (s.method, s.path) == (case["method"], case["path"]))
                 self.assertEqual((sent.method, sent.path), (case["method"], case["path"]))
                 self.assertEqual(sent.json, case["body"])
                 key = sent.header("Idempotency-Key")

@@ -190,6 +190,17 @@ class SelfHostedLiveTests(_LiveCase):
         again = client.datasets.score(scored, rubric).wait(timeout=60)
         self.assertEqual(again.version, scored.version)
 
+    def test_benchmark_import_is_pinned(self) -> None:
+        # docs: training/evaluations.mdx "Check for regressions with standard benchmarks" (queued only:
+        # the harness worker has no network, so the import itself is not awaited)
+        client = Grad()
+        gsm8k = client.datasets.from_benchmark("gsm8k", limit=5, wait=False)
+        self.assertEqual(gsm8k.name, "gsm8k-5")
+        job = next(j for j in client.imports.list() if j.dataset == "gsm8k-5")
+        self.assertEqual(job.source["benchmark"], "gsm8k")
+        self.assertRegex(job.source["revision"], r"^[0-9a-f]{40}$")
+        self.assertEqual((job.source["repo"], job.source["split"], job.source["limit"]), ("openai/gsm8k", "test", 5))
+
     def test_errors_keys_and_pagination(self) -> None:
         client = Grad()
         with self.assertRaises(grad.NotFoundError) as ctx:

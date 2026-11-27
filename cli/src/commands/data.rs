@@ -366,6 +366,27 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                 ));
                 finish_import(ctx, &c, job, &wait).await
             }
+            DatasetImportCmd::Benchmark {
+                benchmark,
+                limit,
+                name,
+                wait,
+            } => {
+                let c = ctx.client()?;
+                let name = name.unwrap_or_else(|| match limit {
+                    Some(n) => format!("{}-{}", benchmark, n),
+                    None => benchmark.clone(),
+                });
+                let job = c
+                    .datasets()
+                    .import_benchmark(&name, &benchmark, limit)
+                    .await?;
+                out.note(format!(
+                    "Importing benchmark {} into dataset {} (job {})",
+                    benchmark, name, job.id
+                ));
+                finish_import(ctx, &c, job, &wait).await
+            }
         },
     }
 }

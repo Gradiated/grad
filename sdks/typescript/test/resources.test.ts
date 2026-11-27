@@ -294,6 +294,22 @@ describe("datasets and imports", () => {
     expect((e as ImportFailedError).job.status).toBe("failed");
   });
 
+  it("imports a built-in benchmark and waits for it", async () => {
+    const queued = wire<Record<string, unknown>>("import-job-queued.json");
+    const server = new FakeServer()
+      .on("POST", "/v1/datasets/gsm8k-200/imports", json(queued, 202))
+      .on("GET", `/v1/imports/${String(queued.id)}`, json({ ...queued, status: "completed" }))
+      .on("GET", "/v1/datasets/gsm8k-200", json({ ...wire<Record<string, unknown>>("dataset.json"), name: "gsm8k-200" }))
+      .on("POST", "/v1/datasets/mmlu/imports", json(queued, 202))
+      .on("GET", "/v1/datasets/mmlu", json({ ...wire<Record<string, unknown>>("dataset.json"), name: "mmlu" }));
+    const { grad } = makeGrad(server);
+    const gsm8k = await grad.datasets.fromBenchmark("gsm8k", { limit: 200, pollIntervalMs: 1 });
+    expect(gsm8k.name).toBe("gsm8k-200");
+    expect(server.lastBody("POST", "/v1/datasets/gsm8k-200/imports")).toEqual({ source: { kind: "benchmark", benchmark: "gsm8k", limit: 200 }, connector: "auto" });
+    await grad.datasets.fromBenchmark("mmlu", { wait: false });
+    expect(server.lastBody("POST", "/v1/datasets/mmlu/imports")).toEqual({ source: { kind: "benchmark", benchmark: "mmlu" }, connector: "auto" });
+  });
+
   it("imports from Hugging Face into a derived dataset name", async () => {
     const done = { ...wire<Record<string, unknown>>("import-job-completed.json"), dataset: "openai-gsm8k-train" };
     const server = new FakeServer()

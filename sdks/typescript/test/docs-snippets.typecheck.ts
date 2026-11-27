@@ -135,3 +135,14 @@ export const scoreAndFilter = async () => {
   const passing = await scored.filter({ scores: { resolved: ">=0.8" } });
   console.log(passing.recordCount);
 };
+
+// docs: training/evaluations.mdx "Check for regressions with standard benchmarks"
+export const benchmarkRegression = async () => {
+  const grad = new Grad();
+  const gsm8k = await grad.datasets.fromBenchmark("gsm8k", { limit: 200 });
+
+  const ev = await grad.evals
+    .create({ name: "sql-agent-regressions", models: ["qwen/qwen3-8b", "sql-agent@latest"], dataset: gsm8k, baseline: "qwen/qwen3-8b" })
+    .wait();
+  console.log(ev.summaryTable());
+};

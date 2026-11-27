@@ -317,6 +317,13 @@ func TestLiveSelfHosted(t *testing.T) {
 		}
 	})
 
+	t.Run("a benchmark import is pinned", func(t *testing.T) {
+		job := must(client.Datasets.ImportBenchmark(ctx, grad.BenchmarkGSM8K, grad.BenchmarkOptions{Limit: 5}).Result())(t)
+		if job.Dataset != "gsm8k-5" || job.Source["benchmark"] != "gsm8k" || len(fmt.Sprint(job.Source["revision"])) != 40 {
+			t.Fatalf("job %+v", job)
+		}
+	})
+
 	t.Run("scoped keys, errors.As and config fallbacks", func(t *testing.T) {
 		key := must(client.Keys.Create(ctx, "ci", "runs:read"))(t)
 		ci := grad.NewClient(grad.WithBaseURL(stack.BaseURL), grad.WithAPIKey(key.Secret))

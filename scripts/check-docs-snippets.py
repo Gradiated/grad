@@ -53,6 +53,8 @@ SKIP = [
     ("", "sglang.launch_server", "needs a GPU and SGLang"),
     ("", "from_hf(", "needs network access to Hugging Face"),
     ("", "import hf ", "needs network access to Hugging Face"),
+    ("", "from_benchmark(", "needs network access to Hugging Face"),
+    ("", "import benchmark ", "needs network access to Hugging Face"),
     ("", "grad local up", "starts Docker Compose (the harness is already a local stack)"),
     ("", "helm upgrade", "needs a Kubernetes cluster"),
     ("", "kubectl ", "needs a Kubernetes cluster"),

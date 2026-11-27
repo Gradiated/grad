@@ -122,6 +122,10 @@ func TestParityRequests(t *testing.T) {
 				Metadata: map[string]any{"env": "prod"}, CreatedAfter: "2026-11-01", Version: 2, Name: "support-good"})
 			return err
 		},
+		"import_benchmark": func() error {
+			_, err := c.Datasets.ImportBenchmark(ctx, grad.BenchmarkGSM8K, grad.BenchmarkOptions{Limit: 200, Name: "gsm8k-test-200"}).Result()
+			return err
+		},
 		"filter_dataset_ids": func() error {
 			_, err := c.Datasets.Filter(ctx, "support-logs", grad.FilterOptions{IDs: []string{"rec_a", "rec_c"}})
 			return err

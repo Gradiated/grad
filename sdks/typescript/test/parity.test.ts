@@ -119,6 +119,7 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
     grad.datasets.score("support-logs", judge, { version: 1, name: "support-logs-quality", limit: 100, idempotencyKey: "parity-score-key" }),
   filter_dataset_fields: () =>
     grad.datasets.filter("support-logs", { scores: { quality: ">=0.8" }, metadata: { env: "prod" }, createdAfter: "2026-11-01", version: 2, name: "support-good" }),
+  import_benchmark: () => grad.datasets.fromBenchmark("gsm8k", { limit: 200, name: "gsm8k-test-200", wait: false }),
   filter_dataset_ids: () => grad.datasets.filter("support-logs", { ids: ["rec_a", "rec_c"] }),
   deploy: () => grad.deploy(artifact, { name: "support", fallback: "test/tiny-qwen3", exploreRate: 0.1, idempotencyKey: "parity-deploy-key" }),
 });
@@ -127,12 +128,15 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
   it("sends the fixture's request for every case", async () => {
     const server = new FakeServer();
     for (const c of parity.requests) server.on(c.method, c.path, () => json({ id: "x", status: "queued" }));
+    // fromBenchmark reads the dataset back.
+    server.on("GET", "/v1/datasets/gsm8k-test-200", () => json({ id: "x", name: "gsm8k-test-200" }));
     const { grad } = makeGrad(server);
     const table = calls(grad);
     expect(Object.keys(table).sort()).toEqual(parity.requests.map((c) => c.case).sort());
     for (const c of parity.requests) {
       await table[c.case]?.();
-      const sent = server.calls[server.calls.length - 1];
+      // The last request to the case's endpoint (a helper may read the result back).
+      const sent = server.calls.filter((call) => call.method === c.method && call.url.pathname === c.path).at(-1);
       expect([sent?.method, sent?.url.pathname], c.case).toEqual([c.method, c.path]);
       expect(JSON.parse(sent?.body ?? "null"), c.case).toEqual(c.body);
       const key = sent?.headers.get("idempotency-key");

@@ -238,6 +238,11 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             };
             c.datasets().filter("support-logs", &req).await.map(drop)
         }
+        "import_benchmark" => c
+            .datasets()
+            .import_benchmark("gsm8k-test-200", "gsm8k", Some(200))
+            .await
+            .map(drop),
         "filter_dataset_ids" => {
             let req = FilterDatasetRequest {
                 ids: Some(vec!["rec_a".into(), "rec_c".into()]),

@@ -428,6 +428,29 @@ impl Datasets<'_> {
         .await
     }
 
+    /// Import a built-in benchmark (`gsm8k`, `mmlu`, `mmlu_pro`, `arc_challenge`) at a
+    /// pinned revision; evals on the dataset without a rubric use its answer check.
+    pub async fn import_benchmark(
+        &self,
+        name: &str,
+        benchmark: &str,
+        limit: Option<i64>,
+    ) -> Result<ImportJob> {
+        self.create_import(
+            name,
+            &CreateImportRequest {
+                source: ImportSource {
+                    kind: ImportSourceKind::Benchmark,
+                    benchmark: Some(ImportSourceBenchmark::from(benchmark)),
+                    limit,
+                    ..Default::default()
+                },
+                connector: Some(CreateImportRequestConnector::Auto),
+            },
+        )
+        .await
+    }
+
     /// Score the records' own answers with a rubric (`POST /v1/datasets/{name}/score`):
     /// an eval in mode `score`, billed like one. Wait with [`Datasets::wait_scored`].
     pub async fn score(

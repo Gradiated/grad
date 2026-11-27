@@ -2153,6 +2153,17 @@ fn parity_requests_match_the_shared_fixture() {
                     s("limit"),
                 ]
             }
+            "/v1/datasets/gsm8k-test-200/imports" => vec![
+                "datasets".into(),
+                "import".into(),
+                "benchmark".into(),
+                body["source"]["benchmark"].as_str().unwrap().into(),
+                "--limit".into(),
+                body["source"]["limit"].to_string(),
+                "--name".into(),
+                "gsm8k-test-200".into(),
+                "--no-wait".into(),
+            ],
             "/v1/datasets/support-logs/filter" => {
                 let mut a: Vec<String> =
                     vec!["datasets".into(), "filter".into(), "support-logs".into()];
