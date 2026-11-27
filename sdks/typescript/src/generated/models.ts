@@ -122,6 +122,7 @@ export interface Dataset {
   workspaceId: string;
   name: string;
   version: number;
+  /** Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again. */
   recordCount: number;
   metadata: Record<string, unknown>;
   createdAt: string;
@@ -483,6 +484,7 @@ export interface ImportJob {
   source: Record<string, unknown>;
   connector: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
   attempt: number;
+  /** Records this import added to the dataset (score updates for existing records add none). */
   importedCount: number;
   droppedCount: number;
   detectedScores: Array<string>;

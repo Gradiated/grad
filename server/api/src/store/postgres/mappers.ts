@@ -55,6 +55,7 @@ export const toDataset = (r: Row): Dataset => ({
 export const toPart = (r: Row): DatasetPart => ({
   key: s(r.key),
   count: n(r.count),
+  resets: r.resets === true,
   sha256: s(r.sha256),
   bytes: n(r.bytes),
 });

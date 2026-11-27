@@ -25,9 +25,10 @@ type StoreFactory = (
 
 const config = { model: "test/tiny" } as unknown as ResolvedRunConfig;
 
-const part = (key: string, count = 2): DatasetPart => ({
+const part = (key: string, count = 2, resets = false): DatasetPart => ({
   key,
   count,
+  resets,
   sha256: "a".repeat(64),
   bytes: count * 10,
 });
@@ -265,6 +266,15 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       await expect(
         store.datasets.appendVersion({ datasetId: "ds_missing", parts: [] }),
       ).rejects.toThrow();
+
+      // A resetting part (a full sync) restarts the count; later parts add.
+      const reset = await store.datasets.appendVersion({
+        datasetId: ds.id,
+        parts: [part("p4", 0, true), part("p5", 2)],
+      });
+      expect(reset.record_count).toBe(2);
+      expect((await store.datasets.getVersion(ds.id, 3))?.record_count).toBe(2);
+      expect((await store.datasets.getVersion(ds.id, 2))?.record_count).toBe(6);
     });
 
     it("datasets: 10 concurrent appends produce versions 1..10 with every part", async () => {

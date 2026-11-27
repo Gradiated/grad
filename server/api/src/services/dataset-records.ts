@@ -5,12 +5,38 @@ import type { DatasetRecord } from "../contracts.js";
 import { conflict } from "../errors.js";
 import { ObjectExistsError, type ObjectStore } from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
+import { isReset, isScoreUpdate } from "./record-merge.js";
 
 export const encodeRecordsJsonl = (records: readonly DatasetRecord[]): Buffer =>
   Buffer.from(records.map((r) => `${JSON.stringify(r)}\n`).join(""), "utf8");
 
 const sha256Of = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
+
+/**
+ * What a part does to its dataset's merged record count: the distinct records
+ * it adds after its last reset marker. Score updates and reset markers add
+ * none, and `resets` says the count restarts at this part (a full sync).
+ */
+export const countRecords = (
+  records: readonly DatasetRecord[],
+): Pick<DatasetPart, "count" | "resets"> => {
+  let resets = false;
+  let ids = new Set<string>();
+  let anonymous = 0;
+  for (const record of records) {
+    if (isReset(record)) {
+      resets = true;
+      ids = new Set();
+      anonymous = 0;
+    } else if (!isScoreUpdate(record)) {
+      if (record.id) ids.add(record.id);
+      else anonymous += 1;
+    }
+  }
+
+  return { count: ids.size + anonymous, resets };
+};
 
 /**
  * Writes one immutable gzip-compressed JSONL part at `keyFor(sha256)`, where
@@ -41,7 +67,12 @@ export const writeRecordsPart = async (
     }
   }
 
-  return { key, count: records.length, sha256, bytes: bytes.byteLength };
+  return {
+    key,
+    ...countRecords(records),
+    sha256,
+    bytes: bytes.byteLength,
+  };
 };
 
 const parsePart = (stored: Uint8Array, part: DatasetPart): DatasetRecord[] => {

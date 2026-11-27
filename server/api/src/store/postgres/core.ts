@@ -20,6 +20,23 @@ const findHit = async (
 ): Promise<IdempotentHit | null> =>
   first(await db.query<{ id: string; request_hash: string }>(sql, params));
 
+/** What parts add to a merged count: everything from the last reset on. */
+const tally = (
+  parts: readonly Pick<DatasetPart, "count" | "resets">[],
+): { added: number; resets: boolean } => {
+  let added = 0;
+  let resets = false;
+  for (const part of parts) {
+    if (part.resets) {
+      added = 0;
+      resets = true;
+    }
+    added += part.count;
+  }
+
+  return { added, resets };
+};
+
 export const createApiKeyRepository = (
   db: Db,
   clock: Clock,
@@ -106,13 +123,15 @@ export const createDatasetRepository = (
     for (const [i, part] of parts.entries()) {
       await db.query(
         `INSERT INTO grad_dataset_parts
-           (dataset_id, version, key, count, sha256, bytes, idempotency_key, request_hash, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)`,
+           (dataset_id, version, key, count, resets, sha256, bytes, idempotency_key, request_hash,
+            created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz)`,
         [
           datasetId,
           version,
           part.key,
           part.count,
+          part.resets,
           part.sha256,
           part.bytes,
           i === 0 ? (idempotency?.key ?? null) : null,
@@ -123,19 +142,30 @@ export const createDatasetRepository = (
     }
   };
 
-  /** Bumps the version by one and the count by `added`; returns the row (locked). */
+  /**
+   * Bumps the version by one and the count by what `parts` add (a reset
+   * restarts it); returns the row (locked).
+   */
   const bump = async (
     datasetId: string,
-    added: number,
+    parts: readonly Pick<DatasetPart, "count" | "resets">[],
     metadata: Record<string, unknown> | undefined,
   ) => {
+    const { added, resets } = tally(parts);
     const row = first(
       await db.query(
         `UPDATE grad_datasets
-         SET version = version + 1, record_count = record_count + $2,
+         SET version = version + 1,
+             record_count = CASE WHEN $5 THEN $2 ELSE record_count + $2 END,
              metadata = metadata || $3::jsonb, updated_at = $4::timestamptz
          WHERE id = $1 RETURNING *`,
-        [datasetId, added, JSON.stringify(metadata ?? {}), nowIso(clock)],
+        [
+          datasetId,
+          added,
+          JSON.stringify(metadata ?? {}),
+          nowIso(clock),
+          resets,
+        ],
       ),
     );
     if (!row) throw new Error(`Dataset '${datasetId}' not found.`);
@@ -214,20 +244,10 @@ export const createDatasetRepository = (
         "SELECT id, request_hash FROM grad_datasets WHERE workspace_id = $1 AND idempotency_key = $2",
         [workspaceId, key],
       ),
-    appendVersion: ({
-      datasetId,
-      parts,
-      metadata,
-      idempotency,
-      countRecords = true,
-    }) =>
+    appendVersion: ({ datasetId, parts, metadata, idempotency }) =>
       db.atomic(async () => {
-        const counted = countRecords
-          ? parts
-          : parts.map((p) => ({ ...p, count: 0 }));
-        const added = counted.reduce((sum, p) => sum + p.count, 0);
-        const dataset = await bump(datasetId, added, metadata);
-        await insertParts(datasetId, dataset.version, counted, idempotency);
+        const dataset = await bump(datasetId, parts, metadata);
+        await insertParts(datasetId, dataset.version, parts, idempotency);
 
         return dataset;
       }),
@@ -259,15 +279,16 @@ export const createDatasetRepository = (
         dataset_id: datasetId,
         version,
         parts,
-        record_count: parts.reduce((sum, p) => sum + p.count, 0),
+        record_count: tally(parts).added,
       };
     },
     stagePart: async ({ datasetId, jobId, attempt, batch, part, dropped }) =>
       (
         await db.query(
           `INSERT INTO grad_dataset_parts
-             (dataset_id, job_id, attempt, batch, key, count, sha256, bytes, dropped, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz)
+             (dataset_id, job_id, attempt, batch, key, count, resets, sha256, bytes, dropped,
+              created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)
            ON CONFLICT (job_id, attempt, batch) DO NOTHING RETURNING id`,
           [
             datasetId,
@@ -276,6 +297,7 @@ export const createDatasetRepository = (
             batch,
             part?.key ?? null,
             part?.count ?? 0,
+            part?.resets ?? false,
             part?.sha256 ?? null,
             part?.bytes ?? 0,
             dropped,
@@ -298,12 +320,19 @@ export const createDatasetRepository = (
     commitStaged: ({ datasetId, jobId, attempt, metadata }) =>
       db.atomic(async () => {
         const staged = await db.query(
-          `SELECT count FROM grad_dataset_parts
-           WHERE job_id = $1 AND attempt = $2 AND version IS NULL AND key IS NOT NULL`,
+          `SELECT count, resets FROM grad_dataset_parts
+           WHERE job_id = $1 AND attempt = $2 AND version IS NULL AND key IS NOT NULL
+           ORDER BY batch`,
           [jobId, attempt],
         );
-        const added = staged.reduce((sum, r) => sum + Number(r.count), 0);
-        const dataset = await bump(datasetId, added, metadata);
+        const dataset = await bump(
+          datasetId,
+          staged.map((r) => ({
+            count: Number(r.count),
+            resets: r.resets === true,
+          })),
+          metadata,
+        );
         await db.query(
           `UPDATE grad_dataset_parts SET version = $3
            WHERE job_id = $1 AND attempt = $2 AND version IS NULL`,

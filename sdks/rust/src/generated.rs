@@ -252,6 +252,7 @@ pub struct Dataset {
     pub workspace_id: String,
     pub name: String,
     pub version: i64,
+    /// Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again.
     pub record_count: i64,
     pub metadata: BTreeMap<String, Value>,
     pub created_at: String,
@@ -841,6 +842,7 @@ pub struct ImportJob {
     pub source: BTreeMap<String, Value>,
     pub connector: ImportJobConnector,
     pub attempt: i64,
+    /// Records this import added to the dataset (score updates for existing records add none).
     pub imported_count: i64,
     pub dropped_count: i64,
     pub detected_scores: Vec<String>,

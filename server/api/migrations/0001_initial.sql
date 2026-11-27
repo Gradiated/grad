@@ -123,8 +123,11 @@ CREATE TABLE grad_dataset_parts (
   batch INTEGER,
   -- NULL when every record of a staged batch was dropped.
   key TEXT,
-  -- Records the part adds (0 for a score-update part: it changes records).
+  -- Distinct records the part adds to the merged dataset (score updates and
+  -- reset markers add none), so record_count is the merged count.
   count BIGINT NOT NULL CHECK (count >= 0),
+  -- The part holds a full sync's reset marker: the count restarts here.
+  resets BOOLEAN NOT NULL DEFAULT false,
   -- Of the uncompressed JSONL, so identical records dedupe; bytes is the
   -- stored (compressed) size.
   sha256 TEXT,

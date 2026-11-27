@@ -216,6 +216,8 @@ components:
         record_count:
           type: integer
           minimum: 0
+          description: "Records in the current version after merging: score updates fold into their records, and a full source
+            sync restarts the count. A record pushed again with an id it already has counts again."
         metadata:
           type: object
           additionalProperties: {}
@@ -993,6 +995,7 @@ components:
         imported_count:
           type: integer
           minimum: 0
+          description: Records this import added to the dataset (score updates for existing records add none).
         dropped_count:
           type: integer
           minimum: 0

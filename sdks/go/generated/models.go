@@ -242,10 +242,11 @@ type CreatedAPIKey struct {
 
 // Dataset is generated from the OpenAPI schema.
 type Dataset struct {
-	ID          string         `json:"id"`
-	WorkspaceID string         `json:"workspace_id"`
-	Name        string         `json:"name"`
-	Version     int            `json:"version"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Version     int    `json:"version"`
+	// RecordCount Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again.
 	RecordCount int            `json:"record_count"`
 	Metadata    map[string]any `json:"metadata"`
 	CreatedAt   string         `json:"created_at"`
@@ -884,16 +885,17 @@ type HFColumnMapping struct {
 
 // ImportJob is generated from the OpenAPI schema.
 type ImportJob struct {
-	ID             string             `json:"id"`
-	WorkspaceID    string             `json:"workspace_id"`
-	Dataset        string             `json:"dataset"`
-	Status         ImportStatus       `json:"status"`
-	Source         map[string]any     `json:"source"`
-	Connector      ImportJobConnector `json:"connector"`
-	Attempt        int                `json:"attempt"`
-	ImportedCount  int                `json:"imported_count"`
-	DroppedCount   int                `json:"dropped_count"`
-	DetectedScores []string           `json:"detected_scores"`
+	ID          string             `json:"id"`
+	WorkspaceID string             `json:"workspace_id"`
+	Dataset     string             `json:"dataset"`
+	Status      ImportStatus       `json:"status"`
+	Source      map[string]any     `json:"source"`
+	Connector   ImportJobConnector `json:"connector"`
+	Attempt     int                `json:"attempt"`
+	// ImportedCount Records this import added to the dataset (score updates for existing records add none).
+	ImportedCount  int      `json:"imported_count"`
+	DroppedCount   int      `json:"dropped_count"`
+	DetectedScores []string `json:"detected_scores"`
 	// DropReasons Why rows were dropped, one line per row (`line 12: invalid JSON`), capped at 100 entries.
 	DropReasons    []string `json:"drop_reasons"`
 	DatasetVersion *int     `json:"dataset_version"`

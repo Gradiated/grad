@@ -379,7 +379,7 @@ export const createImportService = (
           // Progress only: completion recounts from the staged parts.
           ...(added
             ? {
-                imported_count: job.imported_count + accepted.length,
+                imported_count: job.imported_count + (part?.count ?? 0),
                 dropped_count: job.dropped_count + rejected,
               }
             : {}),

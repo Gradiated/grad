@@ -23,7 +23,7 @@ const meta = (record: DatasetRecord): Record<string, unknown> | undefined =>
 export const isScoreUpdate = (record: DatasetRecord): boolean =>
   meta(record)?.[SCORE_UPDATE] === true;
 
-const isReset = (record: DatasetRecord): boolean =>
+export const isReset = (record: DatasetRecord): boolean =>
   meta(record)?.dataset_reset === true;
 
 const apply = (target: DatasetRecord, patch: DatasetRecord): DatasetRecord => {

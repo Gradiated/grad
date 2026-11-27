@@ -75,10 +75,16 @@ export interface ApiKeyRepository {
 
 // --- Datasets ----------------------------------------------------------------
 
-/** One immutable gzip-compressed JSONL object holding `count` records. */
+/** One immutable gzip-compressed JSONL object. */
 export interface DatasetPart {
   key: string;
+  /**
+   * The distinct records it adds to the merged dataset: score updates and a
+   * full sync's reset marker add none.
+   */
   count: number;
+  /** It starts with a reset marker: the version's count restarts here. */
+  resets: boolean;
   /** Of the uncompressed JSONL. */
   sha256: string;
   /** Stored (compressed) size. */
@@ -122,8 +128,6 @@ export interface DatasetRepository {
     parts: DatasetPart[];
     metadata?: Record<string, unknown>;
     idempotency?: IdempotencyInput | undefined;
-    /** False for score-update parts: they change records, not their number. */
-    countRecords?: boolean;
   }): Promise<Dataset>;
   /** The push an Idempotency-Key already appended to this dataset. */
   findIdempotentPush(

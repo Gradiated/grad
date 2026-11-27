@@ -354,7 +354,6 @@ export const createEvalService = (
                   await store.datasets.appendVersion({
                     datasetId: record.dataset_id,
                     parts: [scorePart],
-                    countRecords: false,
                   })
                 ).version
               : record.dataset_version;

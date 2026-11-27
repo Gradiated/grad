@@ -362,6 +362,62 @@ describe("sources", () => {
     });
   });
 
+  it("counts merged records: score updates add none, a full sync restarts the count", async () => {
+    const source = (await addSource()).body;
+    const syncWith = async (
+      records: Array<Record<string, unknown>>,
+      full = false,
+    ) => {
+      t.clock.advanceSeconds(61);
+      await t.json(`/v1/sources/${source.id}/sync`, { body: { full } });
+      const job = await claimImport();
+      await worker.call(`/v1/trainer-jobs/${job.id}/records`, {
+        ...worker.ref(job),
+        seq: 0,
+        records,
+      });
+      const done = await worker.complete(job, {
+        status: "completed",
+        import_summary: { watermark: null },
+      });
+      return (done.body as { import: { imported_count: number } }).import;
+    };
+    const dataset = async () =>
+      (await t.json<{ record_count: number }>("/v1/datasets/support-prod")).body
+        .record_count;
+    const total = async () =>
+      (
+        await t.json<{ total: number }>(
+          "/v1/datasets/support-prod/records?limit=1",
+        )
+      ).body.total;
+    const update = (id: string) => ({
+      id,
+      scores: { thumbs: 1 },
+      metadata: { score_update: true },
+    });
+
+    await syncWith(["t1", "t2", "t3"].map(record));
+    expect(await dataset()).toBe(3);
+    // Late scores for old traces plus one new trace: one more record.
+    const late = await syncWith([update("t1"), update("t2"), record("t4")]);
+    expect(late.imported_count).toBe(1);
+    expect(await dataset()).toBe(4);
+    expect(await total()).toBe(4);
+    // A full resync: the reset marker, then what the provider holds now.
+    await syncWith(
+      [
+        { id: "grad:reset", metadata: { dataset_reset: true } },
+        record("t2"),
+        record("t5"),
+        update("t5"),
+      ],
+      true,
+    );
+    expect(await dataset()).toBe(2);
+    expect(await total()).toBe(2);
+  });
+
   it("fails a queued sync whose source was removed", async () => {
     const source = (await addSource()).body;
     const sync = await t.json<{ id: string }>(`/v1/sources/${source.id}/sync`, {

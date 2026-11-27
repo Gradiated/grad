@@ -85,7 +85,10 @@ export const DatasetSchema = z
     workspace_id: z.string().min(1),
     name: SlugSchema,
     version: z.number().int().min(0),
-    record_count: z.number().int().min(0),
+    record_count: z.number().int().min(0).openapi({
+      description:
+        "Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again.",
+    }),
     metadata: z.record(z.string(), z.unknown()),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
@@ -277,7 +280,10 @@ export const ImportJobSchema = z
     source: z.record(z.string(), z.unknown()),
     connector: z.enum(CONNECTOR_NAMES),
     attempt: z.number().int().min(0),
-    imported_count: z.number().int().min(0),
+    imported_count: z.number().int().min(0).openapi({
+      description:
+        "Records this import added to the dataset (score updates for existing records add none).",
+    }),
     dropped_count: z.number().int().min(0),
     detected_scores: z.array(z.string()),
     drop_reasons: z.array(z.string()).openapi({
