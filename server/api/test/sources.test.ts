@@ -380,7 +380,8 @@ describe("sources", () => {
         status: "completed",
         import_summary: { watermark: null },
       });
-      return (done.body as { import: { imported_count: number } }).import;
+      return (done.body as unknown as { import: { imported_count: number } })
+        .import;
     };
     const dataset = async () =>
       (await t.json<{ record_count: number }>("/v1/datasets/support-prod")).body
