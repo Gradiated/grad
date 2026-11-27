@@ -16,7 +16,7 @@
 //! a typo (`lerning_rate`) never trains silently with the default.
 
 use grad_sdk::{recipes, PlanRunRequest, RecipeSpec, Run, SplitSpec};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 use crate::output::{CliError, CliResult};
@@ -244,8 +244,23 @@ pub fn build_request(rf: RunFile) -> CliResult<PlanRunRequest> {
     })?;
     let mut params = rf.params;
     params.insert("kind".into(), Value::String(kind.as_str().into()));
-    let recipe: RecipeSpec = serde_json::from_value(Value::Object(params))
-        .map_err(|e| CliError::usage(format!("invalid recipe parameter: {}", e)))?;
+    let recipe: RecipeSpec = match serde_json::from_value(Value::Object(params.clone())) {
+        Ok(r) => r,
+        Err(e) => {
+            // Name the parameter: serde's message alone says only "expected f64".
+            let bad = params.iter().find(|(k, v)| {
+                k.as_str() != "kind"
+                    && serde_json::from_value::<RecipeSpec>(
+                        json!({"kind": kind.as_str(), k.as_str(): v}),
+                    )
+                    .is_err()
+            });
+            return Err(CliError::usage(match bad {
+                Some((k, v)) => format!("invalid recipe parameter '{}' = {}: {}", k, v, e),
+                None => format!("invalid recipe parameter: {}", e),
+            }));
+        }
+    };
     let split: Option<SplitSpec> = match rf.split {
         None => None,
         Some(v) => Some(
@@ -376,7 +391,8 @@ mod tests {
         let e = build_request(p("dataset: d\nname: n\nrecipe: sft\nepochs: two\n").unwrap())
             .unwrap_err();
         assert!(
-            e.message.contains("invalid recipe parameter"),
+            e.message
+                .contains("invalid recipe parameter 'epochs' = \"two\""),
             "{}",
             e.message
         );

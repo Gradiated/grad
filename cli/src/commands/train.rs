@@ -89,6 +89,16 @@ pub fn build_request(a: &TrainArgs) -> CliResult<PlanRunRequest> {
         }),
     );
     set("rubric", a.score.clone().map(Value::String));
+    if let Some(r) = &a.rubric {
+        let path = std::path::Path::new(r);
+        let v = if path.is_file() {
+            serde_json::to_value(super::eval::load_rubric(path)?)
+                .map_err(|e| CliError::usage(e.to_string()))?
+        } else {
+            Value::String(r.clone())
+        };
+        set("rubric", Some(v));
+    }
     if let Some(path) = &a.context_file {
         let text = std::fs::read_to_string(path)
             .map_err(|e| CliError::usage(format!("--context-file {}: {}", path.display(), e)))?;
@@ -627,6 +637,16 @@ async fn report_finished(ctx: &Ctx, c: &Client, run: &Run) -> Option<Artifact> {
     ));
     if let Some(report) = &run.eval_report {
         print_report(out, report);
+        if serde_json::to_value(report)
+            .ok()
+            .and_then(|v| v.get("routes_any_traffic").and_then(Value::as_bool))
+            == Some(false)
+        {
+            out.line(
+                "! The router routes no traffic: every request goes to the fallback model. \
+                 Add records, or raise --max-quality-drop.",
+            );
+        }
     }
     let artifact = match &run.artifact_id {
         Some(id) => c.artifacts().get(id).await.ok(),
@@ -638,18 +658,24 @@ async fn report_finished(ctx: &Ctx, c: &Client, run: &Run) -> Option<Artifact> {
             if a.format.as_ref().map(|f| f.as_str()) == Some("reference") {
                 out.line("  This is a reference-backend test artifact; it cannot be deployed.");
             } else {
-                out.line(format!("  Next: grad deploy {}", a.reference()));
                 out.line(format!(
-                    "    or: grad artifacts download {} --output ./{}",
+                    "  Next: grad artifacts download {} --output ./{}",
                     a.reference(),
                     a.name
+                ));
+                out.line(format!(
+                    "    or: grad deploy {}   # Gradiated Cloud",
+                    a.reference()
                 ));
             }
         }
         None => {
             if let Some(id) = &run.artifact_id {
                 out.line(format!("✓ Exported artifact {}", id));
-                out.line(format!("  Next: grad deploy {}", id));
+                out.line(format!(
+                    "  Next: grad artifacts download {} --output ./{}",
+                    id, run.name
+                ));
             }
         }
     }
@@ -1268,6 +1294,44 @@ mod tests {
             json!({"strategy": "random", "eval_fraction": 0.2})
         );
         assert_eq!(v["max_cost_usd"], json!(3.0));
+        // --rubric takes a score name, or a rubric file (as grad eval does).
+        let named = TrainArgs {
+            rubric: Some("resolved".into()),
+            ..TrainArgs {
+                dataset: a.dataset.clone(),
+                name: a.name.clone(),
+                recipe: a.recipe.clone(),
+                ..Default::default()
+            }
+        };
+        assert_eq!(
+            serde_json::to_value(build_request(&named).unwrap()).unwrap()["recipe"]["rubric"],
+            json!("resolved")
+        );
+        let file =
+            std::env::temp_dir().join(format!("grad-train-rubric-{}.yaml", std::process::id()));
+        std::fs::write(
+            &file,
+            "- name: ok\n  kind: validator\n  validator: non_empty\n",
+        )
+        .unwrap();
+        let filed = TrainArgs {
+            rubric: Some(file.display().to_string()),
+            ..TrainArgs {
+                dataset: a.dataset.clone(),
+                name: a.name.clone(),
+                recipe: a.recipe.clone(),
+                ..Default::default()
+            }
+        };
+        let v = serde_json::to_value(build_request(&filed).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(
+            v["recipe"]["rubric"][0]["validator"],
+            json!("non_empty"),
+            "{}",
+            v
+        );
         let bad = TrainArgs {
             lr: Some("fast".into()),
             ..a

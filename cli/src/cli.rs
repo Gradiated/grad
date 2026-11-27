@@ -551,6 +551,7 @@ pub struct RenderArgs {
 }
 
 #[derive(Args, Debug, Default)]
+#[command(allow_negative_numbers = true)]
 pub struct TrainArgs {
     /// Run config YAML (as written by `grad runs inspect RUN --yaml`)
     #[arg(short = 'f', long = "file", value_name = "FILE")]
@@ -610,8 +611,12 @@ pub struct TrainArgs {
     #[arg(long, requires = "rollout")]
     pub max_new_tokens: Option<u32>,
     /// Reward model: a score name in [0, 1] on your records to also train pointwise
-    #[arg(long, value_name = "SCORE")]
+    #[arg(long, value_name = "SCORE", conflicts_with = "rubric")]
     pub score: Option<String>,
+    /// Router, decision, reward: a score name already on your records (`resolved`),
+    /// or a YAML/JSON rubric file (judges and validators; see `grad eval --rubric`)
+    #[arg(long, value_name = "NAME|FILE")]
+    pub rubric: Option<String>,
     /// Cartridge: number of trained prefix tokens
     #[arg(long)]
     pub num_tokens: Option<u32>,

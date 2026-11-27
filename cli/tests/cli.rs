@@ -1136,7 +1136,8 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
         "fallback quality",
         "! small eval split",
         "✓ Exported artifact support-router@2026-11-26-1",
-        "Next: grad deploy support-router@2026-11-26-1",
+        "Next: grad artifacts download support-router@2026-11-26-1 --output ./support-router",
+        "or: grad deploy support-router@2026-11-26-1   # Gradiated Cloud",
     ] {
         assert!(
             r.stdout.contains(needle),
@@ -1329,7 +1330,7 @@ fn runs_commands() {
     assert_eq!(events.last().unwrap()["type"], "completed");
     let r = run(sb.grad(u), &["runs", "wait", "run_1"]);
     expect(&r, 0);
-    assert!(r.stdout.contains("Next: grad deploy"));
+    assert!(r.stdout.contains("Next: grad artifacts download"));
     // Off a terminal `runs watch` is `runs wait`; GRAD_NO_TUI takes 1/0/true/false.
     for v in ["1", "0", "true", ""] {
         let mut c = sb.grad(u);

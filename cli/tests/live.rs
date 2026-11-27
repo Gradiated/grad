@@ -755,7 +755,8 @@ fn live_router_quickstart_with_torch_worker() {
     ok(&o);
     assert!(o.stdout.contains("Eval report:"), "{}", o.stdout);
     assert!(
-        o.stdout.contains("Next: grad deploy support-router@"),
+        o.stdout
+            .contains("Next: grad artifacts download support-router@"),
         "{}",
         o.stdout
     );
