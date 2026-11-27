@@ -4,7 +4,7 @@ Self-hosted `grad` needs only **PostgreSQL 17** and **S3-compatible object stora
 
 ## Local development (`grad local up`)
 
-`grad local up` starts PostgreSQL 17, SeaweedFS (the S3 store), a one-shot `migrate` service, `grad-server` and a CPU `grad-trainer` worker from published images: one API and one worker. The compose file is built into the `grad` binary, so it works from any directory:
+`grad local up` starts PostgreSQL 17, SeaweedFS (the S3 store), a one-shot `migrate` service, `grad-server`, a CPU `grad-trainer` worker and a `grad-eval-worker` from published images: one API, one trainer worker for training and imports, and one eval worker (the `grad-server` image, because the trainer image has no Node). The compose file is built into the `grad` binary, so it works from any directory:
 
 ```bash
 grad local up
@@ -99,8 +99,8 @@ To work on it, run the API (for example `grad local up` or the harness) and `pnp
 | `S3_REGION`, `S3_ENDPOINT` | AWS default, AWS S3 | `S3_ENDPOINT` points at another S3-compatible store (SeaweedFS, MinIO, R2); path-style addressing is used then. |
 | `S3_PUBLIC_ENDPOINT` | `S3_ENDPOINT` | The address SDK clients reach the store at, when it differs from the server's and workers' (`grad local up`: `http://127.0.0.1:18786`). Only file-upload tickets (`POST /v1/uploads`) are signed for it. |
 | `BILLING_MODE` | `noop` | `cloud` checks balances with Gradiated Cloud (a run of an exhausted workspace stops, resumable) and exports the usage ledger to it from Cloud's cursor. Self-hosted, `GET /v1/usage` lists the ledger (filter by `from`/`to`, `run_id`, `eval_id`, `kind`) and `GET /v1/usage/summary` totals a period (`grad usage`, `grad usage list`). |
-| `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY` | none | OpenAI-compatible endpoint used by evals (your vLLM/SGLang with LoRA modules named by artifact id). Without it `POST /v1/evals` returns `501 inference_unavailable`. Every call carries `X-Grad-Workspace: <workspace id>`: artifact ids are unique only per workspace, so an endpoint shared by several workspaces must serve and bill by (workspace, model). |
-| `GRAD_JUDGE_BASE_URL`, `GRAD_JUDGE_API_KEY` | inference endpoint | Endpoint for `Judge` rubric items. The unprefixed `INFERENCE_*` and `JUDGE_*` names still work, with a deprecation warning at startup. `grad local up` passes all four from your shell. |
+| `GRAD_INFERENCE_BASE_URL` | none | The OpenAI-compatible endpoint the [eval workers](#eval-workers) call. grad-server never calls it: it only checks that it is set, so without it `POST /v1/evals` (and router labelling, distillation's teacher answers, `dataset.score()` with judges) returns `501 inference_unavailable`. Set the same URL on the API and the eval workers; the keys go to the eval workers only. |
+| `GRAD_JUDGE_BASE_URL` | inference endpoint | The endpoint for `Judge` rubric items (the same split). The unprefixed `INFERENCE_*` and `JUDGE_*` names still work, with a deprecation warning at startup. |
 | `GRAD_EXTRA_MODELS_JSON` | none | JSON array adding or overriding catalog models (the single price source for billing). |
 | `GRAD_JUDGE_MODELS_JSON` | none | JSON array of extra judge models with prices, e.g. `[{"id": "anthropic/claude-sonnet-5-5", "price_per_million_tokens_usd": 3}]`. A `Judge` must name a catalog model, one of these, or an artifact of the eval's workspace (priced at its base model); anything else is `422 unknown_judge_model`, so every judge call is billed. |
 | `MAX_ATTEMPTS` | `10` | Attempts that may end without a result (a lost worker, a worker error, out of GPU memory) before a job fails. |
@@ -136,6 +136,28 @@ These checks have been verified on two backends:
 
 AWS S3 documents the same behaviour. grad uses no multipart uploads, range GETs, CopyObject or bucket lifecycle rules. The maintenance tick deletes staged import files under `uploads/` after 7 days, and job blobs that no record references.
 
+## Eval workers
+
+Evals, `dataset.score()`, router labelling, distillation's teacher answers and recipe checkpoint evals are `eval` jobs on the job queue. grad-server creates them, prices and bills what they generate, aggregates them and serves the results; it makes no model or judge calls, so a deploy or restart of the API never interrupts an eval. They run on eval workers, a second entrypoint of the `grad-server` image:
+
+```bash
+node dist/main.js worker --kinds eval
+```
+
+An eval worker claims eval jobs over the same worker protocol as the trainer workers, with a lease it renews by heartbeat. It downloads the eval's pinned dataset version, generates and scores each (task, model, sample) against the endpoints below with the built-in validators, regexes (in a sandboxed thread with a timeout) and judges, and posts the outputs in batches. Each output is stored once per (eval, model, task, sample), so a re-sent batch is a no-op, and grad-server prices it at the prices resolved when the eval was planned and bills the attempt as it goes. Code scorers still run in the SDK (`awaiting_scores`), unchanged. On SIGTERM the worker posts what is in flight and hands the eval back (counted toward `MAX_PREEMPTIONS`); a worker that dies loses its lease, and the next attempt resumes after the outputs already stored. Cancelling an eval stops its worker at the next batch, and the outputs in flight are still billed.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `GRAD_SERVER_URL` | `http://127.0.0.1:8787` | The API. |
+| `TRAINER_API_KEY` | none | A worker key that may claim `eval` jobs (the platform key, or a `TRAINER_KEYS_JSON` key whose `kinds` include `eval`). Eval jobs carry no workspace secrets. |
+| `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY` | none | OpenAI-compatible endpoint for the models under eval (your vLLM/SGLang with LoRA modules named by artifact id). Every call carries `X-Grad-Workspace: <workspace id>`: artifact ids are unique only per workspace, so an endpoint shared by several workspaces must serve and bill by (workspace, model). Without it the worker still runs validators, regexes and code scorers, and says so at startup. |
+| `GRAD_JUDGE_BASE_URL`, `GRAD_JUDGE_API_KEY` | inference endpoint | Endpoint for `Judge` rubric items. `grad local up` passes all four from your shell. |
+| `EVAL_CONCURRENCY` | `8` | Model calls in flight per worker. |
+| `GRAD_WORKER_ID` | hostname | Shown in leases and logs; a per-process suffix is appended. |
+| `GRAD_LEASE_SECONDS` / `GRAD_POLL_INTERVAL_S` | `180` / `1` | Lease length (heartbeats every third of it) and the idle poll interval. |
+
+`grad_eval_outputs_total` and `grad_eval_judge_calls_total` stay on grad-server's `/metrics`: each batch reports its model and judge calls, so eval workers need no scrape. On the API, `GRAD_INFERENCE_API_KEY`, `GRAD_JUDGE_API_KEY` and `EVAL_CONCURRENCY` are ignored with a startup warning.
+
 ## Production Kubernetes (Helm)
 
 The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job and two pull-based worker pools. It needs your own Postgres and an S3-compatible bucket; the chart refuses to render without `storage.s3Bucket`, because replicas and workers share artifacts through presigned S3 URLs.
@@ -149,7 +171,7 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
    | `trainer-api-key` | API, workers | The platform worker key (`workerDefaults.apiKeySecretKey`, or per worker `workers.<name>.apiKeySecretKey`) |
    | `trainer-keys-json` | API | `TRAINER_KEYS_JSON`: per-pool worker keys scoped by job kind, `[{"label": "gpu", "sha256": "<hex>", "kinds": ["train"]}, ...]`. Store each pool's plaintext key under its own Secret key and point `workers.<name>.apiKeySecretKey` at it, so GPU pods can never claim imports or see workspace secrets. |
    | `secrets-key` | API | `GRAD_SECRETS_KEY`: 32 random bytes, base64, encrypting workspace secrets |
-   | `inference-api-key`, `judge-api-key` | API | Keys for `evals.inferenceBaseUrl` and `evals.judgeBaseUrl` |
+   | `inference-api-key`, `judge-api-key` | eval workers | Keys for `evals.inferenceBaseUrl` and `evals.judgeBaseUrl` |
    | `metrics-token` | API, Prometheus, KEDA | Bearer token for `/metrics` and `/metrics/queue` with `metrics.requireToken=true` |
    | `cloud-service-token` | API | Cloud modes only |
    | `aws-access-key-id`, `aws-secret-access-key` | API | Static S3 keys (SeaweedFS, MinIO, R2). Leave them out with EKS Pod Identity or IRSA. |
@@ -173,10 +195,10 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
 3. What gets installed:
    - **Migrations** run once per install and upgrade in a `pre-install,pre-upgrade` hook Job (`node dist/main.js migrate`; Argo CD runs it as a PreSync hook). The API replicas start with `MIGRATE_ON_BOOT=false` and refuse to serve a database with pending migrations. `migrations.enabled=false` makes every replica migrate at boot instead, under an advisory lock.
    - **API**: `api.replicaCount` (2) replicas with liveness, readiness and startup probes, a PodDisruptionBudget and resource requests and limits. Extra settings (for example `GRAD_EXTRA_MODELS_JSON` or `MAX_ATTEMPTS`) go in `api.env`; `api.queue` sets the per-workspace caps (`maxRunningPerWorkspace.{train,import,eval}`, `maxQueuedPerWorkspace`).
-   - **Workers**: `workers.train` claims only `train` jobs and requests `gpuCount` GPUs (`nodeSelector`/`tolerations` place it); `workers.import` is a small CPU pool that claims only `import` jobs, which are file imports and source syncs, the only jobs that carry workspace secrets such as provider keys and HF tokens. Each sets `GRAD_WORKER_KINDS` from `kinds`. Workers drain on SIGTERM: if the next step and a checkpoint fit in `GRAD_RECLAIM_GRACE_SECONDS` (25), the worker saves a checkpoint of the current step first; then the attempt is billed, handed back and requeued at once, and a new worker resumes from that checkpoint. On Kubernetes a node termination handler delivers that SIGTERM; on a plain EC2 host, `GRAD_TERMINATION_NOTICE=aws` makes the worker poll the instance metadata (IMDSv2) for a termination notice and treat it like SIGTERM (the chart's network policy blocks the metadata endpoint). To sync from an observability tool on a private address, set `workers.import.env.GRAD_SOURCES_EGRESS_ALLOW` (CIDRs) and allow it in `networkPolicy.workerEgress`; recipe `loggers=` (W&B, MLflow) go through the same guard on the train workers, so a private MLflow server needs `workers.train.env.GRAD_SOURCES_EGRESS_ALLOW`. A source sync stops after `GRAD_SOURCES_SYNC_MAX_SECONDS` (default 3600) and every provider response after 120 s of wall-clock time, so a slow host can't hold an import worker. `models.mirror` sets `GRAD_MODELS_MIRROR` (a directory or `s3://` prefix holding `<mirror>/<model id>/`) for air-gapped installs.
+   - **Workers**: `workers.train` claims only `train` jobs and requests `gpuCount` GPUs (`nodeSelector`/`tolerations` place it); `workers.import` is a small CPU pool for `import` jobs, which are file imports and source syncs, the only jobs that carry workspace secrets such as provider keys and HF tokens, and `eval` jobs. Each trainer container sets `GRAD_WORKER_KINDS` from `kinds`; a pool whose `kinds` include `eval` also runs a `grad-eval-worker` container (the `grad-server` image, `node dist/main.js worker --kinds eval`) with the pool's worker key, `evals.inferenceBaseUrl`/`evals.judgeBaseUrl`, their Secret keys, `evals.concurrency` and `evals.workerResources`. A GPU pool refuses kind `eval`, and the release notes warn when no pool runs evals. Workers drain on SIGTERM: if the next step and a checkpoint fit in `GRAD_RECLAIM_GRACE_SECONDS` (25), the worker saves a checkpoint of the current step first; then the attempt is billed, handed back and requeued at once, and a new worker resumes from that checkpoint. On Kubernetes a node termination handler delivers that SIGTERM; on a plain EC2 host, `GRAD_TERMINATION_NOTICE=aws` makes the worker poll the instance metadata (IMDSv2) for a termination notice and treat it like SIGTERM (the chart's network policy blocks the metadata endpoint). To sync from an observability tool on a private address, set `workers.import.env.GRAD_SOURCES_EGRESS_ALLOW` (CIDRs) and allow it in `networkPolicy.workerEgress`; recipe `loggers=` (W&B, MLflow) go through the same guard on the train workers, so a private MLflow server needs `workers.train.env.GRAD_SOURCES_EGRESS_ALLOW`. A source sync stops after `GRAD_SOURCES_SYNC_MAX_SECONDS` (default 3600) and every provider response after 120 s of wall-clock time, so a slow host can't hold an import worker. `models.mirror` sets `GRAD_MODELS_MIRROR` (a directory or `s3://` prefix holding `<mirror>/<model id>/`) for air-gapped installs.
 4. Optional:
    - `keda.enabled=true` (KEDA installed in the cluster) adds a ScaledObject per worker. It scales on the open jobs of that worker's kinds, queued **and running**, so a scale-down never strands a running job. `keda.workers.train.minReplicaCount=0` scales GPUs to zero. See [KEDA](#keda) for its two trigger modes; neither needs database credentials.
-   - `networkPolicy.enabled=true` lets only this release's workers and `networkPolicy.apiIngressFrom` peers reach the API, and limits worker egress to DNS, the API and `networkPolicy.workerEgress` (default: HTTPS to public addresses only, never private ranges, CGNAT or link-local metadata endpoints). Add your S3 endpoint there if it is private.
+   - `networkPolicy.enabled=true` lets only this release's workers and `networkPolicy.apiIngressFrom` peers reach the API, and limits worker egress to DNS, the API and `networkPolicy.workerEgress` (default: HTTPS to public addresses only, never private ranges, CGNAT or link-local metadata endpoints). Add your S3 endpoint there if it is private, and an in-cluster inference or judge endpoint to `networkPolicy.inferenceEgress`.
    - `ingress.enabled=true` exposes the API and the [web UI](#web-ui), which share the `/` path on the API Service; `ui.enabled=false` serves only the API.
 5. Serve trained artifacts on vLLM or SGLang by downloading the verified `.grad.tar.gz` bundle:
    ```bash

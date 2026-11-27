@@ -9,6 +9,15 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Changed
 
+- **Evals run on eval workers, not in grad-server.** Evals, `dataset.score()`, router
+  labelling, distillation's teacher answers and checkpoint evals are `eval` jobs on the job
+  queue, claimed by `node dist/main.js worker --kinds eval` (the grad-server image): the Helm
+  `import` pool runs one beside its trainer (kinds `[import, eval]`), and `grad local up` adds a
+  `grad-eval-worker` service. A deploy or restart of the API no longer interrupts an eval; a lost
+  worker's eval resumes after its stored outputs, each billed once. **Breaking (operators):**
+  `GRAD_INFERENCE_API_KEY`, `GRAD_JUDGE_API_KEY` and `EVAL_CONCURRENCY` move to the eval workers
+  (the API keeps the endpoint URLs, to refuse evals without one), and `EVAL_EXECUTOR` is gone.
+
 - **Event streams share one reader per API replica.** SSE streams of run events and metrics no
   longer poll Postgres each (two queries a second per open stream). Each replica LISTENs on
   `grad_job_events` (migration 0004 adds NOTIFY triggers on event inserts and job status

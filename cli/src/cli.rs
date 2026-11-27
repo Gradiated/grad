@@ -1244,7 +1244,7 @@ profile follows it. `grad local status` prints the real URLs.")]
     Logs {
         #[command(flatten)]
         compose: ComposeArgs,
-        /// Only this service (grad-server, grad-trainer, postgres)
+        /// Only this service (grad-server, grad-eval-worker, grad-trainer, postgres)
         service: Option<String>,
         /// Follow log output
         #[arg(long)]
