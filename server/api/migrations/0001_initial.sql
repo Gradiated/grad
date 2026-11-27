@@ -175,10 +175,6 @@ CREATE TABLE grad_runs (
   artifact_id TEXT
 );
 
--- Usage reports find the run a labeling or teacher eval belongs to.
-CREATE INDEX grad_runs_label_eval_idx ON grad_runs ((resolved_config->>'label_eval_id'))
-  WHERE resolved_config->>'label_eval_id' IS NOT NULL;
-
 -- Checkpoints and releases. A checkpoint is a run attempt's step (it expires);
 -- promote adds a release row (name@version) over the same immutable blob.
 CREATE TABLE grad_artifacts (
@@ -289,8 +285,7 @@ CREATE INDEX grad_eval_outputs_order_idx
 -- a final row in the transaction that closes it. Each row covers the
 -- attempt's tokens (tokens_from, tokens_through] and is keyed by its end, so
 -- a replay adds nothing and an attempt's rows sum to what it used. Gradiated
--- Cloud copies the ledger from a cursor (seq); GET /v1/usage lists it and
--- GET /v1/usage/summary aggregates a period of it.
+-- Cloud copies the ledger from a cursor (seq); GET /v1/usage lists it.
 CREATE TABLE grad_usage (
   seq BIGSERIAL PRIMARY KEY,
   idempotency_key TEXT NOT NULL UNIQUE,
@@ -307,7 +302,6 @@ CREATE TABLE grad_usage (
 );
 
 CREATE INDEX grad_usage_workspace_idx ON grad_usage (workspace_id, seq DESC);
-CREATE INDEX grad_usage_workspace_time_idx ON grad_usage (workspace_id, created_at);
 
 -- Workspace secrets (provider keys, HF tokens). Values are AES-256-GCM sealed
 -- by the application (src/secrets.ts; AAD = workspace + name) and never
