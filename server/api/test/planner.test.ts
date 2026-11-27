@@ -7,7 +7,12 @@ import {
   type PlanRunRequest,
 } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
-import { planRun, renderMessages, splitRecords } from "../src/planner.js";
+import {
+  formatUsd,
+  planRun,
+  renderMessages,
+  splitRecords,
+} from "../src/planner.js";
 import {
   assessRecipeUsability,
   recordConversation,
@@ -228,7 +233,12 @@ describe("planRun", () => {
     expectCode(
       () => plan({ kind: "sft", model: "meta/llama-405b" }, records),
       "unknown_model",
-      /^(?!.*explicit lr)/,
+      /^(?!.*(explicit lr|did you mean)).*grad models list/,
+    );
+    expectCode(
+      () => plan({ kind: "sft", model: "qwen/qwen3-8" }, records),
+      "unknown_model",
+      /did you mean 'qwen\/qwen3-8b'\?/,
     );
   });
 
@@ -515,6 +525,27 @@ describe("planRun", () => {
     expect(noEval.warnings.join(" ")).toMatch(/eval split is empty/);
     const budget = plan({ kind: "sft" }, records, { max_cost_usd: 0.0000001 });
     expect(budget.warnings.join(" ")).toMatch(/stopped_budget/);
+    // Sub-cent amounts keep two significant digits instead of "$0.00 exceeds $0.00".
+    expect(budget.warnings.join(" ")).toMatch(
+      /\(\$0\.0\d*[1-9]\d*\) exceeds max_cost_usd \(\$0\.00000010\)/,
+    );
+    expect(formatUsd(0)).toBe("$0.00");
+    expect(formatUsd(12.345)).toBe("$12.35");
+    expect(formatUsd(0.00041)).toBe("$0.00041");
+    expect(formatUsd(0.00001)).toBe("$0.000010");
+    // One example per step at most: a batch size can't reach 100 steps, and "1 step" is singular.
+    const one = plan({ kind: "sft" }, records.slice(0, 4));
+    const few = one.warnings.find((w) => w.includes("below the 100"));
+    expect(few).toMatch(
+      /^1 step is below the 100 we recommend; add data or epochs\.$/,
+    );
+    const many = Array.from({ length: 400 }, (_, i) => chat(i));
+    const advice = plan({ kind: "sft", batch_size: 32 }, many).warnings.find(
+      (w) => w.includes("below the 100"),
+    );
+    expect(advice).toMatch(
+      /^\d+ steps are below the 100 we recommend; use batch_size=\d+ \(or add epochs or data\)\.$/,
+    );
     const long = plan({ kind: "sft", model: "test/tiny-qwen3" }, [
       {
         messages: [

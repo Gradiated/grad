@@ -271,7 +271,7 @@ export const registerDatasetRoutes = (
       if (!model || model.family !== "llm") {
         throw invalid(
           "render_unsupported_model",
-          `Model '${input.model}' is not a chat model in the catalog; see GET /v1/base-models.`,
+          `Model '${input.model}' is not a chat model in the catalog; run \`grad models list\` (GET /v1/base-models).`,
         );
       }
 

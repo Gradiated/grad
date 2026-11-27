@@ -119,7 +119,7 @@ const onPolicyTeacher = (
   if (!teacher || teacher.family !== "llm") {
     throw invalid(
       "unknown_model",
-      `Teacher '${teacherId}' is not an llm model in the trainable catalog; see GET /v1/models, or pass rollout=OffPolicy() to learn from a model your inference endpoint serves.`,
+      `Teacher '${teacherId}' is not an llm model in the trainable catalog; run \`grad models list\` (GET /v1/base-models), or pass rollout=OffPolicy() to learn from a model your inference endpoint serves.`,
     );
   }
   if (teacher.template_revision !== student.template_revision) {

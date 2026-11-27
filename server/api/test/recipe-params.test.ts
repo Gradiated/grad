@@ -508,7 +508,9 @@ describe("recipe parameters", () => {
       { kind: "router", model: "test/tiny-qwen3", rubric: "ok" },
       responses,
     );
-    expect(unpriced.warnings.join(" ")).toMatch(/No price for cheap\/m/);
+    expect(unpriced.warnings.join(" ")).toMatch(
+      /No per-request serving price for cheap\/m/,
+    );
     const restricted = plan(
       {
         kind: "router",

@@ -79,7 +79,7 @@ export const resolveModelTargets = async (
     if (!artifact) {
       throw invalid(
         "unknown_model",
-        `Model '${ref}' is neither a catalog model (see GET /v1/models) nor an artifact in this workspace ('name@version' or 'name@latest').`,
+        `Model '${ref}' is neither a catalog model (run \`grad models list\`, GET /v1/base-models) nor an artifact in this workspace ('name@version' or 'name@latest').`,
       );
     }
     if (NON_DEPLOYABLE_FORMATS.includes(artifact.format)) {

@@ -228,6 +228,29 @@ const estimateRecordTokens = (
   return { total, trained: Math.max(8, Math.round(total * 0.4)) };
 };
 
+/** USD for a message: cents, or two significant digits below a cent ($0.00041). */
+export const formatUsd = (usd: number): string => {
+  if (usd === 0 || Math.abs(usd) >= 0.01) return `$${usd.toFixed(2)}`;
+  const decimals = Math.min(8, 1 - Math.floor(Math.log10(Math.abs(usd))));
+
+  return `$${usd.toFixed(decimals)}`;
+};
+
+/** The "too few steps" advice: a batch size only when one reaches 100 steps. */
+const fewStepsWarning = (
+  steps: number,
+  examples: number,
+  batchSize: number,
+): string => {
+  const reach = Math.floor(examples / 100);
+  const advice =
+    reach >= 1 && reach < batchSize
+      ? `use batch_size=${reach} (or add epochs or data)`
+      : "add data or epochs";
+
+  return `${steps} ${steps === 1 ? "step is" : "steps are"} below the 100 we recommend; ${advice}.`;
+};
+
 export const isV0Recipe = (kind: RecipeKind): boolean =>
   (V0_RECIPE_KINDS as readonly string[]).includes(kind);
 
@@ -248,6 +271,50 @@ const assertRecipeSupported = (
   );
 };
 
+/** The closest catalog id by edit distance, when it is a plausible typo. */
+const closestModel = (
+  requested: string,
+  ids: readonly string[],
+): string | undefined => {
+  const distance = (a: string, b: string): number => {
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i += 1) {
+      const row = [i];
+      for (let j = 1; j <= b.length; j += 1) {
+        row[j] = Math.min(
+          (prev[j] ?? 0) + 1,
+          (row[j - 1] ?? 0) + 1,
+          (prev[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+        );
+      }
+      prev = row;
+    }
+
+    return prev[b.length] ?? 0;
+  };
+  const want = requested.trim().toLowerCase();
+  const best = ids
+    .map((id) => ({ id, d: distance(want, id) }))
+    .sort((x, y) => x.d - y.d)[0];
+
+  return best && best.d <= Math.max(2, Math.floor(want.length / 4))
+    ? best.id
+    : undefined;
+};
+
+/** "Not in the catalog", the closest id, and how to list the catalog. */
+export const unknownModelMessage = (
+  requested: string,
+  catalog: ModelCatalog,
+): string => {
+  const near = closestModel(
+    requested,
+    catalog.list().map((m) => m.id),
+  );
+
+  return `Model '${requested}' is not in the trainable catalog${near ? `; did you mean '${near}'?` : "."} Run \`grad models list\` (GET /v1/base-models) to see it; self-hosted servers can add models with GRAD_EXTRA_MODELS_JSON.`;
+};
+
 const resolveModel = (
   request: PlanRunRequest,
   catalog: ModelCatalog,
@@ -261,7 +328,7 @@ const resolveModel = (
     throw invalid(
       "unknown_model",
       requested
-        ? `Model '${requested}' is not in the trainable catalog; see GET /v1/base-models (self-hosted servers can register models with GRAD_EXTRA_MODELS_JSON).`
+        ? unknownModelMessage(requested, catalog)
         : `No default model is configured for recipe '${kind}'; pass recipe.model.`,
     );
   }
@@ -340,9 +407,11 @@ const resolveRouterCandidates = (
   const loggedCosts = records.some(
     (r) => typeof r.metrics?.cost_usd === "number",
   );
-  if (unpriced.length > 0 && !loggedCosts) {
+  // A Judge or Rubric labels the prompts in an eval, which records each call's cost.
+  const labeled = typeof recipe.rubric === "object" && recipe.rubric !== null;
+  if (unpriced.length > 0 && !loggedCosts && !labeled) {
     warnings.push(
-      `No price for ${unpriced.join(", ")} (recipe.pricing or metrics.cost_usd on your records): the router maximizes offload rate and cost_savings_pct is null.`,
+      `No per-request serving price for ${unpriced.join(", ")} (pass recipe.pricing, or log metrics.cost_usd on your records): the router maximizes offload rate and cost_savings_pct is null.`,
     );
   }
 
@@ -408,7 +477,7 @@ export const planRun = (
   ) {
     throw invalid(
       "unknown_model",
-      `Teacher '${recipe.teacher}' is not a ${model.family} model in the trainable catalog; see GET /v1/base-models.`,
+      `Teacher '${recipe.teacher}' is not a ${model.family} model in the trainable catalog; run \`grad models list\` (GET /v1/base-models).`,
     );
   }
 
@@ -532,12 +601,8 @@ export const planRun = (
     Math.ceil((train.length * recipe.epochs) / batchSize),
   );
   if (estimatedSteps < 100) {
-    const suggested = Math.max(
-      1,
-      Math.floor((train.length * recipe.epochs) / 100),
-    );
     warnings.push(
-      `${estimatedSteps} steps is below the 100 we recommend; use batch_size=${suggested} or more epochs/data.`,
+      fewStepsWarning(estimatedSteps, train.length * recipe.epochs, batchSize),
     );
   }
   if (truncated > 0) {
@@ -571,7 +636,7 @@ export const planRun = (
     estimatedCostUsd > request.max_cost_usd
   ) {
     warnings.push(
-      `Estimated cost ($${estimatedCostUsd.toFixed(2)}) exceeds max_cost_usd ($${request.max_cost_usd.toFixed(2)}); the run will stop early with status stopped_budget.`,
+      `Estimated cost (${formatUsd(estimatedCostUsd)}) exceeds max_cost_usd (${formatUsd(request.max_cost_usd)}); the run will stop early with status stopped_budget.`,
     );
   }
 

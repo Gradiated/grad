@@ -70,6 +70,8 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
       plan.body.labeling.estimated_cost_usd,
     );
     expect(plan.body.warnings.join(" ")).toMatch(/labeling eval replays/);
+    // The labeling eval prices every call, so no "no serving price" warning.
+    expect(plan.body.warnings.join(" ")).not.toMatch(/serving price/);
     expect(plan.body.resolved_config).toMatchObject({
       label_eval_id: null,
       recipe_params: {
