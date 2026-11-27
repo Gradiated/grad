@@ -55,6 +55,12 @@ spec:
             - {name: AUTH_MODE, value: {{ .Values.api.authMode | quote }}}
             - {name: BILLING_MODE, value: {{ .Values.api.billingMode | quote }}}
             - {name: DEFAULT_WORKSPACE_ID, value: {{ .Values.api.defaultWorkspaceId | quote }}}
+            {{- with .Values.api.queue }}
+            - {name: GRAD_MAX_RUNNING_PER_WORKSPACE_TRAIN, value: {{ .maxRunningPerWorkspace.train | quote }}}
+            - {name: GRAD_MAX_RUNNING_PER_WORKSPACE_IMPORT, value: {{ .maxRunningPerWorkspace.import | quote }}}
+            - {name: GRAD_MAX_RUNNING_PER_WORKSPACE_EVAL, value: {{ .maxRunningPerWorkspace.eval | quote }}}
+            - {name: GRAD_MAX_QUEUED_PER_WORKSPACE, value: {{ .maxQueuedPerWorkspace | quote }}}
+            {{- end }}
             - {name: UI_ENABLED, value: {{ .Values.ui.enabled | quote }}}
             - {name: MIGRATE_ON_BOOT, value: {{ ternary "false" "true" .Values.migrations.enabled | quote }}}
             - {name: S3_BUCKET, value: {{ .Values.storage.s3Bucket | quote }}}

@@ -54,6 +54,15 @@ api:
   authMode: api_key
   billingMode: noop
   defaultWorkspaceId: default
+  # Per-workspace queue caps. Claims are fair across workspaces (the one with
+  # the fewest running jobs of the kind goes next); past maxRunning a
+  # workspace's jobs wait, past maxQueued creates answer 429 queue_limit.
+  queue:
+    maxRunningPerWorkspace:
+      train: 8
+      import: 8
+      eval: 8
+    maxQueuedPerWorkspace: 500
   # Extra environment, e.g. GRAD_EXTRA_MODELS_JSON, MAX_ATTEMPTS, EVAL_CONCURRENCY.
   env: {}
   podAnnotations: {}

@@ -428,6 +428,7 @@ mod tests {
             (409, "x", "x"),
             (413, "payload_too_large", "payload_too_large"),
             (429, "rate_limited", "rate_limited"),
+            (429, "queue_limit", "queue_limit"),
             (501, "deploy_unavailable", "deploy_unavailable"),
             (501, "inference_unavailable", "inference_unavailable"),
             (501, "secrets_unavailable", "secrets_unavailable"),

@@ -21,6 +21,20 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   `grad_sse_hub_fetches_total`, `grad_sse_hub_notifications_total`, `grad_sse_hub_listening`
   and `grad_sse_dispatch_latency_seconds`.
 
+- **Fair queue across workspaces.** A claim now picks the workspace with the fewest running
+  jobs of that kind (ties: its oldest queued job), then that workspace's oldest job, instead
+  of the oldest job overall, so one workspace's backlog no longer delays another's. Per
+  workspace, at most `GRAD_MAX_RUNNING_PER_WORKSPACE_{TRAIN,IMPORT,EVAL}` (8) jobs of a kind
+  run at once (the rest wait, "Queued: workspace concurrency limit (8 running)"), and
+  `GRAD_MAX_QUEUED_PER_WORKSPACE` (500) jobs may be queued: creating more answers
+  `429 queue_limit` (Helm `api.queue`). Workers send `device` and their GPU memory with each
+  claim and get only runs whose `min_gpu_memory_gb` fits; a run nobody online fits says so.
+  `Run` gains `queue_position`, `queue_message` and `min_gpu_memory_gb`, and queued phase
+  events `queue_position` and `message`, in every SDK; `grad train`, the TUI and the web UI
+  show the message. New metrics: `grad_job_fair_share_wait_seconds`,
+  `grad_jobs_over_workspace_limit` (excluded from `grad_jobs_open`, so KEDA doesn't scale for
+  capped jobs), `grad_jobs_unfit` and `grad_queue_limit_rejections_total`.
+
 - **Usage reports.** `grad usage` prints a period's total cost and tokens, a breakdown by kind
   (training, eval, scoring, labeling, teacher) and the top runs and evals; `--by
   day|week|month|model|recipe|kind` prints one grouped table, and `--from`/`--to` set the period

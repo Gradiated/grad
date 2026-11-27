@@ -220,6 +220,29 @@
       }
     },
     {
+      "name": "429 queue_limit (the workspace's queued-jobs cap)",
+      "status": 429,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_queue"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Too many queued jobs",
+        "status": 429,
+        "detail": "This workspace already has 500 queued jobs (runs, imports and evals), the most it may queue at once. Wait for some to start, or cancel queued ones, then retry.",
+        "code": "queue_limit",
+        "request_id": "req_queue"
+      },
+      "expect": {
+        "class": "RateLimitError",
+        "status": 429,
+        "code": "queue_limit",
+        "request_id": "req_queue",
+        "retryable": true
+      }
+    },
+    {
       "name": "500 internal",
       "status": 500,
       "headers": {
