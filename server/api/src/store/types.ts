@@ -198,8 +198,7 @@ export interface RunRecord {
   recipe_kind: RecipeKind;
   status: RunStatus;
   resolved_config: ResolvedRunConfig;
-  /** Spend cap in micro-USD (null: uncapped). */
-  max_cost_micro_usd: number | null;
+  max_cost_usd: number | null;
   price_per_million_tokens: number;
   total_steps: number;
   current_step: number;
@@ -208,9 +207,8 @@ export interface RunRecord {
   max_attempts: number;
   /** Consecutive lease expiries since creation or the last resume. */
   failed_attempts: number;
-  /** Tokens and micro-USD of closed (billed) attempts. */
+  /** Tokens of closed (billed) attempts; their cost is derived from them. */
   billed_tokens: number;
-  billed_micro_usd: number;
   /** Latest tokens reported by the open attempt (0 when none is open). */
   attempt_tokens: number;
   worker_id: string | null;
@@ -255,7 +253,7 @@ export interface RunRepository {
     datasetVersion: number;
     recipeKind: RecipeKind;
     resolvedConfig: ResolvedRunConfig;
-    maxCostMicroUsd: number | null;
+    maxCostUsd: number | null;
     pricePerMillionTokens: number;
     totalSteps: number;
     maxAttempts: number;
@@ -500,7 +498,7 @@ export interface EvalRecord {
   total_outputs: number;
   generated: number;
   summary: EvalModelSummary[];
-  total_cost_micro_usd: number;
+  total_cost_usd: number;
   error: string | null;
   attempt: number;
   worker_id: string | null;
@@ -518,7 +516,7 @@ export type EvalPatch = Partial<
     | "total_outputs"
     | "generated"
     | "summary"
-    | "total_cost_micro_usd"
+    | "total_cost_usd"
     | "error"
     | "attempt"
     | "worker_id"
@@ -550,7 +548,7 @@ export interface EvalOutputRow {
   error: string | null;
   prompt_tokens: number;
   completion_tokens: number;
-  cost_micro_usd: number;
+  cost_usd: number;
   created_at: string;
 }
 
@@ -574,7 +572,7 @@ export interface EvalRepository {
       | "total_outputs"
       | "generated"
       | "summary"
-      | "total_cost_micro_usd"
+      | "total_cost_usd"
       | "error"
       | "attempt"
       | "worker_id"
@@ -652,7 +650,7 @@ export interface BillingOutboxEntry {
   run_id: string;
   attempt: number;
   tokens: number;
-  cost_micro_usd: number;
+  cost_usd: number;
   status: "pending" | "sent";
   attempts: number;
   last_error: string | null;
@@ -670,7 +668,7 @@ export interface BillingOutboxRepository {
     runId: string;
     attempt: number;
     tokens: number;
-    costMicroUsd: number;
+    costUsd: number;
   }): Promise<BillingOutboxEntry>;
   /**
    * Pending entries with next_attempt_at <= now; pushes their

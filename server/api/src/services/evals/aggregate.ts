@@ -1,4 +1,3 @@
-import { usd } from "../../catalog.js";
 import type { EvalModelSummary } from "../../contracts.js";
 import type {
   EvalOutputRow,
@@ -22,7 +21,7 @@ interface TaskCell {
 export interface Aggregation {
   summary: EvalModelSummary[];
   results: EvalResultRow[];
-  totalCostMicroUsd: number;
+  totalCostUsd: number;
 }
 
 /**
@@ -64,9 +63,9 @@ export const aggregateEval = (
       output.output === null ? 0 : combineScores(evalRun.rubric, output.scores),
     );
     cell.tokens += output.prompt_tokens + output.completion_tokens;
-    cell.cost += output.cost_micro_usd;
+    cell.cost += output.cost_usd;
     if (output.error !== null) cell.errors += 1;
-    totalCost += output.cost_micro_usd;
+    totalCost += output.cost_usd;
   }
 
   const results: EvalResultRow[] = [];
@@ -156,9 +155,9 @@ export const aggregateEval = (
       errors: modelCells.reduce((sum, c) => sum + c.errors, 0),
       tokens_per_task: tasks > 0 ? round4(tokens / tasks) : 0,
       cost_per_1k_tasks_usd:
-        priced && tasks > 0 ? round4((usd(cost) / tasks) * 1000) : null,
+        priced && tasks > 0 ? round4((cost / tasks) * 1000) : null,
     };
   });
 
-  return { summary, results, totalCostMicroUsd: totalCost };
+  return { summary, results, totalCostUsd: Number(totalCost.toFixed(6)) };
 };

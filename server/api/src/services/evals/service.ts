@@ -1,6 +1,5 @@
 import { hostname } from "node:os";
 
-import { costMicroUsd, usd } from "../../catalog.js";
 import { addSeconds } from "../../clock.js";
 import type {
   EvalOutput,
@@ -181,7 +180,7 @@ export const createEvalService = (
       pending_local_scores: await pendingScores(record),
     },
     summary: record.summary,
-    total_cost_usd: usd(record.total_cost_micro_usd),
+    total_cost_usd: record.total_cost_usd,
     error: record.error,
     created_at: record.created_at,
     updated_at: record.updated_at,
@@ -221,7 +220,7 @@ export const createEvalService = (
         (sum, o) => sum + o.prompt_tokens + o.completion_tokens,
         0,
       ),
-      costMicroUsd: rows.reduce((sum, o) => sum + o.cost_micro_usd, 0),
+      costUsd: Number(rows.reduce((sum, o) => sum + o.cost_usd, 0).toFixed(8)),
     });
     billing.kick();
   };
@@ -240,7 +239,7 @@ export const createEvalService = (
       {
         status: "completed",
         summary: aggregation.summary,
-        total_cost_micro_usd: aggregation.totalCostMicroUsd,
+        total_cost_usd: aggregation.totalCostUsd,
         generated: outputs.length,
         worker_id: null,
         lease_expires_at: null,
@@ -275,7 +274,7 @@ export const createEvalService = (
       error: null,
       prompt_tokens: 0,
       completion_tokens: 0,
-      cost_micro_usd: 0,
+      cost_usd: 0,
       created_at: clock.now().toISOString(),
     };
     if (!pr || !target || !deps.inference) {
@@ -302,9 +301,9 @@ export const createEvalService = (
     );
     const tokens =
       completion.usage.prompt_tokens + completion.usage.completion_tokens;
-    let cost = costMicroUsd(tokens, target.price_per_million_tokens ?? 0);
+    let cost = (tokens / 1_000_000) * (target.price_per_million_tokens ?? 0);
     for (const [judge, judgeTokens] of Object.entries(scored.judgeTokens)) {
-      cost += costMicroUsd(judgeTokens, deps.catalog.priceFor(judge) ?? 0);
+      cost += (judgeTokens / 1_000_000) * (deps.catalog.priceFor(judge) ?? 0);
     }
 
     return {
@@ -317,7 +316,7 @@ export const createEvalService = (
           : null,
       prompt_tokens: completion.usage.prompt_tokens,
       completion_tokens: completion.usage.completion_tokens,
-      cost_micro_usd: cost,
+      cost_usd: Number(cost.toFixed(8)),
     };
   };
 
