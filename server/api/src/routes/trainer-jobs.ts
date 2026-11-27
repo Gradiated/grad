@@ -49,6 +49,7 @@ export const registerTrainerJobRoutes = (
       operationId: "claimTrainerJob",
       summary: "Claim the next queued train or import job (trainer:worker)",
       tags,
+      "x-internal": true,
       request: body(ClaimJobRequestSchema),
       responses: {
         200: jsonResponse(
@@ -95,6 +96,7 @@ export const registerTrainerJobRoutes = (
       summary:
         "Queue depth for autoscaling: queued plus running jobs (trainer:worker)",
       tags,
+      "x-internal": true,
       responses: {
         200: jsonResponse(QueueStatsSchema, "Queue depth."),
         ...defaultErrors,
@@ -128,6 +130,7 @@ export const registerTrainerJobRoutes = (
       operationId: "heartbeatTrainerJob",
       summary: "Renew the job lease; reports whether the worker should stop",
       tags,
+      "x-internal": true,
       request: { params: IdParamSchema, ...body(HeartbeatRequestSchema) },
       responses: {
         200: jsonResponse(HeartbeatResponseSchema, "Lease renewed."),
@@ -153,6 +156,7 @@ export const registerTrainerJobRoutes = (
       operationId: "reportTrainerProgress",
       summary: "Report one training step's metrics",
       tags,
+      "x-internal": true,
       request: { params: IdParamSchema, ...body(ReportProgressRequestSchema) },
       responses: {
         200: jsonResponse(
@@ -182,6 +186,7 @@ export const registerTrainerJobRoutes = (
       operationId: "createTrainerUpload",
       summary: "Get an upload URL for a checkpoint or artifact bundle",
       tags,
+      "x-internal": true,
       request: { params: IdParamSchema, ...body(WorkerUploadRequestSchema) },
       responses: {
         201: jsonResponse(UploadTicketSchema, "Upload ticket."),
@@ -210,6 +215,7 @@ export const registerTrainerJobRoutes = (
       operationId: "registerTrainerCheckpoint",
       summary: "Register an uploaded checkpoint bundle",
       tags,
+      "x-internal": true,
       request: {
         params: IdParamSchema,
         ...body(RegisterCheckpointRequestSchema),
@@ -242,6 +248,7 @@ export const registerTrainerJobRoutes = (
       operationId: "postImportRecords",
       summary: "Append a batch of parsed records to an import job",
       tags,
+      "x-internal": true,
       request: {
         params: IdParamSchema,
         ...body(PostImportRecordsRequestSchema),
@@ -275,6 +282,7 @@ export const registerTrainerJobRoutes = (
       summary:
         "Finish a job attempt: publish its artifact, bill it, release the lease",
       tags,
+      "x-internal": true,
       request: { params: IdParamSchema, ...body(CompleteJobRequestSchema) },
       responses: {
         200: jsonResponse(CompleteJobResponseSchema, "Final job state."),
@@ -330,6 +338,7 @@ export const registerTrainerJobRoutes = (
       summary:
         "Stream the pinned dataset version of a claimed train job as JSONL",
       tags,
+      "x-internal": true,
       request: {
         params: IdParamSchema,
         query: z.object({ attempt: z.coerce.number().int().min(1) }),

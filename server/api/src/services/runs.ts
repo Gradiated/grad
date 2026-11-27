@@ -138,7 +138,12 @@ export interface RunLifecycle {
     workspaceId: string,
     id: string,
     query: MetricsQuery,
-  ): Promise<{ run: Run; data: MetricPoint[]; next_cursor: string | null }>;
+  ): Promise<{
+    run: Run;
+    data: MetricPoint[];
+    next_cursor: string | null;
+    tail_cursor: string;
+  }>;
   cancel(workspaceId: string, id: string): Promise<Run>;
   resume(workspaceId: string, id: string, maxCostUsd?: number): Promise<Run>;
   listCheckpoints(
@@ -497,7 +502,9 @@ export const createRunLifecycle = (
       return {
         run: toPublicRun(run),
         data,
-        next_cursor: last ? encodeCursor([last.seq]) : (query.cursor ?? null),
+        next_cursor:
+          rows.length > query.limit && last ? encodeCursor([last.seq]) : null,
+        tail_cursor: encodeCursor([last?.seq ?? afterSeq]),
       };
     },
 

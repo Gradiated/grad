@@ -7,6 +7,7 @@ import {
   DatasetRecordsPageSchema,
   DatasetSchema,
   ImportJobSchema,
+  pageLimitSchema,
   pageOf,
   PageQuerySchema,
   PushDatasetRequestSchema,
@@ -157,7 +158,7 @@ export const registerDatasetRoutes = (
         params: NameParamSchema,
         query: z.object({
           version: z.coerce.number().int().min(0).optional(),
-          limit: z.coerce.number().int().min(1).max(1000).default(100),
+          limit: pageLimitSchema(1000, 100),
           cursor: z.string().min(1).max(512).optional(),
         }),
       },

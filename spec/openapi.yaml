@@ -4,6 +4,15 @@ info:
   version: 0.2.0
 components:
   schemas:
+    IdempotencyKey:
+      type: string
+      pattern: ^[\x21-\x7e]{1,255}$
+      description: "Up to 255 visible ASCII characters (SDKs send a UUIDv4 and reuse it across retries). A retry with the same
+        key and body replays the stored response with `Idempotent-Replayed: true`; the same key with a different body is
+        rejected with 422 `idempotency_key_reused`; a retry while the first request is still running gets 409
+        `idempotency_in_progress` with Retry-After. Responses are kept for 24 hours; 5xx and 429 responses are not
+        stored."
+      example: 5f0c8d1e-3b8a-4c39-9a4e-2f1f0b6f4a21
     TrainableModel:
       type: object
       properties:
@@ -445,6 +454,7 @@ components:
           type:
             - string
             - "null"
+          description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
       required:
         - dataset
         - version
@@ -1278,10 +1288,7 @@ components:
         latest_metric:
           $ref: "#/components/schemas/MetricPoint"
         eval_report:
-          type:
-            - object
-            - "null"
-          additionalProperties: {}
+          $ref: "#/components/schemas/EvalReport"
         artifact_id:
           type:
             - string
@@ -1355,10 +1362,16 @@ components:
           type:
             - number
             - "null"
-        eval_metric:
+        eval_metrics:
           type:
-            - number
+            - object
             - "null"
+          additionalProperties:
+            type:
+              - number
+              - "null"
+          description: Held-out metrics of an eval step, keyed by name (the recipe's selection metric first); absent on steps
+            without an eval.
         grad_norm:
           type:
             - number
@@ -1389,6 +1402,335 @@ components:
         - cost_usd
         - timestamp
       additionalProperties: {}
+    EvalReport:
+      type:
+        - object
+        - "null"
+      properties:
+        metric_name:
+          type: string
+          description: "Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge),
+            recall_at_10 (embedding)."
+        selected_step:
+          type: integer
+          minimum: 0
+        best_step:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        final_step:
+          type: integer
+          minimum: 0
+        train_records:
+          type: integer
+          minimum: 0
+        eval_records:
+          type: integer
+          minimum: 0
+        warnings:
+          type: array
+          items:
+            type: string
+        eval_loss:
+          type:
+            - number
+            - "null"
+          description: "Written by: sft, dpo, router, decision."
+        eval_token_accuracy:
+          type:
+            - number
+            - "null"
+          description: "Written by: sft."
+        trained_token_fraction:
+          type: number
+          description: "Written by: sft."
+        train_examples:
+          type: integer
+          minimum: 0
+          description: "Written by: sft."
+        eval_examples:
+          type: integer
+          minimum: 0
+          description: "Written by: sft, router, decision."
+        selection_examples:
+          type: integer
+          minimum: 0
+          description: "Written by: router, decision."
+        truncated:
+          type: integer
+          minimum: 0
+          description: "Written by: sft, dpo."
+        preference_accuracy:
+          type:
+            - number
+            - "null"
+          description: "Written by: dpo."
+        reward_margin:
+          type:
+            - number
+            - "null"
+          description: "Written by: dpo."
+        beta:
+          type: number
+          description: "Written by: dpo."
+        train_pairs:
+          type: integer
+          minimum: 0
+          description: "Written by: dpo, embedding."
+        eval_pairs:
+          type: integer
+          minimum: 0
+          description: "Written by: dpo, embedding."
+        dropped_records:
+          type: integer
+          minimum: 0
+          description: "Written by: dpo, embedding."
+        eval_kl:
+          type:
+            - number
+            - "null"
+          description: "Written by: cartridge."
+        no_context_kl:
+          type:
+            - number
+            - "null"
+          description: "Written by: cartridge."
+        kl_reduction:
+          type:
+            - number
+            - "null"
+          description: "Written by: cartridge."
+        num_tokens:
+          type: integer
+          minimum: 0
+          description: "Written by: cartridge."
+        teacher:
+          type: string
+          description: "Written by: cartridge."
+        candidates:
+          type: array
+          items:
+            type: string
+          description: "Written by: router."
+        fallback_model:
+          type: string
+          description: "Written by: router."
+        fallback_quality:
+          type:
+            - number
+            - "null"
+          description: "Written by: router."
+        routes_any_traffic:
+          type: boolean
+          description: "Written by: router."
+        pareto_summary:
+          $ref: "#/components/schemas/RouterParetoSummary"
+        ece:
+          type:
+            - number
+            - "null"
+          description: "Written by: decision."
+        heads:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DecisionHeadReport"
+          description: "Written by: decision (one entry per question)."
+        recall_at_1:
+          type:
+            - number
+            - "null"
+          description: "Written by: embedding."
+        recall_at_5:
+          type:
+            - number
+            - "null"
+          description: "Written by: embedding."
+        recall_at_10:
+          type:
+            - number
+            - "null"
+          description: "Written by: embedding."
+        mrr:
+          type:
+            - number
+            - "null"
+          description: "Written by: embedding."
+        corpus_size:
+          type: integer
+          minimum: 0
+          description: "Written by: embedding."
+        baseline:
+          type:
+            - object
+            - "null"
+          properties:
+            recall_at_1:
+              type:
+                - number
+                - "null"
+            recall_at_5:
+              type:
+                - number
+                - "null"
+            recall_at_10:
+              type:
+                - number
+                - "null"
+            mrr:
+              type:
+                - number
+                - "null"
+          required:
+            - recall_at_1
+            - recall_at_5
+            - recall_at_10
+            - mrr
+          additionalProperties: {}
+          description: "Retrieval metrics of the untrained base encoder. Written by: embedding."
+      required:
+        - metric_name
+        - selected_step
+        - best_step
+        - final_step
+        - train_records
+        - eval_records
+        - warnings
+      additionalProperties: {}
+    RouterParetoSummary:
+      type: object
+      properties:
+        target_max_drop:
+          type: number
+        routed_quality:
+          type:
+            - number
+            - "null"
+        quality_drop:
+          type:
+            - number
+            - "null"
+        quality_drop_ci95:
+          type:
+            - array
+            - "null"
+          items:
+            type: number
+          description: 95% bootstrap interval [low, high].
+        offload_rate:
+          type:
+            - number
+            - "null"
+        cost_savings_pct:
+          type:
+            - number
+            - "null"
+        ece:
+          type:
+            - number
+            - "null"
+        threshold:
+          type:
+            - number
+            - "null"
+        temperature:
+          type: number
+      required:
+        - target_max_drop
+        - routed_quality
+        - quality_drop
+        - quality_drop_ci95
+        - offload_rate
+        - cost_savings_pct
+        - ece
+        - threshold
+        - temperature
+      additionalProperties: {}
+      description: Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no
+        report prompt was scored for every candidate.
+    DecisionHeadReport:
+      type:
+        - object
+        - "null"
+      properties:
+        type:
+          type: string
+          enum:
+            - choice
+            - noul
+            - score
+        examples:
+          type: integer
+          minimum: 0
+        accuracy:
+          type:
+            - number
+            - "null"
+        ece:
+          type:
+            - number
+            - "null"
+        temperature:
+          type: number
+        brier:
+          type: number
+          description: "Written by: noul heads."
+        mae:
+          type: number
+          description: "Written by: score heads."
+        macro_f1:
+          type:
+            - number
+            - "null"
+        per_option:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              precision:
+                type:
+                  - number
+                  - "null"
+              recall:
+                type:
+                  - number
+                  - "null"
+              f1:
+                type:
+                  - number
+                  - "null"
+              support:
+                type: integer
+                minimum: 0
+            required:
+              - precision
+              - recall
+              - f1
+              - support
+        confusion_matrix:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+            matrix:
+              type: array
+              items:
+                type: array
+                items:
+                  type: integer
+                  minimum: 0
+          required:
+            - labels
+            - matrix
+      required:
+        - type
+        - examples
+        - accuracy
+        - ece
+        - temperature
+      additionalProperties: {}
     MetricsPage:
       type: object
       properties:
@@ -1404,11 +1746,17 @@ components:
           type:
             - string
             - "null"
+          description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+        tail_cursor:
+          type: string
+          description: Cursor after the newest point returned so far; pass it back as `cursor` to poll for points written later
+            (tailing a running run).
       required:
         - run_id
         - status
         - data
         - next_cursor
+        - tail_cursor
     ResumeRunRequest:
       type: object
       properties:
@@ -1531,10 +1879,7 @@ components:
           type: object
           additionalProperties: {}
         eval_report:
-          type:
-            - object
-            - "null"
-          additionalProperties: {}
+          $ref: "#/components/schemas/EvalReport"
         created_at:
           type: string
           format: date-time
@@ -1885,10 +2230,16 @@ components:
           type:
             - number
             - "null"
-        eval_metric:
+        eval_metrics:
           type:
-            - number
+            - object
             - "null"
+          additionalProperties:
+            type:
+              - number
+              - "null"
+          description: Held-out metrics of an eval step, keyed by name (the recipe's selection metric first); absent on steps
+            without an eval.
         grad_norm:
           type:
             - number
@@ -2089,10 +2440,7 @@ components:
           additionalProperties: {}
           default: {}
         eval_report:
-          type:
-            - object
-            - "null"
-          additionalProperties: {}
+          $ref: "#/components/schemas/EvalReport"
         tokens_processed:
           type: integer
           minimum: 0
@@ -3036,7 +3384,18 @@ components:
           maxLength: 4000
       required:
         - worker_id
-  parameters: {}
+  parameters:
+    IdempotencyKey:
+      schema:
+        $ref: "#/components/schemas/IdempotencyKey"
+      required: false
+      description: "Up to 255 visible ASCII characters (SDKs send a UUIDv4 and reuse it across retries). A retry with the same
+        key and body replays the stored response with `Idempotent-Replayed: true`; the same key with a different body is
+        rejected with 422 `idempotency_key_reused`; a retry while the first request is still running gets 409
+        `idempotency_in_progress` with Retry-After. Responses are kept for 24 hours; 5xx and 429 responses are not
+        stored."
+      name: Idempotency-Key
+      in: header
 paths:
   /v1/models:
     get:
@@ -3112,6 +3471,8 @@ paths:
       summary: Create a scoped workspace API key (trainer worker keys are platform config, not keys)
       tags:
         - Keys
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -3184,7 +3545,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -3210,6 +3573,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -3342,7 +3706,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -3368,6 +3734,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -3423,6 +3790,8 @@ paths:
       operationId: createDataset
       summary: Create an empty dataset
       tags: *a1
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -3567,6 +3936,7 @@ paths:
           required: true
           name: name
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -3654,7 +4024,9 @@ paths:
             minimum: 1
             maximum: 1000
             default: 100
+            description: Page size (default 100). Values above 1000 are clamped to 1000.
           required: false
+          description: Page size (default 100). Values above 1000 are clamped to 1000.
           name: limit
           in: query
         - schema:
@@ -3733,6 +4105,7 @@ paths:
           required: true
           name: name
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -3799,6 +4172,8 @@ paths:
       operationId: createUpload
       summary: Get an upload URL for a file to import (PUT the bytes, then create an import)
       tags: *a1
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -3874,6 +4249,7 @@ paths:
           required: true
           name: name
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -3946,7 +4322,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -3972,6 +4350,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -4097,6 +4476,8 @@ paths:
       summary: Dry-run a training recipe at zero cost
       tags: &a2
         - Runs
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -4163,6 +4544,8 @@ paths:
       operationId: createRun
       summary: Create and enqueue a training run (pins the dataset version)
       tags: *a2
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -4234,7 +4617,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -4260,6 +4645,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -4385,7 +4771,8 @@ paths:
       summary: Training step metrics as JSON pages, or a live SSE stream
       description: "With `Accept: text/event-stream` the response is a Server-Sent Events stream of `metric` events (event id
         = `seq`) followed by one `status` event carrying the final Run; reconnect with `Last-Event-ID` to resume.
-        Otherwise returns a JSON page; pass `next_cursor` back as `cursor` to poll for newer points."
+        Otherwise returns a JSON page: `next_cursor` pages through the points written so far (null on the last page,
+        like every list), and `tail_cursor` polls for points written later."
       tags: *a2
       parameters:
         - schema:
@@ -4415,7 +4802,9 @@ paths:
             minimum: 1
             maximum: 5000
             default: 1000
+            description: Page size (default 1000). Values above 5000 are clamped to 5000.
           required: false
+          description: Page size (default 1000). Values above 5000 are clamped to 5000.
           name: limit
           in: query
       responses:
@@ -4489,6 +4878,7 @@ paths:
           required: true
           name: id
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Cancelled training run.
@@ -4557,6 +4947,7 @@ paths:
           required: true
           name: id
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: false
         content:
@@ -4637,7 +5028,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -4663,6 +5056,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -4727,6 +5121,7 @@ paths:
           required: true
           name: id
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: false
         content:
@@ -4794,6 +5189,7 @@ paths:
       summary: Claim the next queued train or import job (trainer:worker)
       tags: &a4
         - TrainerJobs
+      x-internal: true
       requestBody:
         required: true
         content:
@@ -4860,6 +5256,7 @@ paths:
       operationId: getTrainerQueueStats
       summary: "Queue depth for autoscaling: queued plus running jobs (trainer:worker)"
       tags: *a4
+      x-internal: true
       responses:
         "200":
           description: Queue depth.
@@ -4920,6 +5317,7 @@ paths:
       operationId: heartbeatTrainerJob
       summary: Renew the job lease; reports whether the worker should stop
       tags: *a4
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -4994,6 +5392,7 @@ paths:
       operationId: reportTrainerProgress
       summary: Report one training step's metrics
       tags: *a4
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -5068,6 +5467,7 @@ paths:
       operationId: createTrainerUpload
       summary: Get an upload URL for a checkpoint or artifact bundle
       tags: *a4
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -5142,6 +5542,7 @@ paths:
       operationId: registerTrainerCheckpoint
       summary: Register an uploaded checkpoint bundle
       tags: *a4
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -5222,6 +5623,7 @@ paths:
       operationId: postImportRecords
       summary: Append a batch of parsed records to an import job
       tags: *a4
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -5296,6 +5698,7 @@ paths:
       operationId: completeTrainerJob
       summary: "Finish a job attempt: publish its artifact, bill it, release the lease"
       tags: *a4
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -5370,6 +5773,7 @@ paths:
       operationId: downloadTrainerDataset
       summary: Stream the pinned dataset version of a claimed train job as JSONL
       tags: *a4
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -5451,7 +5855,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -5485,6 +5891,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -5679,6 +6086,8 @@ paths:
       summary: Deploy or update an artifact under a stable model name
       tags:
         - Deployments
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -5757,7 +6166,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -5783,6 +6194,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -5919,6 +6331,7 @@ paths:
           required: true
           name: name
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Rolled-back deployment.
@@ -5986,6 +6399,8 @@ paths:
       summary: Ask a deployed model router which model to call
       tags:
         - Serving
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6059,6 +6474,8 @@ paths:
       summary: Generate embeddings from a deployed embedding artifact
       tags:
         - Serving
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6132,6 +6549,8 @@ paths:
       summary: Record deduplicated outcome scores and gold corrections
       tags:
         - Feedback
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6199,6 +6618,8 @@ paths:
       summary: Estimate tasks, model/judge calls, and cost before running an eval
       tags:
         - Evals
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6272,6 +6693,8 @@ paths:
       summary: Queue an evaluation across models on a pinned dataset version (executed by the server)
       tags:
         - Evals
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6350,7 +6773,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -6376,6 +6801,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -6515,7 +6941,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -6555,6 +6983,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -6620,6 +7049,7 @@ paths:
           required: true
           name: id
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -6700,7 +7130,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -6733,6 +7165,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - data
                   - next_cursor
@@ -6803,7 +7236,9 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
           required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
           name: limit
           in: query
         - schema:
@@ -6847,6 +7282,7 @@ paths:
                     type:
                       - string
                       - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
                 required:
                   - eval_id
                   - data
@@ -6913,6 +7349,7 @@ paths:
           required: true
           name: id
           in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Cancelled evaluation run.
@@ -6974,6 +7411,7 @@ paths:
       summary: Register or heartbeat an outbound `grad env serve` worker
       tags:
         - Environments
+      x-internal: true
       requestBody:
         required: true
         content:
@@ -7058,6 +7496,7 @@ paths:
       summary: Dispatch an evaluation or rollout task to a connected `grad env serve` worker
       tags:
         - Environments
+      x-internal: true
       requestBody:
         required: true
         content:
@@ -7143,6 +7582,7 @@ paths:
       summary: Long-poll for the next task assigned to a `grad env serve` worker
       tags:
         - Environments
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -7238,6 +7678,7 @@ paths:
       summary: Submit scored trajectory output for an environment task
       tags:
         - Environments
+      x-internal: true
       parameters:
         - schema:
             type: string
@@ -7313,6 +7754,7 @@ paths:
       summary: Inspect an environment task and its result
       tags:
         - Environments
+      x-internal: true
       parameters:
         - schema:
             type: string

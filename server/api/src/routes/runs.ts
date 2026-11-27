@@ -3,6 +3,7 @@ import { streamSSE } from "hono/streaming";
 
 import {
   MetricsPageSchema,
+  pageLimitSchema,
   pageOf,
   PageQuerySchema,
   PlanRunRequestSchema,
@@ -144,14 +145,14 @@ export const registerRunRoutes = (
       operationId: "listRunMetrics",
       summary: "Training step metrics as JSON pages, or a live SSE stream",
       description:
-        "With `Accept: text/event-stream` the response is a Server-Sent Events stream of `metric` events (event id = `seq`) followed by one `status` event carrying the final Run; reconnect with `Last-Event-ID` to resume. Otherwise returns a JSON page; pass `next_cursor` back as `cursor` to poll for newer points.",
+        "With `Accept: text/event-stream` the response is a Server-Sent Events stream of `metric` events (event id = `seq`) followed by one `status` event carrying the final Run; reconnect with `Last-Event-ID` to resume. Otherwise returns a JSON page: `next_cursor` pages through the points written so far (null on the last page, like every list), and `tail_cursor` polls for points written later.",
       tags,
       request: {
         params: IdParamSchema,
         query: z.object({
           cursor: z.string().min(1).max(512).optional(),
           after_step: z.coerce.number().int().min(-1).optional(),
-          limit: z.coerce.number().int().min(1).max(5000).default(1000),
+          limit: pageLimitSchema(5000, 1000),
         }),
       },
       responses: {
@@ -183,6 +184,7 @@ export const registerRunRoutes = (
             status: result.run.status,
             data: result.data,
             next_cursor: result.next_cursor,
+            tail_cursor: result.tail_cursor,
           },
           200,
         );

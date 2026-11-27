@@ -3,9 +3,11 @@ import { z } from "@hono/zod-openapi";
 import {
   IsoTimestampSchema,
   ModelIdSchema,
+  NextCursorSchema,
   Sha256HexSchema,
   SlugSchema,
 } from "./common.js";
+import { EvalReportSchema } from "./eval-report.js";
 
 export const AdapterSpecSchema = z
   .discriminatedUnion("kind", [
@@ -175,13 +177,22 @@ export const RunStatusSchema = z.enum(RUN_STATUSES).openapi("RunStatus");
 
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
+const EvalMetricsSchema = z
+  .record(z.string(), z.number().nullable())
+  .nullable()
+  .optional()
+  .openapi({
+    description:
+      "Held-out metrics of an eval step, keyed by name (the recipe's selection metric first); absent on steps without an eval.",
+  });
+
 /** Metric point as reported by a trainer worker (extra numeric keys allowed). */
 export const MetricPointInputSchema = z
   .looseObject({
     step: z.number().int().min(0),
     loss: z.number(),
     eval_loss: z.number().nullable().optional(),
-    eval_metric: z.number().nullable().optional(),
+    eval_metrics: EvalMetricsSchema,
     grad_norm: z.number().nullable().optional(),
     lr: z.number().nullable().optional(),
     tokens_per_sec: z.number().nullable().optional(),
@@ -201,7 +212,7 @@ export const MetricPointSchema = z
     step: z.number().int().min(0),
     loss: z.number(),
     eval_loss: z.number().nullable().optional(),
-    eval_metric: z.number().nullable().optional(),
+    eval_metrics: EvalMetricsSchema,
     grad_norm: z.number().nullable().optional(),
     lr: z.number().nullable().optional(),
     tokens_per_sec: z.number().nullable().optional(),
@@ -233,7 +244,7 @@ export const RunSchema = z
     attempt: z.number().int().min(0),
     max_attempts: z.number().int().min(1),
     latest_metric: MetricPointSchema.nullable(),
-    eval_report: z.record(z.string(), z.unknown()).nullable(),
+    eval_report: EvalReportSchema.nullable(),
     artifact_id: z.string().nullable(),
     error: z.string().nullable(),
     created_at: IsoTimestampSchema,
@@ -255,7 +266,11 @@ export const MetricsPageSchema = z
     run_id: z.string(),
     status: RunStatusSchema,
     data: z.array(MetricPointSchema),
-    next_cursor: z.string().nullable(),
+    next_cursor: NextCursorSchema,
+    tail_cursor: z.string().openapi({
+      description:
+        "Cursor after the newest point returned so far; pass it back as `cursor` to poll for points written later (tailing a running run).",
+    }),
   })
   .openapi("MetricsPage");
 
@@ -319,7 +334,7 @@ export const ArtifactSchema = z
     sha256: Sha256HexSchema,
     size_bytes: z.number().int().min(0),
     manifest: z.record(z.string(), z.unknown()),
-    eval_report: z.record(z.string(), z.unknown()).nullable(),
+    eval_report: EvalReportSchema.nullable(),
     created_at: IsoTimestampSchema,
   })
   .openapi("Artifact");

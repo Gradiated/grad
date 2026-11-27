@@ -4,6 +4,7 @@ import {
   ChatMessageSchema,
   IsoTimestampSchema,
   ModelIdSchema,
+  NextCursorSchema,
   Sha256HexSchema,
   SlugSchema,
 } from "./common.js";
@@ -114,7 +115,7 @@ export const DatasetRecordsPageSchema = z
     version: z.number().int().min(0),
     total: z.number().int().min(0),
     data: z.array(DatasetRecordSchema),
-    next_cursor: z.string().nullable(),
+    next_cursor: NextCursorSchema,
   })
   .openapi("DatasetRecordsPage");
 

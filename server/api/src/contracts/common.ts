@@ -33,17 +33,42 @@ export type Problem = z.infer<typeof ProblemSchema>;
 
 export const MAX_PAGE_LIMIT = 200;
 
+/**
+ * `limit` query parameter of a list endpoint: values above `max` are clamped
+ * to `max` (never a 422), values below 1 are rejected. The documented
+ * `maximum` is what codegen emits as each SDK's page-size constant.
+ */
+export const pageLimitSchema = (max: number, fallback: number) =>
+  z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(fallback)
+    .transform((value) => Math.min(value, max))
+    .openapi({
+      type: "integer",
+      minimum: 1,
+      maximum: max,
+      default: fallback,
+      description: `Page size (default ${fallback}). Values above ${max} are clamped to ${max}.`,
+    });
+
 export const PageQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(MAX_PAGE_LIMIT).default(50),
+  limit: pageLimitSchema(MAX_PAGE_LIMIT, 50),
   cursor: z.string().min(1).max(512).optional(),
 });
 
 export type PageQuery = z.infer<typeof PageQuerySchema>;
 
+export const NextCursorSchema = z.string().nullable().openapi({
+  description:
+    "Pass back as `cursor` for the next page; null on the last page (every list endpoint).",
+});
+
 export const pageOf = <T extends z.ZodType>(item: T) =>
   z.object({
     data: z.array(item),
-    next_cursor: z.string().nullable(),
+    next_cursor: NextCursorSchema,
   });
 
 export interface Page<T> {

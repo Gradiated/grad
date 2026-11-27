@@ -25,6 +25,7 @@ export const registerEnvWorkerRoutes = (
     operationId: "registerEnvWorker",
     summary: "Register or heartbeat an outbound `grad env serve` worker",
     tags: ["Environments"],
+    "x-internal": true,
     request: {
       body: {
         required: true,
@@ -66,6 +67,7 @@ export const registerEnvWorkerRoutes = (
     summary:
       "Dispatch an evaluation or rollout task to a connected `grad env serve` worker",
     tags: ["Environments"],
+    "x-internal": true,
     request: {
       body: {
         required: true,
@@ -122,6 +124,7 @@ export const registerEnvWorkerRoutes = (
     summary:
       "Long-poll for the next task assigned to a `grad env serve` worker",
     tags: ["Environments"],
+    "x-internal": true,
     request: {
       params: z.object({ name: SlugSchema }),
       body: {
@@ -172,6 +175,7 @@ export const registerEnvWorkerRoutes = (
     operationId: "completeEnvTask",
     summary: "Submit scored trajectory output for an environment task",
     tags: ["Environments"],
+    "x-internal": true,
     request: {
       params: z.object({ id: z.string().min(1) }),
       body: {
@@ -217,6 +221,7 @@ export const registerEnvWorkerRoutes = (
     operationId: "getEnvTask",
     summary: "Inspect an environment task and its result",
     tags: ["Environments"],
+    "x-internal": true,
     request: { params: z.object({ id: z.string().min(1) }) },
     responses: {
       200: jsonResponse(z.record(z.string(), z.unknown()), "Environment task."),

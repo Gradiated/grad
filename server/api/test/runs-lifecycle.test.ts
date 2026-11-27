@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BillingAdapter } from "../src/adapters.js";
 import { costForTokens } from "../src/catalog.js";
 import { ADMIN_KEY, makeTestApp, type TestApp } from "./fixtures/app.js";
+import { evalReport } from "./fixtures/eval-report.js";
 import { createSftRun, FakeWorker, sha256Hex } from "./fixtures/worker.js";
 
 const recordingBilling = () => {
@@ -82,13 +83,20 @@ describe("run lifecycle and worker protocol", () => {
     expect(ckpt.status).toBe(201);
     expect(ckpt.body).not.toHaveProperty("storage_key");
 
+    const untyped = await worker.complete(job!, {
+      status: "completed",
+      eval_report: { acc: 1 },
+    });
+    expect(untyped.status).toBe(422);
+    expect(JSON.stringify(untyped.body)).toContain("eval_report.metric_name");
+
     const done = await worker.complete(
       job!,
       {
         status: "completed",
         tokens_processed: 1_000_000,
         manifest: { schema: "evil", run_id: "x", files: 1 },
-        eval_report: { acc: 1 },
+        eval_report: evalReport({ acc: 1 }),
       },
       "artifact-bytes",
     );
@@ -670,22 +678,34 @@ describe("run lifecycle and worker protocol", () => {
     for (let step = 1; step <= 3; step += 1)
       await worker.progress(job!, step, step * 10);
 
-    const page1 = await t.json<{
+    type MetricsPage = {
       data: Array<{ seq: number; step: number; attempt: number }>;
-      next_cursor: string;
-    }>(`/v1/runs/${run.id}/metrics?limit=2`);
+      next_cursor: string | null;
+      tail_cursor: string;
+    };
+    const empty = await t.json<MetricsPage>(
+      `/v1/runs/${(await createSftRun(t, { name: "idle" })).id}/metrics`,
+    );
+    expect(empty.body).toMatchObject({ data: [], next_cursor: null });
+    expect(typeof empty.body.tail_cursor).toBe("string");
+
+    const page1 = await t.json<MetricsPage>(
+      `/v1/runs/${run.id}/metrics?limit=2`,
+    );
     expect(page1.body.data.map((m) => m.step)).toEqual([1, 2]);
     expect(page1.body.data[0]?.attempt).toBe(1);
-    const page2 = await t.json<{
-      data: Array<{ step: number }>;
-      next_cursor: string;
-    }>(`/v1/runs/${run.id}/metrics?limit=2&cursor=${page1.body.next_cursor}`);
+    expect(page1.body.next_cursor).toBe(page1.body.tail_cursor);
+    const page2 = await t.json<MetricsPage>(
+      `/v1/runs/${run.id}/metrics?limit=2&cursor=${page1.body.next_cursor}`,
+    );
     expect(page2.body.data.map((m) => m.step)).toEqual([3]);
-    const page3 = await t.json<{ data: unknown[]; next_cursor: string }>(
-      `/v1/runs/${run.id}/metrics?cursor=${page2.body.next_cursor}`,
+    expect(page2.body.next_cursor).toBeNull();
+    const page3 = await t.json<MetricsPage>(
+      `/v1/runs/${run.id}/metrics?cursor=${page2.body.tail_cursor}`,
     );
     expect(page3.body.data).toEqual([]);
-    expect(page3.body.next_cursor).toBe(page2.body.next_cursor);
+    expect(page3.body.next_cursor).toBeNull();
+    expect(page3.body.tail_cursor).toBe(page2.body.tail_cursor);
     const filtered = await t.json<{ data: unknown[] }>(
       `/v1/runs/${run.id}/metrics?after_step=2`,
     );
@@ -725,6 +745,15 @@ describe("run lifecycle and worker protocol", () => {
           ).step,
       );
     expect(metricSteps).toEqual([2, 3, 4]);
+    const tailed = await t.json<MetricsPage>(
+      `/v1/runs/${run.id}/metrics?cursor=${page3.body.tail_cursor}`,
+    );
+    expect(tailed.body.data.map((m) => m.step)).toEqual([4]);
+    const clamped = await t.json<MetricsPage>(
+      `/v1/runs/${run.id}/metrics?limit=999999`,
+    );
+    expect(clamped.status).toBe(200);
+    expect(clamped.body.data).toHaveLength(4);
     expect(events.at(-1)).toContain("event: status");
     expect(events.at(-1)).toContain('"status":"completed"');
 

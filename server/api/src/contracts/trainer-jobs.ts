@@ -1,6 +1,7 @@
 import { z } from "@hono/zod-openapi";
 
 import { IsoTimestampSchema, Sha256HexSchema } from "./common.js";
+import { EvalReportSchema } from "./eval-report.js";
 import {
   CONNECTOR_NAMES,
   DatasetRecordSchema,
@@ -199,7 +200,7 @@ export const CompleteJobRequestSchema = z
     upload_id: z.string().min(1).max(160).optional(),
     format: ArtifactFormatSchema.optional(),
     manifest: z.record(z.string(), z.unknown()).default({}),
-    eval_report: z.record(z.string(), z.unknown()).nullable().optional(),
+    eval_report: EvalReportSchema.nullable().optional(),
     tokens_processed: z.number().int().min(0).default(0),
     error: z.string().max(4000).optional(),
     import_summary: z

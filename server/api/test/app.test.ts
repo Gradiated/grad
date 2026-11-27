@@ -247,6 +247,12 @@ describe("grad-server HTTP API", () => {
       next_cursor: string | null;
     }>("/v1/keys?limit=1");
     expect(listed.body.data).toHaveLength(1);
+    const clamped = await t.json<{ data: unknown[]; next_cursor: null }>(
+      "/v1/keys?limit=100000",
+    );
+    expect(clamped.status).toBe(200);
+    expect(clamped.body).toMatchObject({ next_cursor: null });
+    expect((await t.json("/v1/keys?limit=0")).status).toBe(422);
     expect(
       (await t.json(`/v1/keys/${created.body.key.id}`, { method: "DELETE" }))
         .status,

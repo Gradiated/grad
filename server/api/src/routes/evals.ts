@@ -4,6 +4,7 @@ import {
   EvalOutputSchema,
   EvalRunSchema,
   EvalTaskOutcomeSchema,
+  NextCursorSchema,
   PageQuerySchema,
   pageOf,
   PlanEvalRequestSchema,
@@ -245,7 +246,7 @@ export const registerEvalRoutes = (
           z.object({
             eval_id: z.string(),
             data: z.array(EvalTaskOutcomeSchema),
-            next_cursor: z.string().nullable(),
+            next_cursor: NextCursorSchema,
           }),
           "Failing task outcomes.",
         ),
