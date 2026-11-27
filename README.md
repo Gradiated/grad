@@ -35,13 +35,15 @@ It is one open-source codebase. The same server runs on your laptop (`grad local
 
 ## Quickstart
 
-Install the CLI and an SDK. The TypeScript SDK is on npm; until the PyPI and crates.io releases, install the Python SDK, the Rust SDK and the CLI from this repository:
+Install the CLI and an SDK:
 
 ```bash
-cargo install --locked --git https://github.com/Gradiated/grad grad-cli   # the `grad` binary
-pip install "grad-sdk @ git+https://github.com/Gradiated/grad#subdirectory=sdks/python"
+brew install gradiated/tap/grad   # the `grad` binary (macOS and Linux)
+pip install grad-sdk
 npm install @gradiated/grad
 ```
+
+Without Homebrew, take a binary from the [GitHub Releases](https://github.com/Gradiated/grad/releases) or build one with `cargo install --locked grad-cli@0.2.0-alpha.3` (cargo needs the version while every release is a pre-release).
 
 Train a router on support traces that already carry a `resolved` score. [`examples/support_traces.jsonl`](examples/support_traces.jsonl) is a synthetic sample (two models answering 48 made-up tickets) you can use to try it:
 
@@ -268,11 +270,11 @@ Datasets, training, evals (against your own OpenAI-compatible endpoint), artifac
 
 | | Install | Source |
 | --- | --- | --- |
-| Python | `pip install "grad-sdk @ git+https://github.com/Gradiated/grad#subdirectory=sdks/python"` (PyPI soon) | [`sdks/python`](sdks/python) |
-| TypeScript | `npm install @gradiated/grad` | [`sdks/typescript`](sdks/typescript) |
-| Go | `go get github.com/Gradiated/grad/sdks/go@main` | [`sdks/go`](sdks/go) |
-| Rust | `cargo add grad-sdk --git https://github.com/Gradiated/grad` (crates.io soon) | [`sdks/rust`](sdks/rust) |
-| CLI | `cargo install --locked --git https://github.com/Gradiated/grad grad-cli` | [`cli`](cli) |
+| Python | `pip install grad-sdk` ([PyPI](https://pypi.org/project/grad-sdk/)) | [`sdks/python`](sdks/python) |
+| TypeScript | `npm install @gradiated/grad` ([npm](https://www.npmjs.com/package/@gradiated/grad)) | [`sdks/typescript`](sdks/typescript) |
+| Go | `go get github.com/Gradiated/grad/sdks/go@latest` ([pkg.go.dev](https://pkg.go.dev/github.com/Gradiated/grad/sdks/go)) | [`sdks/go`](sdks/go) |
+| Rust | `cargo add grad-sdk` ([crates.io](https://crates.io/crates/grad-sdk); `use grad::Client`) | [`sdks/rust`](sdks/rust) |
+| CLI | `brew install gradiated/tap/grad`, a [release binary](https://github.com/Gradiated/grad/releases), or the `grad-cli` crate | [`cli`](cli) |
 
 All four SDKs cover the same surface: datasets, sources and secrets, runs, checkpoints, artifacts (including uploads and Hugging Face imports), evals and usage. They and the CLI resolve configuration the same way (explicit arguments, then the profile named by `GRADIATED_PROFILE`, then `GRADIATED_API_KEY` / `GRADIATED_BASE_URL`, then the `default` profile that `grad login` saves), fail before any request when no key is found, and verify every artifact download against its SHA-256.
 

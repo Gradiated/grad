@@ -38,6 +38,8 @@ FIELDS = [
     # Per-pool trainer tags: the GPU `train` pool uses the -gpu image, the CPU `import` pool the plain one.
     ("server/helm/grad/values.yaml", rf'(\n    image:\n      tag: ")({SEMVER})(-gpu"\n    gpuCount: [1-9])'),
     ("server/helm/grad/values.yaml", rf'(\n    image:\n      tag: ")({SEMVER})("\n    gpuCount: 0)'),
+    # cargo only installs a pre-release when it is named.
+    ("README.md", rf"(cargo install --locked grad-cli@)({SEMVER})(`)"),
 ]
 
 
