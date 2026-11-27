@@ -1,580 +1,1702 @@
 # AUTO-GENERATED from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.
-"""Generated low-level wire clients for the Gradiated Training & Serving API."""
+"""Generated wire layer for the Gradiated Training & Serving API.
+
+One method per OpenAPI operation, typed with a ``TypedDict`` per schema. The
+request policy (auth, retries, redirects, typed errors) lives in ``grad._transport``.
+Prefer the resource objects on ``grad.Grad``; this layer is the escape hatch
+(``client.wire``) for anything the façade does not wrap.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, Mapping, NotRequired, TypeAlias, TypedDict, cast
 
+from .._errors import GradAPIError as GradApiError
+from .._transport import quote_path_param
 
-class GradApiError(RuntimeError):
-    """RFC 7807 problem+json error raised by grad-server."""
+if TYPE_CHECKING:
+    from .._http import AsyncResponse, Response
+    from .._transport import AsyncTransport, SyncTransport
 
-    def __init__(
-        self,
-        *,
-        status: int,
-        code: str = "api_error",
-        title: str = "API Error",
-        detail: str = "",
-        request_id: str = "",
-    ) -> None:
-        super().__init__(f"[{status}] {code}: {detail or title}")
-        self.status = status
-        self.code = code
-        self.title = title
-        self.detail = detail
-        self.request_id = request_id
+__all__ = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+
+AdapterSpec: TypeAlias = "dict[str, Any]"
+
+ApiKey = TypedDict(
+    "ApiKey",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "name": "str",
+        "prefix": "str",
+        "scopes": "list[ApiKeyScope]",
+        "created_at": "str",
+        "revoked_at": "str | None",
+    },
+)
+
+ApiKeyScope: TypeAlias = "Literal['admin', 'datasets:read', 'datasets:write', 'runs:read', 'runs:write', 'artifacts:read', 'artifacts:write', 'deployments:write', 'feedback:write', 'env:serve']"
+
+Artifact = TypedDict(
+    "Artifact",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "name": "str",
+        "version": "str",
+        "run_id": "str | None",
+        "checkpoint_id": "str | None",
+        "base_model": "str",
+        "recipe_kind": "RecipeKind",
+        "format": "ArtifactFormat",
+        "sha256": "str",
+        "size_bytes": "int",
+        "manifest": "dict[str, Any]",
+        "eval_report": "dict[str, Any] | None",
+        "created_at": "str",
+    },
+)
+
+ArtifactFormat: TypeAlias = "Literal['peft_lora', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reference'] | None"
+
+BenchmarkSpec = TypedDict(
+    "BenchmarkSpec",
+    {
+        "name": "Literal['ifeval', 'gsm8k', 'mmlu-pro', 'gpqa-diamond', 'humaneval', 'livecodebench']",
+        "limit": "NotRequired[int]",
+    },
+)
+
+ChatMessage = TypedDict(
+    "ChatMessage",
+    {
+        "role": "Literal['system', 'user', 'assistant', 'tool']",
+        "content": "NotRequired[str | list[dict[str, Any]] | None]",
+        "tool_calls": "NotRequired[list[dict[str, Any]]]",
+        "tool_call_id": "NotRequired[str]",
+        "name": "NotRequired[str]",
+        "train": "NotRequired[bool]",
+    },
+)
+
+Checkpoint = TypedDict(
+    "Checkpoint",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "run_id": "str",
+        "attempt": "int",
+        "step": "int",
+        "eval_score": "float | None",
+        "format": "ArtifactFormat",
+        "sha256": "str",
+        "size_bytes": "int",
+        "metadata": "dict[str, Any]",
+        "best": "bool",
+        "final": "bool",
+        "expires_at": "str | None",
+        "created_at": "str",
+    },
+)
+
+ClaimJobRequest = TypedDict(
+    "ClaimJobRequest",
+    {
+        "worker_id": "str",
+        "lease_seconds": "NotRequired[int]",
+        "kinds": "NotRequired[list[JobKind]]",
+        "recipes": "NotRequired[list[RecipeKind]]",
+    },
+)
+
+ClaimJobResponse = TypedDict(
+    "ClaimJobResponse",
+    {
+        "protocol": "Literal['grad.trainer-protocol/1']",
+        "job": "TrainerJob",
+    },
+)
+
+CompleteTrainerJobRequest = TypedDict(
+    "CompleteTrainerJobRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "status": "Literal['completed', 'stopped_budget', 'failed', 'cancelled', 'abandoned']",
+        "upload_id": "NotRequired[str]",
+        "format": "NotRequired[ArtifactFormat]",
+        "manifest": "NotRequired[dict[str, Any]]",
+        "eval_report": "NotRequired[dict[str, Any] | None]",
+        "tokens_processed": "NotRequired[int]",
+        "error": "NotRequired[str]",
+        "import_summary": "NotRequired[dict[str, Any]]",
+    },
+)
+
+CompleteTrainerJobResponse = TypedDict(
+    "CompleteTrainerJobResponse",
+    {
+        "job_id": "str",
+        "kind": "JobKind",
+        "status": "str",
+        "run": "Run",
+        "artifact": "Artifact",
+        "import": "ImportJob",
+    },
+)
+
+CreateApiKeyRequest = TypedDict(
+    "CreateApiKeyRequest",
+    {
+        "name": "str",
+        "scopes": "list[ApiKeyScope]",
+    },
+)
+
+CreateDatasetRequest = TypedDict(
+    "CreateDatasetRequest",
+    {
+        "name": "str",
+        "metadata": "NotRequired[dict[str, Any]]",
+    },
+)
+
+CreateImportRequest = TypedDict(
+    "CreateImportRequest",
+    {
+        "source": "ImportSource",
+        "connector": "NotRequired[Literal['auto', 'grad_trajectories', 'openai_chat', 'gradiated', 'otel', 'langfuse', 'posthog', 'braintrust', 'langsmith']]",
+    },
+)
+
+CreateUploadRequest = TypedDict(
+    "CreateUploadRequest",
+    {
+        "purpose": "Literal['dataset_import']",
+        "filename": "str",
+        "size_bytes": "int",
+        "sha256": "str",
+    },
+)
+
+CreatedApiKey = TypedDict(
+    "CreatedApiKey",
+    {
+        "key": "ApiKey",
+        "secret": "str",
+    },
+)
+
+Dataset = TypedDict(
+    "Dataset",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "name": "str",
+        "version": "int",
+        "record_count": "int",
+        "metadata": "dict[str, Any]",
+        "created_at": "str",
+        "updated_at": "str",
+    },
+)
+
+DatasetRecord = TypedDict(
+    "DatasetRecord",
+    {
+        "schema": "NotRequired[Literal['grad.trajectory/1']]",
+        "id": "NotRequired[str]",
+        "session_id": "NotRequired[str | None]",
+        "group_id": "NotRequired[str | None]",
+        "role": "NotRequired[Literal['chosen', 'rejected', 'anchor', 'positive', 'negative', 'desirable', 'undesirable', 'rollout'] | None]",
+        "source": "NotRequired[str | None]",
+        "timestamp": "NotRequired[str | None]",
+        "messages": "NotRequired[list[ChatMessage]]",
+        "tools": "NotRequired[list[dict[str, Any]]]",
+        "input": "NotRequired[TrajectoryInput]",
+        "output": "NotRequired[TrajectoryOutput]",
+        "prompt": "NotRequired[str | list[ChatMessage]]",
+        "completion": "NotRequired[str | list[ChatMessage]]",
+        "chosen": "NotRequired[str | list[ChatMessage]]",
+        "rejected": "NotRequired[str | list[ChatMessage]]",
+        "query": "NotRequired[str]",
+        "positive": "NotRequired[str]",
+        "negatives": "NotRequired[list[str]]",
+        "state": "NotRequired[Any]",
+        "questions": "NotRequired[dict[str, Any]]",
+        "expected_output": "NotRequired[Any]",
+        "scores": "NotRequired[dict[str, float]]",
+        "metrics": "NotRequired[dict[str, float]]",
+        "metadata": "NotRequired[dict[str, Any]]",
+    },
+)
+
+DatasetRecordsPage = TypedDict(
+    "DatasetRecordsPage",
+    {
+        "dataset": "str",
+        "version": "int",
+        "total": "int",
+        "data": "list[DatasetRecord]",
+        "next_cursor": "str | None",
+    },
+)
+
+DeployArtifactRequest = TypedDict(
+    "DeployArtifactRequest",
+    {
+        "artifact": "str",
+        "name": "NotRequired[str]",
+        "fallback": "NotRequired[str]",
+        "explore_rate": "NotRequired[float]",
+    },
+)
+
+Deployment = TypedDict(
+    "Deployment",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "name": "str",
+        "model_id": "str",
+        "active_artifact_id": "str",
+        "previous_artifact_id": "str | None",
+        "fallback_model": "str | None",
+        "explore_rate": "float",
+        "status": "Literal['active', 'disabled']",
+        "created_at": "str",
+        "updated_at": "str",
+    },
+)
+
+DeploymentStatus = TypedDict(
+    "DeploymentStatus",
+    {
+        "deployment": "Deployment",
+        "feedback_count": "int",
+        "average_score": "float | None",
+    },
+)
+
+EmbedRequest = TypedDict(
+    "EmbedRequest",
+    {
+        "model": "str",
+        "input": "str | list[str]",
+    },
+)
+
+EmbedResponse = TypedDict(
+    "EmbedResponse",
+    {
+        "model": "str",
+        "data": "list[dict[str, Any]]",
+        "usage": "dict[str, Any]",
+    },
+)
+
+EnvTaskDispatch = TypedDict(
+    "EnvTaskDispatch",
+    {
+        "env_name": "str",
+        "task": "dict[str, Any]",
+        "model_id": "str",
+        "system_prompt": "NotRequired[str]",
+        "timeout_s": "NotRequired[int]",
+    },
+)
+
+EnvTaskResult = TypedDict(
+    "EnvTaskResult",
+    {
+        "worker_id": "str",
+        "score": "NotRequired[float | None]",
+        "scores": "NotRequired[dict[str, float]]",
+        "trajectory": "NotRequired[dict[str, Any]]",
+        "error": "NotRequired[str]",
+    },
+)
+
+EnvWorkerRegister = TypedDict(
+    "EnvWorkerRegister",
+    {
+        "name": "str",
+        "worker_id": "str",
+        "concurrency": "NotRequired[int]",
+    },
+)
+
+EvalModelSummary = TypedDict(
+    "EvalModelSummary",
+    {
+        "model": "str",
+        "overall": "float",
+        "ci_low": "float",
+        "ci_high": "float",
+        "pass_at_k": "dict[str, float]",
+        "vs_baseline": "dict[str, Any] | None",
+        "tasks": "int",
+        "errors": "int",
+        "tokens_per_task": "float",
+        "cost_per_1k_tasks_usd": "float | None",
+    },
+)
+
+EvalOutput = TypedDict(
+    "EvalOutput",
+    {
+        "id": "str",
+        "eval_id": "str",
+        "task_id": "str",
+        "model": "str",
+        "sample_index": "int",
+        "input": "list[ChatMessage]",
+        "output": "str | None",
+        "expected_output": "NotRequired[Any]",
+        "record": "DatasetRecord",
+        "scores": "dict[str, float]",
+        "error": "str | None",
+        "usage": "dict[str, Any]",
+    },
+)
+
+EvalRubricItem = TypedDict(
+    "EvalRubricItem",
+    {
+        "name": "str",
+        "kind": "Literal['regex', 'validator', 'code', 'judge']",
+        "weight": "NotRequired[float]",
+        "pattern": "NotRequired[str]",
+        "flags": "NotRequired[str]",
+        "validator": "NotRequired[Literal['json', 'non_empty', 'exact_match']]",
+        "model": "NotRequired[str]",
+        "prompt": "NotRequired[str]",
+        "runtime": "NotRequired[Literal['local']]",
+    },
+)
+
+EvalRun = TypedDict(
+    "EvalRun",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "name": "str",
+        "status": "EvalStatus",
+        "models": "list[str]",
+        "baseline": "str | None",
+        "task_source": "dict[str, Any]",
+        "rubric": "list[EvalRubricItem]",
+        "samples": "int",
+        "temperature": "float",
+        "max_tokens": "int",
+        "pass_threshold": "float",
+        "judge_models": "list[str]",
+        "local_scorers": "list[str]",
+        "progress": "dict[str, Any]",
+        "summary": "list[EvalModelSummary]",
+        "total_cost_usd": "float",
+        "error": "str | None",
+        "created_at": "str",
+        "updated_at": "str",
+        "completed_at": "str | None",
+    },
+)
+
+EvalStatus: TypeAlias = "Literal['queued', 'running', 'awaiting_scores', 'completed', 'failed', 'cancelled']"
+
+EvalTaskOutcome = TypedDict(
+    "EvalTaskOutcome",
+    {
+        "task_id": "str",
+        "model": "str",
+        "score": "float",
+        "passed": "bool",
+        "sample_scores": "list[float]",
+        "judge_model": "str | None",
+        "record": "DatasetRecord",
+    },
+)
+
+FeedbackEventInput = TypedDict(
+    "FeedbackEventInput",
+    {
+        "inference_id": "NotRequired[str]",
+        "session_id": "NotRequired[str]",
+        "deployment_name": "NotRequired[str]",
+        "idempotency_key": "str",
+        "score": "NotRequired[float]",
+        "expected_output": "NotRequired[Any]",
+        "metrics": "NotRequired[dict[str, float]]",
+    },
+)
+
+FeedbackRecord = TypedDict(
+    "FeedbackRecord",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "inference_id": "str | None",
+        "session_id": "str | None",
+        "deployment_name": "str | None",
+        "idempotency_key": "str",
+        "score": "float | None",
+        "expected_output": "NotRequired[Any]",
+        "metrics": "dict[str, float]",
+        "created_at": "str",
+    },
+)
+
+HfColumnMapping = TypedDict(
+    "HfColumnMapping",
+    {
+        "messages": "NotRequired[str]",
+        "prompt": "NotRequired[str]",
+        "completion": "NotRequired[str]",
+        "chosen": "NotRequired[str]",
+        "rejected": "NotRequired[str]",
+        "answer": "NotRequired[str]",
+        "query": "NotRequired[str]",
+        "positive": "NotRequired[str]",
+    },
+)
+
+ImportJob = TypedDict(
+    "ImportJob",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "dataset": "str",
+        "status": "ImportStatus",
+        "source": "dict[str, Any]",
+        "connector": "Literal['auto', 'grad_trajectories', 'openai_chat', 'gradiated', 'otel', 'langfuse', 'posthog', 'braintrust', 'langsmith']",
+        "attempt": "int",
+        "imported_count": "int",
+        "dropped_count": "int",
+        "detected_scores": "list[str]",
+        "drop_reasons": "list[str]",
+        "dataset_version": "int | None",
+        "error": "str | None",
+        "created_at": "str",
+        "updated_at": "str",
+    },
+)
+
+ImportSource: TypeAlias = "dict[str, Any]"
+
+ImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
+
+JobKind: TypeAlias = "Literal['train', 'import']"
+
+MetricPoint = TypedDict(
+    "MetricPoint",
+    {
+        "seq": "int",
+        "attempt": "int",
+        "step": "int",
+        "loss": "float",
+        "eval_loss": "NotRequired[float | None]",
+        "eval_metric": "NotRequired[float | None]",
+        "grad_norm": "NotRequired[float | None]",
+        "lr": "NotRequired[float | None]",
+        "tokens_per_sec": "NotRequired[float | None]",
+        "tokens": "int",
+        "cost_usd": "float",
+        "timestamp": "str",
+    },
+)
+
+MetricPointInput = TypedDict(
+    "MetricPointInput",
+    {
+        "step": "int",
+        "loss": "float",
+        "eval_loss": "NotRequired[float | None]",
+        "eval_metric": "NotRequired[float | None]",
+        "grad_norm": "NotRequired[float | None]",
+        "lr": "NotRequired[float | None]",
+        "tokens_per_sec": "NotRequired[float | None]",
+        "tokens": "int",
+        "cost_usd": "NotRequired[float]",
+        "timestamp": "str",
+    },
+)
+
+MetricsPage = TypedDict(
+    "MetricsPage",
+    {
+        "run_id": "str",
+        "status": "RunStatus",
+        "data": "list[MetricPoint]",
+        "next_cursor": "str | None",
+    },
+)
+
+PlanEvalRequest = TypedDict(
+    "PlanEvalRequest",
+    {
+        "name": "NotRequired[str]",
+        "models": "list[str]",
+        "baseline": "NotRequired[str]",
+        "dataset": "NotRequired[str]",
+        "dataset_version": "NotRequired[int]",
+        "env_name": "NotRequired[str]",
+        "tasks": "NotRequired[list[dict[str, Any]]]",
+        "benchmarks": "NotRequired[list[BenchmarkSpec]]",
+        "rubric": "NotRequired[list[EvalRubricItem]]",
+        "samples": "NotRequired[int]",
+        "temperature": "NotRequired[float]",
+        "max_tokens": "NotRequired[int]",
+        "limit": "NotRequired[int]",
+        "pass_threshold": "NotRequired[float | None]",
+        "max_cost_usd": "NotRequired[float]",
+    },
+)
+
+PlanEvalResponse = TypedDict(
+    "PlanEvalResponse",
+    {
+        "task_source_kind": "Literal['dataset']",
+        "dataset_version": "int",
+        "estimated_tasks": "int",
+        "estimated_model_calls": "int",
+        "estimated_judge_calls": "int",
+        "estimated_cost_usd": "float",
+        "judge_models": "list[str]",
+        "local_scorers": "list[str]",
+        "pass_threshold": "float",
+        "warnings": "list[str]",
+    },
+)
+
+PlanRunRequest = TypedDict(
+    "PlanRunRequest",
+    {
+        "dataset": "str",
+        "name": "str",
+        "recipe": "RecipeSpec",
+        "split": "NotRequired[SplitSpec]",
+        "max_cost_usd": "NotRequired[float]",
+    },
+)
+
+PlanRunResponse = TypedDict(
+    "PlanRunResponse",
+    {
+        "resolved_config": "ResolvedRunConfig",
+        "dataset_version": "int",
+        "usable_records": "int",
+        "total_records": "int",
+        "estimated_steps": "int",
+        "estimated_tokens": "int",
+        "estimated_cost_usd": "float",
+        "price_per_million_tokens": "float",
+        "trained_token_fraction": "float",
+        "warnings": "list[str]",
+    },
+)
+
+PostEvalScoresRequest = TypedDict(
+    "PostEvalScoresRequest",
+    {
+        "scores": "list[dict[str, Any]]",
+    },
+)
+
+PostEvalScoresResponse = TypedDict(
+    "PostEvalScoresResponse",
+    {
+        "accepted": "int",
+        "status": "EvalStatus",
+        "pending_local_scores": "int",
+    },
+)
+
+PostImportRecordsRequest = TypedDict(
+    "PostImportRecordsRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "records": "list[Any]",
+    },
+)
+
+PostImportRecordsResponse = TypedDict(
+    "PostImportRecordsResponse",
+    {
+        "accepted": "int",
+        "rejected": "int",
+        "errors": "list[dict[str, Any]]",
+    },
+)
+
+Problem = TypedDict(
+    "Problem",
+    {
+        "type": "str",
+        "title": "str",
+        "status": "int",
+        "detail": "str",
+        "code": "str",
+        "request_id": "str",
+    },
+)
+
+PromoteCheckpointRequest = TypedDict(
+    "PromoteCheckpointRequest",
+    {
+        "name": "NotRequired[str]",
+    },
+)
+
+PushDatasetRequest = TypedDict(
+    "PushDatasetRequest",
+    {
+        "records": "list[DatasetRecord]",
+        "metadata": "NotRequired[dict[str, Any]]",
+    },
+)
+
+RecipeKind: TypeAlias = "Literal['sft', 'dpo', 'router', 'decision', 'cartridge', 'embedding', 'distill', 'reward', 'grpo']"
+
+RecipeSpec = TypedDict(
+    "RecipeSpec",
+    {
+        "kind": "RecipeKind",
+        "model": "NotRequired[str]",
+        "adapter": "NotRequired[AdapterSpec]",
+        "lr": "NotRequired[Literal['auto'] | float]",
+        "lr_scale": "NotRequired[float]",
+        "batch_size": "NotRequired[int]",
+        "epochs": "NotRequired[int]",
+        "schedule": "NotRequired[Literal['linear', 'cosine', 'constant']]",
+        "warmup": "NotRequired[float]",
+        "train_on": "NotRequired[Literal['last', 'all_assistant']]",
+        "thinking": "NotRequired[Literal['auto', 'on', 'off']]",
+        "preserve_thinking": "NotRequired[bool]",
+        "reduction": "NotRequired[Literal['per_example', 'per_token']]",
+        "select": "NotRequired[Literal['best', 'last']]",
+        "checkpoint_ttl_days": "NotRequired[int]",
+        "beta": "NotRequired[float]",
+        "models": "NotRequired[list[str]]",
+        "max_quality_drop": "NotRequired[float]",
+        "context_text": "NotRequired[str]",
+        "context_uri": "NotRequired[str]",
+        "num_tokens": "NotRequired[int]",
+        "temp": "NotRequired[float]",
+        "teacher": "NotRequired[str]",
+        "env_name": "NotRequired[str]",
+        "group_size": "NotRequired[int]",
+    },
+)
+
+RecordFeedbackRequest = TypedDict(
+    "RecordFeedbackRequest",
+    {
+        "events": "list[FeedbackEventInput]",
+    },
+)
+
+RecordFeedbackResponse = TypedDict(
+    "RecordFeedbackResponse",
+    {
+        "accepted": "int",
+        "deduplicated": "int",
+        "records": "list[FeedbackRecord]",
+    },
+)
+
+RegisterTrainerCheckpointRequest = TypedDict(
+    "RegisterTrainerCheckpointRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "step": "int",
+        "eval_score": "NotRequired[float | None]",
+        "upload_id": "str",
+        "format": "NotRequired[ArtifactFormat]",
+        "metadata": "NotRequired[dict[str, Any]]",
+    },
+)
+
+RenderDatasetRequest = TypedDict(
+    "RenderDatasetRequest",
+    {
+        "model": "NotRequired[str]",
+        "train_on": "NotRequired[Literal['last', 'all_assistant']]",
+        "thinking": "NotRequired[Literal['auto', 'on', 'off']]",
+        "preserve_thinking": "NotRequired[bool]",
+        "limit": "NotRequired[int]",
+    },
+)
+
+RenderDatasetResponse = TypedDict(
+    "RenderDatasetResponse",
+    {
+        "dataset": "str",
+        "model": "str",
+        "template_revision": "str",
+        "token_counts": "Literal['estimated']",
+        "examples": "list[dict[str, Any]]",
+    },
+)
+
+ReportTrainerProgressRequest = TypedDict(
+    "ReportTrainerProgressRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "metric": "MetricPointInput",
+    },
+)
+
+ReportTrainerProgressResponse = TypedDict(
+    "ReportTrainerProgressResponse",
+    {
+        "status": "RunStatus",
+        "should_stop": "bool",
+        "stop_reason": "Literal['cancelled', 'budget'] | None",
+        "cost_usd": "float",
+    },
+)
+
+ResolvedRunConfig = TypedDict(
+    "ResolvedRunConfig",
+    {
+        "rule_version": "str",
+        "dataset": "str",
+        "dataset_version": "int",
+        "name": "str",
+        "recipe_kind": "RecipeKind",
+        "model": "str",
+        "template_revision": "str",
+        "adapter": "dict[str, Any]",
+        "lr": "float",
+        "lr_source": "str",
+        "batch_size": "int",
+        "epochs": "int",
+        "schedule": "Literal['linear', 'cosine', 'constant']",
+        "warmup": "float",
+        "train_on": "Literal['last', 'all_assistant']",
+        "thinking": "Literal['auto', 'on', 'off']",
+        "preserve_thinking": "bool",
+        "reduction": "Literal['per_example', 'per_token']",
+        "select": "Literal['best', 'last']",
+        "checkpoint_every_steps": "int",
+        "checkpoint_ttl_days": "int",
+        "split": "dict[str, Any]",
+        "recipe_params": "dict[str, Any]",
+    },
+)
+
+ResumeRunRequest = TypedDict(
+    "ResumeRunRequest",
+    {
+        "max_cost_usd": "NotRequired[float]",
+    },
+)
+
+RouteRequest = TypedDict(
+    "RouteRequest",
+    {
+        "deployment": "str",
+        "messages": "list[ChatMessage]",
+        "tools": "NotRequired[list[dict[str, Any]]]",
+        "session_id": "NotRequired[str]",
+    },
+)
+
+RouteResponse = TypedDict(
+    "RouteResponse",
+    {
+        "inference_id": "str",
+        "deployment": "str",
+        "artifact_id": "str",
+        "model": "str",
+        "is_exploration": "bool",
+        "confidence": "float",
+        "scores": "dict[str, float]",
+    },
+)
+
+Run = TypedDict(
+    "Run",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "name": "str",
+        "dataset_id": "str",
+        "dataset_name": "str",
+        "dataset_version": "int",
+        "recipe_kind": "RecipeKind",
+        "status": "RunStatus",
+        "resolved_config": "ResolvedRunConfig",
+        "max_cost_usd": "float | None",
+        "price_per_million_tokens": "float",
+        "tokens_processed": "int",
+        "cost_usd": "float",
+        "current_step": "int",
+        "total_steps": "int",
+        "attempt": "int",
+        "max_attempts": "int",
+        "latest_metric": "MetricPoint",
+        "eval_report": "dict[str, Any] | None",
+        "artifact_id": "str | None",
+        "error": "str | None",
+        "created_at": "str",
+        "updated_at": "str",
+        "finished_at": "str | None",
+    },
+)
+
+RunStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed', 'cancelled', 'stopped_budget']"
+
+SplitSpec = TypedDict(
+    "SplitSpec",
+    {
+        "strategy": "NotRequired[Literal['by_session', 'by_group', 'random']]",
+        "eval_fraction": "NotRequired[float]",
+        "seed": "NotRequired[int]",
+    },
+)
+
+TrainableModel = TypedDict(
+    "TrainableModel",
+    {
+        "id": "str",
+        "hf_repo": "str | None",
+        "family": "Literal['llm', 'encoder']",
+        "adapters": "list[Literal['lora', 'prefix_kv', 'frozen_head', 'encoder_full']]",
+        "recipes": "list[RecipeKind]",
+        "default_for": "list[RecipeKind]",
+        "price_per_million_tokens_usd": "float",
+        "max_context_tokens": "int",
+        "template_revision": "str",
+        "calibrated_lrs": "dict[str, float]",
+    },
+)
+
+TrainerHeartbeatRequest = TypedDict(
+    "TrainerHeartbeatRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "lease_seconds": "NotRequired[int]",
+    },
+)
+
+TrainerHeartbeatResponse = TypedDict(
+    "TrainerHeartbeatResponse",
+    {
+        "status": "str",
+        "should_stop": "bool",
+        "stop_reason": "Literal['cancelled', 'budget'] | None",
+        "lease_expires_at": "str",
+    },
+)
+
+TrainerJob = TypedDict(
+    "TrainerJob",
+    {
+        "id": "str",
+        "kind": "JobKind",
+        "attempt": "int",
+        "lease_seconds": "int",
+        "lease_expires_at": "str",
+        "run": "dict[str, Any] | None",
+        "import": "dict[str, Any] | None",
+        "price_per_million_tokens": "float | None",
+        "max_cost_usd": "float | None",
+        "dataset": "dict[str, Any] | None",
+        "resume": "dict[str, Any] | None",
+    },
+)
+
+TrainerQueueStats = TypedDict(
+    "TrainerQueueStats",
+    {
+        "queued": "int",
+        "running": "int",
+        "total": "int",
+        "by_kind": "dict[str, Any]",
+    },
+)
+
+TrainerUploadRequest = TypedDict(
+    "TrainerUploadRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "kind": "Literal['checkpoint', 'artifact']",
+        "sha256": "str",
+        "size_bytes": "int",
+    },
+)
+
+TrajectoryInput = TypedDict(
+    "TrajectoryInput",
+    {
+        "messages": "NotRequired[list[ChatMessage]]",
+        "tools": "NotRequired[list[dict[str, Any]]]",
+        "media": "NotRequired[list[dict[str, Any]]]",
+        "features": "NotRequired[dict[str, Any]]",
+        "payload": "NotRequired[Any]",
+    },
+)
+
+TrajectoryOutput = TypedDict(
+    "TrajectoryOutput",
+    {
+        "turns": "NotRequired[list[ChatMessage]]",
+        "payload": "NotRequired[Any]",
+    },
+)
+
+UploadTicket = TypedDict(
+    "UploadTicket",
+    {
+        "upload_id": "str",
+        "method": "Literal['PUT']",
+        "url": "str",
+        "headers": "dict[str, str]",
+        "expires_at": "str",
+    },
+)
+
+ClaimEnvTaskResponse = TypedDict(
+    "ClaimEnvTaskResponse",
+    {
+        "task": "dict[str, Any] | None",
+    },
+)
+
+DispatchEnvTaskResponse = TypedDict(
+    "DispatchEnvTaskResponse",
+    {
+        "id": "str",
+        "env_name": "str",
+        "status": "str",
+        "active_workers": "int",
+    },
+)
+
+ListApiKeysResponse = TypedDict(
+    "ListApiKeysResponse",
+    {
+        "data": "list[ApiKey]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListArtifactsResponse = TypedDict(
+    "ListArtifactsResponse",
+    {
+        "data": "list[Artifact]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListDatasetsResponse = TypedDict(
+    "ListDatasetsResponse",
+    {
+        "data": "list[Dataset]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListDeploymentsResponse = TypedDict(
+    "ListDeploymentsResponse",
+    {
+        "data": "list[Deployment]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListEvalFailuresResponse = TypedDict(
+    "ListEvalFailuresResponse",
+    {
+        "eval_id": "str",
+        "data": "list[EvalTaskOutcome]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListEvalOutputsResponse = TypedDict(
+    "ListEvalOutputsResponse",
+    {
+        "data": "list[EvalOutput]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListEvalResultsResponse = TypedDict(
+    "ListEvalResultsResponse",
+    {
+        "data": "list[EvalTaskOutcome]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListEvalsResponse = TypedDict(
+    "ListEvalsResponse",
+    {
+        "data": "list[EvalRun]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListImportsResponse = TypedDict(
+    "ListImportsResponse",
+    {
+        "data": "list[ImportJob]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListModelsResponse = TypedDict(
+    "ListModelsResponse",
+    {
+        "data": "list[TrainableModel]",
+    },
+)
+
+ListRunCheckpointsResponse = TypedDict(
+    "ListRunCheckpointsResponse",
+    {
+        "data": "list[Checkpoint]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListRunsResponse = TypedDict(
+    "ListRunsResponse",
+    {
+        "data": "list[Run]",
+        "next_cursor": "str | None",
+    },
+)
+
+RegisterEnvWorkerResponse = TypedDict(
+    "RegisterEnvWorkerResponse",
+    {
+        "name": "str",
+        "worker_id": "str",
+        "concurrency": "int",
+        "last_heartbeat_at": "str",
+    },
+)
+
+SCHEMA_FIELDS: dict[str, frozenset[str]] = {
+    "ApiKey": frozenset({"created_at", "id", "name", "prefix", "revoked_at", "scopes", "workspace_id"}),
+    "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
+    "BenchmarkSpec": frozenset({"limit", "name"}),
+    "ChatMessage": frozenset({"content", "name", "role", "tool_call_id", "tool_calls", "train"}),
+    "Checkpoint": frozenset({"attempt", "best", "created_at", "eval_score", "expires_at", "final", "format", "id", "metadata", "run_id", "sha256", "size_bytes", "step", "workspace_id"}),
+    "ClaimJobRequest": frozenset({"kinds", "lease_seconds", "recipes", "worker_id"}),
+    "ClaimJobResponse": frozenset({"job", "protocol"}),
+    "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "status", "tokens_processed", "upload_id", "worker_id"}),
+    "CompleteTrainerJobResponse": frozenset({"artifact", "import", "job_id", "kind", "run", "status"}),
+    "CreateApiKeyRequest": frozenset({"name", "scopes"}),
+    "CreateDatasetRequest": frozenset({"metadata", "name"}),
+    "CreateImportRequest": frozenset({"connector", "source"}),
+    "CreateUploadRequest": frozenset({"filename", "purpose", "sha256", "size_bytes"}),
+    "CreatedApiKey": frozenset({"key", "secret"}),
+    "Dataset": frozenset({"created_at", "id", "metadata", "name", "record_count", "updated_at", "version", "workspace_id"}),
+    "DatasetRecord": frozenset({"chosen", "completion", "expected_output", "group_id", "id", "input", "messages", "metadata", "metrics", "negatives", "output", "positive", "prompt", "query", "questions", "rejected", "role", "schema", "scores", "session_id", "source", "state", "timestamp", "tools"}),
+    "DatasetRecordsPage": frozenset({"data", "dataset", "next_cursor", "total", "version"}),
+    "DeployArtifactRequest": frozenset({"artifact", "explore_rate", "fallback", "name"}),
+    "Deployment": frozenset({"active_artifact_id", "created_at", "explore_rate", "fallback_model", "id", "model_id", "name", "previous_artifact_id", "status", "updated_at", "workspace_id"}),
+    "DeploymentStatus": frozenset({"average_score", "deployment", "feedback_count"}),
+    "EmbedRequest": frozenset({"input", "model"}),
+    "EmbedResponse": frozenset({"data", "model", "usage"}),
+    "EnvTaskDispatch": frozenset({"env_name", "model_id", "system_prompt", "task", "timeout_s"}),
+    "EnvTaskResult": frozenset({"error", "score", "scores", "trajectory", "worker_id"}),
+    "EnvWorkerRegister": frozenset({"concurrency", "name", "worker_id"}),
+    "EvalModelSummary": frozenset({"ci_high", "ci_low", "cost_per_1k_tasks_usd", "errors", "model", "overall", "pass_at_k", "tasks", "tokens_per_task", "vs_baseline"}),
+    "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
+    "EvalRubricItem": frozenset({"flags", "kind", "model", "name", "pattern", "prompt", "runtime", "validator", "weight"}),
+    "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "models", "name", "pass_threshold", "progress", "rubric", "samples", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
+    "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),
+    "FeedbackEventInput": frozenset({"deployment_name", "expected_output", "idempotency_key", "inference_id", "metrics", "score", "session_id"}),
+    "FeedbackRecord": frozenset({"created_at", "deployment_name", "expected_output", "id", "idempotency_key", "inference_id", "metrics", "score", "session_id", "workspace_id"}),
+    "HfColumnMapping": frozenset({"answer", "chosen", "completion", "messages", "positive", "prompt", "query", "rejected"}),
+    "ImportJob": frozenset({"attempt", "connector", "created_at", "dataset", "dataset_version", "detected_scores", "drop_reasons", "dropped_count", "error", "id", "imported_count", "source", "status", "updated_at", "workspace_id"}),
+    "MetricPoint": frozenset({"attempt", "cost_usd", "eval_loss", "eval_metric", "grad_norm", "loss", "lr", "seq", "step", "timestamp", "tokens", "tokens_per_sec"}),
+    "MetricPointInput": frozenset({"cost_usd", "eval_loss", "eval_metric", "grad_norm", "loss", "lr", "step", "timestamp", "tokens", "tokens_per_sec"}),
+    "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status"}),
+    "PlanEvalRequest": frozenset({"baseline", "benchmarks", "dataset", "dataset_version", "env_name", "limit", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "tasks", "temperature"}),
+    "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
+    "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
+    "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "price_per_million_tokens", "resolved_config", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
+    "PostEvalScoresRequest": frozenset({"scores"}),
+    "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
+    "PostImportRecordsRequest": frozenset({"attempt", "records", "worker_id"}),
+    "PostImportRecordsResponse": frozenset({"accepted", "errors", "rejected"}),
+    "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
+    "PromoteCheckpointRequest": frozenset({"name"}),
+    "PushDatasetRequest": frozenset({"metadata", "records"}),
+    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "env_name", "epochs", "group_size", "kind", "lr", "lr_scale", "max_quality_drop", "model", "models", "num_tokens", "preserve_thinking", "reduction", "schedule", "select", "teacher", "temp", "thinking", "train_on", "warmup"}),
+    "RecordFeedbackRequest": frozenset({"events"}),
+    "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
+    "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
+    "RenderDatasetRequest": frozenset({"limit", "model", "preserve_thinking", "thinking", "train_on"}),
+    "RenderDatasetResponse": frozenset({"dataset", "examples", "model", "template_revision", "token_counts"}),
+    "ReportTrainerProgressRequest": frozenset({"attempt", "metric", "worker_id"}),
+    "ReportTrainerProgressResponse": frozenset({"cost_usd", "should_stop", "status", "stop_reason"}),
+    "ResolvedRunConfig": frozenset({"adapter", "batch_size", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "lr", "lr_source", "model", "name", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
+    "ResumeRunRequest": frozenset({"max_cost_usd"}),
+    "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
+    "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
+    "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
+    "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
+    "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
+    "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),
+    "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
+    "TrainerJob": frozenset({"attempt", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "max_cost_usd", "price_per_million_tokens", "resume", "run"}),
+    "TrainerQueueStats": frozenset({"by_kind", "queued", "running", "total"}),
+    "TrainerUploadRequest": frozenset({"attempt", "kind", "sha256", "size_bytes", "worker_id"}),
+    "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
+    "TrajectoryOutput": frozenset({"payload", "turns"}),
+    "UploadTicket": frozenset({"expires_at", "headers", "method", "upload_id", "url"}),
+}
+"""Property names of every object schema (for client-side typo checks)."""
+
+SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
+    "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "deployments:write", "feedback:write", "env:serve",),
+    "ArtifactFormat": ("peft_lora", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference", None,),
+    "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
+    "ImportStatus": ("queued", "running", "completed", "failed",),
+    "JobKind": ("train", "import",),
+    "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
+    "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget",),
+}
+"""Allowed values of every enum schema."""
+
+OPERATIONS: dict[str, tuple[str, str]] = {
+    "cancel_eval": ("POST", "/v1/evals/{id}/cancel"),
+    "cancel_run": ("POST", "/v1/runs/{id}/cancel"),
+    "claim_env_task": ("POST", "/v1/env-workers/{name}/claim"),
+    "claim_trainer_job": ("POST", "/v1/trainer-jobs/claim"),
+    "complete_env_task": ("POST", "/v1/env-workers/tasks/{id}/complete"),
+    "complete_trainer_job": ("POST", "/v1/trainer-jobs/{id}/complete"),
+    "create_api_key": ("POST", "/v1/keys"),
+    "create_dataset": ("POST", "/v1/datasets"),
+    "create_dataset_import": ("POST", "/v1/datasets/{name}/imports"),
+    "create_embeddings": ("POST", "/v1/embeddings"),
+    "create_eval": ("POST", "/v1/evals"),
+    "create_run": ("POST", "/v1/runs"),
+    "create_trainer_upload": ("POST", "/v1/trainer-jobs/{id}/uploads"),
+    "create_upload": ("POST", "/v1/uploads"),
+    "deploy_artifact": ("POST", "/v1/deployments"),
+    "dispatch_env_task": ("POST", "/v1/env-workers/tasks"),
+    "download_artifact": ("GET", "/v1/artifacts/{id}/download"),
+    "download_trainer_dataset": ("GET", "/v1/trainer-jobs/{id}/dataset"),
+    "get_artifact": ("GET", "/v1/artifacts/{id}"),
+    "get_dataset": ("GET", "/v1/datasets/{name}"),
+    "get_deployment": ("GET", "/v1/deployments/{name}"),
+    "get_env_task": ("GET", "/v1/env-workers/tasks/{id}"),
+    "get_eval": ("GET", "/v1/evals/{id}"),
+    "get_import": ("GET", "/v1/imports/{id}"),
+    "get_run": ("GET", "/v1/runs/{id}"),
+    "get_trainer_queue_stats": ("GET", "/v1/trainer-jobs/queue"),
+    "heartbeat_trainer_job": ("POST", "/v1/trainer-jobs/{id}/heartbeat"),
+    "list_api_keys": ("GET", "/v1/keys"),
+    "list_artifacts": ("GET", "/v1/artifacts"),
+    "list_dataset_records": ("GET", "/v1/datasets/{name}/records"),
+    "list_datasets": ("GET", "/v1/datasets"),
+    "list_deployments": ("GET", "/v1/deployments"),
+    "list_eval_failures": ("GET", "/v1/evals/{id}/failures"),
+    "list_eval_outputs": ("GET", "/v1/evals/{id}/outputs"),
+    "list_eval_results": ("GET", "/v1/evals/{id}/results"),
+    "list_evals": ("GET", "/v1/evals"),
+    "list_imports": ("GET", "/v1/imports"),
+    "list_models": ("GET", "/v1/models"),
+    "list_run_checkpoints": ("GET", "/v1/runs/{id}/checkpoints"),
+    "list_run_metrics": ("GET", "/v1/runs/{id}/metrics"),
+    "list_runs": ("GET", "/v1/runs"),
+    "plan_eval": ("POST", "/v1/evals/plan"),
+    "plan_run": ("POST", "/v1/runs/plan"),
+    "post_eval_scores": ("POST", "/v1/evals/{id}/scores"),
+    "post_import_records": ("POST", "/v1/trainer-jobs/{id}/records"),
+    "promote_checkpoint": ("POST", "/v1/checkpoints/{id}/promote"),
+    "push_dataset_records": ("POST", "/v1/datasets/{name}/records"),
+    "record_feedback": ("POST", "/v1/feedback"),
+    "register_env_worker": ("POST", "/v1/env-workers/register"),
+    "register_trainer_checkpoint": ("POST", "/v1/trainer-jobs/{id}/checkpoints"),
+    "render_dataset": ("POST", "/v1/datasets/{name}/render"),
+    "report_trainer_progress": ("POST", "/v1/trainer-jobs/{id}/progress"),
+    "resume_run": ("POST", "/v1/runs/{id}/resume"),
+    "revoke_api_key": ("DELETE", "/v1/keys/{id}"),
+    "rollback_deployment": ("POST", "/v1/deployments/{name}/rollback"),
+    "route_request": ("POST", "/v1/route"),
+}
+"""operationId (snake_case) -> (HTTP method, path template)."""
 
 
 class GeneratedApiClient:
-    """Synchronous stdlib HTTP client generated from spec/openapi.yaml."""
+    """Blocking wire client: one method per operation in spec/openapi.yaml."""
 
-    def __init__(
-        self,
-        base_url: str,
-        api_key: str | None = None,
-        timeout_s: float = 30.0,
-    ) -> None:
-        parsed = urllib.parse.urlparse(base_url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"Unsupported base_url scheme: {parsed.scheme!r}")
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.timeout_s = timeout_s
+    def __init__(self, transport: SyncTransport) -> None:
+        self._t = transport
 
-    def _build_url(self, route_path: str, query: dict[str, Any] | None) -> str:
-        url = f"{self.base_url}{route_path}"
-        if query:
-            filtered = {k: str(v) for k, v in query.items() if v is not None}
-            if filtered:
-                url = f"{url}?{urllib.parse.urlencode(filtered)}"
-        return url
+    def cancel_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
+        """Cancel a queued, running or awaiting_scores evaluation."""
+        return cast("EvalRun", self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
 
-    def _send(
-        self,
-        method: str,
-        route_path: str,
-        body: dict[str, Any] | None = None,
-        query: dict[str, Any] | None = None,
-    ) -> tuple[bytes, dict[str, str], int]:
-        headers: dict[str, str] = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        data: bytes | None = None
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(body).encode("utf-8")
+    def cancel_run(self, id: str, *, timeout: float | None = None) -> Run:
+        """Cancel a training run (a running attempt is stopped and billed)."""
+        return cast("Run", self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
 
-        req = urllib.request.Request(
-            self._build_url(route_path, query),
-            data=data,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                resp_headers = {k.lower(): v for k, v in resp.headers.items()}
-                return resp.read(), resp_headers, int(resp.status)
-        except urllib.error.HTTPError as exc:
-            with exc:
-                raw = exc.read().decode("utf-8", errors="replace")
-            try:
-                problem = json.loads(raw)
-            except Exception:
-                problem = {"status": exc.code, "detail": raw}
-            raise GradApiError(
-                status=int(problem.get("status", exc.code)),
-                code=str(problem.get("code", "api_error")),
-                title=str(problem.get("title", "API Error")),
-                detail=str(problem.get("detail", raw)),
-                request_id=str(problem.get("request_id", "")),
-            ) from exc
+    def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
+        """Long-poll for the next task assigned to a `grad env serve` worker."""
+        return cast("ClaimEnvTaskResponse", self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
 
-    def _request_json(
-        self,
-        method: str,
-        route_path: str,
-        body: dict[str, Any] | None = None,
-        query: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        raw, _, status = self._send(method, route_path, body=body, query=query)
-        if status in (204, 205) or not raw.strip():
-            return {}
-        return json.loads(raw.decode("utf-8"))
+    def claim_trainer_job(self, body: ClaimJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> ClaimJobResponse:
+        """Claim the next queued train or import job (trainer:worker)."""
+        return cast("ClaimJobResponse", self._t.request("POST", "/v1/trainer-jobs/claim", json_body=body, timeout=timeout))
 
-    def _request_bytes(
-        self,
-        method: str,
-        route_path: str,
-        body: dict[str, Any] | None = None,
-        query: dict[str, Any] | None = None,
-    ) -> tuple[bytes, dict[str, str]]:
-        raw, headers, _ = self._send(method, route_path, body=body, query=query)
-        return raw, headers
+    def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        """Submit scored trajectory output for an environment task."""
+        return cast("dict[str, Any]", self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
 
-    def cancel_eval(self, id: str) -> dict[str, Any]:
-        """Cancel a queued, running or awaiting_scores evaluation"""
-        _query = None
-        return self._request_json("POST", f"/v1/evals/{urllib.parse.quote(id, safe='')}/cancel", body=None, query=_query)
+    def complete_trainer_job(self, id: str, body: CompleteTrainerJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> CompleteTrainerJobResponse:
+        """Finish a job attempt: publish its artifact, bill it, release the lease."""
+        return cast("CompleteTrainerJobResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
 
-    def cancel_run(self, id: str) -> dict[str, Any]:
-        """Cancel a training run (a running attempt is stopped and billed)"""
-        _query = None
-        return self._request_json("POST", f"/v1/runs/{urllib.parse.quote(id, safe='')}/cancel", body=None, query=_query)
+    def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, timeout: float | None = None) -> CreatedApiKey:
+        """Create a scoped workspace API key (trainer worker keys are platform config, not keys)."""
+        return cast("CreatedApiKey", self._t.request("POST", "/v1/keys", json_body=body, timeout=timeout))
 
-    def claim_env_task(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Long-poll for the next task assigned to a `grad env serve` worker"""
-        _query = None
-        return self._request_json("POST", f"/v1/env-workers/{urllib.parse.quote(name, safe='')}/claim", body=body, query=_query)
+    def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+        """Create an empty dataset."""
+        return cast("Dataset", self._t.request("POST", "/v1/datasets", json_body=body, timeout=timeout))
 
-    def claim_trainer_job(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Claim the next queued train or import job (trainer:worker)"""
-        _query = None
-        return self._request_json("POST", f"/v1/trainer-jobs/claim", body=body, query=_query)
+    def create_dataset_import(self, name: str, body: CreateImportRequest | Mapping[str, Any], *, timeout: float | None = None) -> ImportJob:
+        """Import an uploaded file or a Hugging Face dataset into a dataset (async job)."""
+        return cast("ImportJob", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, timeout=timeout))
 
-    def complete_env_task(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Submit scored trajectory output for an environment task"""
-        _query = None
-        return self._request_json("POST", f"/v1/env-workers/tasks/{urllib.parse.quote(id, safe='')}/complete", body=body, query=_query)
+    def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, timeout: float | None = None) -> EmbedResponse:
+        """Generate embeddings from a deployed embedding artifact."""
+        return cast("EmbedResponse", self._t.request("POST", "/v1/embeddings", json_body=body, timeout=timeout))
 
-    def complete_trainer_job(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Finish a job attempt: publish its artifact, bill it, release the lease"""
-        _query = None
-        return self._request_json("POST", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/complete", body=body, query=_query)
+    def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> EvalRun:
+        """Queue an evaluation across models on a pinned dataset version (executed by the server)."""
+        return cast("EvalRun", self._t.request("POST", "/v1/evals", json_body=body, timeout=timeout))
 
-    def create_api_key(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Create a scoped workspace API key (trainer worker keys are platform config, not keys)"""
-        _query = None
-        return self._request_json("POST", f"/v1/keys", body=body, query=_query)
+    def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> Run:
+        """Create and enqueue a training run (pins the dataset version)."""
+        return cast("Run", self._t.request("POST", "/v1/runs", json_body=body, timeout=timeout))
 
-    def create_dataset(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Create an empty dataset"""
-        _query = None
-        return self._request_json("POST", f"/v1/datasets", body=body, query=_query)
+    def create_trainer_upload(self, id: str, body: TrainerUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
+        """Get an upload URL for a checkpoint or artifact bundle."""
+        return cast("UploadTicket", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/uploads", json_body=body, timeout=timeout))
 
-    def create_dataset_import(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Import an uploaded file or a Hugging Face dataset into a dataset (async job)"""
-        _query = None
-        return self._request_json("POST", f"/v1/datasets/{urllib.parse.quote(name, safe='')}/imports", body=body, query=_query)
+    def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
+        """Get an upload URL for a file to import (PUT the bytes, then create an import)."""
+        return cast("UploadTicket", self._t.request("POST", "/v1/uploads", json_body=body, timeout=timeout))
 
-    def create_embeddings(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Generate embeddings from a deployed embedding artifact"""
-        _query = None
-        return self._request_json("POST", f"/v1/embeddings", body=body, query=_query)
+    def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, timeout: float | None = None) -> Deployment:
+        """Deploy or update an artifact under a stable model name."""
+        return cast("Deployment", self._t.request("POST", "/v1/deployments", json_body=body, timeout=timeout))
 
-    def create_eval(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Queue an evaluation across models on a pinned dataset version (executed by the server)"""
-        _query = None
-        return self._request_json("POST", f"/v1/evals", body=body, query=_query)
+    def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
+        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
+        return cast("DispatchEnvTaskResponse", self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
 
-    def create_run(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Create and enqueue a training run (pins the dataset version)"""
-        _query = None
-        return self._request_json("POST", f"/v1/runs", body=body, query=_query)
+    def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:
+        """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 (streams `application/octet-stream`; read or close the response)."""
+        return self._t.stream("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}/download", accept="application/octet-stream", timeout=timeout)
 
-    def create_trainer_upload(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Get an upload URL for a checkpoint or artifact bundle"""
-        _query = None
-        return self._request_json("POST", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/uploads", body=body, query=_query)
+    def download_trainer_dataset(self, id: str, *, attempt: int | None = None, timeout: float | None = None) -> Response:
+        """Stream the pinned dataset version of a claimed train job as JSONL (streams `application/x-ndjson`; read or close the response)."""
+        return self._t.stream("GET", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/dataset", query={"attempt": attempt}, accept="application/x-ndjson", timeout=timeout)
 
-    def create_upload(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Get an upload URL for a file to import (PUT the bytes, then create an import)"""
-        _query = None
-        return self._request_json("POST", f"/v1/uploads", body=body, query=_query)
+    def get_artifact(self, id: str, *, timeout: float | None = None) -> Artifact:
+        """Get an artifact by id or name@latest."""
+        return cast("Artifact", self._t.request("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    def deploy_artifact(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Deploy or update an artifact under a stable model name"""
-        _query = None
-        return self._request_json("POST", f"/v1/deployments", body=body, query=_query)
+    def get_dataset(self, name: str, *, timeout: float | None = None) -> Dataset:
+        """Get a dataset by name."""
+        return cast("Dataset", self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}", timeout=timeout))
 
-    def dispatch_env_task(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker"""
-        _query = None
-        return self._request_json("POST", f"/v1/env-workers/tasks", body=body, query=_query)
+    def get_deployment(self, name: str, *, timeout: float | None = None) -> DeploymentStatus:
+        """Get deployment status and feedback summary."""
+        return cast("DeploymentStatus", self._t.request("GET", f"/v1/deployments/{quote_path_param(name, 'name')}", timeout=timeout))
 
-    def download_artifact(self, id: str) -> tuple[bytes, dict[str, str]]:
-        """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256"""
-        _query = None
-        return self._request_bytes("GET", f"/v1/artifacts/{urllib.parse.quote(id, safe='')}/download", body=None, query=_query)
+    def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
+        """Inspect an environment task and its result."""
+        return cast("dict[str, Any]", self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    def download_trainer_dataset(self, id: str, *, attempt: Any = None) -> tuple[bytes, dict[str, str]]:
-        """Stream the pinned dataset version of a claimed train job as JSONL"""
-        _query = {"attempt": attempt}
-        return self._request_bytes("GET", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/dataset", body=None, query=_query)
+    def get_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
+        """Get an evaluation run by ID."""
+        return cast("EvalRun", self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    def get_artifact(self, id: str) -> dict[str, Any]:
-        """Get an artifact by id or name@latest"""
-        _query = None
-        return self._request_json("GET", f"/v1/artifacts/{urllib.parse.quote(id, safe='')}", body=None, query=_query)
+    def get_import(self, id: str, *, timeout: float | None = None) -> ImportJob:
+        """Get a dataset import job."""
+        return cast("ImportJob", self._t.request("GET", f"/v1/imports/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    def get_dataset(self, name: str) -> dict[str, Any]:
-        """Get a dataset by name"""
-        _query = None
-        return self._request_json("GET", f"/v1/datasets/{urllib.parse.quote(name, safe='')}", body=None, query=_query)
+    def get_run(self, id: str, *, timeout: float | None = None) -> Run:
+        """Get a training run."""
+        return cast("Run", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    def get_deployment(self, name: str) -> dict[str, Any]:
-        """Get deployment status and feedback summary"""
-        _query = None
-        return self._request_json("GET", f"/v1/deployments/{urllib.parse.quote(name, safe='')}", body=None, query=_query)
+    def get_trainer_queue_stats(self, *, timeout: float | None = None) -> TrainerQueueStats:
+        """Queue depth for autoscaling: queued plus running jobs (trainer:worker)."""
+        return cast("TrainerQueueStats", self._t.request("GET", "/v1/trainer-jobs/queue", timeout=timeout))
 
-    def get_env_task(self, id: str) -> dict[str, Any]:
-        """Inspect an environment task and its result"""
-        _query = None
-        return self._request_json("GET", f"/v1/env-workers/tasks/{urllib.parse.quote(id, safe='')}", body=None, query=_query)
+    def heartbeat_trainer_job(self, id: str, body: TrainerHeartbeatRequest | Mapping[str, Any], *, timeout: float | None = None) -> TrainerHeartbeatResponse:
+        """Renew the job lease; reports whether the worker should stop."""
+        return cast("TrainerHeartbeatResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/heartbeat", json_body=body, timeout=timeout))
 
-    def get_eval(self, id: str) -> dict[str, Any]:
-        """Get an evaluation run by ID"""
-        _query = None
-        return self._request_json("GET", f"/v1/evals/{urllib.parse.quote(id, safe='')}", body=None, query=_query)
+    def list_api_keys(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListApiKeysResponse:
+        """List workspace API keys."""
+        return cast("ListApiKeysResponse", self._t.request("GET", "/v1/keys", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def get_import(self, id: str) -> dict[str, Any]:
-        """Get a dataset import job"""
-        _query = None
-        return self._request_json("GET", f"/v1/imports/{urllib.parse.quote(id, safe='')}", body=None, query=_query)
+    def list_artifacts(self, *, limit: int | None = None, cursor: str | None = None, name: str | None = None, timeout: float | None = None) -> ListArtifactsResponse:
+        """List immutable artifacts (newest first)."""
+        return cast("ListArtifactsResponse", self._t.request("GET", "/v1/artifacts", query={"limit": limit, "cursor": cursor, "name": name}, timeout=timeout))
 
-    def get_run(self, id: str) -> dict[str, Any]:
-        """Get a training run"""
-        _query = None
-        return self._request_json("GET", f"/v1/runs/{urllib.parse.quote(id, safe='')}", body=None, query=_query)
+    def list_dataset_records(self, name: str, *, version: int | None = None, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> DatasetRecordsPage:
+        """Read records of a dataset version."""
+        return cast("DatasetRecordsPage", self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}/records", query={"version": version, "limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def get_trainer_queue_stats(self) -> dict[str, Any]:
-        """Queue depth for autoscaling: queued plus running jobs (trainer:worker)"""
-        _query = None
-        return self._request_json("GET", f"/v1/trainer-jobs/queue", body=None, query=_query)
+    def list_datasets(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDatasetsResponse:
+        """List datasets (newest first)."""
+        return cast("ListDatasetsResponse", self._t.request("GET", "/v1/datasets", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def heartbeat_trainer_job(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Renew the job lease; reports whether the worker should stop"""
-        _query = None
-        return self._request_json("POST", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/heartbeat", body=body, query=_query)
+    def list_deployments(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDeploymentsResponse:
+        """List deployments."""
+        return cast("ListDeploymentsResponse", self._t.request("GET", "/v1/deployments", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_api_keys(self, *, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """List workspace API keys"""
-        _query = {"limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/keys", body=None, query=_query)
+    def list_eval_failures(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, threshold: float | None = None, timeout: float | None = None) -> ListEvalFailuresResponse:
+        """List failing task records from an evaluation run for mining."""
+        return cast("ListEvalFailuresResponse", self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/failures", query={"limit": limit, "cursor": cursor, "model": model, "threshold": threshold}, timeout=timeout))
 
-    def list_artifacts(self, *, limit: Any = None, cursor: Any = None, name: Any = None) -> dict[str, Any]:
-        """List immutable artifacts (newest first)"""
-        _query = {"limit": limit, "cursor": cursor, "name": name}
-        return self._request_json("GET", f"/v1/artifacts", body=None, query=_query)
+    def list_eval_outputs(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, missing_scorer: str | None = None, timeout: float | None = None) -> ListEvalOutputsResponse:
+        """Page through generated model outputs (filter by model or by a code scorer that still needs a score)."""
+        return cast("ListEvalOutputsResponse", self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/outputs", query={"limit": limit, "cursor": cursor, "model": model, "missing_scorer": missing_scorer}, timeout=timeout))
 
-    def list_dataset_records(self, name: str, *, version: Any = None, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """Read records of a dataset version"""
-        _query = {"version": version, "limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/datasets/{urllib.parse.quote(name, safe='')}/records", body=None, query=_query)
+    def list_eval_results(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, timeout: float | None = None) -> ListEvalResultsResponse:
+        """Per-task, per-model results of a completed evaluation."""
+        return cast("ListEvalResultsResponse", self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/results", query={"limit": limit, "cursor": cursor, "model": model}, timeout=timeout))
 
-    def list_datasets(self, *, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """List datasets (newest first)"""
-        _query = {"limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/datasets", body=None, query=_query)
+    def list_evals(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListEvalsResponse:
+        """List evaluation runs."""
+        return cast("ListEvalsResponse", self._t.request("GET", "/v1/evals", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_deployments(self, *, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """List deployments"""
-        _query = {"limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/deployments", body=None, query=_query)
+    def list_imports(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListImportsResponse:
+        """List dataset import jobs (newest first)."""
+        return cast("ListImportsResponse", self._t.request("GET", "/v1/imports", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_eval_failures(self, id: str, *, limit: Any = None, cursor: Any = None, model: Any = None, threshold: Any = None) -> dict[str, Any]:
-        """List failing task records from an evaluation run for mining"""
-        _query = {"limit": limit, "cursor": cursor, "model": model, "threshold": threshold}
-        return self._request_json("GET", f"/v1/evals/{urllib.parse.quote(id, safe='')}/failures", body=None, query=_query)
+    def list_models(self, *, timeout: float | None = None) -> ListModelsResponse:
+        """List trainable base models (the server catalog and price source)."""
+        return cast("ListModelsResponse", self._t.request("GET", "/v1/models", timeout=timeout))
 
-    def list_eval_outputs(self, id: str, *, limit: Any = None, cursor: Any = None, model: Any = None, missing_scorer: Any = None) -> dict[str, Any]:
-        """Page through generated model outputs (filter by model or by a code scorer that still needs a score)"""
-        _query = {"limit": limit, "cursor": cursor, "model": model, "missing_scorer": missing_scorer}
-        return self._request_json("GET", f"/v1/evals/{urllib.parse.quote(id, safe='')}/outputs", body=None, query=_query)
+    def list_run_checkpoints(self, id: str, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunCheckpointsResponse:
+        """List unexpired checkpoints of a run (best and final never expire)."""
+        return cast("ListRunCheckpointsResponse", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/checkpoints", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_eval_results(self, id: str, *, limit: Any = None, cursor: Any = None, model: Any = None) -> dict[str, Any]:
-        """Per-task, per-model results of a completed evaluation"""
-        _query = {"limit": limit, "cursor": cursor, "model": model}
-        return self._request_json("GET", f"/v1/evals/{urllib.parse.quote(id, safe='')}/results", body=None, query=_query)
+    def list_run_metrics(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> MetricsPage:
+        """Training step metrics as JSON pages, or a live SSE stream."""
+        return cast("MetricsPage", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, timeout=timeout))
 
-    def list_evals(self, *, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """List evaluation runs"""
-        _query = {"limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/evals", body=None, query=_query)
+    def list_run_metrics_stream(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> Response:
+        """Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events stream; read or close the response)."""
+        return self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, accept="text/event-stream", timeout=timeout)
 
-    def list_imports(self, *, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """List dataset import jobs (newest first)"""
-        _query = {"limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/imports", body=None, query=_query)
+    def list_runs(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunsResponse:
+        """List training runs (newest first)."""
+        return cast("ListRunsResponse", self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_models(self) -> dict[str, Any]:
-        """List trainable base models (the server catalog and price source)"""
-        _query = None
-        return self._request_json("GET", f"/v1/models", body=None, query=_query)
+    def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanEvalResponse:
+        """Estimate tasks, model/judge calls, and cost before running an eval."""
+        return cast("PlanEvalResponse", self._t.request("POST", "/v1/evals/plan", json_body=body, timeout=timeout))
 
-    def list_run_checkpoints(self, id: str, *, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """List unexpired checkpoints of a run (best and final never expire)"""
-        _query = {"limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/runs/{urllib.parse.quote(id, safe='')}/checkpoints", body=None, query=_query)
+    def plan_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanRunResponse:
+        """Dry-run a training recipe at zero cost."""
+        return cast("PlanRunResponse", self._t.request("POST", "/v1/runs/plan", json_body=body, timeout=timeout))
 
-    def list_run_metrics(self, id: str, *, cursor: Any = None, after_step: Any = None, limit: Any = None) -> dict[str, Any]:
-        """Training step metrics as JSON pages, or a live SSE stream"""
-        _query = {"cursor": cursor, "after_step": after_step, "limit": limit}
-        return self._request_json("GET", f"/v1/runs/{urllib.parse.quote(id, safe='')}/metrics", body=None, query=_query)
+    def post_eval_scores(self, id: str, body: PostEvalScoresRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostEvalScoresResponse:
+        """Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing."""
+        return cast("PostEvalScoresResponse", self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, timeout=timeout))
 
-    def list_runs(self, *, limit: Any = None, cursor: Any = None) -> dict[str, Any]:
-        """List training runs (newest first)"""
-        _query = {"limit": limit, "cursor": cursor}
-        return self._request_json("GET", f"/v1/runs", body=None, query=_query)
+    def post_import_records(self, id: str, body: PostImportRecordsRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostImportRecordsResponse:
+        """Append a batch of parsed records to an import job."""
+        return cast("PostImportRecordsResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/records", json_body=body, timeout=timeout))
 
-    def plan_eval(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Estimate tasks, model/judge calls, and cost before running an eval"""
-        _query = None
-        return self._request_json("POST", f"/v1/evals/plan", body=body, query=_query)
+    def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Artifact:
+        """Copy an exportable checkpoint into a new immutable artifact."""
+        return cast("Artifact", self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, timeout=timeout))
 
-    def plan_run(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Dry-run a training recipe at zero cost"""
-        _query = None
-        return self._request_json("POST", f"/v1/runs/plan", body=body, query=_query)
+    def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+        """Append records as a new dataset version (creates the dataset if needed)."""
+        return cast("Dataset", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, timeout=timeout))
 
-    def post_eval_scores(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing"""
-        _query = None
-        return self._request_json("POST", f"/v1/evals/{urllib.parse.quote(id, safe='')}/scores", body=body, query=_query)
+    def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, timeout: float | None = None) -> RecordFeedbackResponse:
+        """Record deduplicated outcome scores and gold corrections."""
+        return cast("RecordFeedbackResponse", self._t.request("POST", "/v1/feedback", json_body=body, timeout=timeout))
 
-    def post_import_records(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Append a batch of parsed records to an import job"""
-        _query = None
-        return self._request_json("POST", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/records", body=body, query=_query)
+    def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
+        """Register or heartbeat an outbound `grad env serve` worker."""
+        return cast("RegisterEnvWorkerResponse", self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))
 
-    def promote_checkpoint(self, id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Copy an exportable checkpoint into a new immutable artifact"""
-        _query = None
-        return self._request_json("POST", f"/v1/checkpoints/{urllib.parse.quote(id, safe='')}/promote", body=body, query=_query)
+    def register_trainer_checkpoint(self, id: str, body: RegisterTrainerCheckpointRequest | Mapping[str, Any], *, timeout: float | None = None) -> Checkpoint:
+        """Register an uploaded checkpoint bundle."""
+        return cast("Checkpoint", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/checkpoints", json_body=body, timeout=timeout))
 
-    def push_dataset_records(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Append records as a new dataset version (creates the dataset if needed)"""
-        _query = None
-        return self._request_json("POST", f"/v1/datasets/{urllib.parse.quote(name, safe='')}/records", body=body, query=_query)
+    def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> RenderDatasetResponse:
+        """Preview chat-template rendering and loss masks (estimated token counts)."""
+        return cast("RenderDatasetResponse", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, timeout=timeout))
 
-    def record_feedback(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Record deduplicated outcome scores and gold corrections"""
-        _query = None
-        return self._request_json("POST", f"/v1/feedback", body=body, query=_query)
+    def report_trainer_progress(self, id: str, body: ReportTrainerProgressRequest | Mapping[str, Any], *, timeout: float | None = None) -> ReportTrainerProgressResponse:
+        """Report one training step's metrics."""
+        return cast("ReportTrainerProgressResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/progress", json_body=body, timeout=timeout))
 
-    def register_env_worker(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Register or heartbeat an outbound `grad env serve` worker"""
-        _query = None
-        return self._request_json("POST", f"/v1/env-workers/register", body=body, query=_query)
+    def resume_run(self, id: str, body: ResumeRunRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Run:
+        """Resume a stopped, failed or cancelled run from its latest checkpoint."""
+        return cast("Run", self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/resume", json_body=body, timeout=timeout))
 
-    def register_trainer_checkpoint(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Register an uploaded checkpoint bundle"""
-        _query = None
-        return self._request_json("POST", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/checkpoints", body=body, query=_query)
+    def revoke_api_key(self, id: str, *, timeout: float | None = None) -> ApiKey:
+        """Revoke a workspace API key."""
+        return cast("ApiKey", self._t.request("DELETE", f"/v1/keys/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    def render_dataset(self, name: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Preview chat-template rendering and loss masks (estimated token counts)"""
-        _query = None
-        return self._request_json("POST", f"/v1/datasets/{urllib.parse.quote(name, safe='')}/render", body=body, query=_query)
+    def rollback_deployment(self, name: str, *, timeout: float | None = None) -> Deployment:
+        """Roll a deployment back to its previous artifact."""
+        return cast("Deployment", self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", timeout=timeout))
 
-    def report_trainer_progress(self, id: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Report one training step's metrics"""
-        _query = None
-        return self._request_json("POST", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/progress", body=body, query=_query)
-
-    def resume_run(self, id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Resume a stopped, failed or cancelled run from its latest checkpoint"""
-        _query = None
-        return self._request_json("POST", f"/v1/runs/{urllib.parse.quote(id, safe='')}/resume", body=body, query=_query)
-
-    def revoke_api_key(self, id: str) -> dict[str, Any]:
-        """Revoke a workspace API key"""
-        _query = None
-        return self._request_json("DELETE", f"/v1/keys/{urllib.parse.quote(id, safe='')}", body=None, query=_query)
-
-    def rollback_deployment(self, name: str) -> dict[str, Any]:
-        """Roll a deployment back to its previous artifact"""
-        _query = None
-        return self._request_json("POST", f"/v1/deployments/{urllib.parse.quote(name, safe='')}/rollback", body=None, query=_query)
-
-    def route_request(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Ask a deployed model router which model to call"""
-        _query = None
-        return self._request_json("POST", f"/v1/route", body=body, query=_query)
+    def route_request(self, body: RouteRequest | Mapping[str, Any], *, timeout: float | None = None) -> RouteResponse:
+        """Ask a deployed model router which model to call."""
+        return cast("RouteResponse", self._t.request("POST", "/v1/route", json_body=body, timeout=timeout))
 
 
 class AsyncGeneratedApiClient:
-    """Async wrapper over GeneratedApiClient using asyncio.to_thread."""
+    """asyncio wire client: one coroutine per operation in spec/openapi.yaml."""
 
-    def __init__(
-        self,
-        base_url: str,
-        api_key: str | None = None,
-        timeout_s: float = 30.0,
-    ) -> None:
-        self._sync = GeneratedApiClient(
-            base_url=base_url, api_key=api_key, timeout_s=timeout_s
-        )
+    def __init__(self, transport: AsyncTransport) -> None:
+        self._t = transport
 
-    async def cancel_eval(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.cancel_eval, *args, **kwargs)
+    async def cancel_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
+        """Cancel a queued, running or awaiting_scores evaluation."""
+        return cast("EvalRun", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
 
-    async def cancel_run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.cancel_run, *args, **kwargs)
+    async def cancel_run(self, id: str, *, timeout: float | None = None) -> Run:
+        """Cancel a training run (a running attempt is stopped and billed)."""
+        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
 
-    async def claim_env_task(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.claim_env_task, *args, **kwargs)
+    async def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
+        """Long-poll for the next task assigned to a `grad env serve` worker."""
+        return cast("ClaimEnvTaskResponse", await self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
 
-    async def claim_trainer_job(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.claim_trainer_job, *args, **kwargs)
+    async def claim_trainer_job(self, body: ClaimJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> ClaimJobResponse:
+        """Claim the next queued train or import job (trainer:worker)."""
+        return cast("ClaimJobResponse", await self._t.request("POST", "/v1/trainer-jobs/claim", json_body=body, timeout=timeout))
 
-    async def complete_env_task(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.complete_env_task, *args, **kwargs)
+    async def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        """Submit scored trajectory output for an environment task."""
+        return cast("dict[str, Any]", await self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
 
-    async def complete_trainer_job(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.complete_trainer_job, *args, **kwargs)
+    async def complete_trainer_job(self, id: str, body: CompleteTrainerJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> CompleteTrainerJobResponse:
+        """Finish a job attempt: publish its artifact, bill it, release the lease."""
+        return cast("CompleteTrainerJobResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
 
-    async def create_api_key(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_api_key, *args, **kwargs)
+    async def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, timeout: float | None = None) -> CreatedApiKey:
+        """Create a scoped workspace API key (trainer worker keys are platform config, not keys)."""
+        return cast("CreatedApiKey", await self._t.request("POST", "/v1/keys", json_body=body, timeout=timeout))
 
-    async def create_dataset(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_dataset, *args, **kwargs)
+    async def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+        """Create an empty dataset."""
+        return cast("Dataset", await self._t.request("POST", "/v1/datasets", json_body=body, timeout=timeout))
 
-    async def create_dataset_import(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_dataset_import, *args, **kwargs)
+    async def create_dataset_import(self, name: str, body: CreateImportRequest | Mapping[str, Any], *, timeout: float | None = None) -> ImportJob:
+        """Import an uploaded file or a Hugging Face dataset into a dataset (async job)."""
+        return cast("ImportJob", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, timeout=timeout))
 
-    async def create_embeddings(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_embeddings, *args, **kwargs)
+    async def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, timeout: float | None = None) -> EmbedResponse:
+        """Generate embeddings from a deployed embedding artifact."""
+        return cast("EmbedResponse", await self._t.request("POST", "/v1/embeddings", json_body=body, timeout=timeout))
 
-    async def create_eval(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_eval, *args, **kwargs)
+    async def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> EvalRun:
+        """Queue an evaluation across models on a pinned dataset version (executed by the server)."""
+        return cast("EvalRun", await self._t.request("POST", "/v1/evals", json_body=body, timeout=timeout))
 
-    async def create_run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_run, *args, **kwargs)
+    async def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> Run:
+        """Create and enqueue a training run (pins the dataset version)."""
+        return cast("Run", await self._t.request("POST", "/v1/runs", json_body=body, timeout=timeout))
 
-    async def create_trainer_upload(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_trainer_upload, *args, **kwargs)
+    async def create_trainer_upload(self, id: str, body: TrainerUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
+        """Get an upload URL for a checkpoint or artifact bundle."""
+        return cast("UploadTicket", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/uploads", json_body=body, timeout=timeout))
 
-    async def create_upload(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.create_upload, *args, **kwargs)
+    async def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
+        """Get an upload URL for a file to import (PUT the bytes, then create an import)."""
+        return cast("UploadTicket", await self._t.request("POST", "/v1/uploads", json_body=body, timeout=timeout))
 
-    async def deploy_artifact(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.deploy_artifact, *args, **kwargs)
+    async def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, timeout: float | None = None) -> Deployment:
+        """Deploy or update an artifact under a stable model name."""
+        return cast("Deployment", await self._t.request("POST", "/v1/deployments", json_body=body, timeout=timeout))
 
-    async def dispatch_env_task(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.dispatch_env_task, *args, **kwargs)
+    async def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
+        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
+        return cast("DispatchEnvTaskResponse", await self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
 
-    async def download_artifact(self, *args: Any, **kwargs: Any) -> tuple[bytes, dict[str, str]]:
-        return await asyncio.to_thread(self._sync.download_artifact, *args, **kwargs)
+    async def download_artifact(self, id: str, *, timeout: float | None = None) -> AsyncResponse:
+        """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 (streams `application/octet-stream`; read or close the response)."""
+        return await self._t.stream("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}/download", accept="application/octet-stream", timeout=timeout)
 
-    async def download_trainer_dataset(self, *args: Any, **kwargs: Any) -> tuple[bytes, dict[str, str]]:
-        return await asyncio.to_thread(self._sync.download_trainer_dataset, *args, **kwargs)
+    async def download_trainer_dataset(self, id: str, *, attempt: int | None = None, timeout: float | None = None) -> AsyncResponse:
+        """Stream the pinned dataset version of a claimed train job as JSONL (streams `application/x-ndjson`; read or close the response)."""
+        return await self._t.stream("GET", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/dataset", query={"attempt": attempt}, accept="application/x-ndjson", timeout=timeout)
 
-    async def get_artifact(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_artifact, *args, **kwargs)
+    async def get_artifact(self, id: str, *, timeout: float | None = None) -> Artifact:
+        """Get an artifact by id or name@latest."""
+        return cast("Artifact", await self._t.request("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    async def get_dataset(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_dataset, *args, **kwargs)
+    async def get_dataset(self, name: str, *, timeout: float | None = None) -> Dataset:
+        """Get a dataset by name."""
+        return cast("Dataset", await self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}", timeout=timeout))
 
-    async def get_deployment(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_deployment, *args, **kwargs)
+    async def get_deployment(self, name: str, *, timeout: float | None = None) -> DeploymentStatus:
+        """Get deployment status and feedback summary."""
+        return cast("DeploymentStatus", await self._t.request("GET", f"/v1/deployments/{quote_path_param(name, 'name')}", timeout=timeout))
 
-    async def get_env_task(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_env_task, *args, **kwargs)
+    async def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
+        """Inspect an environment task and its result."""
+        return cast("dict[str, Any]", await self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    async def get_eval(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_eval, *args, **kwargs)
+    async def get_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
+        """Get an evaluation run by ID."""
+        return cast("EvalRun", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    async def get_import(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_import, *args, **kwargs)
+    async def get_import(self, id: str, *, timeout: float | None = None) -> ImportJob:
+        """Get a dataset import job."""
+        return cast("ImportJob", await self._t.request("GET", f"/v1/imports/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    async def get_run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_run, *args, **kwargs)
+    async def get_run(self, id: str, *, timeout: float | None = None) -> Run:
+        """Get a training run."""
+        return cast("Run", await self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    async def get_trainer_queue_stats(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.get_trainer_queue_stats, *args, **kwargs)
+    async def get_trainer_queue_stats(self, *, timeout: float | None = None) -> TrainerQueueStats:
+        """Queue depth for autoscaling: queued plus running jobs (trainer:worker)."""
+        return cast("TrainerQueueStats", await self._t.request("GET", "/v1/trainer-jobs/queue", timeout=timeout))
 
-    async def heartbeat_trainer_job(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.heartbeat_trainer_job, *args, **kwargs)
+    async def heartbeat_trainer_job(self, id: str, body: TrainerHeartbeatRequest | Mapping[str, Any], *, timeout: float | None = None) -> TrainerHeartbeatResponse:
+        """Renew the job lease; reports whether the worker should stop."""
+        return cast("TrainerHeartbeatResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/heartbeat", json_body=body, timeout=timeout))
 
-    async def list_api_keys(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_api_keys, *args, **kwargs)
+    async def list_api_keys(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListApiKeysResponse:
+        """List workspace API keys."""
+        return cast("ListApiKeysResponse", await self._t.request("GET", "/v1/keys", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def list_artifacts(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_artifacts, *args, **kwargs)
+    async def list_artifacts(self, *, limit: int | None = None, cursor: str | None = None, name: str | None = None, timeout: float | None = None) -> ListArtifactsResponse:
+        """List immutable artifacts (newest first)."""
+        return cast("ListArtifactsResponse", await self._t.request("GET", "/v1/artifacts", query={"limit": limit, "cursor": cursor, "name": name}, timeout=timeout))
 
-    async def list_dataset_records(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_dataset_records, *args, **kwargs)
+    async def list_dataset_records(self, name: str, *, version: int | None = None, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> DatasetRecordsPage:
+        """Read records of a dataset version."""
+        return cast("DatasetRecordsPage", await self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}/records", query={"version": version, "limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def list_datasets(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_datasets, *args, **kwargs)
+    async def list_datasets(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDatasetsResponse:
+        """List datasets (newest first)."""
+        return cast("ListDatasetsResponse", await self._t.request("GET", "/v1/datasets", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def list_deployments(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_deployments, *args, **kwargs)
+    async def list_deployments(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDeploymentsResponse:
+        """List deployments."""
+        return cast("ListDeploymentsResponse", await self._t.request("GET", "/v1/deployments", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def list_eval_failures(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_eval_failures, *args, **kwargs)
+    async def list_eval_failures(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, threshold: float | None = None, timeout: float | None = None) -> ListEvalFailuresResponse:
+        """List failing task records from an evaluation run for mining."""
+        return cast("ListEvalFailuresResponse", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/failures", query={"limit": limit, "cursor": cursor, "model": model, "threshold": threshold}, timeout=timeout))
 
-    async def list_eval_outputs(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_eval_outputs, *args, **kwargs)
+    async def list_eval_outputs(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, missing_scorer: str | None = None, timeout: float | None = None) -> ListEvalOutputsResponse:
+        """Page through generated model outputs (filter by model or by a code scorer that still needs a score)."""
+        return cast("ListEvalOutputsResponse", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/outputs", query={"limit": limit, "cursor": cursor, "model": model, "missing_scorer": missing_scorer}, timeout=timeout))
 
-    async def list_eval_results(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_eval_results, *args, **kwargs)
+    async def list_eval_results(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, timeout: float | None = None) -> ListEvalResultsResponse:
+        """Per-task, per-model results of a completed evaluation."""
+        return cast("ListEvalResultsResponse", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/results", query={"limit": limit, "cursor": cursor, "model": model}, timeout=timeout))
 
-    async def list_evals(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_evals, *args, **kwargs)
+    async def list_evals(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListEvalsResponse:
+        """List evaluation runs."""
+        return cast("ListEvalsResponse", await self._t.request("GET", "/v1/evals", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def list_imports(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_imports, *args, **kwargs)
+    async def list_imports(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListImportsResponse:
+        """List dataset import jobs (newest first)."""
+        return cast("ListImportsResponse", await self._t.request("GET", "/v1/imports", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def list_models(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_models, *args, **kwargs)
+    async def list_models(self, *, timeout: float | None = None) -> ListModelsResponse:
+        """List trainable base models (the server catalog and price source)."""
+        return cast("ListModelsResponse", await self._t.request("GET", "/v1/models", timeout=timeout))
 
-    async def list_run_checkpoints(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_run_checkpoints, *args, **kwargs)
+    async def list_run_checkpoints(self, id: str, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunCheckpointsResponse:
+        """List unexpired checkpoints of a run (best and final never expire)."""
+        return cast("ListRunCheckpointsResponse", await self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/checkpoints", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def list_run_metrics(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_run_metrics, *args, **kwargs)
+    async def list_run_metrics(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> MetricsPage:
+        """Training step metrics as JSON pages, or a live SSE stream."""
+        return cast("MetricsPage", await self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, timeout=timeout))
 
-    async def list_runs(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.list_runs, *args, **kwargs)
+    async def list_run_metrics_stream(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> AsyncResponse:
+        """Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events stream; read or close the response)."""
+        return await self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, accept="text/event-stream", timeout=timeout)
 
-    async def plan_eval(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.plan_eval, *args, **kwargs)
+    async def list_runs(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunsResponse:
+        """List training runs (newest first)."""
+        return cast("ListRunsResponse", await self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def plan_run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.plan_run, *args, **kwargs)
+    async def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanEvalResponse:
+        """Estimate tasks, model/judge calls, and cost before running an eval."""
+        return cast("PlanEvalResponse", await self._t.request("POST", "/v1/evals/plan", json_body=body, timeout=timeout))
 
-    async def post_eval_scores(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.post_eval_scores, *args, **kwargs)
+    async def plan_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanRunResponse:
+        """Dry-run a training recipe at zero cost."""
+        return cast("PlanRunResponse", await self._t.request("POST", "/v1/runs/plan", json_body=body, timeout=timeout))
 
-    async def post_import_records(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.post_import_records, *args, **kwargs)
+    async def post_eval_scores(self, id: str, body: PostEvalScoresRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostEvalScoresResponse:
+        """Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing."""
+        return cast("PostEvalScoresResponse", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, timeout=timeout))
 
-    async def promote_checkpoint(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.promote_checkpoint, *args, **kwargs)
+    async def post_import_records(self, id: str, body: PostImportRecordsRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostImportRecordsResponse:
+        """Append a batch of parsed records to an import job."""
+        return cast("PostImportRecordsResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/records", json_body=body, timeout=timeout))
 
-    async def push_dataset_records(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.push_dataset_records, *args, **kwargs)
+    async def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Artifact:
+        """Copy an exportable checkpoint into a new immutable artifact."""
+        return cast("Artifact", await self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, timeout=timeout))
 
-    async def record_feedback(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.record_feedback, *args, **kwargs)
+    async def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+        """Append records as a new dataset version (creates the dataset if needed)."""
+        return cast("Dataset", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, timeout=timeout))
 
-    async def register_env_worker(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.register_env_worker, *args, **kwargs)
+    async def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, timeout: float | None = None) -> RecordFeedbackResponse:
+        """Record deduplicated outcome scores and gold corrections."""
+        return cast("RecordFeedbackResponse", await self._t.request("POST", "/v1/feedback", json_body=body, timeout=timeout))
 
-    async def register_trainer_checkpoint(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.register_trainer_checkpoint, *args, **kwargs)
+    async def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
+        """Register or heartbeat an outbound `grad env serve` worker."""
+        return cast("RegisterEnvWorkerResponse", await self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))
 
-    async def render_dataset(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.render_dataset, *args, **kwargs)
+    async def register_trainer_checkpoint(self, id: str, body: RegisterTrainerCheckpointRequest | Mapping[str, Any], *, timeout: float | None = None) -> Checkpoint:
+        """Register an uploaded checkpoint bundle."""
+        return cast("Checkpoint", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/checkpoints", json_body=body, timeout=timeout))
 
-    async def report_trainer_progress(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.report_trainer_progress, *args, **kwargs)
+    async def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> RenderDatasetResponse:
+        """Preview chat-template rendering and loss masks (estimated token counts)."""
+        return cast("RenderDatasetResponse", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, timeout=timeout))
 
-    async def resume_run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.resume_run, *args, **kwargs)
+    async def report_trainer_progress(self, id: str, body: ReportTrainerProgressRequest | Mapping[str, Any], *, timeout: float | None = None) -> ReportTrainerProgressResponse:
+        """Report one training step's metrics."""
+        return cast("ReportTrainerProgressResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/progress", json_body=body, timeout=timeout))
 
-    async def revoke_api_key(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.revoke_api_key, *args, **kwargs)
+    async def resume_run(self, id: str, body: ResumeRunRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Run:
+        """Resume a stopped, failed or cancelled run from its latest checkpoint."""
+        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/resume", json_body=body, timeout=timeout))
 
-    async def rollback_deployment(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.rollback_deployment, *args, **kwargs)
+    async def revoke_api_key(self, id: str, *, timeout: float | None = None) -> ApiKey:
+        """Revoke a workspace API key."""
+        return cast("ApiKey", await self._t.request("DELETE", f"/v1/keys/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    async def route_request(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return await asyncio.to_thread(self._sync.route_request, *args, **kwargs)
+    async def rollback_deployment(self, name: str, *, timeout: float | None = None) -> Deployment:
+        """Roll a deployment back to its previous artifact."""
+        return cast("Deployment", await self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", timeout=timeout))
+
+    async def route_request(self, body: RouteRequest | Mapping[str, Any], *, timeout: float | None = None) -> RouteResponse:
+        """Ask a deployed model router which model to call."""
+        return cast("RouteResponse", await self._t.request("POST", "/v1/route", json_body=body, timeout=timeout))

@@ -1,0 +1,330 @@
+"""Test doubles: a scripted fake transport (sync + async), a fake clock and wire fixtures.
+
+``FakeSender`` stands in for the HTTP connection pool, so every test exercises the real
+transport policy (auth headers, retries, redirects, error mapping) without sockets.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import logging
+import sys
+import urllib.parse
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
+from grad import AsyncGrad, Grad  # noqa: E402
+from grad._http import Request, TransportFailure  # noqa: E402
+from grad._transport import Clock  # noqa: E402
+
+WIRE = HERE.parents[2] / "tests" / "fixtures" / "wire"
+
+# Expected warnings from the environment worker would otherwise clutter test output.
+logging.getLogger("grad").addHandler(logging.NullHandler())
+logging.getLogger("grad").propagate = False
+
+
+def fixture(name: str) -> Any:
+    """Load ``tests/fixtures/wire/<name>`` (JSON, or text for ``.sse``)."""
+    path = WIRE / name
+    text = path.read_text(encoding="utf-8")
+    return text if path.suffix == ".sse" else json.loads(text)
+
+
+class FakeClock(Clock):
+    """Deterministic time: ``sleep`` advances ``now`` and is recorded."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+        super().__init__(monotonic=lambda: self.now, sleep=self._sleep, random=lambda: 0.5, async_sleep=self._async_sleep)
+
+    def _sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+    async def _async_sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+        await asyncio.sleep(0)
+
+
+@dataclass
+class Reply:
+    """A scripted response. ``chunks`` streams a body; ``error`` raises mid-body."""
+
+    status: int = 200
+    body: Any = None
+    headers: dict[str, str] = field(default_factory=dict)
+    chunks: list[bytes] | None = None
+    error: BaseException | None = None
+
+    def payload(self) -> bytes:
+        if self.chunks is not None:
+            return b"".join(self.chunks)
+        if isinstance(self.body, bytes):
+            return self.body
+        if isinstance(self.body, str):
+            return self.body.encode()
+        if self.body is None:
+            return b""
+        return json.dumps(self.body).encode()
+
+    def all_headers(self) -> dict[str, str]:
+        out = {k.lower(): v for k, v in self.headers.items()}
+        if "content-type" not in out and self.body is not None and not isinstance(self.body, (bytes, str)):
+            out["content-type"] = "application/json" if self.status < 400 else "application/problem+json"
+        return out
+
+
+def json_reply(body: Any, status: int = 200, **headers: str) -> Reply:
+    """A JSON response."""
+    return Reply(status=status, body=body, headers=dict(headers))
+
+
+def problem(status: int, code: str, detail: str = "boom", **headers: str) -> Reply:
+    """A problem+json error response."""
+    body = {"type": f"https://gradiated.com/problems/{code}", "title": code.replace("_", " "), "status": status, "detail": detail, "code": code, "request_id": "req_body"}
+    return Reply(status=status, body=body, headers={"content-type": "application/problem+json", "x-request-id": "req_hdr", **headers})
+
+
+def fixture_reply(name: str) -> Reply:
+    """Replay a captured response (``python-problem-*.json`` hold status/headers/body)."""
+    data = fixture(name)
+    if isinstance(data, dict) and {"status", "body", "headers"} <= set(data):
+        return Reply(status=data["status"], body=data["body"], headers=dict(data["headers"]))
+    return json_reply(data)
+
+
+class FakeResponse:
+    """Duck-types :class:`grad._http.Response`."""
+
+    def __init__(self, reply: Reply, url: str) -> None:
+        self.status = reply.status
+        self.reason = "OK"
+        self.headers = reply.all_headers()
+        self.url = url
+        self._reply = reply
+        self.closed = False
+
+    def _chunks(self) -> list[bytes]:
+        return list(self._reply.chunks) if self._reply.chunks is not None else [self._reply.payload()]
+
+    def read(self) -> bytes:
+        data = b"".join(self.iter_bytes())
+        return data
+
+    def iter_bytes(self, chunk_size: int = 65536) -> Any:
+        for chunk in self._chunks():
+            if chunk:
+                yield chunk
+        if self._reply.error is not None:
+            raise TransportFailure(self._reply.error, phase="receive")
+        self.closed = True
+
+    def iter_lines(self) -> Any:
+        from grad._http import LineSplitter
+
+        splitter = LineSplitter()
+        for chunk in self.iter_bytes():
+            yield from splitter.feed(chunk)
+        yield from splitter.flush()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeAsyncResponse(FakeResponse):
+    """Duck-types :class:`grad._http.AsyncResponse`."""
+
+    async def read(self) -> bytes:  # type: ignore[override]
+        return b"".join([c async for c in self.aiter_bytes()])
+
+    async def aiter_bytes(self, chunk_size: int = 65536) -> Any:
+        for chunk in self._chunks():
+            await asyncio.sleep(0)
+            if chunk:
+                yield chunk
+        if self._reply.error is not None:
+            raise TransportFailure(self._reply.error, phase="receive")
+        self.closed = True
+
+    async def aiter_lines(self) -> Any:
+        from grad._http import LineSplitter
+
+        splitter = LineSplitter()
+        async for chunk in self.aiter_bytes():
+            for line in splitter.feed(chunk):
+                yield line
+        for line in splitter.flush():
+            yield line
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+Handler = Callable[[Request], "Reply | BaseException"]
+
+
+@dataclass
+class Sent:
+    """A request the fake received (body decoded)."""
+
+    method: str
+    url: str
+    headers: dict[str, str]
+    body: bytes | None
+
+    @property
+    def path(self) -> str:
+        return urllib.parse.urlsplit(self.url).path
+
+    @property
+    def query(self) -> dict[str, list[str]]:
+        return urllib.parse.parse_qs(urllib.parse.urlsplit(self.url).query)
+
+    @property
+    def json(self) -> Any:
+        return json.loads(self.body) if self.body else None
+
+    def header(self, name: str) -> str | None:
+        for k, v in self.headers.items():
+            if k.lower() == name.lower():
+                return v
+        return None
+
+
+class FakeSender:
+    """Answers requests from routes (``"GET /v1/runs/x"`` -> replies, used in order) or a handler."""
+
+    # Every fake is finite: a client that keeps requesting past this is looping, so fail the test.
+    MAX_REQUESTS = 2000
+
+    def __init__(self, routes: dict[str, Any] | None = None, handler: Handler | None = None) -> None:
+        self.routes: dict[str, list[Any]] = {}
+        for key, value in (routes or {}).items():
+            self.add(key, value)
+        self.handler = handler
+        self.sent: list[Sent] = []
+        self.closed = False
+
+    def add(self, key: str, value: Any) -> None:
+        """Queue replies for ``"METHOD /path"`` (a list queues several; the last repeats)."""
+        items = value if isinstance(value, list) else [value]
+        self.routes.setdefault(key, []).extend(items)
+
+    def _record(self, request: Request) -> Sent:
+        body: bytes | None
+        if isinstance(request.body, (bytes, bytearray)):
+            body = bytes(request.body)
+        elif request.body is not None:
+            body = request.body.read()
+        else:
+            body = None
+        sent = Sent(request.method, request.url, dict(request.headers), body)
+        if len(self.sent) >= self.MAX_REQUESTS:
+            raise AssertionError(f"client sent more than {self.MAX_REQUESTS} requests (last: {request.method} {request.url}); it is looping")
+        self.sent.append(sent)
+        return sent
+
+    def _answer(self, request: Request) -> Reply:
+        sent = self._record(request)
+        if self.handler is not None:
+            outcome = self.handler(request)
+        else:
+            key = f"{request.method} {sent.path}"
+            queue = self.routes.get(key)
+            if not queue:
+                raise AssertionError(f"unexpected request {key} (known: {sorted(self.routes)})")
+            outcome = queue.pop(0) if len(queue) > 1 else queue[0]
+            if callable(outcome) and not isinstance(outcome, Reply):
+                outcome = outcome(request)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if not isinstance(outcome, Reply):
+            outcome = json_reply(outcome)
+        return outcome
+
+    def send(self, request: Request, *, timeout: float) -> FakeResponse:
+        return FakeResponse(self._answer(request), request.url)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def paths(self) -> list[str]:
+        return [f"{s.method} {s.path}" for s in self.sent]
+
+
+class FakeAsyncSender(FakeSender):
+    """Async twin of :class:`FakeSender`."""
+
+    async def send(self, request: Request, *, timeout: float) -> FakeAsyncResponse:  # type: ignore[override]
+        await asyncio.sleep(0)
+        return FakeAsyncResponse(self._answer(request), request.url)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+BASE = "https://api.test"
+
+
+def make_client(routes: dict[str, Any] | None = None, *, handler: Handler | None = None, **kwargs: Any) -> tuple[Grad, FakeSender, FakeClock]:
+    """A ``Grad`` wired to a fake sender and clock."""
+    sender = FakeSender(routes, handler)
+    clock = FakeClock()
+    kwargs.setdefault("api_key", "grad_test_key")
+    kwargs.setdefault("base_url", BASE)
+    client = Grad(_sender=sender, _clock=clock, _env={}, **kwargs)
+    return client, sender, clock
+
+
+def make_async_client(routes: dict[str, Any] | None = None, *, handler: Handler | None = None, **kwargs: Any) -> tuple[AsyncGrad, FakeAsyncSender, FakeClock]:
+    """An ``AsyncGrad`` wired to a fake sender and clock."""
+    sender = FakeAsyncSender(routes, handler)
+    clock = FakeClock()
+    kwargs.setdefault("api_key", "grad_test_key")
+    kwargs.setdefault("base_url", BASE)
+    client = AsyncGrad(_sender=sender, _clock=clock, _env={}, **kwargs)
+    return client, sender, clock
+
+
+def refused() -> TransportFailure:
+    """A connect-phase failure (the request was never sent)."""
+    return TransportFailure(ConnectionRefusedError(111, "Connection refused"), phase="connect")
+
+
+def reset(phase: str = "receive", reused: bool = False) -> TransportFailure:
+    """A failure after (part of) the request was sent."""
+    return TransportFailure(ConnectionResetError(104, "Connection reset by peer"), phase=phase, reused=reused)  # type: ignore[arg-type]
+
+
+def timed_out() -> TransportFailure:
+    """A read timeout."""
+    return TransportFailure(TimeoutError("timed out"), phase="receive")
+
+
+def bundle_bytes(files: dict[str, bytes], *, manifest_extra: dict[str, Any] | None = None, raw_entries: list[Any] | None = None) -> bytes:
+    """Build a ``.grad.tar.gz`` like the trainer does (manifest with per-file SHA-256)."""
+    import hashlib
+    import tarfile
+
+    manifest = {"schema": "grad.artifact/1", "files": {n: hashlib.sha256(b).hexdigest() for n, b in files.items()}, **(manifest_extra or {})}
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        entries = {"manifest.json": json.dumps(manifest).encode(), **files}
+        for name, content in sorted(entries.items()):
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+        for entry in raw_entries or []:
+            info, content = entry
+            tf.addfile(info, io.BytesIO(content) if content is not None else None)
+    return buf.getvalue()

@@ -1,0 +1,956 @@
+"""Blocking resource namespaces of :class:`grad.Grad` (``client.datasets``, ``client.runs``, ...)."""
+
+from __future__ import annotations
+
+import builtins
+import typing
+import json
+import os
+import shutil
+import tempfile
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from . import _helpers as h
+from ._errors import (
+    APIConnectionError,
+    EvalFailedError,
+    GradAPIError,
+    ImportFailedError,
+    NotAvailableInV0Error,
+    NotFoundError,
+    RateLimitError,
+    RunFailedError,
+    ServerError,
+    ValidationError,
+    WaitTimeoutError,
+)
+from ._http import TransportFailure
+from ._models import (
+    ApiKey,
+    Artifact,
+    Checkpoint,
+    CreatedApiKey,
+    CursorTrail,
+    Dataset,
+    Deployment,
+    DeploymentStatus,
+    Embeddings,
+    Eval,
+    EvalFailures,
+    EvalOutput,
+    EvalPlan,
+    EvalResult,
+    FeedbackResult,
+    ImportJob,
+    MetricPoint,
+    Model,
+    Page,
+    Plan,
+    RenderPreview,
+    RouteDecision,
+    Run,
+    TERMINAL_EVAL_STATUSES,
+    TERMINAL_IMPORT_STATUSES,
+    TERMINAL_RUN_STATUSES,
+)
+from ._transport import SSEDecoder, iter_sse, quote_path_param
+from .rubrics import model_ref
+from .specs import Unavailable
+
+if TYPE_CHECKING:
+    from .client import Grad
+
+TRANSIENT = (APIConnectionError, ServerError, RateLimitError)
+SSE_READ_TIMEOUT = 45.0
+MAX_SSE_RECONNECTS = 20
+
+
+class _Resource:
+    def __init__(self, client: Grad) -> None:
+        self._client = client
+        self._wire = client.wire
+
+    @property
+    def _clock(self) -> Any:
+        return self._client._transport.clock
+
+    def _deadline(self, timeout: float | None) -> float | None:
+        return None if timeout is None else self._clock.monotonic() + timeout
+
+    def _expired(self, deadline: float | None) -> bool:
+        return deadline is not None and self._clock.monotonic() >= deadline
+
+    def _sleep(self, seconds: float, deadline: float | None) -> None:
+        if deadline is not None:
+            seconds = max(0.0, min(seconds, deadline - self._clock.monotonic()))
+        self._clock.sleep(seconds)
+
+    def _page(self, cls: Any, fetch: Callable[[str | None], Mapping[str, Any]], cursor: str | None = None, *, trail: CursorTrail | None = None) -> Page[Any]:
+        trail = trail or CursorTrail(f"list of {cls.__name__} objects")
+        data = fetch(cursor)
+        return Page(
+            [cls.from_api(item, self._client) for item in data.get("data") or []],
+            data.get("next_cursor"),
+            lambda nxt: self._page(cls, fetch, nxt, trail=trail),
+            trail=trail,
+        )
+
+
+class Models(_Resource):
+    """``client.models``: the trainable base-model catalog."""
+
+    def list(self) -> list[Model]:
+        """Every trainable base model, with prices and supported recipes."""
+        return [Model.from_api(m, self._client) for m in self._wire.list_models().get("data") or []]
+
+    def get(self, model_id: str) -> Model:
+        """One catalog model; raises :class:`grad.NotFoundError` if the server does not offer it."""
+        for model in self.list():
+            if model.id == model_id:
+                return model
+        raise NotFoundError(
+            status=404,
+            code="model_not_found",
+            title="Model not found",
+            detail=f"Model {model_id!r} is not in this server's catalog (see client.models.list()).",
+            request_id=None,
+            method="GET",
+            url=self._client._transport.url("/v1/models"),
+        )
+
+
+class Datasets(_Resource):
+    """``client.datasets``: versioned training and eval data."""
+
+    def create(self, name: str, *, metadata: Mapping[str, Any] | None = None) -> Dataset:
+        """Create an empty dataset (raises :class:`grad.ConflictError` if it exists)."""
+        body: dict[str, Any] = {"name": h.check_slug(name, "dataset name")}
+        if metadata is not None:
+            body["metadata"] = dict(metadata)
+        return Dataset.from_api(self._wire.create_dataset(body), self._client)
+
+    def get(self, name: str) -> Dataset:
+        """A dataset by name."""
+        return Dataset.from_api(self._wire.get_dataset(h.dataset_name(name)), self._client)
+
+    def list(self, *, limit: int | None = None) -> Page[Dataset]:
+        """Datasets, newest first (iterating walks every page)."""
+        return self._page(Dataset, lambda cursor: self._wire.list_datasets(limit=limit, cursor=cursor))
+
+    def count(self, dataset: Any) -> int:
+        """Record count of the latest version."""
+        return self.get(h.dataset_name(dataset)).record_count
+
+    def push(
+        self,
+        name: str,
+        records: Iterable[Any] | str | os.PathLike[str],
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        chunk_size: int = h.DEFAULT_CHUNK_RECORDS,
+        connector: str = "auto",
+        format: str = "auto",
+        timeout: float | None = None,
+    ) -> Dataset:
+        """Append records (dicts, ``Trajectory``/``Record`` objects, any iterable) or a file.
+
+        Records are sent in chunks of ``chunk_size`` (each chunk becomes a dataset
+        version). A path (``"./train.jsonl"``, ``.json``, ``.parquet``) is uploaded and
+        imported server-side (with ``connector``), waiting up to ``timeout`` seconds.
+        """
+        h.check_slug(name, "dataset name")
+        if h.is_path_like(records):
+            job = self.import_file(name, records, connector=connector, format=format)  # type: ignore[arg-type]
+            job.wait(timeout=timeout)
+            return self.get(name)
+        if isinstance(records, (str, bytes, Mapping)):
+            raise TypeError(
+                "push() takes a list/iterable of records or a path to a .jsonl/.json/.parquet file; "
+                f"{records!r:.60} is neither (does the file exist?)."
+            )
+        result: Dataset | None = None
+        first = True
+        for offset, chunk in h.chunk_records(typing.cast(Iterable[Any], records), max_records=chunk_size):
+            body: dict[str, Any] = {"records": chunk}
+            if metadata is not None and first:
+                body["metadata"] = dict(metadata)
+            try:
+                result = Dataset.from_api(self._wire.push_dataset_records(name, body), self._client)
+            except ValidationError as exc:
+                raise h.renumber_validation(exc, offset, len(chunk)) from None
+            first = False
+        if result is None:
+            raise ValueError("push() got no records; pass at least one record (or create an empty dataset with datasets.create).")
+        return result
+
+    def import_file(self, name: str, path: str | os.PathLike[str], *, connector: str = "auto", format: str = "auto") -> ImportJob:
+        """Upload a local file and start a server-side import job (``.wait()`` on the result)."""
+        file_path = Path(path).expanduser()
+        h.check_slug(name, "dataset name")
+        h.check_connector(connector)
+        fmt = h.file_format(file_path, format)
+        ticket = self._wire.create_upload(h.upload_request(file_path))
+        with open(file_path, "rb") as fh:
+            self._client._transport.upload(
+                ticket["url"],
+                fh,
+                length=file_path.stat().st_size,
+                headers=ticket.get("headers") or {},
+                method=ticket.get("method") or "PUT",
+                timeout=max(self._client._transport.timeout, 300.0),
+            )
+        source = {"kind": "upload", "upload_id": ticket["upload_id"], "format": fmt}
+        return ImportJob.from_api(self._wire.create_dataset_import(name, {"source": source, "connector": connector}), self._client)
+
+    def from_hf(
+        self,
+        repo: str,
+        *,
+        split: str = "train",
+        config: str | None = None,
+        subset: str | None = None,
+        revision: str | None = None,
+        columns: Mapping[str, str] | None = None,
+        messages: str | None = None,
+        prompt: str | None = None,
+        completion: str | None = None,
+        answer: str | None = None,
+        chosen: str | None = None,
+        rejected: str | None = None,
+        query: str | None = None,
+        positive: str | None = None,
+        limit: int | None = None,
+        name: str | None = None,
+        connector: str = "auto",
+        wait: bool = True,
+        timeout: float | None = None,
+    ) -> Dataset:
+        """Import a Hugging Face dataset server-side (nothing is downloaded locally).
+
+        Column mappings (``messages="messages"``, ``prompt="question"``, ``answer=``,
+        ``chosen=``/``rejected=``, ``query=``/``positive=``) say which columns hold what.
+        ``subset`` is an alias of ``config``. The dataset name defaults to the repo slug.
+        """
+        if subset is not None and config is not None and subset != config:
+            raise ValueError("Pass either config= or subset= (they are the same setting).")
+        cfg = config if config is not None else subset
+        source = h.hf_source(
+            repo,
+            split=split,
+            config=cfg,
+            revision=revision,
+            columns=columns,
+            column_kwargs={
+                "messages": messages,
+                "prompt": prompt,
+                "completion": completion,
+                "answer": answer,
+                "chosen": chosen,
+                "rejected": rejected,
+                "query": query,
+                "positive": positive,
+            },
+            limit=limit,
+        )
+        ds_name = h.check_slug(name or h.hf_dataset_name(repo, split, cfg), "dataset name")
+        job = ImportJob.from_api(
+            self._wire.create_dataset_import(ds_name, {"source": source, "connector": h.check_connector(connector)}),
+            self._client,
+        )
+        if wait:
+            job.wait(timeout=timeout)
+        return self.get(ds_name)
+
+    def records(self, name: Any, *, version: int | None = None, limit: int | None = None) -> Iterator[dict[str, Any]]:
+        """Iterate the records of a version (latest by default), page by page."""
+        ds = h.dataset_name(name)
+        trail = CursorTrail(f"GET /v1/datasets/{ds}/records")
+        cursor: str | None = None
+        while True:
+            page = self._wire.list_dataset_records(ds, version=version, limit=limit, cursor=cursor)
+            yield from typing.cast(builtins.list[dict[str, Any]], page.get("data") or [])
+            cursor = trail.follow(page.get("next_cursor"), page.get("data") or [])
+            if cursor is None:
+                return
+
+    def render(
+        self,
+        dataset: Any,
+        *,
+        model: Any = None,
+        train_on: str | None = None,
+        thinking: Any = None,
+        preserve_thinking: bool | None = None,
+        limit: int | None = None,
+    ) -> RenderPreview:
+        """Preview chat-template rendering and which tokens are trained (``print()`` it)."""
+        body: dict[str, Any] = {}
+        if model is not None:
+            body["model"] = model_ref(model)
+        if train_on is not None:
+            body["train_on"] = train_on
+        if thinking is not None:
+            body["thinking"] = {"on": True, "off": False}.get(thinking, thinking) if isinstance(thinking, str) else thinking
+        if preserve_thinking is not None:
+            body["preserve_thinking"] = preserve_thinking
+        if limit is not None:
+            body["limit"] = limit
+        return RenderPreview.from_api(self._wire.render_dataset(h.dataset_name(dataset), body), self._client)
+
+    def score(self, *args: Any, **kwargs: Any) -> Any:
+        """Not available in v0."""
+        raise NotAvailableInV0Error(
+            "datasets.score()",
+            "server-side dataset scoring is deferred past v0.",
+            alternative="Evaluate with client.evals.create(...) and mine failures with ev.failures(...).to_dataset(name).",
+        )
+
+
+class Imports(_Resource):
+    """``client.imports``: dataset import jobs."""
+
+    def get(self, import_id: str) -> ImportJob:
+        """An import job."""
+        return ImportJob.from_api(self._wire.get_import(import_id), self._client)
+
+    def list(self, *, limit: int | None = None) -> Page[ImportJob]:
+        """Import jobs, newest first."""
+        return self._page(ImportJob, lambda cursor: self._wire.list_imports(limit=limit, cursor=cursor))
+
+    def wait(self, import_id: str, *, timeout: float | None = None, poll_interval: float = 0.5) -> ImportJob:
+        """Block until the import finishes; :class:`grad.ImportFailedError` if it failed."""
+        deadline = self._deadline(timeout)
+        backoff = h.Backoff(poll_interval)
+        while True:
+            try:
+                job = self.get(import_id)
+            except TRANSIENT:
+                job = None
+            if job is not None and job.status in TERMINAL_IMPORT_STATUSES:
+                if job.status == "failed":
+                    raise ImportFailedError(f"Import {job.id} into '{job.dataset}' failed: {job.error}", resource=job, error=job.error)
+                return job
+            if self._expired(deadline):
+                status = job.status if job is not None else "unknown"
+                raise WaitTimeoutError(f"Import {import_id} is still {status} after {timeout}s (is a trainer worker running?).", resource=job)
+            self._sleep(backoff.next(), deadline)
+
+
+class Runs(_Resource):
+    """``client.runs``: plan, launch, watch and manage training runs."""
+
+    def plan(
+        self,
+        dataset: Any = None,
+        *,
+        name: str,
+        recipe: Any,
+        split: Any = None,
+        max_cost_usd: float | None = None,
+    ) -> Plan:
+        """Dry-run a recipe at $0: resolved defaults, warnings, tokens and cost (``print(plan)``)."""
+        body = h.run_body(dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd)
+        plan = Plan.from_api(self._wire.plan_run(body), self._client)
+        plan.max_cost_usd = max_cost_usd
+        return plan
+
+    def create(
+        self,
+        dataset: Any = None,
+        *,
+        name: str,
+        recipe: Any,
+        split: Any = None,
+        max_cost_usd: float | None = None,
+    ) -> Run:
+        """Create and enqueue a run (pins the dataset version). Chain ``.wait()``."""
+        body = h.run_body(dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd)
+        return Run.from_api(self._wire.create_run(body), self._client)
+
+    def get(self, run_id: str) -> Run:
+        """A run by id."""
+        return Run.from_api(self._wire.get_run(run_id), self._client)
+
+    def list(self, *, limit: int | None = None) -> Page[Run]:
+        """Runs, newest first."""
+        return self._page(Run, lambda cursor: self._wire.list_runs(limit=limit, cursor=cursor))
+
+    def cancel(self, run_id: str) -> Run:
+        """Cancel a queued or running run."""
+        return Run.from_api(self._wire.cancel_run(run_id), self._client)
+
+    def resume(self, run_id: str, *, max_cost_usd: float | None = None) -> Run:
+        """Resume a stopped, failed or cancelled run from its latest checkpoint (optionally raise the cap)."""
+        body = {} if max_cost_usd is None else {"max_cost_usd": max_cost_usd}
+        return Run.from_api(self._wire.resume_run(run_id, body), self._client)
+
+    def checkpoints(self, run_id: str) -> builtins.list[Checkpoint]:
+        """Unexpired checkpoints of a run (best and final never expire)."""
+        page = self._page(Checkpoint, lambda cursor: self._wire.list_run_checkpoints(run_id, cursor=cursor))
+        return sorted(page.to_list(), key=lambda c: (c.step, c.attempt or 0))
+
+    def metrics(self, run_id: str, *, follow: bool = False, after_step: int | None = None) -> Iterator[MetricPoint]:
+        """Metric points so far; ``follow=True`` streams live (SSE) until the run finishes."""
+        if follow:
+            return (event for kind, event in self._follow(run_id, None) if kind == "metric" and (after_step is None or event.step > after_step))
+        return self._metric_pages(run_id, after_step)
+
+    def _metric_pages(self, run_id: str, after_step: int | None) -> Iterator[MetricPoint]:
+        trail = CursorTrail(f"GET /v1/runs/{run_id}/metrics")
+        cursor: str | None = None
+        while True:
+            page = self._wire.list_run_metrics(run_id, cursor=cursor, after_step=after_step)
+            data = page.get("data") or []
+            for point in data:
+                yield MetricPoint.from_api(point, self._client)
+            nxt = trail.follow(page.get("next_cursor"), data)
+            if nxt is None:
+                return
+            cursor = nxt
+
+    def _follow(self, run_id: str, deadline: float | None) -> Iterator[tuple[str, Any]]:
+        """Yield ``("metric", MetricPoint)`` events then one ``("status", Run)``; reconnects."""
+        last_seq: int | None = None
+        failures = 0
+        retry_ms = 1000
+        while True:
+            headers = {"Last-Event-ID": str(last_seq)} if last_seq is not None else None
+            try:
+                resp = self._client._transport.stream(
+                    "GET",
+                    f"/v1/runs/{quote_path_param(run_id, 'id')}/metrics",
+                    accept="text/event-stream",
+                    headers=headers,
+                    timeout=SSE_READ_TIMEOUT,
+                )
+            except TRANSIENT as exc:
+                failures += 1
+                if failures > MAX_SSE_RECONNECTS:
+                    raise exc
+                if self._expired(deadline):
+                    return
+                self._sleep(min(10.0, retry_ms / 1000 * failures), deadline)
+                continue
+            if "text/event-stream" not in resp.headers.get("content-type", ""):
+                resp.close()
+                yield from self._poll_follow(run_id, deadline, last_seq)
+                return
+            decoder = SSEDecoder()
+            try:
+                for event in iter_sse(self._lines_until(resp, deadline), decoder):
+                    if event.retry is not None:
+                        retry_ms = event.retry
+                    if event.event == "metric":
+                        point = MetricPoint.from_api(_json(event.data), self._client)
+                        seq = point.seq if point.seq is not None else (int(event.id) if event.id and event.id.isdigit() else None)
+                        if seq is not None and last_seq is not None and seq <= last_seq:
+                            continue
+                        if seq is not None:
+                            last_seq = seq
+                        failures = 0
+                        yield "metric", point
+                    elif event.event == "status":
+                        yield "status", Run.from_api(_json(event.data), self._client)
+                        return
+            except (TransportFailure, APIConnectionError):
+                pass
+            finally:
+                resp.close()
+            if self._expired(deadline):
+                return
+            failures += 1
+            if failures > MAX_SSE_RECONNECTS:
+                raise APIConnectionError(
+                    f"Lost the metrics stream for run {run_id} {failures} times in a row.",
+                    method="GET",
+                    url=self._client._transport.url(f"/v1/runs/{run_id}/metrics"),
+                )
+            self._sleep(min(10.0, retry_ms / 1000 * failures), deadline)
+
+    def _lines_until(self, resp: Any, deadline: float | None) -> Iterator[str]:
+        for line in resp.iter_lines():
+            yield line
+            if self._expired(deadline):
+                return
+
+    def _poll_follow(self, run_id: str, deadline: float | None, last_seq: int | None) -> Iterator[tuple[str, Any]]:
+        # Fallback when a proxy strips the event stream: poll JSON pages with backoff.
+        cursor: str | None = None
+        backoff = h.Backoff()
+        while True:
+            try:
+                page = self._wire.list_run_metrics(run_id, cursor=cursor)
+            except TRANSIENT:
+                page = None
+            if page is not None:
+                data = page.get("data") or []
+                for raw in data:
+                    point = MetricPoint.from_api(raw, self._client)
+                    if last_seq is None or (point.seq or 0) > last_seq:
+                        last_seq = point.seq
+                        yield "metric", point
+                cursor = page.get("next_cursor") or cursor
+                if data:
+                    backoff.reset()
+                elif page.get("status") in TERMINAL_RUN_STATUSES:
+                    yield "status", self.get(run_id)
+                    return
+            if self._expired(deadline):
+                return
+            self._sleep(backoff.next(), deadline)
+
+    def wait(
+        self,
+        run_id: str,
+        *,
+        timeout: float | None = None,
+        on_metric: Callable[[MetricPoint], Any] | None = None,
+        on_status: Callable[[Run], Any] | None = None,
+        raise_on_failure: bool = True,
+        poll_interval: float = 0.5,
+    ) -> Run:
+        """Block until the run reaches a terminal status and return it.
+
+        ``on_metric`` receives each :class:`grad.MetricPoint` live (SSE with reconnect);
+        ``on_status`` each status change. Transient errors are retried. Raises
+        :class:`grad.RunFailedError` for ``failed`` runs (unless ``raise_on_failure=False``)
+        and :class:`grad.WaitTimeoutError` after ``timeout`` seconds (the run keeps going).
+        """
+        deadline = self._deadline(timeout)
+        run: Run | None = None
+        last_status: str | None = None
+        if on_metric is not None:
+            for kind, event in self._follow(run_id, deadline):
+                if kind == "metric":
+                    on_metric(event)
+                else:
+                    run = event
+            if run is None or run.status not in TERMINAL_RUN_STATUSES:
+                run = None
+        backoff = h.Backoff(poll_interval)
+        while run is None or run.status not in TERMINAL_RUN_STATUSES:
+            try:
+                run = self.get(run_id)
+            except TRANSIENT:
+                pass
+            if run is not None and run.status != last_status:
+                last_status = run.status
+                if on_status is not None:
+                    on_status(run)
+            if run is not None and run.status in TERMINAL_RUN_STATUSES:
+                break
+            if self._expired(deadline):
+                raise WaitTimeoutError(
+                    f"Run {run_id} is still {run.status if run else 'unknown'} after {timeout}s; it keeps running "
+                    "server-side. Call wait() again, or cancel() it.",
+                    resource=run,
+                )
+            self._sleep(backoff.next(), deadline)
+        if on_status is not None and run.status != last_status:
+            on_status(run)
+        if run.status == "failed" and raise_on_failure:
+            raise RunFailedError(f"Run {run.id} ({run.name}) failed: {run.error or 'no error reported'}", resource=run, error=run.error)
+        return run
+
+
+class Checkpoints(_Resource):
+    """``client.checkpoints``."""
+
+    def promote(self, checkpoint_id: str, *, name: str | None = None) -> Artifact:
+        """Copy a checkpoint into a new immutable artifact."""
+        body = {} if name is None else {"name": h.check_slug(name, "artifact name")}
+        return Artifact.from_api(self._wire.promote_checkpoint(checkpoint_id, body), self._client)
+
+
+class Artifacts(_Resource):
+    """``client.artifacts``: immutable trained artifacts (``name@YYYY-MM-DD-n``, ``name@latest``)."""
+
+    def get(self, ref: Any) -> Artifact:
+        """An artifact by ``name@version``, ``name@latest`` or id."""
+        return Artifact.from_api(self._wire.get_artifact(model_ref(ref)), self._client)
+
+    def list(self, *, name: str | None = None, limit: int | None = None) -> Page[Artifact]:
+        """Artifacts, newest first (optionally one name's versions)."""
+        return self._page(Artifact, lambda cursor: self._wire.list_artifacts(name=name, limit=limit, cursor=cursor))
+
+    def download(
+        self,
+        ref: Any,
+        path: str | os.PathLike[str] = ".",
+        *,
+        format: str = "peft",
+        overwrite: bool = False,
+        timeout: float | None = None,
+    ) -> Path:
+        """Download an artifact, verifying its SHA-256 while streaming (nothing is buffered in memory).
+
+        * ``format="peft"`` (default): extract into directory ``path``, checking every file
+          against the bundle manifest; the result loads with
+          ``vllm serve <base> --enable-lora --lora-modules name=<path>`` (or is merged weights).
+        * ``format="files"``: extract any artifact (routers, embeddings, cartridges).
+        * ``format="bundle"``: keep the ``.grad.tar.gz`` (``path`` may be a file or a directory).
+
+        A checksum mismatch or an unsafe archive entry deletes the partial download and raises.
+        """
+        art = self.get(ref)
+        filename = f"{art.name}-{art.version}.grad.tar.gz"
+        plan = h.plan_download(path, fmt=format, filename=filename, overwrite=overwrite)
+        resp = self._wire.download_artifact(art.ref, timeout=timeout or max(self._client._transport.timeout, 120.0))
+        writer = h.HashingWriter(plan.temp_dir, f".{art.name}.")
+        url = resp.url
+        try:
+            try:
+                for chunk in resp.iter_bytes():
+                    writer.write(chunk)
+            except TransportFailure as failure:
+                raise self._client._transport.connection_error("GET", url, failure) from failure.cause
+            digest = writer.finish()
+            h.verify_digest(digest, h.expected_sha(resp.headers.get("x-artifact-sha256"), art.sha256, url), url)
+            if plan.format == "bundle":
+                h.finalize_file(writer.path, plan.target)
+                return plan.target
+            return _extract(writer.path, plan, art.format, overwrite)
+        except BaseException:
+            writer.discard()
+            raise
+        finally:
+            resp.close()
+            if writer.path.exists() and plan.format != "bundle":
+                writer.discard()
+
+    def merge(self, *args: Any, **kwargs: Any) -> Any:
+        """Not available in v0."""
+        raise NotAvailableInV0Error("artifacts.merge()", "artifact merging is deferred past v0.")
+
+
+def _extract(bundle: Path, plan: h.DownloadPlan, artifact_format: str | None, overwrite: bool) -> Path:
+    staging = Path(tempfile.mkdtemp(dir=plan.temp_dir, prefix=f".{plan.target.name}.extract-"))
+    try:
+        h.safe_extract_bundle(bundle, staging)
+        if plan.format == "peft":
+            h.check_peft_dir(staging, artifact_format)
+        h.finalize_dir(staging, plan.target, overwrite=overwrite)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return plan.target
+
+
+def _json(text: str) -> Any:
+    return json.loads(text)
+
+
+class Deployments(_Resource):
+    """``client.deployments``: stable model names pointing at artifact versions."""
+
+    def create(self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None) -> Deployment:
+        """Deploy (or update) an artifact under a stable name. Same as ``client.deploy``."""
+        body: dict[str, Any] = {"artifact": _artifact_ref(artifact)}
+        if name is not None:
+            body["name"] = h.check_slug(name, "deployment name")
+        if fallback is not None:
+            body["fallback"] = model_ref(fallback)
+        if explore_rate is not None:
+            body["explore_rate"] = explore_rate
+        return Deployment.from_api(self._wire.deploy_artifact(body), self._client)
+
+    def get(self, name: str) -> DeploymentStatus:
+        """A deployment with its feedback count and average score."""
+        return DeploymentStatus.from_api(self._wire.get_deployment(name), self._client)
+
+    def list(self, *, limit: int | None = None) -> Page[Deployment]:
+        """Deployments."""
+        return self._page(Deployment, lambda cursor: self._wire.list_deployments(limit=limit, cursor=cursor))
+
+    def rollback(self, name: str) -> Deployment:
+        """Point a deployment back at its previous artifact."""
+        return Deployment.from_api(self._wire.rollback_deployment(name), self._client)
+
+
+def _artifact_ref(artifact: Any) -> str:
+    if isinstance(artifact, Run):
+        if not artifact.artifact_id:
+            raise artifact._no_artifact()
+        return artifact.artifact_id
+    return model_ref(artifact)
+
+
+class EmbeddingsAPI(_Resource):
+    """``client.embeddings``: vectors from a deployed embedding artifact."""
+
+    def create(self, *, model: str, input: str | Sequence[str]) -> Embeddings:
+        """Embed one string or up to 256 strings."""
+        payload: str | list[str] = input if isinstance(input, str) else list(input)
+        return Embeddings.from_api(self._wire.create_embeddings({"model": model, "input": payload}), self._client)
+
+
+class Feedback(_Resource):
+    """``client.feedback``: outcome scores and gold corrections for deployed models."""
+
+    def record(
+        self,
+        *,
+        inference_id: str | None = None,
+        session_id: str | None = None,
+        deployment_name: str | None = None,
+        score: float | None = None,
+        expected_output: Any = None,
+        metrics: Mapping[str, float] | None = None,
+        idempotency_key: str | None = None,
+    ) -> FeedbackResult:
+        """Record one outcome. ``idempotency_key`` defaults to a hash of the event."""
+        event = h.feedback_event(
+            inference_id=inference_id,
+            session_id=session_id,
+            deployment_name=deployment_name,
+            score=score,
+            expected_output=expected_output,
+            metrics=metrics,
+            idempotency_key=idempotency_key,
+        )
+        return FeedbackResult.from_api(self._wire.record_feedback({"events": [event]}), self._client)
+
+    def record_many(self, events: Sequence[Mapping[str, Any]]) -> FeedbackResult:
+        """Record up to 1000 events in one call (each a dict of ``record()``'s keyword arguments)."""
+        built = [h.feedback_event(**{k: e.get(k) for k in ("inference_id", "session_id", "deployment_name", "score", "expected_output", "metrics", "idempotency_key")}) for e in events]
+        return FeedbackResult.from_api(self._wire.record_feedback({"events": built}), self._client)
+
+
+class Keys(_Resource):
+    """``client.keys``: scoped workspace API keys."""
+
+    def create(self, *, name: str, scopes: Sequence[str]) -> CreatedApiKey:
+        """Create a key; the returned ``secret`` is shown only once."""
+        return CreatedApiKey.from_api(self._wire.create_api_key({"name": h.check_slug(name, "key name"), "scopes": list(scopes)}), self._client)
+
+    def list(self, *, limit: int | None = None) -> Page[ApiKey]:
+        """Workspace keys."""
+        return self._page(ApiKey, lambda cursor: self._wire.list_api_keys(limit=limit, cursor=cursor))
+
+    def revoke(self, key_id: str) -> ApiKey:
+        """Revoke a key."""
+        return ApiKey.from_api(self._wire.revoke_api_key(key_id), self._client)
+
+
+class Evals(_Resource):
+    """``client.evals``: server-executed evaluations with optional local Python scorers."""
+
+    def plan(
+        self,
+        *,
+        models: Sequence[Any],
+        dataset: Any = None,
+        rubric: Any = None,
+        name: str | None = None,
+        baseline: Any = None,
+        samples: int | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        limit: int | None = None,
+        pass_threshold: float | None = None,
+        max_cost_usd: float | None = None,
+        benchmarks: Sequence[Any] | None = None,
+        env: Any = None,
+        tasks: Sequence[Any] | None = None,
+        dataset_version: int | None = None,
+        max_turns: int | None = None,
+        max_concurrency: int | None = None,
+    ) -> EvalPlan:
+        """Estimate tasks, model/judge calls and cost ($0)."""
+        body, _ = h.eval_body(**_eval_kwargs(locals()))
+        return EvalPlan.from_api(self._wire.plan_eval(body), self._client)
+
+    def create(
+        self,
+        *,
+        models: Sequence[Any],
+        dataset: Any = None,
+        rubric: Any = None,
+        name: str | None = None,
+        baseline: Any = None,
+        samples: int | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        limit: int | None = None,
+        pass_threshold: float | None = None,
+        max_cost_usd: float | None = None,
+        benchmarks: Sequence[Any] | None = None,
+        env: Any = None,
+        tasks: Sequence[Any] | None = None,
+        dataset_version: int | None = None,
+        max_turns: int | None = None,
+        max_concurrency: int | None = None,
+    ) -> Eval:
+        """Queue an eval; chain ``.wait()`` (which also runs local ``Scorer`` functions).
+
+        Local scorers are dry-run once on a sample record first, so a broken function fails
+        before any model is called.
+        """
+        body, local = h.eval_body(**_eval_kwargs(locals()))
+        if local is not None and local.local_scorers and dataset is not None:
+            sample = next(iter(self._client.datasets.records(dataset, limit=1)), None)
+            if sample is not None:
+                local.dry_run(sample)
+        ev = Eval.from_api(self._wire.create_eval(body), self._client)
+        ev._local_rubric = local
+        return ev
+
+    def get(self, eval_id: str) -> Eval:
+        """An eval by id."""
+        return Eval.from_api(self._wire.get_eval(eval_id), self._client)
+
+    def list(self, *, limit: int | None = None) -> Page[Eval]:
+        """Evals, newest first."""
+        return self._page(Eval, lambda cursor: self._wire.list_evals(limit=limit, cursor=cursor))
+
+    def cancel(self, eval_id: str) -> Eval:
+        """Cancel a queued, running or awaiting_scores eval."""
+        return Eval.from_api(self._wire.cancel_eval(eval_id), self._client)
+
+    def outputs(self, eval_id: str, *, model: Any = None, missing_scorer: str | None = None, limit: int | None = None) -> Page[EvalOutput]:
+        """Generated outputs (optionally only those still missing ``missing_scorer``)."""
+        ref = None if model is None else model_ref(model)
+        return self._page(EvalOutput, lambda cursor: self._wire.list_eval_outputs(eval_id, model=ref, missing_scorer=missing_scorer, limit=limit, cursor=cursor))
+
+    def results(self, eval_id: str, *, model: Any = None, limit: int | None = None) -> Page[EvalResult]:
+        """Per-task, per-model results."""
+        ref = None if model is None else model_ref(model)
+        return self._page(EvalResult, lambda cursor: self._wire.list_eval_results(eval_id, model=ref, limit=limit, cursor=cursor))
+
+    def failures(self, eval_id: str, *, model: Any = None, threshold: float | None = None) -> EvalFailures:
+        """Tasks scoring below ``threshold`` (default: the eval's pass threshold), all pages."""
+        ref = None if model is None else model_ref(model)
+        page = self._page(EvalResult, lambda cursor: self._wire.list_eval_failures(eval_id, model=ref, threshold=threshold, cursor=cursor))
+        return EvalFailures(eval_id, page.to_list(), self._client)
+
+    def post_scores(self, eval_id: str, scores: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """Low level: post ``{"output_id", "scorer", "score"}`` items (chunked)."""
+        result: dict[str, Any] = {}
+        items = list(scores)
+        for start in range(0, len(items), 1000):
+            result = dict(self._wire.post_eval_scores(eval_id, {"scores": items[start : start + 1000]}))
+        return result
+
+    def score_pending(self, eval_id: str, rubric: Any) -> int:
+        """Run local scorers on every output still missing their score and post them."""
+        ev = self.get(eval_id)
+        if ev.status != "awaiting_scores" or not ev.local_scorers:
+            return 0
+        scorers = h.local_scorers_for(rubric, ev.local_scorers, eval_id)
+        posted = 0
+        for name, scorer in scorers.items():
+            previous: set[str] = set()
+            while True:
+                outputs = self._wire.list_eval_outputs(eval_id, missing_scorer=name, limit=200).get("data") or []
+                if not outputs:
+                    break
+                ids = {o["id"] for o in outputs}
+                if ids & previous:
+                    raise GradAPIError(
+                        status=409,
+                        code="scores_not_accepted",
+                        title="Scores not accepted",
+                        detail=f"The server still reports outputs missing '{name}' after they were scored.",
+                        request_id=None,
+                        method="POST",
+                        url=self._client._transport.url(f"/v1/evals/{eval_id}/scores"),
+                    )
+                previous = ids
+                batch = []
+                for raw in outputs:
+                    out = EvalOutput.from_api(raw, self._client)
+                    batch.append({"output_id": out.id, "scorer": name, "score": scorer.score(out.trajectory(), where=f"output {out.id} ({out.model})")})
+                self.post_scores(eval_id, batch)
+                posted += len(batch)
+        return posted
+
+    def wait(self, eval_id: str, *, timeout: float | None = None, rubric: Any = None, raise_on_failure: bool = True, poll_interval: float = 0.5) -> Eval:
+        """Block until the eval completes, scoring local Python scorers when it awaits them."""
+        deadline = self._deadline(timeout)
+        backoff = h.Backoff(poll_interval)
+        while True:
+            try:
+                ev: Eval | None = self.get(eval_id)
+            except TRANSIENT:
+                ev = None
+            if ev is not None:
+                if ev.status == "awaiting_scores":
+                    if self.score_pending(eval_id, rubric):
+                        backoff.reset(poll_interval)
+                        continue
+                elif ev.status in TERMINAL_EVAL_STATUSES:
+                    if ev.status == "failed" and raise_on_failure:
+                        raise EvalFailedError(f"Eval {ev.id} ({ev.name}) failed: {ev.error or 'no error reported'}", resource=ev, error=ev.error)
+                    ev._local_rubric = rubric
+                    return ev
+            if self._expired(deadline):
+                raise WaitTimeoutError(f"Eval {eval_id} is still {ev.status if ev else 'unknown'} after {timeout}s.", resource=ev)
+            self._sleep(backoff.next(), deadline)
+
+    def from_inspect(self, *args: Any, **kwargs: Any) -> Any:
+        """Not available in v0."""
+        raise NotAvailableInV0Error("evals.from_inspect()", "Inspect task imports are deferred past v0.")
+
+
+def _eval_kwargs(values: Mapping[str, Any]) -> dict[str, Any]:
+    keys = (
+        "models",
+        "name",
+        "dataset",
+        "dataset_version",
+        "rubric",
+        "baseline",
+        "samples",
+        "temperature",
+        "max_tokens",
+        "limit",
+        "pass_threshold",
+        "max_cost_usd",
+        "benchmarks",
+        "env",
+        "tasks",
+        "max_turns",
+        "max_concurrency",
+    )
+    return {k: values[k] for k in keys}
+
+
+class Environments(_Resource):
+    """``client.environments``: dispatch tasks to ``serve_environment`` workers."""
+
+    def dispatch(
+        self,
+        env_name: str,
+        task: Mapping[str, Any],
+        *,
+        model_id: str,
+        system_prompt: str | None = None,
+        timeout_s: int | None = None,
+    ) -> dict[str, Any]:
+        """Queue one task for workers serving ``env_name``."""
+        body: dict[str, Any] = {"env_name": h.check_slug(env_name, "environment name"), "task": dict(task), "model_id": model_id}
+        if system_prompt is not None:
+            body["system_prompt"] = system_prompt
+        if timeout_s is not None:
+            body["timeout_s"] = timeout_s
+        return dict(self._wire.dispatch_env_task(body))
+
+    def get_task(self, task_id: str) -> dict[str, Any]:
+        """A dispatched task with its status and result."""
+        return dict(self._wire.get_env_task(task_id))
+
+    def serve(self, env: Any, *, name: str, policy: Any, **kwargs: Any) -> int:
+        """Run an outbound worker for ``env`` (see :func:`grad.serve_environment`)."""
+        from .environments import serve_environment
+
+        return serve_environment(env, name=name, policy=policy, client=self._client, **kwargs)
+
+
+TRAINERS = Unavailable(
+    "client.trainers",
+    "the interactive Trainer API (forward_backward, optim_step, snapshots) is deferred to Wave 2.",
+    alternative="Use the managed recipes with client.runs.create(...).",
+)
+SECRETS = Unavailable("client.secrets", "workspace secrets are deferred past v0.")

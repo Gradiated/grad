@@ -1,0 +1,48 @@
+{
+  "baseline": null,
+  "completed_at": null,
+  "created_at": "2026-11-27T04:42:39.686Z",
+  "error": null,
+  "id": "eval_c8e9f91fab7866a8bb83eb94",
+  "judge_models": [],
+  "local_scorers": [
+    "short"
+  ],
+  "max_tokens": 1024,
+  "models": [
+    "test/tiny-qwen3"
+  ],
+  "name": "support-eval",
+  "pass_threshold": 0.5,
+  "progress": {
+    "generated": 2,
+    "pending_local_scores": 2,
+    "total_outputs": 2
+  },
+  "rubric": [
+    {
+      "kind": "validator",
+      "name": "non_empty",
+      "validator": "non_empty",
+      "weight": 1
+    },
+    {
+      "kind": "code",
+      "name": "short",
+      "runtime": "local",
+      "weight": 1
+    }
+  ],
+  "samples": 1,
+  "status": "awaiting_scores",
+  "summary": [],
+  "task_source": {
+    "dataset": "support",
+    "kind": "dataset",
+    "version": 1
+  },
+  "temperature": 0.7,
+  "total_cost_usd": 0,
+  "updated_at": "2026-11-27T04:42:39.967Z",
+  "workspace_id": "ws_e2e"
+}

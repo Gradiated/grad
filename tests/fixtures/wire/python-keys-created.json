@@ -1,0 +1,14 @@
+{
+  "key": {
+    "created_at": "2026-11-27T04:42:42.110Z",
+    "id": "key_54fa36223f0003cf2a8a7fde",
+    "name": "ci",
+    "prefix": "grad_d1c6030",
+    "revoked_at": null,
+    "scopes": [
+      "runs:read"
+    ],
+    "workspace_id": "ws_e2e"
+  },
+  "secret": "grad_d1c6030419a945fe314033d2531431ed938e9b11c2982c55"
+}

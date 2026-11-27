@@ -1,0 +1,94 @@
+{
+  "data": [
+    {
+      "base_model": "test/tiny-qwen3",
+      "checkpoint_id": null,
+      "created_at": "2026-11-27T04:42:39.200Z",
+      "eval_report": {
+        "best_step": null,
+        "eval_examples": 0,
+        "eval_loss": null,
+        "eval_records": 0,
+        "final_step": 1,
+        "metric_name": "eval_loss",
+        "reference_backend": true,
+        "selected_step": 1,
+        "train_examples": 2,
+        "train_records": 2,
+        "warnings": [
+          "Reference test backend: the base model was not trained; the artifact is not deployable.",
+          "No held-out examples: eval metrics are null and select='last' was used.",
+          "No held-out examples: eval_loss is null."
+        ]
+      },
+      "format": "reference",
+      "id": "support-sft@2026-11-27-1",
+      "manifest": {
+        "attempt": 1,
+        "backend": "reference",
+        "base_model": "test/tiny-qwen3",
+        "dataset": "support",
+        "dataset_version": 1,
+        "deployable": false,
+        "format": "reference",
+        "lr": 0.001,
+        "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+        "recipe": "sft",
+        "resolved_config": {
+          "adapter": {
+            "alpha": 32,
+            "kind": "lora",
+            "merge_on_export": false,
+            "rank": 32
+          },
+          "batch_size": 128,
+          "checkpoint_every_steps": 1,
+          "checkpoint_ttl_days": 30,
+          "dataset": "support",
+          "dataset_version": 1,
+          "epochs": 1,
+          "lr": 0.001,
+          "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+          "model": "test/tiny-qwen3",
+          "name": "support-sft",
+          "preserve_thinking": false,
+          "recipe_kind": "sft",
+          "recipe_params": {},
+          "reduction": "per_example",
+          "rule_version": "auto@2",
+          "schedule": "linear",
+          "select": "best",
+          "split": {
+            "eval_fraction": 0.1,
+            "eval_records": 0,
+            "seed": 42,
+            "strategy": "by_session",
+            "train_records": 2
+          },
+          "template_revision": "qwen3@3",
+          "thinking": "auto",
+          "train_on": "last",
+          "warmup": 0.03
+        },
+        "rule_version": "auto@2",
+        "run_id": "run_674bf5d2f414690236a912d9",
+        "schema": "grad.artifact/1",
+        "seed": 42,
+        "select": "last",
+        "selected_step": 1,
+        "status": "completed",
+        "steps_completed": 1,
+        "tokens_total": 23,
+        "total_steps": 1
+      },
+      "name": "support-sft",
+      "recipe_kind": "sft",
+      "run_id": "run_674bf5d2f414690236a912d9",
+      "sha256": "8c061a8dee790dc20e35e053c4b2269d5dedb9433c6e9de7d914521496fd883f",
+      "size_bytes": 919,
+      "version": "2026-11-27-1",
+      "workspace_id": "ws_e2e"
+    }
+  ],
+  "next_cursor": null
+}

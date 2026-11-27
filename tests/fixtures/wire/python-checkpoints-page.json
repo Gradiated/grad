@@ -1,0 +1,49 @@
+{
+  "data": [
+    {
+      "attempt": 1,
+      "best": false,
+      "created_at": "2026-11-27T04:42:39.188Z",
+      "eval_score": null,
+      "expires_at": null,
+      "final": true,
+      "format": "reference",
+      "id": "ckpt_57046e44a82974046cfa0d7c",
+      "metadata": {
+        "backend": "reference",
+        "base_model": "test/tiny-qwen3",
+        "deployable": false,
+        "eval_metrics": null,
+        "lr": 0.001,
+        "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+        "manifest": {
+          "backend": "reference",
+          "base_model": "test/tiny-qwen3",
+          "checkpoint_step": 1,
+          "deployable": false,
+          "format": "reference",
+          "lr": 0.001,
+          "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+          "recipe": "sft",
+          "rule_version": "auto@2",
+          "seed": 42,
+          "select": "best"
+        },
+        "metric_mode": "min",
+        "metric_name": "eval_loss",
+        "recipe": "sft",
+        "rule_version": "auto@2",
+        "seed": 42,
+        "select": "best",
+        "step": 1,
+        "tokens_total": 23
+      },
+      "run_id": "run_674bf5d2f414690236a912d9",
+      "sha256": "f7a5d3a999bdf3c811b4bd1d0bab5aca4e098800bda48d5e32f0c632ee1861bf",
+      "size_bytes": 1277,
+      "step": 1,
+      "workspace_id": "ws_e2e"
+    }
+  ],
+  "next_cursor": null
+}

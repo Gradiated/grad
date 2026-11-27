@@ -1,0 +1,50 @@
+{
+  "dataset_version": 1,
+  "estimated_cost_usd": 0.0001,
+  "estimated_steps": 1,
+  "estimated_tokens": 60,
+  "price_per_million_tokens": 1,
+  "resolved_config": {
+    "adapter": {
+      "alpha": 32,
+      "kind": "lora",
+      "merge_on_export": false,
+      "rank": 32
+    },
+    "batch_size": 128,
+    "checkpoint_every_steps": 1,
+    "checkpoint_ttl_days": 30,
+    "dataset": "support",
+    "dataset_version": 1,
+    "epochs": 1,
+    "lr": 0.001,
+    "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+    "model": "test/tiny-qwen3",
+    "name": "support-sft",
+    "preserve_thinking": false,
+    "recipe_kind": "sft",
+    "recipe_params": {},
+    "reduction": "per_example",
+    "rule_version": "auto@2",
+    "schedule": "linear",
+    "select": "best",
+    "split": {
+      "eval_fraction": 0.1,
+      "eval_records": 0,
+      "seed": 42,
+      "strategy": "by_session",
+      "train_records": 2
+    },
+    "template_revision": "qwen3@3",
+    "thinking": "auto",
+    "train_on": "last",
+    "warmup": 0.03
+  },
+  "total_records": 2,
+  "trained_token_fraction": 0.3,
+  "usable_records": 2,
+  "warnings": [
+    "The eval split is empty; eval metrics will be unavailable. Add records or raise split.eval_fraction.",
+    "1 steps is below the 100 we recommend; use batch_size=1 or more epochs/data."
+  ]
+}

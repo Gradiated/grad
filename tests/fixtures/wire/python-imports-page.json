@@ -1,0 +1,31 @@
+{
+  "data": [
+    {
+      "attempt": 1,
+      "connector": "auto",
+      "created_at": "2026-11-27T04:42:40.106Z",
+      "dataset": "hf-data",
+      "dataset_version": null,
+      "detected_scores": [],
+      "drop_reasons": [],
+      "dropped_count": 0,
+      "error": "Can't load Hugging Face dataset 'openai/gsm8k': offline mode is on (HF_HUB_OFFLINE/GRAD_OFFLINE). Download it elsewhere and import the JSONL file instead.",
+      "id": "imp_217ef935533bcdadf4a286a1",
+      "imported_count": 0,
+      "source": {
+        "columns": {
+          "answer": "answer",
+          "prompt": "question"
+        },
+        "config": "main",
+        "kind": "hf",
+        "repo": "openai/gsm8k",
+        "split": "train"
+      },
+      "status": "failed",
+      "updated_at": "2026-11-27T04:42:40.228Z",
+      "workspace_id": "ws_e2e"
+    }
+  ],
+  "next_cursor": null
+}

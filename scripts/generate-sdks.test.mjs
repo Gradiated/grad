@@ -80,10 +80,22 @@ test("every operation in spec/openapi.yaml is generated for TypeScript, Go and R
   assert.ok(rs.includes("pub async fn list_run_metrics_stream("));
 });
 
+test("every operation is generated for Python, typed and natively async", async () => {
+  const { ir, files } = await generateAllTargets(specPath);
+  const py = files["sdks/python/grad/_generated/client.py"];
+  for (const op of ir.operations) {
+    assert.ok(py.includes(`    def ${toSnake(op.id)}(`), `Python sync missing ${op.id}`);
+    assert.ok(py.includes(`    async def ${toSnake(op.id)}(`), `Python async missing ${op.id}`);
+  }
+  assert.ok(py.includes("def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:"));
+  assert.ok(py.includes("async def download_artifact(self, id: str, *, timeout: float | None = None) -> AsyncResponse:"));
+  assert.ok(py.includes("def get_run(self, id: str, *, timeout: float | None = None) -> Run:"));
+  assert.ok(!py.includes("asyncio.to_thread"), "Python async client must be natively async");
+});
+
 test("generated files on disk match the spec (no drift)", async () => {
   const { files } = await generateAllTargets(specPath);
   for (const [rel, expected] of Object.entries(files)) {
-    if (rel.startsWith("sdks/python/")) continue; // owned by the Python emitter's own drift check
     assert.equal(readFileSync(path.join(repoRoot, rel), "utf8"), expected, `${rel} drifted; run node scripts/generate-sdks.mjs`);
   }
 });

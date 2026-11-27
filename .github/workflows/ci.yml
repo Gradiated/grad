@@ -178,8 +178,16 @@ jobs:
         with:
           install_args: node pnpm python go rust
 
-      - name: Test Python SDK
-        run: PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests -v
+      - name: Install server/api dependencies for the Python SDK live tests
+        run: pnpm -C server/api install --frozen-lockfile
+
+      - name: Test Python SDK (unit + live self-hosted/Cloud stack, coverage >= 90%, mypy --strict)
+        run: |
+          python3 -m venv /tmp/py-sdk-venv
+          /tmp/py-sdk-venv/bin/pip install "coverage==7.6.10" "mypy==1.13.0"
+          PYTHONPATH=sdks/python /tmp/py-sdk-venv/bin/python -m coverage run --rcfile=sdks/python/pyproject.toml --data-file=/tmp/.coverage-py -m unittest discover -s sdks/python/tests -v
+          /tmp/py-sdk-venv/bin/python -m coverage report --rcfile=sdks/python/pyproject.toml --data-file=/tmp/.coverage-py
+          cd sdks/python && /tmp/py-sdk-venv/bin/mypy
 
       - name: Install server/api dependencies (live tests start tests/harness/stack.ts)
         run: pnpm -C server/api install --frozen-lockfile

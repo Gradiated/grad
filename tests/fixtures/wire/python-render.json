@@ -1,0 +1,37 @@
+{
+  "dataset": "support",
+  "examples": [
+    {
+      "record_id": "rec_3f8c4063c51b7650",
+      "spans": [
+        {
+          "text": "<|im_start|>user\n",
+          "tokens": 6,
+          "trained": false
+        },
+        {
+          "text": "Reset password?<|im_end|>\n",
+          "tokens": 8,
+          "trained": false
+        },
+        {
+          "text": "<|im_start|>assistant\n",
+          "tokens": 8,
+          "trained": false
+        },
+        {
+          "text": "Settings -> Security.<|im_end|>\n",
+          "tokens": 9,
+          "trained": true
+        }
+      ],
+      "template_revision": "qwen3@3",
+      "total_tokens": 31,
+      "trained_fraction": 0.2903225806451613,
+      "trained_tokens": 9
+    }
+  ],
+  "model": "test/tiny-qwen3",
+  "template_revision": "qwen3@3",
+  "token_counts": "estimated"
+}
