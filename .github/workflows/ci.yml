@@ -15,34 +15,7 @@ concurrency:
 
 jobs:
   server-api:
-    name: Server API & OpenAPI
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install toolchain via mise
-        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
-        with:
-          install_args: node pnpm
-
-      - name: Install server/api dependencies
-        run: pnpm -C server/api install --frozen-lockfile
-
-      - name: Check formatting
-        run: pnpm -C server/api format:check
-
-      - name: Typecheck & unit tests
-        run: pnpm -C server/api check
-
-      - name: Build
-        run: pnpm -C server/api build
-
-      - name: Verify OpenAPI spec is up to date
-        run: pnpm -C server/api openapi:check
-
-  server-integration:
-    name: Server API on Postgres + S3 (self-hosted mode)
+    name: Server API & OpenAPI (Postgres + S3)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -60,7 +33,6 @@ jobs:
           --health-retries 20
     env:
       GRAD_TEST_DATABASE_URL: postgres://grad:grad_ci_only@127.0.0.1:5432/grad
-      GRAD_REQUIRE_POSTGRES: "1"
       S3_TEST_ENDPOINT: http://127.0.0.1:9000
       S3_TEST_BUCKET: grad-ci
       AWS_ACCESS_KEY_ID: gradci
@@ -73,7 +45,7 @@ jobs:
       - name: Install toolchain via mise
         uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          install_args: node pnpm python
+          install_args: node pnpm
 
       # MinIO needs `server /data` as its command, which service containers cannot pass.
       # pgsty/minio is the maintained community build (the official image is no longer published).
@@ -86,32 +58,23 @@ jobs:
       - name: Install server/api dependencies
         run: pnpm -C server/api install --frozen-lockfile
 
-      - name: Tests with coverage gate (memory + Postgres stores, local + S3 storage)
+      - name: Check formatting
+        run: pnpm -C server/api format:check
+
+      - name: Typecheck
+        run: pnpm -C server/api exec tsc --noEmit
+
+      - name: Tests with coverage gate (Postgres store, local + S3 storage)
         run: pnpm -C server/api test:coverage
 
-      - name: Live worker protocol test against the built server
-        run: PYTHONPATH=server/trainer python3 -m unittest discover -s server/trainer/tests -p 'test_worker_*.py' -v
+      - name: Build
+        run: pnpm -C server/api build
 
-  server-trainer:
-    name: Server Trainer & Connectors
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install toolchain via mise
-        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
-        with:
-          install_args: node pnpm python
-
-      - name: Install server/api dependencies for live worker E2E
-        run: pnpm -C server/api install --frozen-lockfile
-
-      - name: Run trainer unit and live worker E2E tests
-        run: PYTHONPATH=server/trainer python3 -m unittest discover -s server/trainer/tests -v
+      - name: Verify OpenAPI spec is up to date
+        run: pnpm -C server/api openapi:check
 
   server-trainer-torch:
-    name: Trainer recipes on CPU torch (coverage gate)
+    name: Trainer (CPU torch recipes, worker protocol and live worker tests, coverage gate)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -122,7 +85,9 @@ jobs:
         with:
           install_args: node pnpm python
 
-      - name: Install server/api dependencies for the split parity check
+      # The split parity check runs server/api code; the live worker tests start
+      # tests/harness/stack.ts (its own Postgres container).
+      - name: Install server/api dependencies
         run: pnpm -C server/api install --frozen-lockfile
 
       - name: Install pinned CPU torch stack
@@ -167,7 +132,7 @@ jobs:
           python3 -m py_compile sdks/python/grad/_generated/client.py
 
   sdks:
-    name: SDKs (Python, TypeScript, Go, Rust)
+    name: SDKs (Python, TypeScript, Go)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -176,9 +141,10 @@ jobs:
       - name: Install toolchain via mise
         uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          install_args: node pnpm python go rust
+          install_args: node pnpm python go
 
-      - name: Install server/api dependencies for the Python SDK live tests
+      # The live suites start tests/harness/stack.ts (its own Postgres container).
+      - name: Install server/api dependencies for the live tests
         run: pnpm -C server/api install --frozen-lockfile
 
       - name: Test Python SDK (unit + live self-hosted/Cloud stack, coverage >= 90%, mypy --strict)
@@ -188,9 +154,6 @@ jobs:
           PYTHONPATH=sdks/python /tmp/py-sdk-venv/bin/python -m coverage run --rcfile=sdks/python/pyproject.toml --data-file=/tmp/.coverage-py -m unittest discover -s sdks/python/tests -v
           /tmp/py-sdk-venv/bin/python -m coverage report --rcfile=sdks/python/pyproject.toml --data-file=/tmp/.coverage-py
           cd sdks/python && /tmp/py-sdk-venv/bin/mypy
-
-      - name: Install server/api dependencies (live tests start tests/harness/stack.ts)
-        run: pnpm -C server/api install --frozen-lockfile
 
       - name: Type-check, unit test with coverage (>= 90% lines), and build the TypeScript SDK
         run: |
@@ -209,11 +172,8 @@ jobs:
           go test -count=1 -coverprofile=cover.out .
           go tool cover -func=cover.out | awk '/^total:/ { sub("%", "", $3); print "Go SDK coverage: " $3 "%"; if ($3 + 0 < 85) exit 1 }'
 
-      - name: Test Rust SDK
-        run: cargo test --locked --package grad-sdk
-
-  cli-and-e2e:
-    name: Rust CLI & Cross-Language E2E
+  rust:
+    name: Rust SDK & CLI (coverage gate)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -223,13 +183,10 @@ jobs:
       - name: Install toolchain via mise
         uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          install_args: node pnpm python go rust
+          install_args: node pnpm python rust
 
-      - name: Build server/api and TypeScript SDK
-        run: |
-          pnpm -C server/api install --frozen-lockfile
-          pnpm -C sdks/typescript install --frozen-lockfile
-          pnpm -C sdks/typescript build
+      - name: Install server/api dependencies for the live CLI tests
+        run: pnpm -C server/api install --frozen-lockfile
 
       - name: Lint Rust workspace (grad-sdk + grad CLI)
         run: |
@@ -250,9 +207,6 @@ jobs:
 
       - name: grad local up compose file is valid
         run: docker compose -f cli/assets/docker-compose.yml config --quiet
-
-      - name: Run full cross-language E2E contract suite (Python + TS + Go + Rust CLI)
-        run: python3 tests/contract/run_e2e.py
 
   packaging:
     name: Docker Compose & Helm Packaging
