@@ -1,10 +1,19 @@
 /**
- * Live-test fault injection for Idempotency-Key retries: a reverse proxy in
- * front of grad-server that forwards the first attempt of every keyed POST,
- * lets the server commit it, then answers the client 503 instead of the real
- * response. The SDK's retry (same key) reaches the server, which replays the
- * stored response with `Idempotent-Replayed: true`. Everything else passes
- * through unchanged. `GET /__fault/stats` reports what happened.
+ * Live-test fault injection: a reverse proxy in front of one or more
+ * grad-server replicas.
+ *
+ * - Keyed POSTs (SDK Idempotency-Key): the first attempt is forwarded, the
+ *   server commits it, and the client gets 503 instead of the real response.
+ *   The SDK's retry (same key) gets the stored response replayed with
+ *   `Idempotent-Replayed: true`.
+ * - Worker POSTs (`/v1/trainer-jobs/*`, natural keys, no Idempotency-Key):
+ *   with `dropWorkerAckEvery: n`, every n-th one is forwarded and committed,
+ *   then the client connection is closed without a response (the lost ack).
+ * - Several targets: requests round-robin over the replicas and fail over to
+ *   the next when one refuses the connection (a killed replica).
+ *
+ * Everything else passes through unchanged. `GET /__fault/stats` reports
+ * what happened.
  */
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,6 +21,15 @@ import type { AddressInfo } from "node:net";
 export interface FaultStats {
   dropped: number;
   replayed: number;
+  /** Worker POSTs whose response was cut after the server committed them. */
+  droppedWorkerAcks: number;
+  /** Requests re-sent to another replica after a connection failure. */
+  failovers: number;
+}
+
+export interface FaultProxyOptions {
+  /** Cut the response of every n-th trainer-job POST (0: never). */
+  dropWorkerAckEvery?: number;
 }
 
 export interface FaultProxy {
@@ -43,9 +61,36 @@ const forwardHeaders = (req: IncomingMessage): Headers => {
   return headers;
 };
 
-export const startFaultProxy = async (target: string): Promise<FaultProxy> => {
-  const stats: FaultStats = { dropped: 0, replayed: 0 };
+export const startFaultProxy = async (
+  target: string | readonly string[],
+  options: FaultProxyOptions = {},
+): Promise<FaultProxy> => {
+  const targets = typeof target === "string" ? [target] : [...target];
+  const stats: FaultStats = {
+    dropped: 0,
+    replayed: 0,
+    droppedWorkerAcks: 0,
+    failovers: 0,
+  };
   const seenKeys = new Set<string>();
+  let nextTarget = 0;
+  let workerPosts = 0;
+
+  /** Round-robin; a replica that refuses the connection is skipped. */
+  const forward = async (path: string, init: RequestInit) => {
+    const first = nextTarget++ % targets.length;
+    let lastError: unknown;
+    for (let i = 0; i < targets.length; i += 1) {
+      const base = targets[(first + i) % targets.length] as string;
+      try {
+        return await fetch(`${base}${path}`, init);
+      } catch (error) {
+        lastError = error;
+        stats.failovers += 1;
+      }
+    }
+    throw lastError;
+  };
 
   const server = createServer((req, res) => {
     void (async () => {
@@ -57,12 +102,25 @@ export const startFaultProxy = async (target: string): Promise<FaultProxy> => {
 
       const body = await readBody(req);
       const method = req.method ?? "GET";
-      const upstream = await fetch(`${target}${req.url ?? "/"}`, {
+      const upstream = await forward(req.url ?? "/", {
         method,
         headers: forwardHeaders(req),
         redirect: "manual",
         ...(method === "GET" || method === "HEAD" ? {} : { body }),
       });
+
+      const every = options.dropWorkerAckEvery ?? 0;
+      if (
+        every > 0 &&
+        method === "POST" &&
+        req.url?.startsWith("/v1/trainer-jobs/") &&
+        (workerPosts += 1) % every === 0
+      ) {
+        await upstream.arrayBuffer();
+        stats.droppedWorkerAcks += 1;
+        req.socket.destroy();
+        return;
+      }
 
       const key = req.headers["idempotency-key"];
       if (method === "POST" && typeof key === "string" && !seenKeys.has(key)) {

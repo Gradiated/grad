@@ -40,7 +40,7 @@ def http_json(url: str, method: str = "GET", payload: Any = None) -> Any:
 class LiveServer:
     """A grad-server on its own Postgres; ``base`` is its URL and ``dir`` a scratch directory."""
 
-    def __init__(self, case: unittest.TestCase) -> None:
+    def __init__(self, case: unittest.TestCase, *extra_args: str) -> None:
         if not TSX_BIN.exists():
             case.skipTest("server/api node_modules not installed")
         tmp = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
@@ -49,7 +49,7 @@ class LiveServer:
         self.log_path = self.dir / "server.log"
         with self.log_path.open("wb") as log:
             self.proc = subprocess.Popen(
-                [str(TSX_BIN), str(STACK), "--auth", "none", "--worker", "none"],
+                [str(TSX_BIN), str(STACK), "--auth", "none", "--worker", "none", *extra_args],
                 cwd=str(API_DIR),
                 env={**os.environ, "EVAL_EXECUTOR": "false"},
                 stdin=subprocess.PIPE,
@@ -62,7 +62,8 @@ class LiveServer:
         line = self.proc.stdout.readline()  # type: ignore[union-attr]
         if not line:
             raise RuntimeError(f"live stack failed to start:\n{self.log_tail()}")
-        self.base: str = json.loads(line)["base_url"]
+        self.info: dict[str, Any] = json.loads(line)
+        self.base: str = self.info["base_url"]
 
     def log_tail(self, chars: int = 4000) -> str:
         return self.log_path.read_text(errors="replace")[-chars:]
