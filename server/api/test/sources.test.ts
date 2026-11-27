@@ -140,11 +140,12 @@ describe("sources", () => {
     job: ClaimedJob,
     ids: string[],
     watermark: Record<string, unknown> | null,
+    seq = 0,
   ) => {
     if (ids.length > 0) {
       const posted = await worker.call(`/v1/trainer-jobs/${job.id}/records`, {
         ...worker.ref(job),
-        seq: 0,
+        seq,
         records: ids.map(record),
       });
       expect(posted.status).toBe(200);
@@ -303,8 +304,46 @@ describe("sources", () => {
       scores: "2026-11-27T10:00:00Z",
     });
 
+    // Score updates fold into their records on read; the old version is unchanged.
+    const scored = await worker.call(`/v1/trainer-jobs/${second.id}/records`, {
+      ...worker.ref(second),
+      seq: 0,
+      records: [
+        {
+          id: "t1",
+          source: "langfuse",
+          scores: { resolved: 1 },
+          metadata: { score_update: true },
+        },
+      ],
+    });
+    expect(scored.status).toBe(200);
+    await worker.complete(second, {
+      status: "completed",
+      import_summary: { watermark: null },
+    });
+    const page = await t.json<{
+      total: number;
+      data: Array<Record<string, unknown>>;
+    }>("/v1/datasets/support-prod/records?limit=1");
+    expect(page.body.total).toBe(2);
+    expect(page.body.data).toEqual([
+      { ...record("t1"), scores: { resolved: 1 } },
+    ]);
+    const v1 = await t.json<{ data: Array<Record<string, unknown>> }>(
+      "/v1/datasets/support-prod/records?version=1",
+    );
+    expect(v1.body.data.map((r) => r.scores)).toEqual([undefined, undefined]);
+    // A null watermark keeps the stored one.
+    await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
+    const third = await claimImport();
+    expect(third.import?.source.watermark).toEqual({
+      traces: "2026-11-27T10:00:00Z",
+      scores: "2026-11-27T10:00:00Z",
+    });
+
     // A failed sync keeps it, so the retry replays the same window.
-    await worker.complete(second, { status: "failed", error: "boom" });
+    await worker.complete(third, { status: "failed", error: "boom" });
     expect(
       (await t.json<Record<string, any>>(`/v1/sources/${source.id}`)).body
         .last_sync.status,
