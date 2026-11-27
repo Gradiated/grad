@@ -14,6 +14,10 @@ record budget (``max_records``: what is left of the source's per-sync and per-da
 updates don't count) apply. Traces past the budget are left out, and the result counts every
 trace each step left out.
 
+The trace and score streams are fetched at the same time, each one page ahead of the records
+being taken (``Prefetch``): two requests in flight at most, paced together by the provider's
+``requests_per_minute`` (``HttpClient`` paces across threads and honours ``Retry-After``).
+
 Records are deduped by provider trace id within a sync (an identical re-read is dropped, a
 changed one is re-emitted and wins when the parts are merged). Score updates for the same trace
 are merged before they are emitted, latest ``updated_at`` winning.
@@ -24,6 +28,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -89,6 +95,50 @@ def pages(fetch: Callable[[str | None, str | None], Page], since: str | None, *,
     raise PaginationLoopError(f"provider returned more than {max_pages} pages")
 
 
+class Prefetch:
+    """Iterates ``source`` on a thread, at most ``depth`` pages ahead of the caller, so the
+    next page downloads while this one is processed. Errors surface on the caller's thread;
+    ``close()`` stops the thread after its current request."""
+
+    _DONE = object()
+
+    def __init__(self, source: Iterator[Page], depth: int = 1) -> None:
+        self._queue: queue.Queue[Any] = queue.Queue(maxsize=depth)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(source,), daemon=True)
+        self._thread.start()
+
+    def _put(self, item: Any) -> bool:
+        while not self._stop.is_set():
+            try:
+                self._queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _run(self, source: Iterator[Page]) -> None:
+        try:
+            for page in source:
+                if not self._put(page):
+                    return
+            self._put(self._DONE)
+        except BaseException as exc:  # handed to the consumer
+            self._put(exc)
+
+    def __iter__(self) -> Iterator[Page]:
+        while True:
+            item = self._queue.get()
+            if item is self._DONE:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    def close(self) -> None:
+        self._stop.set()
+
+
 def _digest(record: dict[str, Any]) -> bytes:
     return hashlib.blake2b(json.dumps(record, sort_keys=True, default=str).encode(), digest_size=12).digest()
 
@@ -137,8 +187,14 @@ class SyncEngine:
         if not p.cursor_watermark and p.rescan_window and parse_time(scores_since):
             scores_since = iso(min(parse_time(scores_since), now - p.rescan_window))  # type: ignore[type-var]
 
-        trace_resume = self._drain(p.fetch_traces, traces_since, lambda raw: self._take_trace(raw, traces_since))
-        score_resume = self._drain(p.fetch_scores, scores_since, lambda raw: self._take_score(raw, wm.get("scores")))
+        traces = Prefetch(pages(p.fetch_traces, traces_since, max_pages=self.max_pages))
+        scores = Prefetch(pages(p.fetch_scores, scores_since, max_pages=self.max_pages))
+        try:
+            trace_resume = self._drain(traces, lambda raw: self._take_trace(raw, traces_since))
+            score_resume = self._drain(scores, lambda raw: self._take_score(raw, wm.get("scores")))
+        finally:
+            traces.close()
+            scores.close()
         self._flush()
         if p.cursor_watermark:
             self._result.watermark = {"traces": trace_resume or traces_since, "scores": score_resume or wm.get("scores")}
@@ -148,9 +204,9 @@ class SyncEngine:
 
     # -- streams ------------------------------------------------------------------------
 
-    def _drain(self, fetch: Callable[[str | None, str | None], Page], since: str | None, take: Callable[[dict[str, Any]], None]) -> str | None:
+    def _drain(self, stream: Prefetch, take: Callable[[dict[str, Any]], None]) -> str | None:
         resume = None
-        for page in pages(fetch, since, max_pages=self.max_pages):
+        for page in stream:
             if self.clock() > self._deadline:
                 raise SourceUnreachableError(
                     f"{self.provider.name} sync took longer than {self.max_seconds:.0f}s (GRAD_SOURCES_SYNC_MAX_SECONDS); "

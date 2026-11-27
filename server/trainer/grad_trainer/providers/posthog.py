@@ -53,7 +53,7 @@ def _literal(value: str | None) -> str:
 class PostHogProvider(Provider):
     name = "posthog"
     default_host = "https://us.posthog.com"
-    page_size = 500
+    page_size = 1000  # HogQL allows 50k; events carry whole conversations
     requests_per_minute = 40  # 2400 queries per hour per project
     pushdown_filters = frozenset({*COLUMNS_BY_FILTER, "metadata", "from", "to"})
 

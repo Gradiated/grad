@@ -53,12 +53,28 @@ class LangfuseQuirks(Served):
 
     def test_edited_score_with_an_old_timestamp_lands_through_the_rescan_window(self) -> None:
         fx, server = self.serve(LangfuseFixture())
-        fx.add_score("tr-0", "resolved", 1.0, NOW - timedelta(minutes=50))
+        fx.add_score("tr-0", "resolved", 1.0, NOW - timedelta(minutes=35))
         first, wm = self.sync(self.provider(fx, server))
         fx.scores[0].update(value=0.0, updatedAt=iso(NOW + timedelta(minutes=5)))  # edited later, same timestamp
-        second, _ = self.sync(self.provider(fx, server), wm.watermark, now=NOW + timedelta(hours=1))
+        # The re-scan window (GRAD_SOURCES_RESCAN_SECONDS, 1 h) still reaches its timestamp.
+        second, _ = self.sync(self.provider(fx, server), wm.watermark, now=NOW + timedelta(minutes=20))
         merged = {r["id"]: r for r in merge_records(first + second)}
         self.assertEqual(merged["tr-0"]["scores"], {"resolved": 0.0})
+
+    def test_feedback_is_re_read_over_a_bounded_window(self) -> None:
+        from grad_trainer.providers.base import RESCAN_WINDOW
+
+        self.assertEqual(RESCAN_WINDOW, timedelta(hours=1))
+        fx, server = self.serve(LangfuseFixture())
+        self.sync(self.provider(fx, server), {"traces": iso(NOW - timedelta(days=3)), "scores": iso(NOW - timedelta(days=3))})
+        since = [r.arg("fromTimestamp") for r in server.requests if r.path == "/api/public/v3/scores"]
+        self.assertEqual(since, [iso(NOW - timedelta(days=3))], "an older watermark is used as is")
+        server.requests.clear()
+        # A recent watermark: one window back, not the 7 days it used to be.
+        later = NOW + timedelta(minutes=5)
+        self.sync(self.provider(fx, server), {"traces": iso(NOW), "scores": iso(NOW)}, now=later)
+        since = [r.arg("fromTimestamp") for r in server.requests if r.path == "/api/public/v3/scores"]
+        self.assertEqual(since, [iso(later - RESCAN_WINDOW)])
 
     def test_score_types(self) -> None:
         p = LangfuseProvider()
@@ -197,7 +213,7 @@ class PostHogQuirks(Served):
     def test_filters_are_quoted_hogql(self) -> None:
         fx, server = self.serve(PostHogFixture())
         self.sync(self.provider(fx, server, filters={"model": ["m-'1"], "to": "2026-11-27T11:30:00Z"}))
-        sql = next(r.body["query"]["query"] for r in server.requests)
+        sql = next(r.body["query"]["query"] for r in server.requests if "$ai_generation" in r.body["query"]["query"])
         self.assertIn("properties.$ai_model IN ('m-\\'1')", sql)
         self.assertIn("timestamp < '2026-11-27 11:30:00.000000'", sql)
 

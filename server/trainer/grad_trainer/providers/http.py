@@ -128,12 +128,14 @@ class HttpClient:
     response_timeout_s: float = 120.0
     # Absolute ``clock()`` time after which no request starts or continues (a sync's cap).
     deadline: float | None = None
-    max_response_bytes: int = 32 * 1024 * 1024
+    max_response_bytes: int = 64 * 1024 * 1024
     max_attempts: int = 5
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     resolve: Callable[[str, int], list[str]] | None = None
     _last_request: float | None = field(default=None, init=False, repr=False)
+    # The trace and score streams share one client (and one requests_per_minute).
+    _pace_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.base = self._check_url(self.base_url)
@@ -281,14 +283,14 @@ class HttpClient:
             conn.close()
 
     def _pace(self) -> None:
-        if self.requests_per_minute:
+        if not self.requests_per_minute:
+            return
+        with self._pace_lock:  # reserve the next slot, then wait for it outside the lock
             now = self.clock()
-            if self._last_request is not None:
-                wait = self._last_request + 60.0 / self.requests_per_minute - now
-                if wait > 0:
-                    self.sleep(wait)
-                    now += wait
-            self._last_request = now
+            slot = now if self._last_request is None else max(now, self._last_request + 60.0 / self.requests_per_minute)
+            self._last_request = slot
+        if slot > now:
+            self.sleep(slot - now)
 
     def _backoff(self, attempt: int, retry_after: str | None) -> float:
         if retry_after:

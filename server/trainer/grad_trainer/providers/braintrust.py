@@ -39,7 +39,7 @@ def _in(column: str, values: tuple[str, ...]) -> str:
 class BraintrustProvider(Provider):
     name = "braintrust"
     default_host = "https://api.braintrust.dev"
-    page_size = 200
+    page_size = 1000  # no documented maximum; queries time out after 30 s
     requests_per_minute = 20  # BTQL limits are per org and project and not published; be gentle
     rescan_window = None
     cursor_watermark = True

@@ -208,6 +208,16 @@ class ClientTests(unittest.TestCase):
         client.get("/a")
         client.get("/b")
         self.assertEqual(self.sleeps, [1.0])
+        # Two streams share the client: each request reserves the next slot.
+        import threading
+
+        self.sleeps.clear()
+        threads = [threading.Thread(target=client.get, args=(f"/{i}",)) for i in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sorted(self.sleeps), [2.0, 3.0, 4.0])
 
     def test_redact(self) -> None:
         client = HttpClient("https://x.example", headers={"x-api-key": "abcd1234"}, secrets=("pk:sk-long", "pk", "sk-long"))

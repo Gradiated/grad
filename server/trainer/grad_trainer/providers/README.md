@@ -37,7 +37,7 @@ the new watermark in the `ImportSummary`.
      tags=..., user_id=...)`;
    - if feedback is separate from traces: `fetch_scores(since, cursor)` and
      `to_score_update(raw) -> ScoreUpdate(trace_id, scores, expected_output, updated_at)`.
-     `since` already includes the 7-day re-scan window; return `updated_at` so the engine can
+     `since` already includes the re-scan window (`GRAD_SOURCES_RESCAN_SECONDS`, 1 h); return `updated_at` so the engine can
      drop feedback it synced before. If the provider merges feedback into the trace row and
      bumps a version (Braintrust), skip both and use `cursor_watermark` with `Page.resume`;
    - optionally `detect(row)` for file auto-detection;
@@ -64,7 +64,8 @@ the new watermark in the `ImportSummary`.
 ## Behaviour every provider gets
 
 - **Watermark.** `{"traces": T, "scores": S}`, stored by grad-server when the job completes.
-  Traces are read from `T`; scores from `min(S, now - 7 days)`, so feedback edited later still
+  Traces are read from `T`; scores from `min(S, now - 1 h)` (`GRAD_SOURCES_RESCAN_SECONDS`;
+  Braintrust and Gradiated use their own cursors instead), so feedback edited later still
   lands. Only rows up to `now - 10 min` are taken (Langfuse documents ~10 minutes before reads
   see new data); the rest wait for the next sync. `full=True` ignores the watermark.
 - **Filters, sampling and caps** (`filters.py`). The engine applies every common filter key to
@@ -75,6 +76,11 @@ the new watermark in the `ImportSummary`.
   update). Score filters (`has_feedback`, `min_score`) ride on the record as
   `metadata.score_filter` and are judged when the dataset is merged, because feedback arrives
   later. The import's drop reasons say how many traces each step left out.
+- **Throughput.** Page sizes are each API's maximum. The trace and score streams are fetched at
+  once, a page ahead of processing (`sync.Prefetch`), sharing the client's
+  `requests_per_minute` pacing. The worker writes what a sync emits as gzip parts straight to
+  storage (`grad_trainer/parts.py`); a scheduled sync's parts wait for the source's
+  `version_interval` before they become a dataset version.
 - **Merging.** Score updates are records with `metadata.score_update = true`. The worker folds
   dataset parts with `records.merge_records` before training: later content replaces earlier
   content, later scores win per name, updates for traces never synced are dropped.

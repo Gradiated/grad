@@ -17,6 +17,7 @@ lives in ``http.HttpClient`` and ``sync.SyncEngine``.
 
 from __future__ import annotations
 
+import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from .filters import COMMON_FILTERS, Filters
 from .http import HttpClient
 
 Raw = dict[str, Any]
+RESCAN_WINDOW = timedelta(seconds=float(os.environ.get("GRAD_SOURCES_RESCAN_SECONDS") or 3600))
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 
@@ -112,9 +114,11 @@ class Provider(ABC):
     default_host: ClassVar[str | None] = None
     page_size: ClassVar[int] = 100
     requests_per_minute: ClassVar[float | None] = None
-    # Scores are re-fetched from max(watermark, now - rescan_window), so edits that keep their
-    # creation time still land. None: the provider's own cursor already covers late scores.
-    rescan_window: ClassVar[timedelta | None] = timedelta(days=7)
+    # Scores are re-fetched from min(watermark, now - rescan_window), so edits that keep their
+    # creation time still land. Bounded (GRAD_SOURCES_RESCAN_SECONDS, default 1 h): a busy
+    # source re-reads only that much feedback per sync. None: the provider's own cursor covers
+    # late scores (Braintrust's _xact_id, the Gradiated Cloud cursor).
+    rescan_window: ClassVar[timedelta | None] = RESCAN_WINDOW
     # True: the provider returns Page.resume (an opaque cursor) and the engine stores that as
     # the watermark instead of a timestamp.
     cursor_watermark: ClassVar[bool] = False

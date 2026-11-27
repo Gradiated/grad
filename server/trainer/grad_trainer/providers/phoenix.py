@@ -24,12 +24,12 @@ from ..records import coerce_messages, maybe_json, record_metadata, score_value
 from .base import Page, Provider, Raw, ScoreUpdate, iso_or_none
 from .sync import pages
 
-ANNOTATIONS_LIMIT = 1000
+ANNOTATIONS_LIMIT = 10_000
 
 
 class PhoenixProvider(Provider):
     name = "phoenix"
-    page_size = 100  # spans: up to 1000
+    page_size = 1000  # spans: up to 1000
     pushdown_filters = frozenset({"name", "user_id", "session_id", "metadata", "from", "to"})
 
     def auth_headers(self, secret: str) -> dict[str, str]:

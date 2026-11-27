@@ -23,12 +23,13 @@ from .filters import COMMON_FILTERS
 
 SELECTS = ["ID", "TRACE_ID", "THREAD_ID", "NAME", "START_TIME", "INPUTS", "OUTPUTS", "METADATA", "TAGS", "FEEDBACK_STATS"]
 EARLIEST = "2000-01-01T00:00:00Z"  # min_start_time defaults to one day ago
+FEEDBACK_LIMIT = 100
 
 
 class LangSmithProvider(Provider):
     name = "langsmith"
     default_host = "https://api.smith.langchain.com"
-    page_size = 100  # runs: up to 1000; feedback: up to 100
+    page_size = 1000  # runs: up to 1000 (feedback pages are at most FEEDBACK_LIMIT)
     requests_per_minute = 600  # runs query allows 300 per 10 s per key
     filter_keys = COMMON_FILTERS | {"filter"}
     pushdown_filters = frozenset({"tags", "name", "from", "to", "filter"})
@@ -72,12 +73,10 @@ class LangSmithProvider(Provider):
         return terms[0] if len(terms) == 1 else f"and({', '.join(terms)})" if terms else None
 
     def fetch_scores(self, since: str | None, cursor: str | None) -> Page:
-        offset = int(cursor or 0)
-        body = self.http.get(
-            "/api/v1/feedback", session=self.project_id, min_created_at=since, limit=self.page_size, offset=offset
-        )
+        offset, limit = int(cursor or 0), min(self.page_size, FEEDBACK_LIMIT)
+        body = self.http.get("/api/v1/feedback", session=self.project_id, min_created_at=since, limit=limit, offset=offset)
         rows = self.items({"list": body}, "list")
-        return Page(rows, str(offset + len(rows)) if len(rows) == self.page_size else None)
+        return Page(rows, str(offset + len(rows)) if len(rows) == limit else None)
 
     @classmethod
     def detect(cls, row: Raw) -> bool:

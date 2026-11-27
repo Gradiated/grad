@@ -173,6 +173,28 @@ class ImportSeamTests(unittest.TestCase):
         self.assertEqual(summary.errors, ["filtered out: 1 traces", "over the record cap: 2 traces"])
 
 
+class PrefetchTests(unittest.TestCase):
+    def test_pages_arrive_in_order_and_errors_surface_on_the_caller(self) -> None:
+        from grad_trainer.providers.sync import Prefetch
+
+        def source() -> Any:
+            yield Page([{"n": 1}])
+            yield Page([{"n": 2}])
+            raise SourceUnreachableError("boom")
+
+        stream = Prefetch(source())
+        seen = []
+        with self.assertRaisesRegex(SourceUnreachableError, "boom"):
+            for page in stream:
+                seen.append(page.items[0]["n"])
+        self.assertEqual(seen, [1, 2])
+        endless = Prefetch(Page([{"n": i}]) for i in range(10**9))
+        self.assertEqual(next(iter(endless)).items, [{"n": 0}])
+        endless.close()  # the thread stops instead of reading forever
+        endless._thread.join(timeout=2)
+        self.assertFalse(endless._thread.is_alive())
+
+
 class FilterTests(unittest.TestCase):
     def test_values_and_matching(self) -> None:
         from grad_trainer.providers.filters import Filters
