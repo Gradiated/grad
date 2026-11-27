@@ -178,14 +178,14 @@ describe("ObjectStore contract: S3 (SeaweedFS)", () => {
       `${prefix}/a/one.bin`,
       `${prefix}/two.bin`,
     ]);
-    expect(await store.listOlder(prefix, future, 1)).toHaveLength(1);
-    // Pages in key order after a cursor.
-    expect(await store.listOlder(prefix, future, 1, `${prefix}/a`)).toEqual([
-      `${prefix}/a/one.bin`,
+    // Pages in key order after a cursor. The cursor is always a key a page
+    // returned: SeaweedFS skips a whole "directory" when StartAfter names
+    // one (`${prefix}/a`), which AWS S3 does not.
+    const first = await store.listOlder(prefix, future, 1);
+    expect(first).toEqual([`${prefix}/a/one.bin`]);
+    expect(await store.listOlder(prefix, future, 5, first[0])).toEqual([
+      `${prefix}/two.bin`,
     ]);
-    expect(
-      await store.listOlder(prefix, future, 5, `${prefix}/a/one.bin`),
-    ).toEqual([`${prefix}/two.bin`]);
     expect(await store.listOlder(prefix, new Date(0), 10)).toEqual([]);
     expect(await store.listOlder(uniqueKey("empty"), future, 10)).toEqual([]);
   });
