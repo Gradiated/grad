@@ -19,7 +19,8 @@ validated by `grad_trainer/artifact_formats.py` against the JSON Schemas in
 | `reward`    | LoRA (or frozen) backbone + scalar head, Bradley-Terry and pointwise | adapter + `reward_head.safetensors` + `reward_config.json` (`reward_bundle`) |
 
 Each module docstring in `grad_trainer/recipes/` describes the data it accepts, the loss and
-the eval report. All recipes share one loop (`grad_trainer/trainer.py`) for batching, LR
+the eval report. `scripts/gpu-smoke/{distill,reward}.py` run the distillation and reward-model
+recipes for a few steps on real Qwen3 weights on one GPU and print a JSON summary. All recipes share one loop (`grad_trainer/trainer.py`) for batching, LR
 schedule (warmup, then linear/cosine decay to zero), real-token metering, the budget stop,
 checkpoints with full resumable state, resume and best-checkpoint selection.
 
