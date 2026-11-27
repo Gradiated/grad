@@ -45,9 +45,17 @@ export interface Artifact {
 }
 
 /** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
-export type ArtifactFormat = "peft_lora" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference";
+export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference";
 
-export const ArtifactFormatValues = ["peft_lora", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference"] as const;
+export const ArtifactFormatValues = ["peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference"] as const;
+
+/** Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference). */
+export interface BaseArtifact {
+  id: string;
+  recipeKind: RecipeKind;
+  format: "peft_lora";
+  sha256: string;
+}
 
 export interface BenchmarkSpec {
   name: "ifeval" | "gsm8k" | "mmlu-pro" | "gpqa-diamond" | "humaneval" | "livecodebench";
@@ -744,6 +752,7 @@ export interface ResolvedRunConfig {
     trainRecords: number;
     evalRecords: number;
   };
+  baseArtifact: BaseArtifact | null;
   recipeParams: Record<string, unknown>;
 }
 
@@ -863,6 +872,12 @@ export interface TrainerJob {
   resume: {
     checkpointId: string;
     step: number;
+    downloadUrl: string;
+  } | null;
+  /** Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training. */
+  base: {
+    artifactId: string;
+    sha256: string;
     downloadUrl: string;
   } | null;
 }

@@ -194,6 +194,17 @@ export const ResolvedAdapterSchema = z.union([
 
 export type ResolvedAdapter = z.infer<typeof ResolvedAdapterSchema>;
 
+export const BaseArtifactSchema = z
+  .object({
+    id: z.string().min(1),
+    recipe_kind: RecipeKindSchema,
+    format: z.literal("peft_lora"),
+    sha256: Sha256HexSchema,
+  })
+  .openapi("BaseArtifact");
+
+export type BaseArtifact = z.infer<typeof BaseArtifactSchema>;
+
 export const ResolvedRunConfigSchema = z
   .object({
     rule_version: z.string(),
@@ -225,6 +236,10 @@ export const ResolvedRunConfigSchema = z
       seed: z.number().int(),
       train_records: z.number().int().min(0),
       eval_records: z.number().int().min(0),
+    }),
+    base_artifact: BaseArtifactSchema.nullable().openapi({
+      description:
+        "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).",
     }),
     recipe_params: z.record(z.string(), z.unknown()),
   })
@@ -349,6 +364,7 @@ export const MetricsPageSchema = z
 export const ArtifactFormatSchema = z
   .enum([
     "peft_lora",
+    "merged_safetensors",
     "prefix_kv",
     "cartridge",
     "encoder_safetensors",

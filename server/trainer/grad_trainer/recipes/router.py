@@ -401,5 +401,5 @@ class RouterRunner(RecipeRunner):
         # Responses to the same prompt from different models must land on the same side.
         return [rec if rec.get("group_id") is not None else {**rec, "group_id": prompt_key(rec)} for rec in records]
 
-    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+    def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
         return RouterTask(spec, train, held_out, workdir)

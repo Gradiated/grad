@@ -83,8 +83,8 @@ class Recipe:
     """Settings shared by every recipe (see the training parameters reference).
 
     Attributes:
-        model: Base model id, or a previous :class:`grad.Artifact` (continued training is
-            rejected by the v0 server with a clear error).
+        model: Base model id, or a previous :class:`grad.Artifact` to keep training its LoRA
+            adapter (``SFTRecipe`` and ``DPORecipe``; DPO uses it as the reference model).
         adapter: ``adapters.LoRA(rank=32)`` by default.
         lr: ``"auto"`` (calibrated per model and objective) or a float.
         lr_scale: Multiplies the resolved ``lr``.

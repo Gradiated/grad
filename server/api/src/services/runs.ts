@@ -24,6 +24,7 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { ApiError, conflict, forbidden, invalid, notFound } from "../errors.js";
 import { newId } from "../ids.js";
+import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
@@ -267,10 +268,14 @@ export const createRunLifecycle = (
   const planFor = async (workspaceId: string, request: PlanRunRequest) => {
     const resolved = await datasets.resolve(workspaceId, request.dataset);
     const records = await datasets.readRecords(resolved.version);
+    const baseArtifact = isArtifactRef(request.recipe.model)
+      ? await store.artifacts.get(workspaceId, request.recipe.model)
+      : null;
     const plan = planRun(request, records, {
       catalog,
       datasetVersion: resolved.version.version,
       allowWave2: settings.allowWave2Recipes,
+      baseArtifact: baseArtifact && toPublicArtifact(baseArtifact),
     });
 
     return { plan, dataset: resolved.dataset };
@@ -355,6 +360,15 @@ export const createRunLifecycle = (
     }
 
     const resume = await store.checkpoints.latestForRun(run.id, clock.now());
+    const baseRef = run.resolved_config.base_artifact;
+    const base = baseRef
+      ? await store.artifacts.get(run.workspace_id, baseRef.id)
+      : null;
+    if (baseRef && base?.sha256 !== baseRef.sha256) {
+      throw new Error(
+        `Starting artifact '${baseRef.id}' of run '${run.id}' is missing or changed.`,
+      );
+    }
 
     return {
       id: run.id,
@@ -388,6 +402,13 @@ export const createRunLifecycle = (
             checkpoint_id: resume.id,
             step: resume.step,
             download_url: await uploads.downloadUrl(resume.storage_key),
+          }
+        : null,
+      base: base
+        ? {
+            artifact_id: base.id,
+            sha256: base.sha256,
+            download_url: await uploads.downloadUrl(base.storage_key),
           }
         : null,
     };

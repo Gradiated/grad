@@ -43,6 +43,7 @@
       "train_records": 20,
       "eval_records": 4
     },
+    "base_artifact": null,
     "recipe_params": {}
   },
   "dpo": {
@@ -89,6 +90,7 @@
       "train_records": 20,
       "eval_records": 4
     },
+    "base_artifact": null,
     "recipe_params": {
       "loss": {
         "kind": "dpo",
@@ -140,6 +142,7 @@
       "train_records": 42,
       "eval_records": 6
     },
+    "base_artifact": null,
     "recipe_params": {
       "rubric": "ok",
       "pricing": {
@@ -196,6 +199,7 @@
       "train_records": 20,
       "eval_records": 4
     },
+    "base_artifact": null,
     "recipe_params": {
       "context_text": "The capital of Testland is Tinytown.",
       "num_tokens": 16,
@@ -249,6 +253,7 @@
       "train_records": 20,
       "eval_records": 4
     },
+    "base_artifact": null,
     "recipe_params": {
       "loss": {
         "kind": "infonce",

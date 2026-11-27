@@ -992,6 +992,8 @@ components:
             - seed
             - train_records
             - eval_records
+        base_artifact:
+          $ref: "#/components/schemas/BaseArtifact"
         recipe_params:
           type: object
           additionalProperties: {}
@@ -1020,6 +1022,7 @@ components:
         - optimizer
         - checkpoint_ttl_days
         - split
+        - base_artifact
         - recipe_params
     OptimizerSpec:
       type: object
@@ -1053,6 +1056,29 @@ components:
           default: 1
           description: Max global gradient norm; 0 disables clipping.
       additionalProperties: false
+    BaseArtifact:
+      type:
+        - object
+        - "null"
+      properties:
+        id:
+          type: string
+          minLength: 1
+        recipe_kind:
+          $ref: "#/components/schemas/RecipeKind"
+        format:
+          type: string
+          enum:
+            - peft_lora
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      required:
+        - id
+        - recipe_kind
+        - format
+        - sha256
+      description: "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference)."
     PlanRunRequest:
       type: object
       properties:
@@ -1628,6 +1654,7 @@ components:
         - "null"
       enum:
         - peft_lora
+        - merged_safetensors
         - prefix_kv
         - cartridge
         - encoder_safetensors
@@ -1850,6 +1877,25 @@ components:
             - checkpoint_id
             - step
             - download_url
+        base:
+          type:
+            - object
+            - "null"
+          properties:
+            artifact_id:
+              type: string
+              minLength: 1
+            sha256:
+              type: string
+              pattern: ^[0-9a-f]{64}$
+            download_url:
+              type: string
+              minLength: 1
+          required:
+            - artifact_id
+            - sha256
+            - download_url
+          description: "Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training."
       required:
         - id
         - kind
@@ -1862,6 +1908,7 @@ components:
         - max_cost_usd
         - dataset
         - resume
+        - base
     JobKind:
       type: string
       enum:

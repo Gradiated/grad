@@ -323,5 +323,5 @@ class DecisionTask(PooledLMTask):
 class DecisionRunner(RecipeRunner):
     kind = "decision"
 
-    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+    def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
         return DecisionTask(spec, train, held_out, workdir)

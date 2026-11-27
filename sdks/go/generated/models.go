@@ -75,12 +75,29 @@ type ArtifactFormat string
 // Values of ArtifactFormat.
 const (
 	ArtifactFormatPeftLora           ArtifactFormat = "peft_lora"
+	ArtifactFormatMergedSafetensors  ArtifactFormat = "merged_safetensors"
 	ArtifactFormatPrefixKv           ArtifactFormat = "prefix_kv"
 	ArtifactFormatCartridge          ArtifactFormat = "cartridge"
 	ArtifactFormatEncoderSafetensors ArtifactFormat = "encoder_safetensors"
 	ArtifactFormatRouterBundle       ArtifactFormat = "router_bundle"
 	ArtifactFormatDecisionBundle     ArtifactFormat = "decision_bundle"
 	ArtifactFormatReference          ArtifactFormat = "reference"
+)
+
+// BaseArtifact Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
+type BaseArtifact struct {
+	ID         string             `json:"id"`
+	RecipeKind RecipeKind         `json:"recipe_kind"`
+	Format     BaseArtifactFormat `json:"format"`
+	SHA256     string             `json:"sha256"`
+}
+
+// BaseArtifactFormat is an enumeration of allowed values.
+type BaseArtifactFormat string
+
+// Values of BaseArtifactFormat.
+const (
+	BaseArtifactFormatPeftLora BaseArtifactFormat = "peft_lora"
 )
 
 // BenchmarkSpec is generated from the OpenAPI schema.
@@ -1474,6 +1491,7 @@ type ResolvedRunConfig struct {
 	Optimizer            OptimizerSpec              `json:"optimizer"`
 	CheckpointTTLDays    int                        `json:"checkpoint_ttl_days"`
 	Split                ResolvedRunConfigSplit     `json:"split"`
+	BaseArtifact         *BaseArtifact              `json:"base_artifact"`
 	RecipeParams         map[string]any             `json:"recipe_params"`
 }
 
@@ -1717,6 +1735,15 @@ type TrainerJob struct {
 	MaxCostUSD *float64           `json:"max_cost_usd"`
 	Dataset    *TrainerJobDataset `json:"dataset"`
 	Resume     *TrainerJobResume  `json:"resume"`
+	// Base Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training.
+	Base *TrainerJobBase `json:"base"`
+}
+
+// TrainerJobBase Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training.
+type TrainerJobBase struct {
+	ArtifactID  string `json:"artifact_id"`
+	SHA256      string `json:"sha256"`
+	DownloadURL string `json:"download_url"`
 }
 
 // TrainerJobDataset is generated from the OpenAPI schema.

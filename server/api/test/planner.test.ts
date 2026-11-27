@@ -227,9 +227,11 @@ describe("planRun", () => {
         ),
       "adapter_not_supported",
     );
+    // The service resolves artifact references; an unresolved one is unknown.
     expectCode(
       () => plan({ kind: "sft", model: "sql-helper@latest" }, records),
-      "continued_training_unsupported",
+      "unknown_model",
+      /not found in this workspace/,
     );
   });
 

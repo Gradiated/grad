@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 
 import type { ModelCatalog } from "./catalog.js";
+import { isArtifactRef, resolveContinuation } from "./continued-training.js";
 import {
   V0_RECIPE_KINDS,
   messageText,
   type AdapterSpec,
+  type Artifact,
+  type BaseArtifact,
   type ChatMessage,
   type DatasetRecord,
   type PlanRunRequest,
@@ -216,20 +219,29 @@ const estimateRecordTokens = (
 export const isV0Recipe = (kind: RecipeKind): boolean =>
   (V0_RECIPE_KINDS as readonly string[]).includes(kind);
 
+const assertRecipeSupported = (
+  kind: RecipeKind,
+  model: TrainableModel,
+  catalog: ModelCatalog,
+): void => {
+  if (model.recipes.includes(kind)) return;
+
+  const supported = catalog
+    .list()
+    .filter((m) => m.recipes.includes(kind))
+    .map((m) => m.id);
+  throw invalid(
+    "recipe_not_supported_for_model",
+    `Model '${model.id}' does not support recipe '${kind}'. Models that do: ${supported.join(", ") || "none"}.`,
+  );
+};
+
 const resolveModel = (
   request: PlanRunRequest,
   catalog: ModelCatalog,
 ): TrainableModel => {
   const { kind } = request.recipe;
   const requested = request.recipe.model;
-
-  if (requested?.includes("@")) {
-    throw invalid(
-      "continued_training_unsupported",
-      `Continued training from artifact '${requested}' is not supported in v0; pass a base model id from GET /v1/models.`,
-    );
-  }
-
   const model = requested
     ? catalog.find(requested)
     : catalog.defaultModelFor(kind);
@@ -242,16 +254,7 @@ const resolveModel = (
     );
   }
 
-  if (!model.recipes.includes(kind)) {
-    const supported = catalog
-      .list()
-      .filter((m) => m.recipes.includes(kind))
-      .map((m) => m.id);
-    throw invalid(
-      "recipe_not_supported_for_model",
-      `Model '${model.id}' does not support recipe '${kind}'. Models that do: ${supported.join(", ") || "none"}.`,
-    );
-  }
+  assertRecipeSupported(kind, model, catalog);
 
   return model;
 };
@@ -338,7 +341,38 @@ export interface PlanContext {
   catalog: ModelCatalog;
   datasetVersion: number;
   allowWave2?: boolean;
+  /** The artifact `recipe.model` names, when it is an artifact reference. */
+  baseArtifact?: Artifact | null;
 }
+
+/** Base model, adapter and (for continued training) the starting artifact. */
+const resolveStart = (
+  request: PlanRunRequest,
+  context: PlanContext,
+): {
+  model: TrainableModel;
+  adapter: ResolvedRunConfig["adapter"];
+  base: BaseArtifact | null;
+} => {
+  if (!isArtifactRef(request.recipe.model)) {
+    const model = resolveModel(request, context.catalog);
+
+    return { model, adapter: resolveAdapter(request, model), base: null };
+  }
+
+  const continuation = resolveContinuation(
+    request.recipe,
+    context.baseArtifact ?? null,
+    context.catalog,
+  );
+  assertRecipeSupported(
+    request.recipe.kind,
+    continuation.model,
+    context.catalog,
+  );
+
+  return continuation;
+};
 
 /** Resolves every default for a run and estimates its cost. Throws ApiError(422). */
 export const planRun = (
@@ -356,8 +390,7 @@ export const planRun = (
     );
   }
 
-  const model = resolveModel(request, context.catalog);
-  const adapter = resolveAdapter(request, model);
+  const { model, adapter, base } = resolveStart(request, context);
   if (
     recipe.teacher !== undefined &&
     context.catalog.find(recipe.teacher)?.family !== model.family
@@ -545,6 +578,7 @@ export const planRun = (
       train_records: train.length,
       eval_records: evalSet.length,
     },
+    base_artifact: base,
     recipe_params: recipeParams,
   };
 

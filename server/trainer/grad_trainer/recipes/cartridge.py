@@ -300,7 +300,7 @@ class CartridgeTask(TorchTask):
 class CartridgeRunner(RecipeRunner):
     kind = "cartridge"
 
-    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+    def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
         return CartridgeTask(spec, train, held_out, workdir)
 
 

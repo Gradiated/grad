@@ -76,6 +76,7 @@ class TrainSpec:
     params: dict[str, Any]
     template_revision: str | None
     rule_version: str
+    base_artifact_id: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     def fingerprint(self) -> dict[str, Any]:
@@ -88,6 +89,7 @@ class TrainSpec:
             "seed": self.seed,
             "split": [self.split.strategy, self.split.eval_fraction, self.split.seed],
             "adapter": self.adapter,
+            "base_artifact": self.base_artifact_id,
         }
 
 
@@ -178,6 +180,9 @@ def parse_train_spec(kind: str, config: Mapping[str, Any]) -> TrainSpec:
         raise RecipeConfigError("'split.eval_fraction' must be <= 0.5.")
 
     adapter = dict(config.get("adapter") or {})
+    base = config.get("base_artifact")
+    if base is not None and (not isinstance(base, Mapping) or not isinstance(base.get("id"), str)):
+        raise RecipeConfigError("'base_artifact' must be an object with an 'id'.")
     params = dict(config.get("recipe_params") or {})
     max_seq_len = config.get("max_seq_len")
 
@@ -209,6 +214,7 @@ def parse_train_spec(kind: str, config: Mapping[str, Any]) -> TrainSpec:
         params=params,
         template_revision=config.get("template_revision"),
         rule_version=str(config.get("rule_version", "auto@1")),
+        base_artifact_id=None if base is None else str(base["id"]),
         raw=dict(config),
     )
 

@@ -234,6 +234,7 @@ export const createImportService = (
         max_cost_usd: null,
         dataset: null,
         resume: null,
+        base: null,
       };
     },
 

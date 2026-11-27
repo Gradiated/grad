@@ -19,6 +19,7 @@ from ..backends import torch_common as tc
 from ..backends.torch_task import TorchTask
 from ..config import TrainSpec
 from ..errors import RecipeDataError
+from ..runner_types import BaseArtifact
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .data import record_id, record_messages
@@ -29,22 +30,27 @@ class SFTTask(TorchTask):
     metric_name = "eval_loss"
     metric_mode = "min"
 
-    def __init__(self, spec: TrainSpec, train: list[dict[str, Any]], held_out: list[dict[str, Any]], workdir: Path) -> None:
+    def __init__(
+        self,
+        spec: TrainSpec,
+        train: list[dict[str, Any]],
+        held_out: list[dict[str, Any]],
+        workdir: Path,
+        base: BaseArtifact | None = None,
+    ) -> None:
         super().__init__(spec, workdir)
         self.resolved = self.resolve(spec.model, "causal_lm")
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
-        base = tc.load_causal_lm(self.resolved, self.device)
-        self.max_len = tc.model_max_len(base, spec)
+        base_lm = tc.load_causal_lm(self.resolved, self.device)
+        self.max_len = tc.model_max_len(base_lm, spec)
         self.stats = {"skipped_no_messages": 0, "skipped_no_trained_tokens": 0, "truncated": 0}
         self.train_examples = self._encode(train)
         self.eval_examples = self._encode(held_out)
         if not self.train_examples:
             raise RecipeDataError("SFT needs at least one training record with a trained assistant turn.")
         self.merge = bool(spec.adapter.get("merge_on_export", False))
-        self.lora = tc.lora_settings(spec.adapter)
-        torch.manual_seed(spec.seed)
-        self.model = tc.apply_lora(base, spec.adapter, tc.use_gradient_checkpointing(spec, self.device))
+        self.model, self.lora = self.lora_model(base_lm, self.resolved, base)
         self.lm = tc.base_causal_lm(self.model)
         self.init_optimizer(self.model)
         self.artifact_format = "peft_lora"
@@ -164,6 +170,7 @@ class SFTTask(TorchTask):
 
 class SFTRunner(RecipeRunner):
     kind = "sft"
+    continues_adapters = True
 
-    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
-        return SFTTask(spec, train, held_out, workdir)
+    def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
+        return SFTTask(spec, train, held_out, workdir, base)

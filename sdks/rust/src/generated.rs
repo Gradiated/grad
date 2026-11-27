@@ -966,6 +966,8 @@ pub mod models {
     pub enum ArtifactFormat {
         /// `"peft_lora"`
         PeftLora,
+        /// `"merged_safetensors"`
+        MergedSafetensors,
         /// `"prefix_kv"`
         PrefixKv,
         /// `"cartridge"`
@@ -992,6 +994,7 @@ pub mod models {
         pub fn as_str(&self) -> &str {
             match self {
                 Self::PeftLora => "peft_lora",
+                Self::MergedSafetensors => "merged_safetensors",
                 Self::PrefixKv => "prefix_kv",
                 Self::Cartridge => "cartridge",
                 Self::EncoderSafetensors => "encoder_safetensors",
@@ -1007,6 +1010,7 @@ pub mod models {
         fn from(s: &str) -> Self {
             match s {
                 "peft_lora" => Self::PeftLora,
+                "merged_safetensors" => Self::MergedSafetensors,
                 "prefix_kv" => Self::PrefixKv,
                 "cartridge" => Self::Cartridge,
                 "encoder_safetensors" => Self::EncoderSafetensors,
@@ -1031,6 +1035,67 @@ pub mod models {
     }
 
     impl<'de> Deserialize<'de> for ArtifactFormat {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
+    }
+
+    /// Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct BaseArtifact {
+        pub id: String,
+        pub recipe_kind: RecipeKind,
+        pub format: BaseArtifactFormat,
+        pub sha256: String,
+    }
+
+    /// Allowed values of `BaseArtifactFormat` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum BaseArtifactFormat {
+        /// `"peft_lora"`
+        PeftLora,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for BaseArtifactFormat {
+        fn default() -> Self {
+            Self::PeftLora
+        }
+    }
+
+    impl BaseArtifactFormat {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::PeftLora => "peft_lora",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for BaseArtifactFormat {
+        fn from(s: &str) -> Self {
+            match s {
+                "peft_lora" => Self::PeftLora,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for BaseArtifactFormat {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for BaseArtifactFormat {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for BaseArtifactFormat {
         fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             let s = String::deserialize(deserializer)?;
             Ok(Self::from(s.as_str()))
@@ -4362,6 +4427,8 @@ pub mod models {
         pub optimizer: OptimizerSpec,
         pub checkpoint_ttl_days: i64,
         pub split: ResolvedRunConfigSplit,
+        #[serde(default)]
+        pub base_artifact: Option<BaseArtifact>,
         pub recipe_params: BTreeMap<String, Value>,
     }
 
@@ -5241,6 +5308,17 @@ pub mod models {
         pub dataset: Option<TrainerJobDataset>,
         #[serde(default)]
         pub resume: Option<TrainerJobResume>,
+        /// Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training.
+        #[serde(default)]
+        pub base: Option<TrainerJobBase>,
+    }
+
+    /// Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct TrainerJobBase {
+        pub artifact_id: String,
+        pub sha256: String,
+        pub download_url: String,
     }
 
     /// Generated from the OpenAPI schema `TrainerJobDataset`.
