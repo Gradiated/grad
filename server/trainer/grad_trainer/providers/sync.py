@@ -102,7 +102,8 @@ def pages(fetch: Callable[[str | None, str | None], Page], since: str | None, *,
 class Prefetch:
     """Iterates ``source`` on a thread, at most ``depth`` pages ahead of the caller, so the
     next page downloads while this one is processed. Errors surface on the caller's thread;
-    ``close()`` stops the thread after its current request."""
+    ``close()`` stops the thread after its current request and waits for it, so a sync that
+    returns (or fails) has no request still in flight."""
 
     _DONE = object()
 
@@ -139,8 +140,12 @@ class Prefetch:
                 raise item
             yield item
 
+    # Longer than one provider response may take (http.py's per-response wall-clock limit).
+    CLOSE_TIMEOUT = 150.0
+
     def close(self) -> None:
         self._stop.set()
+        self._thread.join(self.CLOSE_TIMEOUT)
 
 
 def _digest(record: dict[str, Any]) -> bytes:
