@@ -10,6 +10,8 @@
     "dev": "tsx watch src/main.ts",
     "format": "prettier --write src test scripts",
     "format:check": "prettier --check src test scripts",
+    "metrics:check": "node --import tsx scripts/emit-metrics-doc.ts --check",
+    "metrics:docs": "node --import tsx scripts/emit-metrics-doc.ts",
     "openapi:check": "node --import tsx scripts/emit-openapi.ts --check",
     "openapi:generate": "node --import tsx scripts/emit-openapi.ts",
     "start": "node dist/main.js",

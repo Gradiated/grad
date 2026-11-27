@@ -14,7 +14,7 @@ secrets:
   create: true
   # With create: false, the name of a Secret you manage (kubectl, External
   # Secrets, sealed-secrets). Every key except database-url is optional:
-  #   database-url          Postgres URL (API, migrations Job, KEDA)
+  #   database-url          Postgres URL (API, migrations Job)
   #   admin-api-key-hash    sha256 hex of the bootstrap admin key (AUTH_MODE=api_key)
   #   trainer-api-key       one worker key for every pool (the API hashes it)
   #   trainer-keys-json     per-pool keys scoped by kind: [{"label","sha256","kinds"}]

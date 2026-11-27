@@ -198,3 +198,12 @@ describe("Grafana dashboards", () => {
     ]);
   });
 });
+
+describe("docs/METRICS.md", () => {
+  it("lists every exported metric (pnpm -C server/api metrics:docs)", async () => {
+    const { OUT_PATH, renderMetricsDoc } = await import(
+      "../scripts/emit-metrics-doc.js"
+    );
+    expect(readFileSync(OUT_PATH, "utf8")).toBe(await renderMetricsDoc());
+  });
+});
