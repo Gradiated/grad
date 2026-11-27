@@ -17,7 +17,7 @@ export GRADIATED_API_KEY=grad_...
 
 ```python
 from grad import Grad
-from grad.recipes import DPORecipe, SFTRecipe
+from grad.recipes import SFTRecipe
 
 client = Grad()  # reads GRADIATED_API_KEY and GRADIATED_BASE_URL
 
@@ -74,6 +74,10 @@ Every error subclasses `grad.GradError`. HTTP errors are `grad.GradAPIError` sub
 ## Continued training and idempotent calls
 
 ```python
+from grad import Grad
+from grad.recipes import DPORecipe, SFTRecipe
+
+client = Grad()
 sft = client.runs.create(dataset="sql-sft", name="sql-helper", recipe=SFTRecipe()).wait()
 dpo = client.runs.create(dataset="sql-prefs", name="sql-helper", recipe=DPORecipe(model=sft.artifact),
                          idempotency_key="sql-helper-dpo-1").wait()

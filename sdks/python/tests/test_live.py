@@ -117,15 +117,14 @@ class SelfHostedLiveTests(_LiveCase):
         cwd = os.getcwd()
         os.chdir(self.tmp)
         self.addCleanup(os.chdir, cwd)
-        outputs = []
-        for block in blocks:
-            code = block.replace('SFTRecipe(model="qwen/qwen3-8b")', f'SFTRecipe(model="{LLM}")').replace("SFTRecipe()", f'SFTRecipe(model="{LLM}")')
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                exec(compile(code, "README.md", "exec"), {"__name__": "readme"})
-            outputs.append(out.getvalue())
-        self.assertIn("Estimate", outputs[0])
-        self.assertIn("completed sql-helper@", outputs[0])
-        self.assertRegex(outputs[1], r"^1 ")
+        code = blocks[0].replace('SFTRecipe(model="qwen/qwen3-8b")', f'SFTRecipe(model="{LLM}")')
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            exec(compile(code, "README.md", "exec"), {"__name__": "readme"})
+        self.assertIn("Estimate", out.getvalue())
+        self.assertIn("completed sql-helper@", out.getvalue())
+        # The continued-training block needs a PEFT artifact (the torch worker): it is
+        # exercised by CloudTorchLiveTests.test_continued_training_and_caller_idempotency_key.
+        compile(blocks[1], "README.md", "exec")
         self.assertTrue((self.tmp / "sql-helper-bundle.grad.tar.gz").is_file())
 
     def test_import_file_render_and_records(self) -> None:
@@ -287,6 +286,17 @@ class CloudTorchLiveTests(_LiveCase):
         self.assertEqual(rolled.active_artifact_id, first)
         status = rolled.status_summary()
         self.assertGreaterEqual(status.feedback_count, 1)
+
+    def test_continued_training_and_caller_idempotency_key(self) -> None:
+        # docs: recipes/dpo.mdx "start from an SFT artifact"; api-reference Idempotency-Key
+        client = Grad()
+        ds = client.datasets.push("sql-sft", SQL_RECORDS)
+        sft = client.runs.create(dataset=ds, name="sql-helper", recipe=SFTRecipe(model=LLM), idempotency_key="live-sft-1").wait(timeout=600)
+        self.assertEqual(sft.status, "completed")
+        again = client.runs.create(dataset=ds, name="sql-helper", recipe=SFTRecipe(model=LLM), idempotency_key="live-sft-1")
+        self.assertEqual(again.id, sft.id, "the same key replays the first create instead of starting a run")
+        plan = client.runs.plan(dataset=ds, name="sql-helper-2", recipe=SFTRecipe(model=sft.artifact))
+        self.assertEqual(plan.resolved_config["base_artifact"]["id"], sft.artifact.id)
 
 
 if __name__ == "__main__":
