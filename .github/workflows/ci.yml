@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   server-api:
-    name: Server API & OpenAPI (Postgres + S3)
+    name: Server API & OpenAPI (Postgres + SeaweedFS S3)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,11 +37,6 @@ jobs:
           --health-retries 20
     env:
       GRAD_TEST_DATABASE_URL: postgres://grad:grad_ci_only@127.0.0.1:5432/grad
-      S3_TEST_ENDPOINT: http://127.0.0.1:9000
-      S3_TEST_BUCKET: grad-ci
-      AWS_ACCESS_KEY_ID: gradci
-      AWS_SECRET_ACCESS_KEY: grad-ci-only-secret
-      GRAD_REQUIRE_S3: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,14 +48,9 @@ jobs:
         with:
           install_args: node pnpm
 
-      # MinIO needs `server /data` as its command, which service containers cannot pass.
-      # pgsty/minio is the maintained community build (the official image is no longer published).
-      - name: Start MinIO
-        run: |
-          docker run -d --name grad-ci-minio -p 127.0.0.1:9000:9000 \
-            -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
-            pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 server /data
-
+      # The S3 store is not a service container: the suite's globalSetup starts
+      # one SeaweedFS (gradr8-s3-<pid>, a generated key and its S3 config file
+      # mounted) like on a laptop, and removes it afterwards.
       - name: Install server/api dependencies
         run: pnpm -C server/api install --frozen-lockfile
 
@@ -78,7 +68,7 @@ jobs:
       - name: Typecheck
         run: pnpm -C server/api exec tsc --noEmit
 
-      - name: Tests with coverage gate (Postgres store, local + S3 storage)
+      - name: Tests with coverage gate (Postgres store, SeaweedFS S3 storage)
         run: pnpm -C server/api test:coverage
 
       # Tokenless upload (OIDC); a failed upload never fails CI.
