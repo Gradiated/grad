@@ -53,6 +53,7 @@ export const createCloudBilling = (
   const timeoutMs = options.timeoutMs ?? 10_000;
   const continueCacheMs = options.continueCacheMs ?? 30_000;
   const continued = new Map<string, { allowed: boolean; at: number }>();
+  const checking = new Map<string, Promise<boolean>>();
 
   const post = (path: string, body: unknown): Promise<CloudResponse> =>
     cloudRequest(fetchFn, `${options.baseUrl}${path}`, {
@@ -109,25 +110,34 @@ export const createCloudBilling = (
       const now = options.clock.now().getTime();
       const hit = continued.get(workspaceId);
       if (hit && now - hit.at < continueCacheMs) return hit.allowed;
-      let allowed = true;
-      try {
-        const res = await check(workspaceId, 0);
-        // A billing outage never stops running work.
-        allowed = !isOk(res.status) || res.json.allowed !== false;
-        counted(
-          "continue",
-          !isOk(res.status) ? "error" : allowed ? "allowed" : "refused",
-        );
-      } catch {
-        allowed = true;
-        counted("continue", "error");
-      }
-      continued.set(workspaceId, { allowed, at: now });
-      if (continued.size > 10_000) {
-        continued.delete(continued.keys().next().value as string);
-      }
+      // One check per workspace at a time: a slow billing service never
+      // gets one call per heartbeat of every run in the workspace.
+      const pending = checking.get(workspaceId);
+      if (pending) return pending;
+      const asking = (async () => {
+        let allowed = true;
+        try {
+          const res = await check(workspaceId, 0);
+          // A billing outage never stops running work.
+          allowed = !isOk(res.status) || res.json.allowed !== false;
+          counted(
+            "continue",
+            !isOk(res.status) ? "error" : allowed ? "allowed" : "refused",
+          );
+        } catch {
+          allowed = true;
+          counted("continue", "error");
+        }
+        continued.set(workspaceId, { allowed, at: now });
+        if (continued.size > 10_000) {
+          continued.delete(continued.keys().next().value as string);
+        }
 
-      return allowed;
+        return allowed;
+      })().finally(() => checking.delete(workspaceId));
+      checking.set(workspaceId, asking);
+
+      return asking;
     },
 
     pushUsage: async (events: readonly UsageEvent[]) => {

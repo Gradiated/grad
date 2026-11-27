@@ -22,7 +22,11 @@ import {
   type EvalHarness,
 } from "./fixtures/evals.js";
 import { ManualClock } from "./fixtures/clock.js";
-import { cloudBillingDeps, startTestCloud } from "./fixtures/cloud.js";
+import {
+  cloudBillingDeps,
+  startTestCloud,
+  usageCommitted,
+} from "./fixtures/cloud.js";
 import {
   startFakeCloudApi,
   type FakeCloudApi,
@@ -364,5 +368,84 @@ describe("chaos: billing (price list, balance check) down", () => {
       should_stop: false,
     });
     expect((await t.deps.store.runs.getById(first.id))?.status).toBe("running");
+  });
+
+  it("a slow balance check is asked once per workspace, not once per heartbeat", async () => {
+    cloud = await startTestCloud();
+    const clock = new ManualClock();
+    const { billing } = await cloudBillingDeps(cloud, clock);
+    cloud.setLatency(300);
+    const answers = await Promise.all(
+      Array.from({ length: 50 }, () => billing.canContinue?.(WORKSPACE_A)),
+    );
+    expect(answers.every((a) => a === true)).toBe(true);
+    expect(cloud.callsTo(CHECK)).toHaveLength(1);
+  });
+});
+
+describe("chaos: usage ingest down for hours", () => {
+  const INGEST = "/api/internal/v1/billing/usage-events";
+  let cloud: FakeCloudApi;
+  let t: TestApp | undefined;
+
+  afterEach(async () => {
+    await t?.close();
+    t = undefined;
+    await cloud.close();
+  });
+
+  const row = (i: number) => ({
+    idempotencyKey: `run-usage:run_chaos${i % 7}:1:${1000 + i}`,
+    workspaceId: WORKSPACE_A,
+    kind: "run" as const,
+    refId: `run_chaos${i % 7}`,
+    attempt: 1,
+    tokensFrom: 999 + i,
+    tokensThrough: 1000 + i,
+    costUsd: 0.000001,
+    amountNanoUsd: 1000,
+    priceVersion: "pv_1",
+    sku: "train:test/tiny-qwen3",
+  });
+
+  it("a 3 h outage keeps every row, backs off to 5 min, then drains each row exactly once, lost acks included", async () => {
+    cloud = await startTestCloud();
+    const clock = new ManualClock();
+    t = await makeTestApp({ clock, ...(await cloudBillingDeps(cloud, clock)) });
+    const rows = 1_200;
+    for (let i = 0; i < rows; i += 1) await t.deps.store.usage.record(row(i));
+    await usageCommitted();
+
+    // Down for 3 hours: one attempt per backoff step, never more often.
+    cloud.failNext(1_000_000, 503, INGEST);
+    for (let s = 0; s < 3 * 3600; s += 30) {
+      await t.services.usage.exportPending();
+      clock.advanceSeconds(30);
+    }
+    const attempts = cloud.callsTo(INGEST).length;
+    // 15 s, 30 s, ... capped at 5 min: about 36 tries in 3 h, not 360.
+    expect(attempts).toBeGreaterThan(30);
+    expect(attempts).toBeLessThan(45);
+    expect((await t.deps.store.usage.exportBacklog()).rows).toBe(rows);
+    expect(cloud.usageEvents).toEqual([]);
+
+    // Back, but the first batch's ack is lost after billing took it: the
+    // replay is the same events, and billing keeps one of each.
+    const tried = cloud.callsTo(INGEST).length;
+    cloud.clearFaults();
+    clock.advanceSeconds(301);
+    cloud.dropAckNext(1, INGEST);
+    expect(await t.services.usage.exportPending()).toBe(0);
+    // Still backed off at the cap after the long outage.
+    clock.advanceSeconds(301);
+    expect(await t.services.usage.exportPending()).toBe(rows);
+    const pushes = cloud
+      .callsTo(INGEST)
+      .slice(tried)
+      .map((c) => c.body.events);
+    expect(pushes[0]).toEqual(pushes[1]);
+    expect(cloud.usageEvents).toHaveLength(rows);
+    expect(new Set(cloud.usageEvents.map((e) => e.event_id)).size).toBe(rows);
+    expect((await t.deps.store.usage.exportBacklog()).rows).toBe(0);
   });
 });

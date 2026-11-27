@@ -135,7 +135,9 @@ price they were created with.
 - At every heartbeat of a running run (estimate 0, cached 30 s per
   workspace): refused → `should_stop: insufficient_balance` → the run
   checkpoints and ends `stopped_balance`, resumable once the workspace can pay.
-  A billing outage never stops running work.
+  A billing outage never stops running work. Each replica asks at most once
+  per workspace at a time, so a slow billing service sees one call per
+  workspace, not one per heartbeat.
 
 ### Usage push
 

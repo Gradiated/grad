@@ -114,6 +114,10 @@ export interface FakeCloudApi {
   requests: LoggedRequest[];
   /** The next `count` requests to `path` (or any internal path) return HTTP `status`. */
   failNext(count: number, status?: number, path?: string): void;
+  /** The next `count` requests to `path` are processed, then answered 503 (a lost ack). */
+  dropAckNext(count: number, path: string): void;
+  /** Ends every injected fault (failNext, dropAckNext, respondOnce, latency). */
+  clearFaults(): void;
   /** Delay every internal response by `ms`. */
   setLatency(ms: number): void;
   /** Override the JSON body returned for the next request to `path`. */
@@ -257,6 +261,7 @@ export const startFakeCloudApi = async (
   const failures: Array<{ remaining: number; status: number; path?: string }> =
     [];
   const canned = new Map<string, Array<{ status: number; body: unknown }>>();
+  const droppedAcks = new Map<string, number>();
   let latencyMs = 0;
   let url = "";
 
@@ -552,6 +557,11 @@ export const startFakeCloudApi = async (
         }
         if (method !== "POST") return send(405, { detail: "POST only" });
         const [status, payload] = internal(path, body);
+        const drops = droppedAcks.get(path) ?? 0;
+        if (drops > 0) {
+          droppedAcks.set(path, drops - 1);
+          return send(503, { detail: "injected lost ack" });
+        }
         return send(status, payload);
       } catch (error) {
         return send(500, {
@@ -600,6 +610,15 @@ export const startFakeCloudApi = async (
     requests,
     failNext: (count, status = 503, path) =>
       failures.push({ remaining: count, status, ...(path ? { path } : {}) }),
+    clearFaults: () => {
+      failures.length = 0;
+      canned.clear();
+      droppedAcks.clear();
+      latencyMs = 0;
+    },
+    dropAckNext: (count, path) => {
+      droppedAcks.set(path, count);
+    },
     setLatency: (ms) => {
       latencyMs = ms;
     },
