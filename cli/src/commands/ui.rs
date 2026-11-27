@@ -119,8 +119,8 @@ mod tests {
     #[test]
     fn builds_page_and_handoff_urls() {
         assert_eq!(
-            page_url("http://127.0.0.1:8787", None),
-            "http://127.0.0.1:8787/"
+            page_url("http://127.0.0.1:18787", None),
+            "http://127.0.0.1:18787/"
         );
         assert_eq!(
             page_url("http://h:1/", Some("run_1")),

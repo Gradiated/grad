@@ -104,7 +104,7 @@ Examples:
   grad login                                   # prompts for the key
   grad login --api-key \"$KEY\"
   echo \"$KEY\" | grad login --api-key-stdin
-  grad login --base-url http://127.0.0.1:8787 --profile local
+  grad login --base-url http://127.0.0.1:18787 --profile local
 
 The key is written to $XDG_CONFIG_HOME/gradiated/config.json (mode 0600).")]
     Login(LoginArgs),
@@ -1068,7 +1068,12 @@ Examples:
 
 First run generates an admin key, a trainer key and the workspace-secrets
 key and saves them in the 'local' profile, so the local server runs with
-authentication on.")]
+authentication on.
+
+Ports: the API and web UI on 127.0.0.1:18787, Grafana on 18788 and Prometheus
+on 18789. A busy one moves to a free port in 18790-18809 (one line says so);
+the choice is saved, so later runs keep the same URLs, and the 'local'
+profile follows it. `grad local status` prints the real URLs.")]
     Up {
         #[command(flatten)]
         compose: ComposeArgs,
@@ -1076,7 +1081,7 @@ authentication on.")]
         #[arg(long)]
         gpu: bool,
         /// Add Prometheus and Grafana with the grad dashboards (loopback only;
-        /// GRAD_GRAFANA_PORT, default 3000, and GRAD_PROMETHEUS_PORT, default 9090)
+        /// GRAD_GRAFANA_PORT, default 18788, and GRAD_PROMETHEUS_PORT, default 18789)
         #[arg(long)]
         observability: bool,
         /// Build images from this source checkout instead of pulling them
@@ -1091,9 +1096,11 @@ authentication on.")]
         /// release build, `main` for a source build; see SELF_HOSTING.md)
         #[arg(long, value_name = "TAG", conflicts_with = "build")]
         image_tag: Option<String>,
-        /// Loopback port for the API
-        #[arg(long, env = "GRAD_PORT", default_value_t = 8787)]
-        port: u16,
+        /// Loopback port for the API and web UI (default 18787, or the port the
+        /// last `up` chose; a busy default falls back to a free port, a busy
+        /// --port fails)
+        #[arg(long, env = "GRAD_PORT")]
+        port: Option<u16>,
         /// Do not wait for the API to become healthy
         #[arg(long)]
         no_wait: bool,
@@ -1109,7 +1116,7 @@ authentication on.")]
         #[arg(long, short = 'v')]
         volumes: bool,
     },
-    /// Show container status and API health
+    /// Show container status, API health and the API, UI, Grafana and Prometheus URLs
     Status {
         #[command(flatten)]
         compose: ComposeArgs,

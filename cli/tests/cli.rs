@@ -53,6 +53,8 @@ impl Sandbox {
             .env_remove("GRAD_COMPOSE_FILE")
             .env_remove("COMPOSE_PROJECT_NAME")
             .env_remove("GRAD_PORT")
+            .env_remove("GRAD_GRAFANA_PORT")
+            .env_remove("GRAD_PROMETHEUS_PORT")
             .timeout(Duration::from_secs(60));
         if let Some(u) = url {
             c.env("GRADIATED_BASE_URL", u)
@@ -620,10 +622,10 @@ fn usage_errors_exit_2_and_json_mode_wraps_them() {
     }
     let r = run(
         sb.grad(None),
-        &["--base-url", "localhost:8787", "models", "list"],
+        &["--base-url", "localhost:18787", "models", "list"],
     );
     expect(&r, 2);
-    assert!(r.stderr.contains("http://localhost:8787"), "{}", r.stderr);
+    assert!(r.stderr.contains("http://localhost:18787"), "{}", r.stderr);
     // No key for a remote server: fail before sending, with the message every SDK gives.
     let r = run(
         sb.grad(None),
@@ -2414,13 +2416,25 @@ fn eval_commands() {
 
 // ---------------------------------------------------------------- local stack
 
+/// A loopback port the OS just handed out, free again.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// A fake docker that logs its arguments and env. `docker ps` prints
+/// `docker-ps.txt` (the Ports column of our running containers), if present.
 fn docker_shim(sb: &Sandbox, exit: i32) -> PathBuf {
     let shim = sb.path("docker-shim.sh");
     std::fs::write(
         &shim,
         format!(
-            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY SECRETS=$GRAD_SECRETS_KEY PORT=$GRAD_PORT AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nexit {exit}\n",
+            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY SECRETS=$GRAD_SECRETS_KEY PORT=$GRAD_PORT GRAFANA=$GRAD_GRAFANA_PORT PROMETHEUS=$GRAD_PROMETHEUS_PORT AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nif [ \"$1\" = ps ]; then cat \"{ps}\" 2>/dev/null; fi\nexit {exit}\n",
             log = sb.path("docker.log").display(),
+            ps = sb.path("docker-ps.txt").display(),
             exit = exit
         ),
     )
@@ -2452,35 +2466,38 @@ fn ui_opens_the_browser_with_a_one_time_key_fragment_and_never_prints_the_key() 
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    let mut c = sb.grad(Some("http://127.0.0.1:18787"));
     c.env("BROWSER", &browser);
     let r = run(c, &["ui", "--json"]);
     expect(&r, 0);
-    assert_eq!(r.json()["data"]["url"], "http://127.0.0.1:8787/");
+    assert_eq!(r.json()["data"]["url"], "http://127.0.0.1:18787/");
     assert_eq!(r.json()["data"]["opened"], true);
     assert_eq!(
         std::fs::read_to_string(sb.path("opened.txt")).unwrap(),
-        "http://127.0.0.1:8787/#key=grad_cli_test"
+        "http://127.0.0.1:18787/#key=grad_cli_test"
     );
     assert!(!r.stdout.contains("grad_cli_test") && !r.stderr.contains("grad_cli_test"));
 
-    let mut c = sb.grad(Some("http://127.0.0.1:8787/"));
+    let mut c = sb.grad(Some("http://127.0.0.1:18787/"));
     c.env("BROWSER", &browser);
     let r = run(c, &["ui", "run_01J9X"]);
     expect(&r, 0);
     assert!(
         r.stdout
-            .contains("Opened http://127.0.0.1:8787/runs/run_01J9X"),
+            .contains("Opened http://127.0.0.1:18787/runs/run_01J9X"),
         "{}",
         r.stdout
     );
 
-    let r = run(sb.grad(Some("http://127.0.0.1:8787")), &["ui", "--no-open"]);
+    let r = run(
+        sb.grad(Some("http://127.0.0.1:18787")),
+        &["ui", "--no-open"],
+    );
     expect(&r, 0);
-    assert_eq!(r.stdout.trim(), "http://127.0.0.1:8787/");
+    assert_eq!(r.stdout.trim(), "http://127.0.0.1:18787/");
     assert!(!r.stderr.contains("grad_cli_test"));
 
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    let mut c = sb.grad(Some("http://127.0.0.1:18787"));
     c.env("BROWSER", sb.path("no-such-browser"));
     let r = run(c, &["ui", "--json"]);
     expect(&r, 1);
@@ -2579,11 +2596,126 @@ fn local_up_and_reset_only_ever_write_the_local_profile() {
 }
 
 #[test]
+fn local_up_moves_off_a_busy_default_port_and_refuses_a_busy_pinned_one() {
+    let sb = Sandbox::new("local-ports");
+    let shim = docker_shim(&sb, 0);
+    // Hold the default API port (if something else on this machine already
+    // does, it is just as busy).
+    let _hold = std::net::TcpListener::bind("127.0.0.1:18787");
+    assert!(std::net::TcpListener::bind("127.0.0.1:18787").is_err());
+    let profile_url = || -> String {
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
+        cfg["profiles"]["local"]["base_url"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["local", "up", "--no-wait"]);
+    expect(&r, 0);
+    let url = profile_url();
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    assert_ne!(port, 18787);
+    assert!(
+        r.stderr.contains(&format!(
+            "18787 is in use (by another process); serving the API on 127.0.0.1:{}",
+            port
+        )),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stdout.contains(&format!("grad is running at {}", url)));
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    assert!(log.contains(&format!("PORT={} ", port)), "{}", log);
+    let saved: Value = serde_json::from_str(
+        &std::fs::read_to_string(sb.path("data/gradiated/local/ports.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["grad-local"]["api"], port);
+
+    // The next `up` keeps the saved port (stable URLs), silently.
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["local", "up", "--no-wait"]);
+    expect(&r, 0);
+    assert_eq!(profile_url(), url);
+    assert!(!r.stderr.contains("is in use"), "{}", r.stderr);
+
+    // A pinned port that is busy fails with exit 2 and never starts docker.
+    std::fs::remove_file(sb.path("docker.log")).unwrap();
+    for (env, args, how) in [
+        (
+            None,
+            vec!["--json", "local", "up", "--port", "18787"],
+            "--port / GRAD_PORT",
+        ),
+        (
+            Some(("GRAD_PORT", "18787")),
+            vec!["--json", "local", "up"],
+            "--port / GRAD_PORT",
+        ),
+        (
+            Some(("GRAD_GRAFANA_PORT", "18787")),
+            vec!["--json", "local", "up", "--observability"],
+            "GRAD_GRAFANA_PORT",
+        ),
+    ] {
+        let mut c = sb.grad(None);
+        c.env("GRAD_DOCKER", &shim);
+        if let Some((k, v)) = env {
+            c.env(k, v);
+        }
+        let r = run(c, &args);
+        expect(&r, 2);
+        let err = &r.err_json()["error"];
+        assert_eq!(err["code"], "port_in_use", "{}", r.stderr);
+        assert!(
+            err["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("port 18787 ({})", how)),
+            "{}",
+            err
+        );
+        let hint = err["hint"].as_str().unwrap();
+        assert!(
+            hint.contains("lsof -i :18787") && hint.contains("ss -ltnp"),
+            "{}",
+            hint
+        );
+    }
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap_or_default();
+    assert!(!log.contains("up -d"), "{}", log);
+    assert_eq!(profile_url(), url, "a refused up keeps the profile");
+
+    // Our own running stack holding the port is not a clash.
+    std::fs::write(sb.path("docker-ps.txt"), "127.0.0.1:18787->8787/tcp\n").unwrap();
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(
+        c,
+        &["--json", "local", "up", "--port", "18787", "--no-wait"],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["base_url"], "http://127.0.0.1:18787");
+    assert_eq!(profile_url(), "http://127.0.0.1:18787");
+}
+
+#[test]
 fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let srv = api();
     let port = srv.url.rsplit(':').next().unwrap().to_string();
     let sb = Sandbox::new("local");
     let shim = docker_shim(&sb, 0);
+    // The mock API stands in for our own running stack: its port isn't a clash.
+    std::fs::write(
+        sb.path("docker-ps.txt"),
+        format!("127.0.0.1:{}->8787/tcp\n", port),
+    )
+    .unwrap();
     let mut c = sb.grad(None);
     c.env("GRAD_DOCKER", &shim).current_dir("/");
     let r = run(c, &["local", "up", "--port", &port, "--timeout", "10"]);
@@ -2662,8 +2794,10 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     assert!(log.contains("--profile gpu up -d"));
 
     // --observability adds Prometheus and Grafana, with the dashboards beside the compose file.
+    let grafana = free_port();
     let mut c = sb.grad(None);
-    c.env("GRAD_DOCKER", &shim).env("GRAD_GRAFANA_PORT", "3123");
+    c.env("GRAD_DOCKER", &shim)
+        .env("GRAD_GRAFANA_PORT", grafana.to_string());
     let r = run(
         c,
         &[
@@ -2677,8 +2811,17 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
         ],
     );
     expect(&r, 0);
-    assert_eq!(r.json()["data"]["grafana_url"], "http://127.0.0.1:3123/");
+    assert_eq!(
+        r.json()["data"]["grafana_url"],
+        format!("http://127.0.0.1:{}/", grafana)
+    );
+    let prometheus = r.json()["data"]["ports"]["prometheus"].as_u64().unwrap();
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    assert!(
+        log.contains(&format!("PORT={} GRAFANA={} ", port, grafana)),
+        "{}",
+        log
+    );
     assert!(log.contains("--profile observability pull"), "{}", log);
     assert!(log.contains("--profile observability up -d"), "{}", log);
     let overview = sb.path("data/gradiated/local/grafana/overview.json");
@@ -2687,6 +2830,30 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     assert_eq!(dashboard["uid"], "grad-overview");
     assert!(text.contains("./grafana:/var/lib/grafana/dashboards/grad:ro"));
 
+    // status prints the URLs the last `up` chose.
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["--json", "local", "status"]);
+    expect(&r, 0);
+    let d = &r.json()["data"];
+    assert_eq!(d["base_url"], format!("http://127.0.0.1:{}", port));
+    assert_eq!(d["ui_url"], format!("http://127.0.0.1:{}/", port));
+    assert_eq!(d["grafana_url"], format!("http://127.0.0.1:{}/", grafana));
+    assert_eq!(
+        d["prometheus_url"],
+        format!("http://127.0.0.1:{}/", prometheus)
+    );
+    assert_eq!(d["healthy"], true);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["local", "status"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout
+            .contains(&format!("Grafana:    http://127.0.0.1:{}/", grafana)),
+        "{}",
+        r.stdout
+    );
     for (args, needle) in [
         (
             vec!["local", "down", "--volumes"],
@@ -2776,24 +2943,13 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     expect(&r, 1);
     assert!(r.stderr.contains("Install Docker"), "{}", r.stderr);
     let failing = docker_shim(&sb, 3);
+    let spare = free_port().to_string();
     let mut c = sb.grad(None);
     c.env("GRAD_DOCKER", &failing);
-    let r = run(c, &["local", "up", "--no-wait", "--port", &port]);
+    let r = run(c, &["local", "up", "--no-wait", "--port", &spare]);
     expect(&r, 1);
     assert!(
-        r.stderr.contains(&format!("Port {} is in use", port)),
-        "{}",
-        r.stderr
-    );
-    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let free_port = free.local_addr().unwrap().port().to_string();
-    drop(free);
-    let mut c = sb.grad(None);
-    c.env("GRAD_DOCKER", &failing);
-    let r = run(c, &["local", "up", "--no-wait", "--port", &free_port]);
-    expect(&r, 1);
-    assert!(
-        r.stderr.contains("docker output above") && !r.stderr.contains("--port"),
+        r.stderr.contains("docker output above") && !r.stderr.contains("in use"),
         "a free port is not blamed: {}",
         r.stderr
     );

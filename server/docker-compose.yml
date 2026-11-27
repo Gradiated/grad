@@ -48,7 +48,7 @@ services:
     mem_limit: ${GRAD_SERVER_MEMORY:-1g}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${GRAD_PORT:-8787}:8787"
+      - "127.0.0.1:${GRAD_PORT:-18787}:8787"
     volumes:
       - grad-storage:/var/lib/grad
     healthcheck:
@@ -124,7 +124,7 @@ services:
         target: /etc/prometheus/prometheus.yml
     mem_limit: ${GRAD_PROMETHEUS_MEMORY:-512m}
     ports:
-      - "127.0.0.1:${GRAD_PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${GRAD_PROMETHEUS_PORT:-18789}:9090"
     volumes:
       - grad-prometheus:/prometheus
     restart: unless-stopped
@@ -150,7 +150,7 @@ services:
         target: /etc/grafana/provisioning/dashboards/grad.yaml
     mem_limit: ${GRAD_GRAFANA_MEMORY:-768m}
     ports:
-      - "127.0.0.1:${GRAD_GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${GRAD_GRAFANA_PORT:-18788}:3000"
     volumes:
       - ../deploy/grafana:/var/lib/grafana/dashboards/grad:ro
       - grad-grafana:/var/lib/grafana

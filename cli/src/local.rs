@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use crate::cli::{ComposeArgs, LocalCmd};
 use crate::commands::auth::save_profile;
 use crate::commands::{on_interrupt, Ctx};
-use crate::output::{CliError, CliResult, EXIT_AUTH};
+use crate::output::{CliError, CliResult, EXIT_AUTH, EXIT_USAGE};
 
 pub const EMBEDDED_COMPOSE: &str = include_str!("../assets/docker-compose.yml");
 /// The `--dev-models` override: tiny test models in the catalog and the trainer.
@@ -129,18 +129,6 @@ fn build_fallback(err: &CliError, args: &ComposeArgs, cwd: &Path) -> Option<Path
     }
 }
 
-/// The hint for a failed `docker compose up`: name the port only when it is taken.
-fn up_failed_hint(port: u16) -> String {
-    if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
-        format!(
-            "Port {} is in use (maybe by another stack): pick another with --port, or stop it with `grad local down`.",
-            port
-        )
-    } else {
-        "See the docker output above, and `grad local logs` for container errors.".into()
-    }
-}
-
 /// Find `server/docker-compose.yml` in this directory or a parent.
 fn find_source_compose(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start);
@@ -173,12 +161,217 @@ fn compose_files(args: &ComposeArgs, build: bool, tag: &str) -> CliResult<Vec<Pa
     Ok(vec![write_embedded(tag)?])
 }
 
-/// A port from the environment (what compose publishes), else `default`.
-fn env_port(name: &str, default: u16) -> u16 {
-    std::env::var(name)
+/// The loopback host ports the stack publishes. The first `up` probes them and
+/// saves its choice in `ports.json` (per compose project) beside the compose
+/// file, so the next `up` keeps the same URLs and `status` prints them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Ports {
+    api: u16,
+    grafana: u16,
+    prometheus: u16,
+    /// Whether the last `up` started Grafana and Prometheus.
+    #[serde(default)]
+    observability: bool,
+}
+
+/// An unpopular block below the Linux ephemeral range (32768+), so neither
+/// common dev tools nor outbound connections take these.
+const DEFAULT_PORTS: Ports = Ports {
+    api: 18787,
+    grafana: 18788,
+    prometheus: 18789,
+    observability: false,
+};
+/// Where a busy default (or saved) port falls back to: the 20 ports after the block.
+const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = 18790..=18809;
+
+fn ports_path() -> CliResult<PathBuf> {
+    Ok(data_dir()?.join("ports.json"))
+}
+
+type PortsFile = std::collections::BTreeMap<String, Ports>;
+
+fn load_ports_file() -> PortsFile {
+    ports_path()
         .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// The ports the last `up` of this compose project chose, if any.
+fn saved_ports(project: &str) -> Option<Ports> {
+    load_ports_file().get(project).copied()
+}
+
+fn save_ports(project: &str, ports: Ports) -> CliResult {
+    let path = ports_path()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| CliError::general("io_error", format!("{}: {}", dir.display(), e)))?;
+    }
+    let mut file = load_ports_file();
+    file.insert(project.to_string(), ports);
+    let body = serde_json::to_string_pretty(&file).expect("ports serialize");
+    std::fs::write(&path, body)
+        .map_err(|e| CliError::general("io_error", format!("{}: {}", path.display(), e)))
+}
+
+/// True when nothing listens on 127.0.0.1:`port` (we can bind it briefly).
+fn port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// A port the user pinned with an environment variable, if set.
+fn env_port(name: &str) -> CliResult<Option<u16>> {
+    match std::env::var(name) {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse().map(Some).map_err(|_| {
+            CliError::usage(format!("{}={:?} is not a port number (1-65535)", name, v))
+        }),
+        _ => Ok(None),
+    }
+}
+
+/// One service's host port. A pinned port (`--port`, `GRAD_*_PORT`; `how`
+/// names it) must be free or ours; otherwise `want` (the saved or default
+/// port) if it is, else the first free port in `fallback` that no other
+/// service took. `ours` are the ports this compose project already publishes.
+fn pick_port(
+    service: &str,
+    want: u16,
+    pinned: Option<&str>,
+    fallback: impl IntoIterator<Item = u16>,
+    ours: &[u16],
+    taken: &[u16],
+) -> CliResult<u16> {
+    let usable = |p: u16| !taken.contains(&p) && (ours.contains(&p) || port_free(p));
+    if usable(want) {
+        return Ok(want);
+    }
+    let see =
+        format!("See what is using it with `lsof -i :{want}` or `ss -ltnp 'sport = :{want}'`");
+    if let Some(how) = pinned {
+        return Err(CliError::new(
+            EXIT_USAGE,
+            "port_in_use",
+            format!(
+                "port {} ({}) is already in use on 127.0.0.1, so the {} can't be served there",
+                want, how, service
+            ),
+        )
+        .hint(format!(
+            "{}; stop it, pick another port with {}, or unset it to let grad choose a free one.",
+            see, how
+        )));
+    }
+    let Some(port) = fallback.into_iter().find(|p| usable(*p)) else {
+        return Err(CliError::new(
+            EXIT_USAGE,
+            "port_in_use",
+            format!(
+                "port {} is in use and no fallback port is free for the {}",
+                want, service
+            ),
+        )
+        .hint(format!("{}, or pick a free port yourself.", see)));
+    };
+    Ok(port)
+}
+
+/// The host ports this compose project's running containers publish (`docker
+/// ps`), so a second `up` doesn't take its own stack for a clash. Empty when
+/// docker can't say.
+async fn own_ports(project: &str) -> Vec<u16> {
+    let out = tokio::process::Command::new(docker_bin())
+        .arg("ps")
+        .arg("--filter")
+        .arg(format!("label=com.docker.compose.project={}", project))
+        .arg("--format")
+        .arg("{{.Ports}}")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => parse_published(&String::from_utf8_lossy(&o.stdout)),
+        _ => vec![],
+    }
+}
+
+/// Host ports from `docker ps` Ports, e.g. `127.0.0.1:18787->8787/tcp, 9465/tcp`.
+fn parse_published(ports: &str) -> Vec<u16> {
+    ports
+        .split([',', '\n'])
+        .filter_map(|item| item.split_once("->"))
+        .filter_map(|(host, _)| host.trim().rsplit_once(':')?.1.parse().ok())
+        .collect()
+}
+
+/// Choose the host ports for an `up`: pinned ones as given, then the saved
+/// ones, then the defaults, each moved to a free fallback port when busy (one
+/// note line each). Grafana and Prometheus are probed only with observability.
+fn choose_ports(
+    ctx: &Ctx,
+    pinned_api: Option<u16>,
+    observability: bool,
+    saved: Option<Ports>,
+    ours: &[u16],
+) -> CliResult<Ports> {
+    let base = saved.unwrap_or(DEFAULT_PORTS);
+    let grafana = env_port("GRAD_GRAFANA_PORT")?;
+    let prometheus = env_port("GRAD_PROMETHEUS_PORT")?;
+    let mut chosen = Ports {
+        api: pinned_api.unwrap_or(base.api),
+        grafana: grafana.unwrap_or(base.grafana),
+        prometheus: prometheus.unwrap_or(base.prometheus),
+        observability,
+    };
+    let mut services = vec![(
+        "API",
+        &mut chosen.api,
+        pinned_api.map(|_| "--port / GRAD_PORT"),
+    )];
+    if observability {
+        services.push((
+            "Grafana",
+            &mut chosen.grafana,
+            grafana.map(|_| "GRAD_GRAFANA_PORT"),
+        ));
+        services.push((
+            "Prometheus",
+            &mut chosen.prometheus,
+            prometheus.map(|_| "GRAD_PROMETHEUS_PORT"),
+        ));
+    }
+    if [pinned_api, grafana, prometheus].contains(&Some(0)) {
+        return Err(CliError::usage(
+            "port 0 is not a fixed port: pick one from 1 to 65535",
+        ));
+    }
+    let mut taken = vec![];
+    for (service, port, pinned) in services {
+        let got = pick_port(service, *port, pinned, FALLBACK_PORTS, ours, &taken)?;
+        if got != *port {
+            ctx.out.note(format!(
+                "{} is in use (by another process); serving the {} on 127.0.0.1:{}",
+                port, service, got
+            ));
+            *port = got;
+        }
+        taken.push(got);
+    }
+    Ok(chosen)
+}
+
+/// The ports compose interpolates into the published `ports:`.
+fn port_env(cmd: &mut tokio::process::Command, ports: Ports) {
+    cmd.env("GRAD_PORT", ports.api.to_string())
+        .env("GRAD_GRAFANA_PORT", ports.grafana.to_string())
+        .env("GRAD_PROMETHEUS_PORT", ports.prometheus.to_string());
+}
+
+fn url(port: u16) -> String {
+    format!("http://127.0.0.1:{}", port)
 }
 
 fn docker_bin() -> String {
@@ -199,9 +392,12 @@ fn profiles(cmd: &mut tokio::process::Command, gpu: bool, observability: bool) {
 }
 
 /// `compose` with every profile on: down, ps and logs reach the GPU worker and
-/// the observability services too.
+/// the observability services too, with the ports the last `up` chose.
 fn compose_all(args: &ComposeArgs, files: &[PathBuf]) -> tokio::process::Command {
     let mut cmd = compose(args, files);
+    if let Some(ports) = saved_ports(&args.project_name) {
+        port_env(&mut cmd, ports);
+    }
     cmd.arg("--profile").arg("*");
     cmd
 }
@@ -424,7 +620,7 @@ fn local_profile(ctx: &Ctx) -> CliResult<&'static str> {
                 name, url, LOCAL_PROFILE
             ))
             .hint(if name == LOCAL_PROFILE {
-                "Point the 'local' profile back at this machine (`grad login --profile local --base-url http://127.0.0.1:8787`) or remove it (`grad --profile local logout`)."
+                "Point the 'local' profile back at this machine (`grad login --profile local --base-url http://127.0.0.1:18787`) or remove it (`grad --profile local logout`)."
             } else {
                 "Unset GRADIATED_PROFILE or pass --profile local."
             }));
@@ -496,9 +692,14 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             };
             let mut files = compose_files(&args, build, tag)?;
             files.extend(overrides.iter().cloned());
-            let base_url = format!("http://127.0.0.1:{}", port);
             let profile = local_profile(ctx)?;
+            let ours = own_ports(&args.project_name).await;
+            let saved = saved_ports(&args.project_name);
+            let ports = choose_ports(ctx, port, observability, saved, &ours)?;
+            let base_url = url(ports.api);
+            // The profile's URL is what the CLI, every SDK and `grad ui` use.
             let keys = ensure_keys(profile, &base_url)?;
+            save_ports(&args.project_name, ports)?;
             out.note(format!(
                 "Starting grad on {} ({})",
                 base_url,
@@ -540,11 +741,13 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                     grad_sdk::sha256_hex(keys.admin.as_bytes()),
                 )
                 .env("GRAD_TRAINER_API_KEY", &keys.trainer)
-                .env("GRAD_SECRETS_KEY", &keys.secrets)
-                .env("GRAD_PORT", port.to_string());
+                .env("GRAD_SECRETS_KEY", &keys.secrets);
+            port_env(&mut cmd, ports);
             run(ctx, cmd, "up").await.map_err(|e| {
                 if e.code == "docker_failed" {
-                    e.hint(up_failed_hint(port))
+                    e.hint(
+                        "See the docker output above, and `grad local logs` for container errors.",
+                    )
                 } else {
                     e
                 }
@@ -589,13 +792,12 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 "  Web UI: {}/  (grad --profile {} ui opens it signed in)",
                 base_url, profile
             ));
-            let grafana_url = observability
-                .then(|| format!("http://127.0.0.1:{}/", env_port("GRAD_GRAFANA_PORT", 3000)));
-            if let Some(url) = &grafana_url {
+            let grafana_url = observability.then(|| format!("{}/", url(ports.grafana)));
+            let prometheus_url = observability.then(|| format!("{}/", url(ports.prometheus)));
+            if let (Some(g), Some(p)) = (&grafana_url, &prometheus_url) {
                 out.line(format!(
-                    "  Grafana: {}  (dashboards in the grad folder; Prometheus: http://127.0.0.1:{}/)",
-                    url,
-                    env_port("GRAD_PROMETHEUS_PORT", 9090)
+                    "  Grafana: {}  (dashboards in the grad folder; Prometheus: {})",
+                    g, p
                 ));
             }
             out.line("  Next:");
@@ -609,6 +811,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 "base_url": base_url,
                 "ui_url": format!("{}/", base_url),
                 "grafana_url": grafana_url,
+                "prometheus_url": prometheus_url,
+                "ports": ports,
                 "profile": profile,
                 "compose_files": files,
                 "project": args.project_name,
@@ -641,14 +845,20 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             let mut cmd = compose_all(&args, &files);
             cmd.arg("ps");
             run(ctx, cmd, "ps").await?;
-            let base_url = grad_sdk::ConfigFile::default_path()
-                .and_then(|p| grad_sdk::ConfigFile::load(&p).ok())
-                .and_then(|f| {
-                    f.profiles
-                        .get(LOCAL_PROFILE)
-                        .and_then(|p| p.base_url.clone())
+            // The ports the last `up` chose; else the local profile's URL; else the defaults.
+            let saved = saved_ports(&args.project_name);
+            let base_url = saved
+                .map(|p| url(p.api))
+                .or_else(|| {
+                    grad_sdk::ConfigFile::default_path()
+                        .and_then(|p| grad_sdk::ConfigFile::load(&p).ok())
+                        .and_then(|f| {
+                            f.profiles
+                                .get(LOCAL_PROFILE)
+                                .and_then(|p| p.base_url.clone())
+                        })
                 })
-                .unwrap_or_else(|| "http://127.0.0.1:8787".into());
+                .unwrap_or_else(|| url(DEFAULT_PORTS.api));
             let client = Client::builder()
                 .ignore_env(true)
                 .ignore_config_file(true)
@@ -657,12 +867,27 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 .max_retries(0)
                 .build()?;
             let healthy = client.health().await.is_ok();
+            let ui_url = format!("{}/", base_url.trim_end_matches('/'));
+            let obs = saved.filter(|p| p.observability);
+            let grafana_url = obs.map(|p| format!("{}/", url(p.grafana)));
+            let prometheus_url = obs.map(|p| format!("{}/", url(p.prometheus)));
             out.line(format!(
-                "API {}: {}",
+                "API:        {} ({})",
                 base_url,
                 if healthy { "ready" } else { "not reachable" }
             ));
-            out.done(&json!({ "base_url": base_url, "healthy": healthy }))
+            out.line(format!("Web UI:     {}", ui_url));
+            if let (Some(g), Some(p)) = (&grafana_url, &prometheus_url) {
+                out.line(format!("Grafana:    {}", g));
+                out.line(format!("Prometheus: {}", p));
+            }
+            out.done(&json!({
+                "base_url": base_url,
+                "ui_url": ui_url,
+                "grafana_url": grafana_url,
+                "prometheus_url": prometheus_url,
+                "healthy": healthy,
+            }))
         }
         LocalCmd::Logs {
             compose: args,
@@ -720,7 +945,9 @@ mod tests {
 
     #[test]
     fn embedded_compose_is_loopback_only_and_versioned() {
-        assert!(EMBEDDED_COMPOSE.contains("127.0.0.1:${GRAD_PORT:-8787}:8787"));
+        assert!(EMBEDDED_COMPOSE.contains("127.0.0.1:${GRAD_PORT:-18787}:8787"));
+        assert!(EMBEDDED_COMPOSE.contains("127.0.0.1:${GRAD_GRAFANA_PORT:-18788}:3000"));
+        assert!(EMBEDDED_COMPOSE.contains("127.0.0.1:${GRAD_PROMETHEUS_PORT:-18789}:9090"));
         assert!(
             !EMBEDDED_COMPOSE.contains("build:"),
             "published images only"
@@ -812,13 +1039,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A port the OS just handed out, now free again.
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
     #[test]
-    fn up_failure_names_the_port_only_when_it_is_taken() {
-        let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = taken.local_addr().unwrap().port();
-        assert!(up_failed_hint(port).contains(&format!("Port {} is in use", port)));
-        drop(taken);
-        assert!(up_failed_hint(port).contains("docker output above"));
+    fn a_busy_port_falls_back_unless_pinned_or_ours() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let taken_port = listener.local_addr().unwrap().port();
+        let spare = free_port();
+        assert!(port_free(spare) && !port_free(taken_port));
+        // Free: kept. Busy: the first usable fallback.
+        assert_eq!(pick_port("API", spare, None, [], &[], &[]).unwrap(), spare);
+        assert_eq!(
+            pick_port("API", taken_port, None, [taken_port, spare], &[], &[]).unwrap(),
+            spare
+        );
+        // Busy with our own stack: kept, pinned or not.
+        assert_eq!(
+            pick_port("API", taken_port, Some("--port"), [], &[taken_port], &[]).unwrap(),
+            taken_port
+        );
+        // Another service already took the fallback: nothing left.
+        let e = pick_port("Grafana", taken_port, None, [spare], &[], &[spare]).unwrap_err();
+        assert_eq!((e.exit, e.code.as_str()), (2, "port_in_use"));
+        // Pinned and busy: exit 2, naming the port and how to see its owner.
+        let e = pick_port(
+            "API",
+            taken_port,
+            Some("--port / GRAD_PORT"),
+            [spare],
+            &[],
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!((e.exit, e.code.as_str()), (2, "port_in_use"));
+        assert!(e
+            .message
+            .contains(&format!("port {} (--port / GRAD_PORT)", taken_port)));
+        let hint = e.hint.unwrap();
+        assert!(hint.contains(&format!("lsof -i :{}", taken_port)) && hint.contains("ss -ltnp"));
+    }
+
+    #[test]
+    fn parses_published_ports_from_docker_ps() {
+        assert_eq!(
+            parse_published(
+                "127.0.0.1:18787->8787/tcp\n\n127.0.0.1:18788->3000/tcp, 9465/tcp\n0.0.0.0:5432->5432/tcp, :::5432->5432/tcp\n"
+            ),
+            [18787, 18788, 5432, 5432]
+        );
+        assert!(parse_published("").is_empty());
     }
 
     #[test]

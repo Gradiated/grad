@@ -7,16 +7,18 @@
 #
 #   GRAD_BIN=target/debug/grad GRAD_SMOKE_PYTHON=python3 tests/compose/smoke.sh
 #
-# GRAD_SMOKE_PROJECT (default grad-smoke) names the compose project and
-# GRAD_SMOKE_PORT (default 8797) the loopback API port. The Python must have
-# httpx; the SDK is imported from sdks/python. KEEP=1 leaves the stack up.
+# GRAD_SMOKE_PROJECT (default grad-smoke) names the compose project.
+# GRAD_SMOKE_PORT pins the loopback API port; by default `grad local up` picks
+# 18787 or a free fallback and the 'local' profile follows it. The Python must
+# have httpx; the SDK is imported from sdks/python. KEEP=1 leaves the stack up.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 GRAD=${GRAD_BIN:-grad}
 PY=${GRAD_SMOKE_PYTHON:-python3}
 export COMPOSE_PROJECT_NAME=${GRAD_SMOKE_PROJECT:-grad-smoke}
-export GRAD_PORT=${GRAD_SMOKE_PORT:-8797}
+if [ -n "${GRAD_SMOKE_PORT:-}" ]; then export GRAD_PORT=$GRAD_SMOKE_PORT; else unset GRAD_PORT; fi
+unset GRAD_GRAFANA_PORT GRAD_PROMETHEUS_PORT
 export GRAD_COMPOSE_FILE="$ROOT/server/docker-compose.yml:$ROOT/tests/compose/smoke.yml"
 # About 3 GB for the whole stack.
 export GRAD_POSTGRES_MEMORY=${GRAD_POSTGRES_MEMORY:-256m}
@@ -46,6 +48,13 @@ trap cleanup EXIT
 step "grad local up --build"
 "$GRAD" local up --build --dev-models --timeout 600
 "$GRAD" models list | grep -q test/tiny-qwen3 || fail "tiny model not in the catalog"
+local_url() { "$GRAD" --json local status | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["data"]["base_url"])'; }
+API_URL=$(local_url)
+
+step "grad local up again while running: its own ports are not a clash"
+"$GRAD" --json local up --build --dev-models --timeout 600 > up-again.json
+"$PY" -c 'import json,sys; d=json.load(open("up-again.json"))["data"]; sys.exit(d["base_url"] != sys.argv[1])' "$API_URL" \
+  || fail "second up moved off its own port"
 
 step "CLI quickstart: import, plan, train, download, eval"
 for i in $(seq 0 23); do
@@ -87,12 +96,14 @@ PYTHONPATH="$ROOT/sdks/python" "$PY" "$ROOT/tests/compose/smoke_sdk.py"
 step "grad local status / logs"
 "$GRAD" local status | tee status.out
 grep -q "ready" status.out || fail "status"
+grep -q "Web UI:     $API_URL/" status.out || fail "status UI URL"
 "$GRAD" local logs grad-server --tail 20 | grep -q "grad-server listening" || fail "logs"
 
 step "restart: data persists"
 "$GRAD" local down
 "$GRAD" local up --build --dev-models --timeout 600
 "$GRAD" --json runs list | grep -q '"support-sft"' || fail "run lost across restart"
+[ "$(local_url)" = "$API_URL" ] || fail "URL changed across restart"
 "$GRAD" secrets list | grep -q hf-token || fail "secret lost across restart"
 rm -rf support-sft
 "$GRAD" artifacts download support-sft@latest --output ./support-sft
