@@ -11,6 +11,7 @@ python3 -m unittest discover -s sdks/python/tests -p test_live.py``.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import io
 import json
@@ -214,58 +215,96 @@ class SelfHostedLiveTests(_LiveCase):
         self.assertRegex(job.source["revision"], r"^[0-9a-f]{40}$")
         self.assertEqual((job.source["repo"], job.source["split"], job.source["limit"]), ("openai/gsm8k", "test", 5))
 
-    def test_checkpoint_evals_and_mlflow_logger(self) -> None:
-        # docs: training/recipes.mdx "Evaluate during training" and "Experiment tracking"
+    def test_checkpoint_evals_and_tracker_loggers(self) -> None:
+        # docs: training/recipes.mdx "Evaluate during training" and "Experiment tracking".
+        # The real server resolves each logger's workspace secret on claim; the real worker
+        # streams the run's metrics to a fake MLflow and a fake W&B over their HTTP APIs.
         import http.server
         import threading
 
-        seen: list[tuple[str, Any]] = []
+        seen: list[tuple[str, str, Any, str | None]] = []  # (tracker, path, body, Authorization)
 
-        class MLflow(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *_a: Any) -> None:
-                return
+        def tracker(name: str, reply: Any) -> str:
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *_a: Any) -> None:
+                    return
 
-            def _reply(self) -> None:
-                n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(n)) if n else None
-                seen.append((self.path, body))
-                if "get-by-name" in self.path:
-                    payload, status = {"error_code": "RESOURCE_DOES_NOT_EXIST"}, 404
-                elif self.path.endswith("experiments/create"):
-                    payload, status = {"experiment_id": "1"}, 200
-                elif self.path.endswith("runs/create"):
-                    payload, status = {"run": {"info": {"run_id": "r1"}}}, 200
-                else:
-                    payload, status = {}, 200
-                raw = json.dumps(payload).encode()
-                self.send_response(status)
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+                def _reply(self) -> None:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(n)) if n else None
+                    seen.append((name, self.path, body, self.headers.get("Authorization")))
+                    payload, status = reply(self.path, body)
+                    raw = json.dumps(payload).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
 
-            do_GET = do_POST = _reply
+                do_GET = do_POST = _reply
 
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MLflow)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            return f"127.0.0.1:{server.server_address[1]}"
+
+        def mlflow(path: str, _body: Any) -> tuple[Any, int]:
+            if "get-by-name" in path:
+                return {"error_code": "RESOURCE_DOES_NOT_EXIST"}, 404
+            if path.endswith("experiments/create"):
+                return {"experiment_id": "1"}, 200
+            if path.endswith("runs/create"):
+                return {"run": {"info": {"run_id": "r1"}}}, 200
+            return {}, 200
+
+        def wandb(path: str, body: Any) -> tuple[Any, int]:
+            if path == "/graphql" and "viewer" in body["query"]:
+                return {"data": {"viewer": {"entity": "team-ml"}}}, 200
+            if path == "/graphql":
+                return {"data": {"upsertBucket": {"bucket": {"id": "b1", "name": body["variables"]["name"]}}}}, 200
+            return {}, 200
+
+        mlflow_host, wandb_host = tracker("mlflow", mlflow), tracker("wandb", wandb)
         client = Grad()
+        client.secrets.set("wandb-key", "wandb-live-0123456789", allowed_hosts=[wandb_host])
+        client.secrets.set("mlflow-token", "mlflow-live-0123456789", allowed_hosts=[mlflow_host])
         dataset = client.datasets.push("sql-sft-tracked", SQL_RECORDS * 10)
         holdout = client.datasets.push("sql-holdout-tracked", SQL_RECORDS)
         recipe = SFTRecipe(
             model=LLM,
             evals=[grad.EvalSpec(holdout, rubric=validators.Regex("SELECT"))],
-            loggers=[grad.loggers.MLflow(f"http://127.0.0.1:{server.server_address[1]}", experiment="sql")],
+            loggers=[
+                grad.loggers.MLflow(f"http://{mlflow_host}", experiment="sql", secret=client.secrets.get("mlflow-token")),
+                grad.loggers.WandB("sql-helper", secret=client.secrets.get("wandb-key"), host=f"http://{wandb_host}", run_name="tracked"),
+            ],
         )
         run = client.runs.create(dataset=dataset, name="sql-tracked", recipe=recipe).wait(timeout=240)
+        self.assertEqual(run.status, "completed", run.error)
         self.assertEqual(run.resolved_config["checkpoint_evals"][0]["dataset"], "sql-holdout-tracked")
+        # The secret names are in the run's config; their values never are.
+        self.assertEqual([lg.get("secret") for lg in run.resolved_config["loggers"]], ["mlflow-token", "wandb-key"])
+        self.assertNotIn("live-0123456789", json.dumps(run.resolved_config))
         # The reference worker's checkpoints can't be served, so each checkpoint eval is recorded as failed.
         self.assertTrue(run.checkpoint_evals)
         self.assertTrue(all(e["status"] == "failed" and "can't serve" in e["error"] for e in run.checkpoint_evals))
-        steps = [m["step"] for path, body in seen if path.endswith("log-batch") for m in (body or {}).get("metrics", [])]
+
+        mlflow_calls = [(p, b, a) for t, p, b, a in seen if t == "mlflow"]
+        self.assertEqual({a for _, _, a in mlflow_calls}, {"Bearer mlflow-live-0123456789"})
+        self.assertIn(("/api/2.0/mlflow/experiments/create", {"name": "sql"}), [(p, b) for p, b, _ in mlflow_calls])
+        steps = [m["step"] for p, b, _ in mlflow_calls if p.endswith("log-batch") for m in (b or {}).get("metrics", [])]
         self.assertTrue(steps, seen)
-        self.assertIn(("/api/2.0/mlflow/experiments/create", {"name": "sql"}), seen)
-        self.assertEqual(next(b for p, b in seen if p.endswith("runs/update"))["status"], "FINISHED")
+        self.assertEqual(next(b for p, b, _ in mlflow_calls if p.endswith("runs/update"))["status"], "FINISHED")
+
+        wandb_calls = [(p, b, a) for t, p, b, a in seen if t == "wandb"]
+        basic = "Basic " + base64.b64encode(b"api:wandb-live-0123456789").decode()
+        self.assertEqual({a for _, _, a in wandb_calls}, {basic})
+        upsert = next(b for p, b, _ in wandb_calls if p == "/graphql" and "upsertBucket" in b["query"])
+        self.assertEqual((upsert["variables"]["project"], upsert["variables"]["entity"], upsert["variables"]["displayName"]), ("sql-helper", "team-ml", "tracked"))
+        stream = [b for p, b, _ in wandb_calls if p.startswith(f"/files/team-ml/sql-helper/{upsert['variables']['name']}/file_stream")]
+        rows = [json.loads(line) for b in stream for line in (b.get("files") or {}).get("wandb-history.jsonl", {}).get("content", [])]
+        self.assertEqual(sorted(r["_step"] for r in rows), sorted(set(steps)))
+        self.assertTrue(all("loss" in r for r in rows), rows)
+        self.assertEqual(stream[-1], {"complete": True, "exitcode": 0})
 
     def test_errors_keys_and_pagination(self) -> None:
         client = Grad()
