@@ -15,6 +15,7 @@ import {
   Run,
   Scorer,
   Trajectory,
+  loggers,
   recipes,
   validators,
   type MetricPoint,
@@ -174,6 +175,20 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
     expect((await scored.filter({ scores: { brief: ">=0.8" } })).id).toBe(passing.id);
     const exports = await scored.filter((r) => JSON.stringify(r.messages).includes("Export"));
     expect((await exports.records().all()).map((r) => r.id)).toEqual(["long"]);
+  });
+
+  it("plans checkpoint evals and loggers", async () => {
+    await grad.datasets.push("ts-holdout", [{ messages: [{ role: "user", content: "Reset?" }, { role: "assistant", content: "Settings." }] }]);
+    await grad.datasets.push("ts-train", [{ messages: [{ role: "user", content: "Reset?" }, { role: "assistant", content: "Settings." }] }]);
+    const plan = await grad.runs.plan({
+      dataset: "ts-train",
+      name: "tracked",
+      recipe: recipes.sft({ model: "test/tiny-qwen3", evals: ["ts-holdout"], loggers: [loggers.wandb({ project: "p", secret: "wandb-key" })] }),
+    });
+    expect(plan.resolvedConfig.checkpointEvals).toEqual([
+      { name: "ts-holdout", dataset: "ts-holdout", datasetVersion: 1, rubric: [{ name: "non_empty", kind: "validator", weight: 1, validator: "non_empty" }], limit: null },
+    ]);
+    expect(plan.warnings.join("\n")).toContain("wandb-key");
   });
 
   it("queues a pinned benchmark import", async () => {

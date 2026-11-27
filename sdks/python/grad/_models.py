@@ -611,6 +611,7 @@ class Run(APIObject):
     max_attempts: int | None = None
     latest_metric: MetricPoint | None = None
     eval_report: EvalReport | None = None
+    checkpoint_evals: list[dict[str, Any]] = field(default_factory=list)
     artifact_id: str | None = None
     error: str | None = None
     created_at: str | None = None

@@ -181,13 +181,47 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual((defaults.betas, defaults.weight_decay, defaults.grad_clip), ((0.9, 0.95), 0.0, 1.0))
 
     def test_unsupported_common_settings(self) -> None:
-        with self.assertRaises(TypeError):
-            SFTRecipe(evals=[{"name": "ifeval"}])  # type: ignore[call-arg]
         self.assertEqual(SFTRecipe(eval_every="auto").to_spec(), {"kind": "sft"})
         with self.assertRaises(ValueError):
             SFTRecipe(thinking="high")
         with self.assertRaises(ValueError):
             SFTRecipe(thinking="maybe")  # type: ignore[arg-type]
+
+    def test_checkpoint_evals_and_loggers(self) -> None:
+        dataset = grad.Dataset.from_api({"id": "ds_1", "name": "gsm8k-200", "record_count": 200})
+        recipe = SFTRecipe(
+            evals=[
+                dataset,
+                "support-holdout",
+                grad.EvalSpec("support-holdout", rubric=grad.validators.Regex("^SELECT"), limit=50, name="sql", version=2),
+                {"dataset": "raw"},
+            ],
+            loggers=[
+                grad.loggers.WandB("support", secret="wandb-key", entity="team"),
+                grad.loggers.MLflow("https://mlflow.internal", experiment="sft"),
+            ],
+        )
+        spec = recipe.to_spec()
+        self.assertEqual(
+            spec["evals"],
+            [
+                {"dataset": "gsm8k-200"},
+                {"dataset": "support-holdout"},
+                {"dataset": "support-holdout", "rubric": [{"name": "regex", "kind": "regex", "weight": 1.0, "pattern": "^SELECT"}], "limit": 50, "name": "sql", "version": 2},
+                {"dataset": "raw"},
+            ],
+        )
+        self.assertEqual(
+            spec["loggers"],
+            [
+                {"kind": "wandb", "project": "support", "secret": "wandb-key", "entity": "team"},
+                {"kind": "mlflow", "tracking_uri": "https://mlflow.internal", "experiment": "sft"},
+            ],
+        )
+        with self.assertRaises(ValueError):
+            SFTRecipe(evals=[grad.EvalSpec("d", rubric=grad.Scorer("mine", fn=lambda t: 1.0))]).to_spec()
+        with self.assertRaises(TypeError):
+            grad.loggers.WandB("p", secret=3)
 
     def test_grpo_is_typed_but_refuses_to_submit(self) -> None:
         recipe = GRPORecipe(model="qwen/qwen3-4b", rubric=grad.Rubric([grad.Judge(model="m")]), group_size=16, kl_coef=0.01, max_staleness=1, advantage=grad.advantages.GroupStd())
@@ -286,7 +320,7 @@ class SpecTests(unittest.TestCase):
         self.assertEqual(splits.ByGroup().to_dict(), {"strategy": "by_group"})
         self.assertEqual(grad.advantages.RLOO().kind, "rloo")
         self.assertEqual(grad.advantages.GroupMean().kind, "group_mean")
-        self.assertEqual(grad.loggers.MLflow(experiment="e").options["experiment"], "e")
+        self.assertEqual(grad.loggers.MLflow("http://mlflow", experiment="e").options["experiment"], "e")
 
     def test_unavailable_namespaces(self) -> None:
         for ns in (grad.mergers, grad.heads):

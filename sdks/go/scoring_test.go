@@ -159,3 +159,14 @@ func TestFromBenchmarkImportsAndWaits(t *testing.T) {
 		t.Fatal("a failing import must fail")
 	}
 }
+
+func TestCheckpointEvalsRejectLocalScorers(t *testing.T) {
+	local := grad.Scorer{Name: "mine", Fn: func(context.Context, grad.ScoreInput) (float64, error) { return 1, nil }}
+	_, err := grad.SFTRecipe{Common: grad.Common{Evals: []grad.CheckpointEval{{Dataset: grad.DatasetName("d"), Rubric: grad.Rubric{local}}}}}.RecipeSpec()
+	if err == nil {
+		t.Fatal("local scorers must be rejected")
+	}
+	if _, err := (grad.SFTRecipe{Common: grad.Common{Evals: []grad.CheckpointEval{{}}}}).RecipeSpec(); err == nil {
+		t.Fatal("a missing dataset must be rejected")
+	}
+}

@@ -383,6 +383,50 @@
       },
       "idempotency_key": null,
       "body": null
+    },
+    {
+      "case": "plan_sft_checkpoint_evals_loggers",
+      "method": "POST",
+      "path": "/v1/runs/plan",
+      "idempotency_key": null,
+      "body": {
+        "dataset": "support",
+        "name": "sft-tracked",
+        "recipe": {
+          "kind": "sft",
+          "model": "test/tiny-qwen3",
+          "evals": [
+            {
+              "dataset": "gsm8k-200"
+            },
+            {
+              "dataset": "support-holdout",
+              "rubric": [
+                {
+                  "name": "starts_select",
+                  "kind": "regex",
+                  "pattern": "^SELECT",
+                  "weight": 1.0
+                }
+              ],
+              "limit": 50,
+              "name": "sql"
+            }
+          ],
+          "loggers": [
+            {
+              "kind": "wandb",
+              "project": "support",
+              "secret": "wandb-key"
+            },
+            {
+              "kind": "mlflow",
+              "tracking_uri": "https://mlflow.internal",
+              "experiment": "sft"
+            }
+          ]
+        }
+      }
     }
   ],
   "responses": {

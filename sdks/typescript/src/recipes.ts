@@ -1,4 +1,4 @@
-import type { AdapterSpec, LossSpec, OptimizerSpec, PoolingSpec, RecipeKind, RecipeSpec, RolloutSpec, SplitSpec } from "./generated/models.js";
+import type { AdapterSpec, LoggerSpec, LossSpec, OptimizerSpec, PoolingSpec, RecipeEval, RecipeKind, RecipeSpec, RolloutSpec, SplitSpec } from "./generated/models.js";
 import { isNodeRuntime } from "./core.js";
 import { GradUsageError } from "./errors.js";
 import { toRubric, type RubricInput } from "./rubrics.js";
@@ -114,11 +114,48 @@ export interface CommonRecipeOptions {
   checkpointTtlDays?: number;
   /** "auto" (every 10% of steps) or a number of optimizer steps. */
   evalEvery?: number | "auto";
+  /** Extra evals on each checkpoint: a dataset (or its name), or `{ dataset, rubric?, limit?, name?, version? }`. */
+  evals?: Array<string | { name: string; recordCount: number } | CheckpointEvalOptions>;
+  /** Experiment trackers: `[loggers.wandb({ project, secret })]` or `[loggers.mlflow({ trackingUri })]`. */
+  loggers?: LoggerSpec[];
 }
+
+/** One of a recipe's `evals`, scored on every checkpoint during training. */
+export interface CheckpointEvalOptions {
+  dataset: string | { name: string };
+  /** Judges, regexes and validators (local functions can't run during training). */
+  rubric?: RubricInput;
+  limit?: number;
+  name?: string;
+  version?: number;
+}
+
+const checkpointEval = (item: NonNullable<CommonRecipeOptions["evals"]>[number]): RecipeEval => {
+  if (typeof item === "string") return { dataset: item };
+  if ("recordCount" in item) return { dataset: item.name };
+  const { dataset, rubric, ...rest } = item;
+  const out: RecipeEval = { dataset: typeof dataset === "string" ? dataset : dataset.name, ...rest };
+  if (rubric !== undefined) {
+    const built = toRubric(rubric);
+    if (built.local.size > 0) {
+      throw usage(`evals: local scorers (${[...built.local.keys()].join(", ")}) can't run during training; use judges, regexes and validators.`);
+    }
+    out.rubric = built.wire;
+  }
+  return out;
+};
+
+/** Experiment trackers for recipe `loggers`; keys come from workspace secrets. A failing tracker never fails the run. */
+export const loggers = {
+  /** Weights & Biases: `secret` names the workspace secret holding the API key. */
+  wandb: (options: { project: string; secret: string; entity?: string; runName?: string; host?: string }): LoggerSpec => ({ kind: "wandb", ...options }),
+  /** MLflow: `secret` names a workspace secret with a bearer token, if the server needs one. */
+  mlflow: (options: { trackingUri: string; experiment?: string; secret?: string; runName?: string }): LoggerSpec => ({ kind: "mlflow", ...options }),
+};
 
 const COMMON_KEYS = [
   "model", "adapter", "lr", "lrScale", "optimizer", "batchSize", "epochs", "schedule", "warmup", "trainOn", "thinking",
-  "preserveThinking", "reduction", "select", "checkpointTtlDays", "evalEvery",
+  "preserveThinking", "reduction", "select", "checkpointTtlDays", "evalEvery", "evals", "loggers",
 ] as const;
 
 /** A recipe ready to submit; build one with `recipes.*`. */
@@ -143,6 +180,7 @@ const common = (options: CommonRecipeOptions): Partial<RecipeSpec> => {
   for (const key of COMMON_KEYS) if (options[key] !== undefined) out[key] = options[key];
   if (options.model !== undefined) out.model = modelId(options.model);
   if (options.evalEvery === "auto") delete out.evalEvery;
+  if (options.evals !== undefined) out.evals = options.evals.map(checkpointEval);
   if (options.optimizer !== undefined) {
     const { lr, kind, betas, weightDecay, gradClip } = options.optimizer;
     if (lr !== undefined) {

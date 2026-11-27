@@ -4,7 +4,7 @@ export { DEFAULT_BASE_URL } from "./config.js";
 export { Paginator, type Page } from "./pagination.js";
 export { Pending } from "./pending.js";
 export type { WaitOptions } from "./polling.js";
-export { adapters, Context, losses, optim, pooling, Recipe, recipes, rollouts, splits, type CommonRecipeOptions, type ModelRef } from "./recipes.js";
+export { adapters, Context, loggers, losses, optim, pooling, Recipe, recipes, rollouts, splits, type CheckpointEvalOptions, type CommonRecipeOptions, type ModelRef } from "./recipes.js";
 export { Judge, Rubric, Scorer, validators, type BuiltinValidator, type RubricInput, type RubricItem, type ScoreFn, type ScoreInput } from "./rubrics.js";
 export { Trajectory } from "./trajectory.js";
 export {

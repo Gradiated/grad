@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { adapters, Context, GradUsageError, Judge, losses, optim, pooling, Recipe, recipes, Rubric, rollouts, Scorer, splits, Trajectory, validators, type ScoreInput } from "../src/index.js";
+import { adapters, Context, GradUsageError, Judge, loggers, losses, optim, pooling, Recipe, recipes, Rubric, rollouts, Scorer, splits, Trajectory, validators, type ScoreInput } from "../src/index.js";
 
 const spec = (recipe: Recipe) => recipe.toSpec();
 
@@ -106,6 +106,18 @@ describe("recipes", () => {
       rubric: "resolved",
     });
     expect(() => recipes.rewardModel({ beta: 0.1 } as never)).toThrow(/does not support 'beta'/);
+  });
+
+  it("maps checkpoint evals and loggers", async () => {
+    const spec = await recipes
+      .sft({
+        evals: [{ name: "gsm8k-200", recordCount: 200 }, { dataset: { name: "holdout" }, rubric: new Judge({ name: "ok", model: "j/m" }), version: 2 }],
+        loggers: [loggers.mlflow({ trackingUri: "http://m", secret: "tok" })],
+      })
+      .toSpec();
+    expect(spec.evals).toEqual([{ dataset: "gsm8k-200" }, { dataset: "holdout", version: 2, rubric: [{ name: "ok", kind: "judge", model: "j/m" }] }]);
+    expect(spec.loggers).toEqual([{ kind: "mlflow", trackingUri: "http://m", secret: "tok" }]);
+    expect(() => recipes.sft({ evals: [{ dataset: "d", rubric: new Scorer("mine", { fn: () => 1 }) }] })).toThrow(GradUsageError);
   });
 
   it("reads Context.fromFile from disk when the run is submitted", async () => {

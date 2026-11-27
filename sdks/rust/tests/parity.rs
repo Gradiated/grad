@@ -169,6 +169,47 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             let req = PlanRunRequest::new("pairs", "embedding-params", recipe);
             c.runs().plan(&req).await.map(drop)
         }
+        "plan_sft_checkpoint_evals_loggers" => {
+            let starts = EvalRubricItem {
+                name: "starts_select".into(),
+                kind: EvalRubricItemKind::Regex,
+                pattern: Some("^SELECT".into()),
+                weight: Some(1.0),
+                ..Default::default()
+            };
+            let recipe = RecipeSpec {
+                evals: Some(vec![
+                    RecipeEval {
+                        dataset: "gsm8k-200".into(),
+                        ..Default::default()
+                    },
+                    RecipeEval {
+                        dataset: "support-holdout".into(),
+                        rubric: Some(vec![starts]),
+                        limit: Some(50),
+                        name: model("sql"),
+                        ..Default::default()
+                    },
+                ]),
+                loggers: Some(vec![
+                    LoggerSpec {
+                        kind: LoggerSpecKind::Wandb,
+                        project: model("support"),
+                        secret: model("wandb-key"),
+                        ..Default::default()
+                    },
+                    LoggerSpec {
+                        kind: LoggerSpecKind::Mlflow,
+                        tracking_uri: model("https://mlflow.internal"),
+                        experiment: model("sft"),
+                        ..Default::default()
+                    },
+                ]),
+                ..RecipeSpec::new(RecipeKind::Sft).model("test/tiny-qwen3")
+            };
+            let req = PlanRunRequest::new("support", "sft-tracked", recipe);
+            c.runs().plan(&req).await.map(drop)
+        }
         "plan_decision" => {
             let req = PlanRunRequest::new(
                 "decisions",

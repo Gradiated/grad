@@ -320,6 +320,19 @@ func TestLiveSelfHosted(t *testing.T) {
 		}
 	})
 
+	t.Run("checkpoint evals and loggers are planned", func(t *testing.T) {
+		rec := []grad.Trajectory{grad.TrajectoryFromMessages([]grad.Message{{Role: "user", Content: "Reset?"}, {Role: "assistant", Content: "Settings."}})}
+		must(client.Datasets.Push(ctx, "go-holdout", rec))(t)
+		must(client.Datasets.Push(ctx, "go-train", rec))(t)
+		plan := must(client.Runs.Plan(ctx, grad.RunParams{Dataset: grad.DatasetName("go-train"), Name: "tracked",
+			Recipe: grad.SFTRecipe{Common: grad.Common{Model: "test/tiny-qwen3", Evals: []grad.CheckpointEval{{Dataset: grad.DatasetName("go-holdout")}},
+				Loggers: []grad.Logger{grad.WandB("p", "wandb-key", "")}}}}))(t)
+		evals := plan.ResolvedConfig.CheckpointEvals
+		if len(evals) != 1 || evals[0].Dataset != "go-holdout" || evals[0].DatasetVersion != 1 || !strings.Contains(strings.Join(plan.Warnings, "\n"), "wandb-key") {
+			t.Fatalf("plan %+v %v", evals, plan.Warnings)
+		}
+	})
+
 	t.Run("a benchmark import is pinned", func(t *testing.T) {
 		job := must(client.Datasets.ImportBenchmark(ctx, grad.BenchmarkGSM8K, grad.BenchmarkOptions{Limit: 5}).Result())(t)
 		if job.Dataset != "gsm8k-5" || job.Source["benchmark"] != "gsm8k" || len(fmt.Sprint(job.Source["revision"])) != 40 {

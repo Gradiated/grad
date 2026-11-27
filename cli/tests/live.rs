@@ -422,6 +422,23 @@ fn live_self_hosted_quickstart() {
         o.stdout
     );
 
+    // recipe evals and loggers in a run file: the plan pins the eval's dataset version.
+    std::fs::write(
+        home.dir.join("tracked.yaml"),
+        "dataset: support-prod\nname: tracked\nrecipe: sft\nmodel: test/tiny-qwen3\nevals:\n  - dataset: support-prod\n    limit: 5\nloggers:\n  - kind: mlflow\n    tracking_uri: http://127.0.0.1:9\n",
+    )
+    .unwrap();
+    let o = grad(
+        &home,
+        &["--json", "train", "-f", "tracked.yaml", "--dry-run"],
+        &[],
+    );
+    ok(&o);
+    let plan: Value = serde_json::from_str(&o.stdout).unwrap();
+    let pinned = &plan["data"]["resolved_config"]["checkpoint_evals"][0];
+    assert_eq!(pinned["dataset"], "support-prod", "{}", o.stdout);
+    assert_eq!(pinned["limit"], 5, "{}", o.stdout);
+
     // A built-in benchmark import is queued with its pinned source.
     let o = grad(
         &home,

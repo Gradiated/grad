@@ -1,6 +1,7 @@
 package grad
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -154,6 +155,49 @@ type Common struct {
 	CheckpointTTLDays int
 	// EvalEvery is optimizer steps between held-out evals (0: every 10% of steps).
 	EvalEvery int
+	// Evals run on every checkpoint during training (billed like evals).
+	Evals []CheckpointEval
+	// Loggers stream the run's metrics to experiment trackers.
+	Loggers []Logger
+}
+
+// CheckpointEval is one of a recipe's Evals. Rubric takes judges, regexes and
+// validators (default: the dataset's own, such as a benchmark's answer check).
+type CheckpointEval struct {
+	Dataset DatasetRef
+	Rubric  Rubric
+	Limit   int
+	Name    string
+	Version int
+}
+
+// Logger is an experiment tracker; build one with WandB or MLflow.
+type Logger = generated.LoggerSpec
+
+// WandB streams metrics to Weights & Biases; secret names the workspace
+// secret holding the API key. entity may be empty.
+func WandB(project, secret, entity string) Logger {
+	return Logger{Kind: generated.LoggerSpecKind("wandb"), Project: &project, Secret: &secret, Entity: optString(entity)}
+}
+
+// MLflow streams metrics to an MLflow tracking server; secret (optional)
+// names a workspace secret with a bearer token.
+func MLflow(trackingURI, experiment, secret string) Logger {
+	return Logger{Kind: generated.LoggerSpecKind("mlflow"), TrackingURI: &trackingURI, Experiment: optString(experiment), Secret: optString(secret)}
+}
+
+func (e CheckpointEval) wire() (generated.RecipeEval, error) {
+	if e.Dataset == nil || e.Dataset.datasetName() == "" {
+		return generated.RecipeEval{}, errors.New("grad: CheckpointEval.Dataset is required")
+	}
+	items, local, err := e.Rubric.wire()
+	if err != nil {
+		return generated.RecipeEval{}, err
+	}
+	if len(local) > 0 {
+		return generated.RecipeEval{}, errors.New("grad: Evals can't run local Scorer functions during training; use judges, regexes and validators")
+	}
+	return generated.RecipeEval{Dataset: e.Dataset.datasetName(), Rubric: items, Limit: optInt(e.Limit), Name: optString(e.Name), Version: optInt(e.Version)}, nil
 }
 
 func (c Common) spec(kind generated.RecipeKind) (RecipeSpec, error) {
@@ -162,6 +206,14 @@ func (c Common) spec(kind generated.RecipeKind) (RecipeSpec, error) {
 	if c.EvalEvery > 0 {
 		s.EvalEvery = c.EvalEvery
 	}
+	for _, e := range c.Evals {
+		w, err := e.wire()
+		if err != nil {
+			return s, err
+		}
+		s.Evals = append(s.Evals, w)
+	}
+	s.Loggers = c.Loggers
 	if c.Adapter != nil {
 		a := c.Adapter.adapterSpec()
 		s.Adapter = &a

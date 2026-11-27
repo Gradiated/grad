@@ -201,6 +201,59 @@ class SelfHostedLiveTests(_LiveCase):
         self.assertRegex(job.source["revision"], r"^[0-9a-f]{40}$")
         self.assertEqual((job.source["repo"], job.source["split"], job.source["limit"]), ("openai/gsm8k", "test", 5))
 
+    def test_checkpoint_evals_and_mlflow_logger(self) -> None:
+        # docs: training/recipes.mdx "Evaluate during training" and "Experiment tracking"
+        import http.server
+        import threading
+
+        seen: list[tuple[str, Any]] = []
+
+        class MLflow(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_a: Any) -> None:
+                return
+
+            def _reply(self) -> None:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n)) if n else None
+                seen.append((self.path, body))
+                if "get-by-name" in self.path:
+                    payload, status = {"error_code": "RESOURCE_DOES_NOT_EXIST"}, 404
+                elif self.path.endswith("experiments/create"):
+                    payload, status = {"experiment_id": "1"}, 200
+                elif self.path.endswith("runs/create"):
+                    payload, status = {"run": {"info": {"run_id": "r1"}}}, 200
+                else:
+                    payload, status = {}, 200
+                raw = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            do_GET = do_POST = _reply
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MLflow)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        client = Grad()
+        dataset = client.datasets.push("sql-sft-tracked", SQL_RECORDS * 10)
+        holdout = client.datasets.push("sql-holdout-tracked", SQL_RECORDS)
+        recipe = SFTRecipe(
+            model=LLM,
+            evals=[grad.EvalSpec(holdout, rubric=validators.Regex("SELECT"))],
+            loggers=[grad.loggers.MLflow(f"http://127.0.0.1:{server.server_address[1]}", experiment="sql")],
+        )
+        run = client.runs.create(dataset=dataset, name="sql-tracked", recipe=recipe).wait(timeout=240)
+        self.assertEqual(run.resolved_config["checkpoint_evals"][0]["dataset"], "sql-holdout-tracked")
+        # The reference worker's checkpoints can't be served, so each checkpoint eval is recorded as failed.
+        self.assertTrue(run.checkpoint_evals)
+        self.assertTrue(all(e["status"] == "failed" and "can't serve" in e["error"] for e in run.checkpoint_evals))
+        steps = [m["step"] for path, body in seen if path.endswith("log-batch") for m in (body or {}).get("metrics", [])]
+        self.assertTrue(steps, seen)
+        self.assertIn(("/api/2.0/mlflow/experiments/create", {"name": "sql"}), seen)
+        self.assertEqual(next(b for p, b in seen if p.endswith("runs/update"))["status"], "FINISHED")
+
     def test_errors_keys_and_pagination(self) -> None:
         client = Grad()
         with self.assertRaises(grad.NotFoundError) as ctx:

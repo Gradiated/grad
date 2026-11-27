@@ -130,6 +130,15 @@ func TestParityRequests(t *testing.T) {
 				Metadata: map[string]any{"env": "prod"}, CreatedAfter: "2026-11-01", Version: 2, Name: "support-good"})
 			return err
 		},
+		"plan_sft_checkpoint_evals_loggers": func() error {
+			_, err := c.Runs.Plan(ctx, grad.RunParams{Dataset: grad.DatasetName("support"), Name: "sft-tracked",
+				Recipe: grad.SFTRecipe{Common: grad.Common{Model: "test/tiny-qwen3",
+					Evals: []grad.CheckpointEval{{Dataset: grad.DatasetName("gsm8k-200")},
+						{Dataset: grad.DatasetName("support-holdout"), Rubric: grad.Rubric{grad.Regex{Name: "starts_select", Pattern: "^SELECT", Weight: 1}}, Limit: 50, Name: "sql"}},
+					Loggers: []grad.Logger{grad.WandB("support", "wandb-key", ""), grad.MLflow("https://mlflow.internal", "sft", "")},
+				}}})
+			return err
+		},
 		"import_benchmark": func() error {
 			_, err := c.Datasets.ImportBenchmark(ctx, grad.BenchmarkGSM8K, grad.BenchmarkOptions{Limit: 200, Name: "gsm8k-test-200"}).Result()
 			return err

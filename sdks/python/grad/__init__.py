@@ -100,6 +100,7 @@ from .records import Context, PreferencePair, Record, Task, Trajectory, Triplet
 from .rubrics import Judge, Rubric, Scorer, StatefulScorer
 from . import sources
 from .specs import adapters, advantages, heads, loggers, losses, mergers, optim, pooling, splits
+from .recipes import EvalSpec
 
 __all__ = [
     "APIConnectionError",
@@ -194,6 +195,7 @@ __all__ = [
     "environments",
     "heads",
     "loggers",
+    "EvalSpec",
     "losses",
     "mergers",
     "optim",

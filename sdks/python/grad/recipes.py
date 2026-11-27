@@ -21,7 +21,7 @@ from ._errors import NotAvailableInV0Error
 from ._generated.client import SCHEMA_FIELDS
 from .records import Context
 from .rubrics import coerce_rubric, model_ref
-from .specs import AdamWSpec, AdapterSpec, LossSpec, PoolingSpec, SplitSpec, adapters
+from .specs import AdamWSpec, AdapterSpec, LoggerSpec, LossSpec, PoolingSpec, SplitSpec, adapters
 
 __all__ = [
     "CartridgeRecipe",
@@ -70,6 +70,44 @@ def _unsupported(recipe: str, setting: str, reason: str, alternative: str | None
     return NotAvailableInV0Error(f"{recipe}({setting})", reason, alternative=alternative)
 
 
+@dataclass(frozen=True)
+class EvalSpec:
+    """One of a recipe's ``evals=``: scored on every checkpoint during training.
+
+    ``dataset`` is a :class:`grad.Dataset` or a name (a benchmark from
+    ``client.datasets.from_benchmark`` brings its own answer check); ``rubric`` takes judges,
+    regexes and validators; ``limit`` evaluates the first N tasks.
+    """
+
+    dataset: Any
+    rubric: Any = None
+    limit: int | None = None
+    name: str | None = None
+    version: int | None = None
+
+
+def _eval_item(item: Any) -> dict[str, Any]:
+    from ._helpers import dataset_name, rubric_items
+
+    if isinstance(item, Mapping):
+        return dict(item)
+    spec = item if isinstance(item, EvalSpec) else EvalSpec(dataset=item)
+    out: dict[str, Any] = {"dataset": dataset_name(spec.dataset)}
+    if spec.rubric is not None:
+        wire, local = rubric_items(spec.rubric)
+        if local is not None and local.local_scorers:
+            raise ValueError(
+                f"evals=: code scorers ({', '.join(local.local_scorers)}) can't run during training; "
+                "use judges, regexes and validators, or evaluate run.artifact afterwards."
+            )
+        out["rubric"] = wire
+    for key in ("limit", "name", "version"):
+        value = getattr(spec, key)
+        if value is not None:
+            out[key] = value
+    return out
+
+
 @dataclass(kw_only=True)
 class Recipe:
     """Settings shared by every recipe (see the training parameters reference).
@@ -90,6 +128,8 @@ class Recipe:
         checkpoint_ttl_days: Retention of intermediate checkpoints.
         split: Train/eval split (``splits.BySession(0.10)`` by default); sent with the run.
         eval_every: ``"auto"`` (every 10% of steps) or a number of optimizer steps.
+        evals: Extra evals on each checkpoint: datasets, names or :class:`EvalSpec`.
+        loggers: Experiment trackers, ``[loggers.WandB(...)]`` or ``[loggers.MLflow(...)]``.
     """
 
     kind: ClassVar[str] = ""
@@ -111,6 +151,8 @@ class Recipe:
     checkpoint_ttl_days: int | None = None
     split: SplitSpec | Mapping[str, Any] | None = None
     eval_every: Any = None
+    evals: Sequence[Any] | None = None
+    loggers: Sequence[LoggerSpec | Mapping[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         name = type(self).__name__
@@ -150,6 +192,10 @@ class Recipe:
             out["optimizer"] = {"kind": "adamw", "betas": list(opt.betas), "weight_decay": opt.weight_decay, "grad_clip": opt.grad_clip}
         if self.eval_every not in (None, "auto"):
             out["eval_every"] = self.eval_every
+        if self.evals:
+            out["evals"] = [_eval_item(e) for e in self.evals]
+        if self.loggers:
+            out["loggers"] = [lg.to_wire() if isinstance(lg, LoggerSpec) else dict(lg) for lg in self.loggers]
         for key in (
             "lr",
             "lr_scale",

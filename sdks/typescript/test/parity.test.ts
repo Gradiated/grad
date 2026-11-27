@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { adapters, Context, Judge, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
+import { adapters, Context, Judge, loggers, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
 import type { EvalRun, PlanEvalResponse, Run, Secret, Source, UsageRecord } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
@@ -119,6 +119,16 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
     grad.datasets.score("support-logs", judge, { version: 1, name: "support-logs-quality", limit: 100, idempotencyKey: "parity-score-key" }),
   filter_dataset_fields: () =>
     grad.datasets.filter("support-logs", { scores: { quality: ">=0.8" }, metadata: { env: "prod" }, createdAfter: "2026-11-01", version: 2, name: "support-good" }),
+  plan_sft_checkpoint_evals_loggers: () =>
+    grad.runs.plan({
+      dataset: "support",
+      name: "sft-tracked",
+      recipe: recipes.sft({
+        model: "test/tiny-qwen3",
+        evals: ["gsm8k-200", { dataset: "support-holdout", rubric: new Scorer("starts_select", { fn: validators.regex("^SELECT"), weight: 1 }), limit: 50, name: "sql" }],
+        loggers: [loggers.wandb({ project: "support", secret: "wandb-key" }), loggers.mlflow({ trackingUri: "https://mlflow.internal", experiment: "sft" })],
+      }),
+    }),
   import_benchmark: () => grad.datasets.fromBenchmark("gsm8k", { limit: 200, name: "gsm8k-test-200", wait: false }),
   filter_dataset_ids: () => grad.datasets.filter("support-logs", { ids: ["rec_a", "rec_c"] }),
   deploy: () => grad.deploy(artifact, { name: "support", fallback: "test/tiny-qwen3", exploreRate: 0.1, idempotencyKey: "parity-deploy-key" }),

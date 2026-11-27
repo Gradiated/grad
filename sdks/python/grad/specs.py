@@ -325,24 +325,57 @@ class advantages:
 
 @dataclass(frozen=True)
 class LoggerSpec:
-    """An experiment tracker configuration."""
+    """An experiment tracker for recipe ``loggers=`` (the trainer streams the run's metrics to it)."""
 
     kind: str
     options: dict[str, Any] = field(default_factory=dict)
 
+    def to_wire(self) -> dict[str, Any]:
+        return {"kind": self.kind, **{k: v for k, v in self.options.items() if v is not None}}
+
+
+def _secret_name(secret: Any) -> str | None:
+    """A workspace secret given by name or as a ``client.secrets.get(...)`` object."""
+    if secret is None:
+        return None
+    name = getattr(secret, "name", secret)
+    if not isinstance(name, str) or not name:
+        raise TypeError("secret= takes the name of a workspace secret (or client.secrets.get(name)).")
+    return name
+
 
 class loggers:
-    """Experiment trackers. Typed today; the v0 server does not forward metrics to them yet."""
+    """Experiment trackers. Keys come from workspace secrets; a tracker that fails is reported
+    in the worker log and dropped, and never fails the run."""
 
     @staticmethod
-    def WandB(project: str, *, tags: list[str] | None = None, entity: str | None = None) -> LoggerSpec:
-        """Weights & Biases."""
-        return LoggerSpec(kind="wandb", options={"project": project, "tags": tags, "entity": entity})
+    def WandB(
+        project: str,
+        *,
+        secret: Any,
+        entity: str | None = None,
+        run_name: str | None = None,
+        host: str | None = None,
+    ) -> LoggerSpec:
+        """Weights & Biases; ``secret`` names the workspace secret holding the API key."""
+        return LoggerSpec(
+            kind="wandb",
+            options={"project": project, "secret": _secret_name(secret), "entity": entity, "run_name": run_name, "host": host},
+        )
 
     @staticmethod
-    def MLflow(*, tracking_uri: str | None = None, experiment: str | None = None) -> LoggerSpec:
-        """MLflow."""
-        return LoggerSpec(kind="mlflow", options={"tracking_uri": tracking_uri, "experiment": experiment})
+    def MLflow(
+        tracking_uri: str,
+        *,
+        experiment: str | None = None,
+        secret: Any = None,
+        run_name: str | None = None,
+    ) -> LoggerSpec:
+        """MLflow; ``secret`` names a workspace secret with a bearer token, if the server needs one."""
+        return LoggerSpec(
+            kind="mlflow",
+            options={"tracking_uri": tracking_uri, "experiment": experiment, "secret": _secret_name(secret), "run_name": run_name},
+        )
 
 
 class Unavailable:

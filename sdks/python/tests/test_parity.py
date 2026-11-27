@@ -112,6 +112,15 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "filter_dataset_fields": lambda: client.datasets.filter(
             "support-logs", scores={"quality": ">=0.8"}, metadata={"env": "prod"}, created_after=datetime.date(2026, 11, 1), version=2, name="support-good"
         ),
+        "plan_sft_checkpoint_evals_loggers": lambda: client.runs.plan(
+            "support",
+            name="sft-tracked",
+            recipe=SFTRecipe(
+                model="test/tiny-qwen3",
+                evals=["gsm8k-200", grad.EvalSpec("support-holdout", rubric=grad.Scorer("starts_select", fn=validators.Regex("^SELECT")), limit=50, name="sql")],
+                loggers=[grad.loggers.WandB("support", secret="wandb-key"), grad.loggers.MLflow("https://mlflow.internal", experiment="sft")],
+            ),
+        ),
         "import_benchmark": lambda: client.datasets.from_benchmark("gsm8k", limit=200, name="gsm8k-test-200", wait=False),
         "filter_dataset_ids": lambda: client.datasets.filter("support-logs", ids=["rec_a", "rec_c"]),
         "deploy": lambda: client.deploy(artifact, name="support", fallback="test/tiny-qwen3", explore_rate=0.1, idempotency_key="parity-deploy-key"),
