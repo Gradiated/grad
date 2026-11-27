@@ -327,8 +327,10 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
         if (error instanceof LeaseLost) halt = "lost";
       }
     };
+    // Not unref'd: it also keeps the process alive while the only pending
+    // work is unref'd (the regex sandbox thread), so the worker can't exit
+    // mid-eval. Cleared when the attempt ends.
     const heartbeat = setInterval(() => void beat(), (leaseSeconds * 1000) / 3);
-    heartbeat.unref();
 
     // Outputs go out in batches; one send at a time.
     let buffer: OutputInput[] = [];
