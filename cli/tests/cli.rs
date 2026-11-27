@@ -1592,7 +1592,7 @@ fn docker_shim(sb: &Sandbox, exit: i32) -> PathBuf {
     std::fs::write(
         &shim,
         format!(
-            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY PORT=$GRAD_PORT AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nexit {exit}\n",
+            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY SECRETS=$GRAD_SECRETS_KEY PORT=$GRAD_PORT AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nexit {exit}\n",
             log = sb.path("docker.log").display(),
             exit = exit
         ),
@@ -1648,6 +1648,9 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     assert_eq!(local["base_url"], format!("http://127.0.0.1:{}", port));
     assert!(log.contains(&format!("HASH={}", mock::sha256_hex(admin.as_bytes()))));
     assert!(log.contains(&format!("TRAINER={}", trainer)) && log.contains("AUTH=api_key"));
+    let secrets = local["secrets_key"].as_str().unwrap();
+    assert_eq!(secrets.len(), 44, "32 bytes in base64: {}", secrets);
+    assert!(log.contains(&format!("SECRETS={}", secrets)));
     assert!(
         !log.contains(admin),
         "the admin key itself never reaches docker"
@@ -1702,7 +1705,8 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let cfg: Value =
         serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
     assert!(
-        cfg["profiles"]["local"].get("api_key").is_none(),
+        cfg["profiles"]["local"].get("api_key").is_none()
+            && cfg["profiles"]["local"].get("secrets_key").is_none(),
         "reset forgets the keys"
     );
 

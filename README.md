@@ -218,7 +218,7 @@ Cloud adds three adapters on top of the same code (auth, per-token billing, host
 
 ## Self-hosting
 
-Self-hosted `grad` needs only Postgres and S3 (or a local directory). Start everything locally with one command:
+Self-hosted `grad` needs only Postgres and S3 (or a local directory for `grad local up`). Start everything locally with one command:
 
 ```bash
 grad local up                 # Postgres, grad-server on 127.0.0.1:8787, a CPU trainer
@@ -228,13 +228,14 @@ export GRADIATED_PROFILE=local
 
 The CPU trainer is for trying the workflow on small data; real training uses `grad local up --gpu` or GPU nodes.
 
-The first run generates an admin key and a trainer key and saves them to a `local` CLI profile. `grad local status`, `grad local logs` and `grad local down` manage the stack.
+The first run generates an admin key, a trainer key and the workspace-secrets key and saves them to a `local` CLI profile. `grad local status`, `grad local logs` and `grad local down` manage the stack.
 
-For production, create the database and auth secrets described in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md), then install the Helm chart against your own Postgres and bucket. It supports KEDA scale-to-zero for GPU trainers and an air-gapped judge endpoint:
+For production, create the `grad` Secret described in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) (database URL, admin key hash, trainer key), then install the Helm chart against your own Postgres and S3 bucket. It runs migrations in a Job, two API replicas, a GPU `train` worker pool and a CPU `import` worker pool, with optional KEDA scale-to-zero and NetworkPolicies:
 
 ```bash
-helm upgrade --install grad server/helm/grad --namespace grad --create-namespace \
+helm upgrade --install grad server/helm/grad --namespace grad \
   --set storage.s3Bucket=my-grad-artifacts \
+  --set evals.inferenceBaseUrl=https://vllm.internal.example.com/v1 \
   --set keda.enabled=true
 ```
 

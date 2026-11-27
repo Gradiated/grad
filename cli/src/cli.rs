@@ -807,8 +807,9 @@ Examples:
   grad local up --gpu
   grad local up --build          # build images from a source checkout
 
-First run generates an admin key and a trainer key and saves them in the
-'local' profile, so the local server runs with authentication on.")]
+First run generates an admin key, a trainer key and the workspace-secrets
+key and saves them in the 'local' profile, so the local server runs with
+authentication on.")]
     Up {
         #[command(flatten)]
         compose: ComposeArgs,

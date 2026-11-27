@@ -4,8 +4,9 @@
 //! `$XDG_DATA_HOME/gradiated/local/docker-compose.yml` and uses published
 //! images, so it works from any directory. `--build` (or `--file`) uses a
 //! source checkout's `server/docker-compose.yml` instead. The first `up`
-//! generates an admin key and a trainer key and stores them in the `local`
-//! profile; the server only ever sees the admin key's SHA-256.
+//! generates an admin key, a trainer key and the workspace-secrets key and
+//! stores them in the `local` profile; the server only ever sees the admin
+//! key's SHA-256.
 
 use grad_sdk::Client;
 use serde_json::json;
@@ -131,7 +132,16 @@ fn new_key(prefix: &str) -> String {
 struct LocalKeys {
     admin: String,
     trainer: String,
+    /// GRAD_SECRETS_KEY: 32 random bytes, base64 (encrypts workspace secrets).
+    secrets: String,
     created: bool,
+}
+
+fn new_secrets_key() -> String {
+    use base64::Engine;
+    let mut buf = [0u8; 32];
+    getrandom::getrandom(&mut buf).expect("OS random number generator unavailable");
+    base64::engine::general_purpose::STANDARD.encode(buf)
 }
 
 fn ensure_keys(profile: &str, base_url: &str) -> CliResult<LocalKeys> {
@@ -144,15 +154,24 @@ fn ensure_keys(profile: &str, base_url: &str) -> CliResult<LocalKeys> {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .filter(|k| !k.is_empty());
+        let secrets = p
+            .extra
+            .get("secrets_key")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|k| !k.is_empty());
         let created = admin.is_none() || trainer.is_none();
         let admin = admin.unwrap_or_else(|| new_key("grad_local_"));
         let trainer = trainer.unwrap_or_else(|| new_key("grad_trainer_"));
+        let secrets = secrets.unwrap_or_else(new_secrets_key);
         p.api_key = Some(admin.clone());
         p.base_url = Some(base_url.to_string());
         p.extra.insert("trainer_key".into(), json!(trainer));
+        p.extra.insert("secrets_key".into(), json!(secrets));
         out = Some(LocalKeys {
             admin,
             trainer,
+            secrets,
             created,
         });
     })?;
@@ -246,6 +265,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                     grad_sdk::sha256_hex(keys.admin.as_bytes()),
                 )
                 .env("GRAD_TRAINER_API_KEY", &keys.trainer)
+                .env("GRAD_SECRETS_KEY", &keys.secrets)
                 .env("GRAD_PORT", port.to_string());
             on_interrupt("stopped waiting; the containers keep starting (`grad local status`)");
             run(ctx, cmd, "up").await.map_err(|e| {
@@ -386,6 +406,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             save_profile(&profile, |p| {
                 p.api_key = None;
                 p.extra.remove("trainer_key");
+                p.extra.remove("secrets_key");
             })?;
             out.line("✓ Deleted the local stack's data and keys; `grad local up` starts fresh");
             out.done(&json!({ "project": args.project_name, "profile": profile }))

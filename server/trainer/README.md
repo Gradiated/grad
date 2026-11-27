@@ -49,6 +49,14 @@ summary = import_runner.run(source, connector, emit_batch=post_records, workdir=
   `bundle_directory` stamps `format_version` and `created_by`, and raises `ValueError` when the
   manifest or the format's config file breaks its schema; the worker then fails the job.
 
+## Running the worker
+
+`grad-trainer` (the image's command) polls `GRAD_SERVER_URL` with `TRAINER_API_KEY` and claims
+the job kinds in `GRAD_WORKER_KINDS` (default `train,import`). Run GPU pools with `train` and a
+CPU pool with `import`: imports and source syncs are the only jobs that carry workspace secrets.
+Also: `GRAD_WORKER_ID` (default host-pid-random), `GRAD_LEASE_SECONDS` (180),
+`GRAD_POLL_INTERVAL_S` (1.0), `GRAD_WORKDIR` (a temp dir).
+
 ## Models
 
 Catalog ids map to Hugging Face repos (`qwen/qwen3-8b` -> `Qwen/Qwen3-8B`, ...). Override with
