@@ -28,7 +28,7 @@ class Grad:
 
     Args:
         api_key: API key (``""`` for servers without authentication).
-        base_url: e.g. ``http://localhost:8787`` for a local stack.
+        base_url: e.g. ``http://localhost:18787`` for a local stack.
         profile: Profile in ``~/.config/gradiated/config.json`` (default ``GRADIATED_PROFILE``,
             then ``"default"``), e.g. ``"local"`` after ``grad local up``.
         timeout: Per-request timeout in seconds (connect and each read). Downloads and

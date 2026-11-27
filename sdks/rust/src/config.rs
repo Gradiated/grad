@@ -289,7 +289,7 @@ pub fn validate_base_url(url: &str) -> Result<reqwest::Url> {
     })?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         let hint = if trimmed.contains("://") {
-            "for example http://127.0.0.1:8787".to_string()
+            "for example http://127.0.0.1:18787".to_string()
         } else {
             format!("did you mean http://{}?", trimmed)
         };
@@ -420,9 +420,11 @@ mod tests {
 
     #[test]
     fn base_url_validation_names_the_problem() {
-        let err = validate_base_url("localhost:8787").unwrap_err().to_string();
+        let err = validate_base_url("localhost:18787")
+            .unwrap_err()
+            .to_string();
         assert!(
-            err.contains("http") && err.contains("localhost:8787"),
+            err.contains("http") && err.contains("localhost:18787"),
             "{}",
             err
         );
@@ -435,8 +437,8 @@ mod tests {
 
     #[test]
     fn loopback_and_missing_key_message() {
-        assert!(is_loopback("http://127.0.0.1:8787"));
-        assert!(is_loopback("http://[::1]:8787"));
+        assert!(is_loopback("http://127.0.0.1:18787"));
+        assert!(is_loopback("http://[::1]:18787"));
         assert!(is_loopback("http://app.localhost"));
         assert!(!is_loopback("https://api.gradiated.com"));
         assert_eq!(

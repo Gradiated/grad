@@ -38,14 +38,14 @@ Every push to `main` that touches the server or trainer publishes `main` and `sh
 
 `grad local up` pulls the images first, so a moving tag like `main` stays current. A `grad` binary from a release (or `cargo install grad-cli`) pulls the images tagged with its own version; one built from a checkout pulls `main`. `--image-tag TAG` overrides that. If the pull is refused or the tag doesn't exist and you run `grad local up` inside a grad checkout, it builds the images from the checkout instead, as `--build` does, and says so; elsewhere the error names the tags that exist and suggests `--build` from a checkout.
 
-The API listens on `http://127.0.0.1:8787` (published on loopback only; change it with `--port` or `GRAD_PORT`). Authentication is on: the first run generates an admin key, a trainer key and the key that encrypts workspace secrets (`GRAD_SECRETS_KEY`), and saves them in the `local` profile of the `grad` config file (`grad config path`); the server only receives the admin key's SHA-256. `grad local up` waits for `/health/ready` and prints the next steps:
+The API and web UI listen on `http://127.0.0.1:18787` (published on loopback only). Before starting, `grad local up` checks every port it publishes: a busy default moves to a free port in 18790-18809 and one line says so (`18787 is in use (by another process); serving the API on 127.0.0.1:18790`), while a busy port you chose (`--port`, `GRAD_PORT`, `GRAD_GRAFANA_PORT`, `GRAD_PROMETHEUS_PORT`) fails with exit 2 and how to see what holds it (`lsof -i :PORT` or `ss -ltnp`). The ports of a stack that is already running are its own, not a clash. The choice is saved (`ports.json` beside the embedded compose file), so later runs keep the same URLs, and the `local` profile's `base_url` follows it, so the CLI, the SDKs and `grad ui` do too. The URLs on this page are the defaults; `grad local status` prints the real ones. Authentication is on: the first run generates an admin key, a trainer key and the key that encrypts workspace secrets (`GRAD_SECRETS_KEY`), and saves them in the `local` profile of the `grad` config file (`grad config path`); the server only receives the admin key's SHA-256. `grad local up` waits for `/health/ready` and prints the next steps:
 
 ```bash
 export GRADIATED_PROFILE=local
 grad models list
 ```
 
-`grad local status` shows container status and API health, `grad local logs [SERVICE] [--follow]` prints logs, `grad local down [--volumes]` stops the stack, and `grad local reset` deletes the local data and keys so the next `grad local up` starts fresh. Pass `--file` (or `GRAD_COMPOSE_FILE`) to use your own compose file; repeat `--file` (or separate the paths with `:`) to layer overrides on top, as `docker compose -f` does. `GRAD_SERVER_IMAGE` / `GRAD_TRAINER_IMAGE` / `GRAD_TRAINER_GPU_IMAGE` override the images (then `grad local up` doesn't pull first), and `GRAD_POSTGRES_MEMORY` / `GRAD_SERVER_MEMORY` / `GRAD_TRAINER_MEMORY` (default `1g` / `1g` / `8g`) cap the containers' memory. Data lives in named volumes (Postgres, artifacts and the trainer's Hugging Face cache), so it survives `grad local down` and is deleted by `grad local down --volumes`.
+`grad local status` shows container status, API health and the API, web UI, Grafana and Prometheus URLs, `grad local logs [SERVICE] [--follow]` prints logs, `grad local down [--volumes]` stops the stack, and `grad local reset` deletes the local data and keys so the next `grad local up` starts fresh. Pass `--file` (or `GRAD_COMPOSE_FILE`) to use your own compose file; repeat `--file` (or separate the paths with `:`) to layer overrides on top, as `docker compose -f` does. `GRAD_SERVER_IMAGE` / `GRAD_TRAINER_IMAGE` / `GRAD_TRAINER_GPU_IMAGE` override the images (then `grad local up` doesn't pull first), and `GRAD_POSTGRES_MEMORY` / `GRAD_SERVER_MEMORY` / `GRAD_TRAINER_MEMORY` (default `1g` / `1g` / `8g`) cap the containers' memory. Data lives in named volumes (Postgres, artifacts and the trainer's Hugging Face cache), so it survives `grad local down` and is deleted by `grad local down --volumes`.
 
 `tests/compose/smoke.sh` boots the stack with `grad local up --build --dev-models` and runs the quickstarts (including the README's router on `examples/support_traces.jsonl`) through the CLI and the Python SDK; CI runs it on every push.
 
@@ -60,7 +60,7 @@ export GRAD_SECRETS_KEY=$(openssl rand -base64 32)    # encrypts workspace secre
 
 ## Web UI
 
-`grad-server` serves a web UI at `/` for watching training, much like the Temporal UI for workflows: `http://127.0.0.1:8787/` after `grad local up` (which prints the URL), `<base_url>/` from the harness (`ui_url`), and the API Service or ingress in Kubernetes. Run `grad ui` to open it signed in with your CLI profile (`grad ui RUN_ID` opens one run).
+`grad-server` serves a web UI at `/` for watching training, much like the Temporal UI for workflows: `http://127.0.0.1:18787/` after `grad local up` (which prints the URL; `grad local status` shows it later), `<base_url>/` from the harness (`ui_url`), and the API Service or ingress in Kubernetes. Run `grad ui` to open it signed in with your CLI profile (`grad ui RUN_ID` opens one run).
 
 What it shows (read-mostly):
 
@@ -81,7 +81,7 @@ How it works and what it can reach:
 - Every UI response carries a strict Content-Security-Policy (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'`, nothing inline), `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`.
 - `UI_ENABLED=false` turns it off (it is off by default with `AUTH_MODE=cloud`); Helm sets it from `ui.enabled` (default `true`). The UI needs no extra exposure: keep the server on loopback or behind your ingress as before.
 
-To work on it, run the API (for example `grad local up` or the harness) and `pnpm -C server/ui dev`, which proxies `/v1` to `GRAD_API` (default `http://127.0.0.1:8787`). `pnpm -C server/ui check` runs the typecheck and component tests; `pnpm -C server/ui build` writes `server/ui/dist`, which a source checkout's `grad-server` serves too.
+To work on it, run the API (for example `grad local up` or the harness) and `pnpm -C server/ui dev`, which proxies `/v1` to `GRAD_API` (default `http://127.0.0.1:18787`, the `grad local up` default). `pnpm -C server/ui check` runs the typecheck and component tests; `pnpm -C server/ui build` writes `server/ui/dist`, which a source checkout's `grad-server` serves too.
 
 ## Server configuration
 
@@ -172,7 +172,7 @@ Each worker with `GRAD_WORKER_METRICS_PORT` set serves its own metrics (`grad_tr
 
 ### Locally
 
-`grad local up --observability` adds Prometheus (`127.0.0.1:9090`, 512 MB, 7 days of data) and Grafana (`127.0.0.1:3000`, 768 MB) with the three dashboards provisioned, and prints the Grafana URL. Anyone on the machine can view; sign in as `admin` (password `GRAD_GRAFANA_PASSWORD`, default `admin`) to edit. `GRAD_PROMETHEUS_PORT`, `GRAD_GRAFANA_PORT`, `GRAD_PROMETHEUS_MEMORY` and `GRAD_GRAFANA_MEMORY` change the defaults. `grad local down` stops them too.
+`grad local up --observability` adds Prometheus (`127.0.0.1:18789`, 512 MB, 7 days of data) and Grafana (`127.0.0.1:18788`, 768 MB) with the three dashboards provisioned, and prints the Grafana URL. Anyone on the machine can view; sign in as `admin` (password `GRAD_GRAFANA_PASSWORD`, default `admin`) to edit. `GRAD_PROMETHEUS_PORT`, `GRAD_GRAFANA_PORT`, `GRAD_PROMETHEUS_MEMORY` and `GRAD_GRAFANA_MEMORY` change the defaults. `grad local down` stops them too.
 
 ### Kubernetes
 

@@ -32,7 +32,7 @@ fn precedence_and_file_handling() {
         &path,
         &[
             ("default", "https://api.gradiated.com", "grad_file_default"),
-            ("local", "http://127.0.0.1:8787/", "grad_file_local"),
+            ("local", "http://127.0.0.1:18787/", "grad_file_local"),
         ],
     );
     #[cfg(unix)]
@@ -87,7 +87,7 @@ fn precedence_and_file_handling() {
 
     // An explicitly selected profile beats env (flag or GRADIATED_PROFILE).
     let r = config::resolve(&inputs(None, None, Some("local"))).unwrap();
-    assert_eq!(r.base_url, "http://127.0.0.1:8787");
+    assert_eq!(r.base_url, "http://127.0.0.1:18787");
     assert_eq!(r.api_key.as_deref(), Some("grad_file_local"));
     std::env::set_var("GRADIATED_PROFILE", "local");
     let r = config::resolve(&inputs(None, None, None)).unwrap();
@@ -100,7 +100,7 @@ fn precedence_and_file_handling() {
     let r = config::resolve(&inputs(Some("http://elsewhere:9"), None, None)).unwrap();
     assert_eq!(r.api_key, None);
     assert!(r.note.as_deref().unwrap().contains("belongs to"));
-    let r = config::resolve(&inputs(Some("http://127.0.0.1:8787"), None, Some("local"))).unwrap();
+    let r = config::resolve(&inputs(Some("http://127.0.0.1:18787"), None, Some("local"))).unwrap();
     assert_eq!(
         r.api_key.as_deref(),
         Some("grad_file_local"),

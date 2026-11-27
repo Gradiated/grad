@@ -117,7 +117,7 @@ class ErrorMappingTests(unittest.TestCase):
         with self.assertRaises(grad.AuthenticationError) as ctx:
             client.runs.get("x")
         self.assertIn("grad login", str(ctx.exception))
-        client, _, _ = make_client({"GET /v1/runs/x": problem(401, "unauthorized")}, api_key="", base_url="http://localhost:8787")
+        client, _, _ = make_client({"GET /v1/runs/x": problem(401, "unauthorized")}, api_key="", base_url="http://localhost:18787")
         with self.assertRaises(grad.AuthenticationError) as ctx:
             client.runs.get("x")
         self.assertIn("No API key was sent", str(ctx.exception))

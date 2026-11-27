@@ -6,7 +6,7 @@ import { defineConfig } from "vitest/config";
 // (tests/harness/stack.ts) and pass its base_url and api_key:
 //   GRAD_LIVE_BASE_URL=http://127.0.0.1:PORT GRAD_LIVE_API_KEY=grad_e2e_admin_key \
 //     pnpm -C server/ui exec vitest run --config vitest.live.config.ts
-const base = process.env.GRAD_LIVE_BASE_URL ?? "http://127.0.0.1:8787";
+const base = process.env.GRAD_LIVE_BASE_URL ?? "http://127.0.0.1:18787";
 
 export default defineConfig({
   resolve: { alias: { "@sdk": fileURLToPath(new URL("../../sdks/typescript/src", import.meta.url)) } },

@@ -7,6 +7,16 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+### Changed
+
+- `grad local up` publishes the API and web UI on `127.0.0.1:18787`, Grafana on `18788` and
+  Prometheus on `18789` (was `8787`, `3000` and `9090`). Before starting it probes each port:
+  a busy default moves to a free port in 18790-18809 and one line says so; a busy port set
+  with `--port` or `GRAD_*_PORT` fails with exit 2 (`port_in_use`) and how to see its owner.
+  A running stack's own ports are not a clash. The choice is saved, so later runs keep the
+  same URLs, the `local` profile follows it, and `grad local status` prints the API, UI,
+  Grafana and Prometheus URLs. The Helm NOTES port-forward to `18787` too.
+
 ## [0.2.0-alpha.3] - 2026-11-27
 
 ### Changed

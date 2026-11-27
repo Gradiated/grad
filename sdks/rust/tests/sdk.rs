@@ -209,7 +209,7 @@ async fn invalid_base_url_is_a_config_error() {
     let err = Client::builder()
         .ignore_env(true)
         .ignore_config_file(true)
-        .base_url("localhost:8787")
+        .base_url("localhost:18787")
         .build()
         .unwrap_err();
     assert!(matches!(err, Error::Config(_)));

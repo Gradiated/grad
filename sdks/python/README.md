@@ -10,7 +10,7 @@ fine-tuning runs, evaluate models, download PEFT adapters and deploy them on Gra
 ```bash
 pip install grad-sdk
 export GRADIATED_API_KEY=grad_...
-# Self-hosted server: export GRADIATED_BASE_URL=http://localhost:8787
+# Self-hosted server: export GRADIATED_BASE_URL=http://localhost:18787
 ```
 
 ## Quickstart

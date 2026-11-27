@@ -39,9 +39,9 @@ class ConfigTests(unittest.TestCase):
         self.assertIn(DEFAULT_BASE_URL, text)
 
     def test_loopback_and_explicit_empty_key_need_no_key(self) -> None:
-        self.assertIsNone(resolve_config(base_url="http://localhost:8787", env=self.env).api_key)
-        self.assertIsNone(resolve_config(base_url="http://127.0.0.1:8787", env=self.env).api_key)
-        self.assertIsNone(resolve_config(base_url="http://[::1]:8787", env=self.env).api_key)
+        self.assertIsNone(resolve_config(base_url="http://localhost:18787", env=self.env).api_key)
+        self.assertIsNone(resolve_config(base_url="http://127.0.0.1:18787", env=self.env).api_key)
+        self.assertIsNone(resolve_config(base_url="http://[::1]:18787", env=self.env).api_key)
         self.assertIsNone(resolve_config(api_key="", env=self.env).api_key)
         self.assertTrue(is_loopback("http://app.localhost"))
         self.assertFalse(is_loopback("http://grad.internal"))
@@ -75,11 +75,11 @@ class ConfigTests(unittest.TestCase):
             resolve_config(profile="staging", env=self.env)
 
     def test_gradiated_profile_env_selects_a_profile(self) -> None:
-        self.write({"profiles": {"default": {"api_key": "a"}, "local": {"base_url": "http://127.0.0.1:8787", "api_key": "grad_local"}}})
+        self.write({"profiles": {"default": {"api_key": "a"}, "local": {"base_url": "http://127.0.0.1:18787", "api_key": "grad_local"}}})
         env = {**self.env, "GRADIATED_PROFILE": "local", "GRADIATED_API_KEY": "grad_env", "GRADIATED_BASE_URL": "https://env.example"}
         cfg = resolve_config(env=env)
         # A profile selected by name wins over the environment variables.
-        self.assertEqual((cfg.base_url, cfg.api_key, cfg.profile), ("http://127.0.0.1:8787", "grad_local", "local"))
+        self.assertEqual((cfg.base_url, cfg.api_key, cfg.profile), ("http://127.0.0.1:18787", "grad_local", "local"))
         # Arguments still win over the selected profile.
         self.assertEqual(resolve_config(api_key="grad_arg", env=env).api_key, "grad_arg")
         with self.assertRaises(grad.GradConfigError) as ctx:
@@ -105,8 +105,8 @@ class ConfigTests(unittest.TestCase):
 
     def test_trailing_v1_is_dropped(self) -> None:
         with self.assertWarns(UserWarning):
-            cfg = resolve_config(base_url="http://localhost:8787/v1/", env=self.env)
-        self.assertEqual(cfg.base_url, "http://localhost:8787")
+            cfg = resolve_config(base_url="http://localhost:18787/v1/", env=self.env)
+        self.assertEqual(cfg.base_url, "http://localhost:18787")
 
     def test_malformed_files(self) -> None:
         self.cfg.write_text("{nope")
@@ -157,10 +157,10 @@ class ConfigTests(unittest.TestCase):
         old = dict(os.environ)
         try:
             os.environ["GRADIATED_API_KEY"] = "grad_from_env"
-            os.environ["GRADIATED_BASE_URL"] = "http://localhost:8787"
+            os.environ["GRADIATED_BASE_URL"] = "http://localhost:18787"
             with grad.Grad() as client:
                 self.assertEqual(client.config.api_key, "grad_from_env")
-                self.assertEqual(client.base_url, "http://localhost:8787")
+                self.assertEqual(client.base_url, "http://localhost:18787")
         finally:
             os.environ.clear()
             os.environ.update(old)

@@ -249,7 +249,7 @@ Cloud adds three adapters on top of the same code (auth, per-token billing, host
 Self-hosted `grad` needs only Postgres and S3 (or a local directory for `grad local up`). Start everything locally with one command:
 
 ```bash
-grad local up                 # Postgres, grad-server on 127.0.0.1:8787, a CPU trainer
+grad local up                 # Postgres, grad-server on 127.0.0.1:18787, a CPU trainer
 grad local up --gpu           # add the CUDA trainer (NVIDIA Container Toolkit)
 grad local up --dev-models    # add tiny test models that train in seconds (try-it-out only)
 export GRADIATED_PROFILE=local
@@ -261,7 +261,7 @@ The images are public on Docker Hub: [`gradiated/grad-server`](https://hub.docke
 
 The first run generates an admin key, a trainer key and the workspace-secrets key and saves them to a `local` CLI profile. `grad local status`, `grad local logs` and `grad local down` manage the stack.
 
-`grad-server` also serves a web UI at `http://127.0.0.1:8787/`; `grad ui` opens it signed in. It lists runs with their status, phase, model and cost, and each run page shows live loss, learning-rate, throughput and cost-versus-cap charts, the attempt and phase, the event timeline, checkpoints (promote them there), the eval report, the artifact download and the resolved config. Datasets (versions, records with scores, source syncs), evals (scores with confidence intervals and failures), usage and worker health have pages too. It calls only the public `/v1` API with your key, kept in the browser tab. See [Web UI](docs/SELF_HOSTING.md#web-ui).
+`grad-server` also serves a web UI at `http://127.0.0.1:18787/` (if that port is busy, `grad local up` picks a free one and says so; `grad local status` prints the real URLs); `grad ui` opens it signed in. It lists runs with their status, phase, model and cost, and each run page shows live loss, learning-rate, throughput and cost-versus-cap charts, the attempt and phase, the event timeline, checkpoints (promote them there), the eval report, the artifact download and the resolved config. Datasets (versions, records with scores, source syncs), evals (scores with confidence intervals and failures), usage and worker health have pages too. It calls only the public `/v1` API with your key, kept in the browser tab. See [Web UI](docs/SELF_HOSTING.md#web-ui).
 
 For production, create the `grad` Secret described in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) (database URL, admin key hash, trainer key), then install the Helm chart against your own Postgres and S3 bucket. It runs migrations in a Job, two API replicas, a GPU `train` worker pool and a CPU `import` worker pool, with optional KEDA scale-to-zero and NetworkPolicies:
 

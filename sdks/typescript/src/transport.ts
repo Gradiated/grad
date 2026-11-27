@@ -492,7 +492,7 @@ export class Transport implements TransportLike {
       });
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new GradError(`Invalid base URL '${options.baseURL}': only http and https are supported (include the scheme, e.g. http://localhost:8787).`, {
+      throw new GradError(`Invalid base URL '${options.baseURL}': only http and https are supported (include the scheme, e.g. http://localhost:18787).`, {
         code: "invalid_base_url",
       });
     }

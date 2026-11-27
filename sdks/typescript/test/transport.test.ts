@@ -425,7 +425,7 @@ describe("request building", () => {
   });
 
   it("validates base URLs and path params", () => {
-    expect(() => new Transport({ baseURL: "localhost:8787" })).toThrow(/include the scheme/);
+    expect(() => new Transport({ baseURL: "localhost:18787" })).toThrow(/include the scheme/);
     expect(() => new Transport({ baseURL: "not a url" })).toThrow(/absolute http\(s\) URL/);
     expect(() => new Transport({ baseURL: "ftp://x" })).toThrow(/only http and https/);
     expect(() => new Transport({ baseURL: BASE, fetch: 5 as unknown as typeof fetch })).toThrow(/No fetch/);

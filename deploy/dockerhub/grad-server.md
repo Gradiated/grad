@@ -9,7 +9,7 @@ The [grad](https://github.com/Gradiated/grad) API server and web UI. grad turns 
 
 ## Usage
 
-**Locally**, the `grad` CLI starts Postgres, this server on `127.0.0.1:8787` and a CPU trainer with Docker Compose, generates the keys and saves them in a `local` profile:
+**Locally**, the `grad` CLI starts Postgres, this server on `127.0.0.1:18787` and a CPU trainer with Docker Compose, generates the keys and saves them in a `local` profile:
 
 ```bash
 cargo install --locked --git https://github.com/Gradiated/grad grad-cli

@@ -42,7 +42,7 @@ def normalize_base_url(raw: str) -> str:
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise GradConfigError(
             f"Invalid base_url {raw!r}: expected http(s)://host[:port], e.g. https://api.gradiated.com "
-            "or http://localhost:8787."
+            "or http://localhost:18787."
         )
     if parsed.query or parsed.fragment or parsed.username or parsed.password:
         raise GradConfigError(f"Invalid base_url {raw!r}: it must not contain credentials, a query or a fragment.")

@@ -5,7 +5,7 @@ import { byText, click, mount, waitFor, type Mounted } from "../helpers.js";
 
 vi.mock("uplot", () => ({ default: class { setData() {} setSize() {} destroy() {} } }));
 
-const base = process.env.GRAD_LIVE_BASE_URL ?? "http://127.0.0.1:8787";
+const base = process.env.GRAD_LIVE_BASE_URL ?? "http://127.0.0.1:18787";
 const key = process.env.GRAD_LIVE_API_KEY;
 
 describe("web UI against a live grad-server", () => {

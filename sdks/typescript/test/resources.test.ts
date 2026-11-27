@@ -47,10 +47,10 @@ describe("configuration", () => {
 
   it("reads GRADIATED_API_KEY and GRADIATED_BASE_URL", async () => {
     process.env.GRADIATED_API_KEY = "grad_env";
-    process.env.GRADIATED_BASE_URL = "http://localhost:8787";
+    process.env.GRADIATED_BASE_URL = "http://localhost:18787";
     const server = new FakeServer().on("GET", "/v1/base-models", json(wire("models.json")));
-    const grad = new Grad({ fetch: (async (u: string, i: RequestInit) => server.fetch(u.replace("http://localhost:8787", BASE), i)) as typeof fetch });
-    expect(await grad.config()).toEqual({ baseURL: "http://localhost:8787", apiKeySource: "env" });
+    const grad = new Grad({ fetch: (async (u: string, i: RequestInit) => server.fetch(u.replace("http://localhost:18787", BASE), i)) as typeof fetch });
+    expect(await grad.config()).toEqual({ baseURL: "http://localhost:18787", apiKeySource: "env" });
     await grad.models.list();
     expect(server.calls[0]?.headers.get("authorization")).toBe("Bearer grad_env");
   });
@@ -91,7 +91,7 @@ describe("configuration", () => {
   });
 
   it("drops a trailing /v1 and rejects unknown options", async () => {
-    expect((await new Grad({ baseURL: "http://localhost:8787/v1/", apiKey: "" }).config()).baseURL).toBe("http://localhost:8787");
+    expect((await new Grad({ baseURL: "http://localhost:18787/v1/", apiKey: "" }).config()).baseURL).toBe("http://localhost:18787");
     expect(() => new Grad({ baseUrl: "http://x" } as never)).toThrow(/Unknown Grad option 'baseUrl'; did you mean 'baseURL'\?/);
   });
 
@@ -122,7 +122,7 @@ describe("configuration", () => {
     writeFileSync(bad, JSON.stringify({ profiles: { default: "x" } }));
     await expect(new Grad({ configPath: bad }).config()).rejects.toThrow(/must be an object/);
     await expect(new Grad({ configPath: dir }).config()).rejects.toThrow(/Could not read/);
-    expect(() => new Grad({ baseURL: "localhost:8787" })).toThrow(/absolute http\(s\) URL/);
+    expect(() => new Grad({ baseURL: "localhost:18787" })).toThrow(/absolute http\(s\) URL/);
   });
 });
 
