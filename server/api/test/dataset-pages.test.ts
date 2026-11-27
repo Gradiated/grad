@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatasetRecord } from "../src/contracts.js";
 import {
   buildVersionIndex,
+  createPartLinesCache,
   createVersionIndexCache,
   readVersionPage,
 } from "../src/services/dataset-pages.js";
@@ -88,6 +89,30 @@ describe("dataset pages (r8 P1-5)", () => {
         }
       }
     }
+  });
+
+  it("pages read each part once through the lines cache, and it stays within its bytes (r8-sources)", async () => {
+    const parts = [
+      await write([rec("a", "1"), rec("b", "1")]),
+      await write([scoreUpdate("a", { q: 1 }), rec("c", "1")]),
+    ];
+    const index = await buildVersionIndex(storage, parts);
+    const all = await readVersionPage(storage, parts, index, 0, 100);
+    const lines = createPartLinesCache(storage);
+    fetched = [];
+    const pages = [];
+    for (let from = 0; from < 3; from += 1) {
+      pages.push(
+        ...(await readVersionPage(storage, parts, index, from, 1, lines)),
+      );
+    }
+    expect(pages).toEqual(all);
+    expect(fetched.sort()).toEqual(parts.map((p) => p.key).sort());
+    const tiny = createPartLinesCache(storage, 10);
+    fetched = [];
+    await readVersionPage(storage, parts, index, 0, 1, tiny);
+    await readVersionPage(storage, parts, index, 0, 1, tiny);
+    expect(fetched.length).toBe(4); // too big to keep: read again
   });
 
   it("pages and counts only score-filtered records whose merged scores pass (r8-sources)", async () => {

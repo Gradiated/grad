@@ -1,7 +1,7 @@
 import type { DatasetRecord } from "../contracts.js";
 import type { ObjectStore } from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
-import { parsePart } from "./dataset-records.js";
+import { parsePart, partLines } from "./dataset-records.js";
 import {
   applyFacts,
   isReset,
@@ -153,6 +153,45 @@ export const buildVersionIndex = async (
   return { total, slots: Int32Array.from(lineSlots), partStarts };
 };
 
+/** A part's JSONL lines (`createPartLinesCache`, or a fresh read). */
+export type PartLines = (part: DatasetPart) => Promise<string[]>;
+
+/**
+ * A byte-bounded LRU of parts' JSONL lines. A page parses only its own
+ * lines, and a source's late scores sit in the parts after their records, so
+ * consecutive pages read the same few parts: caching their text saves a
+ * download, a gunzip and a sha256 per page.
+ */
+export const createPartLinesCache = (
+  storage: ObjectStore,
+  maxBytes = 128 * 1024 * 1024,
+): PartLines => {
+  const cached = new Map<string, { lines: string[]; bytes: number }>();
+  let bytes = 0;
+
+  return async (part) => {
+    const hit = cached.get(part.key);
+    if (hit) {
+      cached.delete(part.key);
+      cached.set(part.key, hit);
+      return hit.lines;
+    }
+    const lines = partLines(await storage.get(part.key), part);
+    const size = lines.reduce((sum, line) => sum + line.length, 0);
+    if (size <= maxBytes) {
+      cached.set(part.key, { lines, bytes: size });
+      bytes += size;
+      for (const [key, old] of cached) {
+        if (bytes <= maxBytes) break;
+        cached.delete(key);
+        bytes -= old.bytes;
+      }
+    }
+
+    return lines;
+  };
+};
+
 /** Merged records [from, from + limit) of the version `index` describes. */
 export const readVersionPage = async (
   storage: ObjectStore,
@@ -160,11 +199,13 @@ export const readVersionPage = async (
   index: VersionIndex,
   from: number,
   limit: number,
+  lines: PartLines = async (part) =>
+    partLines(await storage.get(part.key), part),
 ): Promise<DatasetRecord[]> => {
   const to = Math.min(index.total, from + limit);
   if (from >= to) return [];
 
-  const lines: DatasetRecord[] = [];
+  const picked: DatasetRecord[] = [];
   for (const [p, part] of parts.entries()) {
     const start = index.partStarts[p] as number;
     const end = index.partStarts[p + 1] as number;
@@ -175,14 +216,15 @@ export const readVersionPage = async (
     }
     if (!wanted) continue;
 
-    const records = parsePart(await storage.get(part.key), part);
-    for (const [offset, record] of records.entries()) {
+    for (const [offset, line] of (await lines(part)).entries()) {
       const slot = index.slots[start + offset] as number;
-      if (slot >= from && slot < to) lines.push(record);
+      if (slot >= from && slot < to) {
+        picked.push(JSON.parse(line) as DatasetRecord);
+      }
     }
   }
 
-  return mergeRecords(lines);
+  return mergeRecords(picked);
 };
 
 /** A byte-bounded LRU of version indexes, with one build per version at a time. */

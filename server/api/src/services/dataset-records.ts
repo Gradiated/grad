@@ -81,7 +81,11 @@ export const writeRecordsPart = async (
 export const parsePart = (
   stored: Uint8Array,
   part: DatasetPart,
-): DatasetRecord[] => {
+): DatasetRecord[] =>
+  partLines(stored, part).map((line) => JSON.parse(line) as DatasetRecord);
+
+/** A stored part's JSONL lines, integrity-checked (not parsed). */
+export const partLines = (stored: Uint8Array, part: DatasetPart): string[] => {
   let jsonl: Buffer;
   try {
     jsonl = gunzipSync(stored);
@@ -95,8 +99,7 @@ export const parsePart = (
   return jsonl
     .toString("utf8")
     .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as DatasetRecord);
+    .filter((line) => line.length > 0);
 };
 
 /** Yields every record of a dataset version, part by part. */

@@ -17,7 +17,11 @@ import type {
   PageRequest,
 } from "../store/types.js";
 import { canonicalJson, compileFilter, viewName } from "./dataset-filter.js";
-import { createVersionIndexCache, readVersionPage } from "./dataset-pages.js";
+import {
+  createPartLinesCache,
+  createVersionIndexCache,
+  readVersionPage,
+} from "./dataset-pages.js";
 import { readVersionRecords, writeRecordsPart } from "./dataset-records.js";
 import { mergeRecords } from "./record-merge.js";
 
@@ -130,6 +134,7 @@ export const pushRecordIds = (
 export const createDatasetService = (deps: AppDependencies): DatasetService => {
   const { store, storage } = deps;
   const indexes = createVersionIndexCache(storage);
+  const partLines = createPartLinesCache(storage);
 
   const get = async (workspaceId: string, name: string): Promise<Dataset> => {
     const dataset = await store.datasets.get(workspaceId, name);
@@ -316,6 +321,7 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
         index,
         offset,
         input.limit,
+        partLines,
       );
       const nextOffset = offset + data.length;
 
