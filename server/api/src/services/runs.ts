@@ -26,7 +26,7 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { ApiError, conflict, forbidden, invalid, notFound } from "../errors.js";
 import { newId } from "../ids.js";
-import { isArtifactRef, toBaseArtifact } from "../continued-training.js";
+import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
@@ -50,7 +50,6 @@ import {
   settleLabelledRuns,
   toLabelingPlan,
 } from "./router-labels.js";
-import { cancelWaiting, releaseWaiting } from "./run-waits.js";
 import type { UploadService } from "./uploads.js";
 
 type HeartbeatBody = z.infer<typeof HeartbeatRequestSchema>;
@@ -119,7 +118,6 @@ export const toPublicRun = (run: RunRecord): Run => ({
   latest_metric: run.latest_metric,
   eval_report: run.eval_report,
   artifact_id: run.artifact_id,
-  depends_on: run.depends_on,
   error: run.error,
   created_at: run.created_at,
   updated_at: run.updated_at,
@@ -294,14 +292,8 @@ export const createRunLifecycle = (
   const planFor = async (workspaceId: string, request: PlanRunRequest) => {
     const resolved = await datasets.resolve(workspaceId, request.dataset);
     const records = await datasets.readRecords(resolved.version);
-    const dependency = request.depends_on
-      ? await store.runs.get(workspaceId, request.depends_on)
-      : null;
-    const artifactRef = isArtifactRef(request.recipe.model)
-      ? request.recipe.model
-      : dependency?.artifact_id;
-    const baseArtifact = artifactRef
-      ? await store.artifacts.get(workspaceId, artifactRef)
+    const baseArtifact = isArtifactRef(request.recipe.model)
+      ? await store.artifacts.get(workspaceId, request.recipe.model)
       : null;
     const labelRequest = labelingEvalRequest(request, resolved.version.version);
     const labeling = labelRequest
@@ -312,11 +304,10 @@ export const createRunLifecycle = (
       datasetVersion: resolved.version.version,
       allowWave2: settings.allowWave2Recipes,
       baseArtifact: baseArtifact && toPublicArtifact(baseArtifact),
-      dependency: dependency && toPublicRun(dependency),
       labeling,
     });
 
-    return { plan, dataset: resolved.dataset, dependency, labelRequest };
+    return { plan, dataset: resolved.dataset, labelRequest };
   };
 
   /** The run's training records: its pinned dataset version, or its labeling eval's answers. */
@@ -349,57 +340,6 @@ export const createRunLifecycle = (
     }
 
     return { kind: "dataset", version };
-  };
-
-  /** A gate a new run waits on may have finished before the run was inserted. */
-  const settleGate = async (gateId: string): Promise<void> => {
-    const gateRun = await store.runs.getById(gateId);
-    if (gateRun) {
-      await store.transaction((tx) => settleDependents(tx, gateRun));
-      return;
-    }
-    const gateEval = await store.evals.getById(gateId);
-    if (gateEval && EVAL_TERMINAL.includes(gateEval.status)) {
-      await settleLabelledRuns(store, gateEval, clock.now().toISOString());
-    }
-  };
-
-  /**
-   * After `run` reaches a terminal status: chained runs waiting on it start
-   * from its artifact (completed) or are cancelled (failed, cancelled, or an
-   * artifact that can't be continued). `stopped_budget` keeps them waiting,
-   * since the run can be resumed.
-   */
-  const settleDependents = async (
-    tx: Repositories,
-    run: RunRecord,
-  ): Promise<void> => {
-    if (!TERMINAL.includes(run.status) || run.status === "stopped_budget") {
-      return;
-    }
-    const artifact =
-      run.status === "completed" && run.artifact_id
-        ? await tx.artifacts.get(run.workspace_id, run.artifact_id)
-        : null;
-    const now = clock.now().toISOString();
-    if (artifact?.format === "peft_lora") {
-      const base = toBaseArtifact(toPublicArtifact(artifact));
-      await releaseWaiting(tx, run.id, now, (dependent) => ({
-        resolved_config: { ...dependent.resolved_config, base_artifact: base },
-      }));
-      return;
-    }
-
-    const why =
-      run.status === "completed"
-        ? `its artifact has format '${artifact?.format ?? "none"}', which can't be continued`
-        : `it ended ${run.status}`;
-    await cancelWaiting(
-      tx,
-      run.id,
-      now,
-      `Cancelled because dependency run '${run.id}' did not produce a starting point: ${why}.`,
-    );
   };
 
   const pinCheckpoints = async (
@@ -465,7 +405,6 @@ export const createRunLifecycle = (
     });
     if (TERMINAL.includes(updated.status)) {
       await pinCheckpoints(tx, updated, now);
-      await settleDependents(tx, updated);
     }
 
     return updated;
@@ -577,7 +516,7 @@ export const createRunLifecycle = (
       (await planFor(workspaceId, request)).plan,
 
     create: async (workspaceId, request) => {
-      const { plan, dataset, dependency, labelRequest } = await planFor(
+      const { plan, dataset, labelRequest } = await planFor(
         workspaceId,
         request,
       );
@@ -610,16 +549,15 @@ export const createRunLifecycle = (
         pricePerMillionTokens: plan.price_per_million_tokens,
         totalSteps: plan.estimated_steps,
         maxAttempts: settings.maxAttempts,
-        dependsOn: dependency?.id ?? null,
-        waitingOn:
-          labels?.id ??
-          (dependency && plan.resolved_config.base_artifact === null
-            ? dependency.id
-            : null),
+        waitingOn: labels?.id ?? null,
       });
-      if (run.waiting_on === null) return toPublicRun(run);
+      if (!labels) return toPublicRun(run);
 
-      await settleGate(run.waiting_on);
+      // The labeling eval may have finished before the run was inserted.
+      const labelEval = await store.evals.getById(labels.id);
+      if (labelEval && EVAL_TERMINAL.includes(labelEval.status)) {
+        await settleLabelledRuns(store, labelEval, clock.now().toISOString());
+      }
 
       return toPublicRun((await store.runs.getById(run.id)) ?? run);
     },
@@ -671,26 +609,19 @@ export const createRunLifecycle = (
       }
 
       const now = clock.now().toISOString();
-      const updated = await store.transaction(async (tx) => {
-        const cancelled = await tx.runs.update(
-          id,
-          run.worker_id === null
-            ? {
-                status: "cancelled",
-                waiting_on: null,
-                finished_at: now,
-                updated_at: now,
-              }
-            : { status: "cancelled", updated_at: now },
-          { status: [run.status], workerId: run.worker_id },
-        );
-        // Without a worker the run is final now; with one, closeAttempt settles it.
-        if (cancelled?.worker_id === null) {
-          await settleDependents(tx, cancelled);
-        }
-
-        return cancelled;
-      });
+      // Without a worker the run is final now; with one, closeAttempt settles it.
+      const updated = await store.runs.update(
+        id,
+        run.worker_id === null
+          ? {
+              status: "cancelled",
+              waiting_on: null,
+              finished_at: now,
+              updated_at: now,
+            }
+          : { status: "cancelled", updated_at: now },
+        { status: [run.status], workerId: run.worker_id },
+      );
       if (!updated)
         throw conflict(
           "run_state_changed",
@@ -713,21 +644,6 @@ export const createRunLifecycle = (
         throw conflict(
           "run_not_resumable",
           `Run '${id}' is ${run.status}${run.worker_id ? " and its worker is still finalizing" : ""}; only stopped_budget, failed or cancelled runs can be resumed.`,
-        );
-      }
-
-      // A chained run cancelled with its dependency waits for it again.
-      const pendingDependency =
-        run.depends_on !== null && run.resolved_config.base_artifact === null
-          ? await store.runs.getById(run.depends_on)
-          : null;
-      if (
-        pendingDependency &&
-        ["failed", "cancelled"].includes(pendingDependency.status)
-      ) {
-        throw conflict(
-          "dependency_not_viable",
-          `Run '${id}' starts from run '${pendingDependency.id}', which is ${pendingDependency.status}; resume that run first.`,
         );
       }
 
@@ -763,7 +679,6 @@ export const createRunLifecycle = (
           error: null,
           failed_attempts: 0,
           finished_at: null,
-          waiting_on: pendingDependency?.id ?? null,
           updated_at: clock.now().toISOString(),
         },
         { status: [run.status], workerId: null },
@@ -773,12 +688,8 @@ export const createRunLifecycle = (
           "run_state_changed",
           `Run '${id}' changed concurrently; retry.`,
         );
-      if (pendingDependency?.status !== "completed")
-        return toPublicRun(updated);
 
-      await store.transaction((tx) => settleDependents(tx, pendingDependency));
-
-      return toPublicRun(await loadRun(workspaceId, id));
+      return toPublicRun(updated);
     },
 
     listCheckpoints: async (workspaceId, runId, page) => {

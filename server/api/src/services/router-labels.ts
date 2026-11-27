@@ -10,7 +10,6 @@ import type { LabelingPlan } from "../planner.js";
 import { LABEL_SCORE } from "../recipe-params.js";
 import type { EvalRecord, Repositories, Store } from "../store/types.js";
 import { combineScores } from "./evals/scoring.js";
-import { cancelWaiting, releaseWaiting } from "./run-waits.js";
 
 /**
  * Router runs with Judge/validator rubric items: a labeling eval replays each
@@ -120,20 +119,25 @@ export const settleLabelledRuns = async (
   evalRecord: Pick<EvalRecord, "id" | "status" | "error">,
   now: string,
 ): Promise<void> => {
-  if (evalRecord.status === "completed") {
-    await releaseWaiting(repos, evalRecord.id, now);
-    return;
+  const patch =
+    evalRecord.status === "completed"
+      ? {}
+      : {
+          status: "cancelled" as const,
+          finished_at: now,
+          error: `Cancelled because its labeling eval '${evalRecord.id}' ${
+            evalRecord.status === "stopped_budget"
+              ? "stopped at max_cost_usd"
+              : `ended ${evalRecord.status}${evalRecord.error ? `: ${evalRecord.error}` : ""}`
+          }.`,
+        };
+  for (const run of await repos.runs.listWaitingOn(evalRecord.id)) {
+    await repos.runs.update(
+      run.id,
+      { ...patch, waiting_on: null, updated_at: now },
+      { status: ["queued"] },
+    );
   }
-  const why =
-    evalRecord.status === "stopped_budget"
-      ? "stopped at max_cost_usd"
-      : `ended ${evalRecord.status}${evalRecord.error ? `: ${evalRecord.error}` : ""}`;
-  await cancelWaiting(
-    repos,
-    evalRecord.id,
-    now,
-    `Cancelled because its labeling eval '${evalRecord.id}' ${why}.`,
-  );
 };
 
 export const jsonlStream = (

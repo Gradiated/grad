@@ -662,7 +662,6 @@ PlanRunRequest = TypedDict(
         "recipe": "RecipeSpec",
         "split": "NotRequired[SplitSpec]",
         "max_cost_usd": "NotRequired[float]",
-        "depends_on": "NotRequired[str]",
     },
 )
 
@@ -964,7 +963,6 @@ Run = TypedDict(
         "latest_metric": "MetricPoint",
         "eval_report": "EvalReport",
         "artifact_id": "str | None",
-        "depends_on": "str | None",
         "error": "str | None",
         "created_at": "str",
         "updated_at": "str",
@@ -1254,7 +1252,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "OptimizerSpec": frozenset({"betas", "grad_clip", "kind", "weight_decay"}),
     "PlanEvalRequest": frozenset({"baseline", "benchmarks", "dataset", "dataset_version", "env_name", "limit", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "tasks", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
-    "PlanRunRequest": frozenset({"dataset", "depends_on", "max_cost_usd", "name", "recipe", "split"}),
+    "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
     "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "labeling", "price_per_million_tokens", "resolved_config", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
     "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
@@ -1277,7 +1275,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
-    "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "depends_on", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
+    "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),

@@ -37,9 +37,9 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
       `INSERT INTO grad_runs
          (id, workspace_id, name, dataset_id, dataset_name, dataset_version, recipe_kind, status,
           resolved_config, max_cost_usd, price_per_million_tokens, total_steps, max_attempts,
-          created_at, updated_at, depends_on, waiting_on)
+          created_at, updated_at, waiting_on)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8::jsonb, $9, $10, $11, $12,
-               $13::timestamptz, $13::timestamptz, $14, $15)
+               $13::timestamptz, $13::timestamptz, $14)
        RETURNING *`,
       [
         newId("run"),
@@ -55,7 +55,6 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
         input.totalSteps,
         input.maxAttempts,
         ts,
-        input.dependsOn ?? null,
         input.waitingOn ?? null,
       ],
     );

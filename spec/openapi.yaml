@@ -1138,12 +1138,6 @@ components:
         max_cost_usd:
           type: number
           exclusiveMinimum: 0
-        depends_on:
-          type: string
-          minLength: 1
-          maxLength: 80
-          description: "Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it
-            fails. Omit recipe.model."
       required:
         - dataset
         - name
@@ -1556,11 +1550,6 @@ components:
           type:
             - string
             - "null"
-        depends_on:
-          type:
-            - string
-            - "null"
-          description: The run this chained run starts from; it stays queued until that run completes.
         error:
           type:
             - string
@@ -1597,7 +1586,6 @@ components:
         - latest_metric
         - eval_report
         - artifact_id
-        - depends_on
         - error
         - created_at
         - updated_at

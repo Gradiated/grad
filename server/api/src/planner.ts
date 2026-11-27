@@ -1,11 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { ModelCatalog } from "./catalog.js";
-import {
-  isArtifactRef,
-  resolveChainedStart,
-  resolveContinuation,
-} from "./continued-training.js";
+import { isArtifactRef, resolveContinuation } from "./continued-training.js";
 import {
   V0_RECIPE_KINDS,
   messageText,
@@ -18,7 +14,6 @@ import {
   type PlanRunResponse,
   type RecipeKind,
   type ResolvedRunConfig,
-  type Run,
   type TrainableModel,
 } from "./contracts.js";
 import { invalid } from "./errors.js";
@@ -350,10 +345,8 @@ export interface PlanContext {
   catalog: ModelCatalog;
   datasetVersion: number;
   allowWave2?: boolean;
-  /** The artifact `recipe.model` names (or a completed dependency's artifact). */
+  /** The artifact `recipe.model` names (continued training). */
   baseArtifact?: Artifact | null;
-  /** The run `depends_on` names, when the request chains runs. */
-  dependency?: Run | null;
 }
 
 type Start = {
@@ -362,63 +355,19 @@ type Start = {
   base: BaseArtifact | null;
 };
 
-/** A chained run starts from its dependency's artifact (pending until it completes). */
-const resolveDependencyStart = (
-  request: PlanRunRequest,
-  context: PlanContext,
-): Start => {
-  const dependency = context.dependency;
-  if (request.recipe.model !== undefined) {
-    throw invalid(
-      "depends_on_model_conflict",
-      "A chained run starts from its dependency's artifact; omit recipe.model.",
-    );
-  }
-  if (!dependency) {
-    throw invalid(
-      "unknown_dependency",
-      `Run '${request.depends_on}' (depends_on) was not found in this workspace.`,
-    );
-  }
-  if (dependency.status === "failed" || dependency.status === "cancelled") {
-    throw invalid(
-      "dependency_failed",
-      `Run '${dependency.id}' ended ${dependency.status}; resume it first, or start from one of its checkpoints.`,
-    );
-  }
-  if (dependency.status !== "completed") {
-    return {
-      ...resolveChainedStart(request.recipe, dependency, context.catalog),
-      base: null,
-    };
-  }
-
-  return resolveContinuation(
-    { ...request.recipe, model: dependency.artifact_id ?? dependency.id },
-    context.baseArtifact ?? null,
-    context.catalog,
-  );
-};
-
 /** Base model, adapter and (for continued training) the starting artifact. */
 const resolveStart = (request: PlanRunRequest, context: PlanContext): Start => {
-  if (
-    request.depends_on === undefined &&
-    !isArtifactRef(request.recipe.model)
-  ) {
+  if (!isArtifactRef(request.recipe.model)) {
     const model = resolveModel(request, context.catalog);
 
     return { model, adapter: resolveAdapter(request, model), base: null };
   }
 
-  const start =
-    request.depends_on !== undefined
-      ? resolveDependencyStart(request, context)
-      : resolveContinuation(
-          request.recipe,
-          context.baseArtifact ?? null,
-          context.catalog,
-        );
+  const start = resolveContinuation(
+    request.recipe,
+    context.baseArtifact ?? null,
+    context.catalog,
+  );
   assertRecipeSupported(request.recipe.kind, start.model, context.catalog);
 
   return start;

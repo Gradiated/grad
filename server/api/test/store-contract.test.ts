@@ -82,13 +82,11 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       overrides: Partial<{
         recipe: RunRecord["recipe_kind"];
         name: string;
-        dependsOn: string;
         waitingOn: string;
       }> = {},
     ) => {
       const dataset = await makeDataset(ws);
       return store.runs.create({
-        dependsOn: overrides.dependsOn,
         waitingOn: overrides.waitingOn,
         workspaceId: ws,
         name: overrides.name ?? "run",
@@ -548,26 +546,16 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       });
     });
 
-    it("runs: chained runs wait on their dependency until released", async () => {
-      const first = await makeRun();
+    it("runs: a run waiting on its labeling eval is not claimable until released", async () => {
+      const ready = await makeRun();
       clock.advanceSeconds(1);
-      const chained = await makeRun("ws_a", {
-        dependsOn: first.id,
-        waitingOn: first.id,
-      });
-      const ready = await makeRun("ws_a", {
-        dependsOn: first.id,
-      });
-      expect(chained).toMatchObject({
-        depends_on: first.id,
-        waiting_on: first.id,
-      });
-      expect(ready).toMatchObject({ depends_on: first.id, waiting_on: null });
-      expect(first).toMatchObject({ depends_on: null, waiting_on: null });
+      const waiting = await makeRun("ws_a", { waitingOn: "eval_1" });
+      expect(waiting).toMatchObject({ waiting_on: "eval_1" });
+      expect(ready).toMatchObject({ waiting_on: null });
       expect(
-        (await store.runs.listWaitingOn(first.id)).map((r) => r.id),
-      ).toEqual([chained.id]);
-      expect(await store.runs.countActive()).toEqual({ queued: 2, running: 0 });
+        (await store.runs.listWaitingOn("eval_1")).map((r) => r.id),
+      ).toEqual([waiting.id]);
+      expect(await store.runs.countActive()).toEqual({ queued: 1, running: 0 });
 
       const claim = () =>
         store.runs.claimNext({
@@ -575,23 +563,16 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           leaseSeconds: 30,
           now: clock.now(),
         });
-      expect((await claim())?.id).toBe(first.id);
       expect((await claim())?.id).toBe(ready.id);
       expect(await claim()).toBeNull();
 
-      const released = await store.runs.update(
-        chained.id,
-        {
-          waiting_on: null,
-          resolved_config: { ...config, base_artifact: { id: "a@1" } } as never,
-        },
+      await store.runs.update(
+        waiting.id,
+        { waiting_on: null },
         { status: ["queued"] },
       );
-      expect(released?.resolved_config).toMatchObject({
-        base_artifact: { id: "a@1" },
-      });
-      expect(await store.runs.listWaitingOn(first.id)).toEqual([]);
-      expect((await claim())?.id).toBe(chained.id);
+      expect(await store.runs.listWaitingOn("eval_1")).toEqual([]);
+      expect((await claim())?.id).toBe(waiting.id);
     });
 
     it("runs: 20 concurrent claimers over 10 queued runs get unique runs", async () => {

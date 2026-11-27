@@ -204,11 +204,9 @@ export interface RunRecord {
   latest_metric: MetricPoint | null;
   eval_report: EvalReport | null;
   artifact_id: string | null;
-  /** Chained runs: the run whose artifact this run starts from. */
-  depends_on: string | null;
   /**
-   * A dependency run or labeling eval this queued run waits for; such runs are
-   * not claimable until it is released (set to null).
+   * The labeling eval this queued router run waits for; it is not claimable
+   * until the eval completes and this is set to null.
    */
   waiting_on: string | null;
   error: string | null;
@@ -217,7 +215,6 @@ export interface RunRecord {
   finished_at: string | null;
 }
 
-/** `resolved_config` changes only when a chained run's dependency completes. */
 export type RunPatch = Partial<
   Omit<
     RunRecord,
@@ -228,7 +225,7 @@ export type RunPatch = Partial<
     | "dataset_name"
     | "dataset_version"
     | "recipe_kind"
-    | "depends_on"
+    | "resolved_config"
     | "price_per_million_tokens"
     | "created_at"
   >
@@ -247,16 +244,14 @@ export interface RunRepository {
     pricePerMillionTokens: number;
     totalSteps: number;
     maxAttempts: number;
-    /** Chained runs: the run whose artifact this run starts from. */
-    dependsOn?: string | null | undefined;
-    /** The run or labeling eval this run waits on (not claimable until released). */
+    /** The labeling eval this run waits on (not claimable until released). */
     waitingOn?: string | null | undefined;
   }): Promise<RunRecord>;
   get(workspaceId: string, id: string): Promise<RunRecord | null>;
   getById(id: string): Promise<RunRecord | null>;
   list(workspaceId: string, page: PageRequest): Promise<Page<RunRecord>>;
-  /** Queued runs waiting on `gateId` (a run or an eval). */
-  listWaitingOn(gateId: string): Promise<RunRecord[]>;
+  /** Queued runs waiting on the labeling eval `evalId`. */
+  listWaitingOn(evalId: string): Promise<RunRecord[]>;
   update(
     id: string,
     patch: RunPatch,

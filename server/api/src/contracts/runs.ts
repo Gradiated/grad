@@ -191,10 +191,6 @@ export const PlanRunRequestSchema = z
     recipe: RecipeSpecSchema,
     split: SplitSpecSchema.optional(),
     max_cost_usd: z.number().positive().optional(),
-    depends_on: z.string().min(1).max(80).optional().openapi({
-      description:
-        "Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model.",
-    }),
   })
   .openapi("PlanRunRequest");
 
@@ -374,10 +370,6 @@ export const RunSchema = z
     latest_metric: MetricPointSchema.nullable(),
     eval_report: EvalReportSchema.nullable(),
     artifact_id: z.string().nullable(),
-    depends_on: z.string().nullable().openapi({
-      description:
-        "The run this chained run starts from; it stays queued until that run completes.",
-    }),
     error: z.string().nullable(),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
