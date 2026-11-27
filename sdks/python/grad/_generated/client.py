@@ -389,6 +389,7 @@ EvalReport = TypedDict(
     "EvalReport",
     {
         "metric_name": "str",
+        "metric_mode": "NotRequired[Literal['min', 'max']]",
         "selected_step": "int",
         "best_step": "int | None",
         "final_step": "int",
@@ -1358,7 +1359,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "EmbedResponse": frozenset({"data", "model", "usage"}),
     "EvalModelSummary": frozenset({"ci_high", "ci_low", "cost_per_1k_tasks_usd", "errors", "model", "overall", "pass_at_k", "tasks", "tokens_per_task", "vs_baseline"}),
     "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
-    "EvalReport": frozenset({"base_kl", "baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_points", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "pointwise_brier", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "rollout", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_points", "train_records", "trained_token_fraction", "truncated", "warnings"}),
+    "EvalReport": frozenset({"base_kl", "baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_points", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_mode", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "pointwise_brier", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "rollout", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_points", "train_records", "trained_token_fraction", "truncated", "warnings"}),
     "EvalRubricItem": frozenset({"flags", "kind", "model", "name", "pattern", "prompt", "runtime", "validator", "weight"}),
     "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "mode", "models", "name", "pass_threshold", "progress", "rubric", "samples", "scored_dataset_version", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
     "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),

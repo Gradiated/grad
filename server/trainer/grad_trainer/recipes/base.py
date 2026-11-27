@@ -103,6 +103,7 @@ class RecipeRunner:
         eval_report = {
             **report,
             "metric_name": task.metric_name,
+            "metric_mode": task.metric_mode,
             "selected_step": loop.selected_step,
             "best_step": loop.best_step,
             "final_step": loop.step,

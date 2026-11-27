@@ -538,6 +538,9 @@ pub struct EvalOutputUsage {
 pub struct EvalReport {
     /// Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding).
     pub metric_name: String,
+    /// Direction of metric_name: min (lower is better: eval_loss, eval_kl) or max (higher is better: preference_accuracy, recall_at_10). best_step and the pinned best checkpoint follow it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric_mode: Option<EvalReportMetricMode>,
     pub selected_step: i64,
     pub best_step: Option<i64>,
     pub final_step: i64,
@@ -667,6 +670,14 @@ pub struct EvalReportBaseline {
     /// Members not declared in the schema (round-tripped verbatim).
     #[serde(flatten)]
     pub additional_properties: BTreeMap<String, Value>,
+}
+
+string_enum! {
+    /// Direction of metric_name: min (lower is better: eval_loss, eval_kl) or max (higher is better: preference_accuracy, recall_at_10). best_step and the pinned best checkpoint follow it.
+    EvalReportMetricMode {
+        Min => "min",
+        Max => "max",
+    }
 }
 
 string_enum! {

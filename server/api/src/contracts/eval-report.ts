@@ -74,6 +74,10 @@ export const EvalReportSchema = z
       description:
         "Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding).",
     }),
+    metric_mode: z.enum(["min", "max"]).optional().openapi({
+      description:
+        "Direction of metric_name: min (lower is better: eval_loss, eval_kl) or max (higher is better: preference_accuracy, recall_at_10). best_step and the pinned best checkpoint follow it.",
+    }),
     selected_step: count,
     best_step: count.nullable(),
     final_step: count,

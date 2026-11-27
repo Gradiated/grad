@@ -291,6 +291,8 @@ export interface EvalOutput {
 export interface EvalReport {
   /** Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding). */
   metricName: string;
+  /** Direction of metric_name: min (lower is better: eval_loss, eval_kl) or max (higher is better: preference_accuracy, recall_at_10). best_step and the pinned best checkpoint follow it. */
+  metricMode?: "min" | "max" | undefined;
   selectedStep: number;
   bestStep: number | null;
   finalStep: number;

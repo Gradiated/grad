@@ -152,6 +152,17 @@ export const toPublicCheckpoint = ({
   ...checkpoint
 }: CheckpointRecord): Checkpoint => checkpoint;
 
+/** Losses are minimised; a checkpoint without metric_mode falls back on its metric name. */
+const MINIMISED_METRICS = new Set(["eval_loss", "eval_kl", "loss"]);
+
+export const metricMode = (metadata: Record<string, unknown>): "min" | "max" => {
+  const mode = metadata["metric_mode"];
+  if (mode === "min" || mode === "max") return mode;
+  const name = metadata["metric_name"];
+
+  return typeof name === "string" && MINIMISED_METRICS.has(name) ? "min" : "max";
+};
+
 /** The error a run stopped for lack of workspace balance carries (resumable). */
 export const BALANCE_STOPPED =
   "Stopped because the workspace ran out of balance (insufficient_balance); top up, then resume the run.";
@@ -421,15 +432,13 @@ export const createRunLifecycle = (
     const all = await tx.artifacts.allCheckpoints(run.id, now);
     if (all.length === 0) return;
 
-    // The trainer records whether its selection metric is minimised
+    // The trainer stores the selection metric's direction with it: minimised
     // (eval_loss, eval_kl) or maximised (accuracy, recall@10).
     const scored = all.filter((c) => c.eval_score !== null);
     const better = (c: CheckpointRecord, acc: CheckpointRecord): boolean => {
       const [score, prev] = [c.eval_score ?? 0, acc.eval_score ?? 0];
 
-      return c.metadata["metric_mode"] === "min"
-        ? score <= prev
-        : score >= prev;
+      return metricMode(c.metadata) === "min" ? score <= prev : score >= prev;
     };
     const best = scored.reduce<CheckpointRecord | null>(
       (acc, c) => (acc === null || better(c, acc) ? c : acc),

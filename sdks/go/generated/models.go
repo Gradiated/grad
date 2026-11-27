@@ -536,13 +536,15 @@ type EvalOutputUsage struct {
 // EvalReport is generated from the OpenAPI schema.
 type EvalReport struct {
 	// MetricName Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding).
-	MetricName   string   `json:"metric_name"`
-	SelectedStep int      `json:"selected_step"`
-	BestStep     *int     `json:"best_step"`
-	FinalStep    int      `json:"final_step"`
-	TrainRecords int      `json:"train_records"`
-	EvalRecords  int      `json:"eval_records"`
-	Warnings     []string `json:"warnings"`
+	MetricName string `json:"metric_name"`
+	// MetricMode Direction of metric_name: min (lower is better: eval_loss, eval_kl) or max (higher is better: preference_accuracy, recall_at_10). best_step and the pinned best checkpoint follow it.
+	MetricMode   *EvalReportMetricMode `json:"metric_mode,omitempty"`
+	SelectedStep int                   `json:"selected_step"`
+	BestStep     *int                  `json:"best_step"`
+	FinalStep    int                   `json:"final_step"`
+	TrainRecords int                   `json:"train_records"`
+	EvalRecords  int                   `json:"eval_records"`
+	Warnings     []string              `json:"warnings"`
 	// EvalLoss Written by: sft, dpo, router, decision, distill, reward.
 	EvalLoss *float64 `json:"eval_loss,omitempty"`
 	// EvalTokenAccuracy Written by: sft, distill.
@@ -620,6 +622,7 @@ type EvalReport struct {
 
 var knownEvalReportFields = map[string]bool{
 	"metric_name":            true,
+	"metric_mode":            true,
 	"selected_step":          true,
 	"best_step":              true,
 	"final_step":             true,
@@ -724,6 +727,15 @@ func (m *EvalReportBaseline) UnmarshalJSON(data []byte) error {
 	m.AdditionalProperties = extra
 	return nil
 }
+
+// EvalReportMetricMode Direction of metric_name: min (lower is better: eval_loss, eval_kl) or max (higher is better: preference_accuracy, recall_at_10). best_step and the pinned best checkpoint follow it.
+type EvalReportMetricMode string
+
+// Values of EvalReportMetricMode.
+const (
+	EvalReportMetricModeMin EvalReportMetricMode = "min"
+	EvalReportMetricModeMax EvalReportMetricMode = "max"
+)
 
 // EvalReportRollout Written by: distill.
 type EvalReportRollout string
