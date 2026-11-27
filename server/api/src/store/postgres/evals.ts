@@ -140,6 +140,15 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => ({
       )
     ).map(toEval),
 
+  listAwaitingScores: async (limit) =>
+    (
+      await db.query(
+        `SELECT * FROM grad_evals WHERE status = 'awaiting_scores'
+         ORDER BY updated_at LIMIT $1`,
+        [limit],
+      )
+    ).map(toEval),
+
   insertTasks: async (evalId, tasks) => {
     if (tasks.length === 0) return;
     await db.query(
@@ -175,12 +184,7 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => ({
           scores, error, prompt_tokens, completion_tokens, cost_usd, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14,
                $15::timestamptz)
-       ON CONFLICT (eval_id, model, task_index, sample_index) DO UPDATE SET
-         task_id = EXCLUDED.task_id, input = EXCLUDED.input, output = EXCLUDED.output,
-         expected_output = EXCLUDED.expected_output, scores = EXCLUDED.scores,
-         error = EXCLUDED.error, prompt_tokens = EXCLUDED.prompt_tokens,
-         completion_tokens = EXCLUDED.completion_tokens, cost_usd = EXCLUDED.cost_usd,
-         created_at = EXCLUDED.created_at`,
+       ON CONFLICT (eval_id, model, task_index, sample_index) DO NOTHING`,
       [
         o.id,
         o.eval_id,

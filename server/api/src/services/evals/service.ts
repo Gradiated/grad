@@ -83,9 +83,42 @@ export interface EvalService {
   stop(): Promise<void>;
   /** Requeues (or fails, past max attempts) evals whose executor lease expired. */
   recoverExpired(now: Date): Promise<number>;
+  /**
+   * Finalizes awaiting_scores evals that have every score (a crash between the
+   * last scores and finalize) and fails those the SDK stopped scoring.
+   */
+  settleAwaitingScores(now: Date): Promise<number>;
 }
 
+/** An eval no SDK has posted scores to for this long fails. */
+export const AWAITING_SCORES_TIMEOUT_SECONDS = 24 * 3600;
+
 const LEASE_SECONDS = 120;
+
+/** Runs `fn` every `ms` (unref'd); a rejection is logged, never left unhandled. */
+export const backgroundInterval = (
+  fn: () => Promise<unknown>,
+  ms: number,
+  what: string,
+): ReturnType<typeof setInterval> => {
+  const timer = setInterval(() => {
+    fn().catch((error: unknown) => {
+      console.error(
+        JSON.stringify({
+          level: "warn",
+          msg: `${what} failed`,
+          error: errorMessage(error),
+        }),
+      );
+    });
+  }, ms);
+  timer.unref();
+
+  return timer;
+};
+
+/** Thrown inside finalize's transaction when another caller finalized first. */
+class LostRace extends Error {}
 const TASK_PAGE = 200;
 const OUTPUT_PAGE = 1000;
 const ACTIVE: readonly EvalStatus[] = ["queued", "running", "awaiting_scores"];
@@ -210,6 +243,7 @@ export const createEvalService = (
   const onFinished = async (
     record: Pick<EvalRecord, "id" | "workspace_id" | "status" | "error">,
     outputs?: readonly EvalOutputRow[],
+    kick = true,
   ): Promise<void> => {
     await settleLabelledRuns(store, record, clock.now().toISOString());
     const rows = outputs ?? (await allOutputs(record.id));
@@ -222,7 +256,7 @@ export const createEvalService = (
       ),
       costUsd: Number(rows.reduce((sum, o) => sum + o.cost_usd, 0).toFixed(8)),
     });
-    billing.kick();
+    if (kick) billing.kick();
   };
 
   /** Aggregates outputs and marks the eval completed; CAS on `expect`. */
@@ -232,22 +266,33 @@ export const createEvalService = (
   ): Promise<EvalRecord | null> => {
     const outputs = await allOutputs(record.id);
     const aggregation = aggregateEval(record, outputs);
-    await store.evals.replaceResults(record.id, aggregation.results);
+    // Results, status and the billing row commit together, or not at all.
+    const finalized = await store
+      .transaction(async () => {
+        await store.evals.replaceResults(record.id, aggregation.results);
+        const done = await store.evals.update(
+          record.id,
+          {
+            status: "completed",
+            summary: aggregation.summary,
+            total_cost_usd: aggregation.totalCostUsd,
+            generated: outputs.length,
+            worker_id: null,
+            lease_expires_at: null,
+            completed_at: clock.now().toISOString(),
+          },
+          expect,
+        );
+        if (!done) throw new LostRace();
+        await onFinished(done, outputs, false);
 
-    const finalized = await store.evals.update(
-      record.id,
-      {
-        status: "completed",
-        summary: aggregation.summary,
-        total_cost_usd: aggregation.totalCostUsd,
-        generated: outputs.length,
-        worker_id: null,
-        lease_expires_at: null,
-        completed_at: clock.now().toISOString(),
-      },
-      expect,
-    );
-    if (finalized) await onFinished(finalized, outputs);
+        return done;
+      })
+      .catch((error: unknown) => {
+        if (error instanceof LostRace) return null;
+        throw error;
+      });
+    if (finalized) billing.kick();
 
     return finalized;
   };
@@ -341,11 +386,13 @@ export const createEvalService = (
       );
       if (!ok) lost = true;
     };
-    const heartbeat = setInterval(
-      () => void extend(),
+    // A failed renewal (DB blip) never rejects unhandled: the next one
+    // retries, and a lease that really expired is noticed then.
+    const heartbeat = backgroundInterval(
+      extend,
       (LEASE_SECONDS * 1000) / 3,
+      `eval ${job.id} lease renewal`,
     );
-    heartbeat.unref();
 
     try {
       const existing = await store.evals.listOutputKeys(job.id);
@@ -638,6 +685,12 @@ export const createEvalService = (
         record.local_scorers,
       );
       if (pending > 0) {
+        // Scoring is alive: restart the awaiting_scores timeout.
+        await store.evals.update(
+          id,
+          { updated_at: clock.now().toISOString() },
+          { status: ["awaiting_scores"] },
+        );
         return {
           accepted,
           status: "awaiting_scores",
@@ -721,5 +774,38 @@ export const createEvalService = (
     },
 
     recoverExpired,
+
+    settleAwaitingScores: async (now) => {
+      const cutoff = addSeconds(now, -AWAITING_SCORES_TIMEOUT_SECONDS);
+      let settled = 0;
+      for (const record of await store.evals.listAwaitingScores(100)) {
+        const missing = await store.evals.countMissingScores(
+          record.id,
+          record.local_scorers,
+        );
+        if (missing === 0) {
+          if (await finalize(record, { status: ["awaiting_scores"] })) {
+            settled += 1;
+          }
+          continue;
+        }
+        if (Date.parse(record.updated_at) > cutoff.getTime()) continue;
+        const failed = await store.evals.update(
+          record.id,
+          {
+            status: "failed",
+            error: `Timed out after ${AWAITING_SCORES_TIMEOUT_SECONDS / 3600} h waiting for ${missing} local score(s) (code scorers ${record.local_scorers.join(", ")}). They are computed by the SDK: keep ev.wait() running until the eval completes, or run the scorers server-side.`,
+            completed_at: now.toISOString(),
+          },
+          { status: ["awaiting_scores"] },
+        );
+        if (failed) {
+          await onFinished(failed);
+          settled += 1;
+        }
+      }
+
+      return settled;
+    },
   };
 };

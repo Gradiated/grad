@@ -68,6 +68,10 @@ SSE_READ_TIMEOUT = 45.0
 MAX_SSE_RECONNECTS = 20
 
 
+#: ``wait()`` gives up after this long when no ``timeout`` is passed (as the Rust SDK).
+DEFAULT_WAIT_TIMEOUT = 24 * 3600.0
+
+
 class _Resource:
     def __init__(self, client: Grad) -> None:
         self._client = client
@@ -77,8 +81,9 @@ class _Resource:
     def _clock(self) -> Any:
         return self._client._transport.clock
 
-    def _deadline(self, timeout: float | None) -> float | None:
-        return None if timeout is None else self._clock.monotonic() + timeout
+    def _deadline(self, timeout: float | None) -> float:
+        """``timeout=None`` means the 24 h default: no wait() can hang forever."""
+        return float(self._clock.monotonic()) + (DEFAULT_WAIT_TIMEOUT if timeout is None else timeout)
 
     def _expired(self, deadline: float | None) -> bool:
         return deadline is not None and self._clock.monotonic() >= deadline
@@ -327,7 +332,7 @@ class Imports(_Resource):
                 return job
             if self._expired(deadline):
                 status = job.status if job is not None else "unknown"
-                raise WaitTimeoutError(f"Import {import_id} is still {status} after {timeout}s (is a trainer worker running?).", resource=job)
+                raise WaitTimeoutError(f"Import {import_id} is still {status} after {timeout or DEFAULT_WAIT_TIMEOUT:g}s (is a trainer worker running?).", resource=job)
             self._sleep(backoff.next(), deadline)
 
 
@@ -542,7 +547,7 @@ class Runs(_Resource):
                 break
             if self._expired(deadline):
                 raise WaitTimeoutError(
-                    f"Run {run_id} is still {run.status if run else 'unknown'} after {timeout}s; it keeps running "
+                    f"Run {run_id} is still {run.status if run else 'unknown'} after {timeout or DEFAULT_WAIT_TIMEOUT:g}s; it keeps running "
                     "server-side. Call wait() again, or cancel() it.",
                     resource=run,
                 )
@@ -873,7 +878,7 @@ class Evals(_Resource):
                     ev._local_rubric = rubric
                     return ev
             if self._expired(deadline):
-                raise WaitTimeoutError(f"Eval {eval_id} is still {ev.status if ev else 'unknown'} after {timeout}s.", resource=ev)
+                raise WaitTimeoutError(f"Eval {eval_id} is still {ev.status if ev else 'unknown'} after {timeout or DEFAULT_WAIT_TIMEOUT:g}s.", resource=ev)
             self._sleep(backoff.next(), deadline)
 
 

@@ -123,6 +123,17 @@ func TestRunWaitTerminalFailuresTimeoutAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// No timeout given: the 24 h default still ends the wait.
+	c2, _ := newFake(t, map[string]route{"GET /v1/runs/" + id: jsonValue(200, r)}).client()
+	run2, err := c2.Runs.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run2.Wait(ctx, grad.WithPollInterval(time.Hour, time.Hour))
+	var dt *grad.WaitTimeoutError
+	if !errors.As(err, &dt) || !strings.Contains(err.Error(), "24h0m0s") {
+		t.Fatalf("default timeout: %v", err)
+	}
 	err = run.Wait(ctx, grad.WithWaitTimeout(10*time.Second), grad.WithPollInterval(time.Second, 2*time.Second))
 	var wt *grad.WaitTimeoutError
 	if !errors.As(err, &wt) || wt.LastStatus != "running" {

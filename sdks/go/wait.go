@@ -17,7 +17,11 @@ type waitConfig struct {
 // WaitOption configures Wait on runs, imports and evals.
 type WaitOption func(*waitConfig)
 
-// WithWaitTimeout gives up with *WaitTimeoutError after d (the ctx deadline applies too).
+// DefaultWaitTimeout is how long Wait polls without WithWaitTimeout (as every SDK).
+const DefaultWaitTimeout = 24 * time.Hour
+
+// WithWaitTimeout gives up with *WaitTimeoutError after d (default DefaultWaitTimeout;
+// the ctx deadline applies too).
 func WithWaitTimeout(d time.Duration) WaitOption { return func(w *waitConfig) { w.timeout = d } }
 
 // WithPollInterval sets the polling backoff bounds (default 500 ms growing to 5 s).
@@ -35,7 +39,7 @@ func WithOnMetric(fn func(MetricPoint)) WaitOption { return func(w *waitConfig) 
 func WithRubric(r Rubric) WaitOption { return func(w *waitConfig) { w.rubric = r } }
 
 func newWaitConfig(opts []WaitOption) *waitConfig {
-	w := &waitConfig{minInterval: 500 * time.Millisecond, maxInterval: 5 * time.Second}
+	w := &waitConfig{timeout: DefaultWaitTimeout, minInterval: 500 * time.Millisecond, maxInterval: 5 * time.Second}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(w)

@@ -603,6 +603,8 @@ export interface EvalRepository {
   ): Promise<EvalRecord | null>;
   claimNext(input: ClaimInput): Promise<EvalRecord | null>;
   listExpiredLeases(now: Date, limit: number): Promise<EvalRecord[]>;
+  /** Evals waiting for SDK-posted scores, least recently touched first. */
+  listAwaitingScores(limit: number): Promise<EvalRecord[]>;
 
   insertTasks(evalId: string, tasks: readonly EvalTaskRow[]): Promise<void>;
   /** Tasks with task_index > afterIndex, ascending. */

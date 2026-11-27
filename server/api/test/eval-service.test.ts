@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   PlanEvalRequestSchema,
   type PlanEvalRequest,
 } from "../src/contracts.js";
+import {
+  AWAITING_SCORES_TIMEOUT_SECONDS,
+  backgroundInterval,
+} from "../src/services/evals/service.js";
 import { makeTestApp, WORKSPACE_A } from "./fixtures/app.js";
 import {
   goldResponder,
@@ -349,6 +353,46 @@ describe("eval service", () => {
     expect(done.summary[0]?.overall).toBeCloseTo((0.5 + 0.5 + 1) / 3, 3);
   });
 
+  it("never leaves an eval stuck in awaiting_scores: maintenance finalizes or times it out", async () => {
+    h = await makeEvalHarness();
+    const { t } = h;
+    await seedDataset(t, "qa", qaRecords(2));
+    const evals = t.services.evals;
+    const rubric = [{ name: "fn", kind: "code" as const, runtime: "local" }];
+    const scored = await evals.create(
+      WORKSPACE_A,
+      request({ models: ["qwen/qwen3-8b"], dataset: "qa", rubric }),
+    );
+    const abandoned = await evals.create(
+      WORKSPACE_A,
+      request({ models: ["qwen/qwen3-8b"], dataset: "qa", rubric }),
+    );
+    await evals.drain();
+
+    // Every score stored, then the replica died before finalize.
+    const outputs = await evals.listOutputs(WORKSPACE_A, scored.id, {
+      limit: 10,
+    });
+    await t.deps.store.evals.setScores(
+      scored.id,
+      outputs.data.map((o) => ({ output_id: o.id, scorer: "fn", score: 1 })),
+    );
+    expect(await evals.settleAwaitingScores(t.clock.now())).toBe(1);
+    expect((await evals.get(WORKSPACE_A, scored.id)).status).toBe("completed");
+
+    // Nobody scores the other one: it fails after the timeout, not forever.
+    expect((await evals.get(WORKSPACE_A, abandoned.id)).status).toBe(
+      "awaiting_scores",
+    );
+    t.clock.advanceSeconds(AWAITING_SCORES_TIMEOUT_SECONDS + 1);
+    await t.services.maintenance.tick();
+    const failed = await evals.get(WORKSPACE_A, abandoned.id);
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toMatch(
+      /waiting for 2 local score\(s\).*ev\.wait\(\)/,
+    );
+  });
+
   it("fails the eval with the inference error when every model call fails", async () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
@@ -515,5 +559,32 @@ describe("eval service", () => {
     expect((await t.services.evals.get(WORKSPACE_A, created.id)).status).toBe(
       "completed",
     );
+  });
+});
+
+describe("backgroundInterval", () => {
+  it("logs a rejected tick instead of leaving it unhandled (which would exit Node)", async () => {
+    vi.useFakeTimers();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let calls = 0;
+      const timer = backgroundInterval(
+        async () => {
+          calls += 1;
+          throw new Error("connection terminated");
+        },
+        1000,
+        "eval lease renewal",
+      );
+      await vi.advanceTimersByTimeAsync(2500);
+      clearInterval(timer);
+      expect(calls).toBe(2);
+      expect(errors.mock.calls[0]?.[0]).toMatch(
+        /eval lease renewal failed.*connection terminated/,
+      );
+    } finally {
+      errors.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

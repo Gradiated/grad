@@ -12,6 +12,7 @@ export interface MaintenanceReport {
   expiredRuns: number;
   expiredImports: number;
   recoveredEvals: number;
+  settledEvals: number;
   deletedCheckpoints: number;
   deletedUploads: number;
   deletedIdempotencyKeys: number;
@@ -44,6 +45,7 @@ export const createMaintenance = (
     const expiredRuns = await services.runs.expireLeases(now);
     const expiredImports = await services.imports.expireLeases(now);
     const recoveredEvals = await services.evals.recoverExpired(now);
+    const settledEvals = await services.evals.settleAwaitingScores(now);
     const deletedCheckpoints =
       await services.runs.collectExpiredCheckpoints(now);
     const deletedUploads = await services.uploads.collectExpired(now);
@@ -56,6 +58,7 @@ export const createMaintenance = (
       expiredRuns,
       expiredImports,
       recoveredEvals,
+      settledEvals,
       deletedCheckpoints,
       deletedUploads,
       deletedIdempotencyKeys,

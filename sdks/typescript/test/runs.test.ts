@@ -100,6 +100,16 @@ describe("runs", () => {
     await expect(makeGrad(server).grad.runs.wait(completed.id)).rejects.toThrow(/without an artifact/);
   });
 
+  it("gives up after the 24 h default when no timeout is given", async () => {
+    const server = new FakeServer().on("GET", RUN, json(withStatus("running")));
+    const { grad } = makeGrad(server);
+    const hour = 3600 * 1000;
+    await expect(
+      grad.runs.wait(completed.id, { pollIntervalMs: hour, maxPollIntervalMs: hour }),
+    ).rejects.toBeInstanceOf(WaitTimeoutError);
+    expect(server.callsTo("GET", RUN).length).toBeLessThanOrEqual(26);
+  });
+
   it("times out and aborts without leaking abort listeners", async () => {
     const server = new FakeServer().on("GET", RUN, json(withStatus("running")));
     const { grad } = makeGrad(server);

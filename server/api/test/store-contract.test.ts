@@ -1281,9 +1281,10 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       });
       const o1 = output("m1", 0, 0);
       await store.evals.upsertOutput(o1);
+      // First write wins: a stale executor's replay cannot overwrite it.
       await store.evals.upsertOutput({
         ...output("m1", 0, 0),
-        output: "replaced",
+        output: "stale replay",
       });
       await store.evals.upsertOutput(output("m2", 0, 0));
       await store.evals.upsertOutput(output("m1", 0, 1));
@@ -1315,7 +1316,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       ]);
       expect(all.rows[0]).toMatchObject({
         id: o1.id,
-        output: "replaced",
+        output: "answer",
         record: { id: "t0", query: "a" },
       });
       expect(

@@ -6,6 +6,7 @@ import copy
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any
 
@@ -365,6 +366,17 @@ class RunTests(unittest.TestCase):
         client, _, clock = make_client({f"GET /v1/runs/{RUN_ID}": [*[json_reply(RUN_Q)] * 12, json_reply(RUN_C)]})
         client.runs.wait(RUN_ID)
         self.assertEqual(max(clock.sleeps), 5.0)
+
+    def test_wait_without_timeout_still_gives_up(self) -> None:
+        from grad import _resources
+
+        self.assertEqual(_resources.DEFAULT_WAIT_TIMEOUT, 24 * 3600)
+        client, _, clock = make_client({f"GET /v1/runs/{RUN_ID}": json_reply(RUN_Q)})
+        with mock.patch.object(_resources, "DEFAULT_WAIT_TIMEOUT", 60.0):
+            with self.assertRaises(grad.WaitTimeoutError) as ctx:
+                client.runs.wait(RUN_ID)
+        self.assertIn("after 60s", str(ctx.exception))
+        self.assertAlmostEqual(sum(clock.sleeps), 60, delta=0.01)
 
     def test_wait_timeout_and_failure(self) -> None:
         client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}": json_reply(RUN_Q)})

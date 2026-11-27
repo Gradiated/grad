@@ -4,6 +4,13 @@ import { createGradApp } from "./app.js";
 import { buildDependencies, log } from "./bootstrap.js";
 import { parseServerEnvironment } from "./environment.js";
 
+// A stray rejection is a bug to log, not a reason to take the replica down.
+process.on("unhandledRejection", (reason: unknown) => {
+  log("error", "unhandled promise rejection", {
+    error: reason instanceof Error ? reason.message : String(reason),
+  });
+});
+
 const main = async () => {
   const env = parseServerEnvironment();
   for (const warning of env.warnings) log("warn", warning);
