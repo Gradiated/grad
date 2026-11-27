@@ -1,5 +1,6 @@
 import type { UsageRecord } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
+import { metrics } from "../telemetry/metrics.js";
 import type {
   JobRow,
   Page,
@@ -76,6 +77,9 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
       });
       if (!advanced) return;
       const kind = job.kind === "eval" ? "eval" : "run";
+      const costUsd = Number(
+        Math.max(0, total.costUsd - state.billed_cost).toFixed(8),
+      );
       await tx.usage.record({
         idempotencyKey: usageKey(kind, job.id, job.attempt, total.tokens),
         workspaceId: job.workspace_id,
@@ -84,11 +88,11 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
         attempt: job.attempt,
         tokensFrom: state.billed_through,
         tokensThrough: total.tokens,
-        costUsd: Number(
-          Math.max(0, total.costUsd - state.billed_cost).toFixed(8),
-        ),
+        costUsd,
         priceVersion: catalog.priceVersion,
       });
+      metrics.billedTokens.inc({ kind }, tokens);
+      metrics.billedCost.inc({ kind }, costUsd);
     },
 
     exportPending: async () => {

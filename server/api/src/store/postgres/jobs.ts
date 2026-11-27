@@ -1,5 +1,7 @@
 import type { Clock } from "../../clock.js";
 import { newId } from "../../ids.js";
+import { metricKind, metrics } from "../../telemetry/metrics.js";
+import { currentTraceparent } from "../../telemetry/tracing.js";
 import type {
   IdempotencyInput,
   JobExpectation,
@@ -78,11 +80,46 @@ const updateJobRow = async (
     );
   }
   const where = `id = ${params.add(id)}${expectClause(expect, params)}`;
-
-  return first(
+  const finishing = typeof columns.finished_at === "string";
+  const row = first(
     await db.query(
-      `UPDATE grad_jobs SET ${sets.join(", ")} WHERE ${where} RETURNING *`,
+      `UPDATE grad_jobs SET ${sets.join(", ")} WHERE ${where} RETURNING *${
+        finishing
+          ? ", (SELECT recipe_kind FROM grad_runs r WHERE r.id = grad_jobs.id) AS recipe_kind"
+          : ""
+      }`,
       params.values,
+    ),
+  );
+  if (row && finishing) observeJobFinished(row);
+
+  return row;
+};
+
+/** grad_job_duration_seconds for a job that just reached a terminal status. */
+const observeJobFinished = (row: Row): void => {
+  const job = toJob(row);
+  if (!job.finished_at) return;
+  const kind = metricKind(job);
+  if (kind === "sync") {
+    const source = (row.payload as { source?: { provider?: unknown } } | null)
+      ?.source;
+    metrics.sourceSyncs.inc({
+      provider:
+        typeof source?.provider === "string" ? source.provider : "unknown",
+      status: job.status,
+    });
+  }
+  metrics.jobDuration.observe(
+    {
+      kind,
+      recipe_kind:
+        typeof row.recipe_kind === "string" ? row.recipe_kind : "none",
+      status: job.status,
+    },
+    Math.max(
+      0,
+      (Date.parse(job.finished_at) - Date.parse(job.created_at)) / 1000,
     ),
   );
 };
@@ -102,6 +139,8 @@ export const insertJob = async (
 ): Promise<string> => {
   const ts = nowIso(clock);
   const id = newId(input.prefix);
+  // A worker's requests for this job join the creating request's trace.
+  const traceparent = currentTraceparent();
   await db.query(
     `INSERT INTO grad_jobs
        (id, workspace_id, kind, status, max_attempts, waiting_on, payload,
@@ -113,7 +152,10 @@ export const insertJob = async (
       input.kind,
       input.maxAttempts,
       input.waitingOn ?? null,
-      JSON.stringify(input.payload ?? {}),
+      JSON.stringify({
+        ...(input.payload ?? {}),
+        ...(traceparent ? { traceparent } : {}),
+      }),
       input.idempotency?.key ?? null,
       input.idempotency?.hash ?? null,
       ts,
@@ -214,6 +256,13 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
         [id, attempt, from, through, cost, at.toISOString()],
       )
     ).length > 0,
+  recordWorkerStats: async (id, attempt, stats) => {
+    await db.query(
+      `UPDATE grad_jobs SET payload = payload || jsonb_build_object('worker_stats', $3::jsonb)
+       WHERE id = $1 AND attempt = $2`,
+      [id, attempt, JSON.stringify(stats)],
+    );
+  },
   listWaitingOn: async (jobId) =>
     (
       await db.query(

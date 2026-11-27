@@ -204,6 +204,10 @@ export interface JobFields<S extends string = JobStatus> {
   created_at: string;
   updated_at: string;
   finished_at: string | null;
+  /** W3C traceparent of the request that created the job (tracing on). */
+  traceparent: string | null;
+  /** `source`: an import a source sync started. */
+  origin: "api" | "source";
 }
 
 export type JobRow = JobFields;
@@ -218,6 +222,8 @@ export type JobPatch<S extends string = JobStatus> = Partial<
     | "billed_through"
     | "billed_cost"
     | "billed_at"
+    | "traceparent"
+    | "origin"
   >
 >;
 
@@ -288,6 +294,12 @@ export interface JobRepository {
   }): Promise<boolean>;
   /** Queued jobs waiting on `jobId`. */
   listWaitingOn(jobId: string): Promise<JobRow[]>;
+  /** Stores the stats an attempt's last heartbeat carried (payload.worker_stats). */
+  recordWorkerStats(
+    id: string,
+    attempt: number,
+    stats: Record<string, unknown>,
+  ): Promise<void>;
   findIdempotent(
     workspaceId: string,
     key: string,
@@ -826,7 +838,42 @@ export interface Repositories {
   sources: SourceRepository;
 }
 
+// --- Telemetry -------------------------------------------------------------------
+
+/** Aggregates behind the queue and worker gauges (one maintenance tick's read). */
+export interface TelemetrySnapshot {
+  jobs: Array<{
+    /** train, import, sync (an import a source started) or eval. */
+    kind: string;
+    /** queued, blocked, waiting_for_compute, running, awaiting_scores, or a leased terminal status. */
+    state: string;
+    /** Only with `byWorkspace`. */
+    workspace_id: string | null;
+    count: number;
+    /** Claimable queued or leased (what KEDA scales on). */
+    open: number;
+    oldest_queued_seconds: number | null;
+  }>;
+  workers: Array<{
+    kind: string;
+    online: number;
+    tokens_per_second: number;
+    gpu_memory_used_bytes: number;
+    gpu_utilization: number | null;
+    flush_lag_seconds: number | null;
+  }>;
+  phases: Array<{ kind: string; phase: string; count: number }>;
+}
+
+export interface TelemetryRepository {
+  snapshot(
+    now: Date,
+    options: { byWorkspace: boolean },
+  ): Promise<TelemetrySnapshot>;
+}
+
 export interface Store extends Repositories {
+  telemetry: TelemetryRepository;
   /**
    * Runs `fn` atomically: one transaction on one connection. Nested calls
    * join the outer transaction; an error thrown inside a nested call rolls

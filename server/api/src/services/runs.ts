@@ -67,6 +67,11 @@ import {
 } from "./jobs.js";
 import { jobBlobKey, type UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
+import {
+  metrics,
+  modelFamily,
+  observeCheckpoint,
+} from "../telemetry/metrics.js";
 
 type ProgressBody = z.infer<typeof ReportProgressRequestSchema>;
 type WorkerUploadBody = z.infer<typeof WorkerUploadRequestSchema>;
@@ -987,6 +992,13 @@ export const createRunLifecycle = (
           fenceOf(run),
         );
         if (!fenced) throw leaseLost(id);
+        metrics.trainingTokens.inc(
+          {
+            recipe_kind: run.recipe_kind,
+            model_family: modelFamily(run.resolved_config.model),
+          },
+          attemptTokens - run.attempt_tokens,
+        );
         const point = toMetricPoint(
           await tx.jobs.appendEvent({
             jobId: run.id,
@@ -1065,6 +1077,7 @@ export const createRunLifecycle = (
       });
       // A checkpoint bills the attempt's usage so far.
       if (result.created) {
+        observeCheckpoint(run.recipe_kind, blob.sizeBytes, body.metadata);
         await store.transaction((tx) =>
           usage.flush(tx, run, attemptUsage(run, run.attempt_tokens), true),
         );

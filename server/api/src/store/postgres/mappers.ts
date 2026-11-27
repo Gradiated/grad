@@ -80,7 +80,21 @@ export const toJob = <S extends string>(r: Row): JobFields<S> => ({
   created_at: iso(r.created_at),
   updated_at: iso(r.updated_at),
   finished_at: isoN(r.finished_at),
+  ...jobTelemetry(r),
 });
+
+/** The telemetry fields a job keeps in its payload. */
+export const jobTelemetry = (
+  r: Row,
+): { traceparent: string | null; origin: "api" | "source" } => {
+  const p = j<Record<string, unknown>>(r.payload, {});
+  const source = j<Record<string, unknown>>(p.source, {});
+
+  return {
+    traceparent: typeof p.traceparent === "string" ? p.traceparent : null,
+    origin: typeof source.source_id === "string" ? "source" : "api",
+  };
+};
 
 export const toImportPayload = (r: Row): ImportPayload => {
   const p = j<Record<string, unknown>>(r.payload, {});

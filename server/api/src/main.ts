@@ -2,11 +2,12 @@ import type { Server } from "node:http";
 
 import { serve } from "@hono/node-server";
 
-import { createGradApp } from "./app.js";
+import { API_VERSION, createGradApp, createMetricsApp } from "./app.js";
 import { buildDependencies, log } from "./bootstrap.js";
 import { parseServerEnvironment } from "./environment.js";
 import { runMigrations } from "./migrations.js";
 import { gracefulShutdown } from "./shutdown.js";
+import { startTracing, stopTracing } from "./telemetry/tracing.js";
 
 // A stray rejection is a bug to log, not a reason to take the replica down.
 process.on("unhandledRejection", (reason: unknown) => {
@@ -18,6 +19,7 @@ process.on("unhandledRejection", (reason: unknown) => {
 const main = async () => {
   const env = parseServerEnvironment();
   for (const warning of env.warnings) log("warn", warning);
+  const tracing = await startTracing(process.env, { version: API_VERSION });
 
   const deps = await buildDependencies(env);
   const { app, services } = createGradApp(deps);
@@ -30,11 +32,23 @@ const main = async () => {
     hostname: env.HOST,
     port: env.PORT,
   });
+  const metricsServer =
+    env.METRICS_ENABLED && env.METRICS_PORT !== undefined
+      ? serve({
+          fetch: createMetricsApp(deps, services).fetch,
+          hostname: env.HOST,
+          port: env.METRICS_PORT,
+        })
+      : null;
   log("info", "grad-server listening", {
     url: `http://${env.HOST}:${env.PORT}`,
     auth_mode: env.AUTH_MODE,
     storage: deps.storage.kind,
     inference: deps.inference ? "configured" : "unavailable",
+    metrics: env.METRICS_ENABLED
+      ? `:${env.METRICS_PORT ?? env.PORT}/metrics`
+      : "off",
+    tracing: tracing ? "otlp" : "off",
   });
 
   let stopping = false;
@@ -49,8 +63,10 @@ const main = async () => {
         await services.evals.stop();
       },
       closeResources: async () => {
+        metricsServer?.close();
         await deps.regex.close();
         await deps.store.close();
+        await stopTracing();
       },
     });
     process.exit(0);

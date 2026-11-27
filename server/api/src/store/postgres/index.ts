@@ -10,7 +10,9 @@ import { createEvalRepository } from "./evals.js";
 import { createJobRepository } from "./jobs.js";
 import { createImportJobRepository, createRunRepository } from "./runs.js";
 import { createSecretRepository, createSourceRepository } from "./sources.js";
+import { createTelemetryRepository } from "./telemetry.js";
 import { createUsageRepository } from "./usage.js";
+import { watchPool } from "../../telemetry/metrics.js";
 
 export interface PostgresStoreOptions {
   connectionString: string;
@@ -62,6 +64,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
     );
   });
 
+  const unwatch = watchPool(pool);
   const db = createDb(pool);
   const { clock } = options;
   const repos: Repositories = {
@@ -79,6 +82,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
 
   return {
     ...repos,
+    telemetry: createTelemetryRepository(db),
     transaction: (fn) => db.atomic(() => fn(repos)),
     migrate: async () => {
       await migrate(pool, { schema: options.schema });
@@ -96,6 +100,10 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
 
       return new Date(rows[0]?.now ?? Date.now());
     },
-    close: () => pool.end(),
+    close: () => {
+      unwatch();
+
+      return pool.end();
+    },
   };
 };

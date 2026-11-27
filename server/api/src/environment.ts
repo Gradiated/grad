@@ -67,6 +67,14 @@ const EnvironmentSchema = z.object({
     .max(3650)
     .default(90),
   MAINTENANCE_INTERVAL_MS: z.coerce.number().int().min(100).default(15_000),
+  /** Serve Prometheus metrics at /metrics. */
+  METRICS_ENABLED: booleanFlag("true"),
+  /** Scrapes must send this bearer token. */
+  METRICS_TOKEN: optionalString,
+  /** Serve /metrics on this port only (keeps it off the API port). */
+  METRICS_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  /** Add a workspace label (grad_workspace_jobs): self-hosted, few workspaces. */
+  METRICS_WORKSPACE_LABEL: booleanFlag("false"),
 });
 
 export type RawEnvironment = z.infer<typeof EnvironmentSchema>;
@@ -173,6 +181,10 @@ export const parseServerEnvironment = (
     (env.JUDGE_BASE_URL || env.GRAD_JUDGE_BASE_URL
       ? undefined
       : env.INFERENCE_API_KEY);
+
+  if (env.METRICS_PORT !== undefined && env.METRICS_PORT === env.PORT) {
+    throw new Error("METRICS_PORT must differ from PORT.");
+  }
 
   return {
     ...env,

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { OpenAPIHono } from "@hono/zod-openapi";
-import type { Context } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 
@@ -20,6 +20,10 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
 import { createServices, type Services } from "./services/index.js";
 import { isDatabaseUnavailable } from "./store/postgres/db.js";
+import { registerMetricsEndpoints } from "./telemetry/endpoint.js";
+import { httpTelemetry } from "./telemetry/http.js";
+import { log } from "./telemetry/log.js";
+import { metrics } from "./telemetry/metrics.js";
 
 export type { AppDependencies } from "./deps.js";
 
@@ -65,6 +69,7 @@ export interface GradApp {
 
 export const createGradApp = (deps: AppDependencies): GradApp => {
   const services = createServices(deps);
+  metrics.buildInfo.set({ version: API_VERSION }, 1);
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result) => {
       if (!result.success) {
@@ -120,18 +125,12 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
       return res;
     }
 
-    console.error(
-      JSON.stringify({
-        level: "error",
-        msg: "unhandled error",
-        request_id: c.get("requestId"),
-        path: c.req.path,
-        error:
-          error instanceof Error
-            ? (error.stack ?? error.message)
-            : String(error),
-      }),
-    );
+    log("error", "unhandled error", {
+      request_id: c.get("requestId"),
+      path: c.req.path,
+      error:
+        error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
 
     return problemResponse(
       c,
@@ -162,6 +161,17 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     c.header("x-request-id", requestId);
     await next();
   });
+
+  app.use("*", httpTelemetry());
+
+  const metricsSettings = deps.settings.metrics ?? { enabled: true };
+  if (metricsSettings.enabled && !metricsSettings.separatePort) {
+    registerMetricsEndpoints(app as unknown as Hono, {
+      token: metricsSettings.token,
+      sampler: services.telemetry,
+      now: () => deps.clock.now(),
+    });
+  }
 
   app.use(
     "/v1/*",
@@ -243,6 +253,21 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
 
 export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> =>
   createGradApp(deps).app;
+
+/** The metrics-only app main.ts serves on METRICS_PORT. */
+export const createMetricsApp = (
+  deps: AppDependencies,
+  services: Services,
+): Hono => {
+  const app = new Hono();
+  registerMetricsEndpoints(app, {
+    token: deps.settings.metrics?.token,
+    sampler: services.telemetry,
+    now: () => deps.clock.now(),
+  });
+
+  return app;
+};
 
 export const buildOpenApiDocument = (
   app: OpenAPIHono<AppEnv>,

@@ -2966,6 +2966,12 @@ components:
             - sha256
             - download_url
           description: "Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training."
+        traceparent:
+          type:
+            - string
+            - "null"
+          description: "W3C traceparent of the request that created the job (server tracing on): send it as the `traceparent`
+            header on this job's requests so they join that trace."
       required:
         - id
         - kind
@@ -3054,9 +3060,32 @@ components:
           type: integer
           minimum: 30
           maximum: 3600
+        stats:
+          $ref: "#/components/schemas/TrainerWorkerStats"
       required:
         - worker_id
         - attempt
+    TrainerWorkerStats:
+      type: object
+      properties:
+        phase:
+          type: string
+          maxLength: 64
+          description: "What the worker is doing: starting, loading_model, training, evaluating, checkpointing, uploading,
+            completing, importing."
+        tokens_per_second:
+          type: number
+          minimum: 0
+        gpu_memory_used_bytes:
+          type: number
+          minimum: 0
+        gpu_utilization:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Mean GPU utilisation since the last heartbeat, 0 to 1.
+      description: A few live numbers the server aggregates into grad_worker_* gauges, so workers that can't be scraped still
+        show up.
     ReportTrainerProgressResponse:
       type: object
       properties:

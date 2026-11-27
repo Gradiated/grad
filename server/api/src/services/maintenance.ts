@@ -1,6 +1,9 @@
 import { addSeconds } from "../clock.js";
 import type { AppDependencies } from "../deps.js";
 import { errorMessage } from "../errors.js";
+import { log } from "../telemetry/log.js";
+import { metrics, secondsSince } from "../telemetry/metrics.js";
+import type { TelemetrySampler } from "../telemetry/sampler.js";
 import type { EvalService } from "./evals/service.js";
 import type { JobQueue } from "./jobs.js";
 import type { RunLifecycle } from "./runs.js";
@@ -18,6 +21,8 @@ export interface MaintenanceReport {
   deletedEvents: number;
   exportedUsage: number;
   syncedSources: number;
+  /** 1 when the metric gauges were refreshed. */
+  sampledMetrics: number;
 }
 
 export interface Maintenance {
@@ -36,6 +41,7 @@ export const createMaintenance = (
     uploads: UploadService;
     usage: UsageService;
     sources: SourceService;
+    telemetry?: TelemetrySampler;
   },
 ): Maintenance => {
   let timer: NodeJS.Timeout | null = null;
@@ -43,18 +49,18 @@ export const createMaintenance = (
 
   /** One step's failure (an S3 outage, say) is logged and never stops the others. */
   const step = async (name: string, fn: () => Promise<number>) => {
+    const start = performance.now();
     try {
       return await fn();
     } catch (error) {
-      console.error(
-        JSON.stringify({
-          level: "error",
-          msg: "maintenance step failed",
-          step: name,
-          error: errorMessage(error),
-        }),
-      );
+      metrics.maintenanceErrors.inc({ step: name });
+      log("error", "maintenance step failed", {
+        step: name,
+        error: errorMessage(error),
+      });
       return 0;
+    } finally {
+      metrics.maintenanceDuration.observe({ step: name }, secondsSince(start));
     }
   };
 
@@ -88,6 +94,11 @@ export const createMaintenance = (
       syncedSources: await step("sync_sources", () =>
         services.sources.tick(now),
       ),
+      // Last: the gauges then reflect this tick's expiries and syncs.
+      sampledMetrics: await step("sample_metrics", async () => {
+        await services.telemetry?.refresh(deps.clock.now());
+        return services.telemetry ? 1 : 0;
+      }),
     };
   };
 
@@ -99,13 +110,9 @@ export const createMaintenance = (
         if (running) return;
         running = tick()
           .catch((error: unknown) => {
-            console.error(
-              JSON.stringify({
-                level: "error",
-                msg: "maintenance tick failed",
-                error: errorMessage(error),
-              }),
-            );
+            log("error", "maintenance tick failed", {
+              error: errorMessage(error),
+            });
           })
           .finally(() => {
             running = null;

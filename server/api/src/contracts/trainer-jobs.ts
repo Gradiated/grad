@@ -116,6 +116,10 @@ export const TrainerJobSchema = z
         description:
           "Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training.",
       }),
+    traceparent: z.string().nullable().optional().openapi({
+      description:
+        "W3C traceparent of the request that created the job (server tracing on): send it as the `traceparent` header on this job's requests so they join that trace.",
+    }),
   })
   .openapi("TrainerJob");
 
@@ -128,10 +132,43 @@ export const ClaimJobResponseSchema = z
   })
   .openapi("ClaimJobResponse");
 
+/** Phases a heartbeat's stats may name; anything else is reported as `other`. */
+export const WORKER_STAT_PHASES = [
+  "starting",
+  "loading_model",
+  "training",
+  "evaluating",
+  "checkpointing",
+  "uploading",
+  "completing",
+  "importing",
+] as const;
+
+export const WorkerStatsSchema = z
+  .object({
+    phase: z
+      .string()
+      .max(64)
+      .optional()
+      .openapi({
+        description: `What the worker is doing: ${WORKER_STAT_PHASES.join(", ")}.`,
+      }),
+    tokens_per_second: z.number().nonnegative().optional(),
+    gpu_memory_used_bytes: z.number().nonnegative().optional(),
+    gpu_utilization: z.number().min(0).max(1).optional().openapi({
+      description: "Mean GPU utilisation since the last heartbeat, 0 to 1.",
+    }),
+  })
+  .openapi("TrainerWorkerStats", {
+    description:
+      "A few live numbers the server aggregates into grad_worker_* gauges, so workers that can't be scraped still show up.",
+  });
+
 export const HeartbeatRequestSchema = z
   .object({
     ...AttemptRefShape,
     lease_seconds: LeaseSecondsSchema.optional(),
+    stats: WorkerStatsSchema.optional(),
   })
   .openapi("TrainerHeartbeatRequest");
 

@@ -6,7 +6,20 @@ import { describe, expect, it } from "vitest";
 import { hashApiKey } from "../src/adapters.js";
 import { buildDependencies } from "../src/bootstrap.js";
 import { isLoopbackHost, parseServerEnvironment } from "../src/environment.js";
+import { metrics } from "../src/telemetry/metrics.js";
 import { postgresUrl } from "./fixtures/postgres.js";
+
+const errorCount = async (counter: {
+  get(): Promise<{ values: Array<{ labels: object; value: number }> }>;
+}): Promise<number> =>
+  (await counter.get()).values.find(
+    (v) => (v.labels as { result?: string }).result === "error",
+  )?.value ?? 0;
+
+const counterValues = async () => ({
+  outputs: await errorCount(metrics.evalOutputs),
+  judge: await errorCount(metrics.judgeCalls),
+});
 
 const ADMIN_HASH = hashApiKey("admin");
 const DB = { DATABASE_URL: "postgres://x" };
@@ -144,7 +157,19 @@ describe("buildDependencies", () => {
           INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
         }),
       );
-      expect(none.inference?.judge).toBe(none.inference?.models);
+      // One endpoint, two counters: generations and judge calls.
+      const before = await counterValues();
+      const request = {
+        model: "m",
+        messages: [{ role: "user" as const, content: "hi" }],
+        temperature: 0,
+        max_tokens: 1,
+      };
+      await expect(none.inference?.models.complete(request)).rejects.toThrow();
+      await expect(none.inference?.judge.complete(request)).rejects.toThrow();
+      const after = await counterValues();
+      expect(after.outputs - before.outputs).toBe(1);
+      expect(after.judge - before.judge).toBe(1);
       expect(await none.auth.authenticate(undefined)).toMatchObject({
         kind: "dev",
       });

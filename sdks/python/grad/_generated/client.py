@@ -1128,6 +1128,7 @@ TrainerHeartbeatRequest = TypedDict(
         "worker_id": "str",
         "attempt": "int",
         "lease_seconds": "NotRequired[int]",
+        "stats": "NotRequired[TrainerWorkerStats]",
     },
 )
 
@@ -1157,6 +1158,7 @@ TrainerJob = TypedDict(
         "resume": "dict[str, Any] | None",
         "loggers": "NotRequired[list[dict[str, Any]]]",
         "base": "dict[str, Any] | None",
+        "traceparent": "NotRequired[str | None]",
     },
 )
 
@@ -1168,6 +1170,16 @@ TrainerUploadRequest = TypedDict(
         "kind": "Literal['checkpoint', 'artifact']",
         "sha256": "str",
         "size_bytes": "int",
+    },
+)
+
+TrainerWorkerStats = TypedDict(
+    "TrainerWorkerStats",
+    {
+        "phase": "NotRequired[str]",
+        "tokens_per_second": "NotRequired[float]",
+        "gpu_memory_used_bytes": "NotRequired[float]",
+        "gpu_utilization": "NotRequired[float]",
     },
 )
 
@@ -1417,10 +1429,11 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
     "SyncSourceRequest": frozenset({"full"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
-    "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),
+    "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "stats", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
-    "TrainerJob": frozenset({"attempt", "base", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "loggers", "max_cost_usd", "price_per_million_tokens", "resume", "run"}),
+    "TrainerJob": frozenset({"attempt", "base", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "loggers", "max_cost_usd", "price_per_million_tokens", "resume", "run", "traceparent"}),
     "TrainerUploadRequest": frozenset({"attempt", "kind", "sha256", "size_bytes", "worker_id"}),
+    "TrainerWorkerStats": frozenset({"gpu_memory_used_bytes", "gpu_utilization", "phase", "tokens_per_second"}),
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
     "TrajectoryOutput": frozenset({"payload", "turns"}),
     "UploadTicket": frozenset({"expires_at", "headers", "method", "upload_id", "url"}),

@@ -3,6 +3,13 @@ import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import type { RecipeKind, TrainerJob } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { ApiError, conflict, notFound } from "../errors.js";
+import {
+  WORKER_STAT_PHASES,
+  type WorkerStatsSchema,
+} from "../contracts/trainer-jobs.js";
+import { metricKind, metrics } from "../telemetry/metrics.js";
+import { contextFromTraceparent, withSpan } from "../telemetry/tracing.js";
+import type { z } from "@hono/zod-openapi";
 import type {
   JobExpectation,
   JobKind,
@@ -124,6 +131,28 @@ export const requeuePatch = (
       };
 };
 
+/** Counts a started attempt, and a first claim's wait since creation. */
+export const observeClaim = (job: JobRow, now: Date): void => {
+  const kind = metricKind(job);
+  metrics.attempts.inc({ kind });
+  if (job.attempt === 1) {
+    metrics.claimLatency.observe(
+      { kind },
+      Math.max(0, (now.getTime() - Date.parse(job.created_at)) / 1000),
+    );
+  }
+};
+
+/** Counts an attempt that ended without a result. */
+export const observeInterruption = (
+  job: Pick<JobRow, "kind" | "origin">,
+  reason: "lease_lost" | "preempted" | "worker_error" | "oom",
+): void => {
+  metrics.requeues.inc({ kind: metricKind(job), reason });
+};
+
+const STAT_PHASES = new Set<string>(WORKER_STAT_PHASES);
+
 export interface JobQueue {
   /** Worker claim: its held job again (lost response), else the oldest claimable. */
   claim(
@@ -148,6 +177,7 @@ export interface JobQueue {
       worker_id: string;
       attempt: number;
       lease_seconds?: number | undefined;
+      stats?: z.infer<typeof WorkerStatsSchema> | undefined;
     },
   ): Promise<{
     status: string;
@@ -198,6 +228,7 @@ export const createJobQueue = (
           },
           now,
         );
+        observeInterruption(job, "lease_lost");
         closed += 1;
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
@@ -207,12 +238,35 @@ export const createJobQueue = (
     return closed;
   };
 
-  const claimRow: JobQueue["claimRow"] = (input) =>
-    store.jobs.claimNext({
+  const claimRow: JobQueue["claimRow"] = async (input) => {
+    const now = clock.now();
+    const job = await store.jobs.claimNext({
       ...input,
       workerKey: IN_PROCESS_WORKER_KEY,
-      now: clock.now(),
+      now,
     });
+    if (job) observeClaim(job, now);
+
+    return job;
+  };
+
+  /** A fresh claim, in a span of the trace that created the job. */
+  const build = (job: JobRow) =>
+    withSpan(
+      "grad.job.claim",
+      {
+        "grad.job_id": job.id,
+        "grad.job.kind": job.kind,
+        "grad.job.attempt": job.attempt,
+      },
+      async () => {
+        observeClaim(job, clock.now());
+        const built = await handlers[job.kind].onClaim?.(job, false);
+
+        return built ? { ...built, traceparent: job.traceparent } : null;
+      },
+      { parent: contextFromTraceparent(job.traceparent) },
+    );
 
   const loadForWorker = async (principal: AuthPrincipal, id: string) => {
     const job = await store.jobs.getById(id);
@@ -242,7 +296,7 @@ export const createJobQueue = (
       const renewed = held && (await renew(held, input.leaseSeconds));
       if (renewed) {
         const job = await handlers[renewed.kind].onClaim?.(renewed, true);
-        if (job) return job;
+        if (job) return { ...job, traceparent: renewed.traceparent };
       }
 
       for (;;) {
@@ -256,7 +310,7 @@ export const createJobQueue = (
           workspaceId,
         });
         if (!job) return null;
-        const built = await handlers[job.kind].onClaim?.(job, false);
+        const built = await build(job);
         if (built) return built;
       }
     },
@@ -270,6 +324,14 @@ export const createJobQueue = (
       }
       const updated = await renew(job, body.lease_seconds ?? job.lease_seconds);
       if (!updated) throw leaseLost(id);
+      metrics.heartbeats.inc({ kind: metricKind(job) });
+      if (body.stats) {
+        const { phase, ...numbers } = body.stats;
+        await store.jobs.recordWorkerStats(id, job.attempt, {
+          ...numbers,
+          ...(phase ? { phase: STAT_PHASES.has(phase) ? phase : "other" } : {}),
+        });
+      }
       const reason = (await handlers[job.kind].stopReason?.(updated)) ?? null;
 
       return {

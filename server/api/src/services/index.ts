@@ -1,4 +1,8 @@
 import type { AppDependencies } from "../deps.js";
+import {
+  createTelemetrySampler,
+  type TelemetrySampler,
+} from "../telemetry/sampler.js";
 import { createDatasetService, type DatasetService } from "./datasets.js";
 import { createEvalService, type EvalService } from "./evals/service.js";
 import { createImportService, type ImportService } from "./imports.js";
@@ -18,6 +22,7 @@ export interface Services {
   evals: EvalService;
   queue: JobQueue;
   sources: SourceService;
+  telemetry: TelemetrySampler;
   maintenance: Maintenance;
 }
 
@@ -52,7 +57,11 @@ export const createServices = (deps: AppDependencies): Services => {
     import: imports.handler,
     eval: evals.handler,
   });
+  const telemetry = createTelemetrySampler(deps.store, {
+    workspaceLabel: deps.settings.metrics?.workspaceLabel === true,
+  });
   const maintenance = createMaintenance(deps, {
+    telemetry,
     queue,
     runs,
     evals,
@@ -70,6 +79,7 @@ export const createServices = (deps: AppDependencies): Services => {
     evals,
     queue,
     sources,
+    telemetry,
     maintenance,
   };
 };

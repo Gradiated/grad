@@ -43,6 +43,24 @@ import {
   type SourceService,
 } from "./sources.js";
 import { jobBlobKey, stagingKey, type UploadService } from "./uploads.js";
+import { metricKind, metrics } from "../telemetry/metrics.js";
+import { isScoreUpdate } from "./record-merge.js";
+
+/** Records a worker posted (counted once per batch), and a sync's split. */
+const observeRecords = (
+  job: ImportJobRecord,
+  accepted: readonly DatasetRecord[],
+  rejected: number,
+): void => {
+  const kind = metricKind(job);
+  metrics.importRecords.inc({ kind, result: "accepted" }, accepted.length);
+  metrics.importRecords.inc({ kind, result: "dropped" }, rejected);
+  if (kind !== "sync") return;
+  const provider = String(job.source.provider ?? "unknown");
+  const updates = accepted.filter(isScoreUpdate).length;
+  metrics.sourceRecords.inc({ provider }, accepted.length - updates);
+  metrics.sourceScoreUpdates.inc({ provider }, updates);
+};
 
 /** HF imports send their token to the Hugging Face Hub only. */
 const HF_USE: SecretUse = { url: `https://${HF_HOST}`, use: "HF import" };
@@ -409,6 +427,7 @@ export const createImportService = (
         },
       );
       if (!updated) throw leaseLost(id);
+      if (added) observeRecords(job, accepted, rejected);
 
       return { accepted: accepted.length, rejected, errors };
     },

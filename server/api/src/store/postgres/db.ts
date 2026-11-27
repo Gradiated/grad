@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Pool, PoolClient } from "pg";
 
+import { metrics, secondsSince } from "../../telemetry/metrics.js";
+import { SpanKind, withSpan } from "../../telemetry/tracing.js";
+
 export type Row = Record<string, unknown>;
 
 /**
@@ -27,9 +30,25 @@ export const createDb = (pool: Pool): Db => {
       params: readonly unknown[] = [],
     ) => {
       const client = ambient.getStore();
-      const result = await (client ?? pool).query(sql, params as unknown[]);
+      const start = performance.now();
+      try {
+        const result = await withSpan(
+          "db.query",
+          {
+            "db.system.name": "postgresql",
+            "db.query.text": sql.length > 2000 ? sql.slice(0, 2000) : sql,
+          },
+          () => (client ?? pool).query(sql, params as unknown[]),
+          { kind: SpanKind.CLIENT },
+        );
 
-      return result.rows as R[];
+        return result.rows as R[];
+      } catch (error) {
+        metrics.dbQueryErrors.inc();
+        throw error;
+      } finally {
+        metrics.dbQueryDuration.observe(secondsSince(start));
+      }
     },
     atomic: async (fn) => {
       const outer = ambient.getStore();

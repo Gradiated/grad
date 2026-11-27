@@ -26,6 +26,16 @@ export interface AppSettings {
   sourceSyncIntervalSeconds?: number;
   /** Job events (metrics) older than this are deleted (default 90 days). */
   jobEventRetentionDays?: number;
+  /** Prometheus endpoint (default: on, on the API port, no token). */
+  metrics?: MetricsSettings;
+}
+
+export interface MetricsSettings {
+  enabled: boolean;
+  token?: string | undefined;
+  /** Served on METRICS_PORT by main.ts instead of the API app. */
+  separatePort?: boolean;
+  workspaceLabel?: boolean;
 }
 
 export interface AppDependencies {

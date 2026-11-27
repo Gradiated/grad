@@ -1,3 +1,5 @@
+import type { Counter } from "@prometheus-io/client";
+
 import {
   createLocalApiKeyAuth,
   createLocalNoneAuth,
@@ -16,22 +18,40 @@ import type { AppDependencies } from "./deps.js";
 import type { ServerEnvironment } from "./environment.js";
 import { createOpenAICompatibleClient } from "./services/evals/inference.js";
 import { createRegexEvaluator } from "./services/evals/regex.js";
-import type { InferenceClients } from "./services/evals/types.js";
+import type {
+  ChatCompletionClient,
+  InferenceClients,
+} from "./services/evals/types.js";
 import { assertMigrated } from "./migrations.js";
 import { LocalObjectStore } from "./storage/local.js";
 import { S3ObjectStore } from "./storage/s3.js";
 import { createBlobSigner } from "./storage/signer.js";
 import { createSecretsCipher } from "./secrets.js";
 import { createPostgresStore } from "./store/postgres.js";
+import { log } from "./telemetry/log.js";
+import { metrics } from "./telemetry/metrics.js";
+import { instrumentObjectStore } from "./telemetry/storage.js";
 
-export const log = (
-  level: "info" | "warn" | "error",
-  msg: string,
-  extra: Record<string, unknown> = {},
-) =>
-  console[level === "info" ? "log" : level](
-    JSON.stringify({ level, msg, ...extra }),
-  );
+export { log } from "./telemetry/log.js";
+
+/** Counts a client's calls on `counter` by result (ok, error). */
+const countCalls = (
+  client: ChatCompletionClient,
+  counter: Counter<"result">,
+): ChatCompletionClient => ({
+  ...client,
+  complete: async (input) => {
+    try {
+      const reply = await client.complete(input);
+      counter.inc({ result: "ok" });
+
+      return reply;
+    } catch (error) {
+      counter.inc({ result: "error" });
+      throw error;
+    }
+  },
+});
 
 const buildInference = (env: ServerEnvironment): InferenceClients | null => {
   if (!env.INFERENCE_BASE_URL) return null;
@@ -50,7 +70,10 @@ const buildInference = (env: ServerEnvironment): InferenceClients | null => {
         })
       : models;
 
-  return { models, judge };
+  return {
+    models: countCalls(models, metrics.evalOutputs),
+    judge: countCalls(judge, metrics.judgeCalls),
+  };
 };
 
 export const buildDependencies = async (
@@ -69,13 +92,15 @@ export const buildDependencies = async (
     clock.sync(store.dbNow).catch(() => undefined);
   }, 60_000).unref();
 
-  const storage = env.S3_BUCKET
-    ? new S3ObjectStore({
-        bucket: env.S3_BUCKET,
-        region: env.S3_REGION,
-        endpoint: env.S3_ENDPOINT,
-      })
-    : new LocalObjectStore(env.STORAGE_DIR);
+  const storage = instrumentObjectStore(
+    env.S3_BUCKET
+      ? new S3ObjectStore({
+          bucket: env.S3_BUCKET,
+          region: env.S3_REGION,
+          endpoint: env.S3_ENDPOINT,
+        })
+      : new LocalObjectStore(env.STORAGE_DIR),
+  );
 
   const trainerKeyHash =
     env.TRAINER_API_KEY_HASH ??
@@ -135,6 +160,12 @@ export const buildDependencies = async (
       usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
       usageExportLagSeconds: env.USAGE_EXPORT_LAG_SECONDS,
       sourceSyncIntervalSeconds: env.SOURCE_SYNC_INTERVAL_SECONDS,
+      metrics: {
+        enabled: env.METRICS_ENABLED,
+        token: env.METRICS_TOKEN,
+        separatePort: env.METRICS_PORT !== undefined,
+        workspaceLabel: env.METRICS_WORKSPACE_LABEL,
+      },
     },
   };
 };

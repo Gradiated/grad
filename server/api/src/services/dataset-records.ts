@@ -6,6 +6,7 @@ import { conflict } from "../errors.js";
 import { ObjectExistsError, type ObjectStore } from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
 import { isReset, isScoreUpdate } from "./record-merge.js";
+import { metrics } from "../telemetry/metrics.js";
 
 export const encodeRecordsJsonl = (records: readonly DatasetRecord[]): Buffer =>
   Buffer.from(records.map((r) => `${JSON.stringify(r)}\n`).join(""), "utf8");
@@ -56,6 +57,8 @@ export const writeRecordsPart = async (
   const key = keyFor(sha256);
   try {
     await storage.put(key, bytes);
+    metrics.partBytes.inc({ form: "compressed" }, bytes.byteLength);
+    metrics.partBytes.inc({ form: "uncompressed" }, jsonl.byteLength);
   } catch (error) {
     // A retried write of the same deterministic key: fine if the records match.
     if (!(error instanceof ObjectExistsError)) throw error;
