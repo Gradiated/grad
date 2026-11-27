@@ -17,6 +17,7 @@ import {
   ObjectExistsError,
   ObjectIntegrityError,
   ObjectNotFoundError,
+  StorageUnavailableError,
   validateObjectKey,
   type ObjectHead,
   type ObjectStore,
@@ -41,6 +42,11 @@ export interface S3ObjectStoreOptions {
   credentials?: S3ClientConfig["credentials"];
   /** Injected client (tests); other connection options are then ignored. */
   client?: S3Client;
+  /**
+   * A request's bound (default 120 s). A streamed read is bound by it until
+   * the response starts, then by the same time between two chunks, so a
+   * long download on a slow link finishes and a stalled one still ends.
+   */
   requestTimeoutMs?: number;
 }
 
@@ -68,6 +74,21 @@ const awsName = (error: unknown): string =>
 const isNotFound = (error: unknown): boolean =>
   ["NoSuchKey", "NotFound", "NoSuchObject"].includes(awsName(error)) ||
   awsStatus(error) === 404;
+
+/** A 5xx, a timeout or a failed connection after the SDK's own retries. */
+const isTransient = (error: unknown): boolean => {
+  const status = awsStatus(error);
+  if (status !== undefined) return status >= 500 || status === 429;
+  const name = awsName(error);
+
+  return (
+    ["TimeoutError", "AbortError", "RequestTimeout", "SlowDown"].includes(
+      name,
+    ) ||
+    typeof (error as { code?: unknown })?.code === "string" ||
+    (error as { $retryable?: unknown })?.$retryable !== undefined
+  );
+};
 
 const isPreconditionFailed = (error: unknown): boolean =>
   ["PreconditionFailed", "ConditionalRequestConflict"].includes(
@@ -131,6 +152,15 @@ export class S3ObjectStore implements ObjectStore {
   private signal = (ms = this.timeoutMs): AbortSignal =>
     AbortSignal.timeout(ms);
 
+  /** `client.send`, with transient failures as StorageUnavailableError. */
+  private send = (async (command: never, options?: never) => {
+    try {
+      return await this.client.send(command, options);
+    } catch (error) {
+      throw isTransient(error) ? new StorageUnavailableError(error) : error;
+    }
+  }) as unknown as S3Client["send"];
+
   private sendPut = async (
     key: string,
     body: Uint8Array | Readable,
@@ -142,7 +172,7 @@ export class S3ObjectStore implements ObjectStore {
       ? AbortSignal.any([this.signal(), abort])
       : this.signal();
     try {
-      await this.client.send(
+      await this.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: key,
@@ -263,12 +293,12 @@ export class S3ObjectStore implements ObjectStore {
     return { key: clean, sha256, sizeBytes: size };
   };
 
-  private getObject = async (key: string) => {
+  private getObject = async (key: string, abortSignal: AbortSignal) => {
     const clean = validateObjectKey(key);
     try {
-      const response = await this.client.send(
+      const response = await this.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: clean }),
-        { abortSignal: this.signal() },
+        { abortSignal },
       );
       if (!response.Body) throw new ObjectNotFoundError(clean);
 
@@ -280,17 +310,45 @@ export class S3ObjectStore implements ObjectStore {
   };
 
   get = async (key: string): Promise<Uint8Array> =>
-    (await this.getObject(key)).transformToByteArray();
+    (await this.getObject(key, this.signal())).transformToByteArray();
 
-  getStream = async (key: string): Promise<ReadableStream<Uint8Array>> =>
-    (
-      await this.getObject(key)
-    ).transformToWebStream() as ReadableStream<Uint8Array>;
+  getStream = async (key: string): Promise<ReadableStream<Uint8Array>> => {
+    // An idle timer, not a deadline: it restarts with every chunk.
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => controller.abort(new Error("S3 read timed out")),
+        this.timeoutMs,
+      );
+      timer.unref();
+    };
+    arm();
+    try {
+      const body = (
+        await this.getObject(key, controller.signal)
+      ).transformToWebStream() as ReadableStream<Uint8Array>;
+
+      return body.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          transform: (chunk, out) => {
+            arm();
+            out.enqueue(chunk);
+          },
+          flush: () => clearTimeout(timer),
+        }),
+      );
+    } catch (error) {
+      clearTimeout(timer);
+      throw error;
+    }
+  };
 
   head = async (key: string): Promise<ObjectHead | null> => {
     const clean = validateObjectKey(key);
     try {
-      const response = await this.client.send(
+      const response = await this.send(
         new HeadObjectCommand({
           Bucket: this.bucket,
           Key: clean,
@@ -320,7 +378,7 @@ export class S3ObjectStore implements ObjectStore {
     const keys: string[] = [];
     let token: string | undefined;
     do {
-      const page = await this.client.send(
+      const page = await this.send(
         new ListObjectsV2Command({
           Bucket: this.bucket,
           Prefix: `${validateObjectKey(prefix)}/`,
@@ -343,7 +401,7 @@ export class S3ObjectStore implements ObjectStore {
 
   delete = async (key: string): Promise<void> => {
     const clean = validateObjectKey(key);
-    await this.client.send(
+    await this.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: clean }),
       { abortSignal: this.signal(15_000) },
     );
@@ -354,7 +412,7 @@ export class S3ObjectStore implements ObjectStore {
     const target = validateObjectKey(to);
     if (await this.head(target)) return;
     try {
-      await this.client.send(
+      await this.send(
         new CopyObjectCommand({
           Bucket: this.bucket,
           Key: target,

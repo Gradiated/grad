@@ -20,6 +20,7 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 import { createServices, type Services } from "./services/index.js";
+import { StorageUnavailableError } from "./storage/types.js";
 import { isDatabaseUnavailable } from "./store/postgres/db.js";
 import { registerMetricsEndpoints } from "./telemetry/endpoint.js";
 import { httpTelemetry } from "./telemetry/http.js";
@@ -139,6 +140,24 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
         malformed ? "Malformed request" : "Request failed",
         error.message || "The request could not be processed.",
       );
+    }
+
+    if (error instanceof StorageUnavailableError) {
+      const res = problemResponse(
+        c,
+        503,
+        "storage_unavailable",
+        "Storage unavailable",
+        "Object storage is unreachable or overloaded; retry shortly.",
+      );
+      res.headers.set("Retry-After", "1");
+      log("warn", "object storage unavailable", {
+        request_id: c.get("requestId"),
+        path: c.req.path,
+        error: error.message,
+      });
+
+      return res;
     }
 
     if (isDatabaseUnavailable(error)) {

@@ -24,6 +24,17 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
+/** The object store is unreachable, timed out or answered 5xx: retry shortly (API: 503). */
+export class StorageUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `Object storage unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = "StorageUnavailableError";
+  }
+}
+
 export class ObjectIntegrityError extends Error {
   constructor(message: string) {
     super(message);
