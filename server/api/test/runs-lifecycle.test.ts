@@ -544,6 +544,29 @@ describe("run lifecycle and worker protocol", () => {
     ]);
   });
 
+  it("marks the lowest score best when the selection metric is minimised", async () => {
+    const run = await createSftRun(t);
+    const job = await worker.claim();
+    const min = { metric_mode: "min", metric_name: "eval_loss" };
+    await worker.checkpoint(job!, 1, "c1", { eval_score: 0.9, metadata: min });
+    await worker.checkpoint(job!, 2, "c2", { eval_score: 0.1, metadata: min });
+    await worker.checkpoint(job!, 3, "c3", { eval_score: 0.2, metadata: min });
+    await worker.complete(
+      job!,
+      { status: "completed", tokens_processed: 1 },
+      "art",
+    );
+
+    const ckpts = await t.json<{
+      data: Array<{ step: number; best: boolean; final: boolean }>;
+    }>(`/v1/runs/${run.id}/checkpoints`);
+    expect(ckpts.body.data.map((c) => [c.step, c.best, c.final])).toEqual([
+      [1, false, false],
+      [2, true, false],
+      [3, false, true],
+    ]);
+  });
+
   it("requeues expired leases with attempt+1, bills the lost attempt, and fails after max_attempts", async () => {
     const run = await createSftRun(t);
     for (let attempt = 1; attempt <= 3; attempt += 1) {

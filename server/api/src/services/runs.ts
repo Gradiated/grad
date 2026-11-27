@@ -421,10 +421,18 @@ export const createRunLifecycle = (
     const all = await tx.artifacts.allCheckpoints(run.id, now);
     if (all.length === 0) return;
 
+    // The trainer records whether its selection metric is minimised
+    // (eval_loss, eval_kl) or maximised (accuracy, recall@10).
     const scored = all.filter((c) => c.eval_score !== null);
+    const better = (c: CheckpointRecord, acc: CheckpointRecord): boolean => {
+      const [score, prev] = [c.eval_score ?? 0, acc.eval_score ?? 0];
+
+      return c.metadata["metric_mode"] === "min"
+        ? score <= prev
+        : score >= prev;
+    };
     const best = scored.reduce<CheckpointRecord | null>(
-      (acc, c) =>
-        acc === null || (c.eval_score ?? 0) >= (acc.eval_score ?? 0) ? c : acc,
+      (acc, c) => (acc === null || better(c, acc) ? c : acc),
       null,
     );
     const final = all.reduce((acc, c) =>
