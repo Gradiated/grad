@@ -317,7 +317,13 @@ export const createDatasetRepository = (
         count: rows.reduce((sum, r) => sum + Number(r.count), 0),
       };
     },
-    commitStaged: ({ datasetId, jobId, attempt, metadata }) =>
+    commitStaged: ({
+      datasetId,
+      jobId,
+      attempt,
+      metadata,
+      keepVersionIfEmpty,
+    }) =>
       db.atomic(async () => {
         const staged = await db.query(
           `SELECT count, resets FROM grad_dataset_parts
@@ -325,14 +331,24 @@ export const createDatasetRepository = (
            ORDER BY batch`,
           [jobId, attempt],
         );
-        const dataset = await bump(
-          datasetId,
-          staged.map((r) => ({
-            count: Number(r.count),
-            resets: r.resets === true,
-          })),
-          metadata,
-        );
+        const current =
+          keepVersionIfEmpty === true && staged.length === 0
+            ? first(
+                await db.query("SELECT * FROM grad_datasets WHERE id = $1", [
+                  datasetId,
+                ]),
+              )
+            : null;
+        const dataset = current
+          ? toDataset(current)
+          : await bump(
+              datasetId,
+              staged.map((r) => ({
+                count: Number(r.count),
+                resets: r.resets === true,
+              })),
+              metadata,
+            );
         await db.query(
           `UPDATE grad_dataset_parts SET version = $3
            WHERE job_id = $1 AND attempt = $2 AND version IS NULL`,

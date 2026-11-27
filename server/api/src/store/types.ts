@@ -168,6 +168,8 @@ export interface DatasetRepository {
     jobId: string;
     attempt: number;
     metadata?: Record<string, unknown>;
+    /** Nothing staged: keep the current version instead of an empty new one (source syncs). */
+    keepVersionIfEmpty?: boolean;
   }): Promise<{ dataset: Dataset; orphanKeys: string[] }>;
   /** Deletes every staged part of a job (it failed); returns their keys. */
   discardStaged(jobId: string): Promise<string[]>;

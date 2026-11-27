@@ -477,15 +477,23 @@ pub(crate) fn print_import(out: &Out, j: &ImportJob) {
     } else {
         format!(", scores: {}", j.detected_scores.join(", "))
     };
+    // A source sync has no parser to report: name the provider instead.
+    let origin = match (
+        j.source.get("kind").and_then(|v| v.as_str()),
+        j.source.get("provider").and_then(|v| v.as_str()),
+    ) {
+        (Some("provider"), Some(provider)) => format!("synced from {}", provider),
+        _ => format!("parser {}", j.connector),
+    };
     out.line(format!(
-        "✓ Dataset {}: imported {} records, dropped {} (version {}, parser {}{})",
+        "✓ Dataset {}: imported {} records, dropped {} (version {}, {}{})",
         j.dataset,
         thousands(j.imported_count),
         thousands(j.dropped_count),
         j.dataset_version
             .map(|v| v.to_string())
             .unwrap_or_else(|| "-".into()),
-        j.connector,
+        origin,
         scores
     ));
     for r in j.drop_reasons.iter().take(10) {

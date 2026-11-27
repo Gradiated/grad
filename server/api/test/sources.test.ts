@@ -495,10 +495,24 @@ describe("sources", () => {
     });
     t.clock.advanceSeconds(61);
     await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
-    expect((await claimImport()).import?.source.watermark).toEqual({
+    const quiet = await claimImport();
+    expect(quiet.import?.source.watermark).toEqual({
       traces: "2026-11-27T11:00:00Z",
       scores: "2026-11-27T11:00:00Z",
     });
+    // A sync that finds nothing new adds no empty version.
+    const before = (
+      await t.json<{ version: number }>("/v1/datasets/support-prod")
+    ).body.version;
+    const nothing = await finish(quiet, [], null);
+    expect(nothing.body.import).toMatchObject({
+      imported_count: 0,
+      dataset_version: before,
+    });
+    expect(
+      (await t.json<{ version: number }>("/v1/datasets/support-prod")).body
+        .version,
+    ).toBe(before);
   });
 
   it("counts merged records: score updates add none, a full sync restarts the count", async () => {

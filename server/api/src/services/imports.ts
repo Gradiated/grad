@@ -493,6 +493,8 @@ export const createImportService = (
           jobId: job.id,
           attempt: job.attempt,
           ...(benchmark ? { metadata: benchmark } : {}),
+          // A sync that found nothing new adds no empty version.
+          keepVersionIfEmpty: isSyncPayload(job.source),
         });
         const updated = await tx.imports.update(
           id,
