@@ -145,6 +145,45 @@ describe("run lifecycle and worker protocol", () => {
     });
   });
 
+  it("stores each worker write once: replayed progress and checkpoint retries", async () => {
+    const run = await createSftRun(t);
+    const job = await worker.claim();
+    await worker.progress(job!, 1, 100);
+    const replay = await worker.progress(job!, 1, 100);
+    expect(replay.status).toBe(200);
+    await worker.progress(job!, 2, 200);
+    const metrics = await t.json<{ data: Array<{ step: number }> }>(
+      `/v1/runs/${run.id}/metrics`,
+    );
+    expect(metrics.body.data.map((m) => m.step)).toEqual([1, 2]);
+    // A late replay of an older step does not move the run backwards.
+    await worker.progress(job!, 1, 100);
+    expect((await t.json(`/v1/runs/${run.id}`)).body).toMatchObject({
+      current_step: 2,
+      latest_metric: { step: 2 },
+    });
+
+    const uploadId = await worker.upload(job!, "checkpoint", "ckpt-bytes");
+    const body = {
+      ...worker.ref(job!),
+      step: 2,
+      upload_id: uploadId,
+      metadata: {},
+    };
+    const path = `/v1/trainer-jobs/${job!.id}/checkpoints`;
+    const first = await worker.call<{ id: string }>(path, body);
+    expect(first.status).toBe(201);
+    const retry = await worker.call<{ id: string }>(path, body);
+    expect(retry.status).toBe(200);
+    expect(retry.body.id).toBe(first.body.id);
+    // The retry must not delete the checkpoint's own blob.
+    const resumed = await t.deps.store.checkpoints.latestForRun(
+      run.id,
+      t.clock.now(),
+    );
+    expect(await t.deps.storage.head(resumed!.storage_key)).not.toBeNull();
+  });
+
   it("rejects workspace admins on every trainer-job route and hides worker fields", async () => {
     const run = await createSftRun(t);
     const asAdmin = new FakeWorker(t, "worker-1", ADMIN_KEY);
@@ -820,6 +859,7 @@ describe("run lifecycle and worker protocol", () => {
     const job = await worker.claim();
     const records = await worker.call(`/v1/trainer-jobs/${run.id}/records`, {
       ...worker.ref(job!),
+      seq: 0,
       records: [{}],
     });
     expect(records.status).toBe(409);

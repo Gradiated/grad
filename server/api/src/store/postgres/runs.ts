@@ -156,13 +156,22 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
 
 export const createMetricsRepository = (db: Db): MetricsRepository => ({
   append: async (runId, attempt, point) => {
-    const rows = await db.query(
-      `INSERT INTO grad_run_metrics (run_id, attempt, point) VALUES ($1, $2, $3::jsonb)
-       RETURNING *`,
-      [runId, attempt, JSON.stringify(point)],
+    const inserted = first(
+      await db.query(
+        `INSERT INTO grad_run_metrics (run_id, attempt, step, point) VALUES ($1, $2, $3, $4::jsonb)
+         ON CONFLICT (run_id, attempt, step) DO NOTHING RETURNING *`,
+        [runId, attempt, point.step, JSON.stringify(point)],
+      ),
+    );
+    if (inserted) return toMetric(inserted);
+    const existing = first(
+      await db.query(
+        "SELECT * FROM grad_run_metrics WHERE run_id = $1 AND attempt = $2 AND step = $3",
+        [runId, attempt, point.step],
+      ),
     );
 
-    return toMetric(rows[0] ?? {});
+    return toMetric(existing ?? {});
   },
   list: async (runId, afterSeq, limit) =>
     (

@@ -44,7 +44,10 @@ export interface UploadService {
     jobId: string | null;
     attempt: number | null;
   }): Promise<UploadRecord>;
-  /** Marks the upload consumed (single use) inside `tx`; throws 409 if already used. */
+  /**
+   * Marks the upload consumed (single use) inside `tx`; a no-op when
+   * `consumedBy` already consumed it, else 409 if already used.
+   */
   consume(
     tx: Repositories,
     upload: UploadRecord,
@@ -220,6 +223,8 @@ export const createUploadService = (deps: AppDependencies): UploadService => {
 
     consume: async (tx, upload, consumedBy) => {
       const consumed = await tx.uploads.consume(upload.id, consumedBy);
+      // A retry by the same consumer is a no-op.
+      if (!consumed && upload.consumed_by === consumedBy) return upload;
       if (!consumed) {
         throw conflict(
           "upload_already_used",

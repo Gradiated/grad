@@ -28,7 +28,8 @@ class Recorded:
 class FakeProtocolServer:
     """Scriptable fake. ``jobs`` are handed out by claim in order; every request
     is recorded. Knobs: ``fail_next[action]`` status codes returned before a
-    real answer, ``progress_reply`` / ``heartbeat_reply`` callables, ``api_key``
+    real answer (0: close the connection without a response, as when the ack
+    of a committed request is lost), ``progress_reply`` / ``heartbeat_reply`` callables, ``api_key``
     (401 when the bearer differs), ``upload_origin`` (absolute ticket URLs on
     another server), ``blobs`` served on GET, ``redirect_claim_to``."""
 
@@ -94,6 +95,9 @@ class FakeProtocolServer:
                 with server._lock:
                     server.requests.append(rec)
                 status, payload, raw, headers = server.dispatch(rec)
+                if status == 0:
+                    self.close_connection = True
+                    return
                 self._send(status, payload, raw, headers)
 
             do_GET = do_POST = do_PUT = _handle
@@ -172,7 +176,8 @@ class FakeProtocolServer:
 
         pending = self.fail_next.get(action)
         if pending:
-            return self._problem(pending.pop(0), "injected")
+            status = pending.pop(0)
+            return (0, None, None, None) if status == 0 else self._problem(status, "injected")
 
         if action == "claim":
             if self.redirect_claim_to:

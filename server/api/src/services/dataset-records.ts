@@ -1,27 +1,39 @@
 import { createHash } from "node:crypto";
 
 import type { DatasetRecord } from "../contracts.js";
-import type { ObjectStore } from "../storage/types.js";
+import { conflict } from "../errors.js";
+import { ObjectExistsError, type ObjectStore } from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
 
 export const encodeRecordsJsonl = (records: readonly DatasetRecord[]): Buffer =>
   Buffer.from(records.map((r) => `${JSON.stringify(r)}\n`).join(""), "utf8");
 
-/** Writes one immutable JSONL part at a fresh key. */
+/**
+ * Writes one immutable JSONL part. Rewriting an existing key with the same
+ * bytes is a no-op, so a deterministic key makes a retried write safe.
+ */
 export const writeRecordsPart = async (
   storage: ObjectStore,
   key: string,
   records: readonly DatasetRecord[],
 ): Promise<DatasetPart> => {
   const bytes = encodeRecordsJsonl(records);
-  const stored = await storage.put(key, bytes);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  try {
+    await storage.put(key, bytes);
+  } catch (error) {
+    // A retried write of the same deterministic key: fine if the bytes match.
+    if (!(error instanceof ObjectExistsError)) throw error;
+    const existing = await storage.get(key);
+    if (createHash("sha256").update(existing).digest("hex") !== sha256) {
+      throw conflict(
+        "records_batch_conflict",
+        `Records part '${key}' already exists with different contents; a batch number was reused for different records.`,
+      );
+    }
+  }
 
-  return {
-    key: stored.key,
-    count: records.length,
-    sha256: stored.sha256,
-    bytes: stored.sizeBytes,
-  };
+  return { key, count: records.length, sha256, bytes: bytes.byteLength };
 };
 
 const parsePart = (bytes: Uint8Array, part: DatasetPart): DatasetRecord[] => {

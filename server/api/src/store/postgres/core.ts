@@ -4,6 +4,8 @@ import { hashApiKey } from "../../adapters.js";
 import type { Clock } from "../../clock.js";
 import { newId } from "../../ids.js";
 import type {
+  DatasetPart,
+  DatasetVersion,
   ApiKeyRepository,
   DatasetRepository,
   ImportJobRepository,
@@ -107,8 +109,8 @@ export const createDatasetRepository = (
         if (!row) return null;
         const dataset = toDataset(row);
         await db.query(
-          `INSERT INTO grad_dataset_versions (dataset_id, version, parts, record_count, created_at)
-           VALUES ($1, 0, '[]'::jsonb, 0, $2::timestamptz)`,
+          `INSERT INTO grad_dataset_versions (dataset_id, version, part_count, record_count, created_at)
+           VALUES ($1, 0, 0, 0, $2::timestamptz)`,
           [dataset.id, ts],
         );
 
@@ -172,29 +174,39 @@ export const createDatasetRepository = (
         const dataset = toDataset(row);
         const previous = first(
           await db.query(
-            "SELECT parts FROM grad_dataset_versions WHERE dataset_id = $1 AND version = $2",
+            "SELECT part_count FROM grad_dataset_versions WHERE dataset_id = $1 AND version = $2",
             [datasetId, dataset.version - 1],
           ),
         );
-        const allParts = [
-          ...((previous?.parts as unknown[] | undefined) ?? []),
-          ...parts,
-        ];
-        const version = first(
+        const start = Number(previous?.part_count ?? 0);
+        for (const [i, part] of parts.entries()) {
           await db.query(
-            `INSERT INTO grad_dataset_versions (dataset_id, version, parts, record_count, created_at)
-             VALUES ($1, $2, $3::jsonb, $4, $5::timestamptz) RETURNING *`,
+            `INSERT INTO grad_dataset_parts (dataset_id, seq, key, count, sha256, bytes)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
             [
               datasetId,
-              dataset.version,
-              JSON.stringify(allParts),
-              dataset.record_count,
-              ts,
+              start + i,
+              part.key,
+              part.count,
+              part.sha256,
+              part.bytes,
             ],
-          ),
+          );
+        }
+        await db.query(
+          `INSERT INTO grad_dataset_versions (dataset_id, version, part_count, record_count, created_at)
+           VALUES ($1, $2, $3, $4, $5::timestamptz)`,
+          [
+            datasetId,
+            dataset.version,
+            start + parts.length,
+            dataset.record_count,
+            ts,
+          ],
         );
+        const version = await repo.getVersion(datasetId, dataset.version);
 
-        return { dataset, version: toDatasetVersion(version ?? {}) };
+        return { dataset, version: version as DatasetVersion };
       }),
     getVersion: async (datasetId, version) => {
       const row = first(
@@ -203,8 +215,14 @@ export const createDatasetRepository = (
           [datasetId, version],
         ),
       );
+      if (!row) return null;
+      const parts = await db.query(
+        `SELECT key, count, sha256, bytes FROM grad_dataset_parts
+         WHERE dataset_id = $1 AND seq < $2 ORDER BY seq`,
+        [datasetId, row.part_count],
+      );
 
-      return row ? toDatasetVersion(row) : null;
+      return toDatasetVersion(row, parts);
     },
   };
 
@@ -321,19 +339,27 @@ export const createImportJobRepository = (
         [now.toISOString(), limit],
       )
     ).map(toImportJob),
-  addPart: async (importId, attempt, part) => {
-    await db.query(
-      "INSERT INTO grad_import_parts (import_id, attempt, part) VALUES ($1, $2, $3::jsonb)",
-      [importId, attempt, jsonParam(part)],
-    );
-  },
-  listParts: async (importId, attempt) =>
+  addPart: async ({ importId, attempt, batch, part, dropped }) =>
     (
       await db.query(
-        "SELECT part FROM grad_import_parts WHERE import_id = $1 AND attempt = $2 ORDER BY seq",
-        [importId, attempt],
+        `INSERT INTO grad_import_parts (import_id, attempt, batch, part, dropped)
+         VALUES ($1, $2, $3, $4::jsonb, $5)
+         ON CONFLICT (import_id, attempt, batch) DO NOTHING RETURNING seq`,
+        [importId, attempt, batch, jsonParam(part), dropped],
       )
-    ).map((r) => r.part as never),
+    ).length > 0,
+  listParts: async (importId, attempt) => {
+    const rows = await db.query(
+      `SELECT part, dropped FROM grad_import_parts WHERE import_id = $1 AND attempt = $2
+       ORDER BY batch, seq`,
+      [importId, attempt],
+    );
+
+    return {
+      parts: rows.flatMap((r) => (r.part ? [r.part as DatasetPart] : [])),
+      dropped: rows.reduce((sum, r) => sum + Number(r.dropped), 0),
+    };
+  },
 });
 
 export const createUploadRepository = (

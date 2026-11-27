@@ -297,21 +297,35 @@ describe("datasets, uploads and imports", () => {
       should_stop: false,
     });
 
-    const batch = await worker.call<{
-      accepted: number;
-      rejected: number;
-      errors: unknown[];
-    }>(`/v1/trainer-jobs/${job!.id}/records`, {
-      ...worker.ref(job!),
-      records: [
-        ...sftRecords(3),
-        { foo: 1 },
-        { messages: "nope" },
-        { ...sftRecords(1)[0], scores: { csat: 1 } },
-      ],
-    });
+    const records = [
+      ...sftRecords(3),
+      { foo: 1 },
+      { messages: "nope" },
+      { ...sftRecords(1)[0], scores: { csat: 1 } },
+    ];
+    const post = (seq: number) =>
+      worker.call<{
+        accepted: number;
+        rejected: number;
+        errors: unknown[];
+      }>(`/v1/trainer-jobs/${job!.id}/records`, {
+        ...worker.ref(job!),
+        seq,
+        records,
+      });
+    const batch = await post(0);
     expect(batch.body).toMatchObject({ accepted: 4, rejected: 2 });
     expect(batch.body.errors).toHaveLength(2);
+    // A retry whose first response was lost is stored once (records without
+    // an id get the same deterministic ids, so the part is byte-identical).
+    const retry = await post(0);
+    expect(retry.status).toBe(200);
+    expect(retry.body).toMatchObject({ accepted: 4, rejected: 2 });
+    const progress = await t.json(`/v1/imports/${imp.body.id}`);
+    expect(progress.body).toMatchObject({
+      imported_count: 4,
+      dropped_count: 2,
+    });
 
     const before = await t.json("/v1/datasets/traces");
     expect(before.body).toMatchObject({ version: 0 });
@@ -370,6 +384,7 @@ describe("datasets, uploads and imports", () => {
       expect(job?.attempt).toBe(attempt);
       await worker.call(`/v1/trainer-jobs/${job!.id}/records`, {
         ...worker.ref(job!),
+        seq: 0,
         records: sftRecords(2),
       });
       t.clock.advanceSeconds(61);
@@ -391,6 +406,7 @@ describe("datasets, uploads and imports", () => {
     const stale = await worker.call(`/v1/trainer-jobs/${job2!.id}/records`, {
       worker_id: worker.workerId,
       attempt: 1,
+      seq: 0,
       records: sftRecords(1),
     });
     expect(stale.status).toBe(409);

@@ -179,6 +179,10 @@ export const RegisterCheckpointRequestSchema = z
 export const PostImportRecordsRequestSchema = z
   .object({
     ...AttemptRefShape,
+    seq: z.number().int().min(0).openapi({
+      description:
+        "This attempt's batch number (0, 1, 2, ...). A batch is stored once per (job, attempt, seq), so retrying a batch whose response was lost is safe.",
+    }),
     records: z.array(z.unknown()).min(1).max(10_000),
   })
   .openapi("PostImportRecordsRequest");

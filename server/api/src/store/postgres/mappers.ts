@@ -58,10 +58,17 @@ export const toDataset = (r: Row): Dataset => ({
   updated_at: iso(r.updated_at),
 });
 
-export const toDatasetVersion = (r: Row): DatasetVersion => ({
+export const toDatasetVersion = (r: Row, parts: Row[]): DatasetVersion => ({
   dataset_id: s(r.dataset_id),
   version: n(r.version),
-  parts: j<DatasetPart[]>(r.parts, []),
+  parts: parts.map(
+    (p): DatasetPart => ({
+      key: s(p.key),
+      count: n(p.count),
+      sha256: s(p.sha256),
+      bytes: n(p.bytes),
+    }),
+  ),
   record_count: n(r.record_count),
   created_at: iso(r.created_at),
 });

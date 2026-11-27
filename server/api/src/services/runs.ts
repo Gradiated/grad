@@ -841,29 +841,38 @@ export const createRunLifecycle = (
       const run = await loadLeased(principal, id, body.worker_id, body.attempt);
       const attemptTokens = Math.max(run.attempt_tokens, body.metric.tokens);
       const cost = usd(runCostMicro(run, attemptTokens));
-      const point = await store.metrics.append(run.id, run.attempt, {
-        ...body.metric,
-        tokens: run.billed_tokens + attemptTokens,
-        cost_usd: cost,
+      // One step's point is stored once per attempt (a retry returns it), and
+      // only while this worker still holds the lease.
+      const updated = await store.transaction(async (tx) => {
+        const point = await tx.metrics.append(run.id, run.attempt, {
+          ...body.metric,
+          tokens: run.billed_tokens + attemptTokens,
+          cost_usd: cost,
+        });
+        const fenced = await tx.runs.update(
+          id,
+          {
+            attempt_tokens: attemptTokens,
+            current_step: Math.max(run.current_step, point.step),
+            latest_metric:
+              point.step >= (run.latest_metric?.step ?? -1)
+                ? point
+                : run.latest_metric,
+            lease_expires_at: addSeconds(
+              clock.now(),
+              run.lease_seconds,
+            ).toISOString(),
+          },
+          {
+            workerId: body.worker_id,
+            attempt: body.attempt,
+            status: ["running", "cancelled"],
+          },
+        );
+        if (!fenced) throw leaseLost(id);
+
+        return fenced;
       });
-      const updated = await store.runs.update(
-        id,
-        {
-          attempt_tokens: attemptTokens,
-          current_step: body.metric.step,
-          latest_metric: point,
-          lease_expires_at: addSeconds(
-            clock.now(),
-            run.lease_seconds,
-          ).toISOString(),
-        },
-        {
-          workerId: body.worker_id,
-          attempt: body.attempt,
-          status: ["running", "cancelled"],
-        },
-      );
-      if (!updated) throw leaseLost(id);
 
       const reason = stopReason(updated);
 
@@ -935,7 +944,12 @@ export const createRunLifecycle = (
         return inserted;
       });
 
-      if (!result.created) {
+      // A re-upload of an existing checkpoint is dropped; a retry of the same
+      // upload is that checkpoint.
+      if (
+        !result.created &&
+        result.checkpoint.storage_key !== upload.storage_key
+      ) {
         await storage.delete(upload.storage_key).catch(() => undefined);
       }
 

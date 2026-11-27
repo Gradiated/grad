@@ -667,6 +667,7 @@ PostImportRecordsRequest = TypedDict(
     {
         "worker_id": "str",
         "attempt": "int",
+        "seq": "int",
         "records": "list[Any]",
     },
 )
@@ -1171,7 +1172,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
     "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
-    "PostImportRecordsRequest": frozenset({"attempt", "records", "worker_id"}),
+    "PostImportRecordsRequest": frozenset({"attempt", "records", "seq", "worker_id"}),
     "PostImportRecordsResponse": frozenset({"accepted", "errors", "rejected"}),
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),

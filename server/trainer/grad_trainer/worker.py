@@ -4,11 +4,16 @@ The worker claims ``train`` and ``import`` jobs, keeps the lease alive from a
 background heartbeat thread, moves weights through upload tickets (presigned
 S3 PUTs or the server's streaming blob proxy), and finishes every attempt with
 ``/complete`` so the server can bill it.
+
+Every worker write is keyed by ``(job, attempt, seq|step)`` on the server, so
+the client simply re-sends a request whose response was lost (connection reset,
+timeout, 5xx): the replay is stored once.
 """
 
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import random
@@ -150,13 +155,14 @@ class ProtocolClient:
             return self._opener.open(req, timeout=self.timeout_s)
         except urllib.error.HTTPError as exc:
             raise _parse_problem(exc.code, exc.read(), full) from None
-        except (urllib.error.URLError, OSError) as exc:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
             raise ServerUnreachable(f"{full}: {getattr(exc, 'reason', exc)}") from exc
 
     def post_json(
         self, path: str, payload: dict[str, Any], *, attempts: int = 1
     ) -> dict[str, Any]:
-        """POST JSON; retries connection errors, 429 and 5xx up to ``attempts`` times."""
+        """POST JSON; retries connection errors (also a response cut off after the
+        server committed), 429 and 5xx up to ``attempts`` times."""
         body = json.dumps(payload).encode("utf-8")
         delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
         for attempt in range(1, attempts + 1):
@@ -167,7 +173,10 @@ class ProtocolClient:
                     data=body,
                     headers={"Content-Type": "application/json"},
                 ) as resp:
-                    raw = resp.read()
+                    try:
+                        raw = resp.read()
+                    except (http.client.HTTPException, OSError) as exc:
+                        raise ServerUnreachable(f"{path}: response lost ({exc!r})") from exc
                 return json.loads(raw) if raw else {}
             except (ServerError, ServerUnreachable) as exc:
                 retryable = isinstance(exc, ServerUnreachable) or exc.transient
@@ -231,6 +240,7 @@ class _JobState:
     lease_lost: bool = False
     auth_error: WorkerAuthError | None = None
     max_tokens: int = 0
+    batches: int = 0
 
     def request_stop(self, reason: str) -> None:
         if self.stop_reason is None:
@@ -685,8 +695,13 @@ class TrainerWorker:
                 self._post(
                     state,
                     "records",
-                    {"records": records[start : start + RECORDS_BATCH_LIMIT]},
+                    {
+                        "seq": state.batches,
+                        "records": records[start : start + RECORDS_BATCH_LIMIT],
+                    },
+                    attempts=5,
                 )
+                state.batches += 1
 
         work = job_dir / "work"
         work.mkdir()

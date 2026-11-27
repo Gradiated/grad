@@ -2595,6 +2595,11 @@ components:
         attempt:
           type: integer
           minimum: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: This attempt's batch number (0, 1, 2, ...). A batch is stored once per (job, attempt, seq), so retrying a
+            batch whose response was lost is safe.
         records:
           type: array
           items: {}
@@ -2603,6 +2608,7 @@ components:
       required:
         - worker_id
         - attempt
+        - seq
         - records
     CompleteTrainerJobResponse:
       type: object

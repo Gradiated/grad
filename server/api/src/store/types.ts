@@ -167,8 +167,23 @@ export interface ImportJobRepository {
   /** Oldest queued job → running, attempt + 1, lease set (SKIP LOCKED). */
   claimNext(input: ClaimInput): Promise<ImportJobRecord | null>;
   listExpiredLeases(now: Date, limit: number): Promise<ImportJobRecord[]>;
-  addPart(importId: string, attempt: number, part: DatasetPart): Promise<void>;
-  listParts(importId: string, attempt: number): Promise<DatasetPart[]>;
+  /**
+   * Records batch `batch` of an attempt once: false when (import, attempt,
+   * batch) already exists (a worker retry). `part` is null when every record
+   * of the batch was dropped.
+   */
+  addPart(input: {
+    importId: string;
+    attempt: number;
+    batch: number;
+    part: DatasetPart | null;
+    dropped: number;
+  }): Promise<boolean>;
+  /** An attempt's parts in batch order, and the records its batches dropped. */
+  listParts(
+    importId: string,
+    attempt: number,
+  ): Promise<{ parts: DatasetPart[]; dropped: number }>;
 }
 
 // --- Runs --------------------------------------------------------------------
@@ -270,6 +285,7 @@ export interface RunRepository {
 }
 
 export interface MetricsRepository {
+  /** Idempotent on (run, attempt, step): a replay returns the stored point. */
   append(
     runId: string,
     attempt: number,

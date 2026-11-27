@@ -386,13 +386,27 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const expired = await store.imports.listExpiredLeases(clock.now(), 10);
       expect(expired.map((j) => j.id).sort()).toEqual([a.id, b.id].sort());
 
-      await store.imports.addPart(a.id, 1, part("i1"));
-      await store.imports.addPart(a.id, 1, part("i2"));
-      await store.imports.addPart(a.id, 2, part("i3"));
-      expect(
-        (await store.imports.listParts(a.id, 1)).map((p) => p.key),
-      ).toEqual(["i1", "i2"]);
-      expect(await store.imports.listParts(a.id, 3)).toEqual([]);
+      const add = (attempt: number, batch: number, key: string | null) =>
+        store.imports.addPart({
+          importId: a.id,
+          attempt,
+          batch,
+          part: key === null ? null : part(key),
+          dropped: 1,
+        });
+      expect(await add(1, 1, "i2")).toBe(true);
+      expect(await add(1, 0, "i1")).toBe(true);
+      expect(await add(1, 2, null)).toBe(true);
+      // A retried batch is stored once, whatever it carries.
+      expect(await add(1, 0, "i1-retry")).toBe(false);
+      expect(await add(2, 0, "i3")).toBe(true);
+      const attempt1 = await store.imports.listParts(a.id, 1);
+      expect(attempt1.parts.map((p) => p.key)).toEqual(["i1", "i2"]);
+      expect(attempt1.dropped).toBe(3);
+      expect(await store.imports.listParts(a.id, 3)).toEqual({
+        parts: [],
+        dropped: 0,
+      });
 
       const released = await store.imports.update(a.id, {
         worker_id: null,

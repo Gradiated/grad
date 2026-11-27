@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { z } from "@hono/zod-openapi";
 
 import type { AuthPrincipal } from "../adapters.js";
@@ -90,6 +92,14 @@ const leaseLost = (id: string): ApiError =>
     "lease_lost",
     `This worker no longer holds the lease on job '${id}' (expired, reclaimed, or finished). Stop work on it.`,
   );
+
+/** The id of record `index` of batch `seq`: the same on every retry of the batch. */
+const batchRecordId = (
+  job: { id: string; attempt: number },
+  seq: number,
+  index: number,
+): string =>
+  `rec_${createHash("sha256").update(`${job.id}:${job.attempt}:${seq}:${index}`).digest("hex").slice(0, 16)}`;
 
 export const createImportService = (
   deps: AppDependencies,
@@ -284,28 +294,41 @@ export const createImportService = (
           }
           return;
         }
+        // Deterministic ids keep a retried batch byte-identical.
         const record = parsed.data.id
           ? parsed.data
-          : { ...parsed.data, id: newId("rec").slice(0, 20) };
+          : { ...parsed.data, id: batchRecordId(job, body.seq, index) };
         Object.keys(record.scores ?? {}).forEach((key) => scores.add(key));
         accepted.push(record);
       });
 
       const rejected = body.records.length - accepted.length;
-      if (accepted.length > 0) {
-        const part = await writeRecordsPart(
-          storage,
-          `imports/${encodeURIComponent(job.workspace_id)}/${job.id}/${job.attempt}/${newId("part")}.jsonl`,
-          accepted,
-        );
-        await store.imports.addPart(job.id, job.attempt, part);
-      }
+      const part =
+        accepted.length > 0
+          ? await writeRecordsPart(
+              storage,
+              `imports/${encodeURIComponent(job.workspace_id)}/${job.id}/${job.attempt}/${body.seq}.jsonl`,
+              accepted,
+            )
+          : null;
+      const added = await store.imports.addPart({
+        importId: job.id,
+        attempt: job.attempt,
+        batch: body.seq,
+        part,
+        dropped: rejected,
+      });
 
       const updated = await store.imports.update(
         id,
         {
-          imported_count: job.imported_count + accepted.length,
-          dropped_count: job.dropped_count + rejected,
+          // Progress only: completion recounts from the parts.
+          ...(added
+            ? {
+                imported_count: job.imported_count + accepted.length,
+                dropped_count: job.dropped_count + rejected,
+              }
+            : {}),
           detected_scores: [...scores].sort(),
           lease_expires_at: addSeconds(
             clock.now(),
@@ -364,7 +387,10 @@ export const createImportService = (
         return toPublicImport(updated);
       }
 
-      const parts = await store.imports.listParts(job.id, job.attempt);
+      const { parts, dropped } = await store.imports.listParts(
+        job.id,
+        job.attempt,
+      );
       const completed = await store.transaction(async (tx) => {
         const { version } = await tx.datasets.appendVersion({
           datasetId: job.dataset_id,
@@ -375,7 +401,7 @@ export const createImportService = (
           release({
             status: "completed",
             imported_count: parts.reduce((sum, p) => sum + p.count, 0),
-            dropped_count: job.dropped_count + summary.dropped_count,
+            dropped_count: dropped + summary.dropped_count,
             detected_scores: [
               ...new Set([...job.detected_scores, ...summary.detected_scores]),
             ].sort(),

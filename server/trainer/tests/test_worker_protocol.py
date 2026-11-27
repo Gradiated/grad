@@ -391,6 +391,9 @@ class WorkerProtocolTests(unittest.TestCase):
             ]
         )
         srv.blobs["/blobs/objects"] = b'{"a": 1}\n'
+        # The first batch's response is lost after the server stored it: the
+        # worker re-posts the same batch (same seq), which the server dedupes.
+        srv.fail_next["records"] = [0]
         importer = StubImporter(batches=2, batch_size=3)
         result = self.worker(srv, importer=importer).run_once()
         self.assertEqual(result["status"], "completed")
@@ -398,7 +401,8 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(importer.sources[0]["format"], "jsonl")
         self.assertEqual(importer.sources[0]["content"], b'{"a": 1}\n')
         self.assertIsNone(importer.sources[0]["connector"])
-        self.assertEqual([len(b["records"]) for b in srv.bodies("records")], [3, 3])
+        self.assertEqual([len(b["records"]) for b in srv.bodies("records")], [3, 3, 3])
+        self.assertEqual([b["seq"] for b in srv.bodies("records")], [0, 0, 1])
         complete = srv.bodies("complete")[0]
         self.assertEqual(
             complete["import_summary"],
@@ -424,6 +428,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(
             [len(b["records"]) for b in srv.bodies("records")], [10_000, 1]
         )
+        self.assertEqual([b["seq"] for b in srv.bodies("records")], [0, 1])
 
     def test_idle_claim_returns_none(self) -> None:
         srv = self.server()

@@ -161,6 +161,7 @@ describe.skipIf(!target)("self-hosted stack (Postgres + S3)", () => {
     ).toBe(true);
     await worker.call(`/v1/trainer-jobs/${job!.id}/records`, {
       ...worker.ref(job!),
+      seq: 0,
       records: sftRecords(2),
     });
     const done = await worker.complete(job!, { status: "completed" });
