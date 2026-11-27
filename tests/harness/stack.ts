@@ -11,7 +11,10 @@
  *     [--database-url postgres://...]
  *
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
- *          "workspace_id","mode","worker","model_paths"}
+ *          "workspace_id","mode","worker","model_paths","fault_url"}
+ * `fault_url` is the same server behind tests/harness/fault-proxy.ts, which
+ * drops the response to the first attempt of every keyed POST (after the
+ * server committed it) so live tests can prove Idempotency-Key replays.
  * Trainer Python: $GRAD_TRAINER_PYTHON (default python3). Torch workers build
  * the tiny test models from server/trainer/tests/fixtures/tiny_models.py.
  */
@@ -26,6 +29,7 @@ import { parseArgs } from "node:util";
 
 import { startFakeCloudApi } from "../../server/api/test/fixtures/fake-cloud-api.js";
 import { startFakeOpenAI } from "../../server/api/test/fixtures/fake-openai.js";
+import { startFaultProxy, type FaultProxy } from "./fault-proxy.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -130,6 +134,7 @@ const main = async () => {
     ? await startFakeCloudApi({ serviceToken: "svc_e2e_token" })
     : undefined;
   let modelPaths: Record<string, string> = {};
+  let faultProxy: FaultProxy | undefined;
 
   let stopping = false;
   const stop = async (code = 0) => {
@@ -152,6 +157,7 @@ const main = async () => {
           }),
       ),
     );
+    await faultProxy?.close();
     await inference.close();
     await cloud?.close();
     rmSync(scratch, { recursive: true, force: true });
@@ -216,6 +222,7 @@ const main = async () => {
     );
     children.push(server);
     await waitReady(baseUrl, server);
+    faultProxy = await startFaultProxy(baseUrl);
 
     const python = process.env.GRAD_TRAINER_PYTHON ?? "python3";
     if (args.worker !== "none") {
@@ -251,6 +258,7 @@ const main = async () => {
         mode: cloud ? "cloud" : "self_hosted",
         worker: args.worker,
         model_paths: modelPaths,
+        fault_url: faultProxy.url,
       })}\n`,
     );
   } catch (error) {

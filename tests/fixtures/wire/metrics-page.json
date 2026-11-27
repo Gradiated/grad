@@ -81,5 +81,6 @@
       "attempt": 1
     }
   ],
-  "next_cursor": "WzZd"
+  "next_cursor": null,
+  "tail_cursor": "WzZd"
 }

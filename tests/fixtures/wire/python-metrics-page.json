@@ -14,7 +14,8 @@
       "tokens_per_sec": 309965.82241272193
     }
   ],
-  "next_cursor": "WzFd",
+  "next_cursor": null,
   "run_id": "run_674bf5d2f414690236a912d9",
-  "status": "completed"
+  "status": "completed",
+  "tail_cursor": "WzFd"
 }

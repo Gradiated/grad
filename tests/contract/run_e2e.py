@@ -263,19 +263,15 @@ def main() -> None:
 
         t = threading.Thread(target=run_env_worker, daemon=True)
         t.start()
-        dispatched = client.wire.dispatch_env_task(
-            {
-                "env_name": "e2e-env",
-                "task": {"prompt": "fix failing test"},
-                "model_id": "qwen/qwen3-8b",
-            }
+        dispatched = client.environments.dispatch(
+            "e2e-env", {"prompt": "fix failing test"}, model_id="qwen/qwen3-8b"
         )
         t.join(timeout=10.0)
         assert not t.is_alive(), "serve_environment thread timed out"
         if worker_errors:
             raise worker_errors[0]
         assert worker_done == [1]
-        env_task = client.wire.get_env_task(dispatched["id"])
+        env_task = client.environments.get_task(dispatched["id"])
         assert env_task["status"] == "completed"
         assert env_task["result"]["score"] == 1.0
         print("[py-e2e] PASS (all 6 v0 recipes, cartridge/1, evals+mining, env-serve)")
@@ -362,16 +358,12 @@ def main() -> None:
             stderr=subprocess.PIPE,
         )
         try:
-            dispatched_cli = client.wire.dispatch_env_task(
-                {
-                    "env_name": "cli-bridge-env",
-                    "task": {"prompt": "cli bridge check"},
-                    "model_id": "qwen/qwen3-8b",
-                }
+            dispatched_cli = client.environments.dispatch(
+                "cli-bridge-env", {"prompt": "cli bridge check"}, model_id="qwen/qwen3-8b"
             )
             cli_env_proc.wait(timeout=15)
             assert cli_env_proc.returncode == 0
-            cli_task = client.wire.get_env_task(dispatched_cli["id"])
+            cli_task = client.environments.get_task(dispatched_cli["id"])
             assert cli_task["status"] == "completed"
             assert cli_task["result"]["score"] == 1.0
         finally:
