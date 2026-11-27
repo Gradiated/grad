@@ -1616,6 +1616,20 @@ import json, os
 class Environment:
     def setup(self, task): pass
     def evaluate(self): return 1.0
+class _Eval(dict):
+    def wait(self):
+        self["status"] = os.environ.get("GRAD_TEST_EVAL_STATUS", "completed")
+        return self
+class _Evals:
+    def create(self, **kw):
+        with open(os.environ["GRAD_TEST_RECORD"], "w") as f:
+            json.dump({k: (v if k != "rubric" else repr(v)) for k, v in kw.items()}, f)
+        return _Eval(id="eval_py", name=kw.get("name", "x"), status="queued", samples=kw.get("samples", 1),
+                     summary=[{"model": m, "overall": 0.5, "ci_low": 0.4, "ci_high": 0.6, "tasks": 3} for m in kw["models"]])
+class Grad:
+    def __init__(self, base_url=None, api_key=None):
+        assert base_url, "base_url"
+        self.evals = _Evals()
 def serve_environment(env, *, name, base_url, api_key=None, concurrency=4, wait_ms=5000, max_tasks=None, worker_id=None):
     with open(os.environ["GRAD_TEST_RECORD"], "w") as f:
         json.dump({"type": type(env).__name__, "is_instance": isinstance(env, Environment), "name": name,
@@ -1711,6 +1725,151 @@ fn env_serve_instantiates_classes_and_passes_the_resolved_config() {
     );
     expect(&r, 2);
     let r = run(sb.grad(None), &["env", "check", "owner/env@1"]);
+    expect(&r, 2);
+}
+
+#[test]
+fn eval_with_a_python_rubric_runs_through_the_python_sdk() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let sb = Sandbox::new("pyeval");
+    let lib = fake_python_sdk(&sb);
+    let rec = sb.path("record.json");
+    std::fs::write(sb.path("rubric.py"), "rubric = 'my-rubric'\n").unwrap();
+    std::fs::write(sb.path("norubric.py"), "x = 1\n").unwrap();
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", &lib).env("GRAD_TEST_RECORD", &rec);
+    let r = run(
+        c,
+        &[
+            "eval",
+            "--name",
+            "py",
+            "--models",
+            "qwen/qwen3-8b,sql-agent@latest",
+            "--dataset",
+            "holdout",
+            "--rubric",
+            "./rubric.py",
+            "--samples",
+            "4",
+            "--temperature",
+            "0.7",
+            "--wait",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("sql-agent@latest") && r.stdout.contains("50.0%"),
+        "{}",
+        r.stdout
+    );
+    let got: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+    assert_eq!(got["rubric"], "'my-rubric'");
+    assert_eq!(got["samples"], 4);
+    assert_eq!(got["temperature"], 0.7);
+    assert_eq!(got["dataset"], "holdout");
+    assert!(
+        got.get("baseline").is_none(),
+        "unset options are not passed"
+    );
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", &lib)
+        .env("GRAD_TEST_RECORD", &rec)
+        .env("GRAD_TEST_EVAL_STATUS", "failed");
+    let r = run(
+        c,
+        &[
+            "--json",
+            "eval",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--rubric",
+            "rubric.py",
+            "--wait",
+        ],
+    );
+    expect(&r, 7);
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", &lib);
+    let r = run(
+        c,
+        &[
+            "eval",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--rubric",
+            "norubric.py",
+        ],
+    );
+    expect(&r, 1);
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", sb.path("empty"));
+    let r = run(
+        c,
+        &[
+            "eval",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--rubric",
+            "rubric.py",
+        ],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(None),
+        &[
+            "eval",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--rubric",
+            "rubric.py",
+            "--dry-run",
+        ],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(None),
+        &[
+            "eval",
+            "plan",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--rubric",
+            "rubric.py",
+        ],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(None),
+        &[
+            "eval",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--rubric",
+            "rubric.py",
+            "--python",
+            "/nonexistent/py",
+        ],
+    );
     expect(&r, 2);
 }
 

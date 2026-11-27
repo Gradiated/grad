@@ -11,6 +11,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[cfg(test)]
+use crate::models::RunStatus;
 use crate::models::{EvalRun, ImportJob, Run};
 
 /// Details of an HTTP error response from grad-server.
@@ -371,3 +373,163 @@ fn path_of(url: &str) -> String {
 
 /// Convenience alias.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(status: u16, code: &str) -> ApiErrorBody {
+        ApiErrorBody {
+            status,
+            code: code.into(),
+            title: "t".into(),
+            detail: "d".into(),
+            request_id: None,
+            errors: Some(
+                serde_json::json!([{"path": ["recipe", "lr"], "message": "bad"}, {"path": "x", "message": "y"}]),
+            ),
+            method: "POST".into(),
+            url: "http://h/v1/x".into(),
+            retry_after: None,
+        }
+    }
+
+    #[test]
+    fn status_mapping_and_codes() {
+        let cases = [
+            (401, "unauthorized", "unauthorized"),
+            (403, "x", "x"),
+            (404, "x", "x"),
+            (409, "x", "x"),
+            (413, "payload_too_large", "payload_too_large"),
+            (429, "rate_limited", "rate_limited"),
+            (501, "deploy_unavailable", "deploy_unavailable"),
+            (501, "inference_unavailable", "inference_unavailable"),
+            (502, "x", "x"),
+            (418, "teapot", "teapot"),
+        ];
+        for (s, c, want) in cases {
+            let e = Error::from_status(body(s, c));
+            assert_eq!(e.code(), want);
+            assert_eq!(e.status(), s);
+            assert!(e.to_string().contains("recipe.lr: bad"), "{}", e);
+        }
+        assert!(matches!(
+            Error::from_status(body(413, "x")),
+            Error::Validation(_)
+        ));
+        assert!(matches!(Error::from_status(body(418, "x")), Error::Api(_)));
+        assert!(Error::from_status(body(408, "x")).is_transient());
+        assert!(!Error::from_status(body(404, "x")).is_transient());
+    }
+
+    #[test]
+    fn local_errors_display_and_codes() {
+        let run = Run {
+            id: "run_1".into(),
+            name: "n".into(),
+            status: RunStatus::StoppedBudget,
+            error: Some("cap".into()),
+            ..Default::default()
+        };
+        let ev = EvalRun {
+            id: "e".into(),
+            status: crate::models::EvalStatus::Cancelled,
+            ..Default::default()
+        };
+        let job = ImportJob {
+            id: "imp".into(),
+            dataset: "d".into(),
+            error: Some("bad file".into()),
+            ..Default::default()
+        };
+        let cases: Vec<(Error, &str, &str)> = vec![
+            (
+                Error::Timeout {
+                    method: "GET".into(),
+                    url: "u".into(),
+                    after: None,
+                },
+                "timeout",
+                "timed out",
+            ),
+            (
+                Error::Decode {
+                    method: "GET".into(),
+                    url: "u".into(),
+                    message: "m".into(),
+                },
+                "decode_error",
+                "invalid response",
+            ),
+            (
+                Error::Redirect {
+                    method: "GET".into(),
+                    from: "a".into(),
+                    to: "b".into(),
+                    reason: "r".into(),
+                },
+                "redirect_refused",
+                "refusing",
+            ),
+            (
+                Error::Checksum {
+                    what: "w".into(),
+                    expected: "e".into(),
+                    actual: "a".into(),
+                },
+                "checksum_mismatch",
+                "expected e",
+            ),
+            (
+                Error::UnsafeArchive("x".into()),
+                "unsafe_archive",
+                "refusing to extract",
+            ),
+            (Error::RunFailed(Box::new(run)), "run_stopped_budget", "cap"),
+            (
+                Error::EvalFailed(Box::new(ev)),
+                "eval_cancelled",
+                "cancelled",
+            ),
+            (
+                Error::ImportFailed(Box::new(job)),
+                "import_failed",
+                "bad file",
+            ),
+            (
+                Error::WaitTimeout {
+                    what: "run".into(),
+                    id: "r".into(),
+                    status: "running".into(),
+                    after: Duration::from_secs(1),
+                },
+                "wait_timeout",
+                "keeps going",
+            ),
+            (Error::Config("c".into()), "config_error", "c"),
+            (Error::InvalidInput("i".into()), "invalid_input", "i"),
+            (
+                Error::io("/p", std::io::Error::other("boom")),
+                "io_error",
+                "/p: boom",
+            ),
+            (
+                Error::Connection {
+                    method: "GET".into(),
+                    url: "http://h:1/v1/m".into(),
+                    cause: "refused".into(),
+                },
+                "connection_error",
+                "could not reach http://h:1 (GET /v1/m): refused",
+            ),
+        ];
+        for (e, code, text) in cases {
+            assert_eq!(e.code(), code);
+            assert!(e.to_string().contains(text), "{} !~ {}", e, text);
+            assert_eq!(e.status(), 0);
+            assert!(e.request_id().is_none());
+        }
+        assert!(std::error::Error::source(&Error::io("/p", std::io::Error::other("x"))).is_some());
+    }
+}
