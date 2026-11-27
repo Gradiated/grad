@@ -44,6 +44,7 @@ import { planRun } from "../planner.js";
 import { assertSecretHost, loggerUrl } from "../secret-hosts.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./evals/planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
+import { ObjectNotFoundError } from "../storage/types.js";
 import type {
   ArtifactRecord,
   CheckpointRecord,
@@ -1372,12 +1373,20 @@ export const createRunLifecycle = (
       // the content-addressed artifacts/ prefix. Natural key (checkpoint,
       // name): promoting twice returns the first release.
       const storageKey = artifactKey(workspaceId, checkpoint.sha256);
-      await storage.copy(checkpoint.storage_key, storageKey);
+      // Its blob expired (retention) between the read and the copy: gone.
+      const copy = () =>
+        storage
+          .copy(checkpoint.storage_key, storageKey)
+          .catch((error: unknown) => {
+            if (error instanceof ObjectNotFoundError) {
+              throw notFound("checkpoint", checkpointId);
+            }
+            throw error;
+          });
+      await copy();
       const artifact = await store.transaction(async (tx) => {
         // A delete of another release on this bundle removed it since the copy.
-        if (!(await holdBlob(deps, storageKey))) {
-          await storage.copy(checkpoint.storage_key, storageKey);
-        }
+        if (!(await holdBlob(deps, storageKey))) await copy();
 
         return tx.artifacts.createRelease({
           workspaceId,
