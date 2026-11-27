@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import unittest
 from datetime import timedelta
 from typing import Any
@@ -151,9 +152,20 @@ class PostHogQuirks(Served):
     def test_survey_responses(self) -> None:
         p = PostHogProvider()
         base = {"created_at": "2026-11-27T10:00:00Z", "properties": {"$ai_trace_id": "t", "$survey_id": "srv"}}
-        responses = {"$survey_response_up": 1, "$survey_response_down": "2", "$survey_response_stars": 4, "$survey_response": 0.5, "$survey_response_text": "great"}
-        update = p.to_score_update({**base, "properties": {**base["properties"], **responses}})
-        self.assertEqual(update.scores, {"up": 1.0, "down": 0.0, "stars": 4.0, "srv": 0.5})
+        score = lambda **props: p.to_score_update({**base, "properties": {**base["properties"], **props}}).scores  # noqa: E731
+        # posthog-js lists the questions: the first is the LLM feedback survey's thumbs question.
+        questions = [{"id": "q-thumbs", "question": "Was this helpful?"}, {"id": "q-why", "question": "What went wrong?"}]
+        self.assertEqual(score(**{"$survey_questions": questions, "$survey_response": 2, "$survey_response_q-thumbs": 2, "$survey_response_q-why": "hedgehogs"}), {"thumbs": 0.0})
+        self.assertEqual(score(**{"$survey_questions": json.dumps(questions), "$survey_response_q-thumbs": "1"}), {"thumbs": 1.0})
+        # A manual capture (docs: user-feedback/manual-event-capture): the only numeric answer.
+        self.assertEqual(score(**{"$survey_response_0193": 1, "$survey_response_0194": "great"}), {"thumbs": 1.0})
+        self.assertEqual(score(**{"$survey_response": 2}), {"thumbs": 0.0})
+        # A 2 on a rating scale is not a thumbs down: other answers keep their value by question id.
+        rating = [{"id": "q-thumbs"}, {"id": "q-stars"}]
+        self.assertEqual(score(**{"$survey_questions": rating, "$survey_response_q-thumbs": 1, "$survey_response_q-stars": 2}), {"thumbs": 1.0, "q-stars": 2.0})
+        self.assertEqual(score(**{"$survey_response_a": 2, "$survey_response_b": 4}), {"a": 2.0, "b": 4.0})
+        self.assertEqual(score(**{"$survey_questions": rating, "$survey_response_q-thumbs": 4}), {"q-thumbs": 4.0})
+        self.assertEqual(score(**{"$survey_response": 0.5}), {"srv": 0.5})
         self.assertIsNone(p.to_score_update({"properties": {"$survey_response_x": 1}}))
         self.assertIsNone(p.to_score_update({**base, "properties": {"$ai_trace_id": "t", "$survey_response_x": "meh"}}))
 

@@ -50,6 +50,10 @@ class ProviderFixture:
     def add_score(self, trace_id: str, name: str, value: float, at: datetime) -> None:
         raise NotImplementedError
 
+    def synced_score(self, name: str) -> str:
+        """The score name a score added with ``add_score(name=...)`` syncs as."""
+        return name
+
     def add_correction(self, trace_id: str, answer: str, at: datetime) -> None:
         """A fixed answer for a trace, the way the provider's feedback API records it."""
         raise NotImplementedError(f"{self.name} has no corrections")

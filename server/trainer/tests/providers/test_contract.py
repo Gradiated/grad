@@ -87,7 +87,7 @@ class ProviderContract:
         self.fx.add_score(self.fx.trace_id(0), "resolved", 1.0, NOW + timedelta(minutes=20))
         second, wm2 = self.sync(wm.watermark, now=LATER)
         merged = {r["id"]: r for r in merge_records(first + second)}
-        self.assertEqual(merged[self.fx.trace_id(0)]["scores"], {"resolved": 1.0})
+        self.assertEqual(merged[self.fx.trace_id(0)]["scores"], {self.fx.synced_score("resolved"): 1.0})
         self.assertEqual(len(merged), 5)
         self.assertNotIn("scores", merged[self.fx.trace_id(1)])
         third, _ = self.sync(wm2.watermark, now=LATER + timedelta(minutes=30))
@@ -100,7 +100,7 @@ class ProviderContract:
         self.assertEqual(records[0], RESET_RECORD, "a rebuild starts with the reset marker")
         merged = {r["id"]: r for r in merge_records([{"id": "stale", "messages": [{"role": "user", "content": "x"}]}, *records])}
         self.assertEqual(sorted(merged), self.all_ids())
-        self.assertEqual(merged[self.fx.trace_id(2)]["scores"], {"resolved": 1.0})
+        self.assertEqual(merged[self.fx.trace_id(2)]["scores"], {self.fx.synced_score("resolved"): 1.0})
         self.assertTrue(result.watermark["traces"])
 
     def test_retries_429_and_5xx(self) -> None:

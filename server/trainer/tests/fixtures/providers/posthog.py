@@ -33,8 +33,19 @@ class PostHogFixture(ProviderFixture):
         }
         self.traces.append({"uuid": f"evt-{i}", "event": "$ai_generation", "timestamp": iso(at), "created_at": iso(at), "distinct_id": "user-7", "properties": props})
 
+    def synced_score(self, name: str) -> str:
+        return "thumbs"  # the LLM feedback survey's first question, whatever its id
+
     def add_score(self, trace_id: str, name: str, value: float, at: datetime) -> None:
-        props = {"$survey_id": "srv-1", f"$survey_response_{name}": 1 if value >= 1 else 2, "$ai_trace_id": trace_id}
+        # The thumbs question (a UUID id, listed first in $survey_questions) and a text follow-up.
+        thumbs, why = f"0193-{name}", f"0194-{name}"
+        props = {
+            "$survey_id": "srv-1",
+            "$survey_questions": [{"id": thumbs, "question": "Was this helpful?"}, {"id": why, "question": "What went wrong?"}],
+            f"$survey_response_{thumbs}": 1 if value >= 1 else 2,
+            f"$survey_response_{why}": "" if value >= 1 else "it made things up",
+            "$ai_trace_id": trace_id,
+        }
         self.scores.append({"uuid": f"evt-s{len(self.scores)}", "event": "survey sent", "timestamp": iso(at), "created_at": iso(at), "distinct_id": "user-7", "properties": props})
 
     def respond(self, req: Req) -> tuple[int, Any, dict[str, str]]:

@@ -3,8 +3,9 @@ API, ``POST /api/projects/{project}/query/``, paged by ``timestamp`` (PostHog re
 personal API keys and asks for keyset paging on ``timestamp``).
 
 A trace's record is its latest generation (each generation carries the conversation so far),
-keyed by ``$ai_trace_id``. Thumbs survey responses (1 = up, 2 = down) become 1.0 / 0.0; other
-numeric responses keep their value. Feedback is filtered on ``created_at`` (ingestion time), so
+keyed by ``$ai_trace_id``. PostHog's LLM feedback survey starts with a thumbs question
+(1 = up, 2 = down): that answer becomes the score ``thumbs`` (1.0 / 0.0). Any other numeric
+answer keeps its value under its question id; text answers are not scores. Feedback is filtered on ``created_at`` (ingestion time), so
 a late event with an old client timestamp still lands within the re-scan window.
 
 Secret: a personal API key with Query Read (Bearer). ``project`` is the numeric project id
@@ -100,20 +101,45 @@ class PostHogProvider(Provider):
         props = self._props(raw)
         if not props.get("$ai_trace_id"):
             return None
-        scores: dict[str, float] = {}
+        responses: dict[str, float] = {}  # question id ("" = the legacy first-question key) -> number
         for key, value in props.items():
-            if not str(key).startswith("$survey_response"):
-                continue
-            number = score_value(value)
-            if number is None and isinstance(value, str):
-                try:
-                    number = float(value)
-                except ValueError:
-                    continue
-            if number is None:
-                continue
-            name = str(key).removeprefix("$survey_response").lstrip("_") or str(props.get("$survey_id") or "survey")
-            scores[name] = THUMBS.get(int(number), number) if number.is_integer() else number
+            if str(key).startswith("$survey_response"):
+                number = _number(value)
+                if number is not None:
+                    responses[str(key).removeprefix("$survey_response").lstrip("_")] = number
+        thumbs = _thumbs_question(props, responses)
+        scores: dict[str, float] = {}
+        for question, number in responses.items():
+            if question == thumbs and number in THUMBS:
+                scores["thumbs"] = THUMBS[int(number)]
+            else:
+                scores[question or str(props.get("$survey_id") or "survey")] = number
         if not scores:
             return None
         return ScoreUpdate(str(props["$ai_trace_id"]), scores, updated_at=iso_or_none(raw.get("created_at") or raw.get("timestamp")))
+
+
+def _number(value: Any) -> float | None:
+    number = score_value(value)
+    if number is None and isinstance(value, str):
+        try:
+            number = float(value)
+        except ValueError:
+            return None
+    return number
+
+
+def _thumbs_question(props: dict[str, Any], responses: dict[str, float]) -> str | None:
+    """The thumbs question of an LLM-trace feedback survey: its first question. That is
+    ``$survey_questions[0]`` when the event lists the questions (posthog-js does), the legacy
+    ``$survey_response`` key, or else the only numeric answer (a manual capture sends the
+    thumbs answer and, at most, a follow-up text answer)."""
+    questions = maybe_json(props.get("$survey_questions"))
+    if isinstance(questions, list) and questions and isinstance(questions[0], dict) and questions[0].get("id"):
+        first = str(questions[0]["id"])
+        if first in responses:
+            responses.pop("", None)  # the legacy key repeats the first answer
+            return first
+    if "" in responses:
+        return ""
+    return next(iter(responses)) if len(responses) == 1 else None
