@@ -7,6 +7,8 @@
 //!   connection errors; a keyed POST also on 409 with `Retry-After` (the first
 //!   attempt still running). Unkeyed POSTs (internal worker endpoints) only on
 //!   429 and on connection failures where the request never left the client.
+//!   A 429 `queue_limit` (the workspace's queued-jobs cap) is never retried:
+//!   it returns `Error::QueueLimit` at once.
 //! - `Retry-After` (seconds) is honoured, capped at 60 s.
 //! - Redirects are followed by hand: only same-origin GET/HEAD redirects are
 //!   followed, so a bearer token never reaches another origin and a POST is
@@ -443,7 +445,9 @@ impl Transport {
                     }
                     let err = self.problem(resp, &method, &url).await;
                     let ra = err.api().and_then(|b| b.retry_after);
-                    if attempt < self.max_retries && retryable_status(req, status, ra) {
+                    // 429 queue_limit is the workspace's queued-jobs cap, not rate limiting.
+                    let capped = matches!(err, Error::QueueLimit(_));
+                    if !capped && attempt < self.max_retries && retryable_status(req, status, ra) {
                         Some(ra.map(|d| d.min(MAX_RETRY_AFTER)))
                     } else {
                         return Err(err);

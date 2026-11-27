@@ -239,6 +239,28 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(post(client), {"id": "t"})
         self.assertEqual(len(sender.sent), 3)
 
+    def test_queue_limit_is_never_retried(self) -> None:
+        # 429 queue_limit is the workspace's queued-jobs cap, not rate limiting:
+        # retrying can't succeed until queued jobs start, so it raises at once.
+        run = grad_fixture("python-run-queued.json")
+        full = problem(429, "queue_limit")
+        for route, call in (
+            ("POST /v1/runs", lambda c: c.runs.create("support", name="a", recipe={"kind": "sft"})),
+            ("POST /v1/raw", lambda c: c._transport.request("POST", "/v1/raw", json_body={})),
+            ("GET /v1/runs/x", lambda c: c.runs.get("x")),
+        ):
+            with self.subTest(route=route):
+                client, sender, clock = make_client({route: [full, json_reply(run, 202)]})
+                with self.assertRaises(grad.QueueLimitError) as ctx:
+                    call(client)
+                self.assertEqual(len(sender.sent), 1)
+                self.assertEqual(clock.sleeps, [])
+                self.assertIsInstance(ctx.exception, grad.RateLimitError)
+                self.assertEqual((ctx.exception.status, ctx.exception.code), (429, "queue_limit"))
+        client, sender, _ = make_client({"POST /v1/runs": [problem(429, "rate_limited"), json_reply(run, 202)]})
+        client.runs.create("support", name="a", recipe={"kind": "sft"})
+        self.assertEqual(len(sender.sent), 2, "other 429s are still retried")
+
     def test_connection_errors_and_timeouts(self) -> None:
         client, sender, _ = make_client({"GET /v1/base-models": refused()})
         with self.assertRaises(grad.APIConnectionError) as ctx:

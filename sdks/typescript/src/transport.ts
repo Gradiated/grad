@@ -98,6 +98,12 @@ export class NotFoundError extends APIError {}
 export class ConflictError extends APIError {}
 export class ValidationError extends APIError {}
 export class RateLimitError extends APIError {}
+/**
+ * 429 `queue_limit`: the workspace already has as many queued jobs as it may
+ * (`GRAD_MAX_QUEUED_PER_WORKSPACE`). A hard cap, not rate limiting, so it is never
+ * retried: wait for queued jobs to start, or cancel some, then create the job again.
+ */
+export class QueueLimitError extends RateLimitError {}
 export class ServerError extends APIError {}
 /** 501 `inference_unavailable`: no inference endpoint is configured, so evals cannot generate outputs. */
 export class InferenceUnavailableError extends APIError {}
@@ -155,6 +161,7 @@ export const parseRetryAfterMs = (
 
 const errorClassFor = (status: number, code: string): typeof APIError => {
   if (code === "inference_unavailable") return InferenceUnavailableError;
+  if (status === 429 && code === "queue_limit") return QueueLimitError;
   if (status === 400) return BadRequestError;
   if (status === 401) return AuthenticationError;
   if (status === 403) return PermissionDeniedError;
@@ -644,7 +651,9 @@ export class Transport implements TransportLike {
         const error = makeAPIError(response.status, response.headers, text, { method, url, apiKeyConfigured: authed });
         // 409 + Retry-After on a keyed request: the first attempt is still running server-side.
         const inProgress = response.status === 409 && keyed && error.retryAfterMs !== undefined;
-        const retryable = (RETRY_STATUSES.has(response.status) && (idempotent || response.status === 429)) || inProgress;
+        // 429 queue_limit is the workspace's queued-jobs cap, not rate limiting: never retried.
+        const capped = error instanceof QueueLimitError;
+        const retryable = !capped && ((RETRY_STATUSES.has(response.status) && (idempotent || response.status === 429)) || inProgress);
         if (retryable && attempt < maxRetries) {
           const retryAfter = error.retryAfterMs;
           if (retryAfter === undefined || retryAfter <= MAX_RETRY_AFTER_MS) {

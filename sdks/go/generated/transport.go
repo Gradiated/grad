@@ -101,6 +101,11 @@ type ValidationError struct{ *APIError }
 // RateLimitError is a 429 response.
 type RateLimitError struct{ *APIError }
 
+// QueueLimitError is a 429 queue_limit response: the workspace already has as many queued jobs as
+// it may (GRAD_MAX_QUEUED_PER_WORKSPACE). It is a hard cap, not rate limiting, so it is never
+// retried. It unwraps to *RateLimitError, so errors.As matches either.
+type QueueLimitError struct{ *RateLimitError }
+
 // ServerError is a 5xx response.
 type ServerError struct{ *APIError }
 
@@ -114,6 +119,7 @@ func (e *NotFoundError) Unwrap() error             { return e.APIError }
 func (e *ConflictError) Unwrap() error             { return e.APIError }
 func (e *ValidationError) Unwrap() error           { return e.APIError }
 func (e *RateLimitError) Unwrap() error            { return e.APIError }
+func (e *QueueLimitError) Unwrap() error           { return e.RateLimitError }
 func (e *ServerError) Unwrap() error               { return e.APIError }
 func (e *InferenceUnavailableError) Unwrap() error { return e.APIError }
 
@@ -268,6 +274,8 @@ func NewAPIError(status int, header http.Header, body []byte, method, rawURL str
 	switch {
 	case code == "inference_unavailable":
 		return &InferenceUnavailableError{base}
+	case status == http.StatusTooManyRequests && code == "queue_limit":
+		return &QueueLimitError{&RateLimitError{base}}
 	case status == http.StatusBadRequest:
 		return &BadRequestError{base}
 	case status == http.StatusUnauthorized:
@@ -661,7 +669,9 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 			delay, hinted := ParseRetryAfter(resp.Header, time.Now())
 			// 409 + Retry-After on a keyed request: the first attempt is still running server-side.
 			inProgress := resp.StatusCode == http.StatusConflict && keyed && hinted
-			if ((retryableStatus(resp.StatusCode) && (retrySafe || resp.StatusCode == http.StatusTooManyRequests)) || inProgress) && try < maxRetries {
+			// 429 queue_limit is the workspace's queued-jobs cap, not rate limiting: never retried.
+			_, capped := apiErr.(*QueueLimitError)
+			if !capped && ((retryableStatus(resp.StatusCode) && (retrySafe || resp.StatusCode == http.StatusTooManyRequests)) || inProgress) && try < maxRetries {
 				if !hinted {
 					delay = t.Backoff(try)
 				}

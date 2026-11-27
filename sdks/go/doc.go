@@ -24,7 +24,8 @@
 // *RateLimitError, *RunFailedError, *ArtifactImportFailedError or
 // *ChecksumMismatchError. Idempotent requests are retried twice on 408, 429
 // and 5xx with jittered backoff honouring Retry-After; POSTs only on 429 or
-// when the connection never opened. Redirects that leave the API origin are
+// when the connection never opened. A 429 queue_limit (the workspace's
+// queued-jobs cap) is never retried: it returns *QueueLimitError. Redirects that leave the API origin are
 // refused so the API key is never sent elsewhere.
 //
 // The generated package (github.com/Gradiated/grad/sdks/go/generated), exposed

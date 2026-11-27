@@ -98,7 +98,8 @@ Every error unwraps to `*grad.GradError` (`Status`, `Code`, `RequestID`); use
 `errors.As` with `*grad.NotFoundError`, `*grad.ValidationError`,
 `*grad.RateLimitError`, `*grad.ArtifactImportFailedError`, `*grad.RunFailedError`
 and friends. Requests retry twice on 408/429/5xx with jittered backoff
-honouring `Retry-After`; every POST carries one `Idempotency-Key` (a UUIDv4, or
+honouring `Retry-After`, except a 429 `queue_limit` (the workspace's queued-jobs cap), which
+returns `*grad.QueueLimitError` at once; every POST carries one `Idempotency-Key` (a UUIDv4, or
 `generated.WithIdempotencyKey` on `client.API` calls) across its retries, so the server replays the
 first response instead of running it twice. Redirects that leave the API origin
 are refused.

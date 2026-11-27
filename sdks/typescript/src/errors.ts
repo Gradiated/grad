@@ -13,6 +13,7 @@ export {
   InferenceUnavailableError,
   NotFoundError,
   PermissionDeniedError,
+  QueueLimitError,
   RateLimitError,
   RedirectError,
   ResponseDecodeError,

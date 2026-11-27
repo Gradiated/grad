@@ -220,7 +220,7 @@
       }
     },
     {
-      "name": "429 queue_limit (the workspace's queued-jobs cap)",
+      "name": "429 queue_limit (the workspace's queued-jobs cap: a hard limit, never retried)",
       "status": 429,
       "headers": {
         "content-type": "application/problem+json",
@@ -235,11 +235,11 @@
         "request_id": "req_queue"
       },
       "expect": {
-        "class": "RateLimitError",
+        "class": "QueueLimitError",
         "status": 429,
         "code": "queue_limit",
         "request_id": "req_queue",
-        "retryable": true
+        "retryable": false
       }
     },
     {

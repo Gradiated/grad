@@ -36,6 +36,9 @@ type (
 	ValidationError = generated.ValidationError
 	// RateLimitError is a 429 response.
 	RateLimitError = generated.RateLimitError
+	// QueueLimitError is 429 queue_limit: the workspace's queued-jobs cap. Never retried; it
+	// unwraps to *RateLimitError.
+	QueueLimitError = generated.QueueLimitError
 	// ServerError is a 5xx response.
 	ServerError = generated.ServerError
 	// InferenceUnavailableError is 501 inference_unavailable: no inference endpoint is configured.

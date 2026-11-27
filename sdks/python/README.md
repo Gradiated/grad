@@ -115,7 +115,8 @@ authentication). A trailing `/v1` on the base URL is dropped with a warning. Als
 Every error subclasses `grad.GradError`. HTTP errors are `grad.GradAPIError` subclasses carrying
 `status`, `code`, `detail`, `request_id`, the method and URL: `AuthenticationError` (401),
 `PermissionDeniedError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationError`
-(422, with field `errors`), `RateLimitError` (429), `InferenceUnavailableError` and
+(422, with field `errors`), `RateLimitError` (429; its subclass `QueueLimitError` is the
+workspace's queued-jobs cap, raised at once and never retried), `InferenceUnavailableError` and
 `FeatureUnavailableError` (501), `ServerError` (5xx). Network failures raise
 `APIConnectionError` / `APITimeoutError`; `wait()` raises `RunFailedError` (code `run_failed`,
 `run_cancelled` or `run_stopped_budget`: anything but `completed`), `EvalFailedError`,

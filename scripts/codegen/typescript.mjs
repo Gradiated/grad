@@ -19,7 +19,7 @@ const RESERVED_LOCALS = new Set(["body", "params", "options", "path", "query", "
 
 const RESERVED_TYPE_NAMES = new Set(
   (
-    "Record Array Promise Date Error Map Set Object String Number Boolean Symbol Function Uint8Array ReadableStream Response Request Headers Blob URL AbortSignal Partial Required Readonly Pick Omit Exclude Extract NonNullable ReturnType Iterable AsyncIterable AsyncGenerator JSON Math Transport ApiClient RequestOptions StreamOptions SSEOptions RawResponse ServerSentEvent CodecNode CodecTable ResponseInfo GradError APIError TransportLike RequestSpec TransportOptions Sleep FieldError GradErrorInit APIErrorInit ErrorContext BadRequestError AuthenticationError PermissionDeniedError NotFoundError ConflictError ValidationError RateLimitError ServerError DeployUnavailableError InferenceUnavailableError APIConnectionError APITimeoutError APIUserAbortError RedirectError ResponseDecodeError CODEC"
+    "Record Array Promise Date Error Map Set Object String Number Boolean Symbol Function Uint8Array ReadableStream Response Request Headers Blob URL AbortSignal Partial Required Readonly Pick Omit Exclude Extract NonNullable ReturnType Iterable AsyncIterable AsyncGenerator JSON Math Transport ApiClient RequestOptions StreamOptions SSEOptions RawResponse ServerSentEvent CodecNode CodecTable ResponseInfo GradError APIError TransportLike RequestSpec TransportOptions Sleep FieldError GradErrorInit APIErrorInit ErrorContext BadRequestError AuthenticationError PermissionDeniedError NotFoundError ConflictError ValidationError RateLimitError QueueLimitError ServerError DeployUnavailableError InferenceUnavailableError APIConnectionError APITimeoutError APIUserAbortError RedirectError ResponseDecodeError CODEC"
   ).split(" "),
 );
 

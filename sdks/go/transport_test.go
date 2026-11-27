@@ -47,6 +47,7 @@ func matchClass(err error, class string) bool {
 		"ConflictError":             new(*grad.ConflictError),
 		"ValidationError":           new(*grad.ValidationError),
 		"RateLimitError":            new(*grad.RateLimitError),
+		"QueueLimitError":           new(*grad.QueueLimitError),
 		"ServerError":               new(*grad.ServerError),
 		"InferenceUnavailableError": new(*grad.InferenceUnavailableError),
 	}
@@ -242,6 +243,26 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 		var ce *grad.ConflictError
 		if !errors.As(err, &ce) || g.count("POST", "/v1/runs") != 1 {
 			t.Fatalf("err = %v, requests = %d", err, g.count("POST", "/v1/runs"))
+		}
+	})
+	t.Run("429 queue_limit is never retried", func(t *testing.T) {
+		// The workspace's queued-jobs cap, not rate limiting: retrying can't succeed.
+		f := newFake(t, map[string]route{"POST /v1/runs": sequence(problem(429, "queue_limit"), jsonBody(202, wire(t, "run-queued.json")))})
+		c, clk := f.client()
+		_, err := c.Runs.Create(ctx, grad.RunParams{Dataset: grad.DatasetName("d"), Name: "n", Recipe: grad.SFTRecipe{}}).Result()
+		var ql *grad.QueueLimitError
+		var rl *grad.RateLimitError
+		if !errors.As(err, &ql) || !errors.As(err, &rl) || ql.Code != "queue_limit" || ql.Status != 429 {
+			t.Fatalf("err = %T %v", err, err)
+		}
+		if n := f.count("POST", "/v1/runs"); n != 1 || len(clk.Sleeps()) != 0 {
+			t.Fatalf("POST sent %d times, sleeps %v", n, clk.Sleeps())
+		}
+		g := newFake(t, map[string]route{"POST /v1/runs": problem(429, "queue_limit")})
+		c2, _ := g.client()
+		err = c2.API.T.DoJSON(ctx, generated.RequestSpec{Method: "POST", Path: "/v1/runs", Body: map[string]any{}}, nil)
+		if !errors.As(err, &ql) || g.count("POST", "/v1/runs") != 1 {
+			t.Fatalf("unkeyed: err = %v, requests = %d", err, g.count("POST", "/v1/runs"))
 		}
 	})
 	t.Run("unkeyed POST 500 is not retried", func(t *testing.T) {

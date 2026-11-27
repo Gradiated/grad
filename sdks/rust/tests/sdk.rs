@@ -307,6 +307,37 @@ async fn posts_retry_on_429_and_honour_retry_after() {
 }
 
 #[tokio::test]
+async fn queue_limit_is_never_retried() {
+    // The workspace's queued-jobs cap, not rate limiting: retrying can't succeed.
+    let srv = MockServer::start(|_| {
+        Reply::problem(
+            429,
+            "queue_limit",
+            "This workspace already has 500 queued jobs.",
+        )
+    });
+    let c = client(&srv.url);
+    let e = c
+        .artifacts()
+        .import_hf(
+            "hf://acme/lora",
+            &ArtifactHfOptions {
+                base: "test/tiny-qwen3".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::QueueLimit(_)), "{:?}", e);
+    assert_eq!((e.status(), e.code().as_str()), (429, "queue_limit"));
+    assert!(!e.is_transient());
+    assert_eq!(srv.count("POST", "/v1/artifact-imports"), 1);
+    let e = c.runs().get("r1").await.unwrap_err();
+    assert!(matches!(e, Error::QueueLimit(_)), "{:?}", e);
+    assert_eq!(srv.count("GET", "/v1/runs/r1"), 1);
+}
+
+#[tokio::test]
 async fn retries_stop_after_max_retries() {
     let srv = MockServer::start(|_| Reply::problem(503, "down", "down"));
     let c = client(&srv.url).with_max_retries(1);

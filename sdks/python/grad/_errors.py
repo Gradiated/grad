@@ -43,6 +43,7 @@ __all__ = [
     "PaginationLoopError",
     "PayloadTooLargeError",
     "PermissionDeniedError",
+    "QueueLimitError",
     "RateLimitError",
     "RunFailedError",
     "ScorerError",
@@ -339,6 +340,15 @@ class RateLimitError(GradAPIError):
         return parse_retry_after(self.headers.get("retry-after"))
 
 
+class QueueLimitError(RateLimitError):
+    """429 ``queue_limit``: the workspace already has as many queued jobs as it may.
+
+    This is a hard per-workspace cap (``GRAD_MAX_QUEUED_PER_WORKSPACE``), not rate
+    limiting, so the SDK never retries it. Wait for queued jobs to start, or cancel
+    some, then create the job again.
+    """
+
+
 class FeatureUnavailableError(GradAPIError):
     """501: the server does not offer this capability in its current configuration."""
 
@@ -365,6 +375,7 @@ _STATUS_CLASSES: dict[int, type[GradAPIError]] = {
 
 _CODE_CLASSES: dict[str, type[GradAPIError]] = {
     "inference_unavailable": InferenceUnavailableError,
+    "queue_limit": QueueLimitError,
 }
 
 _FIELD_RE = re.compile(r"^([A-Za-z0-9_.\[\]-]+): (.+)$")

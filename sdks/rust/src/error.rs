@@ -97,6 +97,10 @@ pub enum Error {
     Validation(Box<ApiErrorBody>),
     /// 429: rate limited (already retried with backoff).
     RateLimit(Box<ApiErrorBody>),
+    /// 429 `queue_limit`: the workspace already has as many queued jobs as it
+    /// may (`GRAD_MAX_QUEUED_PER_WORKSPACE`). A hard cap, not rate limiting, so
+    /// it is never retried: wait for queued jobs to start, or cancel some.
+    QueueLimit(Box<ApiErrorBody>),
     /// 501 `inference_unavailable`: no inference endpoint is configured for evals.
     InferenceUnavailable(Box<ApiErrorBody>),
     /// Any other 501: a capability this server has not configured
@@ -184,6 +188,7 @@ impl Error {
             | Error::Conflict(b)
             | Error::Validation(b)
             | Error::RateLimit(b)
+            | Error::QueueLimit(b)
             | Error::InferenceUnavailable(b)
             | Error::FeatureUnavailable(b)
             | Error::Server(b)
@@ -260,6 +265,7 @@ impl Error {
         let body = Box::new(body);
         match (body.status, body.code.as_str()) {
             (_, "inference_unavailable") => Error::InferenceUnavailable(body),
+            (429, "queue_limit") => Error::QueueLimit(body),
             (401, _) => Error::Authentication(body),
             (403, _) => Error::PermissionDenied(body),
             (404, _) => Error::NotFound(body),
@@ -282,6 +288,7 @@ impl fmt::Display for Error {
             | Error::Conflict(b)
             | Error::Validation(b)
             | Error::RateLimit(b)
+            | Error::QueueLimit(b)
             | Error::InferenceUnavailable(b)
             | Error::FeatureUnavailable(b)
             | Error::Server(b)
@@ -466,6 +473,12 @@ mod tests {
             Error::from_status(body(501, "source_unavailable")),
             Error::FeatureUnavailable(_)
         ));
+        assert!(matches!(
+            Error::from_status(body(429, "queue_limit")),
+            Error::QueueLimit(_)
+        ));
+        assert!(!Error::from_status(body(429, "queue_limit")).is_transient());
+        assert!(Error::from_status(body(429, "rate_limited")).is_transient());
         assert!(Error::from_status(body(408, "x")).is_transient());
         assert!(!Error::from_status(body(404, "x")).is_transient());
     }

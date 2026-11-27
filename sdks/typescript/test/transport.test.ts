@@ -122,6 +122,24 @@ describe("retries", () => {
     expect(clock.sleeps).toEqual([2000]);
   });
 
+  it("never retries 429 queue_limit (the workspace's queued-jobs cap)", async () => {
+    const full = () => json({ code: "queue_limit", title: "Too many queued jobs", detail: "This workspace already has 500 queued jobs." }, 429);
+    for (const spec of [
+      { method: "POST", path: "/v1/runs", json: {}, idempotent: true },
+      { method: "POST", path: "/v1/runs", json: {} },
+      { method: "GET", path: "/v1/runs" },
+    ] as const) {
+      const clock = new FakeClock();
+      const server = new FakeServer().on(spec.method, spec.path, full(), json({ id: "run_1" }, 202));
+      const error = await transport(server, clock).json(spec).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(errors.QueueLimitError);
+      expect(error).toBeInstanceOf(RateLimitError);
+      expect((error as APIError).code).toBe("queue_limit");
+      expect(server.calls).toHaveLength(1);
+      expect(clock.sleeps).toEqual([]);
+    }
+  });
+
   it("retries idempotent GETs on 502/503/504 with exponential backoff, up to 2 retries", async () => {
     const clock = new FakeClock();
     const server = new FakeServer().on("GET", "/v1/runs", json({}, 503), json({}, 502), json({}, 504));

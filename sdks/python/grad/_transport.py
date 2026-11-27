@@ -10,7 +10,9 @@ HTTP itself is ``httpx`` (pooling, proxies, streaming). This module adds the pol
   so the server replays the first response instead of starting (and billing) a second
   run. A keyed request that gets 409 with ``Retry-After`` (the first attempt still
   running) is retried too. Other POSTs are retried only on 429 and when the
-  connection failed before anything was sent.
+  connection failed before anything was sent. A 429 ``queue_limit`` (the
+  workspace's queued-jobs cap) is never retried: it raises
+  :class:`grad.QueueLimitError` at once.
 * Redirects are never followed: grad-server does not redirect, so any 3xx raises
   :class:`grad.UnexpectedRedirectError` and the credentials stay with the API origin.
 * Every request carries ``User-Agent: grad-python/<version>`` and an
@@ -101,6 +103,16 @@ def quote_path_param(value: Any, name: str) -> str:
 def _is_json(headers: Mapping[str, str]) -> bool:
     ctype = headers.get("content-type", "")
     return not ctype or "json" in ctype
+
+
+def _problem_code(body: bytes) -> str | None:
+    """The problem+json ``code`` of an error body, if it has one."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    code = parsed.get("code") if isinstance(parsed, dict) else None
+    return code if isinstance(code, str) else None
 
 
 def _new_request_id() -> str:
@@ -244,7 +256,11 @@ class Transport:
             finally:
                 resp.close()
             retry_after = parse_retry_after(resp.headers.get("retry-after"))
-            if replayable and self._retry_status(method, resp.status_code, attempt, keyed=keyed, retry_after=retry_after):
+            if (
+                replayable
+                and not (resp.status_code == 429 and _problem_code(data) == "queue_limit")
+                and self._retry_status(method, resp.status_code, attempt, keyed=keyed, retry_after=retry_after)
+            ):
                 self.clock.sleep(self._backoff(attempt, retry_after))
                 attempt += 1
                 continue

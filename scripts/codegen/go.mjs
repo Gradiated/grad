@@ -23,7 +23,7 @@ const GO_RESERVED_LOCALS = new Set(
   "any bool byte comparable complex64 complex128 error float32 float64 int int8 int16 int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr true false iota nil append cap clear close complex copy delete imag len make max min new panic print println real recover ctx c body params opts out err q h path url fmt http json context strconv time spec".split(" "),
 );
 const GO_RESERVED_TYPES = new Set(
-  "Client Transport Config RequestSpec RequestOption ResponseInfo GradError APIError FieldError BadRequestError AuthenticationError PermissionDeniedError NotFoundError ConflictError ValidationError RateLimitError ServerError DeployUnavailableError InferenceUnavailableError ConnectionError TimeoutError RedirectError DecodeError StreamResponse SSEEvent SSEStream NewClient NewTransport Ptr".split(" "),
+  "Client Transport Config RequestSpec RequestOption ResponseInfo GradError APIError FieldError BadRequestError AuthenticationError PermissionDeniedError NotFoundError ConflictError ValidationError RateLimitError QueueLimitError ServerError DeployUnavailableError InferenceUnavailableError ConnectionError TimeoutError RedirectError DecodeError StreamResponse SSEEvent SSEStream NewClient NewTransport Ptr".split(" "),
 );
 
 /** Pascal-cases with Go initialisms: run_id -> RunID, max_cost_usd -> MaxCostUSD, hf_repo -> HFRepo. */
