@@ -278,6 +278,8 @@ class Model(APIObject):
     max_context_tokens: int | None = None
     template_revision: str | None = None
     calibrated_lrs: dict[str, float] = field(default_factory=dict)
+    min_gpu_memory_gb: float | None = None
+    """GPU memory training this base needs at the recipe defaults (v0 trains on one 80 GB GPU)."""
 
     def __str__(self) -> str:
         return self.id
@@ -500,6 +502,10 @@ class Plan(APIObject):
     estimated_steps: int = 0
     estimated_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    estimated_duration_s: int = 0
+    """Wall-clock estimate on one H100 80 GB (model load, training, evals, checkpoints)."""
+    min_gpu_memory_gb: float | None = None
+    """GPU memory the run needs (the base's requirement plus a teacher loaded beside it)."""
     price_per_million_tokens: float = 0.0
     trained_token_fraction: float = 0.0
     labeling: dict[str, Any] | None = None
@@ -509,7 +515,7 @@ class Plan(APIObject):
     warnings: list[str] = field(default_factory=list)
     max_cost_usd: float | None = None
 
-    _repr_fields = ("estimated_steps", "estimated_tokens", "estimated_cost_usd")
+    _repr_fields = ("estimated_steps", "estimated_tokens", "estimated_cost_usd", "estimated_duration_s")
     _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"resolved_config": _attrdict}
 
     @property

@@ -175,6 +175,16 @@ fn print_plan(out: &Out, req: &PlanRunRequest, plan: &PlanRunResponse) {
                     .unwrap_or_default()
             ),
         ),
+        (
+            "duration",
+            format!(
+                "~{} on one GPU{}",
+                fmt_duration(plan.estimated_duration_s),
+                plan.min_gpu_memory_gb
+                    .map(|gb| format!(" (needs {} GB of GPU memory)", num(gb)))
+                    .unwrap_or_default()
+            ),
+        ),
     ];
     if let Ok(adapter) = serde_json::to_value(&rc.adapter) {
         rows.push(("adapter", compact_json(&adapter)));

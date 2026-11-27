@@ -350,6 +350,13 @@ class RunTests(unittest.TestCase):
         text = str(plan)
         for needle in ("Dataset     support v1", "BySession(0.1", "LoRA(rank=32, alpha=32)", "qwen3@3 (pinned)", "AdamW(lr=0.001", "Estimate", "cap max_cost_usd=5", "Warnings    2", "! The eval split is empty"):
             self.assertIn(needle, text)
+        self.assertIn("Duration    ~66s on one GPU", text)
+        self.assertNotIn("GB of GPU memory", text)  # unknown for the tiny test model
+        self.assertEqual((plan.estimated_duration_s, plan.min_gpu_memory_gb), (66, None))
+        sized = grad.Plan.from_api({**fixture("python-plan.json"), "estimated_duration_s": 1700, "min_gpu_memory_gb": 44}, client)
+        self.assertIn("Duration    ~28 min on one GPU · needs 44 GB of GPU memory", str(sized))
+        long = grad.Plan.from_api({**fixture("python-plan.json"), "estimated_duration_s": 9000}, client)
+        self.assertIn("~2.5 h on one GPU", str(long))
         self.assertIs(plan.resolved_recipe, plan.resolved_config)
         self.assertEqual(plan.resolved_config.adapter.rank, 32)
         self.assertEqual(plan.resolved_config["model"], "test/tiny-qwen3")

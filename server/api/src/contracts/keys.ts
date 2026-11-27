@@ -75,6 +75,10 @@ export const TrainableModelSchema = z
     max_context_tokens: z.number().int().positive(),
     template_revision: z.string().min(1),
     calibrated_lrs: z.record(z.string(), z.number().positive()),
+    min_gpu_memory_gb: z.number().positive().nullable().openapi({
+      description:
+        "GPU memory (GB) training this base needs at the recipe defaults, measured on an H100 80 GB. v0 trains on one GPU, and runs.plan refuses (422 model_exceeds_gpu_memory) a run that needs more than 80 GB. Null when unknown.",
+    }),
   })
   .openapi("TrainableModel");
 

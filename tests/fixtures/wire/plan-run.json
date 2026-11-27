@@ -41,6 +41,8 @@
   "estimated_steps": 6,
   "estimated_tokens": 190,
   "estimated_cost_usd": 0.0002,
+  "estimated_duration_s": 66,
+  "min_gpu_memory_gb": null,
   "price_per_million_tokens": 1,
   "trained_token_fraction": 0.2947,
   "warnings": [

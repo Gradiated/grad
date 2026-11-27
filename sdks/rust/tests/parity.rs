@@ -405,6 +405,8 @@ fn typed_responses() {
     let run: Run = serde_json::from_value(fx["responses"]["run"].clone()).unwrap();
     let ev: EvalRun = serde_json::from_value(fx["responses"]["eval"].clone()).unwrap();
     let scoring: EvalRun = serde_json::from_value(fx["responses"]["scoring"].clone()).unwrap();
+    let run_plan: PlanRunResponse =
+        serde_json::from_value(fx["responses"]["run_plan"].clone()).unwrap();
     let plan: PlanEvalResponse =
         serde_json::from_value(fx["responses"]["eval_plan"].clone()).unwrap();
     let source: Source = serde_json::from_value(fx["responses"]["source"].clone()).unwrap();
@@ -447,6 +449,8 @@ fn typed_responses() {
         "eval_plan.estimated_cost_usd": plan.estimated_cost_usd,
         "scoring.mode": scoring.mode.as_str(),
         "scoring.scored_dataset_version": scoring.scored_dataset_version,
+        "run_plan.estimated_duration_s": run_plan.estimated_duration_s,
+        "run_plan.min_gpu_memory_gb": run_plan.min_gpu_memory_gb,
         "source.id": source.id,
         "source.provider.kind": source.provider.kind,
         "source.provider.secret": source.provider.secret,

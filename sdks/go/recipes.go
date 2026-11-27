@@ -153,7 +153,7 @@ type Common struct {
 	Select string
 	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
 	CheckpointTTLDays int
-	// EvalEvery is optimizer steps between held-out evals (0: every 10% of steps).
+	// EvalEvery is optimizer steps between held-out evals (0: every 25% of the run, at most every 20 steps).
 	EvalEvery int
 	// Evals run on every checkpoint during training (billed like evals).
 	Evals []CheckpointEval

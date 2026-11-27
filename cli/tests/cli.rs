@@ -177,7 +177,8 @@ fn plan_obj() -> Value {
     json!({
         "resolved_config": run_obj("x", "support-router", "queued")["resolved_config"].clone(),
         "dataset_version": 3, "usable_records": 4820, "total_records": 4820, "estimated_steps": 33,
-        "estimated_tokens": 1100000, "estimated_cost_usd": 0.165, "price_per_million_tokens": 0.15,
+        "estimated_tokens": 1100000, "estimated_cost_usd": 0.165, "estimated_duration_s": 140,
+        "min_gpu_memory_gb": 24, "price_per_million_tokens": 0.15,
         "trained_token_fraction": 0.62, "warnings": ["3 records have no scores"]
     })
 }
@@ -939,6 +940,7 @@ fn train_dry_run_prints_the_plan_and_sends_the_recipe() {
         "4,097 train / 723 eval",
         "~1.1M",
         "$0.17",
+        "~2m20s on one GPU (needs 24 GB of GPU memory)",
         "3 records have no scores",
     ] {
         assert!(

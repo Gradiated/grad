@@ -1,8 +1,10 @@
 {
   "dataset_version": 1,
   "estimated_cost_usd": 0.0001,
+  "estimated_duration_s": 66,
   "estimated_steps": 1,
   "estimated_tokens": 60,
+  "min_gpu_memory_gb": null,
   "price_per_million_tokens": 1,
   "resolved_config": {
     "adapter": {

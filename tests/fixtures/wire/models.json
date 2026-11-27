@@ -30,7 +30,8 @@
         "reward",
         "router",
         "sft"
-      ]
+      ],
+      "min_gpu_memory_gb": 8
     },
     {
       "id": "qwen/qwen3-1.7b",
@@ -60,7 +61,8 @@
         "reward",
         "router",
         "sft"
-      ]
+      ],
+      "min_gpu_memory_gb": 12
     },
     {
       "id": "qwen/qwen3-4b",
@@ -89,7 +91,8 @@
         "grpo",
         "reward",
         "sft"
-      ]
+      ],
+      "min_gpu_memory_gb": 20
     },
     {
       "id": "qwen/qwen3-8b",
@@ -125,7 +128,8 @@
         "grpo",
         "reward",
         "sft"
-      ]
+      ],
+      "min_gpu_memory_gb": 36
     },
     {
       "id": "qwen/qwen3-14b",
@@ -154,7 +158,8 @@
         "grpo",
         "reward",
         "sft"
-      ]
+      ],
+      "min_gpu_memory_gb": 56
     },
     {
       "id": "qwen/qwen3-32b",
@@ -168,22 +173,9 @@
       "price_per_million_tokens_usd": 1.2,
       "max_context_tokens": 32768,
       "template_revision": "qwen3@3",
-      "calibrated_lrs": {
-        "sft": 0.0003,
-        "dpo": 0.00001,
-        "cartridge": 0.01,
-        "grpo": 0.00003,
-        "distill": 0.00015,
-        "reward": 0.00006
-      },
-      "recipes": [
-        "cartridge",
-        "distill",
-        "dpo",
-        "grpo",
-        "reward",
-        "sft"
-      ]
+      "calibrated_lrs": {},
+      "recipes": [],
+      "min_gpu_memory_gb": 96
     },
     {
       "id": "gradiated/linden-1",
@@ -204,7 +196,8 @@
       },
       "recipes": [
         "decision"
-      ]
+      ],
+      "min_gpu_memory_gb": null
     },
     {
       "id": "baai/bge-small-en-v1.5",
@@ -224,7 +217,8 @@
       },
       "recipes": [
         "embedding"
-      ]
+      ],
+      "min_gpu_memory_gb": 4
     },
     {
       "id": "test/tiny-qwen3",
@@ -249,7 +243,8 @@
         "dpo",
         "router",
         "sft"
-      ]
+      ],
+      "min_gpu_memory_gb": null
     },
     {
       "id": "test/tiny-bert",
@@ -267,7 +262,8 @@
       },
       "recipes": [
         "embedding"
-      ]
+      ],
+      "min_gpu_memory_gb": null
     }
   ]
 }

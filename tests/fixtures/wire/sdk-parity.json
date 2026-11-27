@@ -1219,6 +1219,58 @@
       ],
       "next_cursor": null,
       "tail_cursor": "WzI0XQ"
+    },
+    "run_plan": {
+      "resolved_config": {
+        "rule_version": "auto@2",
+        "dataset": "support-prod",
+        "dataset_version": 2,
+        "name": "support-sft",
+        "recipe_kind": "sft",
+        "model": "test/tiny-qwen3",
+        "template_revision": "qwen3@3",
+        "adapter": {
+          "kind": "lora",
+          "rank": 32,
+          "alpha": 32,
+          "merge_on_export": false
+        },
+        "lr": 8.84e-05,
+        "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+        "batch_size": 1,
+        "epochs": 1,
+        "schedule": "linear",
+        "warmup": 0.03,
+        "train_on": "last",
+        "thinking": "auto",
+        "preserve_thinking": false,
+        "reduction": "per_example",
+        "select": "best",
+        "checkpoint_every_steps": 1,
+        "checkpoint_ttl_days": 30,
+        "split": {
+          "strategy": "by_session",
+          "eval_fraction": 0.1,
+          "seed": 42,
+          "train_records": 6,
+          "eval_records": 0
+        },
+        "recipe_params": {}
+      },
+      "dataset_version": 2,
+      "usable_records": 6,
+      "total_records": 6,
+      "estimated_steps": 6,
+      "estimated_tokens": 190,
+      "estimated_cost_usd": 0.0002,
+      "estimated_duration_s": 1700,
+      "min_gpu_memory_gb": 44,
+      "price_per_million_tokens": 1,
+      "trained_token_fraction": 0.2947,
+      "warnings": [
+        "The eval split is empty; eval metrics will be unavailable. Add records or raise split.eval_fraction.",
+        "6 steps is below the 100 we recommend; use batch_size=1 or more epochs/data."
+      ]
     }
   },
   "expect": {
@@ -1263,6 +1315,8 @@
     "run_events.data[14].resume_step": 2,
     "run_events.data[24].status": "completed",
     "run_events.data[24].run.last_interruption.reason": "compute_reclaimed",
-    "run_events.data[11].checkpoint_id": "ckpt_15220c34be70af6cffa4aa67"
+    "run_events.data[11].checkpoint_id": "ckpt_15220c34be70af6cffa4aa67",
+    "run_plan.estimated_duration_s": 1700,
+    "run_plan.min_gpu_memory_gb": 44
   }
 }

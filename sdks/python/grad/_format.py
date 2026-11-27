@@ -32,6 +32,16 @@ def _usd(value: Any) -> str:
     return f"${value:,.2f}" if value >= 0.01 or value == 0 else f"${value:.4f}"
 
 
+def _duration(seconds: Any) -> str:
+    if not isinstance(seconds, (int, float)):
+        return "—"
+    if seconds < 90:
+        return f"{seconds:.0f}s"
+    if seconds < 90 * 60:
+        return f"{seconds / 60:.0f} min"
+    return f"{seconds / 3600:.1f} h"
+
+
 def _adapter(adapter: Mapping[str, Any] | None) -> str:
     if not adapter:
         return "—"
@@ -75,6 +85,11 @@ def format_plan(plan: Any, max_cost_usd: float | None = None) -> str:
     if max_cost_usd is not None:
         estimate += f" · cap max_cost_usd={_num(max_cost_usd)}"
     lines.append(estimate)
+    gpu = getattr(plan, "min_gpu_memory_gb", None)
+    lines.append(
+        f"Duration    ~{_duration(getattr(plan, 'estimated_duration_s', None))} on one GPU"
+        + (f" · needs {_num(gpu)} GB of GPU memory" if gpu is not None else "")
+    )
     teacher = getattr(plan, "teacher", None)
     if teacher:
         lines.append(

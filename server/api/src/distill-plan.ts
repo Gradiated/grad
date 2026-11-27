@@ -10,7 +10,7 @@ import type {
 import { invalid } from "./errors.js";
 import {
   estimateTextTokens,
-  renderMessages,
+  promptTokens,
   type RenderOptions,
 } from "./planner.js";
 import { recordPromptAndReference } from "./records.js";
@@ -31,7 +31,6 @@ import { recordPromptAndReference } from "./records.js";
 export const DEFAULT_MAX_NEW_TOKENS = 256;
 /** The eval default for max_tokens, which the teacher's labeling eval uses. */
 const OFF_POLICY_MAX_TOKENS = 1024;
-const GENERATION_HEADER_TOKENS = 3;
 
 export type TeacherPlan = NonNullable<PlanRunResponse["teacher"]>;
 
@@ -78,24 +77,11 @@ const resolveMaxNewTokens = (
   );
 };
 
-const promptTokens = (
-  record: DatasetRecord,
-  options: RenderOptions,
-): number | null => {
-  const prompt = recordPromptAndReference(record)?.prompt ?? [];
-  if (!prompt.some((m) => m.role === "user")) return null;
-
-  return (
-    renderMessages(record.id ?? "record", prompt, options).total_tokens +
-    GENERATION_HEADER_TOKENS
-  );
-};
-
 const requireTeacher = (recipe: PlanRunRequest["recipe"]): string => {
   if (recipe.teacher === undefined) {
     throw invalid(
       "distill_teacher_required",
-      "DistillRecipe needs teacher=: a larger catalog model (such as qwen/qwen3-32b) or, with rollout=OffPolicy(), an artifact or any model your inference endpoint serves.",
+      "DistillRecipe needs teacher=: a larger catalog model (such as qwen/qwen3-14b) or, with rollout=OffPolicy(), an artifact or any model your inference endpoint serves.",
     );
   }
 

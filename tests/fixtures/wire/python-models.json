@@ -20,6 +20,7 @@
       "hf_repo": "Qwen/Qwen3-0.6B",
       "id": "qwen/qwen3-0.6b",
       "max_context_tokens": 32768,
+      "min_gpu_memory_gb": 8,
       "price_per_million_tokens_usd": 0.15,
       "recipes": [
         "decision",
@@ -50,6 +51,7 @@
       "hf_repo": "Qwen/Qwen3-1.7B",
       "id": "qwen/qwen3-1.7b",
       "max_context_tokens": 32768,
+      "min_gpu_memory_gb": 12,
       "price_per_million_tokens_usd": 0.22,
       "recipes": [
         "decision",
@@ -80,6 +82,7 @@
       "hf_repo": "Qwen/Qwen3-4B",
       "id": "qwen/qwen3-4b",
       "max_context_tokens": 32768,
+      "min_gpu_memory_gb": 20,
       "price_per_million_tokens_usd": 0.3,
       "recipes": [
         "cartridge",
@@ -116,6 +119,7 @@
       "hf_repo": "Qwen/Qwen3-8B",
       "id": "qwen/qwen3-8b",
       "max_context_tokens": 32768,
+      "min_gpu_memory_gb": 36,
       "price_per_million_tokens_usd": 0.4,
       "recipes": [
         "cartridge",
@@ -145,6 +149,7 @@
       "hf_repo": "Qwen/Qwen3-14B",
       "id": "qwen/qwen3-14b",
       "max_context_tokens": 32768,
+      "min_gpu_memory_gb": 56,
       "price_per_million_tokens_usd": 0.7,
       "recipes": [
         "cartridge",
@@ -161,28 +166,15 @@
         "lora",
         "prefix_kv"
       ],
-      "calibrated_lrs": {
-        "cartridge": 0.01,
-        "distill": 0.00015,
-        "dpo": 1e-05,
-        "grpo": 3e-05,
-        "reward": 6e-05,
-        "sft": 0.0003
-      },
+      "calibrated_lrs": {},
       "default_for": [],
       "family": "llm",
       "hf_repo": "Qwen/Qwen3-32B",
       "id": "qwen/qwen3-32b",
       "max_context_tokens": 32768,
+      "min_gpu_memory_gb": 96,
       "price_per_million_tokens_usd": 1.2,
-      "recipes": [
-        "cartridge",
-        "distill",
-        "dpo",
-        "grpo",
-        "reward",
-        "sft"
-      ],
+      "recipes": [],
       "template_revision": "qwen3@3"
     },
     {
@@ -200,6 +192,7 @@
       "hf_repo": null,
       "id": "gradiated/linden-1",
       "max_context_tokens": 16384,
+      "min_gpu_memory_gb": null,
       "price_per_million_tokens_usd": 0.2,
       "recipes": [
         "decision"
@@ -220,6 +213,7 @@
       "hf_repo": "BAAI/bge-small-en-v1.5",
       "id": "baai/bge-small-en-v1.5",
       "max_context_tokens": 512,
+      "min_gpu_memory_gb": 4,
       "price_per_million_tokens_usd": 0.08,
       "recipes": [
         "embedding"
@@ -242,6 +236,7 @@
       "hf_repo": null,
       "id": "test/tiny-qwen3",
       "max_context_tokens": 2048,
+      "min_gpu_memory_gb": null,
       "price_per_million_tokens_usd": 1,
       "recipes": [
         "cartridge",
@@ -263,6 +258,7 @@
       "hf_repo": null,
       "id": "test/tiny-bert",
       "max_context_tokens": 512,
+      "min_gpu_memory_gb": null,
       "price_per_million_tokens_usd": 0.5,
       "recipes": [
         "embedding"

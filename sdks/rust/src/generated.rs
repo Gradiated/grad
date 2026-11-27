@@ -1185,6 +1185,10 @@ pub struct PlanRunResponse {
     pub estimated_steps: i64,
     pub estimated_tokens: i64,
     pub estimated_cost_usd: f64,
+    /// Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval.
+    pub estimated_duration_s: i64,
+    /// GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown.
+    pub min_gpu_memory_gb: Option<f64>,
     pub price_per_million_tokens: f64,
     pub trained_token_fraction: f64,
     /// The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
@@ -1340,7 +1344,7 @@ pub struct RecipeSpec {
     pub rollout: Option<RolloutSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub optimizer: Option<OptimizerSpec>,
-    /// Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+    /// Optimizer steps between held-out evaluations; auto = every 25% of the run, at most every 20 steps; each eval step is also a checkpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eval_every: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1795,6 +1799,8 @@ pub struct TrainableModel {
     pub max_context_tokens: i64,
     pub template_revision: String,
     pub calibrated_lrs: BTreeMap<String, f64>,
+    /// GPU memory (GB) training this base needs at the recipe defaults, measured on an H100 80 GB. v0 trains on one GPU, and runs.plan refuses (422 model_exceeds_gpu_memory) a run that needs more than 80 GB. Null when unknown.
+    pub min_gpu_memory_gb: Option<f64>,
 }
 
 string_enum! {

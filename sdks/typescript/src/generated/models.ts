@@ -744,6 +744,10 @@ export interface PlanRunResponse {
   estimatedSteps: number;
   estimatedTokens: number;
   estimatedCostUsd: number;
+  /** Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval. */
+  estimatedDurationS: number;
+  /** GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown. */
+  minGpuMemoryGb: number | null;
   pricePerMillionTokens: number;
   trainedTokenFraction: number;
   /** The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt. */
@@ -832,7 +836,7 @@ export interface RecipeSpec {
   teacher?: string | undefined;
   rollout?: RolloutSpec | undefined;
   optimizer?: OptimizerSpec | undefined;
-  /** Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval). */
+  /** Optimizer steps between held-out evaluations; auto = every 25% of the run, at most every 20 steps; each eval step is also a checkpoint. */
   evalEvery?: "auto" | number | undefined;
   loss?: LossSpec | undefined;
   pool?: PoolingSpec | undefined;
@@ -1172,6 +1176,8 @@ export interface TrainableModel {
   maxContextTokens: number;
   templateRevision: string;
   calibratedLrs: Record<string, number>;
+  /** GPU memory (GB) training this base needs at the recipe defaults, measured on an H100 80 GB. v0 trains on one GPU, and runs.plan refuses (422 model_exceeds_gpu_memory) a run that needs more than 80 GB. Null when unknown. */
+  minGpuMemoryGb: number | null;
 }
 
 export interface TrajectoryInput {

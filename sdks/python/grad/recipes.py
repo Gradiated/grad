@@ -127,7 +127,7 @@ class Recipe:
         select: ``"best"`` or ``"last"`` checkpoint becomes ``run.artifact``.
         checkpoint_ttl_days: Retention of intermediate checkpoints.
         split: Train/eval split (``splits.BySession(0.10)`` by default); sent with the run.
-        eval_every: ``"auto"`` (every 10% of steps) or a number of optimizer steps.
+        eval_every: ``"auto"`` (every 25% of the run, at most every 20 steps) or a number of optimizer steps.
         evals: Extra evals on each checkpoint: datasets, names or :class:`EvalSpec`.
         loggers: Experiment trackers, ``[loggers.WandB(...)]`` or ``[loggers.MLflow(...)]``.
     """

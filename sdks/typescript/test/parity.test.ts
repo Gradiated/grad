@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { adapters, Context, Judge, loggers, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
-import type { EvalRun, PlanEvalResponse, Run, RunEventsPage, Secret, Source, UsageRecord } from "../src/generated/models.js";
+import type { EvalRun, PlanEvalResponse, PlanRunResponse, Run, RunEventsPage, Secret, Source, UsageRecord } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
 import { FakeServer, json, makeGrad, wire } from "./helpers.js";
@@ -9,7 +9,7 @@ import { FakeServer, json, makeGrad, wire } from "./helpers.js";
 /** tests/fixtures/wire/sdk-parity.json: every SDK and the CLI send these requests for the same calls. */
 interface Parity {
   requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown; query?: Record<string, string> }[];
-  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] }; run_events: { run_id: string } };
+  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; run_plan: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] }; run_events: { run_id: string } };
   expect: Record<string, unknown>;
 }
 const parity = wire<Parity>("sdk-parity.json");
@@ -180,6 +180,7 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const ev = decode<EvalRun>("EvalRun", parity.responses.eval);
     const plan = decode<PlanEvalResponse>("PlanEvalResponse", parity.responses.eval_plan);
     const scoring = decode<EvalRun>("EvalRun", parity.responses.scoring);
+    const runPlan = decode<PlanRunResponse>("PlanRunResponse", parity.responses.run_plan);
     const source = decode<Source>("Source", parity.responses.source);
     const secret = decode<Secret>("Secret", parity.responses.secret);
     const usage = decode<UsageRecord>("UsageRecord", parity.responses.usage_page.data[0]);
@@ -202,6 +203,8 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "eval_plan.estimated_cost_usd": plan.estimatedCostUsd,
       "scoring.mode": scoring.mode,
       "scoring.scored_dataset_version": scoring.scoredDatasetVersion,
+      "run_plan.estimated_duration_s": runPlan.estimatedDurationS,
+      "run_plan.min_gpu_memory_gb": runPlan.minGpuMemoryGb,
       "source.id": source.id,
       "source.provider.kind": source.provider.kind,
       "source.provider.secret": source.provider.secret,

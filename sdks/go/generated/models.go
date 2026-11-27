@@ -1596,15 +1596,19 @@ type PlanRunRequest struct {
 
 // PlanRunResponse is generated from the OpenAPI schema.
 type PlanRunResponse struct {
-	ResolvedConfig        ResolvedRunConfig `json:"resolved_config"`
-	DatasetVersion        int               `json:"dataset_version"`
-	UsableRecords         int               `json:"usable_records"`
-	TotalRecords          int               `json:"total_records"`
-	EstimatedSteps        int               `json:"estimated_steps"`
-	EstimatedTokens       int               `json:"estimated_tokens"`
-	EstimatedCostUSD      float64           `json:"estimated_cost_usd"`
-	PricePerMillionTokens float64           `json:"price_per_million_tokens"`
-	TrainedTokenFraction  float64           `json:"trained_token_fraction"`
+	ResolvedConfig   ResolvedRunConfig `json:"resolved_config"`
+	DatasetVersion   int               `json:"dataset_version"`
+	UsableRecords    int               `json:"usable_records"`
+	TotalRecords     int               `json:"total_records"`
+	EstimatedSteps   int               `json:"estimated_steps"`
+	EstimatedTokens  int               `json:"estimated_tokens"`
+	EstimatedCostUSD float64           `json:"estimated_cost_usd"`
+	// EstimatedDurationS Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval.
+	EstimatedDurationS int `json:"estimated_duration_s"`
+	// MinGPUMemoryGb GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown.
+	MinGPUMemoryGb        *float64 `json:"min_gpu_memory_gb"`
+	PricePerMillionTokens float64  `json:"price_per_million_tokens"`
+	TrainedTokenFraction  float64  `json:"trained_token_fraction"`
 	// Labeling The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
 	Labeling *PlanRunResponseLabeling `json:"labeling"`
 	// Teacher On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).
@@ -1728,7 +1732,7 @@ type RecipeSpec struct {
 	Teacher   *string        `json:"teacher,omitempty"`
 	Rollout   *RolloutSpec   `json:"rollout,omitempty"`
 	Optimizer *OptimizerSpec `json:"optimizer,omitempty"`
-	// EvalEvery Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+	// EvalEvery Optimizer steps between held-out evaluations; auto = every 25% of the run, at most every 20 steps; each eval step is also a checkpoint.
 	EvalEvery any          `json:"eval_every,omitempty"`
 	Loss      *LossSpec    `json:"loss,omitempty"`
 	Pool      *PoolingSpec `json:"pool,omitempty"`
@@ -2410,6 +2414,8 @@ type TrainableModel struct {
 	MaxContextTokens         int                          `json:"max_context_tokens"`
 	TemplateRevision         string                       `json:"template_revision"`
 	CalibratedLrs            map[string]float64           `json:"calibrated_lrs"`
+	// MinGPUMemoryGb GPU memory (GB) training this base needs at the recipe defaults, measured on an H100 80 GB. v0 trains on one GPU, and runs.plan refuses (422 model_exceeds_gpu_memory) a run that needs more than 80 GB. Null when unknown.
+	MinGPUMemoryGb *float64 `json:"min_gpu_memory_gb"`
 }
 
 // TrainableModelAdaptersItem is an enumeration of allowed values.

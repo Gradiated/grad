@@ -61,6 +61,14 @@ components:
           additionalProperties:
             type: number
             exclusiveMinimum: 0
+        min_gpu_memory_gb:
+          type:
+            - number
+            - "null"
+          exclusiveMinimum: 0
+          description: GPU memory (GB) training this base needs at the recipe defaults, measured on an H100 80 GB. v0 trains on
+            one GPU, and runs.plan refuses (422 model_exceeds_gpu_memory) a run that needs more than 80 GB. Null when
+            unknown.
       required:
         - id
         - hf_repo
@@ -72,6 +80,7 @@ components:
         - max_context_tokens
         - template_revision
         - calibrated_lrs
+        - min_gpu_memory_gb
     RecipeKind:
       type: string
       enum:
@@ -1214,6 +1223,18 @@ components:
         estimated_cost_usd:
           type: number
           minimum: 0
+        estimated_duration_s:
+          type: integer
+          minimum: 0
+          description: "Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s
+            for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval."
+        min_gpu_memory_gb:
+          type:
+            - number
+            - "null"
+          exclusiveMinimum: 0
+          description: "GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when
+            the base's requirement is unknown."
         price_per_million_tokens:
           type: number
           exclusiveMinimum: 0
@@ -1277,6 +1298,8 @@ components:
         - estimated_steps
         - estimated_tokens
         - estimated_cost_usd
+        - estimated_duration_s
+        - min_gpu_memory_gb
         - price_per_million_tokens
         - trained_token_fraction
         - labeling
@@ -1776,7 +1799,8 @@ components:
             - type: integer
               minimum: 1
           default: auto
-          description: Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+          description: Optimizer steps between held-out evaluations; auto = every 25% of the run, at most every 20 steps; each
+            eval step is also a checkpoint.
         loss:
           $ref: "#/components/schemas/LossSpec"
         pool:

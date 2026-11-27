@@ -18,17 +18,28 @@ import {
   type TrainableModel,
 } from "./contracts.js";
 import { invalid } from "./errors.js";
+import {
+  assertFitsOneGpu,
+  estimateDurationS,
+  requiredGpuMemoryGb,
+} from "./gpu-profile.js";
 import { resolveRecipeParams } from "./recipe-params.js";
 import {
   assessRecipeUsability,
   recordConversation,
+  recordPromptAndResponse,
   recordShapeHelp,
+  routerObservations,
   type RecipeUsability,
 } from "./records.js";
 
 export const AUTO_RULE_VERSION = "auto@2";
 
-/** Rough token estimate (chars / 4); plans label counts as estimates. */
+/**
+ * Rough text token estimate (chars / 4); plans label counts as estimates. It
+ * errs high for English prose (Qwen3 averages about 4.5 characters a token
+ * there) and low for code-free CJK text.
+ */
 export const estimateTextTokens = (text: string): number => {
   const trimmed = text.trim();
   if (!trimmed) return 0;
@@ -105,6 +116,18 @@ export interface RenderOptions {
   preserve_thinking: boolean;
 }
 
+/** ChatML framing, exact for the Qwen3 tokenizer: `<|im_start|>`, role, newline. */
+const HEADER_TOKENS = 3;
+/** `<|im_end|>` and the newline after it. */
+const FOOTER_TOKENS = 2;
+/** `<think>\n\n</think>\n\n`, rendered (untrained) before a final answer without reasoning. */
+const EMPTY_THINK = "<think>\n\n</think>\n\n";
+const EMPTY_THINK_TOKENS = 4;
+/** The generation header the trainer appends to router/classifier prompts. */
+const GENERATION_HEADER_TOKENS = 3;
+/** The trainer cuts every sequence to this many tokens (torch_common.model_max_len). */
+export const TRAINER_MAX_SEQ_LEN = 8192;
+
 const stripThinking = (text: string): string =>
   text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
 
@@ -166,10 +189,15 @@ export const renderMessages = (
       isAssistant && !isLastAssistant && !options.preserve_thinking
         ? stripThinking(rawContent)
         : rawContent;
-    const header = `<|im_start|>${message.role}\n`;
+    // The trainer renders the final answer behind an empty think block when it has none.
+    const emptyThink =
+      isLastAssistant &&
+      i === messages.length - 1 &&
+      !hasThinkingBlock(content);
+    const header = `<|im_start|>${message.role}\n${emptyThink ? EMPTY_THINK : ""}`;
     const body = `${content}<|im_end|>\n`;
-    const headerTokens = estimateTextTokens(header) + 2;
-    const bodyTokens = estimateTextTokens(body) + 1;
+    const headerTokens = HEADER_TOKENS + (emptyThink ? EMPTY_THINK_TOKENS : 0);
+    const bodyTokens = estimateTextTokens(content) + FOOTER_TOKENS;
 
     spans.push({ text: header, trained: false, tokens: headerTokens });
     spans.push({ text: body, trained, tokens: bodyTokens });
@@ -249,6 +277,106 @@ const fewStepsWarning = (
       : "add data or epochs";
 
   return `${steps} ${steps === 1 ? "step is" : "steps are"} below the 100 we recommend; ${advice}.`;
+};
+
+/** Tokens of a record's prompt rendered with the generation header, or null without one. */
+export const promptTokens = (
+  record: DatasetRecord,
+  options: RenderOptions,
+): number | null => {
+  const prompt = recordPromptAndResponse(record)?.prompt ?? [];
+  if (!prompt.some((m) => m.role === "user")) return null;
+
+  return (
+    renderMessages(record.id ?? "record", prompt, options).total_tokens +
+    GENERATION_HEADER_TOKENS
+  );
+};
+
+/** Python's json.dumps(value, sort_keys=True, ensure_ascii=False). */
+const pythonJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(pythonJson).join(", ")}]`;
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj)
+      .filter((k) => obj[k] !== undefined)
+      .sort();
+
+    return `{${keys.map((k) => `${JSON.stringify(k)}: ${pythonJson(obj[k])}`).join(", ")}}`;
+  }
+
+  return JSON.stringify(value) ?? "null";
+};
+
+/**
+ * The router's prompt group, as recipes/router.py prompt_key: the record's
+ * group_id, else a hash of its prompt messages.
+ */
+export const routerGroupKey = (record: DatasetRecord): string => {
+  if (record.group_id !== undefined && record.group_id !== null) {
+    return record.group_id;
+  }
+  const prompt = recordPromptAndResponse(record)?.prompt ?? [];
+  const digest = createHash("sha256").update(pythonJson(prompt)).digest("hex");
+
+  return `prompt:${digest.slice(0, 24)}`;
+};
+
+/**
+ * The train/eval split the trainer uses for a recipe. Router runs split whole
+ * prompt groups (by_session means by_group there), like RouterRunner.
+ */
+export const splitForRecipe = (
+  kind: RecipeKind,
+  records: readonly DatasetRecord[],
+  options: {
+    strategy: "by_session" | "by_group" | "random";
+    eval_fraction: number;
+    seed: number;
+  },
+): { train: DatasetRecord[]; eval: DatasetRecord[] } => {
+  if (kind !== "router") return splitRecords(records, options);
+
+  const keyed = records.map((r) =>
+    r.group_id !== undefined && r.group_id !== null
+      ? r
+      : { ...r, group_id: routerGroupKey(r) },
+  );
+  const original = new Map(
+    keyed.map((r, i) => [r, records[i] as DatasetRecord]),
+  );
+  const { train, eval: evalSet } = splitRecords(keyed, {
+    ...options,
+    strategy: options.strategy === "by_session" ? "by_group" : options.strategy,
+  });
+  const back = (rs: DatasetRecord[]) =>
+    rs.map((r) => original.get(r) as DatasetRecord);
+
+  return { train: back(train), eval: back(evalSet) };
+};
+
+/** Router training items: one per scored prompt group, metered on its prompt tokens only. */
+const routerGroups = (
+  records: readonly DatasetRecord[],
+  recipe: PlanRunRequest["recipe"],
+  options: RenderOptions,
+): number[] => {
+  const tokens = new Map<string, number>();
+  const labelled = Array.isArray(recipe.rubric);
+  for (const record of records) {
+    const key = routerGroupKey(record);
+    if (tokens.has(key)) continue;
+    const scored =
+      labelled ||
+      routerObservations(record, {
+        rubric: typeof recipe.rubric === "string" ? recipe.rubric : undefined,
+        candidates: recipe.models?.map((m) => m.trim().toLowerCase()),
+      }).models.length > 0;
+    const count = scored ? promptTokens(record, options) : null;
+    if (count !== null) tokens.set(key, Math.min(count, TRAINER_MAX_SEQ_LEN));
+  }
+
+  return [...tokens.values()];
 };
 
 export const isV0Recipe = (kind: RecipeKind): boolean =>
@@ -538,7 +666,7 @@ export const planRun = (
   const splitStrategy =
     request.split?.strategy ?? (paired ? "by_group" : "by_session");
   const splitSeed = request.split?.seed ?? 42;
-  const { train, eval: evalSet } = splitRecords(records, {
+  const { train, eval: evalSet } = splitForRecipe(recipe.kind, records, {
     strategy: splitStrategy,
     eval_fraction: evalFraction,
     seed: splitSeed,
@@ -570,14 +698,35 @@ export const planRun = (
     preserve_thinking: recipe.preserve_thinking,
   };
 
+  const maxSeqLen = Math.min(model.max_context_tokens, TRAINER_MAX_SEQ_LEN);
   let totalTokens = 0;
   let trainedTokens = 0;
   let truncated = 0;
-  for (const record of train) {
-    const counts = estimateRecordTokens(record, renderOptions);
-    totalTokens += counts.total;
-    trainedTokens += counts.trained;
-    if (counts.total > model.max_context_tokens) truncated += 1;
+  let evalTokens = 0;
+  let trainItems = train.length;
+  if (recipe.kind === "router") {
+    // One item per prompt group, prompt tokens only (recipes/router.py).
+    const groups = routerGroups(train, recipe, renderOptions);
+    trainItems = groups.length;
+    totalTokens = groups.reduce((sum, t) => sum + t, 0);
+    trainedTokens = totalTokens;
+    evalTokens = routerGroups(evalSet, recipe, renderOptions).reduce(
+      (sum, t) => sum + t,
+      0,
+    );
+  } else {
+    for (const record of train) {
+      const counts = estimateRecordTokens(record, renderOptions);
+      totalTokens += Math.min(counts.total, maxSeqLen);
+      trainedTokens += Math.min(counts.trained, maxSeqLen);
+      if (counts.total > maxSeqLen) truncated += 1;
+    }
+    for (const record of evalSet) {
+      evalTokens += Math.min(
+        estimateRecordTokens(record, renderOptions).total,
+        maxSeqLen,
+      );
+    }
   }
 
   let distill: DistillPlan | null = null;
@@ -598,16 +747,16 @@ export const planRun = (
 
   const estimatedSteps = Math.max(
     1,
-    Math.ceil((train.length * recipe.epochs) / batchSize),
+    Math.ceil((trainItems * recipe.epochs) / batchSize),
   );
   if (estimatedSteps < 100) {
     warnings.push(
-      fewStepsWarning(estimatedSteps, train.length * recipe.epochs, batchSize),
+      fewStepsWarning(estimatedSteps, trainItems * recipe.epochs, batchSize),
     );
   }
   if (truncated > 0) {
     warnings.push(
-      `${truncated} training records exceed ${model.max_context_tokens} tokens and will be truncated.`,
+      `${truncated} training records exceed ${maxSeqLen} tokens and will be truncated.`,
     );
   }
 
@@ -640,17 +789,46 @@ export const planRun = (
     );
   }
 
+  // Every 10% of steps and at least every 20 steps; the trainer also checkpoints
+  // every 5 minutes, and uploads in the background.
   const checkpointEvery = Math.max(
     1,
     Math.min(20, Math.floor(estimatedSteps * 0.1)),
   );
+  // auto: every 25% of the run, at most every 20 steps (trainer.default_eval_every).
+  // An eval costs far more than a checkpoint, so it doesn't follow the checkpoints;
+  // the trainer checkpoints at every eval step.
   const evalEvery =
-    recipe.eval_every === "auto" ? checkpointEvery : recipe.eval_every;
+    recipe.eval_every === "auto"
+      ? Math.max(
+          1,
+          Math.min(
+            estimatedSteps,
+            Math.max(20, Math.ceil(estimatedSteps * 0.25)),
+          ),
+        )
+      : recipe.eval_every;
   if (evalEvery > estimatedSteps) {
     warnings.push(
       `eval_every=${evalEvery} is more than the ${estimatedSteps} estimated steps; the held-out split is evaluated only at the end.`,
     );
   }
+
+  const teacherId =
+    distill?.teacher?.model ??
+    (recipe.kind === "cartridge" ? recipe.teacher : undefined);
+  const teacher = teacherId ? (context.catalog.find(teacherId) ?? null) : null;
+  const minGpuMemoryGb = requiredGpuMemoryGb(model, teacher);
+  assertFitsOneGpu(recipe.kind, model, teacher, minGpuMemoryGb);
+  const evals = Math.ceil(estimatedSteps / evalEvery) + 1;
+  const estimatedDurationS = estimateDurationS({
+    kind: recipe.kind,
+    model,
+    trainTokens: estimatedTokens,
+    evalTokens,
+    evals,
+    stepCheckpoints: Math.ceil(estimatedSteps / checkpointEvery),
+  });
 
   const resolvedConfig: ResolvedRunConfig = {
     rule_version: AUTO_RULE_VERSION,
@@ -696,6 +874,8 @@ export const planRun = (
     estimated_steps: estimatedSteps,
     estimated_tokens: estimatedTokens,
     estimated_cost_usd: estimatedCostUsd,
+    estimated_duration_s: estimatedDurationS,
+    min_gpu_memory_gb: minGpuMemoryGb,
     price_per_million_tokens: price,
     trained_token_fraction:
       totalTokens > 0 ? Number((trainedTokens / totalTokens).toFixed(4)) : 0,

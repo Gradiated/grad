@@ -73,7 +73,7 @@
     "reduction": "per_example",
     "select": "best",
     "checkpoint_every_steps": 1,
-    "eval_every_steps": 1,
+    "eval_every_steps": 5,
     "optimizer": {
       "kind": "adamw",
       "betas": [
@@ -126,7 +126,7 @@
     "reduction": "per_example",
     "select": "best",
     "checkpoint_every_steps": 1,
-    "eval_every_steps": 1,
+    "eval_every_steps": 5,
     "optimizer": {
       "kind": "adamw",
       "betas": [
@@ -141,8 +141,8 @@
       "strategy": "by_session",
       "eval_fraction": 0.15,
       "seed": 42,
-      "train_records": 42,
-      "eval_records": 6
+      "train_records": 38,
+      "eval_records": 10
     },
     "label_eval_id": null,
     "base_artifact": null,
@@ -184,7 +184,7 @@
     "reduction": "per_example",
     "select": "best",
     "checkpoint_every_steps": 1,
-    "eval_every_steps": 1,
+    "eval_every_steps": 5,
     "optimizer": {
       "kind": "adamw",
       "betas": [
@@ -242,7 +242,7 @@
     "reduction": "per_example",
     "select": "best",
     "checkpoint_every_steps": 1,
-    "eval_every_steps": 1,
+    "eval_every_steps": 5,
     "optimizer": {
       "kind": "adamw",
       "betas": [
@@ -302,7 +302,7 @@
     "reduction": "per_example",
     "select": "best",
     "checkpoint_every_steps": 1,
-    "eval_every_steps": 1,
+    "eval_every_steps": 6,
     "optimizer": {
       "kind": "adamw",
       "betas": [
@@ -349,7 +349,7 @@
     "reduction": "per_example",
     "select": "best",
     "checkpoint_every_steps": 1,
-    "eval_every_steps": 1,
+    "eval_every_steps": 5,
     "optimizer": {
       "kind": "adamw",
       "betas": [

@@ -170,6 +170,7 @@ class ParityTests(unittest.TestCase):
         ev = grad.Eval.from_api(responses["eval"])
         plan = grad.EvalPlan.from_api(responses["eval_plan"])
         scoring = grad.Eval.from_api(responses["scoring"])
+        run_plan = grad.Plan.from_api(responses["run_plan"])
         source = grad.Source.from_api(responses["source"])
         secret = grad.SecretRef.from_api(responses["secret"])
         usage = grad.UsageRecord.from_api(responses["usage_page"]["data"][0])
@@ -190,6 +191,8 @@ class ParityTests(unittest.TestCase):
             "eval_plan.estimated_cost_usd": plan.estimated_cost_usd,
             "scoring.mode": scoring.mode,
             "scoring.scored_dataset_version": scoring.scored_dataset_version,
+            "run_plan.estimated_duration_s": run_plan.estimated_duration_s,
+            "run_plan.min_gpu_memory_gb": run_plan.min_gpu_memory_gb,
             "source.id": source.id,
             "source.provider.kind": source.provider.kind,
             "source.provider.secret": source.provider.secret,

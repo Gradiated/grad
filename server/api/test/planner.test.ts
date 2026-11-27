@@ -340,6 +340,118 @@ describe("planRun", () => {
     );
   });
 
+  it("counts router prompt groups and prompt tokens, split by group like the trainer", () => {
+    const models = [
+      "qwen/qwen3-8b",
+      "qwen/qwen3-14b",
+      "qwen/qwen3-1.7b",
+      "qwen/qwen3-4b",
+    ];
+    const prompt = (i: number) =>
+      `Which planet is closest to the sun? Case ${i}.`;
+    // One record per (prompt, model), as RouterBench: 300 prompts x 4 responses.
+    const rows: DatasetRecord[] = Array.from({ length: 300 }, (_, i) =>
+      models.map((m, j) => ({
+        id: `r${i}-${j}`,
+        session_id: `r${i}-${j}`,
+        group_id: `g${i}`,
+        messages: [
+          { role: "user" as const, content: prompt(i) },
+          { role: "assistant" as const, content: "A long answer ".repeat(40) },
+        ],
+        metadata: { model: m },
+        scores: { correct: j % 2 },
+      })),
+    ).flat();
+    const router = plan({ kind: "router", batch_size: 16 }, rows);
+    const { train_records, eval_records, strategy } =
+      router.resolved_config.split;
+    expect(strategy).toBe("by_session");
+    expect(train_records % 4).toBe(0); // whole groups land on one side
+    expect(eval_records % 4).toBe(0);
+    const groups = train_records / 4;
+    expect(router.estimated_steps).toBe(Math.ceil(groups / 16));
+    // Prompt tokens only, once per group: header 3 + text + footer 2 + generation header 3.
+    const perGroup = 3 + Math.ceil(prompt(0).length / 4) + 2 + 3;
+    expect(router.estimated_tokens).toBeGreaterThanOrEqual(groups * perGroup);
+    expect(router.estimated_tokens).toBeLessThanOrEqual(
+      groups * (perGroup + 1),
+    );
+    expect(router.trained_token_fraction).toBe(1);
+
+    // Without group_id, records join on their prompt (recipes/router.py prompt_key).
+    const ungrouped = plan(
+      { kind: "router", batch_size: 16 },
+      rows.map(({ group_id: _drop, ...r }) => r),
+    );
+    expect(ungrouped.resolved_config.split.train_records % 4).toBe(0);
+    expect(ungrouped.estimated_tokens).toBeGreaterThan(0);
+  });
+
+  it("estimates chat tokens with exact ChatML framing and the trainer's 8,192-token cut", () => {
+    const one = (content: string): DatasetRecord => ({
+      id: "x",
+      messages: [
+        { role: "user", content: "abcd" },
+        { role: "assistant", content },
+      ],
+    });
+    const rendered = renderMessages("x", one("wxyz").messages ?? [], {
+      templateRevision: "qwen3@3",
+      train_on: "last",
+      thinking: "auto",
+      preserve_thinking: false,
+    });
+    // user: 3 + 1 + 2; assistant: 3 + 4 (empty think) + 1 + 2.
+    expect(rendered.total_tokens).toBe(16);
+    expect(rendered.trained_tokens).toBe(3);
+    expect(rendered.spans[2]?.text).toContain("<think>\n\n</think>");
+    const long = plan({ kind: "sft" }, [one("y".repeat(80_000))], {
+      split: { eval_fraction: 0 },
+    });
+    expect(long.estimated_tokens).toBe(8192);
+    expect(long.warnings.join(" ")).toMatch(/exceed 8192 tokens/);
+  });
+
+  it("checkpoints every 10% of steps (at least every 20), evaluates every 25%, and estimates duration and GPU memory", () => {
+    const many = Array.from({ length: 4000 }, (_, i) => chat(i));
+    const big = plan({ kind: "sft", batch_size: 8 }, many);
+    expect(big.estimated_steps).toBeGreaterThan(400);
+    expect(big.resolved_config.checkpoint_every_steps).toBe(20);
+    // Evals cost far more than checkpoints: every 25% of the run, at most every 20 steps.
+    expect(big.resolved_config.eval_every_steps).toBe(
+      Math.ceil(big.estimated_steps * 0.25),
+    );
+    const small = plan({ kind: "sft" }, records);
+    expect(small.resolved_config.checkpoint_every_steps).toBe(1);
+    expect(small.resolved_config.eval_every_steps).toBe(small.estimated_steps);
+    const mid = plan({ kind: "sft", batch_size: 1 }, records.slice(0, 30));
+    expect(mid.resolved_config.checkpoint_every_steps).toBe(
+      Math.floor(mid.estimated_steps * 0.1),
+    );
+
+    expect(big.min_gpu_memory_gb).toBe(36);
+    expect(big.estimated_duration_s).toBeGreaterThan(65);
+    const slower = plan(
+      { kind: "sft", batch_size: 8, model: "qwen/qwen3-14b" },
+      many,
+    );
+    expect(slower.min_gpu_memory_gb).toBe(56);
+    expect(slower.estimated_duration_s).toBeGreaterThan(
+      big.estimated_duration_s,
+    );
+    // qwen3-32b is an eval/judge model only: no recipe trains it on one GPU.
+    expectCode(
+      () => plan({ kind: "sft", model: "qwen/qwen3-32b" }, records),
+      "recipe_not_supported_for_model",
+    );
+    expect(catalog.find("qwen/qwen3-32b")?.recipes).toEqual([]);
+    expect(
+      plan({ kind: "sft", model: "test/tiny-qwen3" }, records)
+        .min_gpu_memory_gb,
+    ).toBeNull();
+  });
+
   it("rejects Wave 2 recipes", () => {
     expectCode(() => plan({ kind: "grpo" }, records), "recipe_deferred");
   });
@@ -356,27 +468,27 @@ describe("planRun", () => {
 
     const onPolicy = distill({
       model: "qwen/qwen3-4b",
-      teacher: "qwen/qwen3-32b",
+      teacher: "qwen/qwen3-14b",
       rollout: { kind: "on_policy", max_new_tokens: 64 },
     });
     expect(onPolicy.resolved_config.model).toBe("qwen/qwen3-4b");
     expect(onPolicy.resolved_config.lr).toBeCloseTo(2e-4, 8);
     expect(onPolicy.resolved_config.adapter).toMatchObject({ kind: "lora" });
     expect(onPolicy.resolved_config.recipe_params).toMatchObject({
-      teacher: "qwen/qwen3-32b",
+      teacher: "qwen/qwen3-14b",
       rollout: { kind: "on_policy", max_new_tokens: 64 },
       loss: { kind: "top_k_kl_distill", top_k: 32 },
-      teacher_token_weight: 4,
+      teacher_token_weight: 2.33333,
     });
     const teacher = onPolicy.teacher;
     expect(teacher).toMatchObject({
-      model: "qwen/qwen3-32b",
-      price_per_million_tokens: 1.2,
+      model: "qwen/qwen3-14b",
+      price_per_million_tokens: 0.7,
     });
     expect(teacher?.estimated_tokens).toBeGreaterThan(64 * prompts.length);
     const train = onPolicy.resolved_config.split.train_records;
     expect(onPolicy.estimated_tokens).toBeGreaterThan(
-      (teacher?.estimated_tokens ?? 0) * 4,
+      (teacher?.estimated_tokens ?? 0) * 2.3,
     );
     expect(onPolicy.estimated_tokens).toBeGreaterThan(2 * 64 * train);
     expect(onPolicy.estimated_cost_usd).toBeCloseTo(
@@ -387,7 +499,7 @@ describe("planRun", () => {
 
     // auto sizes answers from the records' own assistant turns (or 256 without any).
     const sized = distill(
-      { model: "qwen/qwen3-4b", teacher: "qwen/qwen3-32b" },
+      { model: "qwen/qwen3-4b", teacher: "qwen/qwen3-14b" },
       records,
     );
     expect(sized.resolved_config.recipe_params.rollout).toEqual({
@@ -395,7 +507,7 @@ describe("planRun", () => {
       max_new_tokens: 32,
     });
     expect(
-      distill({ teacher: "qwen/qwen3-32b" }).resolved_config,
+      distill({ teacher: "qwen/qwen3-14b" }).resolved_config,
     ).toMatchObject({
       model: "qwen/qwen3-4b",
       recipe_params: { rollout: { max_new_tokens: 256 } },
@@ -416,6 +528,13 @@ describe("planRun", () => {
         teacher: "qwen/qwen3-4b",
       }).warnings.join(" "),
     ).toMatch(/smaller than the student/);
+    // A 32B teacher beside the student doesn't fit one 80 GB GPU.
+    expectCode(
+      () => distill({ model: "qwen/qwen3-4b", teacher: "qwen/qwen3-32b" }),
+      "model_exceeds_gpu_memory",
+      /needs about 88 GB.*rollout=OffPolicy\(\)/,
+    );
+    expect(onPolicy.min_gpu_memory_gb).toBe(52);
     expectCode(
       () => distill({ teacher: "sft@2026-11-27-1" }),
       "distill_teacher_unsupported",
@@ -433,7 +552,7 @@ describe("planRun", () => {
     expectCode(
       () =>
         distill(
-          { teacher: "qwen/qwen3-32b" },
+          { teacher: "qwen/qwen3-14b" },
           records.map((r) => ({
             ...r,
             messages: [{ role: "system", content: "x" }],

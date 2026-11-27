@@ -239,7 +239,7 @@ export const RecipeSpecSchema = z
       .default("auto")
       .openapi({
         description:
-          "Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).",
+          "Optimizer steps between held-out evaluations; auto = every 25% of the run, at most every 20 steps; each eval step is also a checkpoint.",
       }),
     loss: LossSpecSchema.optional(),
     pool: PoolingSpecSchema.optional(),
@@ -394,6 +394,14 @@ export const PlanRunResponseSchema = z
     estimated_steps: z.number().int().min(0),
     estimated_tokens: z.number().int().min(0),
     estimated_cost_usd: z.number().min(0),
+    estimated_duration_s: z.number().int().min(0).openapi({
+      description:
+        "Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval.",
+    }),
+    min_gpu_memory_gb: z.number().positive().nullable().openapi({
+      description:
+        "GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown.",
+    }),
     price_per_million_tokens: z.number().positive(),
     trained_token_fraction: z.number().min(0).max(1),
     labeling: z

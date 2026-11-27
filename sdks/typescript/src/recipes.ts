@@ -112,7 +112,7 @@ export interface CommonRecipeOptions {
   reduction?: "per_example" | "per_token";
   select?: "best" | "last";
   checkpointTtlDays?: number;
-  /** "auto" (every 10% of steps) or a number of optimizer steps. */
+  /** "auto" (every 25% of the run, at most every 20 steps) or a number of optimizer steps. */
   evalEvery?: number | "auto";
   /** Extra evals on each checkpoint: a dataset (or its name), or `{ dataset, rubric?, limit?, name?, version? }`. */
   evals?: Array<string | { name: string; recordCount: number } | CheckpointEvalOptions>;

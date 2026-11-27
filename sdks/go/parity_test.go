@@ -29,6 +29,7 @@ type parityFixture struct {
 		Eval     json.RawMessage `json:"eval"`
 		EvalPlan json.RawMessage `json:"eval_plan"`
 		Scoring  json.RawMessage `json:"scoring"`
+		RunPlan  json.RawMessage `json:"run_plan"`
 		Source   json.RawMessage `json:"source"`
 		Secret   json.RawMessage `json:"secret"`
 		Usage    struct {
@@ -247,13 +248,14 @@ func TestParityTypedResponses(t *testing.T) {
 	var ev generated.EvalRun
 	var plan generated.PlanEvalResponse
 	var scoring generated.EvalRun
+	var runPlan generated.PlanRunResponse
 	var source grad.Source
 	var secret grad.SecretRef
 	var usage grad.UsageRecord
 	if err := json.Unmarshal(p.Responses.Usage.Data[0], &usage); err != nil {
 		t.Fatal(err)
 	}
-	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan, &p.Responses.Scoring: &scoring, &p.Responses.Source: &source, &p.Responses.Secret: &secret} {
+	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan, &p.Responses.Scoring: &scoring, &p.Responses.Source: &source, &p.Responses.Secret: &secret, &p.Responses.RunPlan: &runPlan} {
 		if err := json.Unmarshal(*raw, into); err != nil {
 			t.Fatal(err)
 		}
@@ -290,6 +292,8 @@ func TestParityTypedResponses(t *testing.T) {
 		"eval_plan.estimated_cost_usd":                     plan.EstimatedCostUSD,
 		"scoring.mode":                                     string(scoring.Mode),
 		"scoring.scored_dataset_version":                   float64(*scoring.ScoredDatasetVersion),
+		"run_plan.estimated_duration_s":                    float64(runPlan.EstimatedDurationS),
+		"run_plan.min_gpu_memory_gb":                       *runPlan.MinGPUMemoryGb,
 		"source.id":                                        source.ID,
 		"source.provider.kind":                             string(source.Provider.Kind),
 		"source.provider.secret":                           *source.Provider.Secret,

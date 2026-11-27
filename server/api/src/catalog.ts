@@ -48,19 +48,15 @@ const QWEN_LRS = {
     distill: 1.5e-4,
     reward: 8e-5,
   },
-  "qwen/qwen3-32b": {
-    sft: 3e-4,
-    dpo: 1e-5,
-    cartridge: 1e-2,
-    distill: 1e-4,
-    reward: 6e-5,
-  },
+  // Eval and judge model only: no recipe trains it on one 80 GB GPU (r6/r7 GPU runs).
+  "qwen/qwen3-32b": {},
 } as const;
 
 const qwen = (
   id: keyof typeof QWEN_LRS,
   hfRepo: string,
   price: number,
+  minGpuMemoryGb: number,
   adapters: TrainableModel["adapters"],
   defaultFor: RecipeKind[],
 ): CatalogEntry => ({
@@ -73,15 +69,19 @@ const qwen = (
   max_context_tokens: 32_768,
   template_revision: "qwen3@3",
   calibrated_lrs: QWEN_LRS[id],
+  min_gpu_memory_gb: minGpuMemoryGb,
 });
 
 export const BUILTIN_MODELS: readonly CatalogEntry[] = [
-  qwen("qwen/qwen3-0.6b", "Qwen/Qwen3-0.6B", 0.15, ["lora"], ["router"]),
-  qwen("qwen/qwen3-1.7b", "Qwen/Qwen3-1.7B", 0.22, ["lora"], []),
+  // min_gpu_memory_gb: peak reserved memory at the defaults (SFT, the most demanding
+  // recipe), measured on an H100 80 GB, plus headroom; see server/trainer/README.md.
+  qwen("qwen/qwen3-0.6b", "Qwen/Qwen3-0.6B", 0.15, 8, ["lora"], ["router"]),
+  qwen("qwen/qwen3-1.7b", "Qwen/Qwen3-1.7B", 0.22, 12, ["lora"], []),
   qwen(
     "qwen/qwen3-4b",
     "Qwen/Qwen3-4B",
     0.3,
+    20,
     ["lora", "prefix_kv"],
     ["distill"],
   ),
@@ -89,11 +89,12 @@ export const BUILTIN_MODELS: readonly CatalogEntry[] = [
     "qwen/qwen3-8b",
     "Qwen/Qwen3-8B",
     0.4,
+    36,
     ["lora", "prefix_kv"],
     ["sft", "dpo", "cartridge", "reward"],
   ),
-  qwen("qwen/qwen3-14b", "Qwen/Qwen3-14B", 0.7, ["lora", "prefix_kv"], []),
-  qwen("qwen/qwen3-32b", "Qwen/Qwen3-32B", 1.2, ["lora", "prefix_kv"], []),
+  qwen("qwen/qwen3-14b", "Qwen/Qwen3-14B", 0.7, 56, ["lora", "prefix_kv"], []),
+  qwen("qwen/qwen3-32b", "Qwen/Qwen3-32B", 1.2, 96, ["lora", "prefix_kv"], []),
   {
     id: "gradiated/linden-1",
     hf_repo: null,
@@ -104,6 +105,7 @@ export const BUILTIN_MODELS: readonly CatalogEntry[] = [
     max_context_tokens: 16_384,
     template_revision: "systemone@1",
     calibrated_lrs: { decision: 3e-4 },
+    min_gpu_memory_gb: null,
   },
   {
     id: "baai/bge-small-en-v1.5",
@@ -115,6 +117,7 @@ export const BUILTIN_MODELS: readonly CatalogEntry[] = [
     max_context_tokens: 512,
     template_revision: "bge@1",
     calibrated_lrs: { embedding: 2e-5 },
+    min_gpu_memory_gb: 4,
   },
 ];
 
@@ -128,6 +131,7 @@ const ExtraModelSchema = TrainableModelSchema.omit({ recipes: true }).extend({
   default_for: TrainableModelSchema.shape.default_for.default([]),
   template_revision: z.string().min(1).default("qwen3@3"),
   max_context_tokens: z.number().int().positive().default(32_768),
+  min_gpu_memory_gb: z.number().positive().nullable().default(null),
 });
 
 export interface ModelCatalog {
