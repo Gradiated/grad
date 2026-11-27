@@ -59,7 +59,7 @@ ADMIN_KEY=$(secret_key admin-api-key)
 [ "$(printf '%s' "$ADMIN_KEY" | sha256sum | cut -d' ' -f1)" = "$(secret_key admin-api-key-hash)" ]
 [ "$(secret_key secrets-key | base64 -d | wc -c)" -eq 32 ] || { echo "FAIL: secrets-key is not 32 bytes" >&2; exit 1; }
 # One generated key per pool, each scoped to its pool's job kinds.
-secret_key trainer-keys-json | python3 -c 'import json,sys; keys=json.load(sys.stdin); assert sorted((k["label"],k["kinds"]) for k in keys) == [("import",["import"]),("train",["train"])], keys'
+secret_key trainer-keys-json | python3 -c 'import json,sys; keys=json.load(sys.stdin); assert sorted((k["label"],k["kinds"]) for k in keys) == [("import",["import","eval"]),("train",["train"])], keys'
 GENERATED=$(kubectl -n "$NS" get secret "$SECRET" -o jsonpath='{.data}')
 # KEDA's metrics-api trigger (keda.trigger=metrics-api) reads each pool's queue
 # depth from grad-server's metrics port; the prometheus trigger reads

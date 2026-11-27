@@ -1,7 +1,8 @@
 /**
  * Boots a complete local grad stack for SDK, CLI and cross-language E2E tests:
  * a fake OpenAI-compatible inference/judge server (judges score 0.9), optionally a fake Gradiated
- * Cloud API, the real grad-server, and optionally a real trainer worker.
+ * Cloud API, the real grad-server, its eval worker (`grad-server worker --kinds
+ * eval`), and optionally a real trainer worker.
  *
  * Prints one JSON line to stdout once everything is ready, then runs until
  * SIGTERM/SIGINT or stdin closes, and tears every child process down.
@@ -19,8 +20,9 @@
  *
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
  *          "workspace_id","mode","worker","model_paths","fault_url",
- *          "worker_url","replicas":[{"url","pid"}],
+ *          "worker_url","replicas":[{"url","pid"}],"eval_worker_pid",
  *          "langfuse_url","langfuse_secret","ui_url","s3"}
+ * `eval_worker_pid` is the eval worker, so a chaos test can kill -9 it.
  * `ui_url` is the web UI (null in --cloud mode or until `pnpm -C server/ui
  * build` has run); open `<ui_url>#key=<api_key>` to sign in.
  * `langfuse_url` is tests/fixtures/fake-langfuse.ts (drive it via its
@@ -276,8 +278,8 @@ const main = async () => {
           "openai/gpt-6.1-sol",
         ].map((id) => ({ id, price_per_million_tokens_usd: 3 })),
       ),
+      // The API only checks an endpoint is set; the eval worker calls it.
       GRAD_INFERENCE_BASE_URL: `${inference.baseUrl}`,
-      GRAD_INFERENCE_API_KEY: "sk-fake-inference",
       TRAINER_API_KEY: TRAINER_KEY,
       MAINTENANCE_INTERVAL_MS: "500",
       GRAD_SECRETS_KEY: randomBytes(32).toString("base64"),
@@ -329,6 +331,29 @@ const main = async () => {
     }
     const workerUrl = workerProxy?.url ?? baseUrl;
 
+    // The eval worker (`grad-server worker --kinds eval`): evals,
+    // dataset.score(), router labelling and checkpoint evals.
+    const evalWorker = spawn(
+      process.execPath,
+      ["--import", "tsx", "src/main.ts", "worker", "--kinds", "eval"],
+      {
+        cwd: apiDir,
+        env: {
+          ...(process.env as Record<string, string>),
+          GRAD_SERVER_URL: workerUrl,
+          TRAINER_API_KEY: TRAINER_KEY,
+          GRAD_WORKER_ID: "harness-eval-worker",
+          GRAD_POLL_INTERVAL_S: "0.2",
+          // Short leases, so a chaos test that kills it resumes quickly.
+          GRAD_LEASE_SECONDS: "30",
+          GRAD_INFERENCE_BASE_URL: `${inference.baseUrl}`,
+          GRAD_INFERENCE_API_KEY: "sk-fake-inference",
+        },
+        stdio: ["ignore", 2, 2],
+      },
+    );
+    children.push(evalWorker);
+
     const python = process.env.GRAD_TRAINER_PYTHON ?? "python3";
     if (args.worker !== "none") {
       if (args.worker === "torch") modelPaths = tinyModelPaths(python);
@@ -367,6 +392,7 @@ const main = async () => {
         fault_url: faultProxy.url,
         worker_url: workerUrl,
         replicas,
+        eval_worker_pid: evalWorker.pid,
         langfuse_url: langfuse.url,
         langfuse_secret: langfuse.secret,
         // The stack's SeaweedFS bucket (scripts/load/sources.py counts its objects).

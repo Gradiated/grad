@@ -10,6 +10,10 @@ services:
     mem_limit: 128m
 
   grad-server:
+    environment:
+      GRAD_INFERENCE_BASE_URL: "http://fake-openai:8080/v1"
+
+  grad-eval-worker:
     depends_on:
       fake-openai:
         condition: service_started

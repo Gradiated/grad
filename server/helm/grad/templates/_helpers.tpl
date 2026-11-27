@@ -123,9 +123,12 @@ capabilities:
 {{- range $name, $w := .Values.workers -}}
 {{- if $w.enabled -}}
 {{- range $w.kinds -}}
-{{- if not (has . (list "train" "import")) -}}
-{{- fail (printf "workers.%s.kinds: %q is not a job kind (train, import)" $name .) -}}
+{{- if not (has . (list "train" "import" "eval")) -}}
+{{- fail (printf "workers.%s.kinds: %q is not a job kind (train, import, eval)" $name .) -}}
 {{- end -}}
+{{- end -}}
+{{- if and (has "eval" $w.kinds) (gt (int $w.gpuCount) 0) -}}
+{{- fail (printf "workers.%s: eval jobs run on CPU workers (they only call the inference endpoint); move kind eval to a pool with gpuCount 0, such as import." $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

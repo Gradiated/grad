@@ -71,6 +71,7 @@ spec:
             {{- with .Values.storage.s3PublicEndpoint }}
             - {name: S3_PUBLIC_ENDPOINT, value: {{ . | quote }}}
             {{- end }}
+            # Evals run on the eval workers; the API only checks an endpoint is set.
             {{- with .Values.evals.inferenceBaseUrl }}
             - {name: GRAD_INFERENCE_BASE_URL, value: {{ . | quote }}}
             {{- end }}
@@ -93,8 +94,6 @@ spec:
             {{- include "grad.secretEnv" (list . "TRAINER_API_KEY" "trainer-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "TRAINER_KEYS_JSON" "trainer-keys-json" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "GRAD_SECRETS_KEY" "secrets-key" true) | nindent 12 }}
-            {{- include "grad.secretEnv" (list . "GRAD_INFERENCE_API_KEY" "inference-api-key" true) | nindent 12 }}
-            {{- include "grad.secretEnv" (list . "GRAD_JUDGE_API_KEY" "judge-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "CLOUD_SERVICE_TOKEN" "cloud-service-token" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "AWS_ACCESS_KEY_ID" "aws-access-key-id" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "AWS_SECRET_ACCESS_KEY" "aws-secret-access-key" true) | nindent 12 }}

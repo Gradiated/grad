@@ -140,13 +140,14 @@ def main() -> None:
         check(bool(run["artifact_id"]), f"artifact {run['artifact_id']} exported to S3")
 
         train_logs = kubectl("logs", f"deploy/{full}-worker-train", ns=ns)
-        import_logs = kubectl("logs", f"deploy/{full}-worker-import", ns=ns)
+        import_logs = kubectl("logs", f"deploy/{full}-worker-import", "-c", "grad-trainer", ns=ns)
         check(rid in train_logs and "(train)" in train_logs, "the train worker ran it")
         check(rid not in import_logs and "(import)" in import_logs, "the import worker (kinds: import) never claimed it")
 
         probe = ("import socket,sys\ntry: socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3).close(); print('open')\n"
                  "except OSError: print('blocked')")
-        reach = {t: kubectl("exec", f"deploy/{full}-worker-import", "--", "python", "-c", probe, *t.split(":"), ns=ns).strip()
+        reach = {t: kubectl("exec", f"deploy/{full}-worker-import", "-c", "grad-trainer", "--", "python", "-c", probe,
+                            *t.split(":"), ns=ns).strip()
                  for t in ("postgres:5432", "seaweedfs:8333")}
         check(reach == {"postgres:5432": "blocked", "seaweedfs:8333": "open"}, f"worker NetworkPolicy egress allowlist {reach}")
     finally:

@@ -21,3 +21,10 @@ Admin API key (generated; kept across upgrades and after uninstall):
 
 Evals are off: set evals.inferenceBaseUrl to an OpenAI-compatible endpoint.
 {{- end }}
+{{- $evalPool := false }}
+{{- range $name, $w := .Values.workers }}{{ if and $w.enabled (has "eval" $w.kinds) }}{{ $evalPool = true }}{{ end }}{{ end }}
+{{- if not $evalPool }}
+
+No enabled worker pool has kind `eval`: evals and dataset.score() stay queued.
+Add eval to a CPU pool's kinds (workers.import.kinds: [import, eval]).
+{{- end }}

@@ -2,6 +2,8 @@
 {{- if $w.enabled }}
 {{- $d := $.Values.workerDefaults }}
 {{- $image := mergeOverwrite (deepCopy $d.image) ($w.image | default dict) }}
+{{- /* eval jobs run in a grad-server container; the trainer takes the rest. */}}
+{{- $trainerKinds := without $w.kinds "eval" }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -45,6 +47,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
+        {{- if $trainerKinds }}
         - name: grad-trainer
           image: "{{ $image.repository }}:{{ $image.tag }}"
           imagePullPolicy: {{ $image.pullPolicy }}
@@ -56,7 +59,7 @@ spec:
           env:
             - name: GRAD_SERVER_URL
               value: "http://{{ include "grad.fullname" $ }}-api:{{ $.Values.api.service.port }}"
-            - {name: GRAD_WORKER_KINDS, value: {{ join "," $w.kinds | quote }}}
+            - {name: GRAD_WORKER_KINDS, value: {{ join "," $trainerKinds | quote }}}
             - {name: GRAD_POLL_INTERVAL_S, value: {{ $d.pollIntervalSeconds | quote }}}
             - {name: GRAD_LEASE_SECONDS, value: {{ $d.leaseSeconds | quote }}}
             {{- if gt (int $.Values.metrics.workerPort) 0 }}
@@ -98,6 +101,48 @@ spec:
               mountPath: /tmp
             - name: hf-cache
               mountPath: /home/grad/.cache
+        {{- end }}
+        {{- if has "eval" $w.kinds }}
+        # Evals, dataset.score() and router labelling: calls the inference and
+        # judge endpoints and posts the outputs to the API (no GPU; eval jobs carry no workspace secrets).
+        - name: grad-eval-worker
+          image: "{{ $.Values.api.image.repository }}:{{ $.Values.api.image.tag }}"
+          imagePullPolicy: {{ $.Values.api.image.pullPolicy }}
+          command: ["node", "dist/main.js", "worker", "--kinds", "eval"]
+          env:
+            - name: GRAD_SERVER_URL
+              value: "http://{{ include "grad.fullname" $ }}-api:{{ $.Values.api.service.port }}"
+            - {name: GRAD_POLL_INTERVAL_S, value: {{ $d.pollIntervalSeconds | quote }}}
+            - {name: GRAD_LEASE_SECONDS, value: {{ $d.leaseSeconds | quote }}}
+            - {name: EVAL_CONCURRENCY, value: {{ $.Values.evals.concurrency | quote }}}
+            - name: GRAD_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with $.Values.evals.inferenceBaseUrl }}
+            - {name: GRAD_INFERENCE_BASE_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- with $.Values.evals.judgeBaseUrl }}
+            - {name: GRAD_JUDGE_BASE_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- include "grad.secretEnv" (list $ "GRAD_INFERENCE_API_KEY" "inference-api-key" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list $ "GRAD_JUDGE_API_KEY" "judge-api-key" true) | nindent 12 }}
+            - name: TRAINER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "grad.secretName" $ }}
+                  key: {{ include "grad.workerKeyName" (list $ $name $w) }}
+          securityContext:
+            {{- include "grad.containerSecurity" $ | nindent 12 }}
+            # The grad-server image's user.
+            runAsUser: 1000
+            runAsGroup: 1000
+          resources:
+            {{- toYaml $.Values.evals.workerResources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+        {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}

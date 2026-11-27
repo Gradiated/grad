@@ -51,7 +51,7 @@ class LiveServer:
             self.proc = subprocess.Popen(
                 [str(TSX_BIN), str(STACK), "--auth", "none", "--worker", "none", *extra_args],
                 cwd=str(API_DIR),
-                env={**os.environ, "EVAL_EXECUTOR": "false"},
+                env=dict(os.environ),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=log,

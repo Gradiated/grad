@@ -34,10 +34,20 @@ const lastUserText = (request: FakeChatRequest): string => {
   return typeof user?.content === "string" ? user.content : "";
 };
 
-/** Deterministic default: echoes the last user message. */
-export const defaultResponder: FakeResponder = (request) => ({
-  content: `answer: ${lastUserText(request)}`,
-});
+/**
+ * Deterministic default: echoes the last user message. A prompt containing
+ * `[delay 100ms]` is answered that much later (live chaos tests kill
+ * processes mid-eval).
+ */
+export const defaultResponder: FakeResponder = (request) => {
+  const text = lastUserText(request);
+  const delay = /\[delay (\d{1,5})ms\]/.exec(text)?.[1];
+
+  return {
+    content: `answer: ${text}`,
+    ...(delay ? { delayMs: Number(delay) } : {}),
+  };
+};
 
 /** Judge responder replying `{"score": x}`. */
 export const judgeResponder =

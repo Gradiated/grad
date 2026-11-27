@@ -63,7 +63,7 @@ api:
       import: 8
       eval: 8
     maxQueuedPerWorkspace: 500
-  # Extra environment, e.g. GRAD_EXTRA_MODELS_JSON, MAX_ATTEMPTS, EVAL_CONCURRENCY.
+  # Extra environment, e.g. GRAD_EXTRA_MODELS_JSON, MAX_ATTEMPTS.
   env: {}
   podAnnotations: {}
   nodeSelector: {}
@@ -114,13 +114,26 @@ storage:
   # (e.g. an in-cluster store behind an ingress); file upload tickets use it.
   s3PublicEndpoint: ""
 
-# Evals call an OpenAI-compatible endpoint (your vLLM/SGLang with the LoRA modules
-# named by artifact ref). Unset: POST /v1/evals returns 501 inference_unavailable.
-# Keys come from the inference-api-key / judge-api-key secret keys.
+# Evals (and dataset.score(), router labelling, checkpoint evals) run on the
+# eval workers: a grad-server container in every worker pool whose kinds include
+# `eval` (the import pool by default). They call an OpenAI-compatible endpoint
+# (your vLLM/SGLang with the LoRA modules named by artifact ref); the API only
+# checks that one is set. Unset: POST /v1/evals returns 501 inference_unavailable.
+# Keys come from the inference-api-key / judge-api-key secret keys (eval workers only).
 evals:
   inferenceBaseUrl: ""
   # Judge endpoint for Judge rubric items; defaults to the inference endpoint.
   judgeBaseUrl: ""
+  # Concurrent model calls per eval worker (EVAL_CONCURRENCY).
+  concurrency: 8
+  # The eval worker container's resources.
+  workerResources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
 
 cloud:
   internalApiUrl: ""
@@ -132,7 +145,8 @@ models:
 
 # Workers pull jobs from the API and claim only their `kinds`. GPU `train`
 # workers never receive workspace secrets; imports and source syncs (which carry
-# provider keys and HF tokens) run on the CPU `import` workers.
+# provider keys and HF tokens) run on the CPU `import` workers, which also run
+# `eval` jobs in a grad-server container beside the trainer.
 workerDefaults:
   image:
     repository: docker.io/gradiated/grad-trainer
@@ -168,7 +182,7 @@ workers:
         memory: 32Gi
   import:
     enabled: true
-    kinds: [import]
+    kinds: [import, eval]
     replicaCount: 1
     image:
       tag: "0.2.0-alpha.3"
@@ -280,6 +294,11 @@ networkPolicy:
             except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
       ports:
         - {protocol: TCP, port: 443}
+  # Extra egress for the eval workers' inference and judge endpoints when they
+  # are in the cluster (private addresses), e.g.
+  #  - to: [{podSelector: {matchLabels: {app: vllm}}}]
+  #    ports: [{protocol: TCP, port: 8000}]
+  inferenceEgress: []
 
 # The web UI (runs, datasets, evals, usage, worker health), served by grad-server
 # at / on the API Service and so behind the ingress below. It calls only the
