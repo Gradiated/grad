@@ -167,6 +167,9 @@ export const runEvents = (r: Wire, opts: { steps: number; interruptAt?: number; 
     phase("uploading", 1, opts.steps);
     phase("completing", 1, opts.steps);
     emit("completed", { run: r }, 1);
+  } else if (!["queued", "running"].includes(String(r.status))) {
+    // An ended run's stream closes with its final state, or the client would reconnect and replay it.
+    emit("completed", { run: r }, 1);
   }
   return out.join("");
 };

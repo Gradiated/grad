@@ -248,9 +248,10 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
         break;
       case "completed": {
         final = ev.run;
-        if (!timeline.some((t) => t.kind === "completed")) {
+        if (!timeline.some((t) => t.key === "completed")) {
           const title = { completed: "Completed", failed: "Failed", cancelled: "Cancelled", stopped_budget: "Stopped at the cost cap" }[ev.status as string] ?? ev.status;
-          timeline.push({ key: "completed", kind: "completed", timestamp: ev.timestamp, title, ...(ev.run.error ? { detail: ev.run.error } : {}) });
+          const kind = ev.status === "completed" ? "completed" : ev.status === "failed" ? "failure" : ev.status === "stopped_budget" ? "warning" : "log";
+          timeline.push({ key: "completed", kind, timestamp: ev.timestamp, title, ...(ev.run.error ? { detail: ev.run.error } : {}) });
         }
         break;
       }

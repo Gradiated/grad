@@ -312,6 +312,13 @@ describe("presentation helpers", () => {
     expect(foldCheckpoints([item("checkpoint", 9), item("checkpoint", 8), item("checkpoint", 7)])[0]).toMatchObject({ detail: "steps 7 to 9", timestamp: "2026-11-27T13:00:09Z" });
   });
 
+  it("marks how a run ended in its timeline", () => {
+    const ended = (status: Run["status"]) => applyEvents(emptyStream(), [{ type: "completed", status, run: run({ status, error: status === "failed" ? "boom" : null }), seq: 0, attempt: 1, timestamp: "2026-11-27T13:00:00Z" }]).timeline.at(-1);
+    expect(ended("failed")).toMatchObject({ kind: "failure", title: "Failed", detail: "boom" });
+    expect(ended("stopped_budget")).toMatchObject({ kind: "warning", title: "Stopped at the cost cap" });
+    expect(ended("cancelled")).toMatchObject({ kind: "log", title: "Cancelled" });
+  });
+
   it("smooths a series with a debiased moving average", () => {
     const out = smooth([1, null, 1, 3], 0.5);
     expect(out[0]).toBeCloseTo(1);
