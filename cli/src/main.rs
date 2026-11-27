@@ -36,6 +36,7 @@ async fn dispatch(cli: Cli, ctx: &Ctx) -> CliResult {
         Command::Usage { page } => sources::usage(ctx, page).await,
         Command::Secrets { action } => sources::secrets(ctx, action).await,
         Command::Sources { action } => sources::sources(ctx, action).await,
+        Command::Ui(a) => ui::ui(ctx, a),
         Command::Local { action } => local::local(ctx, action).await,
     }
 }

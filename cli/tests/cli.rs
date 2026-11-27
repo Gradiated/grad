@@ -429,6 +429,7 @@ fn help_documents_exit_codes_and_every_command_has_help() {
         vec!["deploy"],
         vec!["secrets"],
         vec!["sources"],
+        vec!["ui"],
     ] {
         let mut args = cmd.clone();
         args.push("--help");
@@ -2226,6 +2227,60 @@ fn docker_shim(sb: &Sandbox, exit: i32) -> PathBuf {
 
 #[cfg(unix)]
 #[test]
+fn ui_opens_the_browser_with_a_one_time_key_fragment_and_never_prints_the_key() {
+    let sb = Sandbox::new("ui");
+    // A fake browser that records the URL it was asked to open.
+    let browser = sb.path("browser.sh");
+    std::fs::write(
+        &browser,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$1\" > {}\n",
+            sb.path("opened.txt").display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&browser, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("BROWSER", &browser);
+    let r = run(c, &["ui", "--json"]);
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["url"], "http://127.0.0.1:8787/");
+    assert_eq!(r.json()["data"]["opened"], true);
+    assert_eq!(
+        std::fs::read_to_string(sb.path("opened.txt")).unwrap(),
+        "http://127.0.0.1:8787/#key=grad_cli_test"
+    );
+    assert!(!r.stdout.contains("grad_cli_test") && !r.stderr.contains("grad_cli_test"));
+
+    let mut c = sb.grad(Some("http://127.0.0.1:8787/"));
+    c.env("BROWSER", &browser);
+    let r = run(c, &["ui", "run_01J9X"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout
+            .contains("Opened http://127.0.0.1:8787/runs/run_01J9X"),
+        "{}",
+        r.stdout
+    );
+
+    let r = run(sb.grad(Some("http://127.0.0.1:8787")), &["ui", "--no-open"]);
+    expect(&r, 0);
+    assert_eq!(r.stdout.trim(), "http://127.0.0.1:8787/");
+    assert!(!r.stderr.contains("grad_cli_test"));
+
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("BROWSER", sb.path("no-such-browser"));
+    let r = run(c, &["ui", "--json"]);
+    expect(&r, 1);
+    assert_eq!(r.err_json()["error"]["code"], "browser_unavailable");
+    assert!(!r.stderr.contains("grad_cli_test"));
+}
+
+#[test]
 fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let srv = api();
     let port = srv.url.rsplit(':').next().unwrap().to_string();
@@ -2242,6 +2297,12 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
         r.stdout
     );
     assert!(r.stdout.contains("grad --profile local models list"));
+    assert!(
+        r.stdout
+            .contains(&format!("Web UI: http://127.0.0.1:{}/", port)),
+        "{}",
+        r.stdout
+    );
     let compose = sb.path("data/gradiated/local/docker-compose.yml");
     let text = std::fs::read_to_string(&compose).unwrap();
     // A source build pulls `main`; release.yml bakes the version in (build.rs).

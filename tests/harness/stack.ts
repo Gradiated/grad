@@ -18,7 +18,9 @@
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
  *          "workspace_id","mode","worker","model_paths","fault_url",
  *          "worker_url","replicas":[{"url","pid"}],
- *          "langfuse_url","langfuse_secret"}
+ *          "langfuse_url","langfuse_secret","ui_url"}
+ * `ui_url` is the web UI (null in --cloud mode or until `pnpm -C server/ui
+ * build` has run); open `<ui_url>#key=<api_key>` to sign in.
  * `langfuse_url` is tests/fixtures/fake-langfuse.ts (drive it via its
  * /_control/ routes); store `langfuse_secret` as a grad secret to sync it.
  * Workers reach it through GRAD_SOURCES_EGRESS_ALLOW=127.0.0.1/32 with the
@@ -36,7 +38,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -344,6 +346,11 @@ const main = async () => {
         replicas,
         langfuse_url: langfuse.url,
         langfuse_secret: langfuse.secret,
+        // grad-server serves server/ui/dist when it is built (pnpm -C server/ui build).
+        ui_url:
+          !cloud && existsSync(join(repo, "server", "ui", "dist", "index.html"))
+            ? `${baseUrl}/`
+            : null,
       })}\n`,
     );
   } catch (error) {

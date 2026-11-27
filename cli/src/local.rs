@@ -444,6 +444,10 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 "✓ grad is running at {} (profile '{}')",
                 base_url, profile
             ));
+            out.line(format!(
+                "  Web UI: {}/  (grad --profile {} ui opens it signed in)",
+                base_url, profile
+            ));
             out.line("  Next:");
             out.line(format!("    grad --profile {} models list", profile));
             out.line(format!(
@@ -453,6 +457,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.line("    grad local down             # stop it (add --volumes to delete data)");
             out.done(&json!({
                 "base_url": base_url,
+                "ui_url": format!("{}/", base_url),
                 "profile": profile,
                 "compose_files": files,
                 "project": args.project_name,

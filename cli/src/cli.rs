@@ -268,11 +268,35 @@ key) resumes it.")]
         action: SourcesCmd,
     },
 
+    /// Open the web UI in a browser, signed in with this profile's key
+    #[command(after_help = "\
+Examples:
+  grad ui                         # runs list on the configured server
+  grad ui run_01J9X               # one run's page
+  grad --profile local ui         # the stack from `grad local up`
+  grad ui --no-open               # print the URL (without the key)
+
+The key is handed over once in the URL fragment, which browsers never send to
+the server; the page keeps it in that tab's sessionStorage only. BROWSER
+overrides the browser command.")]
+    Ui(UiArgs),
+
     /// Run a local grad stack with Docker Compose
     Local {
         #[command(subcommand)]
         action: LocalCmd,
     },
+}
+
+#[derive(Args, Debug)]
+pub struct UiArgs {
+    /// Open this run's page instead of the runs list
+    #[arg(value_name = "RUN_ID")]
+    pub run: Option<String>,
+
+    /// Print the URL instead of opening a browser
+    #[arg(long)]
+    pub no_open: bool,
 }
 
 #[derive(Args, Debug)]
