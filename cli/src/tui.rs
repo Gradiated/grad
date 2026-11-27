@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::{cursor, execute, terminal};
 use grad_sdk::{
-    Checkpoint, Client, Error as SdkError, ListParams, MetricEvent, MetricPoint, Run, RunStatus,
+    Checkpoint, Client, Error as SdkError, ListParams, MetricPoint, Run, RunEvent as SdkEvent,
+    RunStatus,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
@@ -96,11 +97,10 @@ impl Tone {
 /// agreed with the lifecycle work (review/r5-coordination.md: `phase`,
 /// `metric`, `checkpoint`, `attempt`, `warning`, `log`, `completed`).
 ///
-/// Until the Rust SDK exposes `runs().events(id, true)`, the driver maps
-/// today's metrics stream (`metric`, `completed`) into these and derives the
-/// phase from the run's status; the render tests replay a recording of the
-/// events endpoint. When the SDK's `RunEvent` lands, these types give way to
-/// it and only [`pump_stream`] changes.
+/// The driver reads them from the SDK's `runs().events(id, true)` (from the
+/// first event, so attaching mid-run backfills the whole history) and
+/// converts each with [`RunEvent::from_sdk`]; the render tests replay a
+/// recording of the events endpoint.
 pub(crate) mod wire {
     use grad_sdk::{MetricPoint, Run};
     use serde::Deserialize;
@@ -217,7 +217,14 @@ pub(crate) mod wire {
             }
         }
 
-        /// A point of today's metrics stream as a `metric` event.
+        /// The SDK's event in these shapes (the same wire JSON).
+        pub fn from_sdk(ev: &grad_sdk::RunEvent) -> Option<RunEvent> {
+            serde_json::to_value(ev)
+                .ok()
+                .and_then(|v| serde_json::from_value(v).ok())
+        }
+
+        /// A polled run's latest point as a `metric` event.
         pub fn metric(p: MetricPoint) -> RunEvent {
             let meta = Meta {
                 seq: p.seq,
@@ -225,19 +232,6 @@ pub(crate) mod wire {
                 timestamp: p.timestamp.clone(),
             };
             RunEvent::Metric { meta, metric: p }
-        }
-
-        /// The metrics stream's final status as a `completed` event.
-        pub fn completed(r: Run) -> RunEvent {
-            let meta = Meta {
-                seq: 0,
-                attempt: r.attempt,
-                timestamp: r.finished_at.clone().unwrap_or_default(),
-            };
-            RunEvent::Completed {
-                meta,
-                run: Box::new(r),
-            }
         }
     }
 }
@@ -296,7 +290,8 @@ struct PhaseView {
     tone: Tone,
 }
 
-const MAX_SAMPLES: usize = 4000;
+/// Samples kept before thinning every other one (the chart downsamples to its width).
+const MAX_SAMPLES: usize = 200_000;
 const MAX_LOG: usize = 500;
 
 /// View state of one followed run.
@@ -306,6 +301,8 @@ pub struct Model {
     checkpoints: Vec<Checkpoint>,
     log: VecDeque<LogLine>,
     seen_seq: i64,
+    /// Lifecycle events folded so far (polled phases apply only before the first).
+    seen_events: u64,
     /// (epoch ms, step, tokens) of recent points in the current attempt.
     window: VecDeque<(i64, i64, i64)>,
     tok_per_sec: Option<f64>,
@@ -340,6 +337,7 @@ impl Model {
             checkpoints: Vec::new(),
             log: VecDeque::new(),
             seen_seq: 0,
+            seen_events: 0,
             window: VecDeque::new(),
             tok_per_sec: None,
             life: None,
@@ -365,10 +363,13 @@ impl Model {
             let text = m.status_text();
             m.push_log(now, m.status_tone(), text);
         }
-        if let Some(p) = m.run.latest_metric.clone() {
-            m.apply_metric(p);
-        }
-        m.sync_phase();
+        // The server's phase and when it began, until the event history
+        // (replayed from the first event) takes over. The chart fills from
+        // that history too, not from the run's latest point.
+        m.life = life_of(&m.run);
+        let v = m.phase();
+        m.phase_key = v.key;
+        m.phase_since = m.life.as_ref().map_or(now, |l| l.since);
         m
     }
 
@@ -541,6 +542,12 @@ impl Model {
             .map(|s| s.step)
             .filter(|_| r.attempt == self.run.attempt);
         let (cost, tokens) = (self.run.cost_usd, self.run.tokens_processed);
+        if self.seen_events == 0 {
+            if let Some(l) = life_of(&r) {
+                let gpu = self.life.take().and_then(|o| o.gpu);
+                self.life = Some(Life { gpu, ..l });
+            }
+        }
         self.run = r;
         if let Some(s) = streamed_step {
             self.run.current_step = self.run.current_step.max(s);
@@ -628,6 +635,9 @@ impl Model {
 
     /// Fold one lifecycle event.
     pub fn apply_event(&mut self, ev: RunEvent) {
+        if !matches!(ev, RunEvent::Unknown) {
+            self.seen_events += 1;
+        }
         let at = ev
             .meta()
             .and_then(|m| parse_ts(&m.timestamp))
@@ -907,6 +917,21 @@ impl Model {
         }
         view
     }
+}
+
+/// The phase a run object reports (`phase`, `phase_since`, queue details).
+fn life_of(r: &Run) -> Option<Life> {
+    let phase: Phase = serde_json::to_value(r.phase.as_ref()?)
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())?;
+    let since = parse_ts(r.phase_since.as_deref()?)?;
+    Some(Life {
+        phase,
+        since,
+        workers_online: r.workers_online,
+        autoscaling: r.autoscaling,
+        gpu: None,
+    })
 }
 
 /// `3/10`, or just `12` once reclaimed GPUs (which don't count) pass the cap.
@@ -1373,6 +1398,74 @@ fn compact_view(f: &mut Frame, area: Rect, m: &Model) {
     footer(f, foot, m, true);
 }
 
+/// The empty chart says what the run is doing: "Waiting for a GPU (2
+/// workers online, all busy)…", "Loading the model…" (from the lifecycle
+/// phase and its queue details), or how it ended before a first step.
+fn empty_chart_message(m: &Model) -> String {
+    let v = m.phase();
+    if m.run.status.is_terminal() {
+        return format!("{} before the first training step", v.label);
+    }
+    match v.key {
+        "training" | "evaluating" | "checkpointing" => {
+            "Training: waiting for the first step…".into()
+        }
+        _ => format!("{}…", v.label.trim_end_matches('…')),
+    }
+}
+
+/// `(step, y)` points cut to `columns` buckets over steps `0..=x1`: each
+/// bucket keeps its lowest and highest point, in step order, so spikes and
+/// dips survive and the curve spans the whole run.
+fn min_max_buckets(
+    points: impl Iterator<Item = (i64, f64)>,
+    x1: f64,
+    columns: usize,
+) -> Vec<(f64, f64)> {
+    let columns = columns.max(1);
+    // Per column: its lowest and its highest (step, y).
+    type Extremes = ((i64, f64), (i64, f64));
+    let mut buckets: Vec<Option<Extremes>> = vec![None; columns];
+    for (step, y) in points.filter(|p| p.1.is_finite()) {
+        let i = ((step as f64 / x1.max(1.0)) * columns as f64) as usize;
+        let b = &mut buckets[i.min(columns - 1)];
+        *b = Some(match *b {
+            None => ((step, y), (step, y)),
+            Some((lo, hi)) => (
+                if y < lo.1 { (step, y) } else { lo },
+                if y > hi.1 { (step, y) } else { hi },
+            ),
+        });
+    }
+    let mut out = Vec::new();
+    for (lo, hi) in buckets.into_iter().flatten() {
+        let (a, b) = if lo.0 <= hi.0 { (lo, hi) } else { (hi, lo) };
+        out.push((a.0 as f64, a.1));
+        if b != a {
+            out.push((b.0 as f64, b.1));
+        }
+    }
+    out
+}
+
+/// Y bounds for the loss chart: the 1st to 99th percentile of the values
+/// once there are 100 or more (all of them below that), padded 8%.
+fn y_bounds(values: impl Iterator<Item = f64>) -> (f64, f64) {
+    let mut v: Vec<f64> = values.filter(|x| x.is_finite()).collect();
+    if v.is_empty() {
+        return (0.0, 1.0);
+    }
+    v.sort_by(|a, b| a.total_cmp(b));
+    let (lo, hi) = if v.len() >= 100 {
+        let at = |q: f64| v[((v.len() - 1) as f64 * q).round() as usize];
+        (at(0.01), at(0.99))
+    } else {
+        (v[0], v[v.len() - 1])
+    };
+    let pad = ((hi - lo) * 0.08).max(1e-6);
+    ((lo - pad).max(0.0_f64.min(lo)), hi + pad)
+}
+
 /// Values scaled to 8..=100 for a sparkline (so the lowest still shows as
 /// `▁`), resampled to `width` buckets.
 fn series(values: impl Iterator<Item = f64>, width: usize) -> Vec<u64> {
@@ -1432,12 +1525,7 @@ fn loss_panel(f: &mut Frame, area: Rect, m: &Model) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     if m.samples.is_empty() {
-        let msg =
-            if m.run.status == RunStatus::Queued || matches!(m.phase().key, "queued" | "waiting") {
-                "The chart starts with the first training step."
-            } else {
-                "Waiting for the first step…"
-            };
+        let msg = empty_chart_message(m);
         let [_, mid, _] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(1),
@@ -1459,19 +1547,14 @@ fn loss_panel(f: &mut Frame, area: Rect, m: &Model) {
     ])
     .areas(inner);
 
-    let width = inner.width.saturating_sub(8).max(10) as usize * 2;
-    let stride = m.samples.len().div_ceil(width).max(1);
-    let mut train: Vec<(f64, f64)> = m
-        .samples
-        .iter()
-        .step_by(stride)
-        .map(|s| (s.step as f64, s.loss))
-        .collect();
-    if let Some(s) = m.samples.last() {
-        if train.last().map(|p| p.0) != Some(s.step as f64) {
-            train.push((s.step as f64, s.loss));
-        }
-    }
+    // X is always the whole run (0..total_steps); each series is cut to the
+    // plot's braille columns with a min and a max per column, so 1,700 or
+    // 100k steps draw as the same full curve.
+    let x0 = 0.0;
+    let last_step = m.samples.last().map(|s| s.step).unwrap_or(1);
+    let x1 = m.run.total_steps.max(last_step).max(1) as f64;
+    let columns = inner.width.saturating_sub(8).max(10) as usize * 2;
+    let train = min_max_buckets(m.samples.iter().map(|s| (s.step, s.loss)), x1, columns);
     let eval: Vec<(f64, f64)> = m
         .samples
         .iter()
@@ -1481,13 +1564,31 @@ fn loss_panel(f: &mut Frame, area: Rect, m: &Model) {
         .best_eval()
         .map(|(s, e)| vec![(s as f64, e)])
         .unwrap_or_default();
-    let ys = train.iter().chain(eval.iter()).map(|p| p.1);
-    let (lo, hi) = ys.fold((f64::MAX, f64::MIN), |(a, b), y| (a.min(y), b.max(y)));
-    let pad = ((hi - lo) * 0.08).max(1e-6);
-    let (lo, hi) = ((lo - pad).max(0.0_f64.min(lo)), hi + pad);
-    let x0 = m.samples.first().map(|s| s.step).unwrap_or(0).min(0) as f64;
-    let last_step = m.samples.last().map(|s| s.step).unwrap_or(1);
-    let x1 = m.run.total_steps.max(last_step).max(1) as f64;
+    // Y scales to the whole visible series, robust to a few spikes: they're
+    // drawn on the edge they cross, in the attention colour.
+    let (lo, hi) = y_bounds(
+        m.samples
+            .iter()
+            .map(|s| s.loss)
+            .chain(eval.iter().map(|p| p.1)),
+    );
+    type Points = Vec<(f64, f64)>;
+    let clip = |pts: &[(f64, f64)]| -> (Points, Points) {
+        let mut out = Vec::new();
+        let inside = pts
+            .iter()
+            .map(|&(x, y)| {
+                if y > hi || y < lo {
+                    out.push((x, y.clamp(lo, hi)));
+                }
+                (x, y.clamp(lo, hi))
+            })
+            .collect();
+        (inside, out)
+    };
+    let (train, mut clipped) = clip(&train);
+    let (eval, eval_clipped) = clip(&eval);
+    clipped.extend(eval_clipped);
 
     // Y tick labels: top, middle (when there's room) and bottom.
     let mut ticks = vec![(0, hi), (plot_rows.height - 1, lo)];
@@ -1512,6 +1613,15 @@ fn loss_panel(f: &mut Frame, area: Rect, m: &Model) {
         .graph_type(GraphType::Line)
         .style(fg(ACCENT))
         .data(&train)];
+    if !clipped.is_empty() {
+        sets.push(
+            Dataset::default()
+                .marker(Marker::Dot)
+                .graph_type(GraphType::Scatter)
+                .style(fg(WARN))
+                .data(&clipped),
+        );
+    }
     if !eval.is_empty() {
         sets.push(
             Dataset::default()
@@ -1862,30 +1972,45 @@ fn fatal(e: &SdkError) -> bool {
     )
 }
 
-/// The run's live stream (SSE), reconnecting with Last-Event-ID for as long
-/// as we follow. Today that is the metrics stream; see [`wire`].
+/// The run's lifecycle events over SSE, from the first one (so attaching
+/// mid-run backfills phases and every metric point), then live; reconnects
+/// resume after the last event id, so nothing repeats or goes missing.
 async fn pump_stream(c: Client, id: String, tx: UnboundedSender<Msg>, polling: Arc<AtomicBool>) {
     let mut last: Option<String> = None;
     let mut failures: u32 = 0;
     loop {
         let mut s = c
             .runs()
-            .stream_metrics(&id, last.clone())
+            .events(&id, true)
             .max_reconnects(1)
             .reconnect_base(Duration::from_millis(250));
+        if let Some(l) = &last {
+            s = s.after(l.clone());
+        }
+        let mut linked = false;
         loop {
             match s.next().await {
-                Some(Ok(MetricEvent::Metric(p))) => {
+                Some(Ok(ev)) => {
                     failures = 0;
-                    let _ = tx.send(Msg::Link(None));
-                    let _ = tx.send(Msg::Event(Box::new(RunEvent::metric(*p))));
-                }
-                Some(Ok(MetricEvent::Finished(r))) => {
-                    let _ = tx.send(Msg::Event(Box::new(RunEvent::completed(*r))));
-                    return;
+                    if let Some(l) = s.last_event_id() {
+                        last = Some(l.to_string());
+                    }
+                    if !linked {
+                        linked = true;
+                        let _ = tx.send(Msg::Link(None));
+                    }
+                    let done = matches!(ev, SdkEvent::Completed(_));
+                    if let Some(w) = RunEvent::from_sdk(&ev) {
+                        let _ = tx.send(Msg::Event(Box::new(w)));
+                    }
+                    if done {
+                        return;
+                    }
                 }
                 Some(Err(e)) => {
-                    last = s.last_event_id().map(str::to_string).or(last);
+                    if let Some(l) = s.last_event_id() {
+                        last = Some(l.to_string());
+                    }
                     if fatal(&e) {
                         let _ = tx.send(Msg::Fatal(Box::new(e)));
                         return;

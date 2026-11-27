@@ -150,6 +150,15 @@ export const REASON_LABEL: Record<string, string> = {
 
 const REPEATING = new Set<RunPhase>(["evaluating", "checkpointing"]);
 
+/** Phases that share one "for" clock. */
+const FAMILY: Partial<Record<RunPhase, string>> = {
+  queued: "queue",
+  waiting_for_compute: "queue",
+  training: "train",
+  evaluating: "train",
+  checkpointing: "train",
+};
+
 /** Applies a batch of events to the state immutably (one React update per batch). */
 export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStreamState => {
   if (events.length === 0) return state;
@@ -183,7 +192,11 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
         break;
       }
       case "phase": {
-        phase = { phase: ev.phase, since: ev.timestamp, step: ev.step, workersOnline: ev.workersOnline, autoscaling: ev.autoscaling };
+        // Evals and checkpoints pause training briefly, and waiting_for_compute only says a
+        // queued run is still unclaimed: one clock per family, so "Training for" counts from
+        // when training began, not from the last eval.
+        const family = phase && FAMILY[phase.phase] !== undefined && FAMILY[phase.phase] === FAMILY[ev.phase];
+        phase = { phase: ev.phase, since: family && phase ? phase.since : ev.timestamp, step: ev.step, workersOnline: ev.workersOnline, autoscaling: ev.autoscaling };
         if (ev.gpu) gpu = ev.gpu;
         if (REPEATING.has(ev.phase)) break;
         if (ev.phase === "training") {

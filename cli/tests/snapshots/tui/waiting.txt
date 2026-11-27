@@ -13,7 +13,7 @@
  │                                                                                                │
  │                                                                                                │
  │                                                                                                │
- │                         The chart starts with the first training step.                         │
+ │                              Waiting for a GPU (0 workers online)…                             │
  │                                                                                                │
  │                                                                                                │
  │                                                                                                │

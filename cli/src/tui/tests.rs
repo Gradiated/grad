@@ -217,6 +217,17 @@ fn assert_palette(b: &Buffer) {
     }
 }
 
+/// The run as a server without lifecycle phases reports it.
+fn no_phase(r: &Run) -> Run {
+    Run {
+        phase: None,
+        phase_since: None,
+        workers_online: None,
+        autoscaling: None,
+        ..r.clone()
+    }
+}
+
 fn label(m: &Model) -> String {
     m.phase().label
 }
@@ -260,9 +271,12 @@ fn waiting_for_a_gpu() {
     m.apply_run(queued.clone());
     assert_eq!(
         label(&m),
-        "Waiting for a GPU",
-        "before the server says more"
+        "Waiting for a GPU (0 workers online)",
+        "the run's own phase and queue details, before any event"
     );
+    let mut bare = Model::new(no_phase(&queued), 0);
+    bare.apply_run(no_phase(&queued));
+    assert_eq!(label(&bare), "Waiting for a GPU", "servers without phases");
     feed(&mut m, &fx, events(&fx).remove(0));
     assert_eq!(label(&m), "Waiting for a GPU (0 workers online)");
     // As the server reports it when no worker claims the run within 45 s.
@@ -278,7 +292,8 @@ fn waiting_for_a_gpu() {
         "one clock across queued and waiting_for_compute:\n{}",
         t
     );
-    assert!(t.contains("The chart starts with the first training step."));
+    // The empty chart says why there's no step yet, never just "soon".
+    assert!(t.contains("Waiting for a GPU (0 workers online)…"), "{}", t);
     assert_eq!(
         log_texts(&m),
         ["Run created", "Waiting for a GPU (0 workers online)"],
@@ -683,12 +698,12 @@ fn stream_bookkeeping() {
     assert!(m.eta().unwrap() >= 0);
     assert_eq!(m.best_eval().unwrap().0, 200, "loss falls on this run");
 
-    // Today's metrics stream: a queued run whose first metric arrives trains.
-    let mut q = Model::new(run_from(&fx["queued"]), 0);
+    // A server without phases: a queued run whose first metric arrives trains.
+    let mut q = Model::new(no_phase(&run_from(&fx["queued"])), 0);
     assert_eq!(label(&q), "Waiting for a GPU");
     q.apply_run(Run {
         status: RunStatus::Running,
-        ..run_from(&fx["queued"])
+        ..no_phase(&run_from(&fx["queued"]))
     });
     assert_eq!(label(&q), "Starting");
     q.apply_event(RunEvent::metric(metrics(&fx).remove(0)));
@@ -719,7 +734,10 @@ fn stream_bookkeeping() {
         big.apply_metric(p);
     }
     assert!(big.samples.len() <= MAX_SAMPLES);
-    assert_eq!(big.samples.iter().filter(|s| s.eval.is_some()).count(), 4);
+    assert_eq!(
+        big.samples.iter().filter(|s| s.eval.is_some()).count(),
+        MAX_SAMPLES / 1000
+    );
     for _ in 0..MAX_LOG + 5 {
         big.push_log(0, Tone::Plain, "x".into());
     }
@@ -781,7 +799,7 @@ fn terminal_statuses() {
         .any(|c| c.fg == Color::Yellow && c.symbol() == "━"));
 
     // A restart with no checkpoint says so (servers without phases).
-    let mut q = run_from(&fx["queued"]);
+    let mut q = no_phase(&run_from(&fx["queued"]));
     q.attempt = 1;
     let mut m = Model::new(q, 0);
     let mut r = m.run.clone();
@@ -944,11 +962,12 @@ const SSE: &str = "text/event-stream";
 #[tokio::test]
 async fn stream_resumes_after_drops_with_last_event_id() {
     let fx = fixture();
-    // Today's metrics stream: `metric` carries a MetricPoint, `status` the final Run.
-    let point = serde_json::to_string(&metrics(&fx)[0]).unwrap();
-    let fin = serde_json::to_string(&final_run(&fx)).unwrap();
-    let metric = format!("event: metric\nid: 1\ndata: {}\n\n", point);
-    let status = format!("event: status\ndata: {}\n\n", fin);
+    // The events stream: each SSE carries a RunEvent; `completed` the final Run.
+    let raw = fx["events"].as_array().unwrap();
+    let first = raw.iter().find(|e| e["type"] == "metric").unwrap();
+    let done = raw.iter().find(|e| e["type"] == "completed").unwrap();
+    let metric = format!("event: metric\nid: 1\ndata: {}\n\n", first);
+    let status = format!("event: completed\ndata: {}\n\n", done);
     // 1: one metric, then the body ends; 2: ends at once (the SDK gives up and
     // the pump reconnects itself); 3: the final status.
     let (url, server) = serve(vec![
@@ -971,6 +990,7 @@ async fn stream_resumes_after_drops_with_last_event_id() {
             "up".to_string(),
             format!("metric {}", metrics(&fx)[0].seq),
             "down connection dropped".into(),
+            "up".into(),
             "finished completed".into(),
         ]
     );
@@ -1041,4 +1061,199 @@ async fn poller_reports_the_run_and_checkpoints_until_it_ends() {
     )
     .await;
     assert_eq!(drain(&mut rx), ["fatal unauthorized"]);
+}
+
+/// A ~1,700-step run attached at step 845: the run as `grad runs watch` first
+/// reads it, and its event history (replayed from the first event).
+fn long_run(fx: &Value) -> (Run, Vec<RunEvent>) {
+    let created = epoch(fx["queued"]["created_at"].as_str().unwrap());
+    let mut run = run_from(&fx["queued"]);
+    run.status = RunStatus::Running;
+    (run.total_steps, run.current_step, run.attempt) = (1691, 845, 1);
+    run.phase = serde_json::from_value(json!("training")).unwrap();
+    run.phase_since = Some(fmt_ts(created + 60));
+    let template = metrics(fx).remove(0);
+    let point = |i: i64| {
+        let mut p = template.clone();
+        (p.seq, p.step, p.attempt) = (10 + i, i, 1);
+        // Falls from 6.2 towards 5.86 with a little noise and one spike.
+        let noise = ((i * 7919) % 13) as f64 / 13.0 * 0.01;
+        p.loss =
+            5.86 + 0.34 * (-(i as f64) / 150.0).exp() + noise + if i == 700 { 3.0 } else { 0.0 };
+        p.tokens = i * 100;
+        p.timestamp = fmt_ts(created + 60 + i);
+        p
+    };
+    run.latest_metric = Some(point(845));
+    let mut evs = vec![
+        event(
+            fx,
+            0,
+            1,
+            json!({"type": "phase", "seq": 1, "phase": "queued", "step": 0, "workers_online": 0, "autoscaling": false, "gpu": null}),
+        ),
+        event(
+            fx,
+            20,
+            1,
+            json!({"type": "phase", "seq": 2, "phase": "starting", "step": 0, "gpu": {"name": "NVIDIA L4", "memory_gb": 22.5}}),
+        ),
+        event(
+            fx,
+            30,
+            1,
+            json!({"type": "phase", "seq": 3, "phase": "loading_model", "step": 0}),
+        ),
+        event(
+            fx,
+            60,
+            1,
+            json!({"type": "phase", "seq": 4, "phase": "training", "step": 0}),
+        ),
+    ];
+    for i in 1..=845 {
+        let p = point(i);
+        evs.push(event(
+            fx,
+            60 + i,
+            1,
+            json!({"type": "metric", "seq": p.seq, "metric": p}),
+        ));
+        if i % 400 == 0 {
+            evs.push(event(
+                fx,
+                60 + i,
+                1,
+                json!({"type": "phase", "seq": 10 + i, "phase": "evaluating", "step": i}),
+            ));
+            evs.push(event(
+                fx,
+                60 + i,
+                1,
+                json!({"type": "phase", "seq": 10 + i, "phase": "training", "step": i}),
+            ));
+        }
+    }
+    (run, evs)
+}
+
+#[test]
+fn attaching_mid_run_backfills_the_whole_history() {
+    // r8 trial: attached at 845/1691, the chart held only the points since
+    // attaching (auto-scaled to 5.84-5.89) and said "Training for 5s".
+    let fx = fixture();
+    let (run, evs) = long_run(&fx);
+    let created = epoch(&run.created_at);
+    let now = created + 60 + 845 + 5;
+    let mut m = Model::new(run.clone(), now);
+    assert_eq!(label(&m), "Training");
+    assert_eq!(
+        m.phase_since,
+        created + 60,
+        "since the server's phase_since"
+    );
+    for ev in evs {
+        m.apply_event(ev);
+    }
+    m.tick(now);
+    assert_eq!(m.samples.len(), 845);
+    assert_eq!(m.samples.first().map(|s| s.step), Some(1));
+    let t = text(&render(&m, 100, 30));
+    assert!(
+        t.contains("Training  for 14m10s"),
+        "phase clock from its start:\n{}",
+        t
+    );
+    // The y axis spans the early, high losses; the one spike is clipped, not scaled to.
+    assert!(t.contains(" 6.") && !t.contains(" 8.9"), "{}", t);
+    assert!(t.contains("1,691"), "x runs to total_steps:\n{}", t);
+    let b = render(&m, 100, 30);
+    assert!(
+        b.content
+            .iter()
+            .any(|c| c.fg == Color::Yellow && c.symbol() == "•"),
+        "the clipped spike is marked"
+    );
+    snapshot("attached", &b);
+}
+
+#[test]
+fn chart_downsamples_to_its_width_and_ignores_outliers() {
+    let points: Vec<(i64, f64)> = (0..100_000)
+        .map(|i| {
+            (
+                i,
+                if i == 50_000 {
+                    99.0
+                } else {
+                    1.0 + i as f64 * 1e-6
+                },
+            )
+        })
+        .collect();
+    let cut = min_max_buckets(points.iter().copied(), 100_000.0, 160);
+    assert!(
+        cut.len() <= 320,
+        "two points per column at most: {}",
+        cut.len()
+    );
+    assert_eq!(cut.first().map(|p| p.0), Some(0.0), "starts at step 0");
+    assert!(cut.iter().any(|p| p.1 == 99.0), "a spike survives the cut");
+    assert!(cut.windows(2).all(|w| w[0].0 <= w[1].0), "in step order");
+    let (lo, hi) = y_bounds(points.iter().map(|p| p.1));
+    assert!(lo < 1.0 && hi < 2.0, "{} {}", lo, hi);
+    let (lo, hi) = y_bounds([3.0, 1.0, 2.0].into_iter());
+    assert!(lo < 1.0 && hi > 3.0, "few points: all of them");
+    assert_eq!(y_bounds(std::iter::empty()), (0.0, 1.0));
+}
+
+#[test]
+fn the_empty_chart_says_what_the_run_is_doing() {
+    let fx = fixture();
+    let queued = run_from(&fx["queued"]);
+    let mut m = Model::new(queued.clone(), epoch(&queued.created_at));
+    let busy = json!({"type": "phase", "seq": 2, "phase": "waiting_for_compute",
+        "step": 0, "workers_online": 2, "autoscaling": false, "gpu": null});
+    feed(&mut m, &fx, event(&fx, 45, 1, busy));
+    assert_eq!(
+        empty_chart_message(&m),
+        "Waiting for a GPU (2 workers online, all busy)…"
+    );
+    feed(
+        &mut m,
+        &fx,
+        event(
+            &fx,
+            50,
+            1,
+            json!({"type": "phase", "seq": 3, "phase": "loading_model", "step": 0}),
+        ),
+    );
+    assert_eq!(empty_chart_message(&m), "Loading the model…");
+    let t = text(&render(&m, 100, 30));
+    assert!(t.contains("Loading the model…"), "{}", t);
+    feed(
+        &mut m,
+        &fx,
+        event(
+            &fx,
+            60,
+            1,
+            json!({"type": "phase", "seq": 4, "phase": "training", "step": 0}),
+        ),
+    );
+    assert_eq!(
+        empty_chart_message(&m),
+        "Training: waiting for the first step…"
+    );
+    let mut r = m.run.clone();
+    r.status = RunStatus::Failed;
+    m.apply_run(r);
+    assert_eq!(
+        empty_chart_message(&m),
+        "Failed before the first training step"
+    );
+    for msg in [empty_chart_message(&m), text(&render(&m, 100, 30))] {
+        assert!(!msg.to_lowercase().contains("spot"));
+    }
 }

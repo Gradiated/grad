@@ -198,6 +198,14 @@ describe("run events", () => {
     expect(state.gpu).toEqual({ name: "H100", memoryGb: 80 });
     expect(state.phase?.phase).toBe("training");
     expect(state.final?.status).toBe("failed");
+    // The phase clock keeps training's start across evals and checkpoints.
+    const at = (s: number) => ({ ...base, timestamp: `2026-11-27T12:00:${String(s).padStart(2, "0")}Z` });
+    const clock = applyEvents(emptyStream(), [
+      ["phase", { ...at(1), seq: 1, attempt: 1, phase: "training", step: 0 }],
+      ["phase", { ...at(30), seq: 2, attempt: 1, phase: "evaluating", step: 10 }],
+      ["phase", { ...at(40), seq: 3, attempt: 1, phase: "training", step: 10 }],
+    ].map(([n, d]) => decodeEvent(n as string, JSON.stringify(d))).filter((e): e is RunEvent => e !== null));
+    expect(clock.phase).toMatchObject({ phase: "training", since: "2026-11-27T12:00:01Z" });
     expect(state.timeline.map((t) => t.title)).toEqual([
       "Queued",
       "Waiting for compute",

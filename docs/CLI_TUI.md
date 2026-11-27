@@ -21,11 +21,11 @@ The capture below is a `TestBackend` dump of a recorded run from the test harnes
  │              ⠉⠒⠤⠤⣀                                                                             │
  │                  ⠈⠉⠒⠤⢄⣀                                                                        │
  │                       ⠈⠉⠒⠤⢄⣀⡀                                                                  │
- │ 0.656                       ⠈⠉⠒⠢⠤⢄⡀                                                            │
- │                                   ⠈⠑⠢⠤⠤⠤⣀⡀                                                     │
- │                                        ⠈⠈⠈⠉⠒⠒⠤⢄⣀⣀⡀                                             │
- │                                                 ⠉⠉⠉⠑⠒⠤⢄⣀⣀⣀•                                    │
- │ 0.614                                                     ⠉                                    │
+ │ 0.656                       ⠈⠉⠒⠤⣀⡀                                                             │
+ │                                  ⠈⠉⠒⠢⠤⣀⣀⡀                                                      │
+ │                                        ⠈⠉⠉⠉⠒⠒⠤⢄⣀⡀⡀                                             │
+ │                                                 ⠉⠑⠒⠒⠒⠤⢄⣀⣀⣀•                                    │
+ │ 0.614                                                    ⠈⠉                                    │
  │       0                                         step                                     1,062 │
  │    lr  ▃▆█▇▇▇▇▇▇▇▇▇▇▆▆▆▆▆▆▆▆▆▆▅▅▅▅▅▅▅▅▅▄▄▄▄▄▄▄▄▄▄▄▃▃▃▃▃▃▃▃▃ 3.6e-5                             │
  ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -69,6 +69,8 @@ q detach  c cancel  l logs  ? help
 | `l`            | Show or hide the full event log.                                           |
 | `?`            | Help.                                                                      |
 
+Attaching to a run that's already going (`grad runs watch`, or `grad train --wait` again) replays its event stream from the first event, so the chart and the log show the whole run, then follows it live; a dropped connection resumes after the last event id. The phase clock starts when the server says the phase began (`phase_since`, or the phase event), not when you attached. The chart always spans step 0 to the run's total steps: each series is cut to the plot's width with the lowest and highest point per column, and the y axis covers the 1st to 99th percentile once there are 100 points, so a few spikes don't flatten the curve; a clipped spike is a yellow dot on the edge. Before the first step the chart says what the run is doing ("Waiting for a GPU (2 workers online, all busy)…", "Loading the model…").
+
 When the run ends, the view closes and the usual summary prints on the normal screen: time, tokens and cost, the eval report, the artifact, and the download and deploy commands. `--json`, `--plain` or `GRAD_NO_TUI=1`, and any non-terminal output (CI logs, pipes), keep the plain line readout.
 
-The view is `cli/src/tui.rs`. Its render tests replay `cli/tests/fixtures/tui/sft-reference-run.json` (a recording of the run events stream) into the wide, standard (80x24), narrow, waiting, interrupted and finished layouts; `GRAD_UPDATE_SNAPSHOTS=1 cargo test -p grad-cli tui` rewrites the snapshots and the two captures on this page.
+The view is `cli/src/tui.rs`. Its render tests replay `cli/tests/fixtures/tui/sft-reference-run.json` (a recording of the run events stream) into the wide, standard (80x24), narrow, waiting, interrupted and finished layouts, plus a 1,691-step run attached at step 845 (`attached`); `GRAD_UPDATE_SNAPSHOTS=1 cargo test -p grad-cli tui` rewrites the snapshots and the two captures on this page.

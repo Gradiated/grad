@@ -633,6 +633,20 @@ fn live_tui_follows_detaches_and_cancels_a_run() {
     ok(&o);
     assert_ne!(o.json()["data"]["status"], "cancelled");
 
+    // Attached past step 1, the plain readout starts from step 1 too.
+    let (_, out) = grad_pty(
+        &home,
+        &["--plain", "runs", "watch", &id, "--timeout", "3"],
+        &env,
+        &[],
+    )
+    .unwrap();
+    assert!(
+        out.contains("step     1/"),
+        "step-1 data on attach: {}",
+        out
+    );
+
     // Reattach with `runs watch`, then cancel with confirmation.
     let (code, out) = grad_pty(
         &home,
@@ -644,6 +658,13 @@ fn live_tui_follows_detaches_and_cancels_a_run() {
     assert_eq!(code, 7, "{}", out);
     assert!(out.contains("Cancelling"), "{}", out);
     assert!(after_tui(&out).contains("status cancelled"), "{}", out);
+    // Reattached past step 1, the view replays the run from its first event
+    // (r8 trial: it showed only the points since attaching).
+    assert!(
+        out.contains("Starting") && out.contains("Run created"),
+        "the event history from the start: {}",
+        out
+    );
 
     // --plain and GRAD_NO_TUI=1 keep the line output on a terminal.
     for (flag, extra) in [("--plain", None), ("", Some(("GRAD_NO_TUI", "1")))] {
