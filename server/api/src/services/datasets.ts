@@ -85,13 +85,16 @@ export interface DatasetService {
   ): Promise<DatasetPart>;
 }
 
-/** Parts are content-addressed: `ws/<ws>/datasets/<dataset>/<sha256>.jsonl`. */
+/**
+ * Parts are gzip-compressed and content-addressed by their uncompressed
+ * JSONL: `ws/<ws>/datasets/<dataset>/<sha256>.jsonl.gz`.
+ */
 export const datasetPartKey = (
   workspaceId: string,
   datasetId: string,
   sha256: string,
 ): string =>
-  `ws/${encodeURIComponent(workspaceId)}/datasets/${datasetId}/${sha256}.jsonl`;
+  `ws/${encodeURIComponent(workspaceId)}/datasets/${datasetId}/${sha256}.jsonl.gz`;
 
 const stampIds = (records: readonly DatasetRecord[]): DatasetRecord[] =>
   records.map((record) =>

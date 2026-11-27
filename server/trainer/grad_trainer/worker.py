@@ -12,6 +12,7 @@ timeout, 5xx): the replay is stored once.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import http.client
 import json
@@ -302,9 +303,10 @@ class _Heartbeat(threading.Thread):
                 self.state.request_stop(str(resp.get("stop_reason") or "cancelled"))
 
 
-def _parse_jsonl(path: Path) -> list[dict[str, Any]]:
+def _parse_jsonl_gz(path: Path) -> list[dict[str, Any]]:
+    """The job dataset download: gzip-compressed JSONL (the dataset's parts, concatenated)."""
     records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
         for line in fh:
             if line.strip():
                 records.append(json.loads(line))
@@ -711,9 +713,9 @@ class TrainerWorker:
         dataset = job.get("dataset")
         if not dataset:
             return []
-        path = job_dir / "dataset.jsonl"
+        path = job_dir / "dataset.jsonl.gz"
         self.client.download(str(dataset["download_url"]), path)
-        return merge_records(_parse_jsonl(path))
+        return merge_records(_parse_jsonl_gz(path))
 
     def _load_resume(self, job: dict[str, Any], job_dir: Path) -> ResumeState | None:
         resume = job.get("resume")

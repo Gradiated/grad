@@ -141,7 +141,7 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
 
     const first = (await worker.claim())!;
     expect((await post(first, worker, 0, 4)).status).toBe(200);
-    const staleKey = `${jobBlobKey({ workspace_id: WORKSPACE_A, id: imp.body.id }, 1, "records")}/0.jsonl`;
+    const staleKey = `${jobBlobKey({ workspace_id: WORKSPACE_A, id: imp.body.id }, 1, "records")}/0.jsonl.gz`;
     expect(await t.deps.storage.head(staleKey)).not.toBeNull();
     t.clock.advanceSeconds(90);
     await t.services.maintenance.tick();

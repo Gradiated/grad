@@ -6513,7 +6513,7 @@ paths:
   /v1/trainer-jobs/{id}/dataset:
     get:
       operationId: downloadTrainerDataset
-      summary: Stream the pinned dataset version of a claimed train job as JSONL
+      summary: Stream the pinned dataset version of a claimed train job as gzip-compressed JSONL
       tags: *a4
       x-internal: true
       parameters:
@@ -6532,9 +6532,10 @@ paths:
           in: query
       responses:
         "200":
-          description: Dataset records (JSON Lines).
+          description: Dataset records as gzip-compressed JSON Lines (the stored parts, concatenated; gunzip yields the records in
+            order, before merging).
           content:
-            application/x-ndjson:
+            application/gzip:
               schema:
                 type: string
         "400":

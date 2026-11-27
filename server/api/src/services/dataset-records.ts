@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 import type { DatasetRecord } from "../contracts.js";
 import { conflict } from "../errors.js";
@@ -8,26 +9,31 @@ import type { DatasetPart, DatasetVersion } from "../store/types.js";
 export const encodeRecordsJsonl = (records: readonly DatasetRecord[]): Buffer =>
   Buffer.from(records.map((r) => `${JSON.stringify(r)}\n`).join(""), "utf8");
 
+const sha256Of = (bytes: Uint8Array): string =>
+  createHash("sha256").update(bytes).digest("hex");
+
 /**
- * Writes one immutable JSONL part at `keyFor(sha256)`. Rewriting an existing
- * key with the same bytes is a no-op, so a deterministic key makes a retried
- * write safe.
+ * Writes one immutable gzip-compressed JSONL part at `keyFor(sha256)`, where
+ * `sha256` is of the uncompressed JSONL (so identical records dedupe whatever
+ * the compressor does). Rewriting an existing key with the same records is a
+ * no-op, so a deterministic key makes a retried write safe. The part's
+ * `bytes` are the stored (compressed) size.
  */
 export const writeRecordsPart = async (
   storage: ObjectStore,
   keyFor: (sha256: string) => string,
   records: readonly DatasetRecord[],
 ): Promise<DatasetPart> => {
-  const bytes = encodeRecordsJsonl(records);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const jsonl = encodeRecordsJsonl(records);
+  const sha256 = sha256Of(jsonl);
+  const bytes = gzipSync(jsonl);
   const key = keyFor(sha256);
   try {
     await storage.put(key, bytes);
   } catch (error) {
-    // A retried write of the same deterministic key: fine if the bytes match.
+    // A retried write of the same deterministic key: fine if the records match.
     if (!(error instanceof ObjectExistsError)) throw error;
-    const existing = await storage.get(key);
-    if (createHash("sha256").update(existing).digest("hex") !== sha256) {
+    if (sha256Of(gunzipSync(await storage.get(key))) !== sha256) {
       throw conflict(
         "records_batch_conflict",
         `Records part '${key}' already exists with different contents; a batch number was reused for different records.`,
@@ -38,13 +44,18 @@ export const writeRecordsPart = async (
   return { key, count: records.length, sha256, bytes: bytes.byteLength };
 };
 
-const parsePart = (bytes: Uint8Array, part: DatasetPart): DatasetRecord[] => {
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  if (digest !== part.sha256) {
+const parsePart = (stored: Uint8Array, part: DatasetPart): DatasetRecord[] => {
+  let jsonl: Buffer;
+  try {
+    jsonl = gunzipSync(stored);
+  } catch {
+    throw new Error(`Dataset part '${part.key}' is not valid gzip.`);
+  }
+  if (sha256Of(jsonl) !== part.sha256) {
     throw new Error(`Dataset part '${part.key}' failed its integrity check.`);
   }
 
-  return Buffer.from(bytes)
+  return jsonl
     .toString("utf8")
     .split("\n")
     .filter((line) => line.length > 0)
@@ -74,22 +85,53 @@ export const readVersionRecords = async (
   return out;
 };
 
-/** Concatenates a version's parts into one JSONL byte stream. */
-export const streamVersionJsonl = (
+/**
+ * A version as one gzip stream: the stored parts back to back, streamed from
+ * storage without decompressing (concatenated gzip members are one valid gzip
+ * file, so `gunzip` yields the parts' JSONL in order).
+ */
+export const streamVersionGzip = (
   storage: ObjectStore,
   version: Pick<DatasetVersion, "parts">,
 ): ReadableStream<Uint8Array> => {
   const parts = [...version.parts];
+  let current: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
   return new ReadableStream<Uint8Array>({
     pull: async (controller) => {
-      const part = parts.shift();
-      if (!part) {
-        controller.close();
-        return;
+      for (;;) {
+        if (!current) {
+          const part = parts.shift();
+          if (!part) {
+            controller.close();
+            return;
+          }
+          current = (await storage.getStream(part.key)).getReader();
+        }
+        const chunk = await current.read();
+        if (!chunk.done) {
+          controller.enqueue(chunk.value);
+          return;
+        }
+        current = null;
       }
+    },
+    cancel: async (reason) => {
+      await current?.cancel(reason);
+    },
+  });
+};
 
-      controller.enqueue(await storage.get(part.key));
+/** Records as one gzip-compressed JSONL stream (in-memory training records). */
+export const gzipJsonlStream = (
+  records: readonly DatasetRecord[],
+): ReadableStream<Uint8Array> => {
+  const bytes = gzipSync(encodeRecordsJsonl(records));
+
+  return new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      controller.enqueue(bytes);
+      controller.close();
     },
   });
 };

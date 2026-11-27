@@ -359,7 +359,7 @@ export const createImportService = (
           ? await writeRecordsPart(
               storage,
               () =>
-                `${jobBlobKey(job, job.attempt, "records")}/${body.seq}.jsonl`,
+                `${jobBlobKey(job, job.attempt, "records")}/${body.seq}.jsonl.gz`,
               accepted,
             )
           : null;

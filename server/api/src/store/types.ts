@@ -75,11 +75,13 @@ export interface ApiKeyRepository {
 
 // --- Datasets ----------------------------------------------------------------
 
-/** One immutable JSONL object holding `count` records. */
+/** One immutable gzip-compressed JSONL object holding `count` records. */
 export interface DatasetPart {
   key: string;
   count: number;
+  /** Of the uncompressed JSONL. */
   sha256: string;
+  /** Stored (compressed) size. */
   bytes: number;
 }
 

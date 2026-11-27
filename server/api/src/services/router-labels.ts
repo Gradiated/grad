@@ -164,17 +164,3 @@ export const settleLabelledRuns = async (
     );
   }
 };
-
-export const jsonlStream = (
-  records: readonly DatasetRecord[],
-): ReadableStream<Uint8Array> =>
-  new ReadableStream<Uint8Array>({
-    start: (controller) => {
-      controller.enqueue(
-        new TextEncoder().encode(
-          records.map((r) => `${JSON.stringify(r)}\n`).join(""),
-        ),
-      );
-      controller.close();
-    },
-  });

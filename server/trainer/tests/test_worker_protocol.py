@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import io
 import json
 import os
@@ -82,7 +83,8 @@ def import_job(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-DATASET = b'{"messages":[{"role":"user","content":"hi"}]}\n{"messages":[{"role":"user","content":"yo"}]}\n'
+# The job dataset download is gzip-compressed JSONL.
+DATASET = gzip.compress(b'{"messages":[{"role":"user","content":"hi"}]}\n{"messages":[{"role":"user","content":"yo"}]}\n')
 
 
 class WorkerProtocolTests(unittest.TestCase):
@@ -514,10 +516,20 @@ class WorkerProtocolTests(unittest.TestCase):
             {"id": "t1", "scores": {"thumbs": 1.0}, "metadata": {"score_update": True}},
         ]
         srv = self.server(jobs=[train_job(dataset_url="/blobs/data")])
-        srv.blobs["/blobs/data"] = "\n".join(json.dumps(r) for r in storage_lines).encode()
+        # One gzip member per stored part, back to back, as grad-server streams them.
+        srv.blobs["/blobs/data"] = b"".join(gzip.compress(f"{json.dumps(r)}\n".encode()) for r in storage_lines)
         runner = StubRunner(checkpoint_at=None)
         self.worker(srv, runner).run_once()
         self.assertEqual(runner.calls[0]["records"], [{"id": "t1", "messages": [{"role": "user", "content": "q"}], "scores": {"thumbs": 1.0}}])
+
+    def test_an_uncompressed_dataset_download_fails_setup(self) -> None:
+        srv = self.server(jobs=[train_job(dataset_url="/blobs/data")])
+        srv.blobs["/blobs/data"] = b'{"messages":[{"role":"user","content":"hi"}]}\n'
+        runner = StubRunner(checkpoint_at=None)
+        result = self.worker(srv, runner).run_once()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("setup failed", srv.bodies("complete")[0]["error"])
+        self.assertEqual(runner.calls, [])
 
     def test_kinds_from_the_environment(self) -> None:
         srv = self.server()

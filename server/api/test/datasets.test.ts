@@ -1,6 +1,8 @@
+import { gunzipSync, gzipSync } from "node:zlib";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { makeTestApp, type TestApp } from "./fixtures/app.js";
+import { makeTestApp, TRAINER_KEY, type TestApp } from "./fixtures/app.js";
 import {
   createSftRun,
   FakeWorker,
@@ -96,6 +98,77 @@ describe("datasets, uploads and imports", () => {
     const bad = await t.json("/v1/datasets/support/records?version=9");
     expect(bad.status).toBe(422);
     expect(bad.body).toMatchObject({ code: "dataset_version_not_found" });
+  });
+
+  it("stores parts gzip-compressed, addressed by the uncompressed JSONL", async () => {
+    const records = sftRecords(50).map((r, i) => ({ ...r, id: `r${i}` }));
+    await t.json("/v1/datasets/packed/records", { body: { records } });
+    await t.json("/v1/datasets/packed/records", { body: { records } });
+    const dataset = await t.deps.store.datasets.get("ws_a", "packed");
+    const version = await t.deps.store.datasets.getVersion(dataset!.id, 2);
+    const [part, again] = version!.parts;
+    // The same records are the same object, whatever the compressor emits.
+    expect(again!.key).toBe(part!.key);
+    expect(part!.key).toBe(
+      `ws/ws_a/datasets/${dataset!.id}/${part!.sha256}.jsonl.gz`,
+    );
+    const stored = await t.deps.storage.get(part!.key);
+    const jsonl = gunzipSync(stored);
+    expect(sha256Hex(jsonl)).toBe(part!.sha256);
+    expect(part!.bytes).toBe(stored.byteLength);
+    expect(part!.bytes).toBeLessThan(jsonl.byteLength / 2);
+    expect(
+      jsonl
+        .toString("utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).id),
+    ).toEqual(records.map((r) => r.id));
+
+    // Every reader decompresses: the record listing, and the job download.
+    const listed = await t.json<{ total: number }>(
+      "/v1/datasets/packed/records?limit=1",
+    );
+    expect(listed.body.total).toBe(50);
+    const run = await t.json("/v1/runs", {
+      body: {
+        dataset: "packed",
+        name: "packed-sft",
+        recipe: { kind: "sft", model: "test/tiny-qwen3", batch_size: 4 },
+      },
+    });
+    expect(run.status).toBe(202);
+    const job = await worker.claim();
+    const res = await t.request(job!.dataset!.download_url, {
+      token: TRAINER_KEY,
+    });
+    expect(res.headers.get("content-type")).toBe("application/gzip");
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
+    // Two parts streamed as two gzip members; gunzip yields both, in order.
+    expect(gunzipSync(body).toString("utf8")).toBe(
+      `${jsonl.toString("utf8")}${jsonl.toString("utf8")}`,
+    );
+  });
+
+  it("refuses a part whose stored bytes are not gzip or fail the checksum", async () => {
+    await t.json("/v1/datasets/broken/records", {
+      body: { records: sftRecords(2) },
+    });
+    const dataset = await t.deps.store.datasets.get("ws_a", "broken");
+    const version = await t.deps.store.datasets.getVersion(dataset!.id, 1);
+    const key = version!.parts[0]!.key;
+    const swap = async (bytes: Uint8Array) => {
+      await t.deps.storage.delete(key);
+      await t.deps.storage.put(key, bytes);
+    };
+
+    await swap(Buffer.from('{"messages":[]}\n'));
+    let res = await t.json("/v1/datasets/broken/records");
+    expect(res.status).toBe(500);
+    await swap(gzipSync(Buffer.from('{"id":"other"}\n')));
+    res = await t.json("/v1/datasets/broken/records");
+    expect(res.status).toBe(500);
   });
 
   it("keeps every concurrent append (no in-process locks)", async () => {

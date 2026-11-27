@@ -110,7 +110,7 @@ CREATE TABLE grad_job_events (
 CREATE INDEX grad_job_events_job_idx ON grad_job_events (job_id, type, seq);
 CREATE INDEX grad_job_events_created_idx ON grad_job_events (created_at);
 
--- Immutable JSONL objects. Version N of a dataset is every part with
+-- Immutable gzip-compressed JSONL objects (.jsonl.gz). Version N of a dataset is every part with
 -- version <= N, in (version, batch, id) order. An import stages its parts with
 -- version NULL (keyed by job, attempt, batch); they become visible when the
 -- import commits them as the next version.
@@ -125,6 +125,8 @@ CREATE TABLE grad_dataset_parts (
   key TEXT,
   -- Records the part adds (0 for a score-update part: it changes records).
   count BIGINT NOT NULL CHECK (count >= 0),
+  -- Of the uncompressed JSONL, so identical records dedupe; bytes is the
+  -- stored (compressed) size.
   sha256 TEXT,
   bytes BIGINT NOT NULL DEFAULT 0 CHECK (bytes >= 0),
   dropped INTEGER NOT NULL DEFAULT 0 CHECK (dropped >= 0),

@@ -302,7 +302,7 @@ export const registerTrainerJobRoutes = (
       path: "/v1/trainer-jobs/{id}/dataset",
       operationId: "downloadTrainerDataset",
       summary:
-        "Stream the pinned dataset version of a claimed train job as JSONL",
+        "Stream the pinned dataset version of a claimed train job as gzip-compressed JSONL",
       tags,
       "x-internal": true,
       request: {
@@ -311,8 +311,9 @@ export const registerTrainerJobRoutes = (
       },
       responses: {
         200: {
-          description: "Dataset records (JSON Lines).",
-          content: { "application/x-ndjson": { schema: z.string() } },
+          description:
+            "Dataset records as gzip-compressed JSON Lines (the stored parts, concatenated; gunzip yields the records in order, before merging).",
+          content: { "application/gzip": { schema: z.string() } },
         },
         ...defaultErrors,
       },
@@ -329,7 +330,7 @@ export const registerTrainerJobRoutes = (
 
       return new Response(stream, {
         status: 200,
-        headers: { "Content-Type": "application/x-ndjson" },
+        headers: { "Content-Type": "application/gzip" },
       }) as never;
     },
   );

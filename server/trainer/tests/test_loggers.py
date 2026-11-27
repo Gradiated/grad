@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import os
 import sys
@@ -162,7 +163,7 @@ class WorkerLoggerTests(unittest.TestCase):
             "loggers": [{"kind": "mlflow", "tracking_uri": fake.url}],
         }
         srv = FakeProtocolServer(api_key="k", jobs=[job])
-        srv.blobs["/v1/trainer-jobs/run_1/dataset"] = b'{"messages":[{"role":"user","content":"hi"}]}\n'
+        srv.blobs["/v1/trainer-jobs/run_1/dataset"] = gzip.compress(b'{"messages":[{"role":"user","content":"hi"}]}\n')
         srv.__enter__()
         self.addCleanup(srv.__exit__)
         worker = TrainerWorker(

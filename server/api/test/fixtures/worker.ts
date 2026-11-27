@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 
 import { TRAINER_KEY, type TestApp } from "./app.js";
 
@@ -181,7 +182,10 @@ export class FakeWorker {
     });
     if (res.status !== 200)
       throw new Error(`dataset download failed ${res.status}`);
-    const text = await res.text();
+    // gzip-compressed JSONL: the stored parts, back to back.
+    const text = gunzipSync(Buffer.from(await res.arrayBuffer())).toString(
+      "utf8",
+    );
 
     return text
       .split("\n")

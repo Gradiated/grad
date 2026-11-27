@@ -42,11 +42,10 @@ import type {
   RunPatch,
   RunRecord,
 } from "../store/types.js";
-import { streamVersionJsonl } from "./dataset-records.js";
+import { gzipJsonlStream, streamVersionGzip } from "./dataset-records.js";
 import type { DatasetService } from "./datasets.js";
 import type { EvalService } from "./evals/service.js";
 import {
-  jsonlStream,
   labelingEvalRequest,
   labelRecords,
   settleLabelledRuns,
@@ -1034,8 +1033,8 @@ export const createRunLifecycle = (
       const training = await trainingRecords(await loadById(id));
 
       return training.kind === "dataset"
-        ? streamVersionJsonl(storage, training.version)
-        : jsonlStream(training.records);
+        ? streamVersionGzip(storage, training.version)
+        : gzipJsonlStream(training.records);
     },
 
     collectExpiredCheckpoints: async (now) => {
