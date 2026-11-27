@@ -36,6 +36,7 @@ pub mod recipes;
 mod resources;
 pub mod sse;
 mod transport;
+pub mod usage;
 mod util;
 
 use std::time::Duration;
@@ -50,6 +51,7 @@ pub use events::{
 pub use models::*;
 pub use resources::*;
 pub use sse::{MetricEvent, MetricStream, SseEvent, SseParser};
+pub use usage::{UsageBound, UsageQuery, UsageSummaryQuery};
 pub use util::sha256_hex;
 
 /// Default total timeout of one JSON request.

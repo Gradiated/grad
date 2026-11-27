@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
 
+import { costForTokens } from "../../catalog.js";
 import { addSeconds } from "../../clock.js";
 import {
   NON_DEPLOYABLE_FORMATS,
@@ -429,10 +430,12 @@ export const createEvalService = (
 
   /** A judge's tokens at the price resolved at plan time (judges are always priced). */
   const judgeCost = (record: EvalRecord, judge: string, tokens: number) =>
-    (tokens / 1_000_000) *
-    (record.judge_targets[judge]?.price_per_million_tokens ??
-      deps.catalog.judgePriceFor(judge) ??
-      0);
+    costForTokens(
+      tokens,
+      record.judge_targets[judge]?.price_per_million_tokens ??
+        deps.catalog.judgePriceFor(judge) ??
+        0,
+    );
 
   const scoreOne = async (
     record: EvalRecord,
@@ -548,7 +551,7 @@ export const createEvalService = (
     );
     const tokens =
       completion.usage.prompt_tokens + completion.usage.completion_tokens;
-    let cost = (tokens / 1_000_000) * (target.price_per_million_tokens ?? 0);
+    let cost = costForTokens(tokens, target.price_per_million_tokens ?? 0);
     for (const [judge, judgeTokens] of Object.entries(scored.judgeTokens)) {
       cost += judgeCost(record, judge, judgeTokens);
     }

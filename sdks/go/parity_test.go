@@ -35,7 +35,8 @@ type parityFixture struct {
 		Usage    struct {
 			Data []json.RawMessage `json:"data"`
 		} `json:"usage_page"`
-		RunEvents json.RawMessage `json:"run_events"`
+		UsageSummary json.RawMessage `json:"usage_summary"`
+		RunEvents    json.RawMessage `json:"run_events"`
 	} `json:"responses"`
 	Expect map[string]any `json:"expect"`
 }
@@ -189,6 +190,18 @@ func TestParityRequests(t *testing.T) {
 			}
 			return nil
 		},
+		"list_usage_filtered": func() error {
+			for _, err := range c.Usage.List(ctx, grad.WithUsageFrom("2026-11-01"),
+				grad.WithUsageTo("2026-11-30"), grad.WithUsageRun("run_015437ae0c01e09a573e4811"),
+				grad.WithUsageKind(grad.UsageLabeling), grad.WithUsagePageSize(10)) {
+				return err
+			}
+			return nil
+		},
+		"usage_summary": func() error {
+			_, err := c.Usage.Summary(ctx, grad.WithUsageFrom("2026-11-01"), grad.WithUsageTo("2026-11-30"), grad.WithUsageGroupBy(grad.UsageByModel))
+			return err
+		},
 		"list_run_events": func() error {
 			for _, err := range c.Runs.Events(ctx, events.RunID, grad.EventsOptions{Limit: 100}) {
 				return err
@@ -255,6 +268,10 @@ func TestParityTypedResponses(t *testing.T) {
 	if err := json.Unmarshal(p.Responses.Usage.Data[0], &usage); err != nil {
 		t.Fatal(err)
 	}
+	var totals grad.UsageSummary
+	if err := json.Unmarshal(p.Responses.UsageSummary, &totals); err != nil {
+		t.Fatal(err)
+	}
 	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan, &p.Responses.Scoring: &scoring, &p.Responses.Source: &source, &p.Responses.Secret: &secret, &p.Responses.RunPlan: &runPlan} {
 		if err := json.Unmarshal(*raw, into); err != nil {
 			t.Fatal(err)
@@ -308,7 +325,17 @@ func TestParityTypedResponses(t *testing.T) {
 		"secret.allowed_hosts[0]":                          secret.AllowedHosts[0],
 		"usage[0].kind":                                    string(usage.Kind),
 		"usage[0].tokens_through":                          float64(usage.TokensThrough),
+		"usage[0].ref_name":                                *usage.RefName,
+		"usage[0].run_id":                                  *usage.RunID,
 		"usage[0].cost_usd":                                usage.CostUSD,
+		"usage_summary.from":                               totals.From,
+		"usage_summary.cost_usd":                           totals.CostUSD,
+		"usage_summary.tokens":                             float64(totals.Tokens),
+		"usage_summary.by_kind[0].kind":                    string(totals.ByKind[0].Kind),
+		"usage_summary.top_runs[0].name":                   *totals.TopRuns[0].Name,
+		"usage_summary.top_evals[0].kind":                  string(totals.TopEvals[0].Kind),
+		"usage_summary.groups[1].key":                      *totals.Groups[1].Key,
+		"usage_summary.groups[1].tokens":                   float64(totals.Groups[1].Tokens),
 	}
 	if !reflect.DeepEqual(got, p.Expect) {
 		t.Fatalf("typed responses\n got %v\nwant %v", got, p.Expect)

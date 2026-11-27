@@ -1,4 +1,4 @@
-"""Human-readable renderings: run plans, eval plans, eval summaries and render previews."""
+"""Human-readable renderings: run plans, eval plans, eval summaries, render previews and usage."""
 
 from __future__ import annotations
 
@@ -194,3 +194,30 @@ def format_render(preview: Any) -> str:
         text = "".join(f"[[{span['text']}]]" if span.get("trained") else str(span.get("text", "")) for span in ex.get("spans", []))
         lines.append(text)
     return "\n".join(lines)
+
+
+def _when(ts: Any) -> str:
+    text = str(ts or "")
+    return f"{text[:10]} {text[11:16]}" if len(text) >= 16 and text[10:11] == "T" else text or "—"
+
+
+def format_usage_summary(summary: Any) -> str:
+    """Totals, the kind breakdown, the top runs and evals, and the groups of a usage summary."""
+    head = (
+        f"Usage from {_when(summary.from_)} to {_when(summary.to)} UTC: {_usd(summary.cost_usd)}"
+        f" · {_tokens(summary.tokens)} tokens · {summary.records:,} billed rows"
+    )
+    parts = [head]
+    if summary.by_kind:
+        rows = [[k.kind or "—", _usd(k.cost_usd), _tokens(k.tokens)] for k in summary.by_kind]
+        parts.append(_table(["kind", "cost", "tokens"], rows, right={1, 2}))
+    for title, refs in (("Top runs", summary.top_runs), ("Top evals", summary.top_evals)):
+        if refs:
+            rows = [[r.name or "—", r.id or "—", r.kind or "—", _usd(r.cost_usd), _tokens(r.tokens)] for r in refs]
+            parts.append(f"{title}\n" + _table(["name", "id", "kind", "cost", "tokens"], rows, right={3, 4}))
+    if summary.group_by:
+        rows = [[g.key or "—", _usd(g.cost_usd), _tokens(g.tokens), f"{g.records:,}"] for g in summary.groups]
+        parts.append(f"By {summary.group_by}\n" + _table([summary.group_by, "cost", "tokens", "rows"], rows, right={1, 2, 3}))
+    if summary.records == 0:
+        parts.append("(nothing billed in this period)")
+    return "\n\n".join(parts)

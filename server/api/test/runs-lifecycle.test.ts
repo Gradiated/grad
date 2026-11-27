@@ -32,7 +32,7 @@ describe("run lifecycle and worker protocol", () => {
   /** The usage ledger summed per (run, attempt), in billing order. */
   const billed = async () => {
     const rows = (
-      await t.deps.store.usage.list(WORKSPACE_A, { limit: 1000 })
+      await t.deps.store.usage.list(WORKSPACE_A, {}, { limit: 1000 })
     ).data.reverse();
     const byAttempt = new Map<
       string,

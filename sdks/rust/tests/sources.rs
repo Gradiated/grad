@@ -266,3 +266,47 @@ async fn import_hf_with_secret_sends_the_name_only() {
     assert_eq!(sent["source"]["secret"], json!("hf-token"));
     assert_eq!(sent["source"]["repo"], json!("org/gated"));
 }
+
+#[tokio::test]
+async fn usage_list_all_keeps_filters_on_every_page_and_summary_decodes() {
+    let fx = fixture();
+    let page = fx["responses"]["usage_page"].clone();
+    let summary = fx["responses"]["usage_summary"].clone();
+    let srv = MockServer::start(move |r| match r.path() {
+        "/v1/usage/summary" => Reply::json(200, summary.clone()),
+        _ if r.query().contains("cursor=c1") => {
+            Reply::json(200, json!({"data": [], "next_cursor": null}))
+        }
+        _ => {
+            let mut p = page.clone();
+            p["next_cursor"] = json!("c1");
+            Reply::json(200, p)
+        }
+    });
+    let c = client(&srv.url);
+    let since = std::time::UNIX_EPOCH + Duration::from_secs(1_793_491_200);
+    let q = UsageQuery::new()
+        .from(since)
+        .eval("eval_1")
+        .kind(UsageKind::Eval)
+        .limit(3)
+        .cursor("ignored");
+    let rows = c.usage().list_all(&q).await.unwrap();
+    assert_eq!(rows[0].kind, UsageKind::Training);
+    let queries: Vec<String> = srv
+        .requests()
+        .iter()
+        .map(|r| r.query().to_string())
+        .collect();
+    let want = "from=2026-11-01T00%3A00%3A00Z&eval_id=eval_1&kind=eval&limit=200";
+    assert_eq!(queries, [want.to_string(), format!("{want}&cursor=c1")]);
+
+    let s = c
+        .usage()
+        .summary(&UsageSummaryQuery::new().group_by(UsageGroupBy::Day))
+        .await
+        .unwrap();
+    assert_eq!(s.top_runs[0].name.as_deref(), Some("support-sft"));
+    assert_eq!(s.group_by, Some(UsageGroupBy::Model));
+    assert_eq!(srv.requests().last().unwrap().query(), "group_by=day");
+}

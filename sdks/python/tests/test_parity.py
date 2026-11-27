@@ -139,6 +139,14 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         ),
         "sync_source_full": lambda: source.sync(full=True),
         "list_usage": lambda: client.usage.list(limit=10),
+        "list_usage_filtered": lambda: client.usage.list(
+            from_=datetime.date(2026, 11, 1),
+            to="2026-11-30",
+            run_id=grad.Run.from_api({"id": "run_015437ae0c01e09a573e4811"}),
+            kind="labeling",
+            limit=10,
+        ),
+        "usage_summary": lambda: client.usage.summary(from_="2026-11-01", to=datetime.date(2026, 11, 30), group_by="model"),
         "list_run_events": lambda: list(client.runs.events(PARITY["responses"]["run_events"]["run_id"])),
     }
 
@@ -174,6 +182,7 @@ class ParityTests(unittest.TestCase):
         source = grad.Source.from_api(responses["source"])
         secret = grad.SecretRef.from_api(responses["secret"])
         usage = grad.UsageRecord.from_api(responses["usage_page"]["data"][0])
+        totals = grad.UsageSummary.from_api(responses["usage_summary"])
         events: list[Any] = [grad._models.run_event_from_api(e) for e in responses["run_events"]["data"]]
         assert run.last_interruption is not None
         assert source.last_sync is not None
@@ -207,7 +216,17 @@ class ParityTests(unittest.TestCase):
             "secret.allowed_hosts[0]": secret.allowed_hosts[0],
             "usage[0].kind": usage.kind,
             "usage[0].tokens_through": usage.tokens_through,
+            "usage[0].ref_name": usage.ref_name,
+            "usage[0].run_id": usage.run_id,
             "usage[0].cost_usd": usage.cost_usd,
+            "usage_summary.from": totals.from_,
+            "usage_summary.cost_usd": totals.cost_usd,
+            "usage_summary.tokens": totals.tokens,
+            "usage_summary.by_kind[0].kind": totals.by_kind[0].kind,
+            "usage_summary.top_runs[0].name": totals.top_runs[0].name,
+            "usage_summary.top_evals[0].kind": totals.top_evals[0].kind,
+            "usage_summary.groups[1].key": totals.groups[1].key,
+            "usage_summary.groups[1].tokens": totals.groups[1].tokens,
             "run.phase": run.phase,
             "run.last_interruption.reason": run.last_interruption.reason,
             "run.last_interruption.resume_step": run.last_interruption.resume_step,

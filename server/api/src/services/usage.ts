@@ -1,16 +1,18 @@
-import type { UsageRecord } from "../contracts.js";
+import {
+  parseUsageBound,
+  type UsageQuery,
+  type UsageRecord,
+  type UsageSummary,
+  type UsageSummaryQuery,
+} from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
+import { invalid } from "../errors.js";
 import { metrics } from "../telemetry/metrics.js";
-import type {
-  JobRow,
-  Page,
-  PageRequest,
-  Repositories,
-} from "../store/types.js";
+import type { JobRow, LedgerRow, Page, Repositories } from "../store/types.js";
 
 /** A usage row's key: the attempt and the token count it bills through. */
 export const usageKey = (
-  kind: UsageRecord["kind"],
+  kind: LedgerRow["kind"],
   refId: string,
   attempt: number,
   tokensThrough: number,
@@ -27,9 +29,53 @@ export const DEFAULT_FLUSH_SECONDS = 300;
 export const DEFAULT_EXPORT_LAG_SECONDS = 60;
 const EXPORT_BATCH = 200;
 
+const monthStart = (at: Date, offset = 0): Date =>
+  new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + offset, 1));
+
+const assertNonEmpty = (from: Date, to: Date): void => {
+  if (from >= to) {
+    throw invalid(
+      "invalid_period",
+      `The period is empty: from (${from.toISOString()}) must be before to (${to.toISOString()}).`,
+    );
+  }
+};
+
+/** `from`/`to` query bounds as `[from, to)`; validated by the query schema. */
+const boundsOf = (query: {
+  from?: string | undefined;
+  to?: string | undefined;
+}) => {
+  const from = query.from ? parseUsageBound(query.from, "from") : null;
+  const to = query.to ? parseUsageBound(query.to, "to") : null;
+  if (from && to) assertNonEmpty(from, to);
+
+  return { from: from ?? undefined, to: to ?? undefined };
+};
+
+/**
+ * A summary's period: `to` defaults to the end of the current UTC month (or
+ * of `from`'s month, if later) and `from` to the start of the month `to` ends
+ * in, so no bounds is this month.
+ */
+export const summaryPeriod = (
+  query: { from?: string | undefined; to?: string | undefined },
+  now: Date,
+): { from: Date; to: Date } => {
+  const bounds = boundsOf(query);
+  const latest = bounds.from && bounds.from > now ? bounds.from : now;
+  const to = bounds.to ?? monthStart(latest, 1);
+  const from = bounds.from ?? monthStart(new Date(to.getTime() - 1));
+  assertNonEmpty(from, to);
+
+  return { from, to };
+};
+
 export interface UsageService {
-  /** The workspace's usage ledger, newest first. */
-  list(workspaceId: string, page: PageRequest): Promise<Page<UsageRecord>>;
+  /** The workspace's billed usage matching `query`, newest first. */
+  list(workspaceId: string, query: UsageQuery): Promise<Page<UsageRecord>>;
+  /** Totals, kinds, the top runs and evals, and groups over a period (default: this month). */
+  summary(workspaceId: string, query: UsageSummaryQuery): Promise<UsageSummary>;
   /**
    * Bills `total` (the open attempt's usage so far) beyond what it already
    * billed, inside the caller's transaction. Without `final`, only once the
@@ -53,7 +99,24 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
   let cursor: number | null = null;
 
   return {
-    list: (workspaceId, page) => store.usage.list(workspaceId, page),
+    list: (workspaceId, query) =>
+      store.usage.list(
+        workspaceId,
+        {
+          ...boundsOf(query),
+          runId: query.run_id,
+          evalId: query.eval_id,
+          kind: query.kind,
+        },
+        { limit: query.limit, cursor: query.cursor },
+      ),
+
+    summary: (workspaceId, query) =>
+      store.usage.summarize(
+        workspaceId,
+        summaryPeriod(query, clock.now()),
+        query.group_by,
+      ),
 
     flush: async (tx, job, total, final) => {
       const state = await tx.jobs.getById(job.id);

@@ -110,6 +110,13 @@ class SelfHostedLiveTests(_LiveCase):
         run = client.runs.create(dataset=dataset, name="sql-helper", recipe=recipe, max_cost_usd=5).wait(timeout=180, on_metric=metrics.append)
         self.assertEqual(run.status, "completed")
         self.assertTrue(metrics, "on_metric saw the streamed metrics")
+        # The run's billed rows, by run object, and this month's summary with them.
+        rows = client.usage.list(run_id=run, kind="training").to_list()
+        self.assertTrue(rows)
+        self.assertEqual({(u.ref_name, u.run_id) for u in rows}, {("sql-helper", run.id)})
+        summary = client.usage.summary(group_by="kind")
+        self.assertIn("training", [g.key for g in summary.groups])
+        self.assertGreaterEqual(summary.tokens, sum(u.tokens for u in rows))
         self.assertTrue(list(run.metrics()))
         self.assertTrue(run.checkpoints())
         # Self-hosted serving is disabled: deploy fails with the documented, actionable error.

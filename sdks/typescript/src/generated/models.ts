@@ -1219,11 +1219,38 @@ export interface UploadTicket {
   expiresAt: string;
 }
 
+export interface UsageGroup {
+  /** The group: a UTC day or week start (YYYY-MM-DD), a month (YYYY-MM), a model, a recipe or a kind. Null for usage with no recipe (plain evals, scoring). */
+  key: string | null;
+  costUsd: number;
+  tokens: number;
+  records: number;
+}
+
+export type UsageGroupBy = "day" | "week" | "month" | "model" | "recipe" | "kind";
+
+export const UsageGroupByValues = ["day", "week", "month", "model", "recipe", "kind"] as const;
+
+/** What the tokens paid for: `training` (a run's attempts), `eval` (evals, including a run's checkpoint evals), `scoring` (dataset.score), `labeling` (a router run's labeling eval) or `teacher` (an off-policy distill run's teacher answers). */
+export type UsageKind = "training" | "eval" | "scoring" | "labeling" | "teacher";
+
+export const UsageKindValues = ["training", "eval", "scoring", "labeling", "teacher"] as const;
+
+export interface UsageKindTotal {
+  kind: UsageKind;
+  costUsd: number;
+  tokens: number;
+  records: number;
+}
+
 export interface UsageRecord {
   id: string;
-  kind: "run" | "eval";
-  /** The run or eval this usage belongs to. */
+  kind: UsageKind;
+  /** The run (kind `training`) or eval this usage belongs to. */
   refId: string;
+  refName: string | null;
+  /** The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it is. */
+  runId: string | null;
   attempt: number;
   /** The attempt's tokens this row starts after (usage is billed in increments while an attempt runs). */
   tokensFrom: number;
@@ -1233,6 +1260,33 @@ export interface UsageRecord {
   priceVersion: string;
   idempotencyKey: string;
   createdAt: string;
+}
+
+export interface UsageRefTotal {
+  id: string;
+  name: string | null;
+  kind: UsageKind;
+  costUsd: number;
+  tokens: number;
+}
+
+export interface UsageSummary {
+  /** Start of the period (inclusive). */
+  from: string;
+  /** End of the period (exclusive). */
+  to: string;
+  costUsd: number;
+  tokens: number;
+  records: number;
+  /** One entry per kind with usage, costliest first. */
+  byKind: Array<UsageKindTotal>;
+  /** The costliest runs' training in the period (up to 5). */
+  topRuns: Array<UsageRefTotal>;
+  /** The costliest evals, scoring, labeling and teacher jobs in the period (up to 5). */
+  topEvals: Array<UsageRefTotal>;
+  groupBy: UsageGroupBy | null;
+  /** With group_by: one entry per group with usage, oldest first for time groups and costliest first otherwise. */
+  groups: Array<UsageGroup>;
 }
 
 export interface WarningEvent {

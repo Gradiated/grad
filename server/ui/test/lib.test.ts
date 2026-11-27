@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { EvalReport, Run, UsageRecord } from "@sdk/generated/models.js";
+import type { EvalReport, Run } from "@sdk/generated/models.js";
 
 import { CODEC, convertKeys, lifecycleOf, listAll } from "../src/lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey } from "../src/lib/auth.js";
@@ -10,7 +10,7 @@ import { renderReport } from "../src/lib/report.js";
 import { match } from "../src/lib/router.js";
 import { importPool, poolState, trainPool } from "../src/pages/health.js";
 import { filterRuns } from "../src/pages/runs.js";
-import { usageTotals } from "../src/pages/usage.js";
+import { defaultPeriod, presets } from "../src/pages/usage.js";
 import { fixture, fixtureText } from "./helpers.js";
 
 const run = (over: Record<string, unknown> = {}): Run => convertKeys(CODEC, "Run", { ...fixture<Record<string, unknown>>("run.json"), ...over }, "decode") as Run;
@@ -272,15 +272,16 @@ describe("health and usage summaries", () => {
     expect(imp).toMatchObject({ queued: 1, running: 1, oldestQueuedMs: 60_000 });
   });
 
-  it("totals the usage ledger by kind", () => {
-    const rows = (fixture<{ data: unknown[] }>("usage.json").data.map((r) => convertKeys(CODEC, "UsageRecord", r, "decode")) as UsageRecord[]).concat([
-      { id: "u_e", kind: "eval", refId: "eval_1", attempt: 1, tokensFrom: 0, tokensThrough: 0, tokens: 10, costUsd: 1, priceVersion: "p", idempotencyKey: "k", createdAt: "t" },
-    ]);
-    const t = usageTotals(rows);
-    expect(t.rows).toBe(4);
-    expect(t.byKind.run?.refs).toBe(1);
-    expect(t.byKind.eval).toEqual({ cost: 1, tokens: 10, refs: 1 });
-    expect(t.cost).toBeCloseTo(1.011415, 6);
+  it("picks UTC usage periods as inclusive dates", () => {
+    expect(defaultPeriod(Date.parse("2026-11-27T14:00:00Z"))).toEqual({ from: "2026-11-01", to: "2026-11-30" });
+    expect(defaultPeriod(Date.parse("2024-02-10T00:00:00Z"))).toEqual({ from: "2024-02-01", to: "2024-02-29" });
+    // 23:30 UTC on 31 December is still December, whatever the local zone.
+    const p = presets(Date.parse("2026-12-31T23:30:00Z"));
+    expect(p.month).toEqual({ from: "2026-12-01", to: "2026-12-31" });
+    expect(p["last-month"]).toEqual({ from: "2026-11-01", to: "2026-11-30" });
+    expect(p["7d"]).toEqual({ from: "2026-12-25", to: "2026-12-31" });
+    expect(presets(Date.parse("2027-01-15T00:00:00Z"))["last-month"]).toEqual({ from: "2026-12-01", to: "2026-12-31" });
+    expect(p["30d"].from).toBe("2026-12-02");
   });
 
   it("filters runs by status and text", () => {

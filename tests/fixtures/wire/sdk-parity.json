@@ -398,6 +398,32 @@
       "body": null
     },
     {
+      "case": "list_usage_filtered",
+      "method": "GET",
+      "path": "/v1/usage",
+      "query": {
+        "limit": "10",
+        "from": "2026-11-01",
+        "to": "2026-11-30",
+        "run_id": "run_015437ae0c01e09a573e4811",
+        "kind": "labeling"
+      },
+      "idempotency_key": null,
+      "body": null
+    },
+    {
+      "case": "usage_summary",
+      "method": "GET",
+      "path": "/v1/usage/summary",
+      "query": {
+        "from": "2026-11-01",
+        "to": "2026-11-30",
+        "group_by": "model"
+      },
+      "idempotency_key": null,
+      "body": null
+    },
+    {
       "case": "plan_sft_checkpoint_evals_loggers",
       "method": "POST",
       "path": "/v1/runs/plan",
@@ -777,8 +803,10 @@
       "data": [
         {
           "id": "use_1",
-          "kind": "run",
+          "kind": "training",
           "ref_id": "run_015437ae0c01e09a573e4811",
+          "ref_name": "support-sft",
+          "run_id": "run_015437ae0c01e09a573e4811",
           "attempt": 1,
           "tokens_from": 0,
           "tokens_through": 84,
@@ -790,6 +818,60 @@
         }
       ],
       "next_cursor": null
+    },
+    "usage_summary": {
+      "from": "2026-11-01T00:00:00.000Z",
+      "to": "2026-12-01T00:00:00.000Z",
+      "cost_usd": 0.0046,
+      "tokens": 2400,
+      "records": 5,
+      "by_kind": [
+        {
+          "kind": "teacher",
+          "cost_usd": 0.0013,
+          "tokens": 500,
+          "records": 1
+        },
+        {
+          "kind": "training",
+          "cost_usd": 0.001,
+          "tokens": 1000,
+          "records": 2
+        }
+      ],
+      "top_runs": [
+        {
+          "id": "run_015437ae0c01e09a573e4811",
+          "name": "support-sft",
+          "kind": "training",
+          "cost_usd": 0.001,
+          "tokens": 1000
+        }
+      ],
+      "top_evals": [
+        {
+          "id": "eval_0b1c",
+          "name": "support-distilled-teacher",
+          "kind": "teacher",
+          "cost_usd": 0.0013,
+          "tokens": 500
+        }
+      ],
+      "group_by": "model",
+      "groups": [
+        {
+          "key": "qwen/qwen3-32b",
+          "cost_usd": 0.0013,
+          "tokens": 500,
+          "records": 1
+        },
+        {
+          "key": "test/tiny-qwen3",
+          "cost_usd": 0.001,
+          "tokens": 1000,
+          "records": 2
+        }
+      ]
     },
     "run_events": {
       "run_id": "run_0f2246b453f78a17b21ac086",
@@ -1305,9 +1387,19 @@
     "source.last_error": "langfuse: 401 Unauthorized (auth failed for ***)",
     "secret.name": "langfuse-prod",
     "secret.allowed_hosts[0]": "cloud.langfuse.com",
-    "usage[0].kind": "run",
+    "usage[0].kind": "training",
     "usage[0].tokens_through": 84,
     "usage[0].cost_usd": 8.4e-05,
+    "usage[0].ref_name": "support-sft",
+    "usage[0].run_id": "run_015437ae0c01e09a573e4811",
+    "usage_summary.from": "2026-11-01T00:00:00.000Z",
+    "usage_summary.cost_usd": 0.0046,
+    "usage_summary.tokens": 2400,
+    "usage_summary.by_kind[0].kind": "teacher",
+    "usage_summary.top_runs[0].name": "support-sft",
+    "usage_summary.top_evals[0].kind": "teacher",
+    "usage_summary.groups[1].key": "test/tiny-qwen3",
+    "usage_summary.groups[1].tokens": 1000,
     "run.phase": "completing",
     "run.last_interruption.reason": "compute_reclaimed",
     "run.last_interruption.resume_step": 120,

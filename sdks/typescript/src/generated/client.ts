@@ -59,6 +59,7 @@ import type {
   TrainableModel,
   UploadTicket,
   UsageRecord,
+  UsageSummary,
 } from "./models.js";
 
 /** Which wire keys are renamed to camelCase, per schema (user-keyed maps are left verbatim). */
@@ -135,9 +136,21 @@ export const CODEC: CodecTable = {
   "TrajectoryInput": { o: [["messages", "messages", { a: "ChatMessage" }]] },
   "TrajectoryOutput": { o: [["turns", "turns", { a: "ChatMessage" }]] },
   "UploadTicket": { o: [["uploadId", "upload_id", 0], ["expiresAt", "expires_at", 0]] },
-  "UsageRecord": { o: [["refId", "ref_id", 0], ["tokensFrom", "tokens_from", 0], ["tokensThrough", "tokens_through", 0], ["costUsd", "cost_usd", 0], ["priceVersion", "price_version", 0], ["idempotencyKey", "idempotency_key", 0], ["createdAt", "created_at", 0]] },
+  "UsageGroup": { o: [["costUsd", "cost_usd", 0]] },
+  "UsageKindTotal": { o: [["costUsd", "cost_usd", 0]] },
+  "UsageRecord": { o: [["refId", "ref_id", 0], ["refName", "ref_name", 0], ["runId", "run_id", 0], ["tokensFrom", "tokens_from", 0], ["tokensThrough", "tokens_through", 0], ["costUsd", "cost_usd", 0], ["priceVersion", "price_version", 0], ["idempotencyKey", "idempotency_key", 0], ["createdAt", "created_at", 0]] },
+  "UsageRefTotal": { o: [["costUsd", "cost_usd", 0]] },
+  "UsageSummary": { o: [["costUsd", "cost_usd", 0], ["byKind", "by_kind", { a: "UsageKindTotal" }], ["topRuns", "top_runs", { a: "UsageRefTotal" }], ["topEvals", "top_evals", { a: "UsageRefTotal" }], ["groupBy", "group_by", 0], ["groups", "groups", { a: "UsageGroup" }]] },
   "WarningEvent": { o: [["runId", "run_id", 0]] },
 };
+
+export interface GetUsageSummaryParams {
+  /** Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp. */
+  from?: string | undefined;
+  /** End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive. */
+  to?: string | undefined;
+  groupBy?: "day" | "week" | "month" | "model" | "recipe" | "kind" | undefined;
+}
 
 export interface ListApiKeysParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
@@ -331,6 +344,14 @@ export interface ListUsageParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
+  /** Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp. */
+  from?: string | undefined;
+  /** End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive. */
+  to?: string | undefined;
+  /** Only usage billed for this run: its training and the evals it started (labeling, teacher answers, checkpoint evals). */
+  runId?: string | undefined;
+  evalId?: string | undefined;
+  kind?: "training" | "eval" | "scoring" | "labeling" | "teacher" | undefined;
 }
 
 export type ListUsageResponse = {
@@ -606,6 +627,16 @@ export class ApiClient {
   }
 
   /**
+   * Total cost and tokens over a period (default: this UTC month), by kind, the top runs and evals, and optional groups
+   *
+   * `GET /v1/usage/summary`
+   */
+  async getUsageSummary(params?: GetUsageSummaryParams, options?: RequestOptions): Promise<UsageSummary> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/usage/summary`, query: [["from", params?.from], ["to", params?.to], ["group_by", params?.groupBy]] }, options);
+    return convertKeys(CODEC, "UsageSummary", data, "decode") as UsageSummary;
+  }
+
+  /**
    * List workspace API keys
    *
    * `GET /v1/keys`
@@ -790,12 +821,12 @@ export class ApiClient {
   }
 
   /**
-   * List billed usage, newest first: one record per run or eval attempt
+   * List billed usage, newest first (filter by period, run, eval or kind): one record per billed increment of a run or eval attempt
    *
    * `GET /v1/usage`
    */
   async listUsage(params?: ListUsageParams, options?: RequestOptions): Promise<ListUsageResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/usage`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/usage`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["from", params?.from], ["to", params?.to], ["run_id", params?.runId], ["eval_id", params?.evalId], ["kind", params?.kind]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "UsageRecord" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListUsageResponse;
   }
 

@@ -13,6 +13,7 @@ use crate::events::{RunEvent, RunEventStream, RunEventsPage};
 use crate::models::*;
 use crate::sse::{MetricEvent, MetricStream};
 use crate::transport::{Body, Deadline, Req};
+use crate::usage::{UsageQuery, UsageSummaryQuery};
 use crate::util::{self, check_path_param, encode_segment as seg};
 use crate::{enc, Client};
 
@@ -640,13 +641,20 @@ impl Datasets<'_> {
 }
 
 impl UsageLedger<'_> {
-    /// Billed usage, newest first: one record per billed increment of a run or eval attempt.
-    pub async fn list(&self, p: &ListParams) -> Result<Page<UsageRecord>> {
-        get(self.c, Req::get("/v1/usage").query(p.query())).await
+    /// Billed rows matching `q`, newest first: one per billed increment of a run or eval attempt.
+    pub async fn list(&self, q: &UsageQuery) -> Result<Page<UsageRecord>> {
+        get(self.c, Req::get("/v1/usage").query(q.query())).await
     }
 
-    pub async fn list_all(&self) -> Result<Vec<UsageRecord>> {
-        collect_all(self.c, "/v1/usage", LIST_USAGE_LIMIT_MAX, vec![]).await
+    /// Every billed row matching `q`'s filters (its `limit` and `cursor` are ignored).
+    pub async fn list_all(&self, q: &UsageQuery) -> Result<Vec<UsageRecord>> {
+        collect_all(self.c, "/v1/usage", LIST_USAGE_LIMIT_MAX, q.filters()).await
+    }
+
+    /// Total cost and tokens, by kind, the top runs and evals, and `group_by`
+    /// groups over a period (default: the current UTC month).
+    pub async fn summary(&self, q: &UsageSummaryQuery) -> Result<UsageSummary> {
+        get(self.c, Req::get("/v1/usage/summary").query(q.query())).await
     }
 }
 
@@ -1490,6 +1498,11 @@ impl Evals<'_> {
 
     pub async fn list(&self, p: &ListParams) -> Result<Page<EvalRun>> {
         get(self.c, Req::get("/v1/evals").query(p.query())).await
+    }
+
+    /// Every eval, newest first.
+    pub async fn list_all(&self) -> Result<Vec<EvalRun>> {
+        collect_all(self.c, "/v1/evals", LIST_EVALS_LIMIT_MAX, vec![]).await
     }
 
     pub async fn cancel(&self, id: &str) -> Result<EvalRun> {

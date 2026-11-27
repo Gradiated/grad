@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
 
 from ._errors import NotAvailableInV0Error, PaginationLoopError, RunFailedError
-from ._format import format_eval_plan, format_eval_summary, format_plan, format_render
+from ._format import format_eval_plan, format_eval_summary, format_plan, format_render, format_usage_summary
 from .records import Trajectory
 
 T = TypeVar("T")
@@ -48,6 +48,9 @@ __all__ = [
     "Run",
     "RunInterruption",
     "RunEvent",
+    "UsageRecord",
+    "UsageSummary",
+    "UsageTotal",
     "PhaseEvent",
     "MetricEvent",
     "CheckpointEvent",
@@ -89,6 +92,8 @@ class APIObject:
 
     _repr_fields: ClassVar[tuple[str, ...]] = ("id",)
     _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {}
+    _aliases: ClassVar[dict[str, str]] = {}
+    """Field name -> JSON key, for keys that are Python keywords (``from_`` is ``from``)."""
 
     @classmethod
     def from_api(cls: builtins.type[A], data: Mapping[str, Any] | None, client: Any = None) -> A:
@@ -99,8 +104,9 @@ class APIObject:
         for f in fields(cls):
             if f.name in ("raw", "_client"):
                 continue
-            if f.name in payload:
-                value = payload[f.name]
+            key = cls._aliases.get(f.name, f.name)
+            if key in payload:
+                value = payload[key]
             elif f.default is not MISSING:
                 value = f.default
             elif f.default_factory is not MISSING:
@@ -931,11 +937,18 @@ class ApiKey(APIObject):
 
 @dataclass(kw_only=True, repr=False, eq=False)
 class UsageRecord(APIObject):
-    """One billed increment of a run or eval attempt (``client.usage.list()``)."""
+    """One billed increment of a run or eval attempt (``client.usage.list()``).
+
+    ``kind`` is what the tokens paid for: ``training``, ``eval``, ``scoring``, ``labeling`` or
+    ``teacher``. ``run_id`` is the run billed: the run itself, or the run whose labeling,
+    teacher or checkpoint eval this is.
+    """
 
     id: str
     kind: str
     ref_id: str
+    ref_name: str | None = None
+    run_id: str | None = None
     attempt: int = 0
     tokens_from: int = 0
     tokens_through: int = 0
@@ -946,6 +959,61 @@ class UsageRecord(APIObject):
     created_at: str | None = None
 
     _repr_fields = ("kind", "ref_id", "attempt", "tokens", "cost_usd")
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class UsageTotal(APIObject):
+    """Cost and tokens of one kind, run, eval or group in a :class:`UsageSummary`.
+
+    ``key`` names a group (a UTC day or week start, a month, a model, a recipe or a kind);
+    ``id``/``name`` name a top run or eval; ``kind`` is set for kinds and top refs.
+    """
+
+    key: str | None = None
+    id: str | None = None
+    name: str | None = None
+    kind: str | None = None
+    cost_usd: float = 0.0
+    tokens: int = 0
+    records: int = 0
+
+    _repr_fields = ("key", "id", "name", "kind", "cost_usd", "tokens")
+
+
+def _totals(value: Any, client: Any) -> Any:
+    return [UsageTotal.from_api(v, client) for v in value] if isinstance(value, list) else value
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class UsageSummary(APIObject):
+    """Billed usage over ``[from_, to)`` (``client.usage.summary()``); ``print()`` it.
+
+    ``by_kind``, ``top_runs``, ``top_evals`` and ``groups`` (with ``group_by``) are lists of
+    :class:`UsageTotal`. ``from_`` is the JSON ``from``.
+    """
+
+    from_: str | None = None
+    to: str | None = None
+    cost_usd: float = 0.0
+    tokens: int = 0
+    records: int = 0
+    by_kind: list[UsageTotal] = field(default_factory=list)
+    top_runs: list[UsageTotal] = field(default_factory=list)
+    top_evals: list[UsageTotal] = field(default_factory=list)
+    group_by: str | None = None
+    groups: list[UsageTotal] = field(default_factory=list)
+
+    _repr_fields = ("from_", "to", "cost_usd", "tokens")
+    _aliases: ClassVar[dict[str, str]] = {"from_": "from"}
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {
+        "by_kind": _totals,
+        "top_runs": _totals,
+        "top_evals": _totals,
+        "groups": _totals,
+    }
+
+    def __str__(self) -> str:
+        return format_usage_summary(self)
 
 
 def _api_key(value: Any, client: Any) -> Any:

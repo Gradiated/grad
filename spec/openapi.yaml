@@ -4348,14 +4348,21 @@ components:
           type: string
           minLength: 1
         kind:
-          type: string
-          enum:
-            - run
-            - eval
+          $ref: "#/components/schemas/UsageKind"
         ref_id:
           type: string
           minLength: 1
-          description: The run or eval this usage belongs to.
+          description: The run (kind `training`) or eval this usage belongs to.
+        ref_name:
+          type:
+            - string
+            - "null"
+        run_id:
+          type:
+            - string
+            - "null"
+          description: "The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it
+            is."
         attempt:
           type: integer
           minimum: 1
@@ -4385,6 +4392,8 @@ components:
         - id
         - kind
         - ref_id
+        - ref_name
+        - run_id
         - attempt
         - tokens_from
         - tokens_through
@@ -4393,6 +4402,147 @@ components:
         - price_version
         - idempotency_key
         - created_at
+    UsageKind:
+      type: string
+      enum:
+        - training
+        - eval
+        - scoring
+        - labeling
+        - teacher
+      description: "What the tokens paid for: `training` (a run's attempts), `eval` (evals, including a run's checkpoint
+        evals), `scoring` (dataset.score), `labeling` (a router run's labeling eval) or `teacher` (an off-policy distill
+        run's teacher answers)."
+    UsageSummary:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date-time
+          description: Start of the period (inclusive).
+        to:
+          type: string
+          format: date-time
+          description: End of the period (exclusive).
+        cost_usd:
+          type: number
+          minimum: 0
+        tokens:
+          type: integer
+          minimum: 0
+        records:
+          type: integer
+          minimum: 0
+        by_kind:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageKindTotal"
+          description: One entry per kind with usage, costliest first.
+        top_runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageRefTotal"
+          description: The costliest runs' training in the period (up to 5).
+        top_evals:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageRefTotal"
+          description: The costliest evals, scoring, labeling and teacher jobs in the period (up to 5).
+        group_by:
+          $ref: "#/components/schemas/UsageGroupBy"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageGroup"
+          description: "With group_by: one entry per group with usage, oldest first for time groups and costliest first otherwise."
+      required:
+        - from
+        - to
+        - cost_usd
+        - tokens
+        - records
+        - by_kind
+        - top_runs
+        - top_evals
+        - group_by
+        - groups
+    UsageKindTotal:
+      type: object
+      properties:
+        kind:
+          $ref: "#/components/schemas/UsageKind"
+        cost_usd:
+          type: number
+          minimum: 0
+        tokens:
+          type: integer
+          minimum: 0
+        records:
+          type: integer
+          minimum: 0
+      required:
+        - kind
+        - cost_usd
+        - tokens
+        - records
+    UsageRefTotal:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type:
+            - string
+            - "null"
+        kind:
+          $ref: "#/components/schemas/UsageKind"
+        cost_usd:
+          type: number
+          minimum: 0
+        tokens:
+          type: integer
+          minimum: 0
+      required:
+        - id
+        - name
+        - kind
+        - cost_usd
+        - tokens
+    UsageGroupBy:
+      type:
+        - string
+        - "null"
+      enum:
+        - day
+        - week
+        - month
+        - model
+        - recipe
+        - kind
+        - null
+    UsageGroup:
+      type: object
+      properties:
+        key:
+          type:
+            - string
+            - "null"
+          description: "The group: a UTC day or week start (YYYY-MM-DD), a month (YYYY-MM), a model, a recipe or a kind. Null for
+            usage with no recipe (plain evals, scoring)."
+        cost_usd:
+          type: number
+          minimum: 0
+        tokens:
+          type: integer
+          minimum: 0
+        records:
+          type: integer
+          minimum: 0
+      required:
+        - key
+        - cost_usd
+        - tokens
+        - records
     PlanEvalResponse:
       type: object
       properties:
@@ -8495,7 +8645,8 @@ paths:
   /v1/usage:
     get:
       operationId: listUsage
-      summary: "List billed usage, newest first: one record per run or eval attempt"
+      summary: "List billed usage, newest first (filter by period, run, eval or kind): one record per billed increment of a
+        run or eval attempt"
       tags:
         - Usage
       parameters:
@@ -8515,6 +8666,51 @@ paths:
             maxLength: 512
           required: false
           name: cursor
+          in: query
+        - schema:
+            type: string
+            maxLength: 40
+            description: "Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp."
+          required: false
+          description: "Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp."
+          name: from
+          in: query
+        - schema:
+            type: string
+            maxLength: 40
+            description: "End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive."
+          required: false
+          description: "End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive."
+          name: to
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            description: "Only usage billed for this run: its training and the evals it started (labeling, teacher answers,
+              checkpoint evals)."
+          required: false
+          description: "Only usage billed for this run: its training and the evals it started (labeling, teacher answers,
+            checkpoint evals)."
+          name: run_id
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          required: false
+          name: eval_id
+          in: query
+        - schema:
+            type: string
+            enum:
+              - training
+              - eval
+              - scoring
+              - labeling
+              - teacher
+          required: false
+          name: kind
           in: query
       responses:
         "200":
@@ -8536,6 +8732,97 @@ paths:
                 required:
                   - data
                   - next_cursor
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/usage/summary:
+    get:
+      operationId: getUsageSummary
+      summary: "Total cost and tokens over a period (default: this UTC month), by kind, the top runs and evals, and optional
+        groups"
+      tags:
+        - Usage
+      parameters:
+        - schema:
+            type: string
+            maxLength: 40
+            description: "Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp."
+          required: false
+          description: "Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp."
+          name: from
+          in: query
+        - schema:
+            type: string
+            maxLength: 40
+            description: "End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive."
+          required: false
+          description: "End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive."
+          name: to
+          in: query
+        - schema:
+            type: string
+            enum:
+              - day
+              - week
+              - month
+              - model
+              - recipe
+              - kind
+          required: false
+          name: group_by
+          in: query
+      responses:
+        "200":
+          description: Usage summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageSummary"
         "400":
           description: Malformed request.
           content:

@@ -36,6 +36,8 @@ export const RUST_MODELS = [
   "ScoreDatasetRequest",
   "TrainableModel",
   "UploadTicket",
+  "UsageRecord",
+  "UsageSummary",
 ];
 
 /** Schemas whose property names the CLI checks user input against (`<Type>::FIELDS`). */

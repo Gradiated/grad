@@ -1361,12 +1361,38 @@ UploadTicket = TypedDict(
     },
 )
 
+UsageGroup = TypedDict(
+    "UsageGroup",
+    {
+        "key": "str | None",
+        "cost_usd": "float",
+        "tokens": "int",
+        "records": "int",
+    },
+)
+
+UsageGroupBy: TypeAlias = "Literal['day', 'week', 'month', 'model', 'recipe', 'kind'] | None"
+
+UsageKind: TypeAlias = "Literal['training', 'eval', 'scoring', 'labeling', 'teacher']"
+
+UsageKindTotal = TypedDict(
+    "UsageKindTotal",
+    {
+        "kind": "UsageKind",
+        "cost_usd": "float",
+        "tokens": "int",
+        "records": "int",
+    },
+)
+
 UsageRecord = TypedDict(
     "UsageRecord",
     {
         "id": "str",
-        "kind": "Literal['run', 'eval']",
+        "kind": "UsageKind",
         "ref_id": "str",
+        "ref_name": "str | None",
+        "run_id": "str | None",
         "attempt": "int",
         "tokens_from": "int",
         "tokens_through": "int",
@@ -1375,6 +1401,33 @@ UsageRecord = TypedDict(
         "price_version": "str",
         "idempotency_key": "str",
         "created_at": "str",
+    },
+)
+
+UsageRefTotal = TypedDict(
+    "UsageRefTotal",
+    {
+        "id": "str",
+        "name": "str | None",
+        "kind": "UsageKind",
+        "cost_usd": "float",
+        "tokens": "int",
+    },
+)
+
+UsageSummary = TypedDict(
+    "UsageSummary",
+    {
+        "from": "str",
+        "to": "str",
+        "cost_usd": "float",
+        "tokens": "int",
+        "records": "int",
+        "by_kind": "list[UsageKindTotal]",
+        "top_runs": "list[UsageRefTotal]",
+        "top_evals": "list[UsageRefTotal]",
+        "group_by": "UsageGroupBy",
+        "groups": "list[UsageGroup]",
     },
 )
 
@@ -1608,7 +1661,11 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
     "TrajectoryOutput": frozenset({"payload", "turns"}),
     "UploadTicket": frozenset({"expires_at", "headers", "method", "upload_id", "url"}),
-    "UsageRecord": frozenset({"attempt", "cost_usd", "created_at", "id", "idempotency_key", "kind", "price_version", "ref_id", "tokens", "tokens_from", "tokens_through"}),
+    "UsageGroup": frozenset({"cost_usd", "key", "records", "tokens"}),
+    "UsageKindTotal": frozenset({"cost_usd", "kind", "records", "tokens"}),
+    "UsageRecord": frozenset({"attempt", "cost_usd", "created_at", "id", "idempotency_key", "kind", "price_version", "ref_id", "ref_name", "run_id", "tokens", "tokens_from", "tokens_through"}),
+    "UsageRefTotal": frozenset({"cost_usd", "id", "kind", "name", "tokens"}),
+    "UsageSummary": frozenset({"by_kind", "cost_usd", "from", "group_by", "groups", "records", "to", "tokens", "top_evals", "top_runs"}),
     "WarningEvent": frozenset({"attempt", "message", "run_id", "seq", "step", "timestamp", "type"}),
 }
 """Property names of every object schema (for client-side typo checks)."""
@@ -1624,6 +1681,8 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
     "RunPhase": ("queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing",),
     "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance",),
+    "UsageGroupBy": ("day", "week", "month", "model", "recipe", "kind", None,),
+    "UsageKind": ("training", "eval", "scoring", "labeling", "teacher",),
 }
 """Allowed values of every enum schema."""
 
@@ -1651,6 +1710,7 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "get_run": ("GET", "/v1/runs/{id}"),
     "get_secret": ("GET", "/v1/secrets/{name}"),
     "get_source": ("GET", "/v1/sources/{id}"),
+    "get_usage_summary": ("GET", "/v1/usage/summary"),
     "list_api_keys": ("GET", "/v1/keys"),
     "list_artifacts": ("GET", "/v1/artifacts"),
     "list_base_models": ("GET", "/v1/base-models"),
@@ -1804,6 +1864,10 @@ class GeneratedApiClient:
         """Get a source and its latest sync."""
         return cast("Source", self._t.request("GET", f"/v1/sources/{quote_path_param(id, 'id')}", timeout=timeout))
 
+    def get_usage_summary(self, *, from_: str | None = None, to: str | None = None, group_by: Literal['day', 'week', 'month', 'model', 'recipe', 'kind'] | None = None, timeout: float | None = None) -> UsageSummary:
+        """Total cost and tokens over a period (default: this UTC month), by kind, the top runs and evals, and optional groups."""
+        return cast("UsageSummary", self._t.request("GET", "/v1/usage/summary", query={"from": from_, "to": to, "group_by": group_by}, timeout=timeout))
+
     def list_api_keys(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListApiKeysResponse:
         """List workspace API keys."""
         return cast("ListApiKeysResponse", self._t.request("GET", "/v1/keys", query={"limit": limit, "cursor": cursor}, timeout=timeout))
@@ -1880,9 +1944,9 @@ class GeneratedApiClient:
         """List sources (newest first), optionally for one dataset."""
         return cast("ListSourcesResponse", self._t.request("GET", "/v1/sources", query={"limit": limit, "cursor": cursor, "dataset": dataset}, timeout=timeout))
 
-    def list_usage(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListUsageResponse:
-        """List billed usage, newest first: one record per run or eval attempt."""
-        return cast("ListUsageResponse", self._t.request("GET", "/v1/usage", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+    def list_usage(self, *, limit: int | None = None, cursor: str | None = None, from_: str | None = None, to: str | None = None, run_id: str | None = None, eval_id: str | None = None, kind: Literal['training', 'eval', 'scoring', 'labeling', 'teacher'] | None = None, timeout: float | None = None) -> ListUsageResponse:
+        """List billed usage, newest first (filter by period, run, eval or kind): one record per billed increment of a run or eval attempt."""
+        return cast("ListUsageResponse", self._t.request("GET", "/v1/usage", query={"limit": limit, "cursor": cursor, "from": from_, "to": to, "run_id": run_id, "eval_id": eval_id, "kind": kind}, timeout=timeout))
 
     def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanEvalResponse:
         """Estimate tasks, model/judge calls, and cost before running an eval."""

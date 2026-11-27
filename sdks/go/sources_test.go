@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	grad "github.com/Gradiated/grad/sdks/go"
 )
@@ -199,5 +200,43 @@ func TestUsageList(t *testing.T) {
 	}
 	if len(got) != 1 || f.last("GET", "/v1/usage").Query != "cursor=c1&limit=5" {
 		t.Fatalf("usage %v %q", got, f.last("GET", "/v1/usage").Query)
+	}
+}
+
+func TestUsageFiltersAndTimeBounds(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t, map[string]route{"GET /v1/usage": jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil})})
+	c, _ := f.client()
+	noon := time.Date(2026, 11, 2, 13, 30, 0, 0, time.FixedZone("CET", 3600))
+	for _, err := range c.Usage.List(ctx, grad.WithUsageFrom(noon), grad.WithUsageTo(""), grad.WithUsageEval("eval_1"), grad.WithUsageKind(grad.UsageEval)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if q := f.last("GET", "/v1/usage").Query; q != "eval_id=eval_1&from=2026-11-02T12%3A30%3A00Z&kind=eval" {
+		t.Fatalf("query %q", q)
+	}
+}
+
+func TestUsageSummary(t *testing.T) {
+	ctx := context.Background()
+	body := wireMap(t, "sdk-parity.json")["responses"].(map[string]any)["usage_summary"]
+	f := newFake(t, map[string]route{"GET /v1/usage/summary": jsonValue(200, body)})
+	c, _ := f.client()
+	s, err := c.Usage.Summary(ctx, grad.WithUsageTo(time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)), grad.WithUsageGroupBy(grad.UsageByRecipe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := f.last("GET", "/v1/usage/summary").Query; q != "group_by=recipe&to=2026-12-01T00%3A00%3A00Z" {
+		t.Fatalf("query %q", q)
+	}
+	if s.CostUSD != 0.0046 || s.ByKind[0].Kind != grad.UsageTeacher || *s.TopRuns[0].Name != "support-sft" || *s.GroupBy != grad.UsageByModel {
+		t.Fatalf("summary %+v", s)
+	}
+	if _, err := c.Usage.Summary(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if q := f.last("GET", "/v1/usage/summary").Query; q != "" {
+		t.Fatalf("default query %q", q)
 	}
 }

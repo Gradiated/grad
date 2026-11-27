@@ -424,6 +424,30 @@ func (c *Client) GetSource(ctx context.Context, id string, opts ...RequestOption
 	return &out, nil
 }
 
+// GetUsageSummary calls GET /v1/usage/summary.
+//
+// Total cost and tokens over a period (default: this UTC month), by kind, the top runs and evals, and optional groups.
+func (c *Client) GetUsageSummary(ctx context.Context, params *GetUsageSummaryParams, opts ...RequestOption) (*UsageSummary, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.From != nil {
+			q.Add("from", FormatScalar(*params.From))
+		}
+		if params.To != nil {
+			q.Add("to", FormatScalar(*params.To))
+		}
+		if params.GroupBy != nil {
+			q.Add("group_by", FormatScalar(*params.GroupBy))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/usage/summary", Query: q}
+	var out UsageSummary
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListAPIKeys calls GET /v1/keys.
 //
 // List workspace API keys.
@@ -870,7 +894,7 @@ func (c *Client) ListSources(ctx context.Context, params *ListSourcesParams, opt
 
 // ListUsage calls GET /v1/usage.
 //
-// List billed usage, newest first: one record per run or eval attempt.
+// List billed usage, newest first (filter by period, run, eval or kind): one record per billed increment of a run or eval attempt.
 func (c *Client) ListUsage(ctx context.Context, params *ListUsageParams, opts ...RequestOption) (*ListUsageResponse, error) {
 	q := url.Values{}
 	if params != nil {
@@ -879,6 +903,21 @@ func (c *Client) ListUsage(ctx context.Context, params *ListUsageParams, opts ..
 		}
 		if params.Cursor != nil {
 			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.From != nil {
+			q.Add("from", FormatScalar(*params.From))
+		}
+		if params.To != nil {
+			q.Add("to", FormatScalar(*params.To))
+		}
+		if params.RunID != nil {
+			q.Add("run_id", FormatScalar(*params.RunID))
+		}
+		if params.EvalID != nil {
+			q.Add("eval_id", FormatScalar(*params.EvalID))
+		}
+		if params.Kind != nil {
+			q.Add("kind", FormatScalar(*params.Kind))
 		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/usage", Query: q}

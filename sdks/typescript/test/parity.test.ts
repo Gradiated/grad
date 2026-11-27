@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { adapters, Context, Judge, loggers, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
-import type { EvalRun, PlanEvalResponse, PlanRunResponse, Run, RunEventsPage, Secret, Source, UsageRecord } from "../src/generated/models.js";
+import type { EvalRun, PlanEvalResponse, PlanRunResponse, Run, RunEventsPage, Secret, Source, UsageRecord, UsageSummary } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
 import { FakeServer, json, makeGrad, wire } from "./helpers.js";
@@ -9,7 +9,7 @@ import { FakeServer, json, makeGrad, wire } from "./helpers.js";
 /** tests/fixtures/wire/sdk-parity.json: every SDK and the CLI send these requests for the same calls. */
 interface Parity {
   requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown; query?: Record<string, string> }[];
-  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; run_plan: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] }; run_events: { run_id: string } };
+  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; run_plan: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] }; usage_summary: unknown; run_events: { run_id: string } };
   expect: Record<string, unknown>;
 }
 const parity = wire<Parity>("sdk-parity.json");
@@ -145,6 +145,12 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
     grad.sources.create("support-prod", { provider: sources.gradiated({ models: ["acme/support"] }), schedule: "0 * * * *" }),
   sync_source_full: async () => grad.sources.sync("src_01J9X", { full: true }),
   list_usage: () => grad.usage.list({ limit: 10 }).pages().next(),
+  list_usage_filtered: () =>
+    grad.usage
+      .list({ from: "2026-11-01", to: "2026-11-30", runId: { id: "run_015437ae0c01e09a573e4811" }, kind: "labeling", limit: 10 })
+      .pages()
+      .next(),
+  usage_summary: () => grad.usage.summary({ from: "2026-11-01", to: "2026-11-30", groupBy: "model" }),
   list_run_events: () => grad.runs.events(parity.responses.run_events.run_id, { limit: 100 }).next(),
 });
 
@@ -184,6 +190,7 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const source = decode<Source>("Source", parity.responses.source);
     const secret = decode<Secret>("Secret", parity.responses.secret);
     const usage = decode<UsageRecord>("UsageRecord", parity.responses.usage_page.data[0]);
+    const totals = decode<UsageSummary>("UsageSummary", parity.responses.usage_summary);
     const events = decode<RunEventsPage>("RunEventsPage", parity.responses.run_events).data;
     const at = <T extends RunEventsPage["data"][number]["type"]>(i: number, type: T) => {
       const event = events[i];
@@ -219,7 +226,17 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "secret.allowed_hosts[0]": secret.allowedHosts[0],
       "usage[0].kind": usage.kind,
       "usage[0].tokens_through": usage.tokensThrough,
+      "usage[0].ref_name": usage.refName,
+      "usage[0].run_id": usage.runId,
       "usage[0].cost_usd": usage.costUsd,
+      "usage_summary.from": totals.from,
+      "usage_summary.cost_usd": totals.costUsd,
+      "usage_summary.tokens": totals.tokens,
+      "usage_summary.by_kind[0].kind": totals.byKind[0]?.kind,
+      "usage_summary.top_runs[0].name": totals.topRuns[0]?.name,
+      "usage_summary.top_evals[0].kind": totals.topEvals[0]?.kind,
+      "usage_summary.groups[1].key": totals.groups[1]?.key,
+      "usage_summary.groups[1].tokens": totals.groups[1]?.tokens,
       "run.phase": run.phase,
       "run.last_interruption.reason": run.lastInterruption?.reason,
       "run.last_interruption.resume_step": run.lastInterruption?.resumeStep,

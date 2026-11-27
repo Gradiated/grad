@@ -131,7 +131,26 @@ describe("usage", () => {
     const server = new FakeServer().on("GET", "/v1/usage", json({ ...page, next_cursor: "c1" }), json({ data: [], next_cursor: null }));
     const { grad } = makeGrad(server);
     const records = await grad.usage.list({ limit: 5 }).all();
-    expect(records.map((r) => [r.kind, r.tokensThrough, r.costUsd])).toEqual([["run", 84, 0.000084]]);
+    expect(records.map((r) => [r.kind, r.tokensThrough, r.costUsd, r.refName])).toEqual([["training", 84, 0.000084, "support-sft"]]);
     expect(server.calls.at(-1)?.url.searchParams.get("cursor")).toBe("c1");
+  });
+
+  it("filters every page and takes Date bounds", async () => {
+    const page = wire<{ responses: { usage_page: { data: unknown[] } } }>("sdk-parity.json").responses.usage_page;
+    const server = new FakeServer().on("GET", "/v1/usage", json({ ...page, next_cursor: "c1" }), json({ data: [], next_cursor: null }));
+    const { grad } = makeGrad(server);
+    await grad.usage.list({ from: new Date(Date.UTC(2026, 10, 2, 12, 30)), evalId: "eval_1", kind: "eval" }).all();
+    const queries = server.calls.map((c) => Object.fromEntries(c.url.searchParams));
+    const want = { from: "2026-11-02T12:30:00.000Z", eval_id: "eval_1", kind: "eval" };
+    expect(queries).toEqual([want, { ...want, cursor: "c1" }]);
+  });
+
+  it("returns a typed summary", async () => {
+    const body = wire<{ responses: { usage_summary: unknown } }>("sdk-parity.json").responses.usage_summary;
+    const server = new FakeServer().on("GET", "/v1/usage/summary", json(body));
+    const { grad } = makeGrad(server);
+    const summary = await grad.usage.summary({ to: new Date(Date.UTC(2026, 11, 1)), groupBy: "recipe" });
+    expect(Object.fromEntries(server.calls[0]!.url.searchParams)).toEqual({ to: "2026-12-01T00:00:00.000Z", group_by: "recipe" });
+    expect([summary.costUsd, summary.byKind[0]?.kind, summary.topRuns[0]?.name, summary.groupBy]).toEqual([0.0046, "teacher", "support-sft", "model"]);
   });
 });

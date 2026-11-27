@@ -1884,33 +1884,247 @@ fn secrets_set_reads_stdin_and_never_prints_the_value() {
     assert_eq!(r.err_json()["error"]["code"], "secret_in_use");
 }
 
-#[test]
-fn usage_lists_billed_increments() {
-    let srv = MockServer::start(|r| {
-        assert_eq!(r.path(), "/v1/usage");
-        Reply::json(
+fn usage_row(kind: &str, ref_id: &str, name: Option<&str>, tokens: u64) -> Value {
+    json!({"id": "use_1", "kind": kind, "ref_id": ref_id, "ref_name": name, "run_id": null,
+        "attempt": 2, "tokens_from": 0, "tokens_through": tokens, "tokens": tokens,
+        "cost_usd": 0.000084, "price_version": "catalog@1", "idempotency_key": "k",
+        "created_at": "2026-11-27T04:35:21.351Z"})
+}
+
+fn usage_api() -> MockServer {
+    MockServer::start(|r| match r.path() {
+        "/v1/usage/summary" => {
+            let grouped = r.query().contains("group_by=day");
+            let empty = r.query().contains("from=2025-01-01");
+            Reply::json(
+                200,
+                json!({"from": "2026-11-01T00:00:00.000Z", "to": "2026-12-01T00:00:00.000Z",
+                    "cost_usd": if empty { 0.0 } else { 12.5 }, "tokens": if empty { 0 } else { 2_400_000 },
+                    "records": if empty { 0 } else { 7 },
+                    "by_kind": [{"kind": "training", "cost_usd": 10.0, "tokens": 2_000_000, "records": 4},
+                                {"kind": "labeling", "cost_usd": 2.5, "tokens": 400_000, "records": 3}],
+                    "top_runs": [{"id": "run_abc", "name": "support-sft", "kind": "training", "cost_usd": 10.0, "tokens": 2_000_000}],
+                    "top_evals": [{"id": "eval_lbl", "name": "support-router-labels", "kind": "labeling", "cost_usd": 2.5, "tokens": 400_000}],
+                    "group_by": if grouped { json!("day") } else { Value::Null },
+                    "groups": if grouped { json!([{"key": "2026-11-02", "cost_usd": 12.5, "tokens": 2_400_000, "records": 7}]) } else { json!([]) }}),
+            )
+        }
+        "/v1/usage" => Reply::json(
             200,
-            json!({"data": [{"id": "use_1", "kind": "run", "ref_id": "run_abc", "attempt": 2,
-                "tokens_from": 0, "tokens_through": 84, "tokens": 84, "cost_usd": 0.000084,
-                "price_version": "catalog@1", "idempotency_key": "k", "created_at": "2026-11-27T04:35:21.351Z"}],
-                "next_cursor": null}),
-        )
-    });
+            json!({"data": [usage_row("training", "run_abc", Some("support-sft"), 84),
+                            usage_row("scoring", "eval_sc", None, 12)],
+                   "next_cursor": if r.query().contains("limit=2") { json!("c2") } else { Value::Null }}),
+        ),
+        "/v1/runs" => Reply::json(
+            200,
+            json!({"data": [{"id": "run_new", "name": "support-sft", "status": "completed"},
+                            {"id": "run_old", "name": "support-sft", "status": "completed"},
+                            {"id": "run_other", "name": "other", "status": "completed"}],
+                   "next_cursor": null}),
+        ),
+        "/v1/evals" => Reply::json(
+            200,
+            json!({"data": [{"id": "eval_one", "name": "nightly", "status": "completed"}], "next_cursor": null}),
+        ),
+        other => panic!("unexpected {}", other),
+    })
+}
+
+#[test]
+fn usage_summary_breaks_down_the_period() {
+    let srv = usage_api();
     let sb = Sandbox::new("usage");
     let r = run(sb.grad(Some(&srv.url)), &["usage"]);
     expect(&r, 0);
+    assert_eq!(srv.last("GET", "/v1/usage/summary").unwrap().query(), "");
+    for want in [
+        "Usage 2026-11-01 00:00 to 2026-12-01 00:00 UTC: $12.50 · 2,400,000 tokens · 7 billed rows",
+        "KIND      COST    TOKENS     ROWS",
+        "training  $10.00  2,000,000  4",
+        "Top runs",
+        "support-sft  run_abc  training  $10.00  2,000,000",
+        "Top evals",
+        "support-router-labels  eval_lbl  labeling  $2.50  400,000",
+    ] {
+        assert!(
+            r.stdout.contains(want),
+            "missing {:?} in\n{}",
+            want,
+            r.stdout
+        );
+    }
+
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "usage",
+            "--by",
+            "day",
+            "--from",
+            "2026-11-01",
+            "--to",
+            "2026-11-30T12:00:00Z",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(
+        srv.last("GET", "/v1/usage/summary").unwrap().query(),
+        "from=2026-11-01&to=2026-11-30T12%3A00%3A00Z&group_by=day"
+    );
     assert!(
-        r.stdout.contains("run_abc") && r.stdout.contains("0.000084"),
+        r.stdout.contains("DAY         COST    TOKENS     ROWS"),
         "{}",
         r.stdout
     );
-    let r = run(sb.grad(Some(&srv.url)), &["usage", "--json"]);
+    assert!(
+        r.stdout.contains("2026-11-02  $12.50  2,400,000  7"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("Top runs"), "{}", r.stdout);
+
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["usage", "--json", "--from", "2025-01-01"],
+    );
+    expect(&r, 0);
+    let v: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(v["data"]["records"], 0);
+    assert_eq!(v["data"]["from"], "2026-11-01T00:00:00.000Z");
+    let r = run(sb.grad(Some(&srv.url)), &["usage", "--from", "2025-01-01"]);
+    assert!(
+        r.stdout.contains("Nothing billed in this period."),
+        "{}",
+        r.stdout
+    );
+
+    let before = srv.requests().len();
+    for bad in [
+        &["usage", "--from", "2026-02-30"][..],
+        &["usage", "--to", "11/30/2026"],
+        &["usage", "list", "--from", "yesterday"],
+        &["usage", "--by", "hour"],
+        &["usage", "list", "--kind", "gpu"],
+    ] {
+        let r = run(sb.grad(Some(&srv.url)), bad);
+        expect(&r, 2);
+    }
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["--json", "usage", "--from", "2026-13-01"],
+    );
+    expect(&r, 2);
+    let e = r.err_json();
+    assert_eq!(e["error"]["code"], "usage_error");
+    assert!(
+        e["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--from '2026-13-01' is not a date (YYYY-MM-DD)"),
+        "{}",
+        e
+    );
+    assert_eq!(
+        srv.requests().len(),
+        before,
+        "bad dates are refused before any request"
+    );
+}
+
+#[test]
+fn usage_list_filters_and_resolves_names() {
+    let srv = usage_api();
+    let sb = Sandbox::new("usage-list");
+    let r = run(sb.grad(Some(&srv.url)), &["usage", "list"]);
+    expect(&r, 0);
+    for want in [
+        "TIME              KIND      RUN/EVAL               ATTEMPT  TOKENS  COST",
+        "2026-11-27 04:35  training  support-sft (run_abc)  2        84      $0.0001",
+        "2026-11-27 04:35  scoring   eval_sc                2        12      $0.0001",
+    ] {
+        assert!(
+            r.stdout.contains(want),
+            "missing {:?} in\n{}",
+            want,
+            r.stdout
+        );
+    }
+
+    // A name several runs share: the newest, with a note.
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "usage",
+            "list",
+            "--run",
+            "support-sft",
+            "--kind",
+            "labeling",
+            "--from",
+            "2026-11-01",
+            "--limit",
+            "2",
+        ],
+    );
     expect(&r, 0);
     assert!(
-        r.stdout.contains("\"tokens_through\": 84") || r.stdout.contains("\"tokens_through\":84"),
+        r.stderr.contains(
+            "2 runs match 'support-sft', showing the newest (run_new); pass an id for another."
+        ),
         "{}",
-        r.stdout
+        r.stderr
     );
+    assert!(r.stderr.contains("more: --cursor c2"), "{}", r.stderr);
+    assert_eq!(
+        srv.last("GET", "/v1/usage").unwrap().query(),
+        "limit=2&from=2026-11-01&run_id=run_new&kind=labeling"
+    );
+
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["usage", "list", "--eval", "nightly", "--to", "2026-11-30"],
+    );
+    expect(&r, 0);
+    assert!(!r.stderr.contains("match"), "{}", r.stderr);
+    assert_eq!(
+        srv.last("GET", "/v1/usage").unwrap().query(),
+        "to=2026-11-30&eval_id=eval_one"
+    );
+
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "usage",
+            "list",
+            "--run",
+            "run_direct",
+            "--eval",
+            "eval_direct",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(
+        srv.last("GET", "/v1/usage").unwrap().query(),
+        "run_id=run_direct&eval_id=eval_direct"
+    );
+
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["usage", "list", "--eval", "missing"],
+    );
+    expect(&r, 4);
+    assert!(
+        r.stderr.contains("no eval with id or name 'missing'"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("grad eval list"), "{}", r.stderr);
+
+    let r = run(sb.grad(Some(&srv.url)), &["usage", "list", "--json"]);
+    expect(&r, 0);
+    let v: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(v["data"]["data"][0]["kind"], "training");
+    assert_eq!(v["data"]["data"][0]["ref_name"], "support-sft");
 }
 
 #[test]
@@ -3415,11 +3629,33 @@ fn parity_requests_match_the_shared_fixture() {
                 }
                 a
             }
-            "/v1/usage" => vec![
-                "usage".into(),
-                "--limit".into(),
-                case["query"]["limit"].as_str().unwrap().into(),
-            ],
+            "/v1/usage" | "/v1/usage/summary" => {
+                let (mut a, flags): (Vec<String>, &[(&str, &str)]) = if path == "/v1/usage" {
+                    (
+                        vec!["usage".into(), "list".into()],
+                        &[
+                            ("limit", "--limit"),
+                            ("from", "--from"),
+                            ("to", "--to"),
+                            ("run_id", "--run"),
+                            ("eval_id", "--eval"),
+                            ("kind", "--kind"),
+                        ],
+                    )
+                } else {
+                    (
+                        vec!["usage".into()],
+                        &[("from", "--from"), ("to", "--to"), ("group_by", "--by")],
+                    )
+                };
+                for (key, flag) in flags {
+                    if let Some(v) = case["query"][key].as_str() {
+                        a.push(flag.to_string());
+                        a.push(v.into());
+                    }
+                }
+                a
+            }
             p if p.starts_with("/v1/runs/") && p.ends_with("/events") => vec![
                 "runs".into(),
                 "events".into(),
@@ -3487,8 +3723,22 @@ fn parity_requests_match_the_shared_fixture() {
             .unwrap_or_else(|| panic!("{}: nothing sent", name));
         let key = sent.header("idempotency-key").unwrap_or_default();
         if case["method"] == "GET" {
-            let want = format!("limit={}", case["query"]["limit"].as_str().unwrap());
-            assert_eq!(sent.query(), want, "{}", name);
+            let got: std::collections::BTreeMap<String, String> = sent
+                .query()
+                .split('&')
+                .filter(|kv| !kv.is_empty())
+                .map(|kv| {
+                    let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                    (k.to_string(), v.to_string())
+                })
+                .collect();
+            let want: std::collections::BTreeMap<String, String> = case["query"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                .collect();
+            assert_eq!(got, want, "{}", name);
             assert_eq!(key, "", "{}", name);
             continue;
         }

@@ -17,6 +17,7 @@ import { registerModelsAndKeysRoutes } from "./routes/keys.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerSourceRoutes } from "./routes/sources.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
+import { registerUsageRoutes } from "./routes/usage.js";
 import { createServices, type Services } from "./services/index.js";
 import { isDatabaseUnavailable } from "./store/postgres/db.js";
 import { registerMetricsEndpoints } from "./telemetry/endpoint.js";
@@ -245,7 +246,8 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   registerCheckpointRoutes(app, deps, services);
   registerTrainerJobRoutes(app, deps, services);
   registerArtifactRoutes(app, deps, services);
-  registerDeploymentRoutes(app, deps, services);
+  registerDeploymentRoutes(app);
+  registerUsageRoutes(app, services);
   registerEvalRoutes(app, deps, services);
   registerSourceRoutes(app, deps, services);
 

@@ -4,6 +4,7 @@ import { App } from "../src/app.js";
 import { createApi } from "../src/lib/api.js";
 import { navigate } from "../src/lib/router.js";
 import { followRun } from "../src/lib/stream.js";
+import { presets } from "../src/pages/usage.js";
 import type { RunEvent } from "../src/lib/events.js";
 // happy-dom has no canvas: stand in for uPlot and record what the charts draw.
 const charts = vi.hoisted(() => ({ created: [] as { series: string[]; data: unknown[] }[] }));
@@ -96,6 +97,7 @@ const routes = (extra: Record<string, unknown> = {}) => ({
   "GET /v1/evals/eval_1": EVAL,
   "GET /v1/evals/eval_1/failures": { data: [{ task_id: "rec_0001", model: "support-sft@1", score: 0.2, passed: false, sample_scores: [0.2], judge_model: "judge/m", record: { id: "rec_0001", messages: [{ role: "user", content: "Where is my invoice?" }] } }], next_cursor: null },
   "GET /v1/usage": fixture("usage.json"),
+  "GET /v1/usage/summary": fixture("usage-summary.json"),
   ...extra,
 });
 
@@ -323,11 +325,26 @@ describe("datasets, evals, usage, health", () => {
     expect(container.querySelectorAll(".ci").length).toBe(2);
   });
 
-  it("totals the usage ledger", async () => {
-    const { container } = await boot(undefined, "/usage");
-    await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(3));
-    expect(container.textContent).toContain("$0.0114");
-    expect(container.textContent).toContain("3 ledger rows");
+  it("summarises usage for a period and regroups it", async () => {
+    const { container, server } = await boot(undefined, "/usage");
+    await waitFor(() => expect(container.textContent).toContain("support-router-labels"));
+    const text = container.textContent ?? "";
+    for (const want of ["$0.0134", "4 billed rows", "Training", "Labeling", "2026-11-27", "support-sft", "Top evals"]) expect(text).toContain(want);
+    await waitFor(() => expect(byText(container, ".card", "Billed rows")?.querySelectorAll("tbody tr").length).toBe(3));
+    const asked = () => server.calls.filter((c) => c.path.startsWith("/v1/usage")).map((c) => c.path);
+    expect(asked().some((p) => /^\/v1\/usage\/summary\?from=\d{4}-\d{2}-01&to=\d{4}-\d{2}-\d{2}&group_by=day$/.test(p))).toBe(true);
+
+    await click(byText(container, "button", /^Model$/));
+    await waitFor(() => expect(asked().some((p) => p.includes("group_by=model"))).toBe(true));
+    expect(location.search).toContain("by=model");
+
+    await type(container.querySelector("#usage-from"), "2026-10-01");
+    await waitFor(() => expect(asked().some((p) => p === "/v1/usage?limit=100&from=2026-10-01&to=2026-11-30")).toBe(true));
+    expect(container.textContent).toContain("Custom");
+    await click(byText(container, "button", /^Last month$/));
+    const last = presets()["last-month"];
+    expect(location.search).toBe(`?by=model&from=${last.from}&to=${last.to}`);
+    expect(container.textContent).not.toContain("Custom");
   });
 
   it("shows pools and the queue on the health page", async () => {

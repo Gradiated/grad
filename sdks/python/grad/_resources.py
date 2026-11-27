@@ -60,6 +60,7 @@ from ._models import (
     SecretRef,
     Source,
     UsageRecord,
+    UsageSummary,
     TERMINAL_EVAL_STATUSES,
     TERMINAL_IMPORT_STATUSES,
     TERMINAL_RUN_STATUSES,
@@ -429,11 +430,60 @@ class Datasets(_Resource):
 
 
 class Usage(_Resource):
-    """Billed usage: one record per billed increment of a run or eval attempt."""
+    """Billed usage: a summary over a period, and the billed rows behind it.
 
-    def list(self, *, limit: int | None = None) -> Page[UsageRecord]:
-        """Usage records, newest first (iterate the page to follow every page)."""
-        return self._page(UsageRecord, lambda cursor: self._wire.list_usage(limit=limit, cursor=cursor))
+    Periods are UTC. ``from_`` is inclusive; ``to`` as a ``date`` or ``"YYYY-MM-DD"`` covers that
+    whole day, and as a ``datetime`` or ISO timestamp is exclusive. A naive ``datetime`` is UTC.
+    """
+
+    def summary(self, *, from_: Any = None, to: Any = None, group_by: str | None = None) -> UsageSummary:
+        """Total cost and tokens, by kind, the top runs and evals, and ``group_by`` groups
+        (``day``, ``week``, ``month``, ``model``, ``recipe`` or ``kind``). Default period: this month."""
+        return UsageSummary.from_api(
+            self._wire.get_usage_summary(
+                from_=_bound(from_), to=_bound(to), group_by=typing.cast(Any, group_by)
+            ),
+            self._client,
+        )
+
+    def list(
+        self,
+        *,
+        from_: Any = None,
+        to: Any = None,
+        run_id: Any = None,
+        eval_id: Any = None,
+        kind: str | None = None,
+        limit: int | None = None,
+    ) -> Page[UsageRecord]:
+        """Billed rows, newest first (iterate the page to follow every page).
+
+        ``run_id`` takes a run or its id and also matches the evals the run started (labeling,
+        teacher answers, checkpoint evals); ``eval_id`` takes an eval or its id; ``kind`` is
+        ``training``, ``eval``, ``scoring``, ``labeling`` or ``teacher``.
+        """
+        run, ev = _ref_id(run_id), _ref_id(eval_id)
+        from_s, to_s = _bound(from_), _bound(to)
+        return self._page(
+            UsageRecord,
+            lambda cursor: self._wire.list_usage(
+                limit=limit,
+                cursor=cursor,
+                from_=from_s,
+                to=to_s,
+                run_id=run,
+                eval_id=ev,
+                kind=typing.cast(Any, kind),
+            ),
+        )
+
+
+def _bound(value: Any) -> str | None:
+    return None if value is None else h.time_bound(value)
+
+
+def _ref_id(value: Any) -> str | None:
+    return None if value is None else str(getattr(value, "id", value))
 
 
 class Secrets(_Resource):

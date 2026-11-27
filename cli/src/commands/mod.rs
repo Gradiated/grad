@@ -7,6 +7,7 @@ pub mod serve;
 pub mod sources;
 pub mod train;
 pub mod ui;
+pub mod usage;
 
 use grad_sdk::{Client, CursorTrail, Error as SdkError, ListParams, Run};
 use std::sync::Mutex;

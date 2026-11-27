@@ -81,6 +81,8 @@ from ._models import (
     SecretRef,
     Source,
     UsageRecord,
+    UsageSummary,
+    UsageTotal,
     WarningEvent,
 )
 from ._version import __version__
@@ -189,6 +191,8 @@ __all__ = [
     "SecretRef",
     "Source",
     "UsageRecord",
+    "UsageSummary",
+    "UsageTotal",
     "RunFailedError",
     "SFTRecipe",
     "Scorer",

@@ -1129,7 +1129,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       await row("k2", "ws_a", 10, 30);
       await row("k3", "ws_b", 0, 5);
       const { rows, pages } = await drain((cursor) =>
-        store.usage.list("ws_a", { limit: 1, cursor }),
+        store.usage.list("ws_a", {}, { limit: 1, cursor }),
       );
       expect(pages).toBe(2);
       expect(rows.map((u) => u.idempotency_key)).toEqual(["k2", "k1"]);

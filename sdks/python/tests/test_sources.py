@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import unittest
 
 from _fakes import fixture, json_reply, make_client
@@ -156,9 +157,38 @@ class UsageTests(unittest.TestCase):
             {"GET /v1/usage": [json_reply({**page, "next_cursor": "c1"}), json_reply({"data": [], "next_cursor": None})]}
         )
         records = client.usage.list(limit=5).to_list()
-        self.assertEqual([(r.kind, r.tokens, r.cost_usd) for r in records], [("run", 84, 0.000084)])
+        self.assertEqual([(r.kind, r.tokens, r.cost_usd) for r in records], [("training", 84, 0.000084)])
         self.assertIsInstance(records[0], grad.UsageRecord)
         self.assertEqual(sender.sent[-1].query, {"limit": ["5"], "cursor": ["c1"]})
+
+    def test_filters_follow_every_page_and_take_native_times(self) -> None:
+        page = PARITY["responses"]["usage_page"]
+        client, sender, _ = make_client(
+            {"GET /v1/usage": [json_reply({**page, "next_cursor": "c1"}), json_reply({"data": [], "next_cursor": None})]}
+        )
+        ev = grad.Eval.from_api({"id": "eval_1"})
+        noon = datetime.datetime(2026, 11, 2, 12, 30)  # naive: UTC
+        client.usage.list(from_=noon, eval_id=ev, kind="eval").to_list()
+        want = {"from": ["2026-11-02T12:30:00+00:00"], "eval_id": ["eval_1"], "kind": ["eval"]}
+        self.assertEqual(sender.sent[0].query, want)
+        self.assertEqual(sender.sent[1].query, {**want, "cursor": ["c1"]})
+
+    def test_summary_is_typed_and_prints_a_report(self) -> None:
+        body = PARITY["responses"]["usage_summary"]
+        client, sender, _ = make_client({"GET /v1/usage/summary": [json_reply(body), json_reply({**body, "records": 0, "by_kind": [], "top_runs": [], "top_evals": [], "group_by": None, "groups": []})]})
+        summary = client.usage.summary(group_by="model")
+        self.assertEqual(sender.sent[0].query, {"group_by": ["model"]})
+        self.assertIsInstance(summary, grad.UsageSummary)
+        self.assertEqual((summary.from_, summary["from"]), ("2026-11-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z"))
+        self.assertIsInstance(summary.top_runs[0], grad.UsageTotal)
+        text = str(summary)
+        self.assertIn("Usage from 2026-11-01 00:00 to 2026-12-01 00:00 UTC: $0.0046", text)
+        self.assertIn("support-sft  run_015437ae0c01e09a573e4811  training", text)
+        self.assertIn("By model", text)
+        self.assertIn("qwen/qwen3-32b", text)
+        self.assertIn("(nothing billed in this period)", str(client.usage.summary(from_=datetime.date(2026, 1, 1))))
+        self.assertEqual(sender.sent[1].query, {"from": ["2026-01-01"]})
+        self.assertIn("UsageSummary(from_=", repr(summary))
 
 
 if __name__ == "__main__":

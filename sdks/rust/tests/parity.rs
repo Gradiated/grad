@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Shared parity fixture (tests/fixtures/wire/sdk-parity.json), replayed by every SDK and the CLI.
 #![recursion_limit = "256"]
 
@@ -330,12 +331,27 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             .await
             .map(drop),
         "sync_source_full" => c.sources().sync("src_01J9X", true).await.map(drop),
-        "list_usage" => c
+        "list_usage" => c.usage().list(&UsageQuery::new().limit(10)).await.map(drop),
+        "list_usage_filtered" => c
             .usage()
-            .list(&ListParams {
-                limit: Some(10),
-                cursor: None,
-            })
+            .list(
+                &UsageQuery::new()
+                    .from("2026-11-01")
+                    .to("2026-11-30")
+                    .run("run_015437ae0c01e09a573e4811")
+                    .kind(UsageKind::Labeling)
+                    .limit(10),
+            )
+            .await
+            .map(drop),
+        "usage_summary" => c
+            .usage()
+            .summary(
+                &UsageSummaryQuery::new()
+                    .from("2026-11-01")
+                    .to("2026-11-30")
+                    .group_by(UsageGroupBy::Model),
+            )
             .await
             .map(drop),
         "list_run_events" => {
@@ -414,6 +430,8 @@ fn typed_responses() {
     let secret: SecretRef = serde_json::from_value(fx["responses"]["secret"].clone()).unwrap();
     let usage: UsageRecord =
         serde_json::from_value(fx["responses"]["usage_page"]["data"][0].clone()).unwrap();
+    let totals: UsageSummary =
+        serde_json::from_value(fx["responses"]["usage_summary"].clone()).unwrap();
     let events: RunEventsPage =
         serde_json::from_value(fx["responses"]["run_events"].clone()).unwrap();
     let phase = |i: usize| match &events.data[i] {
@@ -464,9 +482,19 @@ fn typed_responses() {
         "source.last_error": source.last_error,
         "secret.name": secret.name,
         "secret.allowed_hosts[0]": secret.allowed_hosts[0],
-        "usage[0].kind": usage.kind,
+        "usage[0].kind": usage.kind.as_str(),
         "usage[0].tokens_through": usage.tokens_through,
+        "usage[0].ref_name": usage.ref_name,
+        "usage[0].run_id": usage.run_id,
         "usage[0].cost_usd": usage.cost_usd,
+        "usage_summary.from": totals.from,
+        "usage_summary.cost_usd": totals.cost_usd,
+        "usage_summary.tokens": totals.tokens,
+        "usage_summary.by_kind[0].kind": totals.by_kind[0].kind.as_str(),
+        "usage_summary.top_runs[0].name": totals.top_runs[0].name,
+        "usage_summary.top_evals[0].kind": totals.top_evals[0].kind.as_str(),
+        "usage_summary.groups[1].key": totals.groups[1].key,
+        "usage_summary.groups[1].tokens": totals.groups[1].tokens,
         "run.phase": run.phase.as_ref().unwrap().as_str(),
         "run.last_interruption.reason": interruption.reason.as_str(),
         "run.last_interruption.resume_step": interruption.resume_step,

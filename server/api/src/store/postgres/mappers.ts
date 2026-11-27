@@ -3,6 +3,7 @@ import type {
   Dataset,
   EvalReport,
   MetricPoint,
+  UsageKind,
   UsageRecord,
 } from "../../contracts.js";
 import type {
@@ -14,6 +15,7 @@ import type {
   ImportPayload,
   JobEvent,
   JobFields,
+  LedgerRow,
   RunDomain,
   RunEventsView,
 } from "../types.js";
@@ -218,9 +220,9 @@ export const toEvalOutput = (r: Row): EvalOutputRow => ({
   created_at: iso(r.created_at),
 });
 
-export const toUsage = (r: Row): UsageRecord => ({
+export const toLedgerRow = (r: Row): LedgerRow => ({
   id: `use_${s(r.seq)}`,
-  kind: s(r.kind) as UsageRecord["kind"],
+  kind: s(r.kind) as LedgerRow["kind"],
   ref_id: s(r.ref_id),
   attempt: n(r.attempt),
   tokens_from: n(r.tokens_from),
@@ -230,6 +232,14 @@ export const toUsage = (r: Row): UsageRecord => ({
   price_version: s(r.price_version),
   idempotency_key: s(r.idempotency_key),
   created_at: iso(r.created_at),
+});
+
+/** A ledger row joined with what it paid for (store/postgres/usage.ts). */
+export const toUsage = (r: Row): UsageRecord => ({
+  ...toLedgerRow(r),
+  kind: s(r.usage_kind) as UsageKind,
+  ref_name: sn(r.ref_name),
+  run_id: sn(r.run_id),
 });
 
 export const toEvent = (r: Row): JobEvent => ({

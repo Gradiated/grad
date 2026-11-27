@@ -7,3 +7,4 @@ export * from "./contracts/runs.js";
 export * from "./contracts/serving.js";
 export * from "./contracts/sources.js";
 export * from "./contracts/trainer-jobs.js";
+export * from "./contracts/usage.js";

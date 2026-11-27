@@ -216,15 +216,25 @@ on vLLM or SGLang instead.")]
         action: KeysCmd,
     },
 
-    /// List billed usage: one row per billed increment of a run or eval attempt
-    #[command(after_help = "\
+    /// Billed usage: totals, kinds and top runs and evals for a period, or `list` for the rows
+    #[command(
+        args_conflicts_with_subcommands = true,
+        after_help = "\
 Examples:
-  grad usage
-  grad usage --limit 20 --json")]
-    Usage {
-        #[command(flatten)]
-        page: PageArgs,
-    },
+  grad usage                                   # this UTC month
+  grad usage --from 2026-11-01 --to 2026-11-15
+  grad usage --by day
+  grad usage --by model --from 2026-10-01 --json
+  grad usage list --run support-sft
+  grad usage list --kind eval --from 2026-11-01 --limit 20
+
+Periods are UTC. --from is inclusive; --to YYYY-MM-DD covers that whole day, and
+an ISO 8601 timestamp (2026-11-01T09:30:00Z) is exclusive. The default period is
+the current calendar month. Kinds: training (runs), eval, scoring
+(datasets score), labeling (a router run's labeling eval) and teacher (an
+off-policy distill run's teacher answers)."
+    )]
+    Usage(UsageTop),
 
     /// Store provider keys and tokens as write-only workspace secrets
     #[command(after_help = "\
@@ -740,6 +750,66 @@ Use --plain or GRAD_NO_TUI=1 for line output.")]
         #[arg(long)]
         name: Option<String>,
     },
+}
+
+#[derive(Args, Debug)]
+pub struct UsageTop {
+    #[command(subcommand)]
+    pub action: Option<UsageCmd>,
+    #[command(flatten)]
+    pub summary: UsageSummaryArgs,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct UsagePeriodArgs {
+    /// Start of the period, inclusive (UTC): YYYY-MM-DD or an ISO 8601 timestamp
+    #[arg(long, value_name = "DATE")]
+    pub from: Option<String>,
+    /// End of the period (UTC): YYYY-MM-DD covers that whole day; a timestamp is exclusive
+    #[arg(long, value_name = "DATE")]
+    pub to: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct UsageSummaryArgs {
+    #[command(flatten)]
+    pub period: UsagePeriodArgs,
+    /// Print one table grouped this way
+    #[arg(long, value_parser = ["day", "week", "month", "model", "recipe", "kind"])]
+    pub by: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum UsageCmd {
+    /// List billed rows, newest first: one per billed increment of a run or eval attempt
+    #[command(after_help = "\
+Examples:
+  grad usage list
+  grad usage list --run support-sft --from 2026-11-01
+  grad usage list --eval eval_01J... --json
+  grad usage list --kind labeling --limit 50
+
+--run takes a run id or name and also lists the evals the run started
+(labeling, teacher answers, checkpoint evals). When several runs or evals share
+the name, the newest is used and a note says how many matched.")]
+    List(UsageListArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct UsageListArgs {
+    #[command(flatten)]
+    pub period: UsagePeriodArgs,
+    /// Only this run's usage: a run id or name
+    #[arg(long)]
+    pub run: Option<String>,
+    /// Only this eval's usage: an eval id or name
+    #[arg(long)]
+    pub eval: Option<String>,
+    /// Only this kind
+    #[arg(long, value_parser = ["training", "eval", "scoring", "labeling", "teacher"])]
+    pub kind: Option<String>,
+    #[command(flatten)]
+    pub page: PageArgs,
 }
 
 #[derive(Args, Debug)]

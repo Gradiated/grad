@@ -992,6 +992,28 @@ type GPUInfo struct {
 	MemoryGb float64 `json:"memory_gb"`
 }
 
+// GetUsageSummaryParams holds the query and header parameters of GetUsageSummary.
+type GetUsageSummaryParams struct {
+	// From Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp.
+	From *string
+	// To End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive.
+	To      *string
+	GroupBy *GetUsageSummaryParamsGroupBy
+}
+
+// GetUsageSummaryParamsGroupBy is an enumeration of allowed values.
+type GetUsageSummaryParamsGroupBy string
+
+// Values of GetUsageSummaryParamsGroupBy.
+const (
+	GetUsageSummaryParamsGroupByDay    GetUsageSummaryParamsGroupBy = "day"
+	GetUsageSummaryParamsGroupByWeek   GetUsageSummaryParamsGroupBy = "week"
+	GetUsageSummaryParamsGroupByMonth  GetUsageSummaryParamsGroupBy = "month"
+	GetUsageSummaryParamsGroupByModel  GetUsageSummaryParamsGroupBy = "model"
+	GetUsageSummaryParamsGroupByRecipe GetUsageSummaryParamsGroupBy = "recipe"
+	GetUsageSummaryParamsGroupByKind   GetUsageSummaryParamsGroupBy = "kind"
+)
+
 // HFColumnMapping is generated from the OpenAPI schema.
 type HFColumnMapping struct {
 	Messages   *string `json:"messages,omitempty"`
@@ -1334,7 +1356,27 @@ type ListUsageParams struct {
 	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
+	// From Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp.
+	From *string
+	// To End of the period: a date YYYY-MM-DD covers that whole UTC day; a timestamp is exclusive.
+	To *string
+	// RunID Only usage billed for this run: its training and the evals it started (labeling, teacher answers, checkpoint evals).
+	RunID  *string
+	EvalID *string
+	Kind   *ListUsageParamsKind
 }
+
+// ListUsageParamsKind is an enumeration of allowed values.
+type ListUsageParamsKind string
+
+// Values of ListUsageParamsKind.
+const (
+	ListUsageParamsKindTraining ListUsageParamsKind = "training"
+	ListUsageParamsKindEval     ListUsageParamsKind = "eval"
+	ListUsageParamsKindScoring  ListUsageParamsKind = "scoring"
+	ListUsageParamsKindLabeling ListUsageParamsKind = "labeling"
+	ListUsageParamsKindTeacher  ListUsageParamsKind = "teacher"
+)
 
 // ListUsageResponse is generated from the OpenAPI schema.
 type ListUsageResponse struct {
@@ -2547,13 +2589,58 @@ const (
 	UploadTicketMethodPut UploadTicketMethod = "PUT"
 )
 
+// UsageGroup is generated from the OpenAPI schema.
+type UsageGroup struct {
+	// Key The group: a UTC day or week start (YYYY-MM-DD), a month (YYYY-MM), a model, a recipe or a kind. Null for usage with no recipe (plain evals, scoring).
+	Key     *string `json:"key"`
+	CostUSD float64 `json:"cost_usd"`
+	Tokens  int     `json:"tokens"`
+	Records int     `json:"records"`
+}
+
+// UsageGroupBy is an enumeration of allowed values.
+type UsageGroupBy string
+
+// Values of UsageGroupBy.
+const (
+	UsageGroupByDay    UsageGroupBy = "day"
+	UsageGroupByWeek   UsageGroupBy = "week"
+	UsageGroupByMonth  UsageGroupBy = "month"
+	UsageGroupByModel  UsageGroupBy = "model"
+	UsageGroupByRecipe UsageGroupBy = "recipe"
+	UsageGroupByKind   UsageGroupBy = "kind"
+)
+
+// UsageKind What the tokens paid for: `training` (a run's attempts), `eval` (evals, including a run's checkpoint evals), `scoring` (dataset.score), `labeling` (a router run's labeling eval) or `teacher` (an off-policy distill run's teacher answers).
+type UsageKind string
+
+// Values of UsageKind.
+const (
+	UsageKindTraining UsageKind = "training"
+	UsageKindEval     UsageKind = "eval"
+	UsageKindScoring  UsageKind = "scoring"
+	UsageKindLabeling UsageKind = "labeling"
+	UsageKindTeacher  UsageKind = "teacher"
+)
+
+// UsageKindTotal is generated from the OpenAPI schema.
+type UsageKindTotal struct {
+	Kind    UsageKind `json:"kind"`
+	CostUSD float64   `json:"cost_usd"`
+	Tokens  int       `json:"tokens"`
+	Records int       `json:"records"`
+}
+
 // UsageRecord is generated from the OpenAPI schema.
 type UsageRecord struct {
-	ID   string          `json:"id"`
-	Kind UsageRecordKind `json:"kind"`
-	// RefID The run or eval this usage belongs to.
-	RefID   string `json:"ref_id"`
-	Attempt int    `json:"attempt"`
+	ID   string    `json:"id"`
+	Kind UsageKind `json:"kind"`
+	// RefID The run (kind `training`) or eval this usage belongs to.
+	RefID   string  `json:"ref_id"`
+	RefName *string `json:"ref_name"`
+	// RunID The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it is.
+	RunID   *string `json:"run_id"`
+	Attempt int     `json:"attempt"`
 	// TokensFrom The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).
 	TokensFrom     int     `json:"tokens_from"`
 	TokensThrough  int     `json:"tokens_through"`
@@ -2564,14 +2651,34 @@ type UsageRecord struct {
 	CreatedAt      string  `json:"created_at"`
 }
 
-// UsageRecordKind is an enumeration of allowed values.
-type UsageRecordKind string
+// UsageRefTotal is generated from the OpenAPI schema.
+type UsageRefTotal struct {
+	ID      string    `json:"id"`
+	Name    *string   `json:"name"`
+	Kind    UsageKind `json:"kind"`
+	CostUSD float64   `json:"cost_usd"`
+	Tokens  int       `json:"tokens"`
+}
 
-// Values of UsageRecordKind.
-const (
-	UsageRecordKindRun  UsageRecordKind = "run"
-	UsageRecordKindEval UsageRecordKind = "eval"
-)
+// UsageSummary is generated from the OpenAPI schema.
+type UsageSummary struct {
+	// From Start of the period (inclusive).
+	From string `json:"from"`
+	// To End of the period (exclusive).
+	To      string  `json:"to"`
+	CostUSD float64 `json:"cost_usd"`
+	Tokens  int     `json:"tokens"`
+	Records int     `json:"records"`
+	// ByKind One entry per kind with usage, costliest first.
+	ByKind []UsageKindTotal `json:"by_kind"`
+	// TopRuns The costliest runs' training in the period (up to 5).
+	TopRuns []UsageRefTotal `json:"top_runs"`
+	// TopEvals The costliest evals, scoring, labeling and teacher jobs in the period (up to 5).
+	TopEvals []UsageRefTotal `json:"top_evals"`
+	GroupBy  *UsageGroupBy   `json:"group_by"`
+	// Groups With group_by: one entry per group with usage, oldest first for time groups and costliest first otherwise.
+	Groups []UsageGroup `json:"groups"`
+}
 
 // WarningEvent is generated from the OpenAPI schema.
 type WarningEvent struct {

@@ -1,9 +1,86 @@
 import type { Clock } from "../../clock.js";
+import type { UsageGroupBy, UsageSummary } from "../../contracts.js";
 import { decodeCursor, toPage } from "../cursor.js";
 import type { UsageRepository } from "../types.js";
-import type { Db } from "./db.js";
-import { toUsage } from "./mappers.js";
+import { Params, type Db } from "./db.js";
+import { toLedgerRow, toUsage } from "./mappers.js";
 import { first, nowIso } from "./shared.js";
+
+/**
+ * Ledger rows with what they paid for: the kind (a run's training, an eval,
+ * dataset scoring, or a run's labeling or teacher eval), the ref's name, the
+ * run billed (the run itself, or the run whose labeling, teacher or
+ * checkpoint eval it is), the model and the recipe. `where` filters
+ * grad_usage (alias u) before the joins.
+ */
+const usageRows = (where: string) => `
+  SELECT u.*,
+    CASE WHEN u.kind = 'run' THEN 'training'
+         WHEN e.mode = 'score' THEN 'scoring'
+         WHEN lr.recipe_kind = 'distill' THEN 'teacher'
+         WHEN lr.id IS NOT NULL THEN 'labeling'
+         ELSE 'eval' END AS usage_kind,
+    COALESCE(r.name, e.name) AS ref_name,
+    COALESCE(r.id, lr.id, e.run_id) AS run_id,
+    COALESCE(r.resolved_config->>'model', em.models) AS model,
+    COALESCE(r.recipe_kind, lr.recipe_kind, cr.recipe_kind) AS recipe
+  FROM grad_usage u
+  LEFT JOIN grad_runs r ON u.kind = 'run' AND r.id = u.ref_id
+  LEFT JOIN grad_evals e ON u.kind = 'eval' AND e.id = u.ref_id
+  LEFT JOIN grad_runs cr ON cr.id = e.run_id
+  LEFT JOIN LATERAL (
+    SELECT x.id, x.recipe_kind FROM grad_runs x
+    WHERE u.kind = 'eval' AND x.resolved_config->>'label_eval_id' = u.ref_id
+    ORDER BY x.id LIMIT 1
+  ) lr ON true
+  LEFT JOIN LATERAL (
+    SELECT string_agg(m, ', ' ORDER BY m) AS models
+    FROM jsonb_array_elements_text(e.models) m
+  ) em ON true
+  WHERE ${where}`;
+
+/** Exact sums: costs add as numeric, once, here. */
+const SUMS = `COALESCE(SUM(tokens), 0)::bigint AS tokens,
+  ROUND(COALESCE(SUM(cost_usd::numeric), 0), 8) AS cost_usd,
+  COUNT(*)::int AS records`;
+
+/** Group keys in UTC, whatever the session time zone. */
+const GROUP_KEYS: Record<UsageGroupBy, string> = {
+  day: `to_char(date_trunc('day', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`,
+  week: `to_char(date_trunc('week', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`,
+  month: `to_char(date_trunc('month', created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+  model: "model",
+  recipe: "recipe",
+  kind: "usage_kind",
+};
+
+const TIME_GROUPS: ReadonlySet<UsageGroupBy> = new Set([
+  "day",
+  "week",
+  "month",
+]);
+
+/** The five costliest refs in `u` matching `where`, as JSON. */
+const topRefs = (where: string) => `(
+  SELECT COALESCE(json_agg(t ORDER BY t.cost_usd DESC, t.id), '[]'::json) FROM (
+    SELECT ref_id AS id, ref_name AS name, usage_kind AS kind, ${SUMS}
+    FROM u WHERE ${where} GROUP BY ref_id, ref_name, usage_kind
+    ORDER BY cost_usd DESC, ref_id LIMIT 5
+  ) t)`;
+
+const num = (v: unknown): number => Number(v ?? 0);
+
+interface SumRow {
+  tokens: unknown;
+  cost_usd: unknown;
+  records: unknown;
+}
+
+const sums = (r: SumRow) => ({
+  cost_usd: num(r.cost_usd),
+  tokens: num(r.tokens),
+  records: num(r.records),
+});
 
 export const createUsageRepository = (
   db: Db,
@@ -39,14 +116,32 @@ export const createUsageRepository = (
         ]),
       );
 
-    return toUsage(row ?? {});
+    return toLedgerRow(row ?? {});
   },
-  list: async (workspaceId, page) => {
+  list: async (workspaceId, filter, page) => {
+    const params = new Params();
+    const inner = [`u.workspace_id = ${params.add(workspaceId)}`];
+    const outer = ["true"];
+    if (filter.from)
+      inner.push(
+        `u.created_at >= ${params.add(filter.from.toISOString())}::timestamptz`,
+      );
+    if (filter.to)
+      inner.push(
+        `u.created_at < ${params.add(filter.to.toISOString())}::timestamptz`,
+      );
+    if (filter.evalId)
+      inner.push(`u.kind = 'eval' AND u.ref_id = ${params.add(filter.evalId)}`);
+    if (filter.runId) outer.push(`run_id = ${params.add(filter.runId)}`);
+    if (filter.kind) outer.push(`usage_kind = ${params.add(filter.kind)}`);
     const after = decodeCursor(page.cursor, 1);
+    if (after) inner.push(`u.seq < ${params.add(Number(after[0]))}::bigint`);
+
     const rows = await db.query(
-      `SELECT * FROM grad_usage WHERE workspace_id = $1 AND ($2::bigint IS NULL OR seq < $2::bigint)
-       ORDER BY seq DESC LIMIT $3`,
-      [workspaceId, after ? Number(after[0]) : null, page.limit + 1],
+      `SELECT * FROM (${usageRows(inner.join(" AND "))}) b
+       WHERE ${outer.join(" AND ")}
+       ORDER BY seq DESC LIMIT ${params.add(page.limit + 1)}`,
+      params.values,
     );
 
     const page_ = toPage(
@@ -60,6 +155,57 @@ export const createUsageRepository = (
       next_cursor: page_.next_cursor,
     };
   },
+  summarize: async (workspaceId, period, groupBy) => {
+    const group = groupBy
+      ? `(SELECT COALESCE(json_agg(g ORDER BY ${
+          TIME_GROUPS.has(groupBy)
+            ? "g.key"
+            : "g.cost_usd DESC, g.key NULLS LAST"
+        }), '[]'::json) FROM (
+          SELECT ${GROUP_KEYS[groupBy]} AS key, ${SUMS} FROM u GROUP BY 1
+        ) g)`
+      : `'[]'::json`;
+    const row = first(
+      await db.query(
+        `WITH u AS (${usageRows(
+          "u.workspace_id = $1 AND u.created_at >= $2::timestamptz AND u.created_at < $3::timestamptz",
+        )})
+         SELECT
+           (SELECT row_to_json(t) FROM (SELECT ${SUMS} FROM u) t) AS total,
+           (SELECT COALESCE(json_agg(k ORDER BY k.cost_usd DESC, k.kind), '[]'::json) FROM (
+              SELECT usage_kind AS kind, ${SUMS} FROM u GROUP BY usage_kind
+           ) k) AS by_kind,
+           ${topRefs("usage_kind = 'training'")} AS top_runs,
+           ${topRefs("usage_kind <> 'training'")} AS top_evals,
+           ${group} AS groups`,
+        [workspaceId, period.from.toISOString(), period.to.toISOString()],
+      ),
+    );
+    type Ref = SumRow & { id: string; name: string | null; kind: string };
+    const refs = (v: unknown) =>
+      ((v ?? []) as Ref[]).map((r) => ({
+        id: r.id,
+        name: r.name,
+        kind: r.kind,
+        cost_usd: num(r.cost_usd),
+        tokens: num(r.tokens),
+      }));
+
+    return {
+      from: period.from.toISOString(),
+      to: period.to.toISOString(),
+      ...sums((row?.total ?? {}) as SumRow),
+      by_kind: ((row?.by_kind ?? []) as Array<SumRow & { kind: string }>).map(
+        (k) => ({ kind: k.kind, ...sums(k) }),
+      ),
+      top_runs: refs(row?.top_runs),
+      top_evals: refs(row?.top_evals),
+      group_by: groupBy ?? null,
+      groups: (
+        (row?.groups ?? []) as Array<SumRow & { key: string | null }>
+      ).map((g) => ({ key: g.key, ...sums(g) })),
+    } as UsageSummary;
+  },
   listAfter: async (afterSeq, before, limit) =>
     (
       await db.query(
@@ -68,7 +214,7 @@ export const createUsageRepository = (
         [afterSeq, before.toISOString(), limit],
       )
     ).map((r) => ({
-      ...toUsage(r),
+      ...toLedgerRow(r),
       seq: Number(r.seq),
       workspace_id: String(r.workspace_id),
     })),
@@ -78,5 +224,5 @@ export const createUsageRepository = (
         "SELECT * FROM grad_usage WHERE ref_id = $1 ORDER BY seq",
         [refId],
       )
-    ).map(toUsage),
+    ).map(toLedgerRow),
 });

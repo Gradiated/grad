@@ -43,6 +43,10 @@ const migrateFileSchema = async () => {
   }
 };
 
+/** This test file's schema (migrated on first use). */
+export const fileSchemaName = async (): Promise<string> =>
+  (await (fileSchema ??= migrateFileSchema())).schema;
+
 /** Drops this file's schema (registered as afterAll in fixtures/setup.ts). */
 export const dropFileSchema = async () => {
   if (!fileSchema) return;

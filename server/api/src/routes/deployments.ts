@@ -21,17 +21,13 @@ import {
   RouteRequestSchema,
   RouteResponseSchema,
   SlugSchema,
-  UsageRecordSchema,
   pageOf,
 } from "../contracts.js";
-import type { AppDependencies } from "../deps.js";
 import { ApiError } from "../errors.js";
-import type { Services } from "../services/index.js";
 import {
   defaultErrors,
   jsonResponse,
   notImplementedError,
-  workspaceOf,
   type AppEnv,
 } from "./helpers.js";
 
@@ -80,11 +76,7 @@ const cloudOnly = (
   );
 };
 
-export const registerDeploymentRoutes = (
-  app: OpenAPIHono<AppEnv>,
-  _deps: AppDependencies,
-  services: Services,
-): void => {
+export const registerDeploymentRoutes = (app: OpenAPIHono<AppEnv>): void => {
   cloudOnly(
     app,
     {
@@ -175,26 +167,5 @@ export const registerDeploymentRoutes = (
       ok: jsonResponse(RecordFeedbackResponseSchema, "Recorded feedback."),
     },
     "inference_unavailable",
-  );
-
-  app.openapi(
-    createRoute({
-      method: "get",
-      path: "/v1/usage",
-      operationId: "listUsage",
-      summary:
-        "List billed usage, newest first: one record per run or eval attempt",
-      tags: ["Usage"],
-      request: { query: PageQuerySchema },
-      responses: {
-        200: jsonResponse(pageOf(UsageRecordSchema), "Usage records."),
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      const ws = workspaceOf(c, "runs:read");
-
-      return c.json(await services.usage.list(ws, c.req.valid("query")), 200);
-    },
   );
 };

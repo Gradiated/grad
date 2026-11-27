@@ -319,6 +319,41 @@ fn live_self_hosted_quickstart() {
         o.stdout
     );
 
+    // The run is billed: in this month's summary, and listed by its name.
+    let o = grad(&home, &["--json", "usage", "--by", "kind"], &[]);
+    ok(&o);
+    let summary = o.json()["data"].clone();
+    assert!(summary["tokens"].as_u64().unwrap() > 0, "{}", summary);
+    assert!(
+        summary["top_runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "support-sft"),
+        "{}",
+        summary
+    );
+    assert!(
+        summary["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["key"] == "training"),
+        "{}",
+        summary
+    );
+    let o = grad(
+        &home,
+        &["--json", "usage", "list", "--run", "support-sft", "--kind", "training"],
+        &[],
+    );
+    ok(&o);
+    let rows = o.json()["data"]["data"].as_array().unwrap().clone();
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|r| r["ref_name"] == "support-sft"), "{:?}", rows);
+    let o = grad(&home, &["usage", "list", "--from", "2026-02-30"], &[]);
+    assert_eq!(o.code, 2, "{}", o.stderr);
+
     // Round-trip the run config: re-planning the exported file resolves exactly
     // the same config (zero values such as warmup=0 included).
     let o = grad(&home, &["runs", "inspect", "support-sft", "--yaml"], &[]);

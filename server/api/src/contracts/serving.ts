@@ -137,26 +137,3 @@ export const RecordFeedbackResponseSchema = z
     records: z.array(FeedbackRecordSchema),
   })
   .openapi("RecordFeedbackResponse");
-
-export const UsageRecordSchema = z
-  .object({
-    id: z.string().min(1),
-    kind: z.enum(["run", "eval"]),
-    ref_id: z.string().min(1).openapi({
-      description: "The run or eval this usage belongs to.",
-    }),
-    attempt: z.number().int().min(1),
-    tokens_from: z.number().int().min(0).openapi({
-      description:
-        "The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).",
-    }),
-    tokens_through: z.number().int().min(0),
-    tokens: z.number().int().min(0),
-    cost_usd: z.number().min(0),
-    price_version: z.string().min(1),
-    idempotency_key: z.string().min(1),
-    created_at: IsoTimestampSchema,
-  })
-  .openapi("UsageRecord");
-
-export type UsageRecord = z.infer<typeof UsageRecordSchema>;

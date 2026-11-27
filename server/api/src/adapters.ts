@@ -1,8 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import type { ApiKeyScope, Scope, UsageRecord } from "./contracts.js";
+import type { ApiKeyScope, Scope } from "./contracts.js";
 import { PLATFORM_SCOPES } from "./contracts.js";
-import type { KeyLookupResult } from "./store/types.js";
+import type { KeyLookupResult, LedgerRow } from "./store/types.js";
 
 export interface AuthPrincipal {
   kind: "workspace" | "worker" | "dev";
@@ -50,7 +50,7 @@ export interface AuthAdapter {
 }
 
 /** A usage ledger row as the Cloud exporter sends it. */
-export type ExportedUsage = UsageRecord & { seq: number; workspace_id: string };
+export type ExportedUsage = LedgerRow & { seq: number; workspace_id: string };
 
 export interface BillingAdapter {
   checkCanStartRun(

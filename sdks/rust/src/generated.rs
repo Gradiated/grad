@@ -1890,6 +1890,105 @@ string_enum! {
     }
 }
 
+/// Generated from the OpenAPI schema `UsageGroup`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsageGroup {
+    /// The group: a UTC day or week start (YYYY-MM-DD), a month (YYYY-MM), a model, a recipe or a kind. Null for usage with no recipe (plain evals, scoring).
+    pub key: Option<String>,
+    pub cost_usd: f64,
+    pub tokens: i64,
+    pub records: i64,
+}
+
+string_enum! {
+    /// Allowed values of `UsageGroupBy`.
+    UsageGroupBy {
+        Day => "day",
+        Week => "week",
+        Month => "month",
+        Model => "model",
+        Recipe => "recipe",
+        Kind => "kind",
+    }
+}
+
+string_enum! {
+    /// What the tokens paid for: `training` (a run's attempts), `eval` (evals, including a run's checkpoint evals), `scoring` (dataset.score), `labeling` (a router run's labeling eval) or `teacher` (an off-policy distill run's teacher answers).
+    UsageKind {
+        Training => "training",
+        Eval => "eval",
+        Scoring => "scoring",
+        Labeling => "labeling",
+        Teacher => "teacher",
+    }
+}
+
+/// Generated from the OpenAPI schema `UsageKindTotal`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsageKindTotal {
+    pub kind: UsageKind,
+    pub cost_usd: f64,
+    pub tokens: i64,
+    pub records: i64,
+}
+
+/// Generated from the OpenAPI schema `UsageRecord`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsageRecord {
+    pub id: String,
+    pub kind: UsageKind,
+    /// The run (kind `training`) or eval this usage belongs to.
+    pub ref_id: String,
+    pub ref_name: Option<String>,
+    /// The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it is.
+    pub run_id: Option<String>,
+    pub attempt: i64,
+    /// The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).
+    pub tokens_from: i64,
+    pub tokens_through: i64,
+    pub tokens: i64,
+    pub cost_usd: f64,
+    pub price_version: String,
+    pub idempotency_key: String,
+    pub created_at: String,
+}
+
+/// Generated from the OpenAPI schema `UsageRefTotal`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsageRefTotal {
+    pub id: String,
+    pub name: Option<String>,
+    pub kind: UsageKind,
+    pub cost_usd: f64,
+    pub tokens: i64,
+}
+
+/// Generated from the OpenAPI schema `UsageSummary`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsageSummary {
+    /// Start of the period (inclusive).
+    pub from: String,
+    /// End of the period (exclusive).
+    pub to: String,
+    pub cost_usd: f64,
+    pub tokens: i64,
+    pub records: i64,
+    /// One entry per kind with usage, costliest first.
+    pub by_kind: Vec<UsageKindTotal>,
+    /// The costliest runs' training in the period (up to 5).
+    pub top_runs: Vec<UsageRefTotal>,
+    /// The costliest evals, scoring, labeling and teacher jobs in the period (up to 5).
+    pub top_evals: Vec<UsageRefTotal>,
+    pub group_by: Option<UsageGroupBy>,
+    /// With group_by: one entry per group with usage, oldest first for time groups and costliest first otherwise.
+    pub groups: Vec<UsageGroup>,
+}
+
 /// Largest `limit` accepted by `list_api_keys` (the server clamps larger values).
 pub const LIST_API_KEYS_LIMIT_MAX: u32 = 200;
 /// Largest `limit` accepted by `list_artifacts` (the server clamps larger values).

@@ -21,7 +21,10 @@ import type {
   RunStatus,
   Secret,
   SourceProviderKind,
+  UsageGroupBy,
+  UsageKind,
   UsageRecord,
+  UsageSummary,
 } from "../contracts.js";
 
 export interface PageRequest {
@@ -744,27 +747,62 @@ export interface EvalRepository {
 
 // --- Usage ledger ----------------------------------------------------------------
 
+/** A ledger row as stored: it bills a run attempt or an eval attempt. */
+export interface LedgerRow {
+  id: string;
+  kind: "run" | "eval";
+  ref_id: string;
+  attempt: number;
+  tokens_from: number;
+  tokens_through: number;
+  tokens: number;
+  cost_usd: number;
+  price_version: string;
+  idempotency_key: string;
+  created_at: string;
+}
+
+/** `[from, to)`; either end may be open. */
+export interface UsageFilter {
+  from?: Date | undefined;
+  to?: Date | undefined;
+  runId?: string | undefined;
+  evalId?: string | undefined;
+  kind?: UsageKind | undefined;
+}
+
 export interface UsageRepository {
   /** Idempotent on idempotency_key; returns the stored row. */
   record(input: {
     idempotencyKey: string;
     workspaceId: string;
-    kind: UsageRecord["kind"];
+    kind: LedgerRow["kind"];
     refId: string;
     attempt: number;
     tokensFrom: number;
     tokensThrough: number;
     costUsd: number;
     priceVersion: string;
-  }): Promise<UsageRecord>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<UsageRecord>>;
+  }): Promise<LedgerRow>;
+  /** The workspace's rows matching `filter`, newest first, with their kind and names. */
+  list(
+    workspaceId: string,
+    filter: UsageFilter,
+    page: PageRequest,
+  ): Promise<Page<UsageRecord>>;
+  /** Totals, kinds, top runs and evals, and `groupBy` groups over `[from, to)`. */
+  summarize(
+    workspaceId: string,
+    period: { from: Date; to: Date },
+    groupBy: UsageGroupBy | undefined,
+  ): Promise<UsageSummary>;
   /** Every workspace's rows with seq > afterSeq created at or before `before`, ascending. */
   listAfter(
     afterSeq: number,
     before: Date,
     limit: number,
-  ): Promise<Array<UsageRecord & { seq: number; workspace_id: string }>>;
-  listByRef(refId: string): Promise<UsageRecord[]>;
+  ): Promise<Array<LedgerRow & { seq: number; workspace_id: string }>>;
+  listByRef(refId: string): Promise<LedgerRow[]>;
 }
 
 // --- Secrets and sources --------------------------------------------------------
