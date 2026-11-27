@@ -11,6 +11,7 @@ import {
   PostImportRecordsRequestSchema,
   PostImportRecordsResponseSchema,
   RegisterCheckpointRequestSchema,
+  ReportEventRequestSchema,
   ReportProgressRequestSchema,
   ReportProgressResponseSchema,
   TRAINER_PROTOCOL_VERSION,
@@ -76,6 +77,7 @@ export const registerTrainerJobRoutes = (
         leaseSeconds: input.lease_seconds,
         kinds,
         recipes: input.recipes,
+        gpu: input.gpu,
       });
 
       return c.json(
@@ -112,6 +114,31 @@ export const registerTrainerJobRoutes = (
       );
 
       return c.json(result, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/{id}/events",
+      operationId: "reportTrainerEvent",
+      summary: "Report a train job's phase, or a log or warning line",
+      tags,
+      "x-internal": true,
+      request: { params: IdParamSchema, ...body(ReportEventRequestSchema) },
+      responses: {
+        204: { description: "Stored (a replay is stored once)." },
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      if (isImportJob(id))
+        throw conflict("wrong_job_kind", "Import jobs do not report events.");
+      await services.runs.reportEvent(principal, id, c.req.valid("json"));
+
+      return c.body(null, 204);
     },
   );
 

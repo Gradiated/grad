@@ -7,12 +7,31 @@ import type {
 } from "../types.js";
 import type { Db } from "./db.js";
 import { createJobBackedRepository } from "./jobs.js";
-import { toImportPayload, toJob, toRunDomain } from "./mappers.js";
+import {
+  toImportPayload,
+  toJob,
+  toRunDomain,
+  toRunEventsView,
+} from "./mappers.js";
+
+/** The latest event of a type (and key) as `<prefix>_*` columns. */
+const latestEvent = (prefix: string, where: string) =>
+  `LEFT JOIN LATERAL (
+     SELECT e.seq AS ${prefix}_seq, e.attempt AS ${prefix}_attempt, e.type AS ${prefix}_type,
+            e.step AS ${prefix}_step, e.payload AS ${prefix}_payload, e.created_at AS ${prefix}_at
+     FROM grad_job_events e WHERE e.job_id = grad_jobs.id AND ${where}
+     ORDER BY e.seq DESC LIMIT 1) ${prefix} ON true`;
+
+/** Runs with their latest phase and interruption (index: job, type, seq). */
+const RUNS_FROM = `grad_jobs JOIN grad_runs USING (id)
+  ${latestEvent("ph", "e.type = 'phase'")}
+  ${latestEvent("it", "e.type = 'attempt' AND e.key = 'interrupted'")}`;
 
 export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
   const repo = createJobBackedRepository<RunRecord>(db, clock, {
     kind: "train",
     table: "grad_runs",
+    from: RUNS_FROM,
     types: {
       json: new Set([
         "latest_metric",
@@ -22,7 +41,11 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
       ]),
       timestamps: new Set(),
     },
-    map: (row) => ({ ...toJob(row), ...toRunDomain(row) }),
+    map: (row) => ({
+      ...toJob(row),
+      ...toRunDomain(row),
+      ...toRunEventsView(row),
+    }),
   });
 
   return {

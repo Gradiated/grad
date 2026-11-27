@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from .._transport import Transport
 
-__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_SECRETS_LIMIT_MAX", "LIST_SOURCES_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_EVENTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_SECRETS_LIMIT_MAX", "LIST_SOURCES_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -59,6 +59,23 @@ Artifact = TypedDict(
 )
 
 ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reward_bundle', 'reference'] | None"
+
+AttemptEvent = TypedDict(
+    "AttemptEvent",
+    {
+        "type": "Literal['attempt']",
+        "run_id": "str",
+        "seq": "int",
+        "attempt": "int",
+        "timestamp": "str",
+        "event": "Literal['started', 'interrupted', 'gave_up']",
+        "reason": "InterruptionReason",
+        "step": "int | None",
+        "resume_step": "int | None",
+        "max_attempts": "int",
+        "message": "str",
+    },
+)
 
 BaseArtifact = TypedDict(
     "BaseArtifact",
@@ -118,6 +135,21 @@ CheckpointEvalResult = TypedDict(
     },
 )
 
+CheckpointEvent = TypedDict(
+    "CheckpointEvent",
+    {
+        "type": "Literal['checkpoint']",
+        "run_id": "str",
+        "seq": "int",
+        "attempt": "int",
+        "timestamp": "str",
+        "step": "int",
+        "checkpoint_id": "str",
+        "eval_score": "float | None",
+        "format": "ArtifactFormat",
+    },
+)
+
 ClaimJobRequest = TypedDict(
     "ClaimJobRequest",
     {
@@ -125,6 +157,7 @@ ClaimJobRequest = TypedDict(
         "lease_seconds": "NotRequired[int]",
         "kinds": "NotRequired[list[JobKind]]",
         "recipes": "NotRequired[list[RecipeKind]]",
+        "gpu": "NotRequired[dict[str, Any] | None]",
     },
 )
 
@@ -142,6 +175,7 @@ CompleteTrainerJobRequest = TypedDict(
         "worker_id": "str",
         "attempt": "int",
         "status": "Literal['completed', 'stopped_budget', 'failed', 'cancelled', 'abandoned']",
+        "reason": "NotRequired[Literal['compute_reclaimed', 'worker_error', 'oom']]",
         "upload_id": "NotRequired[str]",
         "format": "NotRequired[ArtifactFormat]",
         "manifest": "NotRequired[dict[str, Any]]",
@@ -162,6 +196,19 @@ CompleteTrainerJobResponse = TypedDict(
         "run": "Run",
         "artifact": "Artifact",
         "import": "ImportJob",
+    },
+)
+
+CompletedEvent = TypedDict(
+    "CompletedEvent",
+    {
+        "type": "Literal['completed']",
+        "run_id": "str",
+        "seq": "int",
+        "attempt": "int",
+        "timestamp": "str",
+        "status": "RunStatus",
+        "run": "Run",
     },
 )
 
@@ -526,6 +573,14 @@ FeedbackRecord = TypedDict(
 
 FilterDatasetRequest: TypeAlias = "DatasetFilter"
 
+GpuInfo = TypedDict(
+    "GpuInfo",
+    {
+        "name": "str",
+        "memory_gb": "float",
+    },
+)
+
 HfColumnMapping = TypedDict(
     "HfColumnMapping",
     {
@@ -567,11 +622,39 @@ ImportSource: TypeAlias = "dict[str, Any]"
 
 ImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
 
+InterruptionReason: TypeAlias = "Literal['lease_lost', 'compute_reclaimed', 'worker_error', 'oom']"
+
 JobKind: TypeAlias = "Literal['train', 'import']"
+
+LogEvent = TypedDict(
+    "LogEvent",
+    {
+        "type": "Literal['log']",
+        "run_id": "str",
+        "seq": "int",
+        "attempt": "int",
+        "timestamp": "str",
+        "step": "int | None",
+        "message": "str",
+    },
+)
 
 LoggerSpec: TypeAlias = "dict[str, Any]"
 
 LossSpec: TypeAlias = "dict[str, Any]"
+
+MetricEvent = TypedDict(
+    "MetricEvent",
+    {
+        "type": "Literal['metric']",
+        "run_id": "str",
+        "seq": "int",
+        "attempt": "int",
+        "timestamp": "str",
+        "step": "int",
+        "metric": "MetricPoint",
+    },
+)
 
 MetricPoint = TypedDict(
     "MetricPoint",
@@ -625,6 +708,22 @@ OptimizerSpec = TypedDict(
         "betas": "NotRequired[list[Any]]",
         "weight_decay": "NotRequired[float]",
         "grad_clip": "NotRequired[float]",
+    },
+)
+
+PhaseEvent = TypedDict(
+    "PhaseEvent",
+    {
+        "type": "Literal['phase']",
+        "run_id": "str",
+        "seq": "int",
+        "attempt": "int",
+        "timestamp": "str",
+        "phase": "RunPhase",
+        "step": "int",
+        "workers_online": "int | None",
+        "autoscaling": "bool | None",
+        "gpu": "GpuInfo",
     },
 )
 
@@ -863,6 +962,8 @@ RenderDatasetResponse = TypedDict(
     },
 )
 
+ReportTrainerEventRequest: TypeAlias = "dict[str, Any]"
+
 ReportTrainerProgressRequest = TypedDict(
     "ReportTrainerProgressRequest",
     {
@@ -984,6 +1085,11 @@ Run = TypedDict(
         "total_steps": "int",
         "attempt": "int",
         "max_attempts": "int",
+        "phase": "Literal['queued', 'waiting_for_compute', 'starting', 'loading_model', 'training', 'evaluating', 'checkpointing', 'uploading', 'completing'] | None",
+        "phase_since": "str | None",
+        "last_interruption": "RunInterruption",
+        "workers_online": "int | None",
+        "autoscaling": "bool | None",
         "latest_metric": "MetricPoint",
         "eval_report": "EvalReport",
         "checkpoint_evals": "list[CheckpointEvalResult]",
@@ -994,6 +1100,33 @@ Run = TypedDict(
         "finished_at": "str | None",
     },
 )
+
+RunEvent: TypeAlias = "PhaseEvent | MetricEvent | CheckpointEvent | AttemptEvent | WarningEvent | LogEvent | CompletedEvent"
+
+RunEventsPage = TypedDict(
+    "RunEventsPage",
+    {
+        "run_id": "str",
+        "status": "RunStatus",
+        "data": "list[RunEvent]",
+        "next_cursor": "str | None",
+        "tail_cursor": "str",
+    },
+)
+
+RunInterruption = TypedDict(
+    "RunInterruption",
+    {
+        "attempt": "int",
+        "reason": "InterruptionReason",
+        "step": "int",
+        "resume_step": "int | None",
+        "at": "str",
+        "message": "str",
+    },
+)
+
+RunPhase: TypeAlias = "Literal['queued', 'waiting_for_compute', 'starting', 'loading_model', 'training', 'evaluating', 'checkpointing', 'uploading', 'completing']"
 
 RunStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed', 'cancelled', 'stopped_budget', 'stopped_balance']"
 
@@ -1231,6 +1364,19 @@ UsageRecord = TypedDict(
     },
 )
 
+WarningEvent = TypedDict(
+    "WarningEvent",
+    {
+        "type": "Literal['warning']",
+        "run_id": "str",
+        "seq": "int",
+        "attempt": "int",
+        "timestamp": "str",
+        "step": "int | None",
+        "message": "str",
+    },
+)
+
 ListApiKeysResponse = TypedDict(
     "ListApiKeysResponse",
     {
@@ -1354,14 +1500,17 @@ ListUsageResponse = TypedDict(
 SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ApiKey": frozenset({"created_at", "id", "name", "prefix", "revoked_at", "scopes", "workspace_id"}),
     "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
+    "AttemptEvent": frozenset({"attempt", "event", "max_attempts", "message", "reason", "resume_step", "run_id", "seq", "step", "timestamp", "type"}),
     "BaseArtifact": frozenset({"format", "id", "recipe_kind", "sha256"}),
     "ChatMessage": frozenset({"content", "name", "role", "tool_call_id", "tool_calls", "train"}),
     "Checkpoint": frozenset({"attempt", "best", "created_at", "eval_score", "expires_at", "final", "format", "id", "metadata", "run_id", "sha256", "size_bytes", "step", "workspace_id"}),
     "CheckpointEvalResult": frozenset({"checkpoint_id", "cost_usd", "dataset", "dataset_version", "error", "eval_id", "name", "score", "status", "step"}),
-    "ClaimJobRequest": frozenset({"kinds", "lease_seconds", "recipes", "worker_id"}),
+    "CheckpointEvent": frozenset({"attempt", "checkpoint_id", "eval_score", "format", "run_id", "seq", "step", "timestamp", "type"}),
+    "ClaimJobRequest": frozenset({"gpu", "kinds", "lease_seconds", "recipes", "worker_id"}),
     "ClaimJobResponse": frozenset({"job", "protocol"}),
-    "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "status", "stop_reason", "tokens_processed", "upload_id", "worker_id"}),
+    "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "reason", "status", "stop_reason", "tokens_processed", "upload_id", "worker_id"}),
     "CompleteTrainerJobResponse": frozenset({"artifact", "import", "job_id", "kind", "run", "status"}),
+    "CompletedEvent": frozenset({"attempt", "run", "run_id", "seq", "status", "timestamp", "type"}),
     "CreateApiKeyRequest": frozenset({"name", "scopes"}),
     "CreateDatasetRequest": frozenset({"metadata", "name"}),
     "CreateImportRequest": frozenset({"connector", "source"}),
@@ -1386,12 +1535,16 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),
     "FeedbackEventInput": frozenset({"deployment_name", "expected_output", "idempotency_key", "inference_id", "metrics", "score", "session_id"}),
     "FeedbackRecord": frozenset({"created_at", "deployment_name", "expected_output", "id", "idempotency_key", "inference_id", "metrics", "score", "session_id", "workspace_id"}),
+    "GpuInfo": frozenset({"memory_gb", "name"}),
     "HfColumnMapping": frozenset({"answer", "chosen", "completion", "messages", "positive", "prompt", "query", "rejected"}),
     "ImportJob": frozenset({"attempt", "connector", "created_at", "dataset", "dataset_version", "detected_scores", "drop_reasons", "dropped_count", "error", "id", "imported_count", "source", "status", "updated_at", "workspace_id"}),
+    "LogEvent": frozenset({"attempt", "message", "run_id", "seq", "step", "timestamp", "type"}),
+    "MetricEvent": frozenset({"attempt", "metric", "run_id", "seq", "step", "timestamp", "type"}),
     "MetricPoint": frozenset({"attempt", "cost_usd", "eval_loss", "eval_metrics", "grad_norm", "loss", "lr", "seq", "step", "timestamp", "tokens", "tokens_per_sec"}),
     "MetricPointInput": frozenset({"cost_usd", "eval_loss", "eval_metrics", "grad_norm", "loss", "lr", "step", "timestamp", "tokens", "tokens_per_sec"}),
     "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
     "OptimizerSpec": frozenset({"betas", "grad_clip", "kind", "weight_decay"}),
+    "PhaseEvent": frozenset({"attempt", "autoscaling", "gpu", "phase", "run_id", "seq", "step", "timestamp", "type", "workers_online"}),
     "PlanEvalRequest": frozenset({"baseline", "dataset", "dataset_version", "limit", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
     "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
@@ -1418,7 +1571,9 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
-    "Run": frozenset({"artifact_id", "attempt", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
+    "Run": frozenset({"artifact_id", "attempt", "autoscaling", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "last_interruption", "latest_metric", "max_attempts", "max_cost_usd", "name", "phase", "phase_since", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workers_online", "workspace_id"}),
+    "RunEventsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
+    "RunInterruption": frozenset({"at", "attempt", "message", "reason", "resume_step", "step"}),
     "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),
     "Secret": frozenset({"allowed_hosts", "created_at", "name", "updated_at", "workspace_id"}),
     "SetSecretRequest": frozenset({"allowed_hosts", "name", "value"}),
@@ -1439,6 +1594,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "TrajectoryOutput": frozenset({"payload", "turns"}),
     "UploadTicket": frozenset({"expires_at", "headers", "method", "upload_id", "url"}),
     "UsageRecord": frozenset({"attempt", "cost_usd", "created_at", "id", "idempotency_key", "kind", "price_version", "ref_id", "tokens", "tokens_from", "tokens_through"}),
+    "WarningEvent": frozenset({"attempt", "message", "run_id", "seq", "step", "timestamp", "type"}),
 }
 """Property names of every object schema (for client-side typo checks)."""
 
@@ -1448,8 +1604,10 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "EvalMode": ("eval", "score",),
     "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
     "ImportStatus": ("queued", "running", "completed", "failed",),
+    "InterruptionReason": ("lease_lost", "compute_reclaimed", "worker_error", "oom",),
     "JobKind": ("train", "import",),
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
+    "RunPhase": ("queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing",),
     "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance",),
 }
 """Allowed values of every enum schema."""
@@ -1490,6 +1648,7 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "list_evals": ("GET", "/v1/evals"),
     "list_imports": ("GET", "/v1/imports"),
     "list_run_checkpoints": ("GET", "/v1/runs/{id}/checkpoints"),
+    "list_run_events": ("GET", "/v1/runs/{id}/events"),
     "list_run_metrics": ("GET", "/v1/runs/{id}/metrics"),
     "list_runs": ("GET", "/v1/runs"),
     "list_secrets": ("GET", "/v1/secrets"),
@@ -1524,6 +1683,7 @@ LIST_EVAL_RESULTS_LIMIT_MAX = 200
 LIST_EVALS_LIMIT_MAX = 200
 LIST_IMPORTS_LIMIT_MAX = 200
 LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200
+LIST_RUN_EVENTS_LIMIT_MAX = 5000
 LIST_RUN_METRICS_LIMIT_MAX = 5000
 LIST_RUNS_LIMIT_MAX = 200
 LIST_SECRETS_LIMIT_MAX = 200
@@ -1676,6 +1836,14 @@ class GeneratedApiClient:
     def list_run_checkpoints(self, id: str, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunCheckpointsResponse:
         """List unexpired checkpoints of a run (best and final never expire)."""
         return cast("ListRunCheckpointsResponse", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/checkpoints", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+
+    def list_run_events(self, id: str, *, cursor: str | None = None, limit: int | None = None, timeout: float | None = None) -> RunEventsPage:
+        """A run's lifecycle events (phases, metrics, checkpoints, attempts, warnings, logs)."""
+        return cast("RunEventsPage", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/events", query={"cursor": cursor, "limit": limit}, timeout=timeout))
+
+    def list_run_events_stream(self, id: str, *, cursor: str | None = None, limit: int | None = None, timeout: float | None = None) -> Response:
+        """A run's lifecycle events (phases, metrics, checkpoints, attempts, warnings, logs) (Server-Sent Events stream; read or close the response)."""
+        return self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/events", query={"cursor": cursor, "limit": limit}, accept="text/event-stream", timeout=timeout)
 
     def list_run_metrics(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> MetricsPage:
         """Training step metrics as JSON pages, or a live SSE stream."""

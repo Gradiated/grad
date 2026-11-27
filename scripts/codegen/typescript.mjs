@@ -117,6 +117,12 @@ const codecNode = (node, needs, where) => {
       return inner === "0" ? "0" : `{ m: ${inner} }`;
     }
     case "union": {
+      // A discriminated union of named schemas: pick the variant by its tag.
+      if (node.discriminator && node.mapping) {
+        const variants = Object.entries(node.mapping).map(([value, name]) => [value, needs.get(name) ? literal(name) : "0"]);
+        if (variants.every(([, codec]) => codec === "0")) return "0";
+        return `{ d: [${literal(node.discriminator)}, { ${variants.map(([value, codec]) => `${literal(value)}: ${codec}`).join(", ")} }] }`;
+      }
       const arrays = node.variants.map(unwrap).filter((v) => v.k === "array");
       const objects = [];
       const refs = [];

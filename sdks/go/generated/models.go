@@ -89,6 +89,42 @@ const (
 	ArtifactFormatReference          ArtifactFormat = "reference"
 )
 
+// AttemptEvent is generated from the OpenAPI schema.
+type AttemptEvent struct {
+	Type  AttemptEventType `json:"type"`
+	RunID string           `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq       int    `json:"seq"`
+	Attempt   int    `json:"attempt"`
+	Timestamp string `json:"timestamp"`
+	// Event started: a worker claimed attempt N (resume_step: the checkpoint it resumes from). interrupted: attempt N ended without a result at `step` (resume_step: where the next attempt resumes). gave_up: no attempts left; the run failed.
+	Event  AttemptEventEvent   `json:"event"`
+	Reason *InterruptionReason `json:"reason"`
+	Step   *int                `json:"step"`
+	// ResumeStep Checkpoint step to resume from; null starts from scratch.
+	ResumeStep  *int   `json:"resume_step"`
+	MaxAttempts int    `json:"max_attempts"`
+	Message     string `json:"message"`
+}
+
+// AttemptEventEvent started: a worker claimed attempt N (resume_step: the checkpoint it resumes from). interrupted: attempt N ended without a result at `step` (resume_step: where the next attempt resumes). gave_up: no attempts left; the run failed.
+type AttemptEventEvent string
+
+// Values of AttemptEventEvent.
+const (
+	AttemptEventEventStarted     AttemptEventEvent = "started"
+	AttemptEventEventInterrupted AttemptEventEvent = "interrupted"
+	AttemptEventEventGaveUp      AttemptEventEvent = "gave_up"
+)
+
+// AttemptEventType is an enumeration of allowed values.
+type AttemptEventType string
+
+// Values of AttemptEventType.
+const (
+	AttemptEventTypeAttempt AttemptEventType = "attempt"
+)
+
 // BaseArtifact Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
 type BaseArtifact struct {
 	ID         string             `json:"id"`
@@ -200,6 +236,48 @@ const (
 	CheckpointEvalResultStatusCompleted CheckpointEvalResultStatus = "completed"
 	CheckpointEvalResultStatusFailed    CheckpointEvalResultStatus = "failed"
 	CheckpointEvalResultStatusCancelled CheckpointEvalResultStatus = "cancelled"
+)
+
+// CheckpointEvent is generated from the OpenAPI schema.
+type CheckpointEvent struct {
+	Type  CheckpointEventType `json:"type"`
+	RunID string              `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq          int             `json:"seq"`
+	Attempt      int             `json:"attempt"`
+	Timestamp    string          `json:"timestamp"`
+	Step         int             `json:"step"`
+	CheckpointID string          `json:"checkpoint_id"`
+	EvalScore    *float64        `json:"eval_score"`
+	Format       *ArtifactFormat `json:"format"`
+}
+
+// CheckpointEventType is an enumeration of allowed values.
+type CheckpointEventType string
+
+// Values of CheckpointEventType.
+const (
+	CheckpointEventTypeCheckpoint CheckpointEventType = "checkpoint"
+)
+
+// CompletedEvent is generated from the OpenAPI schema.
+type CompletedEvent struct {
+	Type  CompletedEventType `json:"type"`
+	RunID string             `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq       int       `json:"seq"`
+	Attempt   int       `json:"attempt"`
+	Timestamp string    `json:"timestamp"`
+	Status    RunStatus `json:"status"`
+	Run       Run       `json:"run"`
+}
+
+// CompletedEventType is an enumeration of allowed values.
+type CompletedEventType string
+
+// Values of CompletedEventType.
+const (
+	CompletedEventTypeCompleted CompletedEventType = "completed"
 )
 
 // CreateAPIKeyRequest is generated from the OpenAPI schema.
@@ -908,6 +986,12 @@ type FilterDatasetRequest struct {
 	Name *string `json:"name,omitempty"`
 }
 
+// GPUInfo starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.
+type GPUInfo struct {
+	Name     string  `json:"name"`
+	MemoryGb float64 `json:"memory_gb"`
+}
+
 // HFColumnMapping is generated from the OpenAPI schema.
 type HFColumnMapping struct {
 	Messages   *string `json:"messages,omitempty"`
@@ -1014,6 +1098,17 @@ const (
 	ImportStatusRunning   ImportStatus = "running"
 	ImportStatusCompleted ImportStatus = "completed"
 	ImportStatusFailed    ImportStatus = "failed"
+)
+
+// InterruptionReason Why an attempt ended without a result: lease_lost (the worker was lost: it stopped heartbeating after a crash, kill or network failure), compute_reclaimed (the GPU was reclaimed; the worker saved a checkpoint when it had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back), oom (CUDA out of memory).
+type InterruptionReason string
+
+// Values of InterruptionReason.
+const (
+	InterruptionReasonLeaseLost        InterruptionReason = "lease_lost"
+	InterruptionReasonComputeReclaimed InterruptionReason = "compute_reclaimed"
+	InterruptionReasonWorkerError      InterruptionReason = "worker_error"
+	InterruptionReasonOom              InterruptionReason = "oom"
 )
 
 // ListAPIKeysParams holds the query and header parameters of ListAPIKeys.
@@ -1176,6 +1271,13 @@ type ListRunCheckpointsResponse struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
+// ListRunEventsParams holds the query and header parameters of ListRunEvents.
+type ListRunEventsParams struct {
+	Cursor *string
+	// Limit Page size (default 1000). Values above 5000 are clamped to 5000.
+	Limit *int
+}
+
 // ListRunMetricsParams holds the query and header parameters of ListRunMetrics.
 type ListRunMetricsParams struct {
 	Cursor    *string
@@ -1241,6 +1343,26 @@ type ListUsageResponse struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
+// LogEvent is generated from the OpenAPI schema.
+type LogEvent struct {
+	Type  LogEventType `json:"type"`
+	RunID string       `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq       int    `json:"seq"`
+	Attempt   int    `json:"attempt"`
+	Timestamp string `json:"timestamp"`
+	Step      *int   `json:"step"`
+	Message   string `json:"message"`
+}
+
+// LogEventType is an enumeration of allowed values.
+type LogEventType string
+
+// Values of LogEventType.
+const (
+	LogEventTypeLog LogEventType = "log"
+)
+
 // LoggerSpec is a union of object shapes; set the fields of exactly one variant.
 type LoggerSpec struct {
 	Kind    LoggerSpecKind `json:"kind"`
@@ -1292,6 +1414,26 @@ type LossSpecReduction string
 const (
 	LossSpecReductionPerExample LossSpecReduction = "per_example"
 	LossSpecReductionPerToken   LossSpecReduction = "per_token"
+)
+
+// MetricEvent is generated from the OpenAPI schema.
+type MetricEvent struct {
+	Type  MetricEventType `json:"type"`
+	RunID string          `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq       int          `json:"seq"`
+	Attempt   int          `json:"attempt"`
+	Timestamp string       `json:"timestamp"`
+	Step      int          `json:"step"`
+	Metric    *MetricPoint `json:"metric"`
+}
+
+// MetricEventType is an enumeration of allowed values.
+type MetricEventType string
+
+// Values of MetricEventType.
+const (
+	MetricEventTypeMetric MetricEventType = "metric"
 )
 
 // MetricPoint is generated from the OpenAPI schema.
@@ -1376,6 +1518,32 @@ type OptimizerSpecKind string
 // Values of OptimizerSpecKind.
 const (
 	OptimizerSpecKindAdamw OptimizerSpecKind = "adamw"
+)
+
+// PhaseEvent is generated from the OpenAPI schema.
+type PhaseEvent struct {
+	Type  PhaseEventType `json:"type"`
+	RunID string         `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq       int      `json:"seq"`
+	Attempt   int      `json:"attempt"`
+	Timestamp string   `json:"timestamp"`
+	Phase     RunPhase `json:"phase"`
+	// Step Training step when the phase began (0 before training; the resume step on a resumed attempt).
+	Step int `json:"step"`
+	// WorkersOnline queued and waiting_for_compute: workers of this job kind holding a lease (all busy; an idle worker would have claimed the run).
+	WorkersOnline *int `json:"workers_online"`
+	// Autoscaling queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than missing.
+	Autoscaling *bool    `json:"autoscaling"`
+	GPU         *GPUInfo `json:"gpu"`
+}
+
+// PhaseEventType is an enumeration of allowed values.
+type PhaseEventType string
+
+// Values of PhaseEventType.
+const (
+	PhaseEventTypePhase PhaseEventType = "phase"
 )
 
 // PlanEvalRequest is generated from the OpenAPI schema.
@@ -1939,10 +2107,19 @@ type Run struct {
 	CostUSD               float64           `json:"cost_usd"`
 	CurrentStep           int               `json:"current_step"`
 	TotalSteps            int               `json:"total_steps"`
-	Attempt               int               `json:"attempt"`
-	MaxAttempts           int               `json:"max_attempts"`
-	LatestMetric          *MetricPoint      `json:"latest_metric"`
-	EvalReport            *EvalReport       `json:"eval_report"`
+	// Attempt Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed).
+	Attempt int `json:"attempt"`
+	// MaxAttempts The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.
+	MaxAttempts      int              `json:"max_attempts"`
+	Phase            *RunPhaseType    `json:"phase"`
+	PhaseSince       *string          `json:"phase_since"`
+	LastInterruption *RunInterruption `json:"last_interruption"`
+	// WorkersOnline While queued: workers of this kind holding a lease (all busy). Null otherwise.
+	WorkersOnline *int `json:"workers_online"`
+	// Autoscaling While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise.
+	Autoscaling  *bool        `json:"autoscaling"`
+	LatestMetric *MetricPoint `json:"latest_metric"`
+	EvalReport   *EvalReport  `json:"eval_report"`
 	// CheckpointEvals recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.
 	CheckpointEvals []CheckpointEvalResult `json:"checkpoint_evals"`
 	ArtifactID      *string                `json:"artifact_id"`
@@ -1951,6 +2128,113 @@ type Run struct {
 	UpdatedAt       string                 `json:"updated_at"`
 	FinishedAt      *string                `json:"finished_at"`
 }
+
+// RunEvent is a union of object shapes; set the fields of exactly one variant.
+type RunEvent struct {
+	Type  RunEventType `json:"type"`
+	RunID string       `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq       int       `json:"seq"`
+	Attempt   int       `json:"attempt"`
+	Timestamp string    `json:"timestamp"`
+	Phase     *RunPhase `json:"phase,omitempty"`
+	// Step Training step when the phase began (0 before training; the resume step on a resumed attempt).
+	Step *int `json:"step,omitempty"`
+	// WorkersOnline queued and waiting_for_compute: workers of this job kind holding a lease (all busy; an idle worker would have claimed the run).
+	WorkersOnline *int `json:"workers_online,omitempty"`
+	// Autoscaling queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than missing.
+	Autoscaling  *bool               `json:"autoscaling,omitempty"`
+	GPU          *GPUInfo            `json:"gpu,omitempty"`
+	Metric       *MetricPoint        `json:"metric,omitempty"`
+	CheckpointID *string             `json:"checkpoint_id,omitempty"`
+	EvalScore    *float64            `json:"eval_score,omitempty"`
+	Format       *ArtifactFormat     `json:"format,omitempty"`
+	Event        *RunEventEvent      `json:"event,omitempty"`
+	Reason       *InterruptionReason `json:"reason,omitempty"`
+	// ResumeStep Checkpoint step to resume from; null starts from scratch.
+	ResumeStep  *int       `json:"resume_step,omitempty"`
+	MaxAttempts *int       `json:"max_attempts,omitempty"`
+	Message     *string    `json:"message,omitempty"`
+	Status      *RunStatus `json:"status,omitempty"`
+	Run         *Run       `json:"run,omitempty"`
+}
+
+// RunEventEvent is an enumeration of allowed values.
+type RunEventEvent string
+
+// Values of RunEventEvent.
+const (
+	RunEventEventStarted     RunEventEvent = "started"
+	RunEventEventInterrupted RunEventEvent = "interrupted"
+	RunEventEventGaveUp      RunEventEvent = "gave_up"
+)
+
+// RunEventType is an enumeration of allowed values.
+type RunEventType string
+
+// Values of RunEventType.
+const (
+	RunEventTypePhase      RunEventType = "phase"
+	RunEventTypeMetric     RunEventType = "metric"
+	RunEventTypeCheckpoint RunEventType = "checkpoint"
+	RunEventTypeAttempt    RunEventType = "attempt"
+	RunEventTypeWarning    RunEventType = "warning"
+	RunEventTypeLog        RunEventType = "log"
+	RunEventTypeCompleted  RunEventType = "completed"
+)
+
+// RunEventsPage is generated from the OpenAPI schema.
+type RunEventsPage struct {
+	RunID  string     `json:"run_id"`
+	Status RunStatus  `json:"status"`
+	Data   []RunEvent `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
+	// TailCursor Cursor after the newest event returned so far; pass it back as `cursor` to poll for later events.
+	TailCursor string `json:"tail_cursor"`
+}
+
+// RunInterruption is generated from the OpenAPI schema.
+type RunInterruption struct {
+	Attempt    int                `json:"attempt"`
+	Reason     InterruptionReason `json:"reason"`
+	Step       int                `json:"step"`
+	ResumeStep *int               `json:"resume_step"`
+	At         string             `json:"at"`
+	Message    string             `json:"message"`
+}
+
+// RunPhase Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat.
+type RunPhase string
+
+// Values of RunPhase.
+const (
+	RunPhaseQueued            RunPhase = "queued"
+	RunPhaseWaitingForCompute RunPhase = "waiting_for_compute"
+	RunPhaseStarting          RunPhase = "starting"
+	RunPhaseLoadingModel      RunPhase = "loading_model"
+	RunPhaseTraining          RunPhase = "training"
+	RunPhaseEvaluating        RunPhase = "evaluating"
+	RunPhaseCheckpointing     RunPhase = "checkpointing"
+	RunPhaseUploading         RunPhase = "uploading"
+	RunPhaseCompleting        RunPhase = "completing"
+)
+
+// RunPhaseType is an enumeration of allowed values.
+type RunPhaseType string
+
+// Values of RunPhaseType.
+const (
+	RunPhaseTypeQueued            RunPhaseType = "queued"
+	RunPhaseTypeWaitingForCompute RunPhaseType = "waiting_for_compute"
+	RunPhaseTypeStarting          RunPhaseType = "starting"
+	RunPhaseTypeLoadingModel      RunPhaseType = "loading_model"
+	RunPhaseTypeTraining          RunPhaseType = "training"
+	RunPhaseTypeEvaluating        RunPhaseType = "evaluating"
+	RunPhaseTypeCheckpointing     RunPhaseType = "checkpointing"
+	RunPhaseTypeUploading         RunPhaseType = "uploading"
+	RunPhaseTypeCompleting        RunPhaseType = "completing"
+)
 
 // RunStatus stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints.
 type RunStatus string
@@ -2267,4 +2551,24 @@ type UsageRecordKind string
 const (
 	UsageRecordKindRun  UsageRecordKind = "run"
 	UsageRecordKindEval UsageRecordKind = "eval"
+)
+
+// WarningEvent is generated from the OpenAPI schema.
+type WarningEvent struct {
+	Type  WarningEventType `json:"type"`
+	RunID string           `json:"run_id"`
+	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
+	Seq       int    `json:"seq"`
+	Attempt   int    `json:"attempt"`
+	Timestamp string `json:"timestamp"`
+	Step      *int   `json:"step"`
+	Message   string `json:"message"`
+}
+
+// WarningEventType is an enumeration of allowed values.
+type WarningEventType string
+
+// Values of WarningEventType.
+const (
+	WarningEventTypeWarning WarningEventType = "warning"
 )

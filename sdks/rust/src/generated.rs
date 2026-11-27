@@ -973,6 +973,16 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// Why an attempt ended without a result: lease_lost (the worker was lost: it stopped heartbeating after a crash, kill or network failure), compute_reclaimed (the GPU was reclaimed; the worker saved a checkpoint when it had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back), oom (CUDA out of memory).
+    InterruptionReason {
+        LeaseLost => "lease_lost",
+        ComputeReclaimed => "compute_reclaimed",
+        WorkerError => "worker_error",
+        Oom => "oom",
+    }
+}
+
 /// A union of object shapes: set the fields of exactly one variant.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -1673,8 +1683,17 @@ pub struct Run {
     pub cost_usd: f64,
     pub current_step: i64,
     pub total_steps: i64,
+    /// Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed).
     pub attempt: i64,
+    /// The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.
     pub max_attempts: i64,
+    pub phase: Option<RunPhase>,
+    pub phase_since: Option<String>,
+    pub last_interruption: Option<RunInterruption>,
+    /// While queued: workers of this kind holding a lease (all busy). Null otherwise.
+    pub workers_online: Option<i64>,
+    /// While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise.
+    pub autoscaling: Option<bool>,
     pub latest_metric: Option<MetricPoint>,
     pub eval_report: Option<EvalReport>,
     /// recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.
@@ -1684,6 +1703,33 @@ pub struct Run {
     pub created_at: String,
     pub updated_at: String,
     pub finished_at: Option<String>,
+}
+
+/// Generated from the OpenAPI schema `RunInterruption`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RunInterruption {
+    pub attempt: i64,
+    pub reason: InterruptionReason,
+    pub step: i64,
+    pub resume_step: Option<i64>,
+    pub at: String,
+    pub message: String,
+}
+
+string_enum! {
+    /// Allowed values of `RunPhase`.
+    RunPhase {
+        Queued => "queued",
+        WaitingForCompute => "waiting_for_compute",
+        Starting => "starting",
+        LoadingModel => "loading_model",
+        Training => "training",
+        Evaluating => "evaluating",
+        Checkpointing => "checkpointing",
+        Uploading => "uploading",
+        Completing => "completing",
+    }
 }
 
 string_enum! {
@@ -1843,6 +1889,8 @@ pub const LIST_EVALS_LIMIT_MAX: u32 = 200;
 pub const LIST_IMPORTS_LIMIT_MAX: u32 = 200;
 /// Largest `limit` accepted by `list_run_checkpoints` (the server clamps larger values).
 pub const LIST_RUN_CHECKPOINTS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_run_events` (the server clamps larger values).
+pub const LIST_RUN_EVENTS_LIMIT_MAX: u32 = 5000;
 /// Largest `limit` accepted by `list_run_metrics` (the server clamps larger values).
 pub const LIST_RUN_METRICS_LIMIT_MAX: u32 = 5000;
 /// Largest `limit` accepted by `list_runs` (the server clamps larger values).

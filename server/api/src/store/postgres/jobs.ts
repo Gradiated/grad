@@ -20,7 +20,7 @@ import {
   type Db,
   type Row,
 } from "./db.js";
-import { toJob } from "./mappers.js";
+import { toEvent, toJob } from "./mappers.js";
 import { addSecondsIso, first, listNewest, nowIso } from "./shared.js";
 
 /** Record fields stored on grad_jobs (`error` is the last_error column). */
@@ -28,6 +28,7 @@ const JOB_FIELDS: Readonly<Record<string, string>> = {
   status: "status",
   attempt: "attempt",
   failed_attempts: "failed_attempts",
+  preemptions: "preemptions",
   max_attempts: "max_attempts",
   worker_id: "worker_id",
   worker_key: "worker_key",
@@ -278,45 +279,81 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
         [workspaceId, key],
       ),
     ),
-  appendEvent: async ({ jobId, attempt, type, step, payload }) => {
-    const toEvent = (r: Row) => ({
-      seq: Number(r.seq),
-      attempt: Number(r.attempt),
-      step: Number(r.step),
-      payload: r.payload as Record<string, unknown>,
-    });
+  appendEvent: async ({ jobId, attempt, type, step, key, payload }) => {
+    const natural = key ?? String(step);
     const inserted = first(
       await db.query(
-        `INSERT INTO grad_job_events (job_id, attempt, type, step, payload, created_at)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6::timestamptz)
-         ON CONFLICT (job_id, attempt, type, step) DO NOTHING RETURNING *`,
-        [jobId, attempt, type, step, JSON.stringify(payload), nowIso(clock)],
+        `INSERT INTO grad_job_events (job_id, attempt, type, step, key, payload, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)
+         ON CONFLICT (job_id, attempt, type, key) DO NOTHING RETURNING *`,
+        [
+          jobId,
+          attempt,
+          type,
+          step,
+          natural,
+          JSON.stringify(payload),
+          nowIso(clock),
+        ],
       ),
     );
     if (inserted) return toEvent(inserted);
     const existing = first(
       await db.query(
         `SELECT * FROM grad_job_events
-         WHERE job_id = $1 AND attempt = $2 AND type = $3 AND step = $4`,
-        [jobId, attempt, type, step],
+         WHERE job_id = $1 AND attempt = $2 AND type = $3 AND key = $4`,
+        [jobId, attempt, type, natural],
       ),
     );
 
-    return toEvent(existing ?? { seq: 0, attempt, step, payload });
+    return toEvent(
+      existing ?? {
+        seq: 0,
+        attempt,
+        type,
+        step,
+        payload,
+        created_at: nowIso(clock),
+      },
+    );
   },
-  listEvents: async (jobId, type, afterSeq, limit) =>
+  listEvents: async (jobId, types, afterSeq, limit) =>
     (
       await db.query(
-        `SELECT * FROM grad_job_events WHERE job_id = $1 AND type = $2 AND seq > $3
+        `SELECT * FROM grad_job_events WHERE job_id = $1 AND type = ANY($2::text[]) AND seq > $3
          ORDER BY seq LIMIT $4`,
-        [jobId, type, afterSeq, limit],
+        [
+          jobId,
+          typeof types === "string" ? [types] : [...types],
+          afterSeq,
+          limit,
+        ],
       )
-    ).map((r) => ({
-      seq: Number(r.seq),
-      attempt: Number(r.attempt),
-      step: Number(r.step),
-      payload: r.payload as Record<string, unknown>,
-    })),
+    ).map(toEvent),
+  countLeasedWorkers: async (kind, now) =>
+    Number(
+      first(
+        await db.query<{ n: string }>(
+          `SELECT count(DISTINCT worker_id) AS n FROM grad_jobs
+           WHERE kind = $1 AND worker_id IS NOT NULL AND lease_expires_at > $2::timestamptz`,
+          [kind, now.toISOString()],
+        ),
+      )?.n ?? 0,
+    ),
+  listUnclaimedSince: async (kind, before, limit) =>
+    (
+      await db.query(
+        `SELECT j.* FROM grad_jobs j
+         JOIN LATERAL (
+           SELECT e.payload->>'phase' AS phase, e.created_at AS phase_at FROM grad_job_events e
+           WHERE e.job_id = j.id AND e.type = 'phase' ORDER BY e.seq DESC LIMIT 1
+         ) p ON true
+         WHERE j.status = 'queued' AND j.waiting_on IS NULL AND j.kind = $1
+           AND p.phase = 'queued' AND p.phase_at < $2::timestamptz
+         ORDER BY j.created_at, j.id COLLATE "C" LIMIT $3`,
+        [kind, before.toISOString(), limit],
+      )
+    ).map((r) => toJob(r)),
   deleteEventsBefore: async (before, limit) =>
     (
       await db.query(
@@ -342,13 +379,15 @@ export const createJobBackedRepository = <R extends JobFields<string>>(
     kind: JobKind;
     /** null: domain fields live in grad_jobs.payload. */
     table: string | null;
+    /** The FROM clause reads use (default: grad_jobs joined with `table`). */
+    from?: string;
     types: ColumnTypes;
     map: (row: Row) => R;
   },
 ) => {
-  const from = spec.table
-    ? `grad_jobs JOIN ${spec.table} USING (id)`
-    : "grad_jobs";
+  const from =
+    spec.from ??
+    (spec.table ? `grad_jobs JOIN ${spec.table} USING (id)` : "grad_jobs");
   const byId = async (where: string, params: unknown[]): Promise<R | null> => {
     const row = first(
       await db.query(

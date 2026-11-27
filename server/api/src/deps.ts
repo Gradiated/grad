@@ -14,6 +14,12 @@ import type { UiBundle } from "./ui.js";
 export interface AppSettings {
   /** Lease expiries tolerated before a job fails (default 3). */
   maxAttempts: number;
+  /** Preempted attempts tolerated before a job fails (default 20). */
+  maxPreemptions?: number;
+  /** A queued run nobody claimed for this long is waiting_for_compute (default 30 s). */
+  waitingForComputeSeconds?: number;
+  /** Workers scale from zero (KEDA): waiting runs say a worker is starting. */
+  workerAutoscaling?: boolean;
   evalConcurrency: number;
   /** SSE metrics stream poll interval (default 1000 ms). */
   ssePollMs?: number;

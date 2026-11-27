@@ -26,7 +26,7 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_job_claim_latency_seconds` | histogram | `kind` | Time from creating a job to its first claim. |
 | `grad_job_duration_seconds` | histogram | `kind`, `recipe_kind`, `status` | Time from creating a job to its terminal status, by kind, recipe and status. |
 | `grad_job_oldest_queued_age_seconds` | gauge | `kind` | Age of the oldest claimable queued job by kind (0 when none). |
-| `grad_job_requeues_total` | counter | `kind`, `reason` | Attempts that ended without a result, by reason (lease_lost, preempted, worker_error, oom). |
+| `grad_job_requeues_total` | counter | `kind`, `reason` | Attempts that ended without a result, by reason (lease_lost, compute_reclaimed, worker_error, oom). |
 | `grad_jobs` | gauge | `kind`, `status` | Open jobs by kind and status: queued (claimable), blocked (waiting on another job), waiting_for_compute, running, awaiting_scores. |
 | `grad_jobs_open` | gauge | `kind` | Claimable queued plus leased jobs by kind: what KEDA scales workers on. |
 | `grad_maintenance_step_duration_seconds` | histogram | `step` | Maintenance step duration. |

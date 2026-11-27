@@ -208,9 +208,14 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
     expect(swept).toBe(1);
     expect(await t.deps.storage.head(key)).toBeNull();
 
+    // The metric and the lifecycle events (queued, started, starting).
+    const stored = (
+      await t.json<{ data: unknown[] }>(`/v1/runs/${run.id}/events`)
+    ).body.data.length;
+    expect(stored).toBeGreaterThanOrEqual(4);
     t.clock.set(new Date(real.getTime() + 91 * 86_400_000));
     const report = await t.services.maintenance.tick();
-    expect(report.deletedEvents).toBe(1);
+    expect(report.deletedEvents).toBe(stored);
     expect(
       (await t.json<{ data: unknown[] }>(`/v1/runs/${run.id}/metrics`)).body
         .data,

@@ -15,6 +15,7 @@ export const DEFAULT_JOB_EVENT_RETENTION_DAYS = 90;
 
 export interface MaintenanceReport {
   expiredJobs: number;
+  waitingForCompute: number;
   settledEvals: number;
   deletedCheckpoints: number;
   deletedUploads: number;
@@ -72,6 +73,9 @@ export const createMaintenance = (
     return {
       expiredJobs: await step("expire_jobs", () =>
         services.queue.expireLeases(now),
+      ),
+      waitingForCompute: await step("waiting_for_compute", () =>
+        services.runs.markWaitingForCompute(now),
       ),
       settledEvals: await step("settle_evals", () =>
         services.evals.settleAwaitingScores(now),

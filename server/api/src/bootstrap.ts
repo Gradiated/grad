@@ -170,6 +170,9 @@ export const buildDependencies = async (
       env.AUTH_MODE === "cloud" ? createCloudTracesAdapter(cloud()) : null,
     settings: {
       maxAttempts: env.MAX_ATTEMPTS,
+      maxPreemptions: env.MAX_PREEMPTIONS,
+      waitingForComputeSeconds: env.WAITING_FOR_COMPUTE_SECONDS,
+      workerAutoscaling: env.GRAD_WORKER_AUTOSCALING,
       evalConcurrency: env.EVAL_CONCURRENCY,
       jobEventRetentionDays: env.JOB_EVENT_RETENTION_DAYS,
       usageFlushTokens: env.USAGE_FLUSH_TOKENS,

@@ -12,11 +12,14 @@ import {
   ArtifactFormatSchema,
   ArtifactSchema,
   CheckpointSchema,
+  GpuInfoSchema,
+  InterruptionReasonSchema,
   MetricPointInputSchema,
   RecipeKindSchema,
   ResolvedRunConfigSchema,
   RunSchema,
   RunStatusSchema,
+  WORKER_PHASES,
 } from "./runs.js";
 
 export const TRAINER_PROTOCOL_VERSION = "grad.trainer-protocol/1";
@@ -45,6 +48,10 @@ export const ClaimJobRequestSchema = z
     recipes: z.array(RecipeKindSchema).min(1).optional().openapi({
       description:
         "Recipe kinds this worker can run; train jobs for other recipes are left queued.",
+    }),
+    gpu: GpuInfoSchema.nullable().optional().openapi({
+      description:
+        "The worker's GPU, shown on the run's `starting` phase (never the worker id or host).",
     }),
   })
   .openapi("ClaimJobRequest");
@@ -205,6 +212,30 @@ export const ReportProgressResponseSchema = z
   })
   .openapi("ReportTrainerProgressResponse");
 
+export const ReportEventRequestSchema = z
+  .discriminatedUnion("type", [
+    z.object({
+      ...AttemptRefShape,
+      type: z.literal("phase"),
+      phase: z.enum(WORKER_PHASES),
+      step: z.number().int().min(0).default(0).openapi({
+        description:
+          "Training step when the phase began. Stored once per (attempt, phase, step), so a retry is safe.",
+      }),
+    }),
+    z.object({
+      ...AttemptRefShape,
+      type: z.enum(["log", "warning"]),
+      seq: z.number().int().min(0).openapi({
+        description:
+          "This attempt's message number (0, 1, 2, ...): stored once per (attempt, seq).",
+      }),
+      message: z.string().min(1).max(2000),
+      step: z.number().int().min(0).nullable().default(null),
+    }),
+  ])
+  .openapi("ReportTrainerEventRequest");
+
 export const WorkerUploadRequestSchema = z
   .object({
     ...AttemptRefShape,
@@ -259,8 +290,14 @@ export const CompleteJobRequestSchema = z
     ...AttemptRefShape,
     status: z.enum(COMPLETION_STATUSES).openapi({
       description:
-        "`abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure.",
+        "`abandoned` hands the attempt back (shutdown, reclaimed compute, a worker error): the job requeues at once and resumes from its latest checkpoint.",
     }),
+    reason: InterruptionReasonSchema.exclude(["lease_lost"])
+      .optional()
+      .openapi({
+        description:
+          "Abandoned attempts: compute_reclaimed (SIGTERM or a cloud termination notice; counts toward the server's separate MAX_PREEMPTIONS cap), worker_error (default) or oom (both count toward max_attempts).",
+      }),
     upload_id: z.string().min(1).max(160).optional(),
     format: ArtifactFormatSchema.optional(),
     manifest: z.record(z.string(), z.unknown()).default({}),

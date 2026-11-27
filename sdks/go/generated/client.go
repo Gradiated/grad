@@ -40,6 +40,9 @@ const ListImportsLimitMax = 200
 // ListRunCheckpointsLimitMax is the largest limit accepted by ListRunCheckpoints (the server clamps larger values).
 const ListRunCheckpointsLimitMax = 200
 
+// ListRunEventsLimitMax is the largest limit accepted by ListRunEvents (the server clamps larger values).
+const ListRunEventsLimitMax = 5000
+
 // ListRunMetricsLimitMax is the largest limit accepted by ListRunMetrics (the server clamps larger values).
 const ListRunMetricsLimitMax = 5000
 
@@ -703,6 +706,50 @@ func (c *Client) ListRunCheckpoints(ctx context.Context, id string, params *List
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ListRunEvents calls GET /v1/runs/{id}/events.
+//
+// A run's lifecycle events (phases, metrics, checkpoints, attempts, warnings, logs).
+func (c *Client) ListRunEvents(ctx context.Context, id string, params *ListRunEventsParams, opts ...RequestOption) (*RunEventsPage, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0 + "/events", Query: q}
+	var out RunEventsPage
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListRunEventsStream opens GET /v1/runs/{id}/events as a Server-Sent Events stream (resume with WithLastEventID).
+func (c *Client) ListRunEventsStream(ctx context.Context, id string, params *ListRunEventsParams, opts ...RequestOption) (*SSEStream, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0 + "/events", Query: q}
+	return c.T.DoSSE(ctx, spec, opts...)
 }
 
 // ListRunMetrics calls GET /v1/runs/{id}/metrics.

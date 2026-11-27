@@ -512,6 +512,64 @@ export const CheckpointEvalResultSchema = z
 
 export type CheckpointEvalResult = z.infer<typeof CheckpointEvalResultSchema>;
 
+export const RUN_PHASES = [
+  "queued",
+  "waiting_for_compute",
+  "starting",
+  "loading_model",
+  "training",
+  "evaluating",
+  "checkpointing",
+  "uploading",
+  "completing",
+] as const;
+
+export const RunPhaseSchema = z.enum(RUN_PHASES).openapi("RunPhase", {
+  description:
+    "Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat.",
+});
+
+export type RunPhase = z.infer<typeof RunPhaseSchema>;
+
+/** Phases a trainer worker reports (the server emits the first three). */
+export const WORKER_PHASES = [
+  "loading_model",
+  "training",
+  "evaluating",
+  "checkpointing",
+  "uploading",
+  "completing",
+] as const satisfies readonly RunPhase[];
+
+export const InterruptionReasonSchema = z
+  .enum(["lease_lost", "compute_reclaimed", "worker_error", "oom"])
+  .openapi("InterruptionReason", {
+    description:
+      "Why an attempt ended without a result: lease_lost (the worker was lost: it stopped heartbeating after a crash, kill or network failure), compute_reclaimed (the GPU was reclaimed; the worker saved a checkpoint when it had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back), oom (CUDA out of memory).",
+  });
+
+export type InterruptionReason = z.infer<typeof InterruptionReasonSchema>;
+
+export const GpuInfoSchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    memory_gb: z.number().min(0).max(100_000),
+  })
+  .openapi("GpuInfo");
+
+export const RunInterruptionSchema = z
+  .object({
+    attempt: z.number().int().min(1),
+    reason: InterruptionReasonSchema,
+    step: z.number().int().min(0),
+    resume_step: z.number().int().min(0).nullable(),
+    at: IsoTimestampSchema,
+    message: z.string(),
+  })
+  .openapi("RunInterruption");
+
+export type RunInterruption = z.infer<typeof RunInterruptionSchema>;
+
 export const RunSchema = z
   .object({
     id: z.string().min(1),
@@ -529,8 +587,25 @@ export const RunSchema = z
     cost_usd: z.number().min(0),
     current_step: z.number().int().min(0),
     total_steps: z.number().int().min(0),
-    attempt: z.number().int().min(0),
-    max_attempts: z.number().int().min(1),
+    attempt: z.number().int().min(0).openapi({
+      description:
+        "Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed).",
+    }),
+    max_attempts: z.number().int().min(1).openapi({
+      description:
+        "The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.",
+    }),
+    phase: z.enum(RUN_PHASES).nullable(),
+    phase_since: IsoTimestampSchema.nullable(),
+    last_interruption: RunInterruptionSchema.nullable(),
+    workers_online: z.number().int().min(0).nullable().openapi({
+      description:
+        "While queued: workers of this kind holding a lease (all busy). Null otherwise.",
+    }),
+    autoscaling: z.boolean().nullable().openapi({
+      description:
+        "While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise.",
+    }),
     latest_metric: MetricPointSchema.nullable(),
     eval_report: EvalReportSchema.nullable(),
     checkpoint_evals: z.array(CheckpointEvalResultSchema).openapi({
@@ -634,3 +709,143 @@ export const ArtifactSchema = z
   .openapi("Artifact");
 
 export type Artifact = z.infer<typeof ArtifactSchema>;
+
+const eventBase = {
+  run_id: z.string().min(1),
+  seq: z.number().int().min(0).openapi({
+    description:
+      "Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.",
+  }),
+  attempt: z.number().int().min(1),
+  timestamp: IsoTimestampSchema,
+};
+
+export const PhaseEventSchema = z
+  .object({
+    type: z.literal("phase"),
+    ...eventBase,
+    phase: RunPhaseSchema,
+    step: z.number().int().min(0).openapi({
+      description:
+        "Training step when the phase began (0 before training; the resume step on a resumed attempt).",
+    }),
+    workers_online: z.number().int().min(0).nullable().openapi({
+      description:
+        "queued and waiting_for_compute: workers of this job kind holding a lease (all busy; an idle worker would have claimed the run).",
+    }),
+    autoscaling: z.boolean().nullable().openapi({
+      description:
+        "queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than missing.",
+    }),
+    gpu: GpuInfoSchema.nullable().openapi({
+      description:
+        "starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.",
+    }),
+  })
+  .openapi("PhaseEvent");
+
+export const MetricEventSchema = z
+  .object({
+    type: z.literal("metric"),
+    ...eventBase,
+    step: z.number().int().min(0),
+    metric: MetricPointSchema,
+  })
+  .openapi("MetricEvent");
+
+export const CheckpointEventSchema = z
+  .object({
+    type: z.literal("checkpoint"),
+    ...eventBase,
+    step: z.number().int().min(0),
+    checkpoint_id: z.string().min(1),
+    eval_score: z.number().nullable(),
+    format: CheckpointSchema.shape.format,
+  })
+  .openapi("CheckpointEvent");
+
+export const AttemptEventSchema = z
+  .object({
+    type: z.literal("attempt"),
+    ...eventBase,
+    event: z.enum(["started", "interrupted", "gave_up"]).openapi({
+      description:
+        "started: a worker claimed attempt N (resume_step: the checkpoint it resumes from). interrupted: attempt N ended without a result at `step` (resume_step: where the next attempt resumes). gave_up: no attempts left; the run failed.",
+    }),
+    reason: InterruptionReasonSchema.nullable(),
+    step: z.number().int().min(0).nullable(),
+    resume_step: z.number().int().min(0).nullable().openapi({
+      description: "Checkpoint step to resume from; null starts from scratch.",
+    }),
+    max_attempts: z.number().int().min(1),
+    message: z.string(),
+  })
+  .openapi("AttemptEvent");
+
+export const WarningEventSchema = z
+  .object({
+    type: z.literal("warning"),
+    ...eventBase,
+    step: z.number().int().min(0).nullable(),
+    message: z.string(),
+  })
+  .openapi("WarningEvent");
+
+export const LogEventSchema = z
+  .object({
+    type: z.literal("log"),
+    ...eventBase,
+    step: z.number().int().min(0).nullable(),
+    message: z.string(),
+  })
+  .openapi("LogEvent");
+
+export const CompletedEventSchema = z
+  .object({
+    type: z.literal("completed"),
+    ...eventBase,
+    status: RunStatusSchema,
+    run: RunSchema,
+  })
+  .openapi("CompletedEvent");
+
+export const RunEventSchema = z
+  .discriminatedUnion("type", [
+    PhaseEventSchema,
+    MetricEventSchema,
+    CheckpointEventSchema,
+    AttemptEventSchema,
+    WarningEventSchema,
+    LogEventSchema,
+    CompletedEventSchema,
+  ])
+  .openapi("RunEvent", {
+    description:
+      "One event of a run's lifecycle, discriminated by `type`. `completed` is always last.",
+  });
+
+export type RunEvent = z.infer<typeof RunEventSchema>;
+export type PhaseEvent = z.infer<typeof PhaseEventSchema>;
+export type AttemptEvent = z.infer<typeof AttemptEventSchema>;
+
+export const RUN_EVENT_TYPES = [
+  "phase",
+  "metric",
+  "checkpoint",
+  "attempt",
+  "warning",
+  "log",
+] as const;
+
+export const RunEventsPageSchema = z
+  .object({
+    run_id: z.string(),
+    status: RunStatusSchema,
+    data: z.array(RunEventSchema),
+    next_cursor: NextCursorSchema,
+    tail_cursor: z.string().openapi({
+      description:
+        "Cursor after the newest event returned so far; pass it back as `cursor` to poll for later events.",
+    }),
+  })
+  .openapi("RunEventsPage");

@@ -50,6 +50,7 @@ import type {
   RouteRequest,
   RouteResponse,
   Run,
+  RunEventsPage,
   ScoreDatasetRequest,
   Secret,
   SetSecretRequest,
@@ -65,10 +66,13 @@ export const CODEC: CodecTable = {
   "AdapterSpec": { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } },
   "ApiKey": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["revokedAt", "revoked_at", 0]] },
   "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["evalReport", "eval_report", "EvalReport"], ["createdAt", "created_at", 0]] },
+  "AttemptEvent": { o: [["runId", "run_id", 0], ["resumeStep", "resume_step", 0], ["maxAttempts", "max_attempts", 0]] },
   "BaseArtifact": { o: [["recipeKind", "recipe_kind", 0]] },
   "ChatMessage": { o: [["toolCalls", "tool_calls", 0], ["toolCallId", "tool_call_id", 0]] },
   "Checkpoint": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["evalScore", "eval_score", 0], ["sizeBytes", "size_bytes", 0], ["expiresAt", "expires_at", 0], ["createdAt", "created_at", 0]] },
   "CheckpointEvalResult": { o: [["checkpointId", "checkpoint_id", 0], ["evalId", "eval_id", 0], ["datasetVersion", "dataset_version", 0], ["costUsd", "cost_usd", 0]] },
+  "CheckpointEvent": { o: [["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["evalScore", "eval_score", 0]] },
+  "CompletedEvent": { o: [["runId", "run_id", 0], ["run", "run", "Run"]] },
   "CreateImportRequest": { o: [["source", "source", "ImportSource"]] },
   "CreateUploadRequest": { o: [["sizeBytes", "size_bytes", 0]] },
   "CreatedApiKey": { o: [["key", "key", "ApiKey"]] },
@@ -88,13 +92,17 @@ export const CODEC: CodecTable = {
   "FeedbackEventInput": { o: [["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0]] },
   "FeedbackRecord": { o: [["workspaceId", "workspace_id", 0], ["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0], ["createdAt", "created_at", 0]] },
   "FilterDatasetRequest": { o: [["createdAfter", "created_after", 0], ["createdBefore", "created_before", 0]] },
+  "GpuInfo": { o: [["memoryGb", "memory_gb", 0]] },
   "ImportJob": { o: [["workspaceId", "workspace_id", 0], ["importedCount", "imported_count", 0], ["droppedCount", "dropped_count", 0], ["detectedScores", "detected_scores", 0], ["dropReasons", "drop_reasons", 0], ["datasetVersion", "dataset_version", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "ImportSource": { u: { o: { o: [["uploadId", "upload_id", 0]] } } },
+  "LogEvent": { o: [["runId", "run_id", 0]] },
   "LoggerSpec": { u: { o: { o: [["runName", "run_name", 0], ["trackingUri", "tracking_uri", 0]] } } },
   "LossSpec": { u: { o: { o: [["topK", "top_k", 0]] } } },
+  "MetricEvent": { o: [["runId", "run_id", 0], ["metric", "metric", "MetricPoint"]] },
   "MetricPoint": { o: [["evalLoss", "eval_loss", 0], ["evalMetrics", "eval_metrics", 0], ["gradNorm", "grad_norm", 0], ["tokensPerSec", "tokens_per_sec", 0], ["costUsd", "cost_usd", 0]] },
   "MetricsPage": { o: [["runId", "run_id", 0], ["data", "data", { a: "MetricPoint" }], ["nextCursor", "next_cursor", 0], ["tailCursor", "tail_cursor", 0]] },
   "OptimizerSpec": { o: [["weightDecay", "weight_decay", 0], ["gradClip", "grad_clip", 0]] },
+  "PhaseEvent": { o: [["runId", "run_id", 0], ["workersOnline", "workers_online", 0], ["gpu", "gpu", "GpuInfo"]] },
   "PlanEvalRequest": { o: [["datasetVersion", "dataset_version", 0], ["maxTokens", "max_tokens", 0], ["passThreshold", "pass_threshold", 0]] },
   "PlanEvalResponse": { o: [["taskSourceKind", "task_source_kind", 0], ["datasetVersion", "dataset_version", 0], ["estimatedTasks", "estimated_tasks", 0], ["estimatedModelCalls", "estimated_model_calls", 0], ["estimatedJudgeCalls", "estimated_judge_calls", 0], ["estimatedCostUsd", "estimated_cost_usd", 0], ["judgeModels", "judge_models", 0], ["localScorers", "local_scorers", 0], ["passThreshold", "pass_threshold", 0]] },
   "PlanRunRequest": { o: [["recipe", "recipe", "RecipeSpec"], ["split", "split", "SplitSpec"], ["maxCostUsd", "max_cost_usd", 0]] },
@@ -113,7 +121,10 @@ export const CODEC: CodecTable = {
   "RouteRequest": { o: [["messages", "messages", { a: "ChatMessage" }], ["sessionId", "session_id", 0]] },
   "RouteResponse": { o: [["inferenceId", "inference_id", 0], ["artifactId", "artifact_id", 0], ["isExploration", "is_exploration", 0]] },
   "RouterParetoSummary": { o: [["targetMaxDrop", "target_max_drop", 0], ["routedQuality", "routed_quality", 0], ["qualityDrop", "quality_drop", 0], ["qualityDropCi95", "quality_drop_ci95", 0], ["offloadRate", "offload_rate", 0], ["costSavingsPct", "cost_savings_pct", 0]] },
-  "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", "EvalReport"], ["checkpointEvals", "checkpoint_evals", { a: "CheckpointEvalResult" }], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
+  "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["phaseSince", "phase_since", 0], ["lastInterruption", "last_interruption", "RunInterruption"], ["workersOnline", "workers_online", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", "EvalReport"], ["checkpointEvals", "checkpoint_evals", { a: "CheckpointEvalResult" }], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
+  "RunEvent": { d: ["type", { "phase": "PhaseEvent", "metric": "MetricEvent", "checkpoint": "CheckpointEvent", "attempt": "AttemptEvent", "warning": "WarningEvent", "log": "LogEvent", "completed": "CompletedEvent" }] },
+  "RunEventsPage": { o: [["runId", "run_id", 0], ["data", "data", { a: "RunEvent" }], ["nextCursor", "next_cursor", 0], ["tailCursor", "tail_cursor", 0]] },
+  "RunInterruption": { o: [["resumeStep", "resume_step", 0]] },
   "Secret": { o: [["workspaceId", "workspace_id", 0], ["allowedHosts", "allowed_hosts", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "SetSecretRequest": { o: [["allowedHosts", "allowed_hosts", 0]] },
   "Source": { o: [["workspaceId", "workspace_id", 0], ["nextSyncAt", "next_sync_at", 0], ["pausedReason", "paused_reason", 0], ["lastError", "last_error", 0], ["lastErrorAt", "last_error_at", 0], ["consecutiveFailures", "consecutive_failures", 0], ["pendingFull", "pending_full", 0], ["lastSyncedAt", "last_synced_at", 0], ["lastSync", "last_sync", "SourceSync"], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
@@ -124,6 +135,7 @@ export const CODEC: CodecTable = {
   "TrajectoryOutput": { o: [["turns", "turns", { a: "ChatMessage" }]] },
   "UploadTicket": { o: [["uploadId", "upload_id", 0], ["expiresAt", "expires_at", 0]] },
   "UsageRecord": { o: [["refId", "ref_id", 0], ["tokensFrom", "tokens_from", 0], ["tokensThrough", "tokens_through", 0], ["costUsd", "cost_usd", 0], ["priceVersion", "price_version", 0], ["idempotencyKey", "idempotency_key", 0], ["createdAt", "created_at", 0]] },
+  "WarningEvent": { o: [["runId", "run_id", 0]] },
 };
 
 export interface ListApiKeysParams {
@@ -264,6 +276,12 @@ export type ListRunCheckpointsResponse = {
   nextCursor: string | null;
 };
 
+export interface ListRunEventsParams {
+  cursor?: string | undefined;
+  /** Page size (default 1000). Values above 5000 are clamped to 5000. */
+  limit?: number | undefined;
+}
+
 export interface ListRunMetricsParams {
   cursor?: string | undefined;
   afterStep?: number | undefined;
@@ -342,6 +360,8 @@ export const LIST_EVALS_LIMIT_MAX = 200;
 export const LIST_IMPORTS_LIMIT_MAX = 200;
 /** Largest `limit` accepted by `listRunCheckpoints` (the server clamps larger values). */
 export const LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listRunEvents` (the server clamps larger values). */
+export const LIST_RUN_EVENTS_LIMIT_MAX = 5000;
 /** Largest `limit` accepted by `listRunMetrics` (the server clamps larger values). */
 export const LIST_RUN_METRICS_LIMIT_MAX = 5000;
 /** Largest `limit` accepted by `listRuns` (the server clamps larger values). */
@@ -702,6 +722,23 @@ export class ApiClient {
   async listRunCheckpoints(id: string, params?: ListRunCheckpointsParams, options?: RequestOptions): Promise<ListRunCheckpointsResponse> {
     const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/checkpoints`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "Checkpoint" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListRunCheckpointsResponse;
+  }
+
+  /**
+   * A run's lifecycle events (phases, metrics, checkpoints, attempts, warnings, logs)
+   *
+   * `GET /v1/runs/{id}/events`
+   */
+  async listRunEvents(id: string, params?: ListRunEventsParams, options?: RequestOptions): Promise<RunEventsPage> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/events`, query: [["cursor", params?.cursor], ["limit", params?.limit]] }, options);
+    return convertKeys(CODEC, "RunEventsPage", data, "decode") as RunEventsPage;
+  }
+
+  /**
+   * A run's lifecycle events (phases, metrics, checkpoints, attempts, warnings, logs) (Server-Sent Events; one connection, resume with `lastEventId`)
+   */
+  listRunEventsStream(id: string, params?: ListRunEventsParams, options?: SSEOptions): AsyncGenerator<ServerSentEvent, void, undefined> {
+    return this.transport.sse({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/events`, query: [["cursor", params?.cursor], ["limit", params?.limit]] }, options);
   }
 
   /**

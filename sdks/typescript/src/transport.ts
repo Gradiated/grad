@@ -228,7 +228,8 @@ export type CodecNode =
   | { a: CodecNode }
   | { m: CodecNode }
   | { o: Array<[string, string, CodecNode]>; x?: CodecNode }
-  | { u: { a?: CodecNode; o?: CodecNode } };
+  | { u: { a?: CodecNode; o?: CodecNode } }
+  | { d: [string, Record<string, CodecNode>] };
 
 export type CodecTable = Record<string, CodecNode>;
 
@@ -272,6 +273,12 @@ export const convertKeys = (
       out[key] = convertKeys(table, node.m, item, direction);
     }
     return out;
+  }
+  if ("d" in node) {
+    if (!isObject(value)) return value;
+    const [tag, variants] = node.d;
+    const variant = variants[String(value[tag])];
+    return variant === undefined ? value : convertKeys(table, variant, value, direction);
   }
   if ("u" in node) {
     if (Array.isArray(value) && node.u.a !== undefined) {

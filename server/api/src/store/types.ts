@@ -188,6 +188,8 @@ export interface JobFields<S extends string = JobStatus> {
   attempt: number;
   /** Attempts that ended without a result since creation or the last resume. */
   failed_attempts: number;
+  /** Preempted attempts since creation or the last resume (a separate cap). */
+  preemptions: number;
   max_attempts: number;
   worker_id: string | null;
   /** The claiming key's identity (`workerKeyOf`), set with worker_id. */
@@ -251,8 +253,10 @@ export interface ClaimInput {
 export interface JobEvent {
   seq: number;
   attempt: number;
+  type: string;
   step: number;
   payload: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface JobRepository {
@@ -305,23 +309,35 @@ export interface JobRepository {
     key: string,
   ): Promise<IdempotentHit | null>;
   /**
-   * Appends an event once per (job, attempt, type, step): a replay returns
-   * the stored event.
+   * Appends an event once per (job, attempt, type, key), key defaulting to
+   * the step: a replay returns the stored event.
    */
   appendEvent(input: {
     jobId: string;
     attempt: number;
     type: string;
     step: number;
+    key?: string | undefined;
     payload: Record<string, unknown>;
   }): Promise<JobEvent>;
-  /** Events of `type` with seq > afterSeq, ascending. */
+  /** Events of these types with seq > afterSeq, ascending. */
   listEvents(
     jobId: string,
-    type: string,
+    types: string | readonly string[],
     afterSeq: number,
     limit: number,
   ): Promise<JobEvent[]>;
+  /** Distinct workers holding an unexpired lease on a job of `kind`. */
+  countLeasedWorkers(kind: JobKind, now: Date): Promise<number>;
+  /**
+   * Claimable queued jobs of `kind` whose latest `phase` event is `queued`
+   * and older than `before` (nobody claimed them in time).
+   */
+  listUnclaimedSince(
+    kind: JobKind,
+    before: Date,
+    limit: number,
+  ): Promise<JobRow[]>;
   /** Retention: deletes up to `limit` events created before `before`. */
   deleteEventsBefore(before: Date, limit: number): Promise<number>;
 }
@@ -402,7 +418,13 @@ export interface RunDomain {
   artifact_id: string | null;
 }
 
-export type RunRecord = JobFields<RunStatus> & RunDomain;
+/** Read-only lifecycle view of a run, from its latest phase and interruption events. */
+export interface RunEventsView {
+  phase_event: JobEvent | null;
+  interruption_event: JobEvent | null;
+}
+
+export type RunRecord = JobFields<RunStatus> & RunDomain & RunEventsView;
 
 export type RunPatch = JobPatch &
   Partial<

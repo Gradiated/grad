@@ -9,12 +9,15 @@ import {
   PlanRunRequestSchema,
   PlanRunResponseSchema,
   ResumeRunRequestSchema,
+  RUN_EVENT_TYPES,
+  RunEventsPageSchema,
   RunSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { notFound } from "../errors.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
+import { toRunEvent } from "../services/run-events.js";
 import { toMetricPoint, toPublicRun } from "../services/runs.js";
 import {
   defaultErrors,
@@ -233,6 +236,108 @@ export const registerRunRoutes = (
               await stream.writeSSE({
                 event: "status",
                 data: JSON.stringify(toPublicRun(current)),
+              });
+            }
+            break;
+          }
+
+          await stream.sleep(pollMs);
+          sincePing += pollMs;
+          if (sincePing >= SSE_PING_MS) {
+            sincePing = 0;
+            await stream.write(": ping\n\n");
+          }
+        }
+      }) as never;
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/runs/{id}/events",
+      operationId: "listRunEvents",
+      summary:
+        "A run's lifecycle events (phases, metrics, checkpoints, attempts, warnings, logs)",
+      description:
+        "Every event is a RunEvent discriminated by `type`; a terminal run's stream ends with one `completed` event. With `Accept: text/event-stream` the response is a Server-Sent Events stream: the SSE event name is the event's `type` and its id is `seq` (none on `completed`); reconnect with `Last-Event-ID` to resume. Otherwise returns a JSON page: `next_cursor` pages through the events written so far, `tail_cursor` polls for later ones.",
+      tags,
+      request: {
+        params: IdParamSchema,
+        query: z.object({
+          cursor: z.string().min(1).max(512).optional(),
+          limit: pageLimitSchema(5000, 1000),
+        }),
+      },
+      responses: {
+        200: {
+          description: "Run events.",
+          content: {
+            "application/json": { schema: RunEventsPageSchema },
+            "text/event-stream": { schema: z.string() },
+          },
+        },
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const workspaceId = workspaceOf(c, "runs:read");
+      const { id } = c.req.valid("param");
+      const query = c.req.valid("query");
+
+      if (!(c.req.header("accept") ?? "").includes("text/event-stream")) {
+        const result = await services.runs.events(workspaceId, id, query);
+
+        return c.json(
+          {
+            run_id: result.run.id,
+            status: result.run.status,
+            data: result.data,
+            next_cursor: result.next_cursor,
+            tail_cursor: result.tail_cursor,
+          },
+          200,
+        );
+      }
+
+      const run = await deps.store.runs.get(workspaceId, id);
+      if (!run) throw notFound("run", id);
+
+      const lastEventId = Number(c.req.header("last-event-id"));
+      let afterSeq =
+        Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : 0;
+      const pollMs = deps.settings.ssePollMs ?? 1000;
+
+      return streamSSE(c, async (stream) => {
+        let sincePing = 0;
+        while (!stream.aborted) {
+          const rows = await deps.store.jobs.listEvents(
+            id,
+            RUN_EVENT_TYPES,
+            afterSeq,
+            SSE_BATCH,
+          );
+          for (const row of rows) {
+            afterSeq = row.seq;
+            const event = toRunEvent(id, row);
+            if (!event) continue;
+            await stream.writeSSE({
+              event: event.type,
+              id: String(event.seq),
+              data: JSON.stringify(event),
+            });
+          }
+          if (rows.length === SSE_BATCH) continue;
+
+          const current = await deps.store.runs.get(workspaceId, id);
+          const done = current
+            ? await services.runs.completedEvent(current, afterSeq)
+            : null;
+          if (!current || done) {
+            if (done) {
+              await stream.writeSSE({
+                event: done.type,
+                data: JSON.stringify(done),
               });
             }
             break;

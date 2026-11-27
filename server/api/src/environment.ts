@@ -50,6 +50,12 @@ const EnvironmentSchema = z.object({
   GRAD_JUDGE_MODELS_JSON: optionalString,
   BLOB_SIGNING_SECRET: optionalString,
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
+  /** Preempted attempts (SIGTERM, a cloud termination notice) a job survives; separate from MAX_ATTEMPTS. */
+  MAX_PREEMPTIONS: z.coerce.number().int().min(1).max(1000).default(20),
+  /** Seconds a queued run waits for a claim before it is waiting_for_compute. */
+  WAITING_FOR_COMPUTE_SECONDS: z.coerce.number().int().min(1).default(30),
+  /** Workers scale from zero (KEDA): say "a GPU worker is starting". */
+  GRAD_WORKER_AUTOSCALING: booleanFlag("false"),
   MIGRATE_ON_BOOT: booleanFlag("true"),
   /** Bill a running attempt every this many tokens... */
   USAGE_FLUSH_TOKENS: z.coerce.number().int().min(1).default(1_000_000),

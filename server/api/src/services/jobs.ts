@@ -1,6 +1,7 @@
 import { claimableKinds, type AuthPrincipal } from "../adapters.js";
 import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import type { RecipeKind, TrainerJob } from "../contracts.js";
+import type { InterruptionReason } from "../contracts/runs.js";
 import type { AppDependencies } from "../deps.js";
 import { ApiError, conflict, notFound } from "../errors.js";
 import {
@@ -27,13 +28,22 @@ import type {
 
 export type StopReason = "cancelled" | "budget" | "insufficient_balance" | null;
 
+/** What a claiming worker says about itself (shown on the run, never its id). */
+export interface ClaimWorker {
+  gpu: { name: string; memory_gb: number } | null;
+}
+
 export interface JobKindHandler {
   /**
    * The worker's job for a fresh claim (`renewed` false) or a claim retried
    * after a lost response. Returns null when the handler closed the job
    * instead (budget exhausted, unbuildable): the queue claims the next one.
    */
-  onClaim?(job: JobRow, renewed: boolean): Promise<TrainerJob | null>;
+  onClaim?(
+    job: JobRow,
+    renewed: boolean,
+    worker: ClaimWorker,
+  ): Promise<TrainerJob | null>;
   /** Heartbeat stop signal. */
   stopReason?(job: JobRow): Promise<StopReason>;
   /**
@@ -103,16 +113,44 @@ export const fenceOf = (
   status: statuses,
 });
 
+/** Default cap on preempted attempts (MAX_PREEMPTIONS). */
+export const DEFAULT_MAX_PREEMPTIONS = 20;
+
 /**
  * The one attempt rule: an attempt that ends without a result (lease
- * expired, or abandoned by a preempted worker) counts, and the job fails once
- * max_attempts of them happened since creation or the last resume.
+ * expired, a worker error) counts, and the job fails once max_attempts of
+ * them happened since creation or the last resume. Preemptions (a worker
+ * told to stop by its platform: SIGTERM, a cloud termination notice) are not the job's
+ * fault and lose at most the grace period's work, so they have their own,
+ * generous cap instead.
  */
 export const requeuePatch = (
-  job: Pick<JobRow, "failed_attempts" | "max_attempts" | "attempt">,
+  job: Pick<
+    JobRow,
+    "failed_attempts" | "max_attempts" | "attempt" | "preemptions"
+  >,
   what: string,
   now: string,
+  preemption?: { maxPreemptions: number },
 ): JobPatch => {
+  if (preemption) {
+    const preemptions = job.preemptions + 1;
+
+    return preemptions >= preemption.maxPreemptions
+      ? {
+          ...RELEASE,
+          status: "failed",
+          preemptions,
+          finished_at: now,
+          error: `${what}; its GPU was reclaimed ${preemptions} time(s) (limit ${preemption.maxPreemptions}).`,
+        }
+      : {
+          ...RELEASE,
+          status: "queued",
+          preemptions,
+          error: `${what}; requeued.`,
+        };
+  }
   const failedAttempts = job.failed_attempts + 1;
 
   return failedAttempts >= job.max_attempts
@@ -146,7 +184,7 @@ export const observeClaim = (job: JobRow, now: Date): void => {
 /** Counts an attempt that ended without a result. */
 export const observeInterruption = (
   job: Pick<JobRow, "kind" | "origin">,
-  reason: "lease_lost" | "preempted" | "worker_error" | "oom",
+  reason: InterruptionReason,
 ): void => {
   metrics.requeues.inc({ kind: metricKind(job), reason });
 };
@@ -162,6 +200,7 @@ export interface JobQueue {
       leaseSeconds: number;
       kinds: readonly JobKind[];
       recipes?: readonly RecipeKind[] | undefined;
+      gpu?: ClaimWorker["gpu"] | undefined;
     },
   ): Promise<TrainerJob | null>;
   /** In-process claim (the eval executor): the raw job row. */
@@ -251,7 +290,7 @@ export const createJobQueue = (
   };
 
   /** A fresh claim, in a span of the trace that created the job. */
-  const build = (job: JobRow) =>
+  const build = (job: JobRow, worker: ClaimWorker) =>
     withSpan(
       "grad.job.claim",
       {
@@ -261,7 +300,7 @@ export const createJobQueue = (
       },
       async () => {
         observeClaim(job, clock.now());
-        const built = await handlers[job.kind].onClaim?.(job, false);
+        const built = await handlers[job.kind].onClaim?.(job, false, worker);
 
         return built ? { ...built, traceparent: job.traceparent } : null;
       },
@@ -282,6 +321,7 @@ export const createJobQueue = (
   return {
     claim: async (principal, input) => {
       await expireLeases(clock.now());
+      const worker: ClaimWorker = { gpu: input.gpu ?? null };
 
       // A worker retrying a claim whose response was lost gets its job back:
       // only under the same key, kinds and workspace scope as a fresh claim.
@@ -295,7 +335,11 @@ export const createJobQueue = (
       });
       const renewed = held && (await renew(held, input.leaseSeconds));
       if (renewed) {
-        const job = await handlers[renewed.kind].onClaim?.(renewed, true);
+        const job = await handlers[renewed.kind].onClaim?.(
+          renewed,
+          true,
+          worker,
+        );
         if (job) return { ...job, traceparent: renewed.traceparent };
       }
 
@@ -310,7 +354,7 @@ export const createJobQueue = (
           workspaceId,
         });
         if (!job) return null;
-        const built = await build(job);
+        const built = await build(job, worker);
         if (built) return built;
       }
     },

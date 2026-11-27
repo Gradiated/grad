@@ -1,0 +1,99 @@
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":1,"attempt":1,"timestamp":"2026-11-27T12:00:00.000Z","phase":"queued","step":0,"workers_online":0,"autoscaling":false,"gpu":null}
+id: 1
+
+event: warning
+data: {"type":"warning","run_id":"run_0f2246b453f78a17b21ac086","seq":2,"attempt":1,"timestamp":"2026-11-27T12:00:00.000Z","step":null,"message":"5 steps is below the 100 we recommend; use batch_size=1 or more epochs/data."}
+id: 2
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":3,"attempt":1,"timestamp":"2026-11-27T12:00:45.000Z","phase":"waiting_for_compute","step":0,"workers_online":0,"autoscaling":false,"gpu":null}
+id: 3
+
+event: attempt
+data: {"type":"attempt","run_id":"run_0f2246b453f78a17b21ac086","seq":4,"attempt":1,"timestamp":"2026-11-27T12:00:45.000Z","event":"started","reason":null,"step":null,"resume_step":null,"max_attempts":3,"message":"attempt 1 started"}
+id: 4
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":5,"attempt":1,"timestamp":"2026-11-27T12:00:45.000Z","phase":"starting","step":0,"workers_online":null,"autoscaling":null,"gpu":{"name":"NVIDIA H100 80GB HBM3","memory_gb":79.6}}
+id: 5
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":6,"attempt":1,"timestamp":"2026-11-27T12:00:47.000Z","phase":"loading_model","step":0,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 6
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":7,"attempt":1,"timestamp":"2026-11-27T12:01:07.000Z","phase":"training","step":0,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 7
+
+event: metric
+data: {"type":"metric","run_id":"run_0f2246b453f78a17b21ac086","seq":8,"attempt":1,"timestamp":"2026-11-27T12:01:08.000Z","step":1,"metric":{"lr":0.0002,"loss":0.5,"step":1,"tokens":120,"cost_usd":0.00012,"eval_loss":null,"timestamp":"2026-11-27T12:01:08.000Z","seq":8,"attempt":1}}
+id: 8
+
+event: metric
+data: {"type":"metric","run_id":"run_0f2246b453f78a17b21ac086","seq":9,"attempt":1,"timestamp":"2026-11-27T12:01:09.000Z","step":2,"metric":{"lr":0.00019,"loss":0.3333333333333333,"step":2,"tokens":240,"cost_usd":0.00024,"eval_loss":0.52,"timestamp":"2026-11-27T12:01:09.000Z","eval_metrics":{"eval_loss":0.52},"seq":9,"attempt":1}}
+id: 9
+
+event: log
+data: {"type":"log","run_id":"run_0f2246b453f78a17b21ac086","seq":10,"attempt":1,"timestamp":"2026-11-27T12:01:09.000Z","step":2,"message":"The worker is shutting down: saving a checkpoint at step 2 before handing the run back"}
+id: 10
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":11,"attempt":1,"timestamp":"2026-11-27T12:01:09.000Z","phase":"checkpointing","step":2,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 11
+
+event: checkpoint
+data: {"type":"checkpoint","run_id":"run_0f2246b453f78a17b21ac086","seq":12,"attempt":1,"timestamp":"2026-11-27T12:01:09.000Z","step":2,"checkpoint_id":"ckpt_15220c34be70af6cffa4aa67","eval_score":0.5,"format":null}
+id: 12
+
+event: attempt
+data: {"type":"attempt","run_id":"run_0f2246b453f78a17b21ac086","seq":13,"attempt":1,"timestamp":"2026-11-27T12:01:09.000Z","event":"interrupted","reason":"compute_reclaimed","step":2,"resume_step":2,"max_attempts":3,"message":"attempt 1 interrupted at step 2: the GPU was reclaimed; resuming from step 2 on a new worker"}
+id: 13
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":14,"attempt":2,"timestamp":"2026-11-27T12:01:09.000Z","phase":"queued","step":2,"workers_online":0,"autoscaling":false,"gpu":null}
+id: 14
+
+event: attempt
+data: {"type":"attempt","run_id":"run_0f2246b453f78a17b21ac086","seq":15,"attempt":2,"timestamp":"2026-11-27T12:01:09.000Z","event":"started","reason":null,"step":null,"resume_step":2,"max_attempts":3,"message":"attempt 2 started, resuming from step 2"}
+id: 15
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":16,"attempt":2,"timestamp":"2026-11-27T12:01:09.000Z","phase":"starting","step":2,"workers_online":null,"autoscaling":null,"gpu":{"name":"NVIDIA H100 80GB HBM3","memory_gb":79.6}}
+id: 16
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":17,"attempt":2,"timestamp":"2026-11-27T12:01:12.000Z","phase":"loading_model","step":2,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 17
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":18,"attempt":2,"timestamp":"2026-11-27T12:01:12.000Z","phase":"training","step":2,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 18
+
+event: warning
+data: {"type":"warning","run_id":"run_0f2246b453f78a17b21ac086","seq":19,"attempt":2,"timestamp":"2026-11-27T12:01:12.000Z","step":2,"message":"wandb logger disabled: WANDB_API_KEY is not set"}
+id: 19
+
+event: metric
+data: {"type":"metric","run_id":"run_0f2246b453f78a17b21ac086","seq":20,"attempt":2,"timestamp":"2026-11-27T12:01:13.000Z","step":3,"metric":{"lr":0.0001,"loss":0.25,"step":3,"tokens":360,"cost_usd":0.00036,"timestamp":"2026-11-27T12:01:13.000Z","seq":20,"attempt":2}}
+id: 20
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":21,"attempt":2,"timestamp":"2026-11-27T12:01:13.000Z","phase":"evaluating","step":3,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 21
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":22,"attempt":2,"timestamp":"2026-11-27T12:01:13.000Z","phase":"uploading","step":3,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 22
+
+event: phase
+data: {"type":"phase","run_id":"run_0f2246b453f78a17b21ac086","seq":23,"attempt":2,"timestamp":"2026-11-27T12:01:13.000Z","phase":"completing","step":3,"workers_online":null,"autoscaling":null,"gpu":null}
+id: 23
+
+event: warning
+data: {"type":"warning","run_id":"run_0f2246b453f78a17b21ac086","seq":24,"attempt":2,"timestamp":"2026-11-27T12:01:13.000Z","step":3,"message":"Only 4 held-out records; eval metrics are noisy."}
+id: 24
+
+event: completed
+data: {"type":"completed","run_id":"run_0f2246b453f78a17b21ac086","seq":24,"attempt":2,"timestamp":"2026-11-27T12:01:13.000Z","status":"completed","run":{"id":"run_0f2246b453f78a17b21ac086","workspace_id":"ws_a","name":"support-sft","dataset_id":"ds_4f364d373177eff4666da051","dataset_name":"support","dataset_version":1,"recipe_kind":"sft","status":"completed","resolved_config":{"lr":0.000177,"name":"support-sft","model":"test/tiny-qwen3","split":{"seed":42,"strategy":"by_session","eval_records":2,"eval_fraction":0.1,"train_records":18},"epochs":1,"select":"best","warmup":0.03,"adapter":{"kind":"lora","rank":32,"alpha":32,"merge_on_export":false},"dataset":"support","schedule":"linear","thinking":"auto","train_on":"last","lr_source":"auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling","optimizer":{"kind":"adamw","betas":[0.9,0.95],"grad_clip":1,"weight_decay":0},"reduction":"per_example","batch_size":4,"recipe_kind":"sft","rule_version":"auto@2","base_artifact":null,"label_eval_id":null,"recipe_params":{},"dataset_version":1,"eval_every_steps":1,"preserve_thinking":false,"template_revision":"qwen3@3","checkpoint_ttl_days":30,"checkpoint_every_steps":1},"max_cost_usd":null,"price_per_million_tokens":1,"tokens_processed":360,"cost_usd":0.00036,"current_step":3,"total_steps":5,"attempt":2,"max_attempts":3,"phase":"completing","phase_since":"2026-11-27T12:01:13.000Z","last_interruption":{"attempt":1,"reason":"compute_reclaimed","step":2,"resume_step":2,"at":"2026-11-27T12:01:09.000Z","message":"attempt 1 interrupted at step 2: the GPU was reclaimed; resuming from step 2 on a new worker"},"workers_online":null,"autoscaling":null,"latest_metric":{"lr":0.0001,"seq":20,"loss":0.25,"step":3,"tokens":360,"attempt":2,"cost_usd":0.00036,"timestamp":"2026-11-27T12:01:13.000Z"},"eval_report":{"warnings":["Only 4 held-out records; eval metrics are noisy."],"best_step":3,"eval_loss":0.48,"final_step":3,"metric_name":"eval_loss","eval_records":4,"selected_step":3,"train_records":16},"checkpoint_evals":[],"artifact_id":"support-sft@2026-11-27-1","error":null,"created_at":"2026-11-27T12:00:00.000Z","updated_at":"2026-11-27T12:01:13.000Z","finished_at":"2026-11-27T12:01:13.000Z"}}
+

@@ -59,6 +59,8 @@ CREATE TABLE grad_jobs (
   attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
   -- Attempts that ended without a result since creation or the last resume.
   failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+  -- Preempted attempts (SIGTERM, spot notice) since then: a separate cap.
+  preemptions INTEGER NOT NULL DEFAULT 0 CHECK (preemptions >= 0),
   max_attempts INTEGER NOT NULL CHECK (max_attempts >= 1),
   worker_id TEXT,
   -- The key that claimed the open attempt (workerKeyOf): a worker id names a
@@ -106,9 +108,12 @@ CREATE TABLE grad_job_events (
   attempt INTEGER NOT NULL,
   type TEXT NOT NULL,
   step INTEGER NOT NULL,
+  -- The event's natural key within (job, attempt, type): the step for metrics
+  -- and checkpoints, "<phase>@<step>" for phases, the sender's ordinal for logs.
+  key TEXT NOT NULL,
   payload JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
-  UNIQUE (job_id, attempt, type, step)
+  UNIQUE (job_id, attempt, type, key)
 );
 
 CREATE INDEX grad_job_events_job_idx ON grad_job_events (job_id, type, seq);

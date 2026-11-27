@@ -49,6 +49,23 @@ export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | 
 
 export const ArtifactFormatValues = ["peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference"] as const;
 
+export interface AttemptEvent {
+  type: "attempt";
+  runId: string;
+  /** Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq. */
+  seq: number;
+  attempt: number;
+  timestamp: string;
+  /** started: a worker claimed attempt N (resume_step: the checkpoint it resumes from). interrupted: attempt N ended without a result at `step` (resume_step: where the next attempt resumes). gave_up: no attempts left; the run failed. */
+  event: "started" | "interrupted" | "gave_up";
+  reason: InterruptionReason | null;
+  step: number | null;
+  /** Checkpoint step to resume from; null starts from scratch. */
+  resumeStep: number | null;
+  maxAttempts: number;
+  message: string;
+}
+
 /** Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference). */
 export interface BaseArtifact {
   id: string;
@@ -96,6 +113,30 @@ export interface CheckpointEvalResult {
   score: number | null;
   costUsd: number;
   error: string | null;
+}
+
+export interface CheckpointEvent {
+  type: "checkpoint";
+  runId: string;
+  /** Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq. */
+  seq: number;
+  attempt: number;
+  timestamp: string;
+  step: number;
+  checkpointId: string;
+  evalScore: number | null;
+  format: ArtifactFormat | null;
+}
+
+export interface CompletedEvent {
+  type: "completed";
+  runId: string;
+  /** Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq. */
+  seq: number;
+  attempt: number;
+  timestamp: string;
+  status: RunStatus;
+  run: Run;
 }
 
 export interface CreateApiKeyRequest {
@@ -481,6 +522,12 @@ export interface FilterDatasetRequest {
   name?: string | undefined;
 }
 
+/** starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host. */
+export interface GpuInfo {
+  name: string;
+  memoryGb: number;
+}
+
 export interface HfColumnMapping {
   messages?: string | undefined;
   prompt?: string | undefined;
@@ -538,6 +585,22 @@ export type ImportStatus = "queued" | "running" | "completed" | "failed";
 
 export const ImportStatusValues = ["queued", "running", "completed", "failed"] as const;
 
+/** Why an attempt ended without a result: lease_lost (the worker was lost: it stopped heartbeating after a crash, kill or network failure), compute_reclaimed (the GPU was reclaimed; the worker saved a checkpoint when it had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back), oom (CUDA out of memory). */
+export type InterruptionReason = "lease_lost" | "compute_reclaimed" | "worker_error" | "oom";
+
+export const InterruptionReasonValues = ["lease_lost", "compute_reclaimed", "worker_error", "oom"] as const;
+
+export interface LogEvent {
+  type: "log";
+  runId: string;
+  /** Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq. */
+  seq: number;
+  attempt: number;
+  timestamp: string;
+  step: number | null;
+  message: string;
+}
+
 export type LoggerSpec = {
   kind: "wandb";
   project: string;
@@ -572,6 +635,17 @@ export type LossSpec = {
   topK?: number | undefined;
 };
 
+export interface MetricEvent {
+  type: "metric";
+  runId: string;
+  /** Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq. */
+  seq: number;
+  attempt: number;
+  timestamp: string;
+  step: number;
+  metric: MetricPoint | null;
+}
+
 export interface MetricPoint {
   seq: number;
   attempt: number;
@@ -605,6 +679,23 @@ export interface OptimizerSpec {
   weightDecay?: number | undefined;
   /** Max global gradient norm; 0 disables clipping. */
   gradClip?: number | undefined;
+}
+
+export interface PhaseEvent {
+  type: "phase";
+  runId: string;
+  /** Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq. */
+  seq: number;
+  attempt: number;
+  timestamp: string;
+  phase: RunPhase;
+  /** Training step when the phase began (0 before training; the resume step on a resumed attempt). */
+  step: number;
+  /** queued and waiting_for_compute: workers of this job kind holding a lease (all busy; an idle worker would have claimed the run). */
+  workersOnline: number | null;
+  /** queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than missing. */
+  autoscaling: boolean | null;
+  gpu: GpuInfo | null;
 }
 
 export interface PlanEvalRequest {
@@ -918,8 +1009,17 @@ export interface Run {
   costUsd: number;
   currentStep: number;
   totalSteps: number;
+  /** Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed). */
   attempt: number;
+  /** The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it. */
   maxAttempts: number;
+  phase: ("queued" | "waiting_for_compute" | "starting" | "loading_model" | "training" | "evaluating" | "checkpointing" | "uploading" | "completing") | null;
+  phaseSince: string | null;
+  lastInterruption: RunInterruption | null;
+  /** While queued: workers of this kind holding a lease (all busy). Null otherwise. */
+  workersOnline: number | null;
+  /** While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise. */
+  autoscaling: boolean | null;
   latestMetric: MetricPoint | null;
   evalReport: EvalReport | null;
   /** recipe.evals results, one per finished eval: a checkpoint (step) on a dataset. */
@@ -930,6 +1030,33 @@ export interface Run {
   updatedAt: string;
   finishedAt: string | null;
 }
+
+/** One event of a run's lifecycle, discriminated by `type`. `completed` is always last. */
+export type RunEvent = PhaseEvent | MetricEvent | CheckpointEvent | AttemptEvent | WarningEvent | LogEvent | CompletedEvent;
+
+export interface RunEventsPage {
+  runId: string;
+  status: RunStatus;
+  data: Array<RunEvent>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
+  nextCursor: string | null;
+  /** Cursor after the newest event returned so far; pass it back as `cursor` to poll for later events. */
+  tailCursor: string;
+}
+
+export interface RunInterruption {
+  attempt: number;
+  reason: InterruptionReason;
+  step: number;
+  resumeStep: number | null;
+  at: string;
+  message: string;
+}
+
+/** Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat. */
+export type RunPhase = "queued" | "waiting_for_compute" | "starting" | "loading_model" | "training" | "evaluating" | "checkpointing" | "uploading" | "completing";
+
+export const RunPhaseValues = ["queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing"] as const;
 
 /** stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints. */
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopped_budget" | "stopped_balance";
@@ -1085,4 +1212,15 @@ export interface UsageRecord {
   priceVersion: string;
   idempotencyKey: string;
   createdAt: string;
+}
+
+export interface WarningEvent {
+  type: "warning";
+  runId: string;
+  /** Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq. */
+  seq: number;
+  attempt: number;
+  timestamp: string;
+  step: number | null;
+  message: string;
 }

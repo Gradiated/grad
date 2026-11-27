@@ -2084,9 +2084,45 @@ components:
         attempt:
           type: integer
           minimum: 0
+          description: Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed).
         max_attempts:
           type: integer
           minimum: 1
+          description: The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose
+            GPU was reclaimed don't count toward it.
+        phase:
+          type:
+            - string
+            - "null"
+          enum:
+            - queued
+            - waiting_for_compute
+            - starting
+            - loading_model
+            - training
+            - evaluating
+            - checkpointing
+            - uploading
+            - completing
+            - null
+        phase_since:
+          type:
+            - string
+            - "null"
+          format: date-time
+        last_interruption:
+          $ref: "#/components/schemas/RunInterruption"
+        workers_online:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          description: "While queued: workers of this kind holding a lease (all busy). Null otherwise."
+        autoscaling:
+          type:
+            - boolean
+            - "null"
+          description: "While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise."
         latest_metric:
           $ref: "#/components/schemas/MetricPoint"
         eval_report:
@@ -2133,6 +2169,11 @@ components:
         - total_steps
         - attempt
         - max_attempts
+        - phase
+        - phase_since
+        - last_interruption
+        - workers_online
+        - autoscaling
         - latest_metric
         - eval_report
         - checkpoint_evals
@@ -2153,6 +2194,47 @@ components:
         - stopped_balance
       description: "stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the
         workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints."
+    RunInterruption:
+      type:
+        - object
+        - "null"
+      properties:
+        attempt:
+          type: integer
+          minimum: 1
+        reason:
+          $ref: "#/components/schemas/InterruptionReason"
+        step:
+          type: integer
+          minimum: 0
+        resume_step:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        at:
+          type: string
+          format: date-time
+        message:
+          type: string
+      required:
+        - attempt
+        - reason
+        - step
+        - resume_step
+        - at
+        - message
+    InterruptionReason:
+      type: string
+      enum:
+        - lease_lost
+        - compute_reclaimed
+        - worker_error
+        - oom
+      description: "Why an attempt ended without a result: lease_lost (the worker was lost: it stopped heartbeating after a
+        crash, kill or network failure), compute_reclaimed (the GPU was reclaimed; the worker saved a checkpoint when it
+        had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back),
+        oom (CUDA out of memory)."
     MetricPoint:
       type:
         - object
@@ -2650,6 +2732,400 @@ components:
         - data
         - next_cursor
         - tail_cursor
+    RunEventsPage:
+      type: object
+      properties:
+        run_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunEvent"
+        next_cursor:
+          type:
+            - string
+            - "null"
+          description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+        tail_cursor:
+          type: string
+          description: Cursor after the newest event returned so far; pass it back as `cursor` to poll for later events.
+      required:
+        - run_id
+        - status
+        - data
+        - next_cursor
+        - tail_cursor
+    RunEvent:
+      oneOf:
+        - $ref: "#/components/schemas/PhaseEvent"
+        - $ref: "#/components/schemas/MetricEvent"
+        - $ref: "#/components/schemas/CheckpointEvent"
+        - $ref: "#/components/schemas/AttemptEvent"
+        - $ref: "#/components/schemas/WarningEvent"
+        - $ref: "#/components/schemas/LogEvent"
+        - $ref: "#/components/schemas/CompletedEvent"
+      discriminator:
+        propertyName: type
+        mapping:
+          phase: "#/components/schemas/PhaseEvent"
+          metric: "#/components/schemas/MetricEvent"
+          checkpoint: "#/components/schemas/CheckpointEvent"
+          attempt: "#/components/schemas/AttemptEvent"
+          warning: "#/components/schemas/WarningEvent"
+          log: "#/components/schemas/LogEvent"
+          completed: "#/components/schemas/CompletedEvent"
+      description: One event of a run's lifecycle, discriminated by `type`. `completed` is always last.
+    PhaseEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - phase
+        run_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume).
+            `completed` repeats the last stored seq.
+        attempt:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+          format: date-time
+        phase:
+          $ref: "#/components/schemas/RunPhase"
+        step:
+          type: integer
+          minimum: 0
+          description: Training step when the phase began (0 before training; the resume step on a resumed attempt).
+        workers_online:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          description: "queued and waiting_for_compute: workers of this job kind holding a lease (all busy; an idle worker would
+            have claimed the run)."
+        autoscaling:
+          type:
+            - boolean
+            - "null"
+          description: "queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than
+            missing."
+        gpu:
+          $ref: "#/components/schemas/GpuInfo"
+      required:
+        - type
+        - run_id
+        - seq
+        - attempt
+        - timestamp
+        - phase
+        - step
+        - workers_online
+        - autoscaling
+        - gpu
+    RunPhase:
+      type: string
+      enum:
+        - queued
+        - waiting_for_compute
+        - starting
+        - loading_model
+        - training
+        - evaluating
+        - checkpointing
+        - uploading
+        - completing
+      description: "Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is
+        authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the
+        server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the
+        worker reports the rest. training, evaluating and checkpointing repeat."
+    GpuInfo:
+      type:
+        - object
+        - "null"
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        memory_gb:
+          type: number
+          minimum: 0
+          maximum: 100000
+      required:
+        - name
+        - memory_gb
+      description: "starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or
+        host."
+    MetricEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - metric
+        run_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume).
+            `completed` repeats the last stored seq.
+        attempt:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+          format: date-time
+        step:
+          type: integer
+          minimum: 0
+        metric:
+          $ref: "#/components/schemas/MetricPoint"
+      required:
+        - type
+        - run_id
+        - seq
+        - attempt
+        - timestamp
+        - step
+        - metric
+    CheckpointEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - checkpoint
+        run_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume).
+            `completed` repeats the last stored seq.
+        attempt:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+          format: date-time
+        step:
+          type: integer
+          minimum: 0
+        checkpoint_id:
+          type: string
+          minLength: 1
+        eval_score:
+          type:
+            - number
+            - "null"
+        format:
+          $ref: "#/components/schemas/ArtifactFormat"
+      required:
+        - type
+        - run_id
+        - seq
+        - attempt
+        - timestamp
+        - step
+        - checkpoint_id
+        - eval_score
+        - format
+    ArtifactFormat:
+      type:
+        - string
+        - "null"
+      enum:
+        - peft_lora
+        - merged_safetensors
+        - prefix_kv
+        - cartridge
+        - encoder_safetensors
+        - router_bundle
+        - decision_bundle
+        - reward_bundle
+        - reference
+        - null
+      description: Artifact format when this checkpoint is exportable (promotable); null for training state only.
+    AttemptEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - attempt
+        run_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume).
+            `completed` repeats the last stored seq.
+        attempt:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+          format: date-time
+        event:
+          type: string
+          enum:
+            - started
+            - interrupted
+            - gave_up
+          description: "started: a worker claimed attempt N (resume_step: the checkpoint it resumes from). interrupted: attempt N
+            ended without a result at `step` (resume_step: where the next attempt resumes). gave_up: no attempts left;
+            the run failed."
+        reason:
+          allOf:
+            - $ref: "#/components/schemas/InterruptionReason"
+            - type:
+                - string
+                - "null"
+        step:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        resume_step:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          description: Checkpoint step to resume from; null starts from scratch.
+        max_attempts:
+          type: integer
+          minimum: 1
+        message:
+          type: string
+      required:
+        - type
+        - run_id
+        - seq
+        - attempt
+        - timestamp
+        - event
+        - reason
+        - step
+        - resume_step
+        - max_attempts
+        - message
+    WarningEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - warning
+        run_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume).
+            `completed` repeats the last stored seq.
+        attempt:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+          format: date-time
+        step:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        message:
+          type: string
+      required:
+        - type
+        - run_id
+        - seq
+        - attempt
+        - timestamp
+        - step
+        - message
+    LogEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - log
+        run_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume).
+            `completed` repeats the last stored seq.
+        attempt:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+          format: date-time
+        step:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        message:
+          type: string
+      required:
+        - type
+        - run_id
+        - seq
+        - attempt
+        - timestamp
+        - step
+        - message
+    CompletedEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - completed
+        run_id:
+          type: string
+          minLength: 1
+        seq:
+          type: integer
+          minimum: 0
+          description: Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume).
+            `completed` repeats the last stored seq.
+        attempt:
+          type: integer
+          minimum: 1
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        run:
+          $ref: "#/components/schemas/Run"
+      required:
+        - type
+        - run_id
+        - seq
+        - attempt
+        - timestamp
+        - status
+        - run
     ResumeRunRequest:
       type: object
       properties:
@@ -2716,22 +3192,6 @@ components:
         - final
         - expires_at
         - created_at
-    ArtifactFormat:
-      type:
-        - string
-        - "null"
-      enum:
-        - peft_lora
-        - merged_safetensors
-        - prefix_kv
-        - cartridge
-        - encoder_safetensors
-        - router_bundle
-        - decision_bundle
-        - reward_bundle
-        - reference
-        - null
-      description: Artifact format when this checkpoint is exportable (promotable); null for training state only.
     Artifact:
       type: object
       properties:
@@ -3020,6 +3480,23 @@ components:
             $ref: "#/components/schemas/RecipeKind"
           minItems: 1
           description: Recipe kinds this worker can run; train jobs for other recipes are left queued.
+        gpu:
+          type:
+            - object
+            - "null"
+          properties:
+            name:
+              type: string
+              minLength: 1
+              maxLength: 200
+            memory_gb:
+              type: number
+              minimum: 0
+              maximum: 100000
+          required:
+            - name
+            - memory_gb
+          description: The worker's GPU, shown on the run's `starting` phase (never the worker id or host).
       required:
         - worker_id
     TrainerHeartbeatResponse:
@@ -3089,6 +3566,76 @@ components:
           description: Mean GPU utilisation since the last heartbeat, 0 to 1.
       description: A few live numbers the server aggregates into grad_worker_* gauges, so workers that can't be scraped still
         show up.
+    ReportTrainerEventRequest:
+      oneOf:
+        - type: object
+          properties:
+            worker_id:
+              type: string
+              minLength: 1
+              maxLength: 160
+              pattern: ^[A-Za-z0-9._:-]+$
+            attempt:
+              type: integer
+              minimum: 1
+            type:
+              type: string
+              enum:
+                - phase
+            phase:
+              type: string
+              enum:
+                - loading_model
+                - training
+                - evaluating
+                - checkpointing
+                - uploading
+                - completing
+            step:
+              type: integer
+              minimum: 0
+              default: 0
+              description: Training step when the phase began. Stored once per (attempt, phase, step), so a retry is safe.
+          required:
+            - worker_id
+            - attempt
+            - type
+            - phase
+        - type: object
+          properties:
+            worker_id:
+              type: string
+              minLength: 1
+              maxLength: 160
+              pattern: ^[A-Za-z0-9._:-]+$
+            attempt:
+              type: integer
+              minimum: 1
+            type:
+              type: string
+              enum:
+                - log
+                - warning
+            seq:
+              type: integer
+              minimum: 0
+              description: "This attempt's message number (0, 1, 2, ...): stored once per (attempt, seq)."
+            message:
+              type: string
+              minLength: 1
+              maxLength: 2000
+            step:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+              default: null
+          required:
+            - worker_id
+            - attempt
+            - type
+            - seq
+            - message
     ReportTrainerProgressResponse:
       type: object
       properties:
@@ -3348,7 +3895,16 @@ components:
             - failed
             - cancelled
             - abandoned
-          description: "`abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure."
+          description: "`abandoned` hands the attempt back (shutdown, reclaimed compute, a worker error): the job requeues at once
+            and resumes from its latest checkpoint."
+        reason:
+          type: string
+          enum:
+            - compute_reclaimed
+            - worker_error
+            - oom
+          description: "Abandoned attempts: compute_reclaimed (SIGTERM or a cloud termination notice; counts toward the server's
+            separate MAX_PREEMPTIONS cap), worker_error (default) or oom (both count toward max_attempts)."
         upload_id:
           type: string
           minLength: 1
@@ -5993,6 +6549,98 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /v1/runs/{id}/events:
+    get:
+      operationId: listRunEvents
+      summary: A run's lifecycle events (phases, metrics, checkpoints, attempts, warnings, logs)
+      description: "Every event is a RunEvent discriminated by `type`; a terminal run's stream ends with one `completed`
+        event. With `Accept: text/event-stream` the response is a Server-Sent Events stream: the SSE event name is the
+        event's `type` and its id is `seq` (none on `completed`); reconnect with `Last-Event-ID` to resume. Otherwise
+        returns a JSON page: `next_cursor` pages through the events written so far, `tail_cursor` polls for later ones."
+      tags: *a2
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+            description: Page size (default 1000). Values above 5000 are clamped to 5000.
+          required: false
+          description: Page size (default 1000). Values above 5000 are clamped to 5000.
+          name: limit
+          in: query
+      responses:
+        "200":
+          description: Run events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunEventsPage"
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/runs/{id}/cancel:
     post:
       operationId: cancelRun
@@ -6407,6 +7055,77 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TrainerHeartbeatResponse"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/events:
+    post:
+      operationId: reportTrainerEvent
+      summary: Report a train job's phase, or a log or warning line
+      tags: *a4
+      x-internal: true
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportTrainerEventRequest"
+      responses:
+        "204":
+          description: Stored (a replay is stored once).
         "400":
           description: Malformed request.
           content:

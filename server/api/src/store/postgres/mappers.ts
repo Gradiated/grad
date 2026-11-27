@@ -12,8 +12,10 @@ import type {
   EvalDomain,
   EvalOutputRow,
   ImportPayload,
+  JobEvent,
   JobFields,
   RunDomain,
+  RunEventsView,
 } from "../types.js";
 import type { Row } from "./db.js";
 
@@ -67,6 +69,7 @@ export const toJob = <S extends string>(r: Row): JobFields<S> => ({
   status: s(r.status) as S,
   attempt: n(r.attempt),
   failed_attempts: n(r.failed_attempts),
+  preemptions: n(r.preemptions),
   max_attempts: n(r.max_attempts),
   worker_id: sn(r.worker_id),
   worker_key: sn(r.worker_key),
@@ -228,3 +231,29 @@ export const toUsage = (r: Row): UsageRecord => ({
   idempotency_key: s(r.idempotency_key),
   created_at: iso(r.created_at),
 });
+
+export const toEvent = (r: Row): JobEvent => ({
+  seq: n(r.seq),
+  attempt: n(r.attempt),
+  type: s(r.type),
+  step: n(r.step),
+  payload: j<Record<string, unknown>>(r.payload, {}),
+  created_at: iso(r.created_at),
+});
+
+/** The run lateral columns (see the runs repository) → its lifecycle view. */
+export const toRunEventsView = (r: Row): RunEventsView => {
+  const event = (prefix: string): JobEvent | null =>
+    r[`${prefix}_seq`] === null || r[`${prefix}_seq`] === undefined
+      ? null
+      : toEvent({
+          seq: r[`${prefix}_seq`],
+          attempt: r[`${prefix}_attempt`],
+          type: r[`${prefix}_type`],
+          step: r[`${prefix}_step`],
+          payload: r[`${prefix}_payload`],
+          created_at: r[`${prefix}_at`],
+        });
+
+  return { phase_event: event("ph"), interruption_event: event("it") };
+};

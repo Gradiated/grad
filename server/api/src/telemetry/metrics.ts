@@ -149,7 +149,7 @@ export const metrics = {
   ),
   requeues: counter(
     "grad_job_requeues_total",
-    "Attempts that ended without a result, by reason (lease_lost, preempted, worker_error, oom).",
+    "Attempts that ended without a result, by reason (lease_lost, compute_reclaimed, worker_error, oom).",
     ["kind", "reason"],
   ),
   workersOnline: gauge(

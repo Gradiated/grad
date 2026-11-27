@@ -29,9 +29,11 @@ import type {
 } from "../store/types.js";
 import { writeRecordsPart } from "./dataset-records.js";
 import {
+  DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
   holdsLease,
   leaseLost,
+  observeInterruption,
   RELEASE,
   requeuePatch,
   type JobKindHandler,
@@ -448,6 +450,9 @@ export const createImportService = (
       }
 
       const now = clock.now().toISOString();
+      if (body.status === "abandoned") {
+        observeInterruption(job, body.reason ?? "worker_error");
+      }
       if (body.status !== "completed") {
         return toPublicImport(
           await close(
@@ -457,6 +462,12 @@ export const createImportService = (
                   job,
                   `Attempt ${job.attempt} was abandoned by its worker`,
                   now,
+                  body.reason === "compute_reclaimed"
+                    ? {
+                        maxPreemptions:
+                          settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
+                      }
+                    : undefined,
                 )
               : {
                   status: "failed",

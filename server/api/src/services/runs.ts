@@ -5,6 +5,7 @@ import {
   ArtifactFormatSchema,
   PlanEvalRequestSchema,
   type CheckpointEvalSpec,
+  RUN_EVENT_TYPES,
   type Artifact,
   type ArtifactFormat,
   type Checkpoint,
@@ -12,9 +13,11 @@ import {
   type EvalStatus,
   type MetricPoint,
   type PlanRunRequest,
+  type InterruptionReason,
   type PlanRunResponse,
   type RecipeKind,
   type Run,
+  type RunEvent,
   type TrainerJob,
   type UploadTicket,
 } from "../contracts.js";
@@ -22,6 +25,7 @@ import type { z } from "@hono/zod-openapi";
 import type {
   CompleteJobRequestSchema,
   RegisterCheckpointRequestSchema,
+  ReportEventRequestSchema,
   ReportProgressRequestSchema,
   WorkerUploadRequestSchema,
 } from "../contracts/trainer-jobs.js";
@@ -62,15 +66,26 @@ import {
   toLabelingPlan,
 } from "./router-labels.js";
 import {
+  DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
   holdsLease,
   leaseLost,
   RELEASE,
   requeuePatch,
   type JobKindHandler,
+  observeInterruption,
   type JobQueue,
   type StopReason,
 } from "./jobs.js";
+import {
+  REASON_TEXT,
+  appendAttempt,
+  appendNote,
+  appendPhase,
+  toInterruption,
+  toMetricPoint,
+  toRunEvent,
+} from "./run-events.js";
 import { jobBlobKey, type UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
 import {
@@ -83,6 +98,15 @@ type ProgressBody = z.infer<typeof ReportProgressRequestSchema>;
 type WorkerUploadBody = z.infer<typeof WorkerUploadRequestSchema>;
 type CheckpointBody = z.infer<typeof RegisterCheckpointRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
+type EventBody = z.infer<typeof ReportEventRequestSchema>;
+
+/** Live queue context of a queued run (null fields otherwise). */
+export interface RunCompute {
+  workers_online: number | null;
+  autoscaling: boolean | null;
+}
+
+const NO_COMPUTE: RunCompute = { workers_online: null, autoscaling: null };
 
 const EVAL_TERMINAL: readonly EvalStatus[] = [
   "completed",
@@ -124,7 +148,10 @@ const runCost = (run: RunRecord, attemptTokens = run.attempt_tokens): number =>
 
 const billedCost = (run: RunRecord): number => runCost(run, 0);
 
-export const toPublicRun = (run: RunRecord): Run => ({
+export const toPublicRun = (
+  run: RunRecord,
+  compute: RunCompute = NO_COMPUTE,
+): Run => ({
   id: run.id,
   workspace_id: run.workspace_id,
   name: run.name,
@@ -142,6 +169,11 @@ export const toPublicRun = (run: RunRecord): Run => ({
   total_steps: run.total_steps,
   attempt: run.attempt,
   max_attempts: run.max_attempts,
+  phase: (run.phase_event?.payload.phase as Run["phase"] | undefined) ?? null,
+  phase_since: run.phase_event?.created_at ?? null,
+  last_interruption: toInterruption(run.interruption_event),
+  workers_online: compute.workers_online,
+  autoscaling: compute.autoscaling,
   latest_metric: run.latest_metric,
   eval_report:
     run.eval_report && run.checkpoint_evals.length > 0
@@ -196,6 +228,11 @@ const stopReason = (run: RunRecord): StopReason => {
   return null;
 };
 
+export interface EventsQuery {
+  cursor?: string | undefined;
+  limit: number;
+}
+
 export interface MetricsQuery {
   cursor?: string | undefined;
   afterStep?: number | undefined;
@@ -221,6 +258,18 @@ export interface RunLifecycle {
     next_cursor: string | null;
     tail_cursor: string;
   }>;
+  events(
+    workspaceId: string,
+    id: string,
+    query: EventsQuery,
+  ): Promise<{
+    run: Run;
+    data: RunEvent[];
+    next_cursor: string | null;
+    tail_cursor: string;
+  }>;
+  /** The terminal event once the run is final and released, else null. */
+  completedEvent(run: RunRecord, lastSeq: number): Promise<RunEvent | null>;
   cancel(workspaceId: string, id: string): Promise<Run>;
   resume(workspaceId: string, id: string, maxCostUsd?: number): Promise<Run>;
   listCheckpoints(
@@ -260,6 +309,11 @@ export interface RunLifecycle {
     id: string,
     body: CompleteBody,
   ): Promise<{ run: Run; artifact: Artifact | null }>;
+  reportEvent(
+    principal: AuthPrincipal,
+    id: string,
+    body: EventBody,
+  ): Promise<void>;
   datasetStream(
     principal: AuthPrincipal,
     id: string,
@@ -270,14 +324,11 @@ export interface RunLifecycle {
   handler: JobKindHandler;
   /** Deletes expired checkpoints (and blobs no release shares). */
   collectExpiredCheckpoints(now: Date): Promise<number>;
+  /** Marks queued runs nobody claimed in time waiting_for_compute. */
+  markWaitingForCompute(now: Date): Promise<number>;
 }
 
-export const toMetricPoint = (event: {
-  seq: number;
-  attempt: number;
-  payload: Record<string, unknown>;
-}): MetricPoint =>
-  ({ ...event.payload, seq: event.seq, attempt: event.attempt }) as MetricPoint;
+export { toMetricPoint };
 
 export const createRunLifecycle = (
   deps: AppDependencies,
@@ -491,6 +542,42 @@ export const createRunLifecycle = (
     costUsd: costForTokens(tokens, run.price_per_million_tokens),
   });
 
+  /** Live queue context while a run waits for a worker. */
+  const computeFor = async (run: RunRecord): Promise<RunCompute> =>
+    run.status === "queued" && run.waiting_on === null
+      ? {
+          workers_online: await store.jobs.countLeasedWorkers(
+            "train",
+            clock.now(),
+          ),
+          autoscaling: settings.workerAutoscaling ?? false,
+        }
+      : NO_COMPUTE;
+
+  const publicRun = async (run: RunRecord): Promise<Run> =>
+    toPublicRun(run, await computeFor(run));
+
+  /** The step the next attempt resumes from (its newest checkpoint), or null. */
+  const resumeStepOf = async (tx: Repositories, runId: string) => {
+    const steps = (await tx.artifacts.allCheckpoints(runId, clock.now())).map(
+      (c) => c.step,
+    );
+
+    return steps.length > 0 ? Math.max(...steps) : null;
+  };
+
+  /** The `queued` phase of the run's next attempt. */
+  const markQueued = async (tx: Repositories, run: RunRecord) => {
+    const compute = await computeFor(run);
+    await appendPhase(tx.jobs, {
+      jobId: run.id,
+      attempt: run.attempt + 1,
+      phase: "queued",
+      step: (await resumeStepOf(tx, run.id)) ?? 0,
+      info: { ...compute },
+    });
+  };
+
   /** Closes an open attempt: bills the rest of it and applies `patch`, atomically. */
   const closeAttempt = async (
     tx: Repositories,
@@ -517,6 +604,68 @@ export const createRunLifecycle = (
     if (TERMINAL.includes(updated.status)) {
       await pinCheckpoints(tx, updated, now);
     }
+
+    return updated;
+  };
+
+  /**
+   * Closes an attempt that ended without a result: requeues the run (or
+   * fails it once its cap is reached) and records the interruption.
+   * Preemptions count toward their own cap, everything else toward
+   * max_attempts.
+   */
+  const interrupt = async (
+    tx: Repositories,
+    run: RunRecord,
+    input: {
+      reason: InterruptionReason;
+      tokens: number;
+      now: string;
+      fence?: JobExpectation;
+    },
+  ): Promise<RunRecord> => {
+    if (run.status === "cancelled") {
+      return closeAttempt(
+        tx,
+        run,
+        input.tokens,
+        { status: "cancelled", finished_at: input.now },
+        input.fence,
+      );
+    }
+    const what =
+      input.reason === "lease_lost"
+        ? `Attempt ${run.attempt} lost its lease`
+        : `Attempt ${run.attempt} ended early (${REASON_TEXT[input.reason]})`;
+    const patch = requeuePatch(
+      run,
+      what,
+      input.now,
+      input.reason === "compute_reclaimed"
+        ? {
+            maxPreemptions: settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
+          }
+        : undefined,
+    );
+    const updated = await closeAttempt(
+      tx,
+      run,
+      input.tokens,
+      patch,
+      input.fence,
+    );
+
+    const event = {
+      jobId: run.id,
+      attempt: run.attempt,
+      reason: input.reason,
+      step: run.current_step,
+      resumeStep: await resumeStepOf(tx, run.id),
+      maxAttempts: run.max_attempts,
+    };
+    await appendAttempt(tx.jobs, { ...event, event: "interrupted" });
+    if (updated.status === "queued") await markQueued(tx, updated);
+    else await appendAttempt(tx.jobs, { ...event, event: "gave_up" });
 
     return updated;
   };
@@ -654,9 +803,24 @@ export const createRunLifecycle = (
 
     return warnings;
   };
+  const completedEvent = async (
+    run: RunRecord,
+    lastSeq: number,
+  ): Promise<RunEvent | null> =>
+    TERMINAL.includes(run.status) && run.worker_id === null
+      ? {
+          type: "completed",
+          run_id: run.id,
+          seq: lastSeq,
+          attempt: Math.max(1, run.attempt),
+          timestamp: run.finished_at ?? run.updated_at,
+          status: run.status,
+          run: toPublicRun(run),
+        }
+      : null;
 
   const handler: JobKindHandler = {
-    onClaim: async (row, renewed) => {
+    onClaim: async (row, renewed, worker) => {
       const run = await loadById(row.id);
       const now = clock.now().toISOString();
       if (
@@ -673,8 +837,9 @@ export const createRunLifecycle = (
         );
         return null;
       }
+      let job: TrainerJob;
       try {
-        return await buildJob(run);
+        job = await buildJob(run);
       } catch (error) {
         await store.transaction((tx) =>
           closeAttempt(tx, run, 0, {
@@ -685,6 +850,24 @@ export const createRunLifecycle = (
         );
         return null;
       }
+      // Keyed per attempt: a claim retried after a lost response adds nothing.
+      const resumeStep = job.resume?.step ?? null;
+      await appendAttempt(store.jobs, {
+        jobId: run.id,
+        attempt: run.attempt,
+        event: "started",
+        resumeStep,
+        maxAttempts: run.max_attempts,
+      });
+      await appendPhase(store.jobs, {
+        jobId: run.id,
+        attempt: run.attempt,
+        phase: "starting",
+        step: resumeStep ?? 0,
+        info: { gpu: worker.gpu },
+      });
+
+      return job;
     },
     stopReason: async (row) => {
       const run = await loadById(row.id);
@@ -698,19 +881,16 @@ export const createRunLifecycle = (
     },
     onLeaseLost: async (row: JobRow, fence, now) => {
       const run = await loadById(row.id);
-      const patch: RunPatch =
-        run.status === "cancelled"
-          ? { status: "cancelled", finished_at: now.toISOString() }
-          : requeuePatch(
-              run,
-              `Attempt ${run.attempt} lost its lease`,
-              now.toISOString(),
-            );
       // Re-checks expiry: a heartbeat that landed after the SELECT wins.
       await store.transaction((tx) =>
-        closeAttempt(tx, run, run.attempt_tokens, patch, {
-          ...fenceOf(run),
-          leaseExpiredBefore: fence.leaseExpiredBefore as string,
+        interrupt(tx, run, {
+          reason: "lease_lost",
+          tokens: run.attempt_tokens,
+          now: now.toISOString(),
+          fence: {
+            ...fenceOf(run),
+            leaseExpiredBefore: fence.leaseExpiredBefore as string,
+          },
         }),
       );
     },
@@ -767,9 +947,19 @@ export const createRunLifecycle = (
               waitingOn: labels?.id ?? null,
               idempotency,
             });
+            await markQueued(store, run);
+            for (const [i, message] of plan.warnings.entries()) {
+              await appendNote(store.jobs, {
+                jobId: run.id,
+                attempt: 1,
+                type: "warning",
+                key: `plan:${i}`,
+                message,
+              });
+            }
             return { run, labels };
           });
-          if (!labels) return toPublicRun(run);
+          if (!labels) return publicRun(await loadById(run.id));
 
           // The labeling eval may have finished before the run was inserted.
           const labelEval = await store.evals.getById(labels.id);
@@ -781,20 +971,64 @@ export const createRunLifecycle = (
             );
           }
 
-          return toPublicRun((await store.runs.getById(run.id)) ?? run);
+          return publicRun((await store.runs.getById(run.id)) ?? run);
         },
       ),
 
-    get: async (workspaceId, id) => toPublicRun(await loadRun(workspaceId, id)),
+    get: async (workspaceId, id) => publicRun(await loadRun(workspaceId, id)),
 
     list: async (workspaceId, page) => {
       const result = await store.runs.list(workspaceId, page);
+      const queued = result.data.find(
+        (r) => r.status === "queued" && r.waiting_on === null,
+      );
+      const compute = queued ? await computeFor(queued) : NO_COMPUTE;
 
       return {
-        data: result.data.map(toPublicRun),
+        data: result.data.map((r) =>
+          toPublicRun(
+            r,
+            r.status === "queued" && r.waiting_on === null
+              ? compute
+              : NO_COMPUTE,
+          ),
+        ),
         next_cursor: result.next_cursor,
       };
     },
+
+    events: async (workspaceId, id, query) => {
+      const run = await loadRun(workspaceId, id);
+      const after = decodeCursor(query.cursor, 1);
+      const afterSeq = after ? Number(after[0]) : 0;
+      if (!Number.isInteger(afterSeq) || afterSeq < 0) {
+        throw invalid("invalid_cursor", "The pagination cursor is malformed.");
+      }
+
+      const rows = await store.jobs.listEvents(
+        run.id,
+        RUN_EVENT_TYPES,
+        afterSeq,
+        query.limit + 1,
+      );
+      const page = rows.slice(0, query.limit);
+      const lastSeq = page.at(-1)?.seq ?? afterSeq;
+      const data: RunEvent[] = page
+        .map((e) => toRunEvent(run.id, e))
+        .filter((e) => e !== null);
+      const more = rows.length > query.limit;
+      const done = more ? null : await completedEvent(run, lastSeq);
+      if (done) data.push(done);
+
+      return {
+        run: await publicRun(run),
+        data,
+        next_cursor: more ? encodeCursor([lastSeq]) : null,
+        tail_cursor: encodeCursor([lastSeq]),
+      };
+    },
+
+    completedEvent: (run, lastSeq) => completedEvent(run, lastSeq),
 
     metrics: async (workspaceId, id, query) => {
       const run = await loadRun(workspaceId, id);
@@ -907,6 +1141,7 @@ export const createRunLifecycle = (
           max_cost_usd: cap,
           error: null,
           failed_attempts: 0,
+          preemptions: 0,
           finished_at: null,
           updated_at: clock.now().toISOString(),
         },
@@ -917,8 +1152,9 @@ export const createRunLifecycle = (
           "run_state_changed",
           `Run '${id}' changed concurrently; retry.`,
         );
+      await markQueued(store, updated);
 
-      return toPublicRun(updated);
+      return publicRun(await loadById(id));
     },
 
     listCheckpoints: async (workspaceId, runId, page) => {
@@ -1103,6 +1339,19 @@ export const createRunLifecycle = (
         );
         await evals.evaluateCheckpoint(run, result.checkpoint);
       }
+      if (result.checkpoint.sha256 === blob.sha256) {
+        await store.jobs.appendEvent({
+          jobId: run.id,
+          attempt: run.attempt,
+          type: "checkpoint",
+          step: body.step,
+          payload: {
+            checkpoint_id: result.checkpoint.id,
+            eval_score: result.checkpoint.eval_score,
+            format: result.checkpoint.format,
+          },
+        });
+      }
       // A retried registration is that checkpoint; other bytes are a conflict.
       if (!result.created && result.checkpoint.sha256 !== blob.sha256) {
         throw conflict(
@@ -1173,6 +1422,22 @@ export const createRunLifecycle = (
 
       const tokens = Math.max(body.tokens_processed, run.attempt_tokens);
       const now = clock.now().toISOString();
+      if (body.status === "abandoned") {
+        const updated = await store.transaction((tx) =>
+          interrupt(tx, run, {
+            reason: body.reason ?? "worker_error",
+            tokens,
+            now,
+          }),
+        );
+        observeInterruption(
+          { kind: "train", origin: "api" },
+          body.reason ?? "worker_error",
+        );
+
+        return { run: toPublicRun(updated), artifact: null };
+      }
+      const status = body.status;
       const format = body.format ?? defaultFormatForRecipe(run.recipe_kind);
       if (!ArtifactFormatSchema.safeParse(format).success) {
         throw invalid("invalid_format", `Unknown artifact format '${format}'.`);
@@ -1208,37 +1473,35 @@ export const createRunLifecycle = (
         const patch: RunPatch =
           run.status === "cancelled"
             ? { status: "cancelled", finished_at: now }
-            : body.status === "abandoned"
-              ? requeuePatch(
-                  run,
-                  `Attempt ${run.attempt} was abandoned by its worker (shutdown or preemption)`,
-                  now,
-                )
-              : {
-                  status: balanceStop
-                    ? "stopped_balance"
-                    : body.status === "cancelled"
-                      ? "cancelled"
-                      : body.status,
-                  finished_at: now,
-                  error:
-                    body.status === "failed"
-                      ? (body.error ?? "The trainer reported a failure.")
-                      : balanceStop
-                        ? BALANCE_STOPPED
-                        : body.status === "stopped_budget"
-                          ? budgetStopped(
-                              runCost(run, tokens),
-                              run.max_cost_usd,
-                            )
-                          : null,
-                  ...(artifact ? { artifact_id: artifact.id } : {}),
-                  ...(body.eval_report !== undefined
-                    ? { eval_report: body.eval_report }
-                    : {}),
-                };
+            : {
+                status: balanceStop ? "stopped_balance" : status,
+                finished_at: now,
+                error:
+                  body.status === "failed"
+                    ? (body.error ?? "The trainer reported a failure.")
+                    : balanceStop
+                      ? BALANCE_STOPPED
+                      : body.status === "stopped_budget"
+                        ? budgetStopped(runCost(run, tokens), run.max_cost_usd)
+                        : null,
+                ...(artifact ? { artifact_id: artifact.id } : {}),
+                ...(body.eval_report !== undefined
+                  ? { eval_report: body.eval_report }
+                  : {}),
+              };
 
         const updated = await closeAttempt(tx, run, tokens, patch);
+        const warnings = body.eval_report?.warnings ?? [];
+        for (const [i, message] of warnings.entries()) {
+          await appendNote(tx.jobs, {
+            jobId: run.id,
+            attempt: run.attempt,
+            type: "warning",
+            key: `report:${i}`,
+            message: String(message),
+            step: updated.current_step,
+          });
+        }
 
         return { run: updated, artifact };
       });
@@ -1247,6 +1510,51 @@ export const createRunLifecycle = (
         run: toPublicRun(result.run),
         artifact: result.artifact ? toPublicArtifact(result.artifact) : null,
       };
+    },
+
+    reportEvent: async (principal, id, body) => {
+      const run = await loadLeased(principal, id, body.worker_id, body.attempt);
+      if (body.type === "phase") {
+        await appendPhase(store.jobs, {
+          jobId: run.id,
+          attempt: run.attempt,
+          phase: body.phase,
+          step: body.step,
+        });
+        return;
+      }
+      await appendNote(store.jobs, {
+        jobId: run.id,
+        attempt: run.attempt,
+        type: body.type,
+        key: `worker:${body.seq}`,
+        message: body.message,
+        step: body.step,
+      });
+    },
+
+    markWaitingForCompute: async (now) => {
+      const threshold = settings.waitingForComputeSeconds ?? 30;
+      const rows = await store.jobs.listUnclaimedSince(
+        "train",
+        new Date(now.getTime() - threshold * 1000),
+        100,
+      );
+      if (rows.length === 0) return 0;
+      const workers = await store.jobs.countLeasedWorkers("train", now);
+      for (const row of rows) {
+        await appendPhase(store.jobs, {
+          jobId: row.id,
+          attempt: row.attempt + 1,
+          phase: "waiting_for_compute",
+          info: {
+            workers_online: workers,
+            autoscaling: settings.workerAutoscaling ?? false,
+          },
+        });
+      }
+
+      return rows.length;
     },
 
     datasetStream: async (principal, id, attempt) => {

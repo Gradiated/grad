@@ -133,6 +133,11 @@ export const normalizeSchema = (schema, where, schemas) => {
         node = { k: "union", variants: rest };
         if (isPlainObject(schema.discriminator) && typeof schema.discriminator.propertyName === "string") {
           node.discriminator = schema.discriminator.propertyName;
+          if (isPlainObject(schema.discriminator.mapping)) {
+            node.mapping = Object.fromEntries(
+              Object.entries(schema.discriminator.mapping).map(([value, ref]) => [value, String(ref).split("/").pop()]),
+            );
+          }
         }
       }
       return withMeta(isNullable ? nullable(node) : node);
