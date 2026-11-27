@@ -184,6 +184,21 @@ func TestParityRequests(t *testing.T) {
 			})
 			return err
 		},
+		"add_source_filtered": func() error {
+			_, err := c.Sources.Create(ctx, grad.DatasetName("support-prod"), grad.SourceParams{
+				Provider: grad.LangfuseSource{Secret: grad.SecretName("langfuse-prod"), Filters: map[string]any{
+					"environment": []any{"production"}, "min_score": map[string]any{"helpfulness": 0.8}}},
+				SampleRate:       0.1,
+				MaxRecordsPerDay: 100000,
+			})
+			return err
+		},
+		"update_source": func() error {
+			half, cleared := 0.5, 0
+			_, err := c.Sources.Update(ctx, "src_01J9X", grad.SourceUpdate{
+				Filters: map[string]any{"tags": []string{"prod"}}, SampleRate: &half, MaxRecordsPerSync: &cleared})
+			return err
+		},
 		"list_usage": func() error {
 			for _, err := range c.Usage.List(ctx, grad.WithUsagePageSize(10)) {
 				return err
@@ -249,6 +264,12 @@ func TestParityRequests(t *testing.T) {
 			t.Errorf("%s: %s %s\n got %s\nwant %s", tc.Case, sent.Method, sent.Path, got, exp)
 		}
 		key := sent.Header.Get("Idempotency-Key")
+		if tc.Method == "PATCH" {
+			if key != "" {
+				t.Errorf("%s: PATCH sent Idempotency-Key %q", tc.Case, key)
+			}
+			continue
+		}
 		if (tc.IdempotencyKey == nil && !uuid.MatchString(key)) || (tc.IdempotencyKey != nil && key != *tc.IdempotencyKey) {
 			t.Errorf("%s: Idempotency-Key %q", tc.Case, key)
 		}
@@ -316,6 +337,9 @@ func TestParityTypedResponses(t *testing.T) {
 		"source.provider.kind":                             string(source.Provider.Kind),
 		"source.provider.secret":                           *source.Provider.Secret,
 		"source.schedule":                                  *source.Schedule,
+		"source.sample_rate":                               source.SampleRate,
+		"source.max_records_per_day":                       float64(*source.MaxRecordsPerDay),
+		"source.records_today":                             float64(source.RecordsToday),
 		"source.last_sync.status":                          string(source.LastSync.Status),
 		"source.last_sync.dataset_version":                 float64(*source.LastSync.DatasetVersion),
 		"source.status":                                    string(source.Status),

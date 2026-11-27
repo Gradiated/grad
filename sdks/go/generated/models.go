@@ -319,6 +319,12 @@ type CreateSourceRequest struct {
 	Provider SourceProvider `json:"provider"`
 	// Schedule Five-field cron in UTC (`*/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds field is rejected). Leave it out to sync only on request.
 	Schedule *string `json:"schedule,omitempty"`
+	// SampleRate The share of traces to sync, chosen by a hash of the trace id: re-syncs keep the same sample, and a trace's feedback follows it. Default 1.
+	SampleRate *float64 `json:"sample_rate,omitempty"`
+	// MaxRecordsPerSync At most this many new traces per sync; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap.
+	MaxRecordsPerSync *int `json:"max_records_per_sync,omitempty"`
+	// MaxRecordsPerDay At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap.
+	MaxRecordsPerDay *int `json:"max_records_per_day,omitempty"`
 }
 
 // CreateUploadRequest is generated from the OpenAPI schema.
@@ -2348,6 +2354,12 @@ type Source struct {
 	Dataset     string             `json:"dataset"`
 	Provider    SourceProviderType `json:"provider"`
 	Schedule    *string            `json:"schedule"`
+	// SampleRate The share of traces synced (1: all).
+	SampleRate        float64 `json:"sample_rate"`
+	MaxRecordsPerSync *int    `json:"max_records_per_sync"`
+	MaxRecordsPerDay  *int    `json:"max_records_per_day"`
+	// RecordsToday New traces synced so far this UTC day (what max_records_per_day counts).
+	RecordsToday int `json:"records_today"`
 	// NextSyncAt When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule backs off: twice its interval per consecutive failure, at most an hour.
 	NextSyncAt *string `json:"next_sync_at"`
 	// Status `paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it.
@@ -2378,7 +2390,7 @@ type SourceProvider struct {
 	Secret *string `json:"secret,omitempty"`
 	// Project The provider project to read. Required for braintrust (project id or name) and posthog (numeric project id); optional elsewhere (LangSmith project, Phoenix project).
 	Project *string `json:"project,omitempty"`
-	// Filters Provider-specific filters passed to the fetcher, for example `{"tags": ["prod"]}` or, for 'gradiated', `{"models": [...], "tasks": [...]}`.
+	// Filters Which traces to sync; a trace must match every key. Values are a string or a list (any of which matches) unless noted: `tags` (list: every tag), `environment`, `model`, `version`, `release`, `name` (trace name or route), `user_id`, `session_id`, `metadata` (`{key: value}`, each equal), `from`/`to` (ISO 8601: the trace started in [from, to)), `has_feedback` (true: a score or a correction) and `min_score` (a number every score must reach, or `{name: number}`). Score filters are judged on the merged dataset, so feedback that arrives later still counts. LangSmith also takes `filter` (a LangSmith filter expression, AND-ed); gradiated takes `models`, `tasks` and `versions`. Any other key is 422 source_filter_unsupported. The response holds the effective filters (single values as lists).
 	Filters map[string]any `json:"filters,omitempty"`
 }
 
@@ -2388,7 +2400,8 @@ type SourceProviderType struct {
 	Host    *string                `json:"host"`
 	Secret  *string                `json:"secret"`
 	Project *string                `json:"project"`
-	Filters map[string]any         `json:"filters"`
+	// Filters The effective filters: validated, with single values as lists.
+	Filters map[string]any `json:"filters"`
 }
 
 // SourceProviderTypeKind is an enumeration of allowed values.
@@ -2568,6 +2581,20 @@ func (m *TrajectoryOutput) UnmarshalJSON(data []byte) error {
 	*m = TrajectoryOutput(p)
 	m.AdditionalProperties = extra
 	return nil
+}
+
+// UpdateSourceRequest Fields left out keep their value. Changes apply from the next sync; traces already synced stay (a full sync rebuilds the dataset with the new settings).
+type UpdateSourceRequest struct {
+	// Filters Replaces the source's filters ({} clears them). Which traces to sync; a trace must match every key. Values are a string or a list (any of which matches) unless noted: `tags` (list: every tag), `environment`, `model`, `version`, `release`, `name` (trace name or route), `user_id`, `session_id`, `metadata` (`{key: value}`, each equal), `from`/`to` (ISO 8601: the trace started in [from, to)), `has_feedback` (true: a score or a correction) and `min_score` (a number every score must reach, or `{name: number}`). Score filters are judged on the merged dataset, so feedback that arrives later still counts. LangSmith also takes `filter` (a LangSmith filter expression, AND-ed); gradiated takes `models`, `tasks` and `versions`. Any other key is 422 source_filter_unsupported. The response holds the effective filters (single values as lists).
+	Filters map[string]any `json:"filters,omitempty"`
+	// Schedule Five-field cron in UTC (`*/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds field is rejected). Leave it out to sync only on request.
+	Schedule *string `json:"schedule,omitempty"`
+	// SampleRate The share of traces to sync, chosen by a hash of the trace id: re-syncs keep the same sample, and a trace's feedback follows it. Default 1.
+	SampleRate *float64 `json:"sample_rate,omitempty"`
+	// MaxRecordsPerSync At most this many new traces per sync; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap.
+	MaxRecordsPerSync *int `json:"max_records_per_sync,omitempty"`
+	// MaxRecordsPerDay At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap.
+	MaxRecordsPerDay *int `json:"max_records_per_day,omitempty"`
 }
 
 // UploadTicket is generated from the OpenAPI schema.

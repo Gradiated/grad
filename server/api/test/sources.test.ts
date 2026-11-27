@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { TracesAdapter } from "../src/adapters.js";
+import { SOURCE_FILTER_KEYS } from "../src/contracts.js";
 import { createSecretsCipher } from "../src/secrets.js";
 import {
   MAX_BACKOFF_SECONDS,
@@ -15,6 +17,21 @@ import {
   FakeWorker,
   type ClaimedJob,
 } from "./fixtures/worker.js";
+
+describe("source filter keys", () => {
+  it("match the trainer's providers (tests/fixtures/wire/source-filter-keys.json)", () => {
+    const wire = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../tests/fixtures/wire/source-filter-keys.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { providers: Record<string, string[]> };
+    expect(SOURCE_FILTER_KEYS).toEqual(wire.providers);
+  });
+});
 
 describe("nextScheduledSync", () => {
   const at = new Date("2026-11-27T10:07:00Z");
@@ -401,6 +418,8 @@ describe("sources", () => {
       secret: KEY,
       project: null,
       filters: {},
+      sample_rate: 1,
+      max_records: null,
       watermark: null,
       full: false,
     });
@@ -573,6 +592,183 @@ describe("sources", () => {
     );
     expect(await dataset()).toBe(2);
     expect(await total()).toBe(2);
+  });
+
+  it("validates filters per provider and stores the effective ones (r8-sources)", async () => {
+    const bad = async (provider: Record<string, unknown>) =>
+      (await addSource({ provider })).body;
+    expect(
+      await bad({ ...LANGFUSE, filters: { tag: ["prod"] } }),
+    ).toMatchObject({
+      status: 422,
+      code: "source_filter_unsupported",
+    });
+    // LangSmith's own filter expression is not a Langfuse filter.
+    expect(
+      (await bad({ ...LANGFUSE, filters: { filter: 'has(tags, "x")' } }))
+        .detail,
+    ).toContain("Its filters: tags, environment");
+    expect(
+      await bad({ ...LANGFUSE, filters: { min_score: "high" } }),
+    ).toMatchObject({ code: "source_filter_invalid" });
+    expect(
+      await bad({
+        ...LANGFUSE,
+        filters: { from: "2026-11-27T00:00:00Z", to: "2026-11-26T00:00:00Z" },
+      }),
+    ).toMatchObject({ code: "source_filter_invalid" });
+    expect(
+      (await addSource({ provider: LANGFUSE, sample_rate: 0 })).body.code,
+    ).toBe("validation_error");
+
+    const created = await addSource({
+      provider: {
+        ...LANGFUSE,
+        filters: {
+          tags: "prod",
+          environment: ["production"],
+          version: 3,
+          metadata: { tier: "gold" },
+          min_score: { resolved: 0.5 },
+        },
+      },
+      sample_rate: 0.25,
+      max_records_per_day: 1000,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({
+      provider: {
+        filters: {
+          tags: ["prod"],
+          environment: ["production"],
+          version: ["3"],
+          metadata: { tier: "gold" },
+          min_score: { resolved: 0.5 },
+        },
+      },
+      sample_rate: 0.25,
+      max_records_per_sync: null,
+      max_records_per_day: 1000,
+      records_today: 0,
+    });
+  });
+
+  it("updates filters, sampling, caps and the schedule from the next sync (r8-sources)", async () => {
+    const source = (await addSource()).body;
+    const patch = (body: Record<string, unknown>, id = source.id) =>
+      t.json<Record<string, any>>(`/v1/sources/${id}`, {
+        method: "PATCH",
+        body,
+      });
+    expect((await patch({ filters: { nope: 1 } })).body.code).toBe(
+      "source_filter_unsupported",
+    );
+    expect((await patch({}, "src_missing")).status).toBe(404);
+    const updated = await patch({
+      filters: { model: "acme/support" },
+      sample_rate: 0.5,
+      max_records_per_sync: 10,
+      schedule: "*/5 * * * *",
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({
+      provider: { filters: { model: ["acme/support"] } },
+      sample_rate: 0.5,
+      max_records_per_sync: 10,
+      schedule: "*/5 * * * *",
+    });
+    expect(updated.body.next_sync_at).not.toBeNull();
+    // Left-out fields keep their value; null clears a cap or the schedule.
+    const cleared = await patch({ max_records_per_sync: null, schedule: null });
+    expect(cleared.body).toMatchObject({
+      provider: { filters: { model: ["acme/support"] } },
+      sample_rate: 0.5,
+      max_records_per_sync: null,
+      schedule: null,
+      next_sync_at: null,
+    });
+    expect((await patch({ filters: {} })).body.provider.filters).toEqual({});
+  });
+
+  it("hands the worker its filters, sample rate and record budget; the day's count caps it (r8-sources)", async () => {
+    const source = (
+      await addSource({
+        provider: { ...LANGFUSE, filters: { tags: ["prod"] } },
+        sample_rate: 0.5,
+        max_records_per_sync: 100,
+        max_records_per_day: 150,
+      })
+    ).body;
+    const syncOnce = async (traces: number) => {
+      t.clock.advanceSeconds(61);
+      await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
+      const job = await claimImport();
+      await worker.complete(job, {
+        status: "completed",
+        import_summary: { watermark: null, traces },
+      });
+      return job.import?.source as Record<string, unknown>;
+    };
+    expect(await syncOnce(100)).toMatchObject({
+      filters: { tags: ["prod"] },
+      sample_rate: 0.5,
+      max_records: 100,
+    });
+    expect((await syncOnce(30)).max_records).toBe(50);
+    expect((await syncOnce(0)).max_records).toBe(20);
+    expect(
+      (await t.json<Record<string, any>>(`/v1/sources/${source.id}`)).body
+        .records_today,
+    ).toBe(130);
+    // A new UTC day starts the count again.
+    t.clock.advanceSeconds(24 * 3600);
+    expect(
+      (await t.json<Record<string, any>>(`/v1/sources/${source.id}`)).body
+        .records_today,
+    ).toBe(0);
+    expect((await syncOnce(5)).max_records).toBe(100);
+  });
+
+  it("keeps a score-filtered trace only once its merged scores pass (r8-sources)", async () => {
+    const source = (await addSource()).body;
+    const rule = { min_score: { resolved: 0.5 } };
+    const ruled = (id: string) => {
+      const r = record(id);
+      return { ...r, metadata: { ...r.metadata, score_filter: rule } };
+    };
+    const syncWith = async (records: Array<Record<string, unknown>>) => {
+      t.clock.advanceSeconds(61);
+      await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
+      const job = await claimImport();
+      await worker.call(`/v1/trainer-jobs/${job.id}/records`, {
+        ...worker.ref(job),
+        seq: 0,
+        records,
+      });
+      await worker.complete(job, {
+        status: "completed",
+        import_summary: { watermark: null },
+      });
+    };
+    const page = async () =>
+      (
+        await t.json<{ total: number; data: Array<Record<string, any>> }>(
+          "/v1/datasets/support-prod/records?limit=10",
+        )
+      ).body;
+    const update = (id: string, resolved: number) => ({
+      id,
+      scores: { resolved },
+      metadata: { score_update: true },
+    });
+
+    await syncWith([ruled("t1"), ruled("t2"), record("t3")]);
+    expect((await page()).data.map((r) => r.id)).toEqual(["t3"]);
+    await syncWith([update("t1", 1), update("t2", 0.2)]);
+    const after = await page();
+    expect(after.total).toBe(2);
+    expect(after.data.map((r) => r.id)).toEqual(["t1", "t3"]);
+    expect(after.data[0]?.metadata).toEqual({ model: "acme/support" });
   });
 
   const syncNow = async (id: string, full = false) => {

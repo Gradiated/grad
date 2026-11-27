@@ -83,10 +83,32 @@ export const sources = {
   },
 };
 
-export interface AddSourceOptions extends RequestOptions {
+/** Sampling and record caps of a source (`sources.create` / `addSource` and `update`). */
+export interface SourceLimits {
+  /** The share of traces to sync (0, 1], chosen by a hash of the trace id, so re-syncs keep the same sample. */
+  sampleRate?: number;
+  /** At most this many new traces per sync (null: no cap). Feedback on synced traces always lands. */
+  maxRecordsPerSync?: number | null;
+  /** At most this many new traces per UTC day (null: no cap). */
+  maxRecordsPerDay?: number | null;
+}
+
+export interface AddSourceOptions extends RequestOptions, SourceLimits {
+  /**
+   * The provider; its `filters` narrow what is synced (every provider takes `tags`,
+   * `environment`, `model`, `version`, `release`, `name`, `user_id`, `session_id`, `metadata`,
+   * `from`/`to`, `has_feedback` and `min_score`; other keys are a 422 ValidationError).
+   */
   provider: SourceProvider;
   /** Five-field UTC cron (fires at most once a minute); leave it out to sync only on request. */
   schedule?: string;
+}
+
+/** Fields left out keep their value; `filters` replaces them all (`{}` clears them). */
+export interface UpdateSourceOptions extends RequestOptions, SourceLimits {
+  filters?: Record<string, unknown>;
+  /** A five-field UTC cron, or null to sync only on request. */
+  schedule?: string | null;
 }
 
 /**
@@ -106,6 +128,20 @@ export class Source {
 
   async refresh(options?: RequestOptions): Promise<this> {
     Object.assign(this, await this.#core.api.getSource(this.id, options));
+    return this;
+  }
+
+  /** The effective filters, as the server validated them (single values as lists). */
+  get filters(): Record<string, unknown> {
+    return { ...(this.provider.filters ?? {}) };
+  }
+
+  /**
+   * Changes filters, sampling, the record caps or the schedule from the next sync; updates this
+   * object. Traces already synced stay (`sync({ full: true })` rebuilds with the new settings).
+   */
+  async update(options: UpdateSourceOptions): Promise<this> {
+    Object.assign(this, await updateSource(this.#core, this.id, options));
     return this;
   }
 
@@ -134,14 +170,22 @@ const syncSource = async (core: Core, id: string, options: { full?: boolean } & 
   return new ImportJob(core, await core.api.syncSource(id, { full }, request));
 };
 
+const defined = <T extends object>(fields: T): Partial<T> =>
+  Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as Partial<T>;
+
 export const addSource = async (core: Core, dataset: DatasetRef, options: AddSourceOptions): Promise<Source> => {
-  const { provider: body, schedule, ...request } = options;
+  const { provider: body, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, ...request } = options;
   const data = await core.api.createDatasetSource(
     datasetName(dataset),
-    { provider: body, ...(schedule !== undefined ? { schedule } : {}) },
+    { provider: body, ...defined({ schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay }) },
     request,
   );
   return new Source(core, data);
+};
+
+const updateSource = async (core: Core, id: string, options: UpdateSourceOptions): Promise<SourceData> => {
+  const { filters, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, ...request } = options;
+  return core.api.updateSource(id, defined({ filters, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay }), request);
 };
 
 export class SecretsResource {
@@ -222,6 +266,10 @@ export class SourcesResource {
 
   sync(id: string, options: { full?: boolean } & RequestOptions = {}): PendingImport {
     return new Pending(syncSource(this.core, id, options));
+  }
+  /** Changes a source from its next sync (see `Source.update`). */
+  async update(id: string, options: UpdateSourceOptions): Promise<Source> {
+    return new Source(this.core, await updateSource(this.core, id, options));
   }
 
   async remove(id: string, options?: RequestOptions): Promise<void> {

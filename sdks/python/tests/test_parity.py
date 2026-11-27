@@ -137,6 +137,13 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "add_source_gradiated": lambda: client.sources.create(
             "support-prod", grad.sources.Gradiated(models=("acme/support",)), schedule="0 * * * *"
         ),
+        "add_source_filtered": lambda: client.sources.create(
+            "support-prod",
+            grad.sources.Langfuse(secret="langfuse-prod", filters={"environment": ["production"], "min_score": {"helpfulness": 0.8}}),
+            sample_rate=0.1,
+            max_records_per_day=100000,
+        ),
+        "update_source": lambda: client.sources.update(source, filters={"tags": ["prod"]}, sample_rate=0.5, max_records_per_sync=None),
         "sync_source_full": lambda: source.sync(full=True),
         "list_usage": lambda: client.usage.list(limit=10),
         "list_usage_filtered": lambda: client.usage.list(
@@ -166,6 +173,8 @@ class ParityTests(unittest.TestCase):
                 key = sent.header("Idempotency-Key")
                 if case["method"] == "GET":
                     self.assertEqual({k: v[0] for k, v in sent.query.items()}, case["query"])
+                    self.assertIsNone(key)
+                elif case["method"] == "PATCH":
                     self.assertIsNone(key)
                 elif case["idempotency_key"] is None:
                     self.assertRegex(key or "", r"^[0-9a-f-]{36}$")
@@ -207,6 +216,9 @@ class ParityTests(unittest.TestCase):
             "source.provider.kind": source.provider.kind,
             "source.provider.secret": source.provider.secret,
             "source.schedule": source.schedule,
+            "source.sample_rate": source.sample_rate,
+            "source.max_records_per_day": source.max_records_per_day,
+            "source.records_today": source.records_today,
             "source.last_sync.status": source.last_sync.status,
             "source.last_sync.dataset_version": source.last_sync.dataset_version,
             "source.status": source.status,

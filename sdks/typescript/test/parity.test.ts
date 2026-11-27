@@ -143,6 +143,13 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
     }),
   add_source_gradiated: () =>
     grad.sources.create("support-prod", { provider: sources.gradiated({ models: ["acme/support"] }), schedule: "0 * * * *" }),
+  add_source_filtered: () =>
+    grad.sources.create("support-prod", {
+      provider: sources.langfuse({ secret: "langfuse-prod", filters: { environment: ["production"], min_score: { helpfulness: 0.8 } } }),
+      sampleRate: 0.1,
+      maxRecordsPerDay: 100000,
+    }),
+  update_source: () => grad.sources.update("src_01J9X", { filters: { tags: ["prod"] }, sampleRate: 0.5, maxRecordsPerSync: null }),
   sync_source_full: async () => grad.sources.sync("src_01J9X", { full: true }),
   list_usage: () => grad.usage.list({ limit: 10 }).pages().next(),
   list_usage_filtered: () =>
@@ -175,7 +182,8 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       if (c.method === "GET") {
         expect(Object.fromEntries(sent?.url.searchParams ?? []), c.case).toEqual(c.query);
         expect(key, c.case).toBeNull();
-      } else if (c.idempotency_key === null) expect(key, c.case).toMatch(/^[0-9a-f-]{36}$/);
+      } else if (c.method === "PATCH") expect(key, c.case).toBeNull();
+      else if (c.idempotency_key === null) expect(key, c.case).toMatch(/^[0-9a-f-]{36}$/);
       else expect(key, c.case).toBe(c.idempotency_key);
     }
   });
@@ -217,6 +225,9 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "source.provider.kind": source.provider.kind,
       "source.provider.secret": source.provider.secret,
       "source.schedule": source.schedule,
+      "source.sample_rate": source.sampleRate,
+      "source.max_records_per_day": source.maxRecordsPerDay,
+      "source.records_today": source.recordsToday,
       "source.last_sync.status": source.lastSync?.status,
       "source.last_sync.dataset_version": source.lastSync?.datasetVersion,
       "source.status": source.status,

@@ -346,6 +346,12 @@ CREATE TABLE grad_sources (
   secret_name TEXT,
   project TEXT,
   filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+  sample_rate DOUBLE PRECISION NOT NULL DEFAULT 1 CHECK (sample_rate > 0 AND sample_rate <= 1),
+  max_records_per_sync INTEGER CHECK (max_records_per_sync > 0),
+  max_records_per_day INTEGER CHECK (max_records_per_day > 0),
+  -- New traces synced on records_day (UTC, YYYY-MM-DD): what max_records_per_day counts.
+  records_today INTEGER NOT NULL DEFAULT 0 CHECK (records_today >= 0),
+  records_day TEXT,
   schedule TEXT,
   next_sync_at TIMESTAMPTZ,
   watermark JSONB,

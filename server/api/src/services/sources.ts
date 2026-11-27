@@ -4,6 +4,7 @@ import type { AuthPrincipal, TracesPage } from "../adapters.js";
 import {
   SOURCE_PROVIDERS,
   type CreateSourceRequestSchema,
+  type UpdateSourceRequestSchema,
   type ImportJob,
   type Secret,
   type Source,
@@ -25,12 +26,43 @@ import type {
   Page,
   PageRequest,
   Repositories,
+  SourcePatch,
   SourceRecord,
 } from "../store/types.js";
 import { toPublicImport } from "./imports.js";
+import { cloudFilters, effectiveFilters } from "./source-filters.js";
 import type { JobQueue } from "./jobs.js";
 
 type CreateSourceBody = z.infer<typeof CreateSourceRequestSchema>;
+type UpdateSourceBody = z.infer<typeof UpdateSourceRequestSchema>;
+
+/** What a completed sync reports back (the import summary's source fields). */
+export interface SyncSummary {
+  watermark?: Record<string, unknown> | null | undefined;
+  /** New traces taken: what the record caps count. */
+  traces?: number | undefined;
+}
+
+/** The UTC day `records_today` counts. */
+const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
+
+const recordsToday = (source: SourceRecord, now: Date): number =>
+  source.records_day === utcDay(now) ? source.records_today : 0;
+
+/**
+ * New traces the next sync may take: the smaller of the per-sync cap and
+ * what is left of today's. Null without a cap.
+ */
+export const syncBudget = (source: SourceRecord, now: Date): number | null => {
+  const caps = [
+    source.max_records_per_sync,
+    source.max_records_per_day === null
+      ? null
+      : Math.max(0, source.max_records_per_day - recordsToday(source, now)),
+  ].filter((cap): cap is number => cap !== null);
+
+  return caps.length > 0 ? Math.min(...caps) : null;
+};
 
 /** The `source` payload of a sync's import job (no secret: that is added at claim). */
 export interface SyncPayload {
@@ -141,6 +173,12 @@ export interface SourceService {
     filter: { dataset?: string | undefined },
     page: PageRequest,
   ): Promise<Page<Source>>;
+  /** Changes filters, sampling, caps or the schedule; applies from the next sync. */
+  update(
+    workspaceId: string,
+    id: string,
+    body: UpdateSourceBody,
+  ): Promise<Source>;
   remove(workspaceId: string, id: string): Promise<void>;
   /**
    * Enqueues a sync (resuming a paused source), or returns the one already
@@ -160,7 +198,7 @@ export interface SourceService {
   completeSync(
     tx: Repositories,
     job: ImportJobRecord,
-    watermark: Record<string, unknown> | null | undefined,
+    summary: SyncSummary,
   ): Promise<void>;
   /**
    * A sync ended failed: record the error, back the schedule off, pause the
@@ -249,6 +287,10 @@ export const createSourceService = (
         filters: source.filters,
       },
       schedule: source.schedule,
+      sample_rate: source.sample_rate,
+      max_records_per_sync: source.max_records_per_sync,
+      max_records_per_day: source.max_records_per_day,
+      records_today: recordsToday(source, clock.now()),
       next_sync_at: source.next_sync_at,
       status: source.status,
       paused_reason: source.paused_reason,
@@ -357,10 +399,19 @@ export const createSourceService = (
       );
     }
 
+    const filters = effectiveFilters(
+      kind as SourceProviderKind,
+      provider.filters,
+    );
     if (kind === "gradiated") {
       if (!deps.traces) throw sourceUnavailable();
 
-      return { kind: kind as SourceProviderKind, host: null, secret: null };
+      return {
+        kind: kind as SourceProviderKind,
+        host: null,
+        secret: null,
+        filters,
+      };
     }
 
     const host = provider.host ?? null;
@@ -400,7 +451,7 @@ export const createSourceService = (
       });
     }
 
-    return { kind: kind as SourceProviderKind, host, secret };
+    return { kind: kind as SourceProviderKind, host, secret, filters };
   };
 
   const firstRun = (schedule: string | null | undefined) => {
@@ -488,7 +539,10 @@ export const createSourceService = (
             host: provider.host,
             secretName: provider.secret,
             project: body.provider.project ?? null,
-            filters: body.provider.filters ?? {},
+            filters: provider.filters,
+            sampleRate: body.sample_rate ?? 1,
+            maxRecordsPerSync: body.max_records_per_sync ?? null,
+            maxRecordsPerDay: body.max_records_per_day ?? null,
             schedule,
             nextSyncAt,
             idempotency,
@@ -517,6 +571,43 @@ export const createSourceService = (
         data: await Promise.all(result.data.map(toPublic)),
         next_cursor: result.next_cursor,
       };
+    },
+
+    update: async (workspaceId, id, body) => {
+      const updated = await store.transaction(async (tx) => {
+        const source = await tx.sources.lock(workspaceId, id);
+        if (!source) throw notFound("source", id);
+        const schedule =
+          body.schedule === undefined ? undefined : firstRun(body.schedule);
+
+        const patch: SourcePatch = {};
+        if (body.filters !== undefined) {
+          patch.filters = effectiveFilters(source.provider, body.filters);
+        }
+        if (body.sample_rate !== undefined)
+          patch.sample_rate = body.sample_rate;
+        if (body.max_records_per_sync !== undefined) {
+          patch.max_records_per_sync = body.max_records_per_sync;
+        }
+        if (body.max_records_per_day !== undefined) {
+          patch.max_records_per_day = body.max_records_per_day;
+        }
+
+        return tx.sources.update(source.id, {
+          ...patch,
+          ...(schedule
+            ? {
+                schedule: schedule.schedule,
+                // A paused source stays paused until it is resumed.
+                next_sync_at:
+                  source.status === "paused" ? null : schedule.nextSyncAt,
+              }
+            : {}),
+        });
+      });
+      if (!updated) throw notFound("source", id);
+
+      return toPublic(updated);
     },
 
     remove: async (workspaceId, id) => {
@@ -586,12 +677,14 @@ export const createSourceService = (
         secret,
         project: source.project,
         filters: source.filters,
+        sample_rate: source.sample_rate,
+        max_records: syncBudget(source, clock.now()),
         watermark: payload.full ? null : source.watermark,
         full: payload.full,
       };
     },
 
-    completeSync: async (tx, job, watermark) => {
+    completeSync: async (tx, job, { watermark, traces }) => {
       const payload = job.source as unknown as SyncPayload;
       const source = await tx.sources.lock(job.workspace_id, payload.source_id);
       if (!source || source.sync_job_id !== job.id) return;
@@ -599,6 +692,8 @@ export const createSourceService = (
       const updated = await tx.sources.update(source.id, {
         last_synced_at: now.toISOString(),
         ...(watermark !== undefined && watermark !== null ? { watermark } : {}),
+        records_today: recordsToday(source, now) + (traces ?? 0),
+        records_day: utcDay(now),
         last_error: null,
         last_error_at: null,
         consecutive_failures: 0,
@@ -664,7 +759,7 @@ export const createSourceService = (
       return deps.traces.pull({
         // Always the job's workspace: never anything the worker sends.
         workspaceId: job.workspace_id,
-        filter: source.filters,
+        filter: cloudFilters(source.filters),
         cursor,
         limit: 500,
       });

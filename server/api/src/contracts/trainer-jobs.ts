@@ -321,6 +321,10 @@ export const CompleteJobRequestSchema = z
             description:
               "Source syncs: where the next sync starts (opaque to the server). Stored only when the import completes; null or absent keeps the previous one.",
           }),
+        traces: z.number().int().min(0).optional().openapi({
+          description:
+            "Source syncs: the new traces taken, which the source's max_records_per_day counts.",
+        }),
       })
       .optional(),
   })

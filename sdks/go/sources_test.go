@@ -240,3 +240,42 @@ func TestUsageSummary(t *testing.T) {
 		t.Fatalf("default query %q", q)
 	}
 }
+
+func TestSourceUpdateAndEffectiveFilters(t *testing.T) {
+	ctx := context.Background()
+	source := parityResponse(t, "source")
+	f := newFake(t, map[string]route{
+		"GET /v1/sources/src_01J9X":   jsonValue(200, source),
+		"PATCH /v1/sources/src_01J9X": jsonValue(200, source),
+		"PATCH /v1/sources/bad":       problem(422, "source_filter_unsupported"),
+	})
+	c, _ := f.client()
+	src, err := c.Sources.Get(ctx, "src_01J9X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(src.Filters(), map[string]any{"environment": []any{"production"}}) || src.SampleRate != 0.1 || src.RecordsToday != 4200 {
+		t.Fatalf("effective filters %v %v %v", src.Filters(), src.SampleRate, src.RecordsToday)
+	}
+	none, cron := "", "*/5 * * * *"
+	day := 0
+	if err := src.Update(ctx, grad.SourceUpdate{Filters: map[string]any{}, Schedule: &cron, MaxRecordsPerDay: &day}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.last("PATCH", "/v1/sources/src_01J9X").JSON(t); !reflect.DeepEqual(got, map[string]any{"filters": map[string]any{}, "schedule": cron, "max_records_per_day": nil}) {
+		t.Fatalf("update body %v", got)
+	}
+	if _, err := c.Sources.Update(ctx, "src_01J9X", grad.SourceUpdate{Schedule: &none}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.last("PATCH", "/v1/sources/src_01J9X").JSON(t); !reflect.DeepEqual(got, map[string]any{"schedule": nil}) {
+		t.Fatalf("clear schedule %v", got)
+	}
+	var invalid *grad.ValidationError
+	if _, err := c.Sources.Update(ctx, "bad", grad.SourceUpdate{Filters: map[string]any{"tag": "x"}}); !errors.As(err, &invalid) {
+		t.Fatalf("unsupported filter: %v", err)
+	}
+	if _, err := c.Sources.Update(ctx, "a/b", grad.SourceUpdate{}); err == nil {
+		t.Fatal("a bad id is refused")
+	}
+}

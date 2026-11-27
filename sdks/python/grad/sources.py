@@ -10,7 +10,11 @@
     source.sync().wait()
 
 Each sync pulls new traces plus scores and corrections on traces already synced, and saves a
-new dataset version. ``secret`` is a :class:`grad.SecretRef` (or a secret name): the key itself
+new dataset version. ``filters`` narrow what is synced (every provider takes ``tags``,
+``environment``, ``model``, ``version``, ``release``, ``name``, ``user_id``, ``session_id``,
+``metadata``, ``from``/``to``, ``has_feedback`` and ``min_score``; the server answers 422 for
+any other key), for example ``sources.Langfuse(..., filters={"environment": "production",
+"min_score": {"helpfulness": 0.8}})``. ``secret`` is a :class:`grad.SecretRef` (or a secret name): the key itself
 never leaves the server's secret store.
 """
 
@@ -18,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Final
 
 __all__ = [
     "Braintrust",
@@ -29,6 +33,15 @@ __all__ = [
     "PostHog",
     "SourceProvider",
 ]
+
+
+class _Unset:
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET: Final[Any] = _Unset()
+"""A keyword argument left out of ``sources.update``: the field keeps its value."""
 
 
 def secret_name(secret: Any) -> str | None:
@@ -77,7 +90,8 @@ class Langfuse(SourceProvider):
 
 @dataclass(frozen=True, kw_only=True)
 class LangSmith(SourceProvider):
-    """LangSmith runs and feedback, including corrections."""
+    """LangSmith runs and feedback, including corrections. ``filters={"filter": "..."}`` adds a
+    LangSmith filter expression."""
 
     kind: ClassVar[str] = "langsmith"
 

@@ -1794,9 +1794,77 @@ fn sources_api() -> MockServer {
                 Reply::json(200, job(if n == 0 { "running" } else { "completed" }))
             }
             ("DELETE", "/v1/sources/src_01J9X") => Reply::bytes(204, vec![], vec![]),
+            ("GET", "/v1/sources/src_01J9X") | ("PATCH", "/v1/sources/src_01J9X") => {
+                let mut s = source_obj();
+                s["provider"]["filters"] =
+                    json!({"environment": ["production"], "min_score": {"helpfulness": 0.8}});
+                s["sample_rate"] = json!(0.1);
+                s["max_records_per_day"] = json!(100000);
+                s["records_today"] = json!(4200);
+                Reply::json(200, s)
+            }
+            ("PATCH", "/v1/sources/src_bad") => Reply::problem(
+                422,
+                "source_filter_unsupported",
+                "The langfuse source has no filter 'tag'.",
+            ),
             _ => Reply::problem(404, "not_found", "nope"),
         }
     })
+}
+
+#[test]
+fn sources_show_and_update_print_the_effective_filters() {
+    let srv = sources_api();
+    let sb = Sandbox::new("sources-update");
+    let u = Some(srv.url.as_str());
+
+    let r = run(sb.grad(u), &["sources", "show", "src_01J9X"]);
+    expect(&r, 0);
+    for want in [
+        r#"environment=["production"] · min_score={"helpfulness":0.8} · 10% sampled · ≤100000/day"#,
+        "4200 of 100000 new traces",
+        "completed (v3)",
+    ] {
+        assert!(r.stdout.contains(want), "{}", r.stdout);
+    }
+    let r = run(sb.grad(u), &["sources", "list"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("FILTERS"), "{}", r.stdout);
+
+    let r = run(
+        sb.grad(u),
+        &[
+            "sources",
+            "update",
+            "src_01J9X",
+            "--clear-filters",
+            "--no-schedule",
+            "--max-records-per-day",
+            "0",
+            "--sample-rate",
+            "0.5",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("Updated source src_01J9X"),
+        "{}",
+        r.stdout
+    );
+    assert_eq!(
+        srv.last("PATCH", "/v1/sources/src_01J9X").unwrap().json(),
+        json!({"filters": {}, "schedule": null, "sample_rate": 0.5, "max_records_per_day": null})
+    );
+    let r = run(sb.grad(u), &["sources", "update", "src_01J9X"]);
+    expect(&r, 2);
+    assert!(r.stderr.contains("nothing to change"), "{}", r.stderr);
+    let r = run(
+        sb.grad(u),
+        &["sources", "update", "src_bad", "--filter", "tag=prod"],
+    );
+    expect(&r, 5);
+    assert!(r.stderr.contains("no filter 'tag'"), "{}", r.stderr);
 }
 
 #[test]
@@ -3722,6 +3790,32 @@ fn parity_requests_match_the_shared_fixture() {
                     a.push("--schedule".into());
                     a.push(cron.into());
                 }
+                for key in ["sample_rate", "max_records_per_sync", "max_records_per_day"] {
+                    if !body[key].is_null() {
+                        a.push(format!("--{}", key.replace('_', "-")));
+                        a.push(body[key].to_string());
+                    }
+                }
+                a
+            }
+            "/v1/sources/src_01J9X" => {
+                let mut a: Vec<String> =
+                    vec!["sources".into(), "update".into(), "src_01J9X".into()];
+                for (k, v) in body["filters"].as_object().into_iter().flatten() {
+                    a.push("--filter".into());
+                    a.push(format!("{}={}", k, v));
+                }
+                for (key, v) in body.as_object().unwrap() {
+                    if key != "filters" {
+                        a.push(format!("--{}", key.replace('_', "-")));
+                        // null clears a cap: 0 on the command line.
+                        a.push(if v.is_null() {
+                            "0".into()
+                        } else {
+                            v.to_string()
+                        });
+                    }
+                }
                 a
             }
             other => panic!("no CLI command for {}", other),
@@ -3763,6 +3857,10 @@ fn parity_requests_match_the_shared_fixture() {
             continue;
         }
         assert_eq!(norm(&sent.json()), norm(body), "{}", name);
+        if case["method"] == "PATCH" {
+            assert_eq!(key, "", "{}", name);
+            continue;
+        }
         match case["idempotency_key"].as_str() {
             Some(k) => assert_eq!(key, k, "{}", name),
             None => assert_eq!(key.len(), 36, "{}", name),

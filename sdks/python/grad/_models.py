@@ -353,10 +353,11 @@ class Dataset(APIObject):
         ``filter(lambda t: ...)`` run locally (see ``client.datasets.filter``)."""
         view: Dataset = self._need_client().datasets.filter(self, fn, **kwargs)
         return view
-    def add_source(self, provider: Any, *, schedule: str | None = None, idempotency_key: str | None = None) -> Source:
+    def add_source(self, provider: Any, *, schedule: str | None = None, idempotency_key: str | None = None, **limits: Any) -> Source:
         """Connect an observability provider (``grad.sources.Langfuse(...)``, ...).
-        ``schedule`` is a five-field UTC cron; leave it out to sync only on request."""
-        source: Source = self._need_client().sources.create(self.name, provider, schedule=schedule, idempotency_key=idempotency_key)
+        ``schedule`` is a five-field UTC cron; leave it out to sync only on request. ``limits``:
+        ``sample_rate``, ``max_records_per_sync``, ``max_records_per_day``."""
+        source: Source = self._need_client().sources.create(self.name, provider, schedule=schedule, idempotency_key=idempotency_key, **limits)
         return source
 
     def sources(self) -> list[Source]:
@@ -396,6 +397,10 @@ class Source(APIObject):
     provider: AttrDict = field(default_factory=AttrDict)
     workspace_id: str | None = None
     schedule: str | None = None
+    sample_rate: float = 1.0
+    max_records_per_sync: int | None = None
+    max_records_per_day: int | None = None
+    records_today: int = 0
     next_sync_at: str | None = None
     status: str = "active"
     paused_reason: str | None = None
@@ -408,13 +413,24 @@ class Source(APIObject):
     created_at: str | None = None
     updated_at: str | None = None
 
-    _repr_fields = ("id", "dataset", "schedule")
+    _repr_fields = ("id", "dataset", "schedule", "filters", "sample_rate")
     _converters = {"provider": _attrdict, "last_sync": _attrdict}
 
     @property
     def kind(self) -> str:
         """The provider (``langfuse``, ``langsmith``, ...)."""
         return str(self.provider.get("kind", ""))
+
+    @property
+    def filters(self) -> dict[str, Any]:
+        """The effective filters, as the server validated them (single values as lists)."""
+        return dict(self.provider.get("filters") or {})
+
+    def update(self, **changes: Any) -> Source:
+        """Change filters, ``sample_rate``, the record caps or the schedule from the next sync
+        (see ``client.sources.update``); updates ``self`` and returns it."""
+        self._update_from(self._need_client().sources.update(self.id, **changes))
+        return self
 
     def refresh(self) -> Source:
         """Reload from the server (in place) and return ``self``."""

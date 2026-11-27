@@ -90,6 +90,48 @@ describe("dataset pages (r8 P1-5)", () => {
     }
   });
 
+  it("pages and counts only score-filtered records whose merged scores pass (r8-sources)", async () => {
+    const ruled = (
+      id: string,
+      text: string,
+      rule: Record<string, unknown>,
+    ) => ({
+      ...rec(id, text),
+      metadata: { score_filter: rule, model: "m" },
+    });
+    const parts = [
+      await write([
+        ruled("a", "1", { has_feedback: true }),
+        ruled("b", "1", { min_score: 0.5 }),
+        rec("c", "1"),
+        ruled("d", "1", { min_score: { q: 0.5 } }),
+      ]),
+      await write([
+        scoreUpdate("e", { q: 0.9 }), // before e exists
+        scoreUpdate("b", { q: 0.7, r: 0.2 }),
+        ruled("e", "1", { min_score: { q: 0.5 } }),
+        { ...scoreUpdate("a", {}), expected_output: "fix" },
+      ]),
+      await write([ruled("d", "2", { min_score: { q: 0.5 } }), rec("b", "2")]),
+    ];
+    const lines: DatasetRecord[] = [];
+    for (const p of parts)
+      lines.push(...parsePart(await storage.get(p.key), p));
+    const expected = mergeRecords(lines);
+    // a: a correction; b: re-sent without a rule; c: no rule; d: no score; e: early 0.9.
+    expect(expected.map((r) => r.id)).toEqual(["a", "b", "c", "e"]);
+    expect(expected[0]?.metadata).toEqual({ model: "m" });
+    const index = await buildVersionIndex(storage, parts);
+    expect(index.total).toBe(4);
+    for (let from = 0; from <= expected.length; from += 1) {
+      for (const limit of [1, 2, 100]) {
+        expect(
+          await readVersionPage(storage, parts, index, from, limit),
+        ).toEqual(expected.slice(from, from + limit));
+      }
+    }
+  });
+
   it("keeps memory and latency bounded on a large dataset: a page reads only its own parts", async () => {
     // 60k records (~45 MB of JSON) in 30 parts, then a dataset.score() part.
     const PARTS = 30;

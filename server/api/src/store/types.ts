@@ -838,6 +838,12 @@ export interface SourceRecord {
   secret_name: string | null;
   project: string | null;
   filters: Record<string, unknown>;
+  sample_rate: number;
+  max_records_per_sync: number | null;
+  max_records_per_day: number | null;
+  /** New traces synced on `records_day` (UTC `YYYY-MM-DD`). */
+  records_today: number;
+  records_day: string | null;
   schedule: string | null;
   next_sync_at: string | null;
   watermark: Record<string, unknown> | null;
@@ -859,6 +865,13 @@ export type SourceStatus = "active" | "paused";
 export type SourcePatch = Partial<
   Pick<
     SourceRecord,
+    | "filters"
+    | "sample_rate"
+    | "max_records_per_sync"
+    | "max_records_per_day"
+    | "records_today"
+    | "records_day"
+    | "schedule"
     | "next_sync_at"
     | "watermark"
     | "sync_job_id"
@@ -881,6 +894,9 @@ export interface SourceRepository {
     secretName: string | null;
     project: string | null;
     filters: Record<string, unknown>;
+    sampleRate: number;
+    maxRecordsPerSync: number | null;
+    maxRecordsPerDay: number | null;
     schedule: string | null;
     nextSyncAt: string | null;
     idempotency?: IdempotencyInput | undefined;

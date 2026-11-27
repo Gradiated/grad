@@ -4020,6 +4020,10 @@ components:
               additionalProperties: {}
               description: "Source syncs: where the next sync starts (opaque to the server). Stored only when the import completes;
                 null or absent keeps the previous one."
+            traces:
+              type: integer
+              minimum: 0
+              description: "Source syncs: the new traces taken, which the source's max_records_per_day counts."
       required:
         - worker_id
         - attempt
@@ -4892,6 +4896,7 @@ components:
             filters:
               type: object
               additionalProperties: {}
+              description: "The effective filters: validated, with single values as lists."
           required:
             - kind
             - host
@@ -4902,6 +4907,21 @@ components:
           type:
             - string
             - "null"
+        sample_rate:
+          type: number
+          description: "The share of traces synced (1: all)."
+        max_records_per_sync:
+          type:
+            - integer
+            - "null"
+        max_records_per_day:
+          type:
+            - integer
+            - "null"
+        records_today:
+          type: integer
+          minimum: 0
+          description: New traces synced so far this UTC day (what max_records_per_day counts).
         next_sync_at:
           type:
             - string
@@ -4958,6 +4978,10 @@ components:
         - dataset
         - provider
         - schedule
+        - sample_rate
+        - max_records_per_sync
+        - max_records_per_day
+        - records_today
         - next_sync_at
         - status
         - paused_reason
@@ -5027,6 +5051,29 @@ components:
           maxLength: 120
           description: Five-field cron in UTC (`*/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds
             field is rejected). Leave it out to sync only on request.
+        sample_rate:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1
+          description: "The share of traces to sync, chosen by a hash of the trace id: re-syncs keep the same sample, and a
+            trace's feedback follows it. Default 1."
+          example: 0.1
+        max_records_per_sync:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+          maximum: 1000000000
+          description: "At most this many new traces per sync; the rest are not synced (the sync's drop reasons count them).
+            Feedback on traces already synced always lands. Null: no cap."
+        max_records_per_day:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+          maximum: 1000000000
+          description: "At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them).
+            Feedback on traces already synced always lands. Null: no cap."
       required:
         - provider
     SourceProvider:
@@ -5065,10 +5112,68 @@ components:
         filters:
           type: object
           additionalProperties: {}
-          description: "Provider-specific filters passed to the fetcher, for example `{\"tags\": [\"prod\"]}` or, for 'gradiated',
-            `{\"models\": [...], \"tasks\": [...]}`."
+          description: "Which traces to sync; a trace must match every key. Values are a string or a list (any of which matches)
+            unless noted: `tags` (list: every tag), `environment`, `model`, `version`, `release`, `name` (trace name or
+            route), `user_id`, `session_id`, `metadata` (`{key: value}`, each equal), `from`/`to` (ISO 8601: the trace
+            started in [from, to)), `has_feedback` (true: a score or a correction) and `min_score` (a number every score
+            must reach, or `{name: number}`). Score filters are judged on the merged dataset, so feedback that arrives
+            later still counts. LangSmith also takes `filter` (a LangSmith filter expression, AND-ed); gradiated takes
+            `models`, `tasks` and `versions`. Any other key is 422 source_filter_unsupported. The response holds the
+            effective filters (single values as lists)."
+          example:
+            tags:
+              - prod
+            environment: production
+            min_score: 0.5
       required:
         - kind
+    UpdateSourceRequest:
+      type: object
+      properties:
+        filters:
+          type: object
+          additionalProperties: {}
+          description: "Replaces the source's filters ({} clears them). Which traces to sync; a trace must match every key. Values
+            are a string or a list (any of which matches) unless noted: `tags` (list: every tag), `environment`,
+            `model`, `version`, `release`, `name` (trace name or route), `user_id`, `session_id`, `metadata` (`{key:
+            value}`, each equal), `from`/`to` (ISO 8601: the trace started in [from, to)), `has_feedback` (true: a score
+            or a correction) and `min_score` (a number every score must reach, or `{name: number}`). Score filters are
+            judged on the merged dataset, so feedback that arrives later still counts. LangSmith also takes `filter` (a
+            LangSmith filter expression, AND-ed); gradiated takes `models`, `tasks` and `versions`. Any other key is 422
+            source_filter_unsupported. The response holds the effective filters (single values as lists)."
+        schedule:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          maxLength: 120
+          description: Five-field cron in UTC (`*/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds
+            field is rejected). Leave it out to sync only on request.
+        sample_rate:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1
+          description: "The share of traces to sync, chosen by a hash of the trace id: re-syncs keep the same sample, and a
+            trace's feedback follows it. Default 1."
+          example: 0.1
+        max_records_per_sync:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+          maximum: 1000000000
+          description: "At most this many new traces per sync; the rest are not synced (the sync's drop reasons count them).
+            Feedback on traces already synced always lands. Null: no cap."
+        max_records_per_day:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+          maximum: 1000000000
+          description: "At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them).
+            Feedback on traces already synced always lands. Null: no cap."
+      description: Fields left out keep their value. Changes apply from the next sync; traces already synced stay (a full sync
+        rebuilds the dataset with the new settings).
     SyncSourceRequest:
       type: object
       properties:
@@ -10165,6 +10270,79 @@ paths:
       responses:
         "200":
           description: Source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    patch:
+      operationId: updateSource
+      summary: Change a source's filters, sampling, record caps or schedule (from its next sync)
+      tags: *a7
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSourceRequest"
+      responses:
+        "200":
+          description: The updated source.
           content:
             application/json:
               schema:

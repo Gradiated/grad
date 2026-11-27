@@ -120,6 +120,29 @@ class SourcesTests(unittest.TestCase):
         self.assertEqual((sender.sent[-1].method, sender.sent[-1].path), ("DELETE", "/v1/sources/src_01J9X"))
         client.sources.remove("src_01J9X")
 
+    def test_filters_sampling_caps_and_update(self) -> None:
+        client, sender, _ = make_client(
+            {
+                "POST /v1/datasets/support-prod/sources": json_reply(SOURCE, 201),
+                "PATCH /v1/sources/src_01J9X": json_reply({**SOURCE, "sample_rate": 0.5}),
+                "PATCH /v1/sources/bad": json_reply(problem(422, "source_filter_unsupported", "no filter 'tag'"), 422),
+            }
+        )
+        source = client.sources.create("support-prod", sources.Langfuse(secret="lf", filters={"tags": ["prod"]}), sample_rate=0.1, max_records_per_sync=500)
+        self.assertEqual(sender.sent[-1].json, {"provider": {"kind": "langfuse", "secret": "lf", "filters": {"tags": ["prod"]}}, "sample_rate": 0.1, "max_records_per_sync": 500})
+        self.assertEqual((source.filters, source.sample_rate, source.max_records_per_day, source.records_today), ({"environment": ["production"]}, 0.1, 100000, 4200))
+        self.assertIn("filters={'environment': ['production']}", repr(source))
+        self.assertIs(source.update(max_records_per_day=None, schedule="*/5 * * * *"), source)
+        self.assertEqual(sender.sent[-1].json, {"schedule": "*/5 * * * *", "max_records_per_day": None})
+        self.assertEqual(source.sample_rate, 0.5)
+        client.sources.update("src_01J9X", filters={})
+        self.assertEqual(sender.sent[-1].json, {"filters": {}})
+        self.assertIsNone(sender.sent[-1].header("Idempotency-Key"))
+        with self.assertRaises(grad.ValidationError) as raised:
+            client.sources.update("bad", filters={"tag": ["prod"]})
+        self.assertEqual(raised.exception.code, "source_filter_unsupported")
+        self.assertEqual(repr(sources.UNSET), "UNSET")
+
     def test_mapping_provider_and_typed_errors(self) -> None:
         client, sender, _ = make_client(
             {

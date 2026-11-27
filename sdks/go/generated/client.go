@@ -1158,3 +1158,22 @@ func (c *Client) SyncSource(ctx context.Context, id string, body *SyncSourceRequ
 	}
 	return &out, nil
 }
+
+// UpdateSource calls PATCH /v1/sources/{id}.
+//
+// Change a source's filters, sampling, record caps or schedule (from its next sync).
+func (c *Client) UpdateSource(ctx context.Context, id string, body *UpdateSourceRequest, opts ...RequestOption) (*Source, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "UpdateSource: body is required"}
+	}
+	spec := RequestSpec{Method: "PATCH", Path: "/v1/sources/" + p0, Body: body}
+	var out Source
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

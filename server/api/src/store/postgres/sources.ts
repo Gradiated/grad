@@ -17,6 +17,9 @@ const isoN = (v: unknown): string | null =>
 const sn = (v: unknown): string | null =>
   v === null || v === undefined ? null : String(v);
 
+const nn = (v: unknown): number | null =>
+  v === null || v === undefined ? null : Number(v);
+
 const toSecret = (r: Row): Secret & { id: string } => ({
   id: String(r.id),
   name: String(r.name),
@@ -128,6 +131,11 @@ const toSource = (r: Row): SourceRecord => ({
   secret_name: sn(r.secret_name),
   project: sn(r.project),
   filters: (r.filters as Record<string, unknown> | null) ?? {},
+  sample_rate: Number(r.sample_rate ?? 1),
+  max_records_per_sync: nn(r.max_records_per_sync),
+  max_records_per_day: nn(r.max_records_per_day),
+  records_today: Number(r.records_today ?? 0),
+  records_day: sn(r.records_day),
   schedule: sn(r.schedule),
   next_sync_at: isoN(r.next_sync_at),
   watermark: (r.watermark as Record<string, unknown> | null) ?? null,
@@ -144,7 +152,7 @@ const toSource = (r: Row): SourceRecord => ({
 });
 
 const SOURCE_COLUMNS = {
-  json: new Set(["watermark"]),
+  json: new Set(["watermark", "filters"]),
   timestamps: new Set([
     "next_sync_at",
     "last_synced_at",
@@ -194,9 +202,10 @@ export const createSourceRepository = (
       await db.query(
         `INSERT INTO grad_sources
            (id, workspace_id, dataset_id, provider, host, secret_name, project, filters,
-            schedule, next_sync_at, idempotency_key, request_hash, created_at, updated_at)
+            schedule, next_sync_at, idempotency_key, request_hash, created_at, updated_at,
+            sample_rate, max_records_per_sync, max_records_per_day)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::timestamptz, $11, $12,
-                 $13::timestamptz, $13::timestamptz)`,
+                 $13::timestamptz, $13::timestamptz, $14, $15, $16)`,
         [
           id,
           input.workspaceId,
@@ -211,6 +220,9 @@ export const createSourceRepository = (
           input.idempotency?.key ?? null,
           input.idempotency?.hash ?? null,
           now,
+          input.sampleRate,
+          input.maxRecordsPerSync,
+          input.maxRecordsPerDay,
         ],
       );
       const [created] = await select("id = $1", [id]);

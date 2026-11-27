@@ -726,16 +726,43 @@ impl Sources<'_> {
         schedule: Option<&str>,
         idempotency_key: Option<&str>,
     ) -> Result<Source> {
+        let opts = SourceOptions {
+            schedule: schedule.map(str::to_string),
+            ..Default::default()
+        };
+        self.create_with(dataset, provider, &opts, idempotency_key)
+            .await
+    }
+
+    /// [`Sources::create`] with sampling and record caps: `opts.sample_rate` keeps that
+    /// share of traces (by trace id), `max_records_per_sync` / `max_records_per_day` cap
+    /// the new traces taken.
+    pub async fn create_with(
+        &self,
+        dataset: &str,
+        provider: &SourceProvider,
+        opts: &SourceOptions,
+        idempotency_key: Option<&str>,
+    ) -> Result<Source> {
         check_path_param("dataset name", dataset)?;
-        let mut b = json!({ "provider": body(provider)? });
-        if let Some(s) = schedule {
-            b["schedule"] = Value::String(s.to_string());
-        }
+        let mut b = body(opts)?;
+        b["provider"] = body(provider)?;
         get(
             self.c,
             Req::post(format!("/v1/datasets/{}/sources", seg(dataset)))
                 .key(idempotency_key)
                 .json(b),
+        )
+        .await
+    }
+
+    /// Change a source from its next sync: filters, sampling, record caps or the schedule.
+    /// Traces already synced stay (a full sync rebuilds the dataset with the new settings).
+    pub async fn update(&self, id: &str, change: &SourceUpdate) -> Result<Source> {
+        check_path_param("source id", id)?;
+        get(
+            self.c,
+            Req::new(Method::PATCH, format!("/v1/sources/{}", seg(id))).json(body(change)?),
         )
         .await
     }

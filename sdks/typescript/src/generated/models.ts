@@ -159,6 +159,12 @@ export interface CreateSourceRequest {
   provider: SourceProvider;
   /** Five-field cron in UTC (`*\/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds field is rejected). Leave it out to sync only on request. */
   schedule?: string | null | undefined;
+  /** The share of traces to sync, chosen by a hash of the trace id: re-syncs keep the same sample, and a trace's feedback follows it. Default 1. */
+  sampleRate?: number | undefined;
+  /** At most this many new traces per sync; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
+  maxRecordsPerSync?: number | null | undefined;
+  /** At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
+  maxRecordsPerDay?: number | null | undefined;
 }
 
 export interface CreateUploadRequest {
@@ -1121,9 +1127,16 @@ export interface Source {
     host: string | null;
     secret: string | null;
     project: string | null;
+    /** The effective filters: validated, with single values as lists. */
     filters: Record<string, unknown>;
   };
   schedule: string | null;
+  /** The share of traces synced (1: all). */
+  sampleRate: number;
+  maxRecordsPerSync: number | null;
+  maxRecordsPerDay: number | null;
+  /** New traces synced so far this UTC day (what max_records_per_day counts). */
+  recordsToday: number;
   /** When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule backs off: twice its interval per consecutive failure, at most an hour. */
   nextSyncAt: string | null;
   /** `paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it. */
@@ -1153,7 +1166,7 @@ export interface SourceProvider {
   secret?: string | null | undefined;
   /** The provider project to read. Required for braintrust (project id or name) and posthog (numeric project id); optional elsewhere (LangSmith project, Phoenix project). */
   project?: string | null | undefined;
-  /** Provider-specific filters passed to the fetcher, for example `{"tags": ["prod"]}` or, for 'gradiated', `{"models": [...], "tasks": [...]}`. */
+  /** Which traces to sync; a trace must match every key. Values are a string or a list (any of which matches) unless noted: `tags` (list: every tag), `environment`, `model`, `version`, `release`, `name` (trace name or route), `user_id`, `session_id`, `metadata` (`{key: value}`, each equal), `from`/`to` (ISO 8601: the trace started in [from, to)), `has_feedback` (true: a score or a correction) and `min_score` (a number every score must reach, or `{name: number}`). Score filters are judged on the merged dataset, so feedback that arrives later still counts. LangSmith also takes `filter` (a LangSmith filter expression, AND-ed); gradiated takes `models`, `tasks` and `versions`. Any other key is 422 source_filter_unsupported. The response holds the effective filters (single values as lists). */
   filters?: Record<string, unknown> | undefined;
 }
 
@@ -1207,6 +1220,20 @@ export interface TrajectoryOutput {
   turns?: Array<ChatMessage> | undefined;
   payload?: unknown | undefined;
   [key: string]: unknown;
+}
+
+/** Fields left out keep their value. Changes apply from the next sync; traces already synced stay (a full sync rebuilds the dataset with the new settings). */
+export interface UpdateSourceRequest {
+  /** Replaces the source's filters ({} clears them). Which traces to sync; a trace must match every key. Values are a string or a list (any of which matches) unless noted: `tags` (list: every tag), `environment`, `model`, `version`, `release`, `name` (trace name or route), `user_id`, `session_id`, `metadata` (`{key: value}`, each equal), `from`/`to` (ISO 8601: the trace started in [from, to)), `has_feedback` (true: a score or a correction) and `min_score` (a number every score must reach, or `{name: number}`). Score filters are judged on the merged dataset, so feedback that arrives later still counts. LangSmith also takes `filter` (a LangSmith filter expression, AND-ed); gradiated takes `models`, `tasks` and `versions`. Any other key is 422 source_filter_unsupported. The response holds the effective filters (single values as lists). */
+  filters?: Record<string, unknown> | undefined;
+  /** Five-field cron in UTC (`*\/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds field is rejected). Leave it out to sync only on request. */
+  schedule?: string | null | undefined;
+  /** The share of traces to sync, chosen by a hash of the trace id: re-syncs keep the same sample, and a trace's feedback follows it. Default 1. */
+  sampleRate?: number | undefined;
+  /** At most this many new traces per sync; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
+  maxRecordsPerSync?: number | null | undefined;
+  /** At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
+  maxRecordsPerDay?: number | null | undefined;
 }
 
 export interface UploadTicket {

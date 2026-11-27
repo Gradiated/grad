@@ -2,7 +2,14 @@ import type { DatasetRecord } from "../contracts.js";
 import type { ObjectStore } from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
 import { parsePart } from "./dataset-records.js";
-import { isReset, isScoreUpdate, mergeRecords } from "./record-merge.js";
+import {
+  applyFacts,
+  isReset,
+  isScoreUpdate,
+  mergeRecords,
+  passesScoreFilter,
+  SCORE_FILTER,
+} from "./record-merge.js";
 
 /**
  * Pages of a dataset version's merged records (the `mergeRecords` view)
@@ -20,6 +27,11 @@ import { isReset, isScoreUpdate, mergeRecords } from "./record-merge.js";
  * Building an index streams the version once, holding one part and one map
  * entry per record id; the index itself is 4 bytes per line. Indexes are
  * cached per version in a byte-bounded LRU.
+ *
+ * A record with a source's score filter (`metadata.score_filter`) also keeps
+ * its merged scores while the index is built; slots whose scores fail the
+ * filter are dropped at the end and the rest renumbered, so `total` and pages
+ * count only admitted records.
  */
 export interface VersionIndex {
   /** Merged records in the version. */
@@ -43,8 +55,34 @@ export const buildVersionIndex = async (
   let slotOf = new Map<string, number>();
   // Lines of updates that arrived before their id's first record.
   let early = new Map<string, number[]>();
+  // Score-filtered slots: their rule and merged scores, and (once the version
+  // has a rule) the facts of early updates.
+  let ruled = new Map<number, DatasetRecord>();
+  let earlyFacts = new Map<string, DatasetRecord>();
   let next = 0;
   let line = 0;
+
+  const rule = (
+    record: DatasetRecord,
+    slot: number,
+    before?: DatasetRecord,
+  ) => {
+    const filter = record.metadata?.[SCORE_FILTER];
+    if (filter === undefined) {
+      ruled.delete(slot); // the latest content decides
+      return;
+    }
+    ruled.set(
+      slot,
+      applyFacts(
+        {
+          ...applyFacts({}, before ?? {}),
+          metadata: { [SCORE_FILTER]: filter },
+        },
+        record,
+      ),
+    );
+  };
 
   for (const [p, part] of parts.entries()) {
     partStarts[p] = line;
@@ -57,6 +95,8 @@ export const buildVersionIndex = async (
         lineSlots.fill(-1);
         slotOf = new Map();
         early = new Map();
+        ruled = new Map();
+        earlyFacts = new Map();
         next = 0;
         continue;
       }
@@ -69,22 +109,48 @@ export const buildVersionIndex = async (
       const known = slotOf.get(id);
       if (known !== undefined) {
         lineSlots[at] = known;
+        const state = ruled.get(known);
+        if (!isScoreUpdate(record)) rule(record, known, state);
+        else if (state) ruled.set(known, applyFacts(state, record));
       } else if (isScoreUpdate(record)) {
         const waiting = early.get(id);
         if (waiting) waiting.push(at);
         else early.set(id, [at]);
+        if (ruled.size > 0) {
+          earlyFacts.set(id, applyFacts(earlyFacts.get(id) ?? {}, record));
+        }
       } else {
         slotOf.set(id, next);
         lineSlots[at] = next;
         for (const earlier of early.get(id) ?? []) lineSlots[earlier] = next;
         early.delete(id);
+        rule(record, next);
+        const facts = earlyFacts.get(id);
+        const state = ruled.get(next);
+        if (facts && state) ruled.set(next, applyFacts(state, facts));
+        earlyFacts.delete(id);
         next += 1;
       }
     }
   }
   partStarts[parts.length] = line;
 
-  return { total: next, slots: Int32Array.from(lineSlots), partStarts };
+  // Drop the slots whose scores fail their filter, and renumber the rest.
+  let total = next;
+  if ([...ruled.values()].some((facts) => !passesScoreFilter(facts))) {
+    const renumber = new Int32Array(next);
+    total = 0;
+    for (let slot = 0; slot < next; slot += 1) {
+      const facts = ruled.get(slot);
+      renumber[slot] = facts && !passesScoreFilter(facts) ? -1 : total++;
+    }
+    for (let i = 0; i < lineSlots.length; i += 1) {
+      const slot = lineSlots[i] as number;
+      if (slot >= 0) lineSlots[i] = renumber[slot] as number;
+    }
+  }
+
+  return { total, slots: Int32Array.from(lineSlots), partStarts };
 };
 
 /** Merged records [from, from + limit) of the version `index` describes. */

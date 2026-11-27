@@ -529,11 +529,7 @@ export const createImportService = (
           );
           if (!updated) throw leaseLost(id);
           if (isSyncPayload(job.source)) {
-            await collaborators.sources.completeSync(
-              tx,
-              job,
-              summary.watermark,
-            );
+            await collaborators.sources.completeSync(tx, job, summary);
           }
 
           return { completed: updated, orphans: orphanKeys, dataset };

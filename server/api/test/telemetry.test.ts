@@ -313,6 +313,9 @@ describe("Prometheus metrics", () => {
       secretName: null,
       project: null,
       filters: {},
+      sampleRate: 1,
+      maxRecordsPerSync: null,
+      maxRecordsPerDay: null,
       schedule: null,
       nextSyncAt: null,
     });

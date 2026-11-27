@@ -44,6 +44,8 @@ export {
   SourcesResource,
   sources,
   type AddSourceOptions,
+  type SourceLimits,
+  type UpdateSourceOptions,
   type GradiatedOptions,
   type ProviderOptions,
   type SecretLike,

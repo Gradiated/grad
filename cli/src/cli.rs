@@ -1072,12 +1072,44 @@ pub enum SourcesCmd {
         /// Five-field UTC cron (at most once a minute); without it the source syncs only on request
         #[arg(long, value_name = "CRON")]
         schedule: Option<String>,
-        /// Provider filter KEY=VALUE (VALUE may be JSON; repeatable)
+        /// Filter KEY=VALUE (VALUE may be JSON; repeatable): tags, environment, model,
+        /// version, release, name, user_id, session_id, metadata, from, to, has_feedback,
+        /// min_score (langsmith also filter)
         #[arg(long = "filter", value_name = "KEY=VALUE")]
         filters: Vec<String>,
+        #[command(flatten)]
+        limits: SourceLimitArgs,
         /// Reuse this key when retrying, so the source is created once
         #[arg(long, value_name = "KEY")]
         idempotency_key: Option<String>,
+    },
+    /// Show a source: its effective filters, sampling, caps and last sync
+    Show {
+        /// Source id
+        id: String,
+    },
+    /// Change a source's filters, sampling, caps or schedule (from its next sync)
+    Update {
+        /// Source id
+        id: String,
+        /// Replace the filters with these KEY=VALUE pairs (repeatable)
+        #[arg(
+            long = "filter",
+            value_name = "KEY=VALUE",
+            conflicts_with = "clear_filters"
+        )]
+        filters: Vec<String>,
+        /// Remove every filter
+        #[arg(long)]
+        clear_filters: bool,
+        /// Five-field UTC cron (at most once a minute)
+        #[arg(long, value_name = "CRON", conflicts_with = "no_schedule")]
+        schedule: Option<String>,
+        /// Sync only on request from now on
+        #[arg(long)]
+        no_schedule: bool,
+        #[command(flatten)]
+        limits: SourceLimitArgs,
     },
     /// List sources with their status and last error
     List {
@@ -1106,6 +1138,20 @@ pub enum SourcesCmd {
         /// Source id
         id: String,
     },
+}
+
+/// A source's sampling and record caps (`grad sources add` / `update`).
+#[derive(Args, Debug, Clone, Default)]
+pub struct SourceLimitArgs {
+    /// Sync this share of traces, in (0, 1], chosen by trace id (re-syncs keep the same sample)
+    #[arg(long, value_name = "RATE")]
+    pub sample_rate: Option<f64>,
+    /// At most N new traces per sync (`update`: 0 removes the cap)
+    #[arg(long, value_name = "N")]
+    pub max_records_per_sync: Option<u64>,
+    /// At most N new traces per UTC day (`update`: 0 removes the cap)
+    #[arg(long, value_name = "N")]
+    pub max_records_per_day: Option<u64>,
 }
 
 #[derive(Args, Debug, Clone)]

@@ -11,6 +11,7 @@ import {
   SlugSchema,
   SourceSchema,
   SyncSourceRequestSchema,
+  UpdateSourceRequestSchema,
 } from "../contracts.js";
 import {
   SourcePageRequestSchema,
@@ -231,6 +232,39 @@ export const registerSourceRoutes = (
         ),
         200,
       ),
+  );
+
+  app.openapi(
+    createRoute({
+      method: "patch",
+      path: "/v1/sources/{id}",
+      operationId: "updateSource",
+      summary:
+        "Change a source's filters, sampling, record caps or schedule (from its next sync)",
+      tags,
+      request: {
+        params: IdParamSchema,
+        ...jsonBody(UpdateSourceRequestSchema),
+      },
+      responses: {
+        200: jsonResponse(SourceSchema, "The updated source."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const workspaceId = workspaceOf(c, "sources:write");
+      // A replace of the given fields: a retry changes nothing more.
+      await idempotencyOf(c);
+
+      return c.json(
+        await services.sources.update(
+          workspaceId,
+          c.req.valid("param").id,
+          c.req.valid("json"),
+        ),
+        200,
+      );
+    },
   );
 
   app.openapi(

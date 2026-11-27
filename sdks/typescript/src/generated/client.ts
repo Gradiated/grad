@@ -57,6 +57,7 @@ import type {
   Source,
   SyncSourceRequest,
   TrainableModel,
+  UpdateSourceRequest,
   UploadTicket,
   UsageRecord,
   UsageSummary,
@@ -75,6 +76,7 @@ export const CODEC: CodecTable = {
   "CheckpointEvent": { o: [["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["evalScore", "eval_score", 0]] },
   "CompletedEvent": { o: [["runId", "run_id", 0], ["run", "run", "Run"]] },
   "CreateImportRequest": { o: [["source", "source", "ImportSource"]] },
+  "CreateSourceRequest": { o: [["sampleRate", "sample_rate", 0], ["maxRecordsPerSync", "max_records_per_sync", 0], ["maxRecordsPerDay", "max_records_per_day", 0]] },
   "CreateUploadRequest": { o: [["sizeBytes", "size_bytes", 0]] },
   "CreatedApiKey": { o: [["key", "key", "ApiKey"]] },
   "Dataset": { o: [["workspaceId", "workspace_id", 0], ["recordCount", "record_count", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
@@ -129,12 +131,13 @@ export const CODEC: CodecTable = {
   "RunInterruption": { o: [["resumeStep", "resume_step", 0]] },
   "Secret": { o: [["workspaceId", "workspace_id", 0], ["allowedHosts", "allowed_hosts", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "SetSecretRequest": { o: [["allowedHosts", "allowed_hosts", 0]] },
-  "Source": { o: [["workspaceId", "workspace_id", 0], ["nextSyncAt", "next_sync_at", 0], ["pausedReason", "paused_reason", 0], ["lastError", "last_error", 0], ["lastErrorAt", "last_error_at", 0], ["consecutiveFailures", "consecutive_failures", 0], ["pendingFull", "pending_full", 0], ["lastSyncedAt", "last_synced_at", 0], ["lastSync", "last_sync", "SourceSync"], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "Source": { o: [["workspaceId", "workspace_id", 0], ["sampleRate", "sample_rate", 0], ["maxRecordsPerSync", "max_records_per_sync", 0], ["maxRecordsPerDay", "max_records_per_day", 0], ["recordsToday", "records_today", 0], ["nextSyncAt", "next_sync_at", 0], ["pausedReason", "paused_reason", 0], ["lastError", "last_error", 0], ["lastErrorAt", "last_error_at", 0], ["consecutiveFailures", "consecutive_failures", 0], ["pendingFull", "pending_full", 0], ["lastSyncedAt", "last_synced_at", 0], ["lastSync", "last_sync", "SourceSync"], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "SourceSync": { o: [["importId", "import_id", 0], ["datasetVersion", "dataset_version", 0], ["createdAt", "created_at", 0], ["finishedAt", "finished_at", 0]] },
   "SplitSpec": { o: [["evalFraction", "eval_fraction", 0]] },
   "TrainableModel": { o: [["hfRepo", "hf_repo", 0], ["defaultFor", "default_for", 0], ["pricePerMillionTokensUsd", "price_per_million_tokens_usd", 0], ["maxContextTokens", "max_context_tokens", 0], ["templateRevision", "template_revision", 0], ["calibratedLrs", "calibrated_lrs", 0], ["minGpuMemoryGb", "min_gpu_memory_gb", 0]] },
   "TrajectoryInput": { o: [["messages", "messages", { a: "ChatMessage" }]] },
   "TrajectoryOutput": { o: [["turns", "turns", { a: "ChatMessage" }]] },
+  "UpdateSourceRequest": { o: [["sampleRate", "sample_rate", 0], ["maxRecordsPerSync", "max_records_per_sync", 0], ["maxRecordsPerDay", "max_records_per_day", 0]] },
   "UploadTicket": { o: [["uploadId", "upload_id", 0], ["expiresAt", "expires_at", 0]] },
   "UsageGroup": { o: [["costUsd", "cost_usd", 0]] },
   "UsageKindTotal": { o: [["costUsd", "cost_usd", 0]] },
@@ -455,7 +458,7 @@ export class ApiClient {
    * `POST /v1/datasets/{name}/sources`
    */
   async createDatasetSource(name: string, body: CreateSourceRequest, options?: RequestOptions): Promise<Source> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/sources`, json: body, idempotent: true }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/sources`, json: convertKeys(CODEC, "CreateSourceRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "Source", data, "decode") as Source;
   }
 
@@ -968,5 +971,15 @@ export class ApiClient {
   async syncSource(id: string, body?: SyncSourceRequest, options?: RequestOptions): Promise<ImportJob> {
     const data = await this.transport.json({ method: "POST", path: `/v1/sources/${encodePathParam(id, "id")}/sync`, json: body, idempotent: true }, options);
     return convertKeys(CODEC, "ImportJob", data, "decode") as ImportJob;
+  }
+
+  /**
+   * Change a source's filters, sampling, record caps or schedule (from its next sync)
+   *
+   * `PATCH /v1/sources/{id}`
+   */
+  async updateSource(id: string, body: UpdateSourceRequest, options?: RequestOptions): Promise<Source> {
+    const data = await this.transport.json({ method: "PATCH", path: `/v1/sources/${encodePathParam(id, "id")}`, json: convertKeys(CODEC, "UpdateSourceRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "Source", data, "decode") as Source;
   }
 }

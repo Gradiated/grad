@@ -13,9 +13,13 @@ import type { DatasetRecord } from "../contracts.js";
  * - an update for an id that never arrives is dropped;
  * - a reset marker (`metadata.dataset_reset: true`, from a full source
  *   resync) drops everything before it;
- * - records without an id pass through unchanged.
+ * - records without an id pass through unchanged;
+ * - a record with a `metadata.score_filter` (a source's `has_feedback` /
+ *   `min_score`, which can't be judged until feedback arrives) is kept only
+ *   once its merged scores pass, and loses the key.
  */
 export const SCORE_UPDATE = "score_update";
+export const SCORE_FILTER = "score_filter";
 
 const meta = (record: DatasetRecord): Record<string, unknown> | undefined =>
   record.metadata;
@@ -26,7 +30,11 @@ export const isScoreUpdate = (record: DatasetRecord): boolean =>
 export const isReset = (record: DatasetRecord): boolean =>
   meta(record)?.dataset_reset === true;
 
-const apply = (target: DatasetRecord, patch: DatasetRecord): DatasetRecord => {
+/** `target` with `patch`'s scores (per name) and expected_output, if any. */
+export const applyFacts = (
+  target: DatasetRecord,
+  patch: DatasetRecord,
+): DatasetRecord => {
   const next = { ...target };
   if (patch.scores && Object.keys(patch.scores).length > 0) {
     next.scores = { ...(target.scores ?? {}), ...patch.scores };
@@ -62,9 +70,9 @@ export const mergeRecords = (
     const at = position.get(id);
     if (isScoreUpdate(record)) {
       if (at === undefined) {
-        pending.set(id, apply(pending.get(id) ?? {}, record));
+        pending.set(id, applyFacts(pending.get(id) ?? {}, record));
       } else {
-        out[at] = apply(out[at] as DatasetRecord, record);
+        out[at] = applyFacts(out[at] as DatasetRecord, record);
       }
       continue;
     }
@@ -89,13 +97,50 @@ export const mergeRecords = (
 
     const early = pending.get(id);
     if (early) {
-      next = apply(next, early);
+      next = applyFacts(next, early);
       out[position.get(id) as number] = next;
       pending.delete(id);
     }
   }
 
-  return out;
+  return out.filter(passesScoreFilter).map(admitted);
+};
+
+/** `grad_trainer/records.py::passes_score_filter`. */
+export const passesScoreFilter = (record: DatasetRecord): boolean => {
+  const rule = meta(record)?.[SCORE_FILTER] as
+    | { has_feedback?: unknown; min_score?: unknown }
+    | undefined;
+  if (!rule || typeof rule !== "object") return true;
+  const named = record.scores ?? {};
+  const scores = Object.values(named);
+  if (
+    rule.has_feedback === true &&
+    scores.length === 0 &&
+    (record.expected_output === undefined || record.expected_output === null)
+  ) {
+    return false;
+  }
+  const min = rule.min_score;
+  if (typeof min === "number") {
+    return scores.length > 0 && scores.every((v) => v >= min);
+  }
+  if (min && typeof min === "object") {
+    return Object.entries(min as Record<string, number>).every(
+      ([name, floor]) =>
+        typeof named[name] === "number" && named[name] >= floor,
+    );
+  }
+
+  return true;
+};
+
+const admitted = (record: DatasetRecord): DatasetRecord => {
+  const m = meta(record);
+  if (!m || !(SCORE_FILTER in m)) return record;
+  const { [SCORE_FILTER]: _rule, ...rest } = m;
+
+  return { ...record, metadata: rest };
 };
 
 /** A score-update record for `id` (appended by `dataset.score()`). */

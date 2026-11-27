@@ -69,7 +69,7 @@ from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX
 from ._transport import SSEDecoder, iter_sse, quote_path_param
 from .recipes import _thinking
 from .records import Trajectory
-from .sources import provider_body, secret_name
+from .sources import UNSET, provider_body, secret_name
 from .rubrics import model_ref
 
 if TYPE_CHECKING:
@@ -524,16 +524,61 @@ class Sources(_Resource):
     A source feeds exactly one dataset; a dataset can have several sources (one per provider or
     project). Deleting a dataset deletes its sources."""
 
-    def create(self, dataset: Any, provider: Any, *, schedule: str | None = None, idempotency_key: str | None = None) -> Source:
-        """Connect ``provider`` (``grad.sources.Langfuse(...)``, ...) to ``dataset`` (created if
-        missing). ``schedule`` is a five-field UTC cron, so it fires at most once a minute."""
+    def create(
+        self,
+        dataset: Any,
+        provider: Any,
+        *,
+        schedule: str | None = None,
+        sample_rate: float | None = None,
+        max_records_per_sync: int | None = None,
+        max_records_per_day: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> Source:
+        """Connect ``provider`` (``grad.sources.Langfuse(..., filters={...})``, ...) to
+        ``dataset`` (created if missing). ``schedule`` is a five-field UTC cron, so it fires at
+        most once a minute. ``sample_rate`` (0-1] keeps that share of traces, chosen by trace id;
+        ``max_records_per_sync`` / ``max_records_per_day`` cap the new traces taken."""
         body: dict[str, Any] = {"provider": provider_body(provider)}
-        if schedule is not None:
-            body["schedule"] = schedule
+        for key, value in (
+            ("schedule", schedule),
+            ("sample_rate", sample_rate),
+            ("max_records_per_sync", max_records_per_sync),
+            ("max_records_per_day", max_records_per_day),
+        ):
+            if value is not None:
+                body[key] = value
         return Source.from_api(
             self._wire.create_dataset_source(h.dataset_name(dataset), body, idempotency_key=idempotency_key),
             self._client,
         )
+
+    def update(
+        self,
+        source: Any,
+        *,
+        filters: Any = UNSET,
+        schedule: Any = UNSET,
+        sample_rate: Any = UNSET,
+        max_records_per_sync: Any = UNSET,
+        max_records_per_day: Any = UNSET,
+    ) -> Source:
+        """Change a source from its next sync. Arguments left out keep their value; ``filters``
+        replaces all of them (``{}`` clears them), ``None`` clears the schedule or a cap. Traces
+        already synced stay; ``sync(full=True)`` rebuilds the dataset with the new settings."""
+        body = {
+            key: dict(value) if key == "filters" else value
+            for key, value in (
+                ("filters", filters),
+                ("schedule", schedule),
+                ("sample_rate", sample_rate),
+                ("max_records_per_sync", max_records_per_sync),
+                ("max_records_per_day", max_records_per_day),
+            )
+            if value is not UNSET
+        }
+        source_id = source.id if isinstance(source, Source) else str(source)
+        return Source.from_api(self._wire.update_source(source_id, body), self._client)
 
     def get(self, source_id: str) -> Source:
         return Source.from_api(self._wire.get_source(source_id), self._client)

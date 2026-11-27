@@ -1,5 +1,5 @@
 {
-  "description": "Every SDK and the CLI replay this file. 'requests': what each SDK must send for the same logical call (method, path, Idempotency-Key when the caller passes one, JSON body). 'responses': bodies whose typed fields every SDK asserts ('expect' lists them). GET cases carry 'query' (string values) and no body or Idempotency-Key.",
+  "description": "Every SDK and the CLI replay this file. 'requests': what each SDK must send for the same logical call (method, path, Idempotency-Key when the caller passes one, JSON body). 'responses': bodies whose typed fields every SDK asserts ('expect' lists them). GET cases carry 'query' (string values) and no body or Idempotency-Key; PATCH cases carry no Idempotency-Key (a replace of the given fields).",
   "requests": [
     {
       "case": "plan_sft_every_param",
@@ -376,6 +376,43 @@
           }
         },
         "schedule": "0 * * * *"
+      }
+    },
+    {
+      "case": "add_source_filtered",
+      "method": "POST",
+      "path": "/v1/datasets/support-prod/sources",
+      "idempotency_key": null,
+      "body": {
+        "provider": {
+          "kind": "langfuse",
+          "secret": "langfuse-prod",
+          "filters": {
+            "environment": [
+              "production"
+            ],
+            "min_score": {
+              "helpfulness": 0.8
+            }
+          }
+        },
+        "sample_rate": 0.1,
+        "max_records_per_day": 100000
+      }
+    },
+    {
+      "case": "update_source",
+      "method": "PATCH",
+      "path": "/v1/sources/src_01J9X",
+      "idempotency_key": null,
+      "body": {
+        "filters": {
+          "tags": [
+            "prod"
+          ]
+        },
+        "sample_rate": 0.5,
+        "max_records_per_sync": null
       }
     },
     {
@@ -767,9 +804,17 @@
         "host": "https://cloud.langfuse.com",
         "secret": "langfuse-prod",
         "project": null,
-        "filters": {}
+        "filters": {
+          "environment": [
+            "production"
+          ]
+        }
       },
       "schedule": "*/15 * * * *",
+      "sample_rate": 0.1,
+      "max_records_per_sync": null,
+      "max_records_per_day": 100000,
+      "records_today": 4200,
       "next_sync_at": null,
       "status": "paused",
       "paused_reason": "10 syncs in a row failed. Fix the cause (often the provider key: 'grad secrets set NAME' resumes the source), or run 'grad sources sync src_01J9X' to resume it.",
@@ -1380,6 +1425,9 @@
     "source.provider.kind": "langfuse",
     "source.provider.secret": "langfuse-prod",
     "source.schedule": "*/15 * * * *",
+    "source.sample_rate": 0.1,
+    "source.max_records_per_day": 100000,
+    "source.records_today": 4200,
     "source.last_sync.status": "completed",
     "source.last_sync.dataset_version": 3,
     "source.status": "paused",

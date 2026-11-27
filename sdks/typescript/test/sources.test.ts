@@ -103,6 +103,30 @@ describe("sources", () => {
     expect(server.calls.at(-1)?.method).toBe("DELETE");
   });
 
+  it("sends sampling and caps, shows the effective filters, and updates a source", async () => {
+    const server = new FakeServer()
+      .on("POST", "/v1/datasets/support-prod/sources", json(SOURCE, 201))
+      .on("PATCH", "/v1/sources/src_01J9X", json({ ...SOURCE, sample_rate: 0.5, schedule: null }))
+      .on("PATCH", "/v1/sources/bad", problem(422, "source_filter_unsupported"));
+    const { grad } = makeGrad(server, { maxRetries: 0 });
+    const source = await grad.sources.create("support-prod", {
+      provider: sources.langfuse({ secret: "lf", filters: { tags: ["prod"] } }),
+      sampleRate: 0.1,
+      maxRecordsPerSync: 500,
+    });
+    expect(JSON.parse(server.calls.at(-1)?.body ?? "{}")).toEqual({
+      provider: { kind: "langfuse", secret: "lf", filters: { tags: ["prod"] } },
+      sample_rate: 0.1,
+      max_records_per_sync: 500,
+    });
+    expect([source.filters, source.sampleRate, source.maxRecordsPerDay, source.recordsToday]).toEqual([{ environment: ["production"] }, 0.1, 100000, 4200]);
+    expect(await source.update({ schedule: null, maxRecordsPerDay: null })).toBe(source);
+    expect(JSON.parse(server.calls.at(-1)?.body ?? "{}")).toEqual({ schedule: null, max_records_per_day: null });
+    expect([source.sampleRate, source.schedule]).toEqual([0.5, null]);
+    expect(server.calls.at(-1)?.headers.get("idempotency-key")).toBeNull();
+    await expect(grad.sources.update("bad", { filters: { tag: ["prod"] } })).rejects.toMatchObject({ code: "source_filter_unsupported" });
+  });
+
   it("maps unsupported and Cloud-only providers to typed errors", async () => {
     const server = new FakeServer()
       .on("POST", "/v1/datasets/d/sources", problem(422, "source_provider_unsupported"))

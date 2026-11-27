@@ -170,6 +170,35 @@ class LangfuseSyncLiveTests(_SourcesLive):
         source.remove()
         client.secrets.delete("langfuse-prod")
 
+    def test_filters_sampling_caps_and_update(self) -> None:
+        client = Grad()
+        url = str(self.stack.info["langfuse_url"])
+        client.secrets.set("langfuse-filtered", str(self.stack.info["langfuse_secret"]), allowed_hosts=[url])
+        self.addCleanup(self.control, "reset", {})
+        self.control("traces", [_trace(11, 90), _trace(12, 80, version="v42"), _trace(13, 70, version="v42"), _trace(14, 60, version="v42")])
+        with self.assertRaises(grad.ValidationError) as bad:
+            client.sources.create("filtered", sources.Langfuse(host=url, secret="langfuse-filtered", filters={"tag": "prod"}))
+        self.assertEqual(bad.exception.code, "source_filter_unsupported")
+
+        source = client.datasets.create("filtered").add_source(
+            provider=sources.Langfuse(host=url, secret="langfuse-filtered", filters={"version": "v42", "tags": ["prod"]}),
+            max_records_per_sync=2,
+        )
+        self.assertEqual(source.filters, {"version": ["v42"], "tags": ["prod"]})
+        job = source.sync().wait(timeout=120)
+        records = self.records(client, "filtered")
+        self.assertEqual(len(records), 2)
+        self.assertTrue(set(records) <= {"trace-12", "trace-13", "trace-14"})
+        self.assertIn("over the record cap: 1 traces", job.drop_reasons)
+        self.assertEqual(source.refresh().records_today, 2)
+
+        source.update(filters={"version": "v41"}, max_records_per_sync=None, sample_rate=1)
+        self.assertEqual((source.filters, source.max_records_per_sync), ({"version": ["v41"]}, None))
+        self.assertEqual(source.sync(full=True).wait(timeout=120).status, "completed")
+        self.assertEqual(sorted(self.records(client, "filtered")), ["trace-11"])
+        source.remove()
+        client.secrets.delete("langfuse-filtered")
+
     def test_typed_errors(self) -> None:
         client = Grad()
         with self.assertRaises(grad.ValidationError) as unsupported:

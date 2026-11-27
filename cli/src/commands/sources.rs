@@ -1,13 +1,13 @@
 //! `grad secrets` and `grad sources`.
 
-use grad_sdk::{Client, Source, SourceProvider, WaitOptions};
+use grad_sdk::{Client, Source, SourceOptions, SourceProvider, SourceUpdate, WaitOptions};
 use serde_json::{json, Value};
 use std::io::{IsTerminal, Read};
 use std::time::Duration;
 
 use super::data::print_import;
 use super::{more_hint, on_interrupt, page, Ctx};
-use crate::cli::{SecretsCmd, SourcesCmd};
+use crate::cli::{SecretsCmd, SourceLimitArgs, SourcesCmd};
 use crate::output::{when, CliError, CliResult};
 
 /// Secret values are small (the server caps them at 16 KiB).
@@ -125,6 +125,38 @@ fn parse_filter(spec: &str) -> CliResult<(String, Value)> {
     Ok((key.to_string(), value))
 }
 
+fn parse_filters(specs: &[String]) -> CliResult<serde_json::Map<String, Value>> {
+    specs.iter().map(|f| parse_filter(f)).collect()
+}
+
+/// The effective filters, sampling and caps in one line: `environment=["production"] · 10% · ≤100000/day`.
+fn limits(s: &Source) -> String {
+    let mut parts: Vec<String> = s
+        .filters()
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect();
+    if s.sample_rate < 1.0 {
+        parts.push(format!("{}% sampled", s.sample_rate * 100.0));
+    }
+    if let Some(n) = s.max_records_per_sync {
+        parts.push(format!("≤{}/sync", n));
+    }
+    if let Some(n) = s.max_records_per_day {
+        parts.push(format!("≤{}/day", n));
+    }
+    if parts.is_empty() {
+        "-".into()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// `--max-records-per-*` on `update`: 0 removes the cap.
+fn cap(n: Option<u64>) -> Option<Option<u64>> {
+    n.map(|n| (n > 0).then_some(n))
+}
+
 fn describe(s: &Source) -> String {
     let mut parts = vec![s.provider.kind.clone()];
     if let Some(h) = &s.provider.host {
@@ -176,25 +208,29 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
             project,
             schedule,
             filters,
+            limits:
+                SourceLimitArgs {
+                    sample_rate,
+                    max_records_per_sync,
+                    max_records_per_day,
+                },
             idempotency_key,
         } => {
             let mut p = SourceProvider::new(provider.trim().to_ascii_lowercase());
             p.host = host;
             p.secret = secret;
             p.project = project;
-            for f in &filters {
-                let (k, v) = parse_filter(f)?;
-                p = p.filter(k, v);
-            }
+            p.filters = parse_filters(&filters)?;
+            let opts = SourceOptions {
+                schedule,
+                sample_rate,
+                max_records_per_sync,
+                max_records_per_day,
+            };
             let c = ctx.client()?;
             let s = c
                 .sources()
-                .create(
-                    &dataset,
-                    &p,
-                    schedule.as_deref(),
-                    idempotency_key.as_deref(),
-                )
+                .create_with(&dataset, &p, &opts, idempotency_key.as_deref())
                 .await?;
             out.line(format!(
                 "✓ Added source {} ({}) to dataset {}",
@@ -213,6 +249,90 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                 )),
                 None => out.line(format!("  Sync it with: grad sources sync {}", s.id)),
             }
+            if limits(&s) != "-" {
+                out.line(format!("  Filters: {}", limits(&s)));
+            }
+            out.done(&s)
+        }
+        SourcesCmd::Show { id } => {
+            let c = ctx.client()?;
+            let s = c.sources().get(&id).await?;
+            let rows = [
+                ("source", s.id.clone()),
+                ("dataset", s.dataset.clone()),
+                ("provider", describe(&s)),
+                (
+                    "schedule",
+                    s.schedule.clone().unwrap_or_else(|| "on request".into()),
+                ),
+                (
+                    "next sync",
+                    s.next_sync_at
+                        .as_deref()
+                        .map(when)
+                        .unwrap_or_else(|| "-".into()),
+                ),
+                ("status", status(&s)),
+                ("filters", limits(&s)),
+                (
+                    "today",
+                    match s.max_records_per_day {
+                        Some(n) => format!("{} of {} new traces", s.records_today, n),
+                        None => format!("{} new traces", s.records_today),
+                    },
+                ),
+                ("last sync", last_sync(&s)),
+                (
+                    "last error",
+                    s.last_error.clone().unwrap_or_else(|| "-".into()),
+                ),
+            ];
+            for (k, v) in rows {
+                out.line(format!("{:<11}{}", k, v));
+            }
+            out.done(&s)
+        }
+        SourcesCmd::Update {
+            id,
+            filters,
+            clear_filters,
+            schedule,
+            no_schedule,
+            limits:
+                SourceLimitArgs {
+                    sample_rate,
+                    max_records_per_sync,
+                    max_records_per_day,
+                },
+        } => {
+            let change = SourceUpdate {
+                filters: if clear_filters || !filters.is_empty() {
+                    Some(parse_filters(&filters)?)
+                } else {
+                    None
+                },
+                schedule: if no_schedule {
+                    Some(None)
+                } else {
+                    schedule.map(Some)
+                },
+                sample_rate,
+                max_records_per_sync: cap(max_records_per_sync),
+                max_records_per_day: cap(max_records_per_day),
+            };
+            if change == SourceUpdate::default() {
+                return Err(CliError::usage(
+                    "nothing to change: pass --filter, --clear-filters, --schedule, --no-schedule, --sample-rate or a --max-records-* cap",
+                ));
+            }
+            let c = ctx.client()?;
+            let s = c.sources().update(&id, &change).await?;
+            out.line(format!("✓ Updated source {} (from its next sync)", s.id));
+            out.line(format!("  Filters: {}", limits(&s)));
+            out.line(format!(
+                "  Traces already synced stay; rebuild with: grad sources sync {} --full",
+                s.id
+            ));
             out.done(&s)
         }
         SourcesCmd::List { dataset, page: p } => {
@@ -225,6 +345,7 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                     "provider",
                     "schedule",
                     "status",
+                    "filters",
                     "last sync",
                     "synced",
                     "last error",
@@ -238,6 +359,7 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                             describe(s),
                             s.schedule.clone().unwrap_or_else(|| "-".into()),
                             status(s),
+                            limits(s),
                             last_sync(s),
                             s.last_synced_at
                                 .as_deref()

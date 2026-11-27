@@ -327,7 +327,10 @@ impl SourceProvider {
         self
     }
 
-    /// One provider-specific filter (`{"tags": ["prod"]}`, ...).
+    /// One filter (`.filter("tags", json!(["prod"]))`). Every provider takes `tags`,
+    /// `environment`, `model`, `version`, `release`, `name`, `user_id`, `session_id`,
+    /// `metadata`, `from`/`to`, `has_feedback` and `min_score` (LangSmith also `filter`);
+    /// the server answers 422 `source_filter_unsupported` for any other key.
     pub fn filter(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
         self.filters.insert(key.into(), value.into());
         self
@@ -383,6 +386,14 @@ pub struct Source {
     pub dataset: String,
     pub provider: SourceProvider,
     pub schedule: Option<String>,
+    /// The share of traces synced (1: all), chosen by a hash of the trace id.
+    #[serde(default = "all_traces")]
+    pub sample_rate: f64,
+    /// Caps on new traces taken per sync and per UTC day (None: no cap).
+    pub max_records_per_sync: Option<u64>,
+    pub max_records_per_day: Option<u64>,
+    /// New traces synced so far this UTC day (what `max_records_per_day` counts).
+    pub records_today: u64,
     /// Null without a schedule or while paused; backs off after failed syncs.
     pub next_sync_at: Option<String>,
     /// `active`, or `paused` after 10 failed syncs in a row (a manual sync or a new value for
@@ -400,4 +411,49 @@ pub struct Source {
     pub last_sync: Option<SourceSync>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+fn all_traces() -> f64 {
+    1.0
+}
+
+impl Source {
+    /// The effective filters, as the server validated them (single values as lists).
+    pub fn filters(&self) -> &serde_json::Map<String, Value> {
+        &self.provider.filters
+    }
+}
+
+/// Schedule, sampling and record caps for [`Sources::create_with`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct SourceOptions {
+    /// Five-field UTC cron (at most once a minute); None syncs only on request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    /// The share of traces to sync, in (0, 1], chosen by a hash of the trace id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
+    /// At most this many new traces per sync. Feedback on synced traces always lands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_records_per_sync: Option<u64>,
+    /// At most this many new traces per UTC day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_records_per_day: Option<u64>,
+}
+
+/// A change to a source from its next sync ([`Sources::update`]): `None` keeps a field,
+/// `Some(None)` clears the schedule or a cap. `filters` replaces them all (an empty map
+/// clears them).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct SourceUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<serde_json::Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_records_per_sync: Option<Option<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_records_per_day: Option<Option<u64>>,
 }

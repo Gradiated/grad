@@ -107,7 +107,9 @@ type ProviderConfig struct {
 	Secret SecretLike
 	// Project is required for Braintrust (id or name) and PostHog (numeric id).
 	Project string
-	// Filters are provider-specific filters passed to the fetcher.
+	// Filters narrow what is synced. Every provider takes tags, environment, model, version,
+	// release, name, user_id, session_id, metadata, from/to, has_feedback and min_score
+	// (LangSmith also "filter"); any other key is a *ValidationError.
 	Filters map[string]any
 }
 
@@ -167,8 +169,60 @@ type SourceParams struct {
 	Provider SourceProvider
 	// Schedule is a five-field UTC cron; empty syncs only on request.
 	Schedule string
+	// SampleRate in (0, 1] keeps that share of traces, chosen by a hash of the trace id (0: all).
+	SampleRate float64
+	// MaxRecordsPerSync and MaxRecordsPerDay cap the new traces taken (0: no cap). Feedback on
+	// traces already synced always lands.
+	MaxRecordsPerSync, MaxRecordsPerDay int
 	// IdempotencyKey makes a retried create return the first source.
 	IdempotencyKey string
+}
+
+// SourceUpdate changes a source from its next sync; nil fields keep their value. Traces
+// already synced stay (a FullSync rebuilds the dataset with the new settings).
+type SourceUpdate struct {
+	// Filters, when non-nil, replaces the filters (an empty map clears them).
+	Filters map[string]any
+	// Schedule: a five-field UTC cron, or "" to sync only on request.
+	Schedule   *string
+	SampleRate *float64
+	// MaxRecordsPerSync and MaxRecordsPerDay: a cap, or 0 to remove it.
+	MaxRecordsPerSync, MaxRecordsPerDay *int
+}
+
+func (u SourceUpdate) body() map[string]any {
+	body := map[string]any{}
+	if u.Filters != nil {
+		body["filters"] = u.Filters
+	}
+	if u.Schedule != nil {
+		body["schedule"] = nilIfZero(*u.Schedule)
+	}
+	if u.SampleRate != nil {
+		body["sample_rate"] = *u.SampleRate
+	}
+	if u.MaxRecordsPerSync != nil {
+		body["max_records_per_sync"] = nilIfZero(*u.MaxRecordsPerSync)
+	}
+	if u.MaxRecordsPerDay != nil {
+		body["max_records_per_day"] = nilIfZero(*u.MaxRecordsPerDay)
+	}
+	return body
+}
+
+func nilIfZero[T comparable](v T) any {
+	var zero T
+	if v == zero {
+		return nil
+	}
+	return v
+}
+
+func optPositive[T int | float64](v T) *T {
+	if v <= 0 {
+		return nil
+	}
+	return &v
 }
 
 // Source is an observability provider synced into a dataset; each sync adds a dataset version.
@@ -206,6 +260,19 @@ func (s *Source) Refresh(ctx context.Context) error {
 // Remove disconnects the source; the dataset and its versions stay.
 func (s *Source) Remove(ctx context.Context) error { return s.c.Sources.Remove(ctx, s.ID) }
 
+// Filters are the effective filters, as the server validated them (single values as lists).
+func (s *Source) Filters() map[string]any { return s.Provider.Filters }
+
+// Update changes the source from its next sync (see SourcesService.Update) and reloads it.
+func (s *Source) Update(ctx context.Context, u SourceUpdate) error {
+	fresh, err := s.c.Sources.Update(ctx, s.ID, u)
+	if err != nil {
+		return err
+	}
+	s.Source = fresh.Source
+	return nil
+}
+
 // AddSource connects an observability provider to this dataset.
 func (d *Dataset) AddSource(ctx context.Context, p SourceParams) (*Source, error) {
 	return d.c.Sources.Create(ctx, d, p)
@@ -232,7 +299,13 @@ func (s *SourcesService) Create(ctx context.Context, dataset DatasetRef, p Sourc
 		return nil, err
 	}
 	src, err := api.CreateDatasetSource(ctx, dataset.datasetName(),
-		&generated.CreateSourceRequest{Provider: p.Provider.wire(), Schedule: optString(p.Schedule)},
+		&generated.CreateSourceRequest{
+			Provider:          p.Provider.wire(),
+			Schedule:          optString(p.Schedule),
+			SampleRate:        optPositive(p.SampleRate),
+			MaxRecordsPerSync: optPositive(p.MaxRecordsPerSync),
+			MaxRecordsPerDay:  optPositive(p.MaxRecordsPerDay),
+		},
 		idempotency(p.IdempotencyKey)...)
 	if err != nil {
 		return nil, err
@@ -289,6 +362,25 @@ func (s *SourcesService) Sync(ctx context.Context, id string, opts ...SyncOption
 	}
 	job, err := api.SyncSource(ctx, id, &generated.SyncSourceRequest{Full: &full})
 	return &ImportHandle{c: s.c, job: job, err: err}
+}
+
+// Update changes source id from its next sync: filters, sampling, record caps or the schedule.
+// Unknown or unsupported filter keys are a *ValidationError.
+func (s *SourcesService) Update(ctx context.Context, id string, u SourceUpdate) (*Source, error) {
+	api, err := s.c.api()
+	if err != nil {
+		return nil, err
+	}
+	path, err := generated.EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	// A map body, so a cleared cap or schedule is sent as an explicit null.
+	var src generated.Source
+	if err := api.T.DoJSON(ctx, generated.RequestSpec{Method: "PATCH", Path: "/v1/sources/" + path, Body: u.body()}, &src); err != nil {
+		return nil, err
+	}
+	return &Source{Source: src, c: s.c}, nil
 }
 
 // Remove disconnects a source; its dataset and versions stay.

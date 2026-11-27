@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 //! Shared parity fixture (tests/fixtures/wire/sdk-parity.json), replayed by every SDK and the CLI.
 #![recursion_limit = "256"]
 
@@ -330,6 +329,30 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             )
             .await
             .map(drop),
+        "add_source_filtered" => {
+            let provider = SourceProvider::langfuse()
+                .secret("langfuse-prod")
+                .filter("environment", json!(["production"]))
+                .filter("min_score", json!({"helpfulness": 0.8}));
+            let opts = SourceOptions {
+                sample_rate: Some(0.1),
+                max_records_per_day: Some(100000),
+                ..Default::default()
+            };
+            c.sources()
+                .create_with("support-prod", &provider, &opts, None)
+                .await
+                .map(drop)
+        }
+        "update_source" => {
+            let change = SourceUpdate {
+                filters: json!({"tags": ["prod"]}).as_object().cloned(),
+                sample_rate: Some(0.5),
+                max_records_per_sync: Some(None),
+                ..Default::default()
+            };
+            c.sources().update("src_01J9X", &change).await.map(drop)
+        }
         "sync_source_full" => c.sources().sync("src_01J9X", true).await.map(drop),
         "list_usage" => c.usage().list(&UsageQuery::new().limit(10)).await.map(drop),
         "list_usage_filtered" => c
@@ -409,6 +432,10 @@ async fn requests_match_the_shared_fixture() {
             continue;
         }
         assert_eq!(norm(&sent.json()), norm(&case["body"]), "{}", name);
+        if case["method"] == "PATCH" {
+            assert_eq!(key, "", "{}: PATCHes carry no Idempotency-Key", name);
+            continue;
+        }
         match case["idempotency_key"].as_str() {
             Some(k) => assert_eq!(key, k, "{}", name),
             None => assert_eq!(key.len(), 36, "{}: a fresh UUIDv4", name),
@@ -475,6 +502,9 @@ fn typed_responses() {
         "source.provider.kind": source.provider.kind,
         "source.provider.secret": source.provider.secret,
         "source.schedule": source.schedule,
+        "source.sample_rate": source.sample_rate,
+        "source.max_records_per_day": source.max_records_per_day,
+        "source.records_today": source.records_today,
         "source.last_sync.status": last.status.as_str(),
         "source.last_sync.dataset_version": last.dataset_version,
         "source.status": source.status,
