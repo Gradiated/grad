@@ -102,16 +102,17 @@ still runs the other tests anywhere `jsonschema` is installed. The split-parity 
 
 Both locks are hash-pinned and resolve from PyPI only; installs use `--require-hashes`, so
 a package with the same name and version on another index can't be substituted. The one
-exception, CPU torch, is pinned in `requirements-cpu-override.txt` to its exact wheel on
-download.pytorch.org (and hashed like the rest). Regenerate the locks after changing
+exception, CPU torch, is pinned in `requirements-cpu-override.txt` to its exact x86_64 and
+aarch64 wheels on download.pytorch.org (and hashed like the rest); the CPU lock is universal,
+because the CPU image is built for linux/amd64 and linux/arm64. Regenerate the locks after changing
 `requirements.txt`:
 
 ```bash
 uv pip compile requirements.txt --python-version 3.12 --python-platform x86_64-manylinux_2_28 --no-header --annotation-style line --index-url https://pypi.org/simple --generate-hashes --emit-index-url -o requirements-gpu.lock
-uv pip compile requirements.txt --python-version 3.13 --python-platform x86_64-manylinux_2_28 --no-header --annotation-style line --override requirements-cpu-override.txt --index-url https://pypi.org/simple --generate-hashes --emit-index-url -o requirements-cpu.lock
+uv pip compile requirements.txt --universal --python-version 3.13 --no-header --annotation-style line --override requirements-cpu-override.txt --index-url https://pypi.org/simple --generate-hashes --emit-index-url -o requirements-cpu.lock
 ```
 
-A torch upgrade also updates the wheel URL in `requirements-cpu-override.txt`.
+A torch upgrade also updates both wheel URLs in `requirements-cpu-override.txt`.
 
 `docker build --target gpu` (default) builds the CUDA 13 image; `--target cpu` the CPU one.
 Both run as uid 10001.
