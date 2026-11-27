@@ -9,7 +9,7 @@ By contributing, you agree that your contributions are licensed under the [MIT L
 ## Setup
 
 You need Docker (the server tests and the live SDK suites start a throwaway Postgres
-container) and the toolchains pinned in [`mise.toml`](mise.toml): Node, pnpm, Python, Go,
+and a SeaweedFS S3 container) and the toolchains pinned in [`mise.toml`](mise.toml): Node, pnpm, Python, Go,
 Rust and Helm. With [mise](https://mise.jdx.dev):
 
 ```bash
@@ -77,7 +77,7 @@ in `tests/fixtures/wire/`, so the four SDKs stay at parity.
 
 Two rules hold everywhere:
 
-- Self-hosted `grad` needs only PostgreSQL and S3 (or a local directory). Cloud-only features
+- Self-hosted `grad` needs only PostgreSQL and S3-compatible storage. Cloud-only features
   go through the narrow auth, billing and deploy adapters, never as a hard dependency.
 - Never commit credentials, API keys or customer data, including in test fixtures.
 

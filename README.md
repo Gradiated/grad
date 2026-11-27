@@ -246,7 +246,7 @@ Cloud adds three adapters on top of the same code (auth, per-token billing, host
 
 ## Self-hosting
 
-Self-hosted `grad` needs only Postgres and S3 (or a local directory for `grad local up`). Start everything locally with one command:
+Self-hosted `grad` needs only PostgreSQL 17 and S3-compatible storage (AWS S3, SeaweedFS, MinIO, R2). `grad local up` runs both, with SeaweedFS as the S3 store, so a laptop stores data the way production does. Start everything locally with one command:
 
 ```bash
 grad local up                 # Postgres, grad-server on 127.0.0.1:18787, a CPU trainer
@@ -306,7 +306,7 @@ sdks/go/                 github.com/Gradiated/grad/sdks/go
 sdks/rust/               grad-sdk crate
 scripts/generate-sdks.mjs  OpenAPI -> SDK transport codegen (`--check` in CI)
 scripts/check-docs-snippets.py  Runs the docs' Python and CLI blocks against a live stack
-tests/harness/           Live stack (Postgres, S3, fake Cloud) the SDK and CLI suites run against
+tests/harness/           Live stack (Postgres, SeaweedFS S3, fake Cloud) the SDK and CLI suites run against
 tests/fixtures/wire/     Wire fixtures every SDK replays, including the parity fixture
 ```
 

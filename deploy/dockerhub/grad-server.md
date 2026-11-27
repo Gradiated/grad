@@ -48,7 +48,7 @@ The image listens on `0.0.0.0:8787` as the `node` user. The main settings (the [
 | `ADMIN_API_KEY_HASH` | none | SHA-256 hex of the bootstrap admin key. |
 | `TRAINER_API_KEY` | none | The key the trainer workers use. |
 | `GRAD_SECRETS_KEY` | none | 32 random bytes, base64; encrypts workspace secrets. |
-| `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT` | local `STORAGE_DIR` | Artifact storage; workers and SDKs use presigned URLs. |
+| `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT` | required, AWS default, AWS S3 | S3-compatible storage (AWS S3, SeaweedFS, MinIO, R2); workers and SDKs use presigned URLs. |
 | `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY` | none | OpenAI-compatible endpoint for evals. |
 | `GRAD_JUDGE_BASE_URL`, `GRAD_JUDGE_API_KEY` | the inference endpoint | Endpoint for judge rubric items. |
 | `METRICS_ENABLED`, `METRICS_PORT`, `METRICS_TOKEN` | `true`, the API port, none | Prometheus metrics at `/metrics`. |
