@@ -277,6 +277,8 @@ class CartridgeTask(TorchTask):
         warnings = []
         if result is None:
             warnings.append("No held-out prompts (or no teacher answers): eval_kl is null.")
+        if self.skipped:
+            warnings.append(f"{self.skipped} records had no user question to answer and were skipped.")
         return {
             "eval_kl": eval_kl,
             "no_context_kl": self.no_context_kl,

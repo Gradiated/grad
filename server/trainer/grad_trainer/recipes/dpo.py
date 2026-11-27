@@ -36,10 +36,7 @@ from ..errors import RecipeConfigError, RecipeDataError
 from ..runner_types import BaseArtifact
 from ..trainer import EvalResult
 from .base import RecipeRunner
-from .data import TRAJECTORY_SCHEMA, as_messages, common_prefix, record_id, trajectory_messages
-
-Pair = tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str]
-
+from .data import Pair, extract_pairs
 
 def dpo_loss(
     policy_chosen: torch.Tensor,
@@ -69,63 +66,6 @@ def resolve_beta(params: dict[str, Any]) -> float:
     if not math.isfinite(beta) or beta <= 0:
         raise RecipeConfigError("DPO beta must be a positive number.")
     return beta
-
-
-def _completion(value: Any) -> list[dict[str, Any]]:
-    turns = as_messages(value, "assistant")
-    for turn in turns:
-        if turn.get("role") != "assistant":
-            raise RecipeDataError("DPO completions must be assistant turns.")
-    return turns
-
-
-def extract_pairs(records: list[dict[str, Any]]) -> tuple[list[Pair], int]:
-    """Build (prompt, chosen, rejected, id) pairs. Returns pairs and the count of dropped rows."""
-    pairs: list[Pair] = []
-    dropped = 0
-    groups: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for index, rec in enumerate(records):
-        rid = record_id(rec, index)
-        if rec.get("schema") == TRAJECTORY_SCHEMA:
-            role = rec.get("role")
-            group = rec.get("group_id")
-            if role not in ("chosen", "rejected") or group is None:
-                dropped += 1
-                continue
-            groups.setdefault(str(group), {"chosen": [], "rejected": []})[role].append(rec)
-            continue
-        if rec.get("chosen") is None or rec.get("rejected") is None:
-            dropped += 1
-            continue
-        chosen = as_messages(rec["chosen"], "assistant")
-        rejected = as_messages(rec["rejected"], "assistant")
-        if rec.get("prompt") is not None:
-            prompt = as_messages(rec["prompt"], "user")
-        elif rec.get("messages"):
-            prompt = as_messages(rec["messages"], "user")
-        else:
-            shared = common_prefix(chosen, rejected)
-            prompt, chosen, rejected = chosen[:shared], chosen[shared:], rejected[shared:]
-        pairs.append((prompt, _completion(chosen), _completion(rejected), rid))
-
-    for group_id, sides in sorted(groups.items()):
-        if len(sides["chosen"]) != 1 or not sides["rejected"]:
-            dropped += len(sides["chosen"]) + len(sides["rejected"])
-            continue
-        prompt, chosen = trajectory_messages(sides["chosen"][0])
-        for rej in sides["rejected"]:
-            rej_prompt, rejected = trajectory_messages(rej)
-            if rej_prompt != prompt:
-                raise RecipeDataError(f"Preference group '{group_id}' has different prompts on each side.")
-            pairs.append((prompt, _completion(chosen), _completion(rejected), group_id))
-
-    valid: list[Pair] = []
-    for prompt, chosen, rejected, rid in pairs:
-        if not prompt or not chosen or not rejected or chosen == rejected:
-            dropped += 1
-            continue
-        valid.append((prompt, chosen, rejected, rid))
-    return valid, dropped
 
 
 class DPOTask(TorchTask):

@@ -261,7 +261,8 @@ class EmbeddingTask(TorchTask):
                 "train_pairs": len(self.train),
                 "eval_pairs": len(self.held_out),
                 "dropped_records": self.dropped,
-                "warnings": [] if metrics else ["No held-out pairs: retrieval metrics are null."],
+                "warnings": ([] if metrics else ["No held-out pairs: retrieval metrics are null."])
+                + ([f"{self.dropped} records had no 'query' and 'positive' and were skipped."] if self.dropped else []),
             }
         )
         return report

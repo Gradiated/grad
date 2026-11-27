@@ -455,7 +455,9 @@ describe("planRun", () => {
     });
     expect(reward.resolved_config.lr).toBeCloseTo(1e-4, 8);
     expect(reward.usable_records).toBe(20);
-    expect(reward.warnings.join(" ")).toMatch(/not paired/);
+    expect(reward.warnings.join(" ")).toMatch(
+      /40 of 60 records cannot be used by 'reward' .*for example 'r0', 'r1', 'r2'/,
+    );
     const scored = records.map((r, i) => ({
       ...r,
       scores: { resolved: i % 2 },
@@ -599,16 +601,39 @@ describe("record helpers", () => {
   });
 
   it("counts usable records per recipe", () => {
-    expect(assessRecipeUsability("cartridge", [{}]).usable).toBe(1);
+    expect(assessRecipeUsability("cartridge", [{ prompt: "q" }]).usable).toBe(
+      1,
+    );
+    expect(assessRecipeUsability("cartridge", [{}])).toMatchObject({
+      usable: 0,
+      unusable: 1,
+      examples: ["#0"],
+    });
     expect(
       assessRecipeUsability("sft", [
         {
           messages: [
+            { role: "user", content: "call it" },
             { role: "assistant", content: "", tool_calls: [{ id: "t" }] },
           ],
         },
       ]).usable,
     ).toBe(1);
+    // An answer with no prompt would train without context: counted and reported.
+    expect(
+      assessRecipeUsability("sft", [
+        { id: "lonely", messages: [{ role: "assistant", content: "a" }] },
+        { id: "no-answer", prompt: "q" },
+      ]),
+    ).toMatchObject({
+      usable: 0,
+      unusable: 2,
+      examples: ["lonely", "no-answer"],
+      reasons: [
+        "record has no prompt (a user or system turn before the answer)",
+        "record has no assistant answer (an assistant turn, completion or expected_output) to train on",
+      ],
+    });
     expect(
       assessRecipeUsability("embedding", [{ prompt: "q", positive: "p" }])
         .usable,

@@ -68,6 +68,11 @@ class LangfuseFixture(ProviderFixture):
             }
         )
 
+    def add_correction(self, trace_id: str, answer: str, at: datetime) -> None:
+        # A CORRECTION score: the corrected output as a string value.
+        self.add_score(trace_id, "correction", 0.0, at)
+        self.scores[-1].update(dataType="CORRECTION", value=answer)
+
     def respond(self, req: Req) -> tuple[int, Any, dict[str, str]]:
         limit = int(req.arg("limit", "50") or 50)
         if req.path == "/api/public/v2/observations":

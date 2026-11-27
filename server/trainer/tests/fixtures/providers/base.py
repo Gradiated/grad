@@ -50,6 +50,10 @@ class ProviderFixture:
     def add_score(self, trace_id: str, name: str, value: float, at: datetime) -> None:
         raise NotImplementedError
 
+    def add_correction(self, trace_id: str, answer: str, at: datetime) -> None:
+        """A fixed answer for a trace, the way the provider's feedback API records it."""
+        raise NotImplementedError(f"{self.name} has no corrections")
+
     def respond(self, req: Req) -> tuple[int, Any, dict[str, str]]:
         raise NotImplementedError
 

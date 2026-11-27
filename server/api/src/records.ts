@@ -34,40 +34,150 @@ const expectedText = (expected: unknown): string | null => {
   return null;
 };
 
-/**
- * Full conversation of a record including its training target, from plain
- * `messages`, `grad.trajectory/1` (`input.messages` + `output.turns` or
- * `expected_output`), or `prompt` + `completion`.
- */
-export const recordConversation = (record: DatasetRecord): ChatMessage[] => {
-  if (record.messages && record.messages.length > 0) return record.messages;
+const assistantTurn = (content: string): ChatMessage => ({
+  role: "assistant",
+  content,
+});
 
-  if (record.input?.messages) {
-    const turns = record.output?.turns ?? [];
-    const target = expectedText(record.expected_output);
-    if (turns.length > 0) return [...record.input.messages, ...turns];
-    if (target !== null) {
-      return [...record.input.messages, { role: "assistant", content: target }];
-    }
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
-    return record.input.messages;
+/** JSON with sorted keys and no spaces: the trainer's `json.dumps(sort_keys=True, separators=(",", ":"))`. */
+const sortedJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(sortedJson).join(",")}]`;
+  if (isObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${sortedJson(value[k])}`)
+      .join(",")}}`;
   }
 
-  if (record.prompt !== undefined) {
-    const completion =
-      record.completion !== undefined
-        ? asMessages(record.completion, "assistant")
-        : (() => {
-            const target = expectedText(record.expected_output);
-            return target === null
-              ? []
-              : [{ role: "assistant" as const, content: target }];
-          })();
+  return JSON.stringify(value);
+};
 
-    return [...asMessages(record.prompt, "user"), ...completion];
+/** Turns from a message, a list of messages or `{messages}`; null when it isn't one (trainer `as_messages`). */
+const turnsOf = (value: unknown): ChatMessage[] | null => {
+  if (typeof value === "string") return [assistantTurn(value)];
+  if (Array.isArray(value)) {
+    const out: ChatMessage[] = [];
+    for (const item of value) {
+      const turns = turnsOf(item);
+      if (turns === null) return null;
+      out.push(...turns);
+    }
+
+    return out;
+  }
+  if (isObject(value)) {
+    if ("role" in value) return [value as ChatMessage];
+    if (typeof value.content === "string")
+      return [assistantTurn(value.content)];
+    if (Array.isArray(value.messages)) return turnsOf(value.messages);
+  }
+
+  return null;
+};
+
+/**
+ * The assistant answer an `expected_output` stands for (a gold answer or a
+ * synced correction), or `[]` when it isn't one. Mirrors the trainer's
+ * `recipes/data.py::expected_turns`: a string, a number, a message, a list of
+ * messages or `{messages}` map directly; a one-key object with a string value
+ * (`{"answer": ...}`) is that string; any other object is its JSON.
+ */
+export const expectedTurns = (value: unknown): ChatMessage[] => {
+  if (value === null || value === undefined || typeof value === "boolean") {
+    return [];
+  }
+  if (typeof value === "number") return [assistantTurn(String(value))];
+  if (typeof value === "string") {
+    return value.trim() ? [assistantTurn(value)] : [];
+  }
+  let turns: ChatMessage[] | null = null;
+  if (isObject(value)) {
+    const entries = Object.entries(value);
+    if (
+      "role" in value ||
+      Array.isArray(value.messages) ||
+      typeof value.content === "string"
+    ) {
+      turns = turnsOf(value);
+    } else if (entries.length === 1 && typeof entries[0]?.[1] === "string") {
+      return expectedTurns(entries[0][1]);
+    } else if (entries.length === 0) {
+      return [];
+    } else {
+      return [assistantTurn(sortedJson(value))];
+    }
+  } else if (Array.isArray(value)) {
+    turns = turnsOf(value);
+  }
+
+  return turns?.some((t) => t.role === "assistant") ? turns : [];
+};
+
+/**
+ * The conversation as logged, with the record's own answer: `messages`,
+ * `input.messages` + `output.turns`, or `prompt` + `completion`.
+ */
+export const ownConversation = (record: DatasetRecord): ChatMessage[] => {
+  if (record.messages && record.messages.length > 0) return record.messages;
+  if (
+    record.schema === "grad.trajectory/1" ||
+    (record.input?.messages?.length ?? 0) > 0
+  ) {
+    return [...(record.input?.messages ?? []), ...(record.output?.turns ?? [])];
+  }
+  if (record.prompt !== undefined) {
+    return [
+      ...asMessages(record.prompt, "user"),
+      ...asMessages(record.completion, "assistant"),
+    ];
   }
 
   return [];
+};
+
+/** (prompt, answer): the answer is the run of assistant turns ending the conversation. */
+export const splitAnswer = (
+  messages: readonly ChatMessage[],
+): [ChatMessage[], ChatMessage[]] => {
+  let cut = messages.length;
+  while (cut > 0 && messages[cut - 1]?.role === "assistant") cut -= 1;
+
+  return [messages.slice(0, cut), messages.slice(cut)];
+};
+
+/**
+ * The conversation a record trains on (trainer `record_messages`).
+ * `expected_output` is the target: it replaces the record's own final answer
+ * (a synced correction), or answers a prompt that has none. A record without
+ * a prompt trains on nothing.
+ */
+export const recordConversation = (record: DatasetRecord): ChatMessage[] => {
+  const conversation = ownConversation(record);
+  const target = expectedTurns(record.expected_output);
+  const [prompt] = splitAnswer(conversation);
+  if (prompt.length === 0) return [];
+
+  return target.length > 0 ? [...prompt, ...target] : conversation;
+};
+
+/**
+ * (prompt, chosen, rejected) for a record whose `expected_output` corrects
+ * its own answer: the correction is chosen, the logged answer rejected.
+ */
+export const correctionPair = (
+  record: DatasetRecord,
+): [ChatMessage[], ChatMessage[], ChatMessage[]] | null => {
+  const target = expectedTurns(record.expected_output);
+  const [prompt, answer] = splitAnswer(ownConversation(record));
+  if (target.length === 0 || prompt.length === 0 || answer.length === 0) {
+    return null;
+  }
+  if (sortedJson(answer) === sortedJson(target)) return null;
+
+  return [prompt, target, answer];
 };
 
 /**
@@ -215,17 +325,22 @@ export const routerObservations = (
 };
 
 export interface RecipeUsability {
+  /** Training items: records, or pairs for DPO and reward models. */
   usable: number;
   total: number;
-  /** Example of why a record was unusable, for error messages. */
+  /** Records the recipe can't use (they are skipped). */
+  unusable: number;
+  /** Why records were unusable (up to 3 distinct reasons). */
   reasons: string[];
+  /** Up to 3 unusable records, by id or `#<index>`. */
+  examples: string[];
   /** Router only: candidate models discovered from per-model scores. */
   discoveredModels?: string[];
 }
 
 const SHAPE_HELP: Record<string, string> = {
-  sft: 'SFT needs chat records with an assistant turn: {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}, a grad.trajectory/1 record with input.messages and output.turns, or {"prompt": ..., "completion": ...}.',
-  dpo: 'DPO needs preference pairs {"prompt", "chosen", "rejected"} or grad.trajectory/1 records sharing a group_id with role "chosen" and role "rejected".',
+  sft: 'SFT needs a prompt and an answer: {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}, {"input": {"messages": [...]}, "output": {"turns": [...]}}, {"prompt": ..., "completion": ...}, or any of these with "expected_output" as the answer.',
+  dpo: 'DPO needs preference pairs {"prompt", "chosen", "rejected"}, grad.trajectory/1 records sharing a group_id with role "chosen" and role "rejected", or a logged answer with a correction in "expected_output" (the correction is chosen).',
   reward:
     'Reward models need preference pairs {"prompt", "chosen", "rejected"} (or grad.trajectory/1 records sharing a group_id with role "chosen" and role "rejected"), or, with recipe.rubric, answers carrying that score in [0, 1]: {"messages": [..., {"role": "assistant", ...}], "scores": {"resolved": 1.0}}.',
   distill:
@@ -241,8 +356,12 @@ const SHAPE_HELP: Record<string, string> = {
 export const recordShapeHelp = (kind: RecipeKind): string =>
   SHAPE_HELP[kind] ?? "";
 
+const recordLabel = (r: DatasetRecord, index: number): string =>
+  r.id ?? `#${index}`;
+
 /**
- * Counts how many records a recipe can actually train on. Unknown shapes are
+ * Counts how many records a recipe can actually train on, and which it can't
+ * (with reasons and example ids for the plan warning). Unknown shapes are
  * never silently accepted: callers reject plans with zero usable records.
  */
 export const assessRecipeUsability = (
@@ -251,18 +370,29 @@ export const assessRecipeUsability = (
   routerOptions: RouterLabelOptions = {},
 ): RecipeUsability => {
   const reasons = new Set<string>();
-  const note = (reason: string) => {
+  const examples: string[] = [];
+  let unusable = 0;
+  const skip = (label: string, reason: string) => {
+    unusable += 1;
+    if (examples.length < 3) examples.push(label);
     if (reasons.size < 3) reasons.add(reason);
   };
+  const result = (usable: number) => ({
+    usable,
+    total: records.length,
+    unusable,
+    reasons: [...reasons],
+    examples,
+  });
 
   if (kind === "dpo" || kind === "reward") {
     let usable = 0;
-    const groups = new Map<string, Set<string>>();
+    const groups = new Map<string, { roles: Set<string>; labels: string[] }>();
     const pointwise = kind === "reward" ? routerOptions.rubric : undefined;
-    for (const r of records) {
+    records.forEach((r, index) => {
       if (isPreferencePair(r)) {
         usable += 1;
-        continue;
+        return;
       }
       if (pointwise !== undefined && r.scores?.[pointwise] !== undefined) {
         const value = r.scores[pointwise];
@@ -274,51 +404,67 @@ export const assessRecipeUsability = (
         }
         if (hasAssistantTarget(recordConversation(r))) {
           usable += 1;
-          continue;
+          return;
         }
       }
       if (r.group_id && (r.role === "chosen" || r.role === "rejected")) {
-        const roles = groups.get(r.group_id) ?? new Set<string>();
-        roles.add(r.role);
-        groups.set(r.group_id, roles);
-        continue;
+        const group = groups.get(r.group_id) ?? {
+          roles: new Set(),
+          labels: [],
+        };
+        group.roles.add(r.role);
+        group.labels.push(recordLabel(r, index));
+        groups.set(r.group_id, group);
+        return;
       }
-      note(
+      if (correctionPair(r)) {
+        usable += 1;
+        return;
+      }
+      skip(
+        recordLabel(r, index),
         pointwise === undefined
-          ? "record is neither a {prompt, chosen, rejected} pair nor a chosen/rejected trajectory"
-          : `record is neither a {prompt, chosen, rejected} pair, a chosen/rejected trajectory nor an answer with a '${pointwise}' score`,
+          ? "record is neither a {prompt, chosen, rejected} pair, a chosen/rejected trajectory nor an answer with a differing expected_output"
+          : `record is neither a {prompt, chosen, rejected} pair, a chosen/rejected trajectory, an answer with a differing expected_output nor an answer with a '${pointwise}' score`,
       );
-    }
-    let oneSided = 0;
-    for (const roles of groups.values()) {
+    });
+    for (const { roles, labels } of groups.values()) {
       if (roles.has("chosen") && roles.has("rejected")) usable += 1;
-      else oneSided += 1;
-    }
-    if (oneSided > 0) {
-      note(
-        `${oneSided} trajectory group(s) have only a chosen or only a rejected side`,
-      );
+      else {
+        for (const label of labels) {
+          skip(
+            label,
+            "trajectory group has only a chosen or only a rejected side",
+          );
+        }
+      }
     }
 
-    return { usable, total: records.length, reasons: [...reasons] };
-  }
-
-  if (kind === "cartridge") {
-    return { usable: records.length, total: records.length, reasons: [] };
+    return result(usable);
   }
 
   let usable = 0;
   const models = new Set<string>();
-  for (const r of records) {
+  records.forEach((r, index) => {
     let ok = false;
+    let reason = "";
     if (kind === "sft" || kind === "grpo") {
-      ok = hasAssistantTarget(recordConversation(r));
-      if (!ok) note("record has no assistant turn to train on");
+      const conversation = recordConversation(r);
+      ok = hasAssistantTarget(conversation);
+      if (!ok) {
+        reason =
+          splitAnswer(ownConversation(r))[0].length === 0
+            ? "record has no prompt (a user or system turn before the answer)"
+            : "record has no assistant answer (an assistant turn, completion or expected_output) to train on";
+      }
+    } else if (kind === "cartridge") {
+      ok = splitAnswer(ownConversation(r))[0].at(-1)?.role === "user";
+      if (!ok) reason = "record has no user question as its last prompt turn";
     } else if (kind === "distill") {
       ok =
         recordPromptAndReference(r)?.prompt.some((m) => m.role === "user") ??
         false;
-      if (!ok) note("record has no user prompt");
+      if (!ok) reason = "record has no user prompt";
     } else if (kind === "router") {
       const hasPrompt =
         recordConversation(r).length > 0 ||
@@ -329,7 +475,7 @@ export const assessRecipeUsability = (
         : routerObservations(r, routerOptions);
       ok = hasPrompt && (routerOptions.labelled || observed.models.length > 0);
       if (ok) observed.models.forEach((m) => models.add(m));
-      else note(observed.reason ?? "record has no prompt");
+      else reason = observed.reason ?? "record has no prompt";
     } else if (kind === "decision") {
       const hasState =
         r.state !== undefined ||
@@ -339,24 +485,27 @@ export const assessRecipeUsability = (
         r.expected_output !== undefined ||
         Object.keys(r.scores ?? {}).length > 0;
       ok = hasState && hasLabel;
-      if (!ok)
-        note(
-          "record needs a state (state, input.features or messages) and a label (expected_output or scores)",
-        );
+      if (!ok) {
+        reason =
+          "record needs a state (state, input.features or messages) and a label (expected_output or scores)";
+      }
     } else if (kind === "embedding") {
       ok =
         typeof (
           r.query ?? (typeof r.prompt === "string" ? r.prompt : undefined)
         ) === "string" && typeof r.positive === "string";
-      if (!ok) note("record needs 'query' and 'positive'");
+      if (!ok) reason = "record needs 'query' and 'positive'";
     }
     if (ok) usable += 1;
-  }
+    else
+      skip(
+        recordLabel(r, index),
+        reason || `record has no shape '${kind}' can use`,
+      );
+  });
 
   return {
-    usable,
-    total: records.length,
-    reasons: [...reasons],
+    ...result(usable),
     ...(kind === "router" ? { discoveredModels: [...models].sort() } : {}),
   };
 };

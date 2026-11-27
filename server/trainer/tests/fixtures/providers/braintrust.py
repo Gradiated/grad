@@ -56,6 +56,12 @@ class BraintrustFixture(ProviderFixture):
         row["scores"] = {**(row["scores"] or {}), name: value}
         row["_xact_id"] = self._next_xact()
 
+    def add_correction(self, trace_id: str, answer: str, at: datetime) -> None:
+        # logFeedback({id, expected}) replaces the span's expected and bumps _xact_id.
+        row = next(r for r in self.traces if r["id"] == trace_id)
+        row["expected"] = answer
+        row["_xact_id"] = self._next_xact()
+
     def respond(self, req: Req) -> tuple[int, Any, dict[str, str]]:
         if req.path == "/v1/project":
             found = [{"id": PROJECT_ID, "name": self.project, "org_id": "org"}] if req.arg("project_name") == self.project else []

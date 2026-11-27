@@ -1,0 +1,525 @@
+{
+  "description": "Shared by server/api/test/training-targets.test.ts and server/trainer/tests/test_training_targets.py: the conversation each record trains on (SFT; [] = unusable, no prompt), and the DPO pair a synced correction makes (chosen = expected_output, rejected = the logged answer).",
+  "cases": [
+    {
+      "name": "prompt + completion",
+      "record": {
+        "id": "pc",
+        "prompt": "What is 2+2?",
+        "completion": "4"
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "What is 2+2?"
+        },
+        {
+          "role": "assistant",
+          "content": "4"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "prompt + completion as messages",
+      "record": {
+        "id": "pcm",
+        "prompt": [
+          {
+            "role": "system",
+            "content": "Be brief."
+          },
+          {
+            "role": "user",
+            "content": "Capital of Peru?"
+          }
+        ],
+        "completion": [
+          {
+            "role": "assistant",
+            "content": "Lima"
+          }
+        ]
+      },
+      "conversation": [
+        {
+          "role": "system",
+          "content": "Be brief."
+        },
+        {
+          "role": "user",
+          "content": "Capital of Peru?"
+        },
+        {
+          "role": "assistant",
+          "content": "Lima"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "prompt + expected_output (Hugging Face answer=)",
+      "record": {
+        "id": "pe",
+        "prompt": "Capital of France?",
+        "expected_output": "Paris"
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "Capital of France?"
+        },
+        {
+          "role": "assistant",
+          "content": "Paris"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "input + expected_output",
+      "record": {
+        "id": "ie",
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Reset my password"
+            }
+          ]
+        },
+        "expected_output": "Open Settings and choose Reset Password."
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "Reset my password"
+        },
+        {
+          "role": "assistant",
+          "content": "Open Settings and choose Reset Password."
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "trajectory with expected_output and no turns",
+      "record": {
+        "id": "te",
+        "schema": "grad.trajectory/1",
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Rotate my key"
+            }
+          ]
+        },
+        "expected_output": {
+          "content": "Open API Keys and click Regenerate."
+        }
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "Rotate my key"
+        },
+        {
+          "role": "assistant",
+          "content": "Open API Keys and click Regenerate."
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "trajectory with output turns",
+      "record": {
+        "id": "tt",
+        "schema": "grad.trajectory/1",
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "hello"
+            }
+          ]
+        },
+        "output": {
+          "turns": [
+            {
+              "role": "assistant",
+              "content": "bonjour"
+            }
+          ]
+        }
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "hello"
+        },
+        {
+          "role": "assistant",
+          "content": "bonjour"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "chat with a synced correction",
+      "record": {
+        "id": "cc",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Where are invoices?"
+          },
+          {
+            "role": "assistant",
+            "content": "I don't know."
+          }
+        ],
+        "expected_output": "Open Billing > Invoices and click Download."
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "Where are invoices?"
+        },
+        {
+          "role": "assistant",
+          "content": "Open Billing > Invoices and click Download."
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": {
+        "chosen": [
+          {
+            "role": "assistant",
+            "content": "Open Billing > Invoices and click Download."
+          }
+        ],
+        "rejected": [
+          {
+            "role": "assistant",
+            "content": "I don't know."
+          }
+        ]
+      }
+    },
+    {
+      "name": "trajectory with a correction",
+      "record": {
+        "id": "tc",
+        "schema": "grad.trajectory/1",
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Merge this diff."
+            }
+          ]
+        },
+        "output": {
+          "turns": [
+            {
+              "role": "assistant",
+              "content": "truncated code"
+            }
+          ]
+        },
+        "expected_output": "clean merged code"
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "Merge this diff."
+        },
+        {
+          "role": "assistant",
+          "content": "clean merged code"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": {
+        "chosen": [
+          {
+            "role": "assistant",
+            "content": "clean merged code"
+          }
+        ],
+        "rejected": [
+          {
+            "role": "assistant",
+            "content": "truncated code"
+          }
+        ]
+      }
+    },
+    {
+      "name": "prompt + completion + correction",
+      "record": {
+        "id": "pcc",
+        "prompt": "SQL for all users",
+        "completion": "SELECT users",
+        "expected_output": "SELECT * FROM users;"
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "SQL for all users"
+        },
+        {
+          "role": "assistant",
+          "content": "SELECT * FROM users;"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": {
+        "chosen": [
+          {
+            "role": "assistant",
+            "content": "SELECT * FROM users;"
+          }
+        ],
+        "rejected": [
+          {
+            "role": "assistant",
+            "content": "SELECT users"
+          }
+        ]
+      }
+    },
+    {
+      "name": "multi-turn correction replaces only the final answer",
+      "record": {
+        "id": "mt",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Be brief."
+          },
+          {
+            "role": "user",
+            "content": "First Q"
+          },
+          {
+            "role": "assistant",
+            "content": "First A"
+          },
+          {
+            "role": "user",
+            "content": "Second Q"
+          },
+          {
+            "role": "assistant",
+            "content": "wrong"
+          }
+        ],
+        "expected_output": "Second A"
+      },
+      "conversation": [
+        {
+          "role": "system",
+          "content": "Be brief."
+        },
+        {
+          "role": "user",
+          "content": "First Q"
+        },
+        {
+          "role": "assistant",
+          "content": "First A"
+        },
+        {
+          "role": "user",
+          "content": "Second Q"
+        },
+        {
+          "role": "assistant",
+          "content": "Second A"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": {
+        "chosen": [
+          {
+            "role": "assistant",
+            "content": "Second A"
+          }
+        ],
+        "rejected": [
+          {
+            "role": "assistant",
+            "content": "wrong"
+          }
+        ]
+      }
+    },
+    {
+      "name": "expected_output as messages",
+      "record": {
+        "id": "em",
+        "prompt": "q",
+        "expected_output": [
+          {
+            "role": "assistant",
+            "content": "a"
+          }
+        ]
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "q"
+        },
+        {
+          "role": "assistant",
+          "content": "a"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "expected_output as a one-key object (LangSmith outputs)",
+      "record": {
+        "id": "ek",
+        "prompt": "q",
+        "expected_output": {
+          "answer": "a"
+        }
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "q"
+        },
+        {
+          "role": "assistant",
+          "content": "a"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "expected_output as a structured object",
+      "record": {
+        "id": "es",
+        "prompt": "q",
+        "expected_output": {
+          "b": 1,
+          "a": "x"
+        }
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "q"
+        },
+        {
+          "role": "assistant",
+          "content": "{\"a\":\"x\",\"b\":1}"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "expected_output as a number",
+      "record": {
+        "id": "en",
+        "prompt": "1+2?",
+        "expected_output": 3
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "1+2?"
+        },
+        {
+          "role": "assistant",
+          "content": "3"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "correction equal to the logged answer",
+      "record": {
+        "id": "eq",
+        "messages": [
+          {
+            "role": "user",
+            "content": "q"
+          },
+          {
+            "role": "assistant",
+            "content": "a"
+          }
+        ],
+        "expected_output": "a"
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "q"
+        },
+        {
+          "role": "assistant",
+          "content": "a"
+        }
+      ],
+      "sft_usable": true,
+      "correction_pair": null
+    },
+    {
+      "name": "expected_output without a prompt",
+      "record": {
+        "id": "np",
+        "expected_output": "x"
+      },
+      "conversation": [],
+      "sft_usable": false,
+      "correction_pair": null
+    },
+    {
+      "name": "an answer without a prompt",
+      "record": {
+        "id": "ao",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "x"
+          }
+        ]
+      },
+      "conversation": [],
+      "sft_usable": false,
+      "correction_pair": null
+    },
+    {
+      "name": "a prompt without an answer",
+      "record": {
+        "id": "po",
+        "prompt": "q"
+      },
+      "conversation": [
+        {
+          "role": "user",
+          "content": "q"
+        }
+      ],
+      "sft_usable": false,
+      "correction_pair": null
+    }
+  ]
+}

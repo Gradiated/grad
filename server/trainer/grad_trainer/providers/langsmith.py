@@ -9,6 +9,7 @@ Docs: https://docs.langchain.com/langsmith/smith-api/runs/query-runs
 from __future__ import annotations
 
 from functools import cached_property
+from typing import Any
 
 from ..errors import SourceUnavailableError
 from ..records import coerce_messages, coerce_scores, record_metadata, score_value
@@ -73,7 +74,7 @@ class LangSmithProvider(Provider):
             if isinstance(first, dict):
                 messages += coerce_messages(first.get("message") or first.get("text"), default_role="assistant")
         else:
-            messages += coerce_messages(outputs, default_role="assistant")
+            messages += _output_messages(outputs)
         extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
         meta = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else extra.get("metadata") or {}
         record: Raw = {"messages": messages}
@@ -102,6 +103,29 @@ class LangSmithProvider(Provider):
         return ScoreUpdate(
             str(trace_id),
             scores,
-            raw.get("correction"),
+            _correction(raw.get("correction")),
             iso_or_none(raw.get("modified_at") or raw.get("created_at")),
         )
+
+
+def _output_messages(outputs: Any) -> list[dict[str, Any]]:
+    """A run's ``outputs`` as assistant turns; a single named text output (``{"answer": "..."}``)
+    is that text, the way LangSmith shows it."""
+    if isinstance(outputs, dict) and len(outputs) == 1:
+        (key, value), = outputs.items()
+        if isinstance(value, str) and key not in ("role", "content"):
+            outputs = value
+    return coerce_messages(outputs, default_role="assistant")
+
+
+def _correction(correction: Any) -> Any:
+    """A feedback ``correction`` (``{"outputs": {...}}``, the fixed run outputs) as an
+    ``expected_output``: the text of a single answer, else the assistant turns."""
+    if correction is None or correction == {}:
+        return None
+    if isinstance(correction, dict) and "outputs" in correction:
+        correction = correction["outputs"]
+    turns = _output_messages(correction)
+    if len(turns) == 1 and isinstance(turns[0].get("content"), str) and set(turns[0]) == {"role", "content"}:
+        return turns[0]["content"]
+    return turns or None

@@ -161,6 +161,15 @@ class SFTTask(TorchTask):
         }
         if result is None:
             report["warnings"].append("No held-out examples: eval_loss is null.")
+        if self.stats["skipped_no_messages"]:
+            report["warnings"].append(
+                f"{self.stats['skipped_no_messages']} records had no prompt and answer to train on and were skipped."
+            )
+        if self.stats["skipped_no_trained_tokens"]:
+            report["warnings"].append(
+                f"{self.stats['skipped_no_trained_tokens']} records had no trained tokens left (train_on='{self.spec.train_on}', "
+                f"max_seq_len {self.max_len}) and were skipped."
+            )
         if self.stats["truncated"]:
             report["warnings"].append(
                 f"{self.stats['truncated']} records were longer than {self.max_len} tokens and were truncated."

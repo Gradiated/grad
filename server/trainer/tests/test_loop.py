@@ -205,9 +205,9 @@ class RecordShapeTests(TempDirCase):
         self.assertEqual([m["role"] for m in record_messages(traj)], ["user", "assistant"])
         self.assertEqual(prompt_messages(traj), [{"role": "user", "content": "q"}])
         self.assertEqual(record_messages({"prompt": "q", "expected_output": {"content": "a"}})[1]["content"], "a")
-        self.assertEqual(record_messages({"prompt": "q", "expected_output": 3}), [{"role": "user", "content": "q"}])
-        # prompt + completion (Hugging Face completion= mapping) trains on the completion.
-        self.assertEqual(record_messages({"prompt": "q", "completion": "c", "expected_output": "e"})[1]["content"], "c")
+        self.assertEqual(record_messages({"prompt": "q", "expected_output": True}), [{"role": "user", "content": "q"}])
+        # A correction (expected_output) replaces the logged completion; more cases in test_training_targets.
+        self.assertEqual(record_messages({"prompt": "q", "completion": "c", "expected_output": "e"})[1]["content"], "e")
         chat = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]}
         self.assertEqual(prompt_messages(chat), [{"role": "user", "content": "q"}])
         self.assertEqual(prompt_messages({"prompt": [{"role": "user", "content": "p"}]})[0]["content"], "p")

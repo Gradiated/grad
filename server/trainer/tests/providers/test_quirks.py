@@ -96,9 +96,21 @@ class LangSmithQuirks(Served):
         records, _ = self.sync(provider)
         merged = {r["id"]: r for r in merge_records(records)}
         self.assertEqual(merged["tr-0"]["scores"], {"k0": 1.0, "k1": 1.0, "k2": 1.0})
-        self.assertEqual(merged["tr-0"]["expected_output"], {"outputs": {"answer": "fixed"}})
+        # The correction's fixed outputs, unwrapped as the logged outputs are: SFT trains on it.
+        self.assertEqual(merged["tr-0"]["expected_output"], "fixed")
         offsets = [r.arg("offset") for r in server.requests if r.path == "/api/v1/feedback"]
         self.assertEqual(offsets, ["0", "2"])
+
+    def test_named_outputs_and_structured_corrections(self) -> None:
+        from grad_trainer.providers.langsmith import _correction
+
+        provider = build_provider({"provider": "langsmith", "secret": "k"})
+        record = provider.to_record({"id": "r1", "inputs": {"question": "q"}, "outputs": {"answer": "a"}})
+        self.assertEqual(record["messages"][-1], {"role": "assistant", "content": "a"})
+        two = [{"role": "assistant", "content": "x"}, {"role": "assistant", "content": "y"}]
+        self.assertEqual(_correction({"outputs": {"messages": two}}), two)
+        self.assertEqual(_correction({"outputs": {"answer": "a", "sources": ["s"]}}), '{"answer": "a", "sources": ["s"]}')
+        self.assertIsNone(_correction({}))
 
     def test_thread_comes_from_metadata_not_the_project_session(self) -> None:
         run = {"id": "r1", "session_id": "project-uuid", "inputs": {"q": 1}, "outputs": {"generations": [[{"text": "a"}]]},

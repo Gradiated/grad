@@ -19,6 +19,7 @@ from grad_trainer.errors import PaginationLoopError, SourceAuthError
 from grad_trainer.providers import PROVIDERS, SyncEngine, build_provider
 from grad_trainer.providers.http import EgressPolicy
 from grad_trainer.records import RESET_RECORD, is_score_update, merge_records
+from grad_trainer.recipes.data import extract_pairs, record_messages
 
 LOOPBACK = EgressPolicy(allow=(ipaddress.ip_network("127.0.0.0/8"),))
 LATER = NOW + timedelta(hours=1)
@@ -152,6 +153,27 @@ class ProviderContract:
         for part in {self.fx.secret, *self.fx.secret.split(":")}:
             self.assertNotIn(part, blob)
         self.assertNotIn("you_sent", blob, "response bodies never reach error messages")
+
+    def test_late_correction_trains_sft_on_the_fix_and_pairs_dpo(self) -> None:
+        # docs: integrations/langsmith.mdx, braintrust.mdx and recipes/sft.mdx "Turn production
+        # misses into your next dataset": the fix is the SFT target, and the DPO chosen side.
+        first, wm = self.sync()
+        fix = "Open Billing > Invoices and click Download."
+        try:
+            self.fx.add_correction(self.fx.trace_id(1), fix, NOW + timedelta(minutes=20))
+        except NotImplementedError:
+            self.skipTest(f"{self.fx.name} has no corrections")
+        second, _ = self.sync(wm.watermark, now=LATER)
+        record = {r["id"]: r for r in merge_records(first + second)}[self.fx.trace_id(1)]
+        self.assertEqual(record["expected_output"], fix)
+        sft = record_messages(record)
+        self.assertEqual(sft, [{"role": "user", "content": "question 1"}, {"role": "assistant", "content": fix}])
+        pairs, dropped = extract_pairs([record])
+        self.assertEqual(dropped, 0)
+        self.assertEqual(
+            pairs,
+            [([{"role": "user", "content": "question 1"}], [{"role": "assistant", "content": fix}], [{"role": "assistant", "content": "answer 1"}], self.fx.trace_id(1))],
+        )
 
     def test_metadata_mapping(self) -> None:
         records, _ = self.sync()

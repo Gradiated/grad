@@ -41,6 +41,11 @@ class GradiatedFixture(ProviderFixture):
             {"type": "score", "trace_id": trace_id, "name": name, "value": value, "expected_output": None, "comment": None, "updated_at": iso(at), "score_id": f"s{len(self.stream)}"}
         )
 
+    def add_correction(self, trace_id: str, answer: str, at: datetime) -> None:
+        self.stream.append(
+            {"type": "score", "trace_id": trace_id, "name": None, "value": None, "expected_output": answer, "comment": None, "updated_at": iso(at), "score_id": f"s{len(self.stream)}"}
+        )
+
     def pull(self, cursor: str | None) -> dict[str, Any]:
         offset = 0 if self.stuck or not cursor else int(cursor)
         chunk = self.stream[offset : offset + PAGE]

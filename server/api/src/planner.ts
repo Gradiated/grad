@@ -430,14 +430,9 @@ export const planRun = (
     );
   }
   const paired = recipe.kind === "dpo" || recipe.kind === "reward";
-  if (usability.usable < usability.total && !paired) {
+  if (usability.unusable > 0) {
     warnings.push(
-      `${usability.total - usability.usable} of ${usability.total} records cannot be used by '${recipe.kind}' and will be skipped (${usability.reasons.join("; ")}).`,
-    );
-  }
-  if (paired && usability.reasons.length > 0) {
-    warnings.push(
-      `Some records were not paired: ${usability.reasons.join("; ")}.`,
+      `${usability.unusable} of ${usability.total} records cannot be used by '${recipe.kind}' and will be skipped (${usability.reasons.join("; ")}); for example ${usability.examples.map((e) => `'${e}'`).join(", ")}.`,
     );
   }
 

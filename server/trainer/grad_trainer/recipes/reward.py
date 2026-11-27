@@ -37,8 +37,7 @@ from ..errors import RecipeConfigError, RecipeDataError
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .classifier import PooledLMTask
-from .data import TRAJECTORY_SCHEMA, record_id, record_messages
-from .dpo import extract_pairs
+from .data import TRAJECTORY_SCHEMA, extract_pairs, record_id, scored_messages
 
 def split_pointwise(records: list[dict[str, Any]], score: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(records for pairs, records scored pointwise under ``score``)."""
@@ -95,7 +94,7 @@ class RewardTask(PooledLMTask):
             {"kind": "pair", "chosen": self._ids(p + c, rid), "rejected": self._ids(p + r, rid)} for p, c, r, rid in pairs
         ]
         for index, rec in enumerate(point_records):
-            messages = record_messages(rec)
+            messages = scored_messages(rec)
             value = rec["scores"][self.score_name]
             if not messages or messages[-1].get("role") != "assistant":
                 self.dropped += 1

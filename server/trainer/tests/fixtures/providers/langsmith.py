@@ -56,6 +56,11 @@ class LangSmithFixture(ProviderFixture):
             }
         )
 
+    def add_correction(self, trace_id: str, answer: str, at: datetime) -> None:
+        # create_feedback(run_id, key="correction", correction={"outputs": {...}}): no score.
+        self.add_score(trace_id, "correction", 0.0, at)
+        self.scores[-1].update(score=None, correction={"outputs": {"answer": answer}})
+
     def respond(self, req: Req) -> tuple[int, Any, dict[str, str]]:
         if req.path == "/api/v1/sessions":
             return 200, [{"id": PROJECT_ID, "name": self.project}] if req.arg("name") == self.project else [], {}
