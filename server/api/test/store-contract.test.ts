@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MetricPointInput, ResolvedRunConfig } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
 import { createMemoryStore } from "../src/store/memory.js";
-import { migrate } from "../src/store/migrate.js";
+import { loadMigrations, migrate } from "../src/store/migrate.js";
 import type { DatasetPart, RunRecord, Store } from "../src/store/types.js";
 import { ManualClock } from "./fixtures/clock.js";
+import { evalReport } from "./fixtures/eval-report.js";
 import {
   createIsolatedPostgresStore,
   dropSchema,
@@ -443,7 +444,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         {
           current_step: 4,
           latest_metric: point as never,
-          eval_report: { acc: 0.9 },
+          eval_report: evalReport({ acc: 0.9 }),
           billed_cost_usd: 1.25,
           billed_tokens: 12345678901,
           finished_at: clock.now().toISOString(),
@@ -452,7 +453,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       );
       expect(updated).toMatchObject({
         current_step: 4,
-        eval_report: { acc: 0.9 },
+        eval_report: evalReport({ acc: 0.9 }),
         billed_cost_usd: 1.25,
         billed_tokens: 12345678901,
         updated_at: clock.now().toISOString(),
@@ -812,12 +813,12 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const a1 = await store.artifacts.create(artifactInput());
       const a2 = await store.artifacts.create({
         ...artifactInput(),
-        evalReport: { acc: 1 },
+        evalReport: evalReport({ acc: 1 }),
       });
       expect(a1.id).toBe("sql-helper@2026-11-27-1");
       expect(a2).toMatchObject({
         version: "2026-11-27-2",
-        eval_report: { acc: 1 },
+        eval_report: { acc: 1, metric_name: "eval_loss" },
       });
       expect(
         (await store.artifacts.create(artifactInput("ws_a", "other"))).version,
@@ -1424,6 +1425,140 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(await store.billing.claimDue(clock.now(), 0, 60)).toEqual([]);
     });
 
+    // --- Idempotency keys -------------------------------------------------
+
+    const idemScope = {
+      workspaceId: "ws_a",
+      principal: "key_1",
+      method: "POST",
+      path: "/v1/runs",
+      key: "k-1",
+    };
+    const idemAt = (ttlSeconds = 86_400, lockSeconds = 300) => ({
+      now: clock.now(),
+      expiredBefore: new Date(clock.now().getTime() - ttlSeconds * 1000),
+      abandonedBefore: new Date(clock.now().getTime() - lockSeconds * 1000),
+    });
+    const stored = {
+      status: 202,
+      headers: { "content-type": "application/json" },
+      body: '{"id":"run_1"}',
+    };
+
+    it("idempotency: claim, in-progress, mismatch, replay, release", async () => {
+      const claim = await store.idempotency.claim(idemScope, "h1", idemAt());
+      expect(claim.outcome).toBe("claimed");
+      const claimId = claim.outcome === "claimed" ? claim.claimId : "";
+
+      expect(await store.idempotency.claim(idemScope, "h1", idemAt())).toEqual({
+        outcome: "in_progress",
+      });
+      expect(await store.idempotency.claim(idemScope, "h2", idemAt())).toEqual({
+        outcome: "mismatch",
+      });
+      expect(
+        (
+          await store.idempotency.claim(
+            { ...idemScope, principal: "key_2" },
+            "h1",
+            idemAt(),
+          )
+        ).outcome,
+      ).toBe("claimed");
+      expect(
+        (
+          await store.idempotency.claim(
+            { ...idemScope, path: "/v1/evals" },
+            "h1",
+            idemAt(),
+          )
+        ).outcome,
+      ).toBe("claimed");
+
+      await store.idempotency.complete(
+        idemScope,
+        "not-the-claim",
+        { ...stored, status: 500 },
+        clock.now(),
+      );
+      await store.idempotency.complete(idemScope, claimId, stored, clock.now());
+      expect(await store.idempotency.claim(idemScope, "h1", idemAt())).toEqual({
+        outcome: "completed",
+        response: stored,
+      });
+      expect(await store.idempotency.claim(idemScope, "h2", idemAt())).toEqual({
+        outcome: "mismatch",
+      });
+
+      const other = { ...idemScope, key: "k-2" };
+      const second = await store.idempotency.claim(other, "h1", idemAt());
+      const secondId = second.outcome === "claimed" ? second.claimId : "";
+      await store.idempotency.release(other, "not-the-claim");
+      expect(
+        (await store.idempotency.claim(other, "h1", idemAt())).outcome,
+      ).toBe("in_progress");
+      await store.idempotency.release(other, secondId);
+      expect(
+        (await store.idempotency.claim(other, "h2", idemAt())).outcome,
+      ).toBe("claimed");
+    });
+
+    it("idempotency: abandoned claims and expired rows are taken over and purged", async () => {
+      const first = await store.idempotency.claim(idemScope, "h1", idemAt());
+      const firstId = first.outcome === "claimed" ? first.claimId : "";
+      clock.advanceSeconds(301);
+      const takeover = await store.idempotency.claim(idemScope, "h2", idemAt());
+      expect(takeover.outcome).toBe("claimed");
+      await store.idempotency.complete(idemScope, firstId, stored, clock.now());
+      expect(await store.idempotency.claim(idemScope, "h2", idemAt())).toEqual({
+        outcome: "in_progress",
+      });
+      const takeoverId = takeover.outcome === "claimed" ? takeover.claimId : "";
+      await store.idempotency.complete(
+        idemScope,
+        takeoverId,
+        stored,
+        clock.now(),
+      );
+
+      clock.advanceSeconds(600);
+      expect(
+        (await store.idempotency.claim(idemScope, "h2", idemAt())).outcome,
+      ).toBe("completed");
+      await store.idempotency.claim(
+        { ...idemScope, key: "fresh" },
+        "h",
+        idemAt(),
+      );
+      clock.advanceDays(1);
+      expect(
+        (await store.idempotency.claim(idemScope, "h3", idemAt())).outcome,
+      ).toBe("claimed");
+      expect(
+        await store.idempotency.deleteExpired(
+          new Date(clock.now().getTime() - 1000),
+        ),
+      ).toBe(1);
+      expect(
+        await store.idempotency.deleteExpired(
+          new Date(clock.now().getTime() + 1000),
+        ),
+      ).toBe(1);
+      expect(await store.idempotency.deleteExpired(clock.now())).toBe(0);
+    });
+
+    it("idempotency: concurrent claims of one key yield exactly one winner", async () => {
+      const outcomes = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          store.idempotency.claim(idemScope, "h1", idemAt()),
+        ),
+      );
+      expect(outcomes.filter((o) => o.outcome === "claimed")).toHaveLength(1);
+      expect(outcomes.filter((o) => o.outcome === "in_progress")).toHaveLength(
+        7,
+      );
+    });
+
     // --- Transactions ----------------------------------------------------
 
     it("transactions: commit, rollback on throw, nested reuse", async () => {
@@ -1485,6 +1620,23 @@ describeStoreContract("memory", async (clock) => ({
   dispose: async () => undefined,
 }));
 
+describe("migration files", () => {
+  it("refuses two migrations with the same version", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const dir = await mkdtemp(
+      path.join(process.env.TMPDIR ?? "/tmp", "grad-mig-"),
+    );
+    try {
+      await writeFile(path.join(dir, "0002_a.sql"), "SELECT 1;");
+      await writeFile(path.join(dir, "0002_b.sql"), "SELECT 2;");
+      await expect(loadMigrations(dir)).rejects.toThrow(/share version 0002/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 const url = postgresUrl();
 
 if (url) {
@@ -1508,12 +1660,14 @@ if (url) {
       const schema = freshSchemaName();
       try {
         await withPool(async (pool) => {
-          expect(await migrate(pool, { schema })).toEqual(["0001"]);
+          const versions = (await loadMigrations()).map((m) => m.version);
+          expect(versions.slice(0, 2)).toEqual(["0001", "0002"]);
+          expect(await migrate(pool, { schema })).toEqual(versions);
           expect(await migrate(pool, { schema })).toEqual([]);
           const { rows } = await pool.query(
-            `SELECT version FROM "${schema}".grad_schema_migrations`,
+            `SELECT version FROM "${schema}".grad_schema_migrations ORDER BY version`,
           );
-          expect(rows).toEqual([{ version: "0001" }]);
+          expect(rows).toEqual(versions.map((version) => ({ version })));
         });
       } finally {
         await dropSchema(url, schema);
@@ -1527,11 +1681,12 @@ if (url) {
           const results = await Promise.all(
             Array.from({ length: 6 }, () => migrate(pool, { schema })),
           );
-          expect(results.flat()).toEqual(["0001"]);
+          const versions = (await loadMigrations()).map((m) => m.version);
+          expect(results.flat().sort()).toEqual(versions);
           const { rows } = await pool.query(
             `SELECT COUNT(*)::int AS n FROM "${schema}".grad_schema_migrations`,
           );
-          expect(rows[0]).toEqual({ n: 1 });
+          expect(rows[0]).toEqual({ n: versions.length });
         });
       } finally {
         await dropSchema(url, schema);

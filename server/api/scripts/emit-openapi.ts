@@ -66,4 +66,7 @@ const run = async () => {
   console.log(`Wrote ${outPath}`);
 };
 
-void run();
+run().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

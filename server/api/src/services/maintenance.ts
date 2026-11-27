@@ -1,5 +1,7 @@
+import { addSeconds } from "../clock.js";
 import type { AppDependencies } from "../deps.js";
 import { errorMessage } from "../errors.js";
+import { IDEMPOTENCY_TTL_SECONDS } from "../idempotency.js";
 import type { BillingOutbox } from "./billing-outbox.js";
 import type { EvalService } from "./evals/service.js";
 import type { ImportService } from "./imports.js";
@@ -12,12 +14,13 @@ export interface MaintenanceReport {
   recoveredEvals: number;
   deletedCheckpoints: number;
   deletedUploads: number;
+  deletedIdempotencyKeys: number;
   billingSent: number;
   billingFailed: number;
 }
 
 export interface Maintenance {
-  /** One pass: lease expiry, TTL garbage collection, billing outbox. */
+  /** One pass: lease expiry, TTL garbage collection (incl. idempotency keys), billing outbox. */
   tick(): Promise<MaintenanceReport>;
   start(intervalMs: number): void;
   stop(): Promise<void>;
@@ -44,6 +47,9 @@ export const createMaintenance = (
     const deletedCheckpoints =
       await services.runs.collectExpiredCheckpoints(now);
     const deletedUploads = await services.uploads.collectExpired(now);
+    const deletedIdempotencyKeys = await deps.store.idempotency.deleteExpired(
+      addSeconds(now, -IDEMPOTENCY_TTL_SECONDS),
+    );
     const billing = await services.billing.drain();
 
     return {
@@ -52,6 +58,7 @@ export const createMaintenance = (
       recoveredEvals,
       deletedCheckpoints,
       deletedUploads,
+      deletedIdempotencyKeys,
       billingSent: billing.sent,
       billingFailed: billing.failed,
     };

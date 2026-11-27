@@ -9,6 +9,7 @@ import type {
   DatasetRecord,
   Deployment,
   EvalModelSummary,
+  EvalReport,
   EvalRubricItem,
   EvalStatus,
   FeedbackRecord,
@@ -201,7 +202,7 @@ export interface RunRecord {
   lease_expires_at: string | null;
   lease_seconds: number;
   latest_metric: MetricPoint | null;
-  eval_report: Record<string, unknown> | null;
+  eval_report: EvalReport | null;
   artifact_id: string | null;
   error: string | null;
   created_at: string;
@@ -335,7 +336,7 @@ export interface ArtifactRepository {
     sha256: string;
     sizeBytes: number;
     manifest: Record<string, unknown>;
-    evalReport: Record<string, unknown> | null;
+    evalReport: EvalReport | null;
   }): Promise<ArtifactRecord>;
   /** `reference` is an artifact id or `name@latest`. */
   get(workspaceId: string, reference: string): Promise<ArtifactRecord | null>;
@@ -656,6 +657,54 @@ export interface BillingOutboxRepository {
   listByRun(runId: string): Promise<BillingOutboxEntry[]>;
 }
 
+// --- Idempotency keys ---------------------------------------------------------------
+
+/** One `Idempotency-Key` namespace: a key is unique per caller, method and path. */
+export interface IdempotencyScope {
+  workspaceId: string;
+  principal: string;
+  method: string;
+  path: string;
+  key: string;
+}
+
+export interface StoredResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export type IdempotencyClaim =
+  | { outcome: "claimed"; claimId: string }
+  | { outcome: "in_progress" }
+  | { outcome: "mismatch" }
+  | { outcome: "completed"; response: StoredResponse };
+
+export interface IdempotencyRepository {
+  /**
+   * Atomically claims `scope` for a request whose body hashes to
+   * `requestHash`. A row created before `expiredBefore`, or still in progress
+   * since before `abandonedBefore`, is taken over; any other existing row is
+   * reported (completed, in progress, or a different request body).
+   */
+  claim(
+    scope: IdempotencyScope,
+    requestHash: string,
+    at: { now: Date; expiredBefore: Date; abandonedBefore: Date },
+  ): Promise<IdempotencyClaim>;
+  /** Stores the response of the request holding `claimId`. */
+  complete(
+    scope: IdempotencyScope,
+    claimId: string,
+    response: StoredResponse,
+    now: Date,
+  ): Promise<void>;
+  /** Drops the claim so the same key can be retried (5xx, thrown errors). */
+  release(scope: IdempotencyScope, claimId: string): Promise<void>;
+  /** Deletes every row created before `before`; returns how many. */
+  deleteExpired(before: Date): Promise<number>;
+}
+
 // --- Composition ----------------------------------------------------------------------
 
 export interface Repositories {
@@ -672,6 +721,7 @@ export interface Repositories {
   feedback: FeedbackRepository;
   evals: EvalRepository;
   billing: BillingOutboxRepository;
+  idempotency: IdempotencyRepository;
 }
 
 export interface Store extends Repositories {

@@ -2,6 +2,7 @@ import type {
   ApiKey,
   Dataset,
   Deployment,
+  EvalReport,
   FeedbackRecord,
   MetricPoint,
 } from "../../contracts.js";
@@ -113,7 +114,7 @@ export const toRun = (r: Row): RunRecord => ({
   lease_expires_at: isoN(r.lease_expires_at),
   lease_seconds: n(r.lease_seconds),
   latest_metric: j<MetricPoint | null>(r.latest_metric, null),
-  eval_report: j<Record<string, unknown> | null>(r.eval_report, null),
+  eval_report: j<EvalReport | null>(r.eval_report, null),
   artifact_id: sn(r.artifact_id),
   error: sn(r.error),
   created_at: iso(r.created_at),
@@ -160,7 +161,7 @@ export const toArtifact = (r: Row): ArtifactRecord => ({
   sha256: s(r.sha256),
   size_bytes: n(r.size_bytes),
   manifest: j(r.manifest, {}),
-  eval_report: j<Record<string, unknown> | null>(r.eval_report, null),
+  eval_report: j<EvalReport | null>(r.eval_report, null),
   created_at: iso(r.created_at),
 });
 

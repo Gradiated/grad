@@ -28,6 +28,14 @@ export const loadMigrations = async (
     .filter((n) => MIGRATION_FILE_RE.test(n))
     .sort();
 
+  const versions = names.map((n) => n.slice(0, 4));
+  const duplicate = versions.find((v, i) => versions.indexOf(v) !== i);
+  if (duplicate) {
+    throw new Error(
+      `Two migrations share version ${duplicate} in ${dir}; renumber one so neither is skipped.`,
+    );
+  }
+
   return Promise.all(
     names.map(async (name) => ({
       version: name.slice(0, 4),

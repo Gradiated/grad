@@ -11,6 +11,7 @@ import {
 } from "./core.js";
 import { createDb } from "./db.js";
 import { createEvalRepository } from "./evals.js";
+import { createIdempotencyRepository } from "./idempotency.js";
 import {
   createArtifactRepository,
   createBillingOutboxRepository,
@@ -87,6 +88,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
     feedback: createFeedbackRepository(db, clock),
     evals: createEvalRepository(db, clock),
     billing: createBillingOutboxRepository(db, clock),
+    idempotency: createIdempotencyRepository(db),
   };
 
   return {

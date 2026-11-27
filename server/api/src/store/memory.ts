@@ -14,6 +14,10 @@ import type {
 } from "../contracts.js";
 import { newId } from "../ids.js";
 import { pageFromSorted, type CursorValue } from "./cursor.js";
+import {
+  createMemoryIdempotencyRepository,
+  type MemoryIdempotencyRow,
+} from "./idempotency-memory.js";
 import type {
   ArtifactRecord,
   BillingOutboxEntry,
@@ -55,6 +59,7 @@ interface MemoryState {
   evalOutputs: Map<string, Map<string, EvalOutputRow>>;
   evalResults: Map<string, EvalResultRow[]>;
   billing: Map<string, BillingOutboxEntry>;
+  idempotency: Map<string, MemoryIdempotencyRow>;
 }
 
 const emptyState = (): MemoryState => ({
@@ -77,6 +82,7 @@ const emptyState = (): MemoryState => ({
   evalOutputs: new Map(),
   evalResults: new Map(),
   billing: new Map(),
+  idempotency: new Map(),
 });
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -1065,6 +1071,8 @@ const buildRepositories = (
             .sort((a, b) => a.attempt - b.attempt),
         ),
     },
+
+    idempotency: createMemoryIdempotencyRepository(() => st().idempotency),
   };
 };
 
