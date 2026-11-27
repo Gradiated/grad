@@ -37,15 +37,19 @@ def split_records(
     eval_fraction: float = 0.1,
     seed: int = 42,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    train: list[dict[str, Any]] = []
-    eval_set: list[dict[str, Any]] = []
-    for index, rec in enumerate(records):
-        if hash_fraction(split_key(rec, index, strategy), seed) < eval_fraction:
-            eval_set.append(rec)
-        else:
-            train.append(rec)
-    if not train and eval_set:
-        train.append(eval_set.pop(0))
+    keys = [split_key(rec, index, strategy) for index, rec in enumerate(records)]
+    fractions = [hash_fraction(key, seed) for key in keys]
+    in_eval = [f < eval_fraction for f in fractions]
+    if in_eval and all(in_eval):
+        in_eval[0] = False
+    elif eval_fraction > 0 and not any(in_eval):
+        # With two or more groups the eval side is never empty: the group that hashes
+        # lowest is held out (tiny datasets otherwise trained unevaluated).
+        held = keys[min(range(len(keys)), key=fractions.__getitem__)] if keys else None
+        if any(key != held for key in keys):
+            in_eval = [key == held for key in keys]
+    train = [rec for rec, e in zip(records, in_eval) if not e]
+    eval_set = [rec for rec, e in zip(records, in_eval) if e]
     return train, eval_set
 
 

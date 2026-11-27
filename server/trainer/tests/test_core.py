@@ -57,6 +57,18 @@ class SplitParityTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(result.stdout), self._python())
 
+    def test_two_or_more_groups_always_hold_one_out(self) -> None:
+        # r8: 12 reward pairs at eval_fraction 0.1 trained with no eval side ~29% of the time.
+        for seed in range(200):
+            train, held = split_records([{"id": f"p{i}"} for i in range(12)], strategy="by_group", eval_fraction=0.1, seed=seed)
+            self.assertTrue(train and held, seed)
+        grouped = [{"id": f"r{i}", "session_id": f"g{i % 2}"} for i in range(6)]
+        _, held = split_records(grouped, eval_fraction=0.01, seed=3)
+        self.assertEqual((len(held), len({r["session_id"] for r in held})), (3, 1))
+        _, held = split_records([{"id": f"r{i}", "session_id": "only"} for i in range(6)], eval_fraction=0.01, seed=3)
+        self.assertEqual(held, [])
+        self.assertEqual(split_records([], eval_fraction=0.1), ([], []))
+
     def test_empty_session_id_falls_back_to_record_id_and_two_folds(self) -> None:
         recs = [{"id": f"r{i}", "session_id": ""} for i in range(20)]
         train, held = split_records(recs, eval_fraction=0.5, seed=3)

@@ -4236,5 +4236,328 @@
 "eval_fraction": 0.5,
 "seed": 3
 }
+},
+{
+"records": [
+{
+"id": "p0",
+"messages": [
+{
+"role": "user",
+"content": "q0"
+},
+{
+"role": "assistant",
+"content": "a0"
+}
+]
+},
+{
+"id": "p1",
+"messages": [
+{
+"role": "user",
+"content": "q1"
+},
+{
+"role": "assistant",
+"content": "a1"
+}
+]
+},
+{
+"id": "p2",
+"messages": [
+{
+"role": "user",
+"content": "q2"
+},
+{
+"role": "assistant",
+"content": "a2"
+}
+]
+},
+{
+"id": "p3",
+"messages": [
+{
+"role": "user",
+"content": "q3"
+},
+{
+"role": "assistant",
+"content": "a3"
+}
+]
+},
+{
+"id": "p4",
+"messages": [
+{
+"role": "user",
+"content": "q4"
+},
+{
+"role": "assistant",
+"content": "a4"
+}
+]
+},
+{
+"id": "p5",
+"messages": [
+{
+"role": "user",
+"content": "q5"
+},
+{
+"role": "assistant",
+"content": "a5"
+}
+]
+},
+{
+"id": "p6",
+"messages": [
+{
+"role": "user",
+"content": "q6"
+},
+{
+"role": "assistant",
+"content": "a6"
+}
+]
+},
+{
+"id": "p7",
+"messages": [
+{
+"role": "user",
+"content": "q7"
+},
+{
+"role": "assistant",
+"content": "a7"
+}
+]
+},
+{
+"id": "p8",
+"messages": [
+{
+"role": "user",
+"content": "q8"
+},
+{
+"role": "assistant",
+"content": "a8"
+}
+]
+},
+{
+"id": "p9",
+"messages": [
+{
+"role": "user",
+"content": "q9"
+},
+{
+"role": "assistant",
+"content": "a9"
+}
+]
+},
+{
+"id": "p10",
+"messages": [
+{
+"role": "user",
+"content": "q10"
+},
+{
+"role": "assistant",
+"content": "a10"
+}
+]
+},
+{
+"id": "p11",
+"messages": [
+{
+"role": "user",
+"content": "q11"
+},
+{
+"role": "assistant",
+"content": "a11"
+}
+]
+}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "g0",
+"messages": [
+{
+"role": "user",
+"content": "q0"
+},
+{
+"role": "assistant",
+"content": "a0"
+}
+]
+},
+{
+"id": "r1",
+"session_id": "g1",
+"messages": [
+{
+"role": "user",
+"content": "q1"
+},
+{
+"role": "assistant",
+"content": "a1"
+}
+]
+},
+{
+"id": "r2",
+"session_id": "g0",
+"messages": [
+{
+"role": "user",
+"content": "q2"
+},
+{
+"role": "assistant",
+"content": "a2"
+}
+]
+},
+{
+"id": "r3",
+"session_id": "g1",
+"messages": [
+{
+"role": "user",
+"content": "q3"
+},
+{
+"role": "assistant",
+"content": "a3"
+}
+]
+},
+{
+"id": "r4",
+"session_id": "g0",
+"messages": [
+{
+"role": "user",
+"content": "q4"
+},
+{
+"role": "assistant",
+"content": "a4"
+}
+]
+},
+{
+"id": "r5",
+"session_id": "g1",
+"messages": [
+{
+"role": "user",
+"content": "q5"
+},
+{
+"role": "assistant",
+"content": "a5"
+}
+]
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.01,
+"seed": 3
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "only",
+"messages": [
+{
+"role": "user",
+"content": "q0"
+},
+{
+"role": "assistant",
+"content": "a0"
+}
+]
+},
+{
+"id": "r1",
+"session_id": "only",
+"messages": [
+{
+"role": "user",
+"content": "q1"
+},
+{
+"role": "assistant",
+"content": "a1"
+}
+]
+},
+{
+"id": "r2",
+"session_id": "only",
+"messages": [
+{
+"role": "user",
+"content": "q2"
+},
+{
+"role": "assistant",
+"content": "a2"
+}
+]
+},
+{
+"id": "r3",
+"session_id": "only",
+"messages": [
+{
+"role": "user",
+"content": "q3"
+},
+{
+"role": "assistant",
+"content": "a3"
+}
+]
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.1,
+"seed": 3
+}
 }
 ]

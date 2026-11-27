@@ -69,22 +69,33 @@ export const splitRecords = (
     seed: number;
   },
 ): { train: DatasetRecord[]; eval: DatasetRecord[] } => {
-  const train: DatasetRecord[] = [];
-  const evalSet: DatasetRecord[] = [];
+  const keys = records.map((record, index) =>
+    splitKey(record, index, options.strategy),
+  );
+  const fractions = keys.map((key) => hashFraction(key, options.seed));
+  const inEval = fractions.map((f) => f < options.eval_fraction);
 
-  records.forEach((record, index) => {
-    const key = splitKey(record, index, options.strategy);
-    (hashFraction(key, options.seed) < options.eval_fraction
-      ? evalSet
-      : train
-    ).push(record);
-  });
-
-  if (train.length === 0 && evalSet.length > 0) {
-    train.push(evalSet.shift() as DatasetRecord);
+  if (inEval.length > 0 && inEval.every(Boolean)) {
+    inEval[0] = false;
+  } else if (options.eval_fraction > 0 && !inEval.some(Boolean)) {
+    // With two or more groups the eval side is never empty: the group that
+    // hashes lowest is held out (tiny datasets otherwise trained unevaluated).
+    let lowest = 0;
+    fractions.forEach((f, i) => {
+      if (f < (fractions[lowest] as number)) lowest = i;
+    });
+    const held = keys[lowest];
+    if (keys.some((key) => key !== held)) {
+      keys.forEach((key, i) => {
+        if (key === held) inEval[i] = true;
+      });
+    }
   }
 
-  return { train, eval: evalSet };
+  return {
+    train: records.filter((_, i) => !inEval[i]),
+    eval: records.filter((_, i) => inEval[i]),
+  };
 };
 
 export interface RenderOptions {

@@ -25,6 +25,18 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - A run stopped because the workspace ran out of balance (Cloud) is `stopped_balance`;
   `stopped_budget` means the run's own cap and resumes only with a higher one.
 
+### Fixed
+
+- `grad local up` and `grad local reset` only ever write the `local` profile. They used to
+  overwrite whichever profile `--profile` or `GRADIATED_PROFILE` selected, and now refuse
+  when that profile (or `local` itself) points at a server that isn't on this machine.
+- `grad runs inspect --yaml` round-trips: zero values (`warmup: 0`) are kept, a
+  continued-training run names its starting artifact as `model`, and `optimizer`,
+  `eval_every` and `loggers` are exported, so `grad train -f` plans the same config.
+- The train/eval split holds out a group whenever the dataset has two or more: small
+  datasets no longer train with an empty eval side (which also made reward-model runs fall
+  back to `eval_loss`).
+
 ## [0.2.0-alpha.1] - 2026-11-27
 
 First public release.

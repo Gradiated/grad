@@ -76,6 +76,35 @@ describe("splitRecords", () => {
     });
     expect(random.eval).toHaveLength(0);
   });
+
+  it("holds out a group whenever there are two or more (r8 reward-model flake)", () => {
+    // 12 pairs at the default 10%: before, about 29% of pushes trained with no eval side.
+    for (let seed = 0; seed < 200; seed += 1) {
+      const records = Array.from({ length: 12 }, (_, i) => chat(i, `s-${i}`));
+      const { train, eval: evalSet } = splitRecords(records, {
+        strategy: "by_session",
+        eval_fraction: 0.1,
+        seed,
+      });
+      expect(evalSet.length).toBeGreaterThan(0);
+      expect(train.length).toBeGreaterThan(0);
+      expect(train.length + evalSet.length).toBe(12);
+    }
+    // The held-out group moves whole; one group alone stays on the train side.
+    const grouped = Array.from({ length: 6 }, (_, i) => chat(i, `g-${i % 2}`));
+    const split = splitRecords(grouped, {
+      strategy: "by_session",
+      eval_fraction: 0.01,
+      seed: 3,
+    });
+    expect(new Set(split.eval.map((r) => r.session_id)).size).toBe(1);
+    expect(split.eval).toHaveLength(3);
+    const single = splitRecords(
+      Array.from({ length: 6 }, (_, i) => chat(i, "only")),
+      { strategy: "by_session", eval_fraction: 0.01, seed: 3 },
+    );
+    expect(single.eval).toHaveLength(0);
+  });
 });
 
 describe("renderMessages", () => {
