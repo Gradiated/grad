@@ -500,8 +500,8 @@ GO_IMPORTS = {"fmt": "fmt", "os": "os", "log": "log", "errors": "errors", "time"
 def compile_blocks(docs: Path) -> list[dict]:
     """Every ts/go/rust block of the v0 pages, with the page's earlier blocks of its language."""
     out, earlier = [], {}
-    for path in sorted(docs.rglob("*.mdx")):
-        page = path.relative_to(docs).as_posix()
+    for path in [docs] if docs.is_file() else sorted(docs.rglob("*.mdx")):
+        page = path.name if docs.is_file() else path.relative_to(docs).as_posix()
         if page in WAVE2:
             continue
         lines = path.read_text().split("\n")
@@ -629,7 +629,7 @@ def compile_check(docs: Path, only: str | None) -> int:
         (work / "go" / "go.mod").write_text(f"module docscheck\n\ngo 1.24\n\nrequire github.com/Gradiated/grad/sdks/go v0.0.0\n\n"
                                             f"replace github.com/Gradiated/grad/sdks/go => {REPO / 'sdks' / 'go'}\n")
         env = {**os.environ, "GOFLAGS": "-mod=mod", "GOPROXY": "off", "GOWORK": "off"}
-        p = subprocess.run(["go", "build", "-gcflags=-e", "./..."], cwd=work / "go", capture_output=True, text=True, env=env)
+        p = subprocess.run(["go", "build", "-gcflags=-e", "-o", str(work / "go-bin") + os.sep, "./..."], cwd=work / "go", capture_output=True, text=True, env=env)
         check_output("go build", p, r"b\d+/main\.go:\d+")
         for m in re.finditer(r"^(?:\./)?b(\d+)/main\.go:(\d+):\d+: (.*)$", p.stderr, re.M):
             keep(int(m.group(1)), int(m.group(2)), m.group(3), GO_IGNORED)
@@ -662,7 +662,7 @@ def compile_check(docs: Path, only: str | None) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--docs", required=True, type=Path, help="product/website/src/docs/training in the docs repo")
+    ap.add_argument("--docs", required=True, type=Path, help="product/website/src/docs/training in the docs repo (with --compile, also one .md file)")
     ap.add_argument("--cloud", action="store_true", help="run the blocks that need the torch worker (fake Cloud API)")
     ap.add_argument("--base-url", help="use a running stack instead of starting one (with --api-key)")
     ap.add_argument("--api-key", default="")

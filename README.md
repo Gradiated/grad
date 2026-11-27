@@ -138,8 +138,7 @@ println!("~${:.2}", client.runs().plan(&req).await?.estimated_cost_usd);
 let run = client.runs().create(&req, None).await?;
 client.runs().wait(&run.id, &WaitOptions::default()).await?;
 
-let opts = DownloadOptions { extract_to: Some("./support-router".into()), ..DownloadOptions::default() };
-client.artifacts().download("support-router@latest", &opts).await?;
+client.artifacts().download("support-router@latest", &DownloadOptions::extract("./support-router")).await?;
 ```
 
 </details>
@@ -328,6 +327,8 @@ To check the code blocks of the public training docs (a checkout of the website 
 ```bash
 python3 scripts/check-docs-snippets.py --docs ../workspace/product/website/src/docs/training          # reference worker
 GRAD_TRAINER_PYTHON=/path/to/torch/python python3 scripts/check-docs-snippets.py --docs ... --cloud   # deploy blocks
+python3 scripts/check-docs-snippets.py --docs ... --compile    # type-check the TypeScript, Go and Rust blocks (no stack)
+python3 scripts/check-docs-snippets.py --docs README.md --compile
 ```
 
 It prints PASS, FAIL or SKIP (with the reason) for every block. Blocks that need a GPU, Hugging Face, the inference gateway or a cluster are skipped; the skip list and fixtures are at the top of the script.
