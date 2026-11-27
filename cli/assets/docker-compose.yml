@@ -153,7 +153,12 @@ services:
       GRAD_WORKER_ID: "local-cpu-trainer"
       GRAD_POLL_INTERVAL_S: "1.0"
       GRAD_WORKER_METRICS_PORT: "9465"
+      # Sources on this machine (a local Langfuse): --host http://host.docker.internal:PORT,
+      # with these CIDRs exported before `grad local up` (e.g. 172.16.0.0/12).
+      GRAD_SOURCES_EGRESS_ALLOW: "${GRAD_SOURCES_EGRESS_ALLOW:-}"
     mem_limit: ${GRAD_TRAINER_MEMORY:-8g}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # On SIGTERM the worker releases its attempt (billed, requeued, resumed from the latest checkpoint).
     stop_grace_period: 2m
     # Downloaded base weights survive restarts.
@@ -173,7 +178,12 @@ services:
       GRAD_WORKER_ID: "local-gpu-trainer"
       GRAD_POLL_INTERVAL_S: "1.0"
       GRAD_WORKER_METRICS_PORT: "9465"
+      # Sources on this machine (a local Langfuse): --host http://host.docker.internal:PORT,
+      # with these CIDRs exported before `grad local up` (e.g. 172.16.0.0/12).
+      GRAD_SOURCES_EGRESS_ALLOW: "${GRAD_SOURCES_EGRESS_ALLOW:-}"
     mem_limit: ${GRAD_TRAINER_MEMORY:-8g}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # On SIGTERM the worker releases its attempt (billed, requeued, resumed from the latest checkpoint).
     stop_grace_period: 2m
     # Downloaded base weights survive restarts.

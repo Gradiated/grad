@@ -322,7 +322,7 @@ class ArtifactImportTests(TorchCase):
             with self.assertRaises(SourceUnavailableError) as ctx:
                 artifact_import.run(self.spec({"kind": "hf", "repo": "acme/lora"}), workdir=self.tmpdir(), download=lambda *_: None)
             self.assertIn("HTTP 401", str(ctx.exception))
-            self.assertIn("gated or private", str(ctx.exception))
+            self.assertIn("check the repo id; if it exists it is gated or private", str(ctx.exception))
             with self.assertRaises(SourceUnavailableError):
                 artifact_import.hf_snapshot("../etc", None, None, self.tmpdir(), ("*",))
         with mock.patch.dict("os.environ", {"HF_ENDPOINT": hub.url, "GRAD_OFFLINE": "1"}), self.assertRaises(SourceUnavailableError) as ctx:

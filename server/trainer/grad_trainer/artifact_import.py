@@ -212,7 +212,12 @@ def hf_snapshot(repo: str, revision: str | None, token: str | None, dest: Path, 
                         raise SourceUnavailableError(f"'{repo}' is larger than {MAX_IMPORT_BYTES} bytes.")
                     out.write(chunk)
     except urllib.error.HTTPError as exc:
-        hint = " (gated or private: pass a workspace secret with an HF token)" if exc.code in (401, 403) else ""
+        # The Hub answers 401 for a repo that doesn't exist too, so say both.
+        hint = (
+            " (check the repo id; if it exists it is gated or private: pass a workspace secret with an HF token)"
+            if exc.code in (401, 403)
+            else ""
+        )
         raise SourceUnavailableError(f"Hugging Face Hub: '{repo}' at '{revision or 'main'}' answered HTTP {exc.code}{hint}.") from exc
     except (urllib.error.URLError, OSError, ValueError) as exc:
         if isinstance(exc, SourceUnavailableError):

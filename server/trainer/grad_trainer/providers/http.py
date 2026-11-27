@@ -210,7 +210,9 @@ class HttpClient:
         if blocked or not addrs:
             raise SourceHostBlockedError(
                 f"source host {host} resolves to a blocked address ({', '.join(blocked) or 'none'}); "
-                "private, loopback, link-local and metadata addresses need GRAD_SOURCES_EGRESS_ALLOW"
+                "private, loopback, link-local and metadata addresses need GRAD_SOURCES_EGRESS_ALLOW (CIDRs) on the "
+                "import workers; with `grad local up`, export it before starting the stack and reach this machine "
+                "as host.docker.internal"
             )
         if parts.scheme == "http" and not all(self.policy.allows_plain_http(ip) for ip in addrs):
             raise SourceHostBlockedError(f"source host {host} must use https")
