@@ -64,6 +64,14 @@ kubectl -n "$NS" create secret generic grad \
 
 step "helm install"
 helm install "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" --wait --timeout 6m
+# The KEDA trigger queries (keda.enabled=true) must run against the migrated schema.
+helm template "$RELEASE" "$CHART" -f "$CHART/ci/kind-values.yaml" --set keda.enabled=true \
+  | python3 -c 'import json,re,sys; [print(json.loads(q)) for q in re.findall(r"^ +query: (\".*\")$", sys.stdin.read(), re.M)]' \
+  | while read -r query; do
+      n=$(kubectl -n "$NS" exec deploy/postgres -- psql -U grad -d grad -tAc "$query")
+      [[ "$n" =~ ^[0-9]+$ ]] || { echo "FAIL: KEDA query returned '$n': $query" >&2; exit 1; }
+      echo "ok: KEDA query counts $n open jobs"
+    done
 python3 "$ROOT/tests/helm/smoke.py" --namespace "$NS" --release "$RELEASE" --admin-key "$ADMIN_KEY"
 
 step "helm upgrade"
