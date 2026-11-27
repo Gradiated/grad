@@ -80,6 +80,33 @@ jobs:
           node scripts/generate-sdks.mjs --check
           python3 -m py_compile sdks/python/grad/_generated/client.py
 
+  sdks:
+    name: SDKs (Python, TypeScript, Go, Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: node pnpm python go rust
+
+      - name: Test Python SDK
+        run: PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests -v
+
+      - name: Install, check, and build TypeScript SDK
+        run: |
+          pnpm -C sdks/typescript install --frozen-lockfile
+          pnpm -C sdks/typescript check
+          pnpm -C sdks/typescript build
+
+      - name: Test Go SDK
+        run: cd sdks/go && go test ./...
+
+      - name: Test Rust SDK
+        run: cargo test --package grad-sdk
+
   secrets:
     name: Secret Scan
     runs-on: ubuntu-latest
