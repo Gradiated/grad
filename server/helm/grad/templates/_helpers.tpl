@@ -85,7 +85,7 @@ capabilities:
 {{/* Fails the render on values that cannot work. */}}
 {{- define "grad.validate" -}}
 {{- if not .Values.storage.s3Bucket -}}
-{{- fail "storage.s3Bucket is required: grad-server replicas and workers share artifacts through S3-compatible storage (set storage.s3Endpoint for MinIO or R2)." -}}
+{{- fail "storage.s3Bucket is required: grad-server replicas and workers share artifacts through S3-compatible storage (set storage.s3Endpoint for SeaweedFS, MinIO or R2)." -}}
 {{- end -}}
 {{- if and (not .Values.secrets.create) (not .Values.secrets.existingSecret) -}}
 {{- fail "secrets.existingSecret is required with secrets.create=false: a Secret with at least a database-url key." -}}

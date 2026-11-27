@@ -1,5 +1,5 @@
 # Test values for tests/helm/smoke.sh: locally built images, in-cluster
-# Postgres and MinIO fixtures, the reference trainer backend, small requests.
+# Postgres and SeaweedFS fixtures, the reference trainer backend, small requests.
 # The chart creates its Secret (admin key, worker keys, secrets-key) itself.
 secrets:
   databaseUrl: postgres://grad:grad-kind-only@postgres:5432/grad
@@ -13,7 +13,7 @@ api:
     limits: {cpu: "1", memory: 512Mi}
 storage:
   s3Bucket: grad-kind
-  s3Endpoint: http://minio:9000
+  s3Endpoint: http://seaweedfs:8333
 workerDefaults:
   image: {repository: grad-trainer, pullPolicy: Never}
   leaseSeconds: 30
@@ -35,8 +35,8 @@ workers:
 networkPolicy:
   enabled: true
   workerEgress:
-    # The in-cluster MinIO fixture (presigned dataset and artifact URLs).
+    # The in-cluster SeaweedFS fixture (presigned dataset and artifact URLs).
     - to:
-        - podSelector: {matchLabels: {app: minio}}
+        - podSelector: {matchLabels: {app: seaweedfs}}
       ports:
-        - {protocol: TCP, port: 9000}
+        - {protocol: TCP, port: 8333}

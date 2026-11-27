@@ -24,10 +24,10 @@ secrets:
   #   judge-api-key         key for evals.judgeBaseUrl
   #   cloud-service-token   AUTH/BILLING_MODE=cloud
   #   metrics-token         bearer token for /metrics and /metrics/queue (metrics.requireToken)
-  #   aws-access-key-id / aws-secret-access-key   static S3 keys (MinIO); omit them with Pod Identity or IRSA
+  #   aws-access-key-id / aws-secret-access-key   static S3 keys (SeaweedFS, MinIO, R2); omit them with Pod Identity or IRSA
   existingSecret: ""
   # The values below are used only with create: true.
-  # Postgres URL (required).
+  # PostgreSQL 17 URL (required).
   databaseUrl: ""
   # sha256 hex of an admin key you hold; empty generates `admin-api-key`.
   adminApiKeyHash: ""
@@ -38,7 +38,7 @@ secrets:
   cloudServiceToken: ""
   # Bearer token for /metrics (metrics.requireToken); empty generates one.
   metricsToken: ""
-  # Static S3 keys (MinIO, R2); leave empty with Pod Identity or IRSA.
+  # Static S3 keys (SeaweedFS, MinIO, R2); leave empty with Pod Identity or IRSA.
   awsAccessKeyId: ""
   awsSecretAccessKey: ""
 
@@ -93,13 +93,17 @@ migrations:
       cpu: 500m
       memory: 256Mi
 
-# Object storage is required: workers and SDKs move weights and datasets through
-# presigned URLs, and replicas must share it.
+# S3-compatible object storage is required (AWS S3, SeaweedFS, MinIO, R2...):
+# workers and SDKs move weights and datasets through presigned URLs, and
+# replicas must share it.
 storage:
   s3Bucket: ""
   s3Region: us-east-1
-  # S3-compatible endpoint (MinIO, R2, ...); path-style addressing is used when set.
+  # S3-compatible endpoint (SeaweedFS, MinIO, R2...); path-style addressing is used when set.
   s3Endpoint: ""
+  # The endpoint SDK clients outside the cluster reach, when it is not s3Endpoint
+  # (e.g. an in-cluster store behind an ingress); file upload tickets use it.
+  s3PublicEndpoint: ""
 
 # Evals call an OpenAI-compatible endpoint (your vLLM/SGLang with the LoRA modules
 # named by artifact ref). Unset: POST /v1/evals returns 501 inference_unavailable.

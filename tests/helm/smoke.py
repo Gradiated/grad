@@ -147,8 +147,8 @@ def main() -> None:
         probe = ("import socket,sys\ntry: socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3).close(); print('open')\n"
                  "except OSError: print('blocked')")
         reach = {t: kubectl("exec", f"deploy/{full}-worker-import", "--", "python", "-c", probe, *t.split(":"), ns=ns).strip()
-                 for t in ("postgres:5432", "minio:9000")}
-        check(reach == {"postgres:5432": "blocked", "minio:9000": "open"}, f"worker NetworkPolicy egress allowlist {reach}")
+                 for t in ("postgres:5432", "seaweedfs:8333")}
+        check(reach == {"postgres:5432": "blocked", "seaweedfs:8333": "open"}, f"worker NetworkPolicy egress allowlist {reach}")
     finally:
         api.close()
 

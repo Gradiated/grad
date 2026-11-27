@@ -45,14 +45,10 @@ kind create cluster --name "$CLUSTER" --image "$NODE_IMAGE" --wait 120s
 docker update --memory "${GRAD_KIND_MEMORY:-3g}" --memory-swap "${GRAD_KIND_MEMORY:-3g}" "$CLUSTER-control-plane" >/dev/null
 kind load docker-image --name "$CLUSTER" grad-server:dev grad-trainer:dev
 
-step "fixtures: Postgres, MinIO and the bucket (no Secret: the chart creates it)"
+step "fixtures: Postgres and SeaweedFS with its bucket (no grad Secret: the chart creates it)"
 kubectl create namespace "$NS"
 kubectl -n "$NS" apply -f "$ROOT/tests/helm/fixtures.yaml"
-kubectl -n "$NS" rollout status deploy/postgres deploy/minio --timeout 180s
-kubectl -n "$NS" run make-bucket --rm -i --restart=Never --image grad-server:dev --image-pull-policy Never \
-  --env AWS_ACCESS_KEY_ID=gradkind --env AWS_SECRET_ACCESS_KEY=grad-kind-only-secret -- \
-  node --input-type=module -e "import {S3Client,CreateBucketCommand} from '@aws-sdk/client-s3';
-    await new S3Client({endpoint:'http://minio:9000',region:'us-east-1',forcePathStyle:true}).send(new CreateBucketCommand({Bucket:'grad-kind'}))"
+kubectl -n "$NS" rollout status deploy/postgres deploy/seaweedfs --timeout 180s
 
 step "helm install"
 helm install "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" --wait --timeout 6m

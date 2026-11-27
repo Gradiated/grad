@@ -62,6 +62,9 @@ spec:
             {{- with .Values.storage.s3Endpoint }}
             - {name: S3_ENDPOINT, value: {{ . | quote }}}
             {{- end }}
+            {{- with .Values.storage.s3PublicEndpoint }}
+            - {name: S3_PUBLIC_ENDPOINT, value: {{ . | quote }}}
+            {{- end }}
             {{- with .Values.evals.inferenceBaseUrl }}
             - {name: GRAD_INFERENCE_BASE_URL, value: {{ . | quote }}}
             {{- end }}
