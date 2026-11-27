@@ -273,7 +273,7 @@ jobs:
 
   # The same build main publishes on every push (images.yml), tagged X.Y.Z (+ latest) here.
   images:
-    name: Publish the container images to GHCR
+    name: Publish the container images to Docker Hub and GHCR
     needs: [prepare, python-build, cli-build]
     permissions:
       contents: read
@@ -282,6 +282,8 @@ jobs:
     with:
       version: ${{ needs.prepare.outputs.version }}
       environment: release
+    # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (repository secrets).
+    secrets: inherit
 
   helm:
     name: Publish the Helm chart
