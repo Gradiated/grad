@@ -1,0 +1,58 @@
+# Compose override for the local-stack smoke test (tests/compose/smoke.sh).
+# Test-only: registers the tiny test models, builds their weights into a volume
+# and points evals at an OpenAI-compatible fake. Paths are relative to server/.
+services:
+  fake-openai:
+    image: node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
+    command: ["node", "/fixture/fake-openai.mjs"]
+    volumes:
+      - ../tests/compose/fake-openai.mjs:/fixture/fake-openai.mjs:ro
+    mem_limit: 128m
+
+  tiny-models:
+    build:
+      context: ./trainer
+      dockerfile: Dockerfile
+      target: cpu
+    user: "0:0"
+    working_dir: /fixtures
+    command:
+      - python
+      - -c
+      - |
+        from pathlib import Path
+        import tiny_models as t
+        t._build_qwen(Path("/models/test/tiny-qwen3"), seed=1)
+        t._build_bert(Path("/models/test/tiny-bert"), seed=3)
+        # safetensors writes 0600; the trainer runs as uid 10001.
+        for p in Path("/models").rglob("*"):
+            p.chmod(0o755 if p.is_dir() else 0o644)
+    volumes:
+      - ./trainer/tests/fixtures:/fixtures:ro
+      - grad-tiny-models:/models
+    mem_limit: 1g
+
+  grad-server:
+    depends_on:
+      fake-openai:
+        condition: service_started
+    environment:
+      INFERENCE_BASE_URL: "http://fake-openai:8080/v1"
+      INFERENCE_API_KEY: "sk-fake-inference"
+      GRAD_EXTRA_MODELS_JSON: >-
+        [{"id":"test/tiny-qwen3","hf_repo":null,"family":"llm","adapters":["lora","prefix_kv"],"default_for":[],"price_per_million_tokens_usd":1,"max_context_tokens":2048,"template_revision":"qwen3@3","calibrated_lrs":{"sft":0.001,"dpo":0.0001,"router":0.001,"cartridge":0.01}},
+        {"id":"test/tiny-bert","hf_repo":null,"family":"encoder","adapters":["encoder_full"],"default_for":[],"price_per_million_tokens_usd":0.5,"max_context_tokens":512,"template_revision":"bge@1","calibrated_lrs":{"embedding":0.0001}}]
+
+  grad-trainer:
+    depends_on:
+      tiny-models:
+        condition: service_completed_successfully
+    environment:
+      GRAD_MODELS_MIRROR: /models
+      GRAD_OFFLINE: "1"
+      GRAD_TORCH_THREADS: "2"
+    volumes:
+      - grad-tiny-models:/models:ro
+
+volumes:
+  grad-tiny-models:

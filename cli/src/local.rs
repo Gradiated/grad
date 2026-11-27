@@ -65,23 +65,23 @@ fn find_source_compose(start: &Path) -> Option<PathBuf> {
     None
 }
 
-fn compose_file(args: &ComposeArgs, build: bool) -> CliResult<PathBuf> {
-    if let Some(f) = &args.file {
-        if !f.is_file() {
+fn compose_files(args: &ComposeArgs, build: bool) -> CliResult<Vec<PathBuf>> {
+    if !args.file.is_empty() {
+        if let Some(f) = args.file.iter().find(|f| !f.is_file()) {
             return Err(CliError::usage(format!(
                 "compose file {} not found",
                 f.display()
             )));
         }
-        return Ok(f.clone());
+        return Ok(args.file.clone());
     }
     if build {
         let cwd = std::env::current_dir()?;
-        return find_source_compose(&cwd).ok_or_else(|| {
+        return find_source_compose(&cwd).map(|f| vec![f]).ok_or_else(|| {
             CliError::usage("--build needs a source checkout: run it inside the grad repository or pass --file path/to/server/docker-compose.yml")
         });
     }
-    write_embedded()
+    Ok(vec![write_embedded()?])
 }
 
 fn docker_bin() -> String {
@@ -91,13 +91,12 @@ fn docker_bin() -> String {
         .unwrap_or_else(|| "docker".into())
 }
 
-fn compose(args: &ComposeArgs, file: &Path) -> tokio::process::Command {
+fn compose(args: &ComposeArgs, files: &[PathBuf]) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(docker_bin());
-    cmd.arg("compose")
-        .arg("-p")
-        .arg(&args.project_name)
-        .arg("-f")
-        .arg(file);
+    cmd.arg("compose").arg("-p").arg(&args.project_name);
+    for f in files {
+        cmd.arg("-f").arg(f);
+    }
     cmd
 }
 
@@ -214,7 +213,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             no_wait,
             timeout,
         } => {
-            let file = compose_file(&args, build)?;
+            let files = compose_files(&args, build)?;
             let base_url = format!("http://127.0.0.1:{}", port);
             let profile = profile_of(ctx);
             let keys = ensure_keys(&profile, &base_url)?;
@@ -227,9 +226,13 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.note(format!(
                 "Starting grad on {} ({})",
                 base_url,
-                file.display()
+                files
+                    .iter()
+                    .map(|f| f.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
-            let mut cmd = compose(&args, &file);
+            let mut cmd = compose(&args, &files);
             if gpu {
                 cmd.arg("--profile").arg("gpu");
             }
@@ -289,7 +292,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.done(&json!({
                 "base_url": base_url,
                 "profile": profile,
-                "compose_file": file,
+                "compose_files": files,
                 "project": args.project_name,
                 "keys_created": keys.created,
                 "healthy": !no_wait,
@@ -299,8 +302,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             compose: args,
             volumes,
         } => {
-            let file = compose_file(&args, false)?;
-            let mut cmd = compose(&args, &file);
+            let files = compose_files(&args, false)?;
+            let mut cmd = compose(&args, &files);
             cmd.arg("down");
             if volumes {
                 cmd.arg("--volumes");
@@ -314,8 +317,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.done(&json!({ "project": args.project_name, "volumes_removed": volumes }))
         }
         LocalCmd::Status { compose: args } => {
-            let file = compose_file(&args, false)?;
-            let mut cmd = compose(&args, &file);
+            let files = compose_files(&args, false)?;
+            let mut cmd = compose(&args, &files);
             cmd.arg("ps");
             run(ctx, cmd, "ps").await?;
             let base_url = grad_sdk::ConfigFile::default_path()
@@ -347,8 +350,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             follow,
             tail,
         } => {
-            let file = compose_file(&args, false)?;
-            let mut cmd = compose(&args, &file);
+            let files = compose_files(&args, false)?;
+            let mut cmd = compose(&args, &files);
             cmd.arg("logs").arg("--tail").arg(&tail);
             if follow {
                 cmd.arg("--follow");
@@ -375,8 +378,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                     return Err(CliError::usage("aborted"));
                 }
             }
-            let file = compose_file(&args, false)?;
-            let mut cmd = compose(&args, &file);
+            let files = compose_files(&args, false)?;
+            let mut cmd = compose(&args, &files);
             cmd.arg("down").arg("--volumes").arg("--remove-orphans");
             run(ctx, cmd, "down").await?;
             let profile = profile_of(ctx);

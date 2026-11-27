@@ -783,9 +783,16 @@ artifacts:read, artifacts:write, deployments:write, feedback:write")]
 
 #[derive(Args, Debug, Clone)]
 pub struct ComposeArgs {
-    /// Compose file to use instead of the one built into grad
-    #[arg(long, short = 'f', env = "GRAD_COMPOSE_FILE", value_name = "FILE")]
-    pub file: Option<PathBuf>,
+    /// Compose file to use instead of the one built into grad; repeat it to
+    /// add override files (GRAD_COMPOSE_FILE takes a ':'-separated list)
+    #[arg(
+        long,
+        short = 'f',
+        env = "GRAD_COMPOSE_FILE",
+        value_name = "FILE",
+        value_delimiter = ':'
+    )]
+    pub file: Vec<PathBuf>,
     /// Compose project name
     #[arg(long, env = "COMPOSE_PROJECT_NAME", default_value = "grad-local")]
     pub project_name: String,

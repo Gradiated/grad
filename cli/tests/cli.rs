@@ -1719,6 +1719,41 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     c.env("GRAD_DOCKER", &shim);
     let r = run(c, &["local", "up", "--file", "missing.yml"]);
     expect(&r, 2);
+    // --file repeats (or GRAD_COMPOSE_FILE lists files) for compose overrides.
+    let (base, extra) = (sb.path("base.yml"), sb.path("override.yml"));
+    std::fs::write(&base, "name: x\n").unwrap();
+    std::fs::write(&extra, "name: x\n").unwrap();
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(
+        c,
+        &[
+            "--json",
+            "local",
+            "up",
+            "--no-wait",
+            "--file",
+            base.to_str().unwrap(),
+            "--file",
+            extra.to_str().unwrap(),
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(
+        r.json()["data"]["compose_files"].as_array().unwrap().len(),
+        2
+    );
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim).env(
+        "GRAD_COMPOSE_FILE",
+        format!("{}:{}", base.display(), extra.display()),
+    );
+    let r = run(c, &["local", "down"]);
+    expect(&r, 0);
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    let pair = format!("-f {} -f {}", base.display(), extra.display());
+    assert!(log.contains(&format!("{} up -d", pair)), "{}", log);
+    assert!(log.contains(&format!("{} down", pair)), "{}", log);
     // Docker missing or failing.
     let mut c = sb.grad(None);
     c.env("GRAD_DOCKER", sb.path("no-docker-here"));

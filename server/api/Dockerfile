@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-slim AS builder
+FROM node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb AS builder
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
 
@@ -11,7 +11,7 @@ COPY src ./src
 COPY migrations ./migrations
 RUN pnpm build && pnpm prune --prod
 
-FROM node:22-slim AS runtime
+FROM node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0

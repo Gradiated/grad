@@ -9,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/home/grad/.cache/huggingface \
     HF_HUB_DISABLE_PROGRESS_BARS=1
-RUN useradd --create-home --uid 10001 grad
+RUN useradd --create-home --uid 10001 grad \
+    && install -d -o 10001 -g 10001 /home/grad/.cache/huggingface
 WORKDIR /app
 COPY requirements-cpu.lock ./
 RUN pip install --no-cache-dir -r requirements-cpu.lock
@@ -30,7 +31,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/venv \
-    && useradd --create-home --uid 10001 grad
+    && useradd --create-home --uid 10001 grad \
+    && install -d -o 10001 -g 10001 /home/grad/.cache/huggingface
 WORKDIR /app
 COPY requirements-gpu.lock ./
 RUN pip install --no-cache-dir -r requirements-gpu.lock
