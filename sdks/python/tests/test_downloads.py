@@ -96,6 +96,26 @@ class DownloadTests(unittest.TestCase):
         self.assertTrue(nested.exists())
         self.assertEqual(leftovers(self.dir), [])
 
+    def test_a_hostile_artifact_name_stays_inside_the_download_directory(self) -> None:
+        # r8 P2-24: the bundle filename came from the server's artifact name verbatim.
+        from grad._helpers import safe_file_name
+        from grad._transport import quote_path_param
+
+        bundle = bundle_bytes(PEFT_FILES)
+        meta = {**artifact(bundle), "name": "./../../evil", "version": "1"}
+        headers = {"content-type": "application/octet-stream", "x-artifact-sha256": meta["sha256"]}
+        client, _, _ = make_client({
+            f"GET /v1/artifacts/{self.ref}": json_reply(meta),
+            f"GET /v1/artifacts/{quote_path_param('./../../evil@1', 'id')}/download": Reply(200, headers=headers, chunks=[bundle]),
+        })
+        downloads = self.dir / "a" / "b" / "downloads"
+        downloads.mkdir(parents=True)
+        out = client.artifacts.download(self.ref, downloads, format="bundle")
+        self.assertEqual(out, downloads / "evil-1.grad.tar.gz")
+        self.assertEqual(sorted(p.name for p in self.dir.rglob("*") if p.is_file()), ["evil-1.grad.tar.gz"])
+        for raw, safe in (("..", "artifact"), ("a\\..\\b c", "b_c"), ("", "artifact"), ("ok@v1", "ok@v1")):
+            self.assertEqual(safe_file_name(raw), safe)
+
     def test_checksum_mismatch_discards_everything(self) -> None:
         bundle = bundle_bytes(PEFT_FILES)
         bad = "f" * 64

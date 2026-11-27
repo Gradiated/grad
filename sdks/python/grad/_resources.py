@@ -971,10 +971,11 @@ class Artifacts(_Resource):
         A checksum mismatch or an unsafe archive entry deletes the partial download and raises.
         """
         art = self.get(ref)
-        filename = f"{art.name}-{art.version}.grad.tar.gz"
+        name = h.safe_file_name(str(art.name))
+        filename = f"{name}-{art.version}.grad.tar.gz"
         plan = h.plan_download(path, fmt=format, filename=filename, overwrite=overwrite)
         resp = self._wire.download_artifact(art.ref, timeout=timeout or max(self._client._transport.timeout, 120.0))
-        writer = h.HashingWriter(plan.temp_dir, f".{art.name}.")
+        writer = h.HashingWriter(plan.temp_dir, f".{name}.")
         url = str(resp.url)
         try:
             try:

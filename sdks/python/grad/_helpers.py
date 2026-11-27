@@ -319,6 +319,16 @@ def local_scorers_for(rubric: Any, needed: Sequence[str], eval_id: str) -> dict[
 # ---------------------------------------------------------------------------- downloads
 
 
+_UNSAFE_FILE_CHARS = re.compile(r"[^A-Za-z0-9._@-]+")
+
+
+def safe_file_name(name: str) -> str:
+    """A server-supplied name as a single path component, like the TypeScript and Go SDKs:
+    its base name with unusual characters replaced, never ``.``, ``..`` or empty."""
+    base = _UNSAFE_FILE_CHARS.sub("_", name.replace("\\", "/").rsplit("/", 1)[-1])
+    return base if base.strip(".") else "artifact"
+
+
 @dataclass
 class DownloadPlan:
     """Where an artifact download goes."""
