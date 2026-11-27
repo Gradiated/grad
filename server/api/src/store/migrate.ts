@@ -132,6 +132,12 @@ export const migrate = async (
   const migrations = await loadMigrations(options.dir);
   const client = await pool.connect();
   try {
+    // An API replica's pool (MIGRATE_ON_BOOT) caps statements at 30 s; a
+    // migration rewriting a big table, or a replica waiting here for another
+    // to finish, may take longer, and would then fail on every boot.
+    await client.query(
+      "SET statement_timeout = 0; SET idle_in_transaction_session_timeout = 0",
+    );
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
     try {
       return await applyPending(client, migrations, options.schema);
@@ -140,6 +146,11 @@ export const migrate = async (
       if (options.schema) await client.query("RESET search_path");
     }
   } finally {
+    await client
+      .query(
+        "RESET statement_timeout; RESET idle_in_transaction_session_timeout",
+      )
+      .catch(() => undefined);
     client.release();
   }
 };
