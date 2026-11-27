@@ -20,7 +20,7 @@ import {
   ResponseDecodeError,
   ServerError,
   Transport,
-} from "../src/generated/transport.js";
+} from "../src/transport.js";
 import { BASE, FakeClock, FakeServer, json, wire } from "./helpers.js";
 
 interface ErrorCase {

@@ -1,4 +1,5 @@
-// Code generated from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.
+// HTTP runtime of the generated client (hand-written; scripts/generate-sdks.mjs emits only
+// models.go, client.go and doc.go next to it).
 
 package generated
 

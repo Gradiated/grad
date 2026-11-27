@@ -1,10 +1,10 @@
-/* HTTP runtime shared by every generated operation: typed errors, retries with
+/* HTTP runtime (hand-written) shared by every generated operation: typed errors, retries with
  * backoff and Retry-After (POSTs carry one Idempotency-Key across retries, so
  * they retry like GETs), same-origin-only redirects, per-attempt timeouts
  * that stop at the response headers for streams, SSE parsing, request ids,
  * and the camelCase <-> wire key codec. Browser-safe: no Node imports. */
 
-export const SDK_VERSION = "__SDK_VERSION__";
+export const SDK_VERSION = "0.1.0";
 
 type Env = Record<string, string | undefined>;
 type ProcessLike = { version?: string; env?: Env; platform?: string };

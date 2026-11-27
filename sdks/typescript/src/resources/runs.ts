@@ -11,7 +11,7 @@ import type {
   RunStatus,
   SplitSpec,
 } from "../generated/models.js";
-import { convertKeys, GradError, type RequestOptions } from "../generated/transport.js";
+import { convertKeys, GradError, type RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { GradUsageError, RunFailedError, WaitTimeoutError } from "../errors.js";
 import { collect, pages, Paginator } from "../pagination.js";

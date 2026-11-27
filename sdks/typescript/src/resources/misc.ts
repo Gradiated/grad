@@ -1,5 +1,5 @@
 import type { ApiKey, ApiKeyScope, CreatedApiKey, TrainableModel } from "../generated/models.js";
-import type { RequestOptions } from "../generated/transport.js";
+import type { RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { Paginator } from "../pagination.js";
 

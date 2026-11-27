@@ -10,7 +10,7 @@ import {
   type SSEOptions,
   type StreamOptions,
   type TransportLike,
-} from "./generated/transport.js";
+} from "./transport.js";
 import { DEFAULT_BASE_URL, defaultConfigPath, loadProfile, validateBaseURL } from "./config.js";
 import type { Core } from "./core.js";
 import { defaultPollContext, type PollContext } from "./polling.js";

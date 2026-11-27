@@ -64,7 +64,7 @@ export {
   LIST_RUN_METRICS_LIMIT_MAX,
   LIST_RUNS_LIMIT_MAX,
 } from "./generated/client.js";
-export { newIdempotencyKey, SDK_VERSION, type RawResponse, type RequestOptions, type ServerSentEvent, type SSEOptions, type StreamOptions } from "./generated/transport.js";
+export { newIdempotencyKey, SDK_VERSION, type RawResponse, type RequestOptions, type ServerSentEvent, type SSEOptions, type StreamOptions } from "./transport.js";
 export type * as models from "./generated/models.js";
 export type {
   AdapterSpec,

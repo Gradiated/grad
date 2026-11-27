@@ -1,4 +1,4 @@
-import { GradError } from "./generated/transport.js";
+import { GradError } from "./transport.js";
 import type { EvalRun, ImportJob, Run } from "./generated/models.js";
 
 export {
@@ -20,7 +20,7 @@ export {
   ServerError,
   ValidationError,
   type FieldError,
-} from "./generated/transport.js";
+} from "./transport.js";
 
 /** A run ended `failed`, `cancelled` or `stopped_budget`; `run` holds its final state. */
 export class RunFailedError extends GradError {

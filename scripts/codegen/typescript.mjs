@@ -1,14 +1,10 @@
 /**
  * TypeScript emitter: camelCase model types, a key codec table, and a typed
  * `ApiClient` with one method per operation (plus `<op>Stream` for SSE).
+ * The HTTP runtime (sdks/typescript/src/transport.ts) is hand-written.
  */
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { compareStrings, parameterMaxima, sanitizeSingleLine, toCamel, toPascal, toSnake } from "./ir.mjs";
 
-const runtimeDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime", "typescript");
 
 export const HEADER = "// AUTO-GENERATED from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.\n";
 
@@ -197,7 +193,7 @@ const scalarTsType = (node, names) => {
 
 const methodName = (opId) => toCamel(opId);
 
-export const generateTypeScriptFiles = async (ir, { sdkVersion = "0.0.0" } = {}) => {
+export const generateTypeScriptFiles = async (ir) => {
   const names = new Map();
   const used = new Map();
   for (const name of Object.keys(ir.schemas)) {
@@ -371,7 +367,7 @@ import {
   type SSEOptions,
   type StreamOptions,
   type TransportLike,
-} from "./transport.js";
+} from "../transport.js";
 ${usedModels.length > 0 ? `import type {\n${usedModels.map((n) => `  ${n},`).join("\n")}\n} from "./models.js";\n` : ""}
 /** Which wire keys are renamed to camelCase, per schema (user-keyed maps are left verbatim). */
 export const CODEC: CodecTable = {
@@ -388,13 +384,11 @@ ${methods.join("\n\n")}
 }
 `;
 
-  const transportSrc = (await readFile(path.join(runtimeDir, "transport.ts"), "utf8")).replace("__SDK_VERSION__", sdkVersion);
-  const index = `${HEADER}export * from "./transport.js";\nexport * from "./models.js";\nexport * from "./client.js";\n`;
+  const index = `${HEADER}export * from "./models.js";\nexport * from "./client.js";\n`;
 
   return {
     "models.ts": models,
     "client.ts": client.replace(/\n{3,}/g, "\n\n"),
-    "transport.ts": `${HEADER}${transportSrc}`,
     "index.ts": index,
   };
 };

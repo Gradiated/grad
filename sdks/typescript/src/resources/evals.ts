@@ -9,7 +9,7 @@ import type {
   PlanEvalResponse,
 } from "../generated/models.js";
 import { LIST_EVAL_OUTPUTS_LIMIT_MAX } from "../generated/client.js";
-import { APIUserAbortError, type RequestOptions } from "../generated/transport.js";
+import { APIUserAbortError, type RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { EvalFailedError, GradUsageError } from "../errors.js";
 import { collect, pages, Paginator } from "../pagination.js";

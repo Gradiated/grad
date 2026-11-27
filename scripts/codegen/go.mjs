@@ -2,14 +2,10 @@
  * Go emitter: structs with json tags (pointers for optional scalars), string
  * enum types with constants, and a typed `Client` with one method per
  * operation. Output is gofmt-clean (the codegen tests run gofmt -l on it).
+ * The HTTP runtime (sdks/go/generated/transport.go) is hand-written.
  */
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { compareStrings, parameterMaxima, sanitizeSingleLine, toPascal, toSnake } from "./ir.mjs";
 
-const runtimeDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime", "go");
 
 export const HEADER = "// Code generated from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.\n";
 
@@ -97,7 +93,7 @@ const alignRows = (rows, indent) => {
 
 const unwrap = (node) => (node.k === "nullable" ? node.inner : node);
 
-export const generateGoFiles = async (ir, { sdkVersion = "0.0.0" } = {}) => {
+export const generateGoFiles = async (ir) => {
   const names = new Map();
   const usedNames = new Map();
   const claim = (goTypeIdent, owner) => {
@@ -507,12 +503,10 @@ export const generateGoFiles = async (ir, { sdkVersion = "0.0.0" } = {}) => {
   const maximaBlock = maxima.length ? `${maxima.join("\n\n")}\n\n` : "";
   const client = `${HEADER}\npackage generated\n\n${importBlock}\n\n${maximaBlock}// Client is the generated low-level client: one typed method per OpenAPI operation.\ntype Client struct {\n\tT *Transport\n}\n\n// NewClient wraps a Transport.\nfunc NewClient(t *Transport) *Client { return &Client{T: t} }\n\n${clientBody}\n`;
 
-  const transport = (await readFile(path.join(runtimeDir, "transport.go"), "utf8")).replace("__SDK_VERSION__", sdkVersion);
   const doc = `${HEADER}\n// Package generated is the low-level wire client for the Gradiated training and serving API.\n// Use the github.com/Gradiated/grad/sdks/go package instead; this one tracks spec/openapi.yaml exactly.\npackage generated\n`;
   return {
     "client.go": client,
     "doc.go": doc,
     "models.go": models,
-    "transport.go": `${HEADER}\n${transport}`,
   };
 };
