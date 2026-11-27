@@ -11,3 +11,5 @@ paths = [
   '''^sdks/typescript/test/''',
   '''^server/ui/test/''',
 ]
+# Fake keys in tests spell out 0123456789 (sk-test-0123456789, wandb-live-0123456789).
+stopwords = ["0123456789"]
