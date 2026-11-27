@@ -1424,11 +1424,12 @@ const (
 
 // RenderDatasetResponse is generated from the OpenAPI schema.
 type RenderDatasetResponse struct {
-	Dataset          string                              `json:"dataset"`
-	Model            string                              `json:"model"`
-	TemplateRevision string                              `json:"template_revision"`
-	TokenCounts      RenderDatasetResponseTokenCounts    `json:"token_counts"`
-	Examples         []RenderDatasetResponseExamplesItem `json:"examples"`
+	Dataset          string `json:"dataset"`
+	Model            string `json:"model"`
+	TemplateRevision string `json:"template_revision"`
+	// TokenCounts Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
+	TokenCounts RenderDatasetResponseTokenCounts    `json:"token_counts"`
+	Examples    []RenderDatasetResponseExamplesItem `json:"examples"`
 }
 
 // RenderDatasetResponseExamplesItem is generated from the OpenAPI schema.
@@ -1448,7 +1449,7 @@ type RenderDatasetResponseExamplesItemSpansItem struct {
 	Tokens  int    `json:"tokens"`
 }
 
-// RenderDatasetResponseTokenCounts is an enumeration of allowed values.
+// RenderDatasetResponseTokenCounts Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
 type RenderDatasetResponseTokenCounts string
 
 // Values of RenderDatasetResponseTokenCounts.

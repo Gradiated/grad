@@ -692,6 +692,7 @@ export interface RenderDatasetResponse {
   dataset: string;
   model: string;
   templateRevision: string;
+  /** Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens. */
   tokenCounts: "estimated";
   examples: Array<{
     recordId: string;

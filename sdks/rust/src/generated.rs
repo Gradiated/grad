@@ -4273,6 +4273,7 @@ pub mod models {
         pub dataset: String,
         pub model: String,
         pub template_revision: String,
+        /// Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
         pub token_counts: RenderDatasetResponseTokenCounts,
         pub examples: Vec<RenderDatasetResponseExamplesItem>,
     }
@@ -4296,7 +4297,7 @@ pub mod models {
         pub tokens: i64,
     }
 
-    /// Allowed values of `RenderDatasetResponseTokenCounts` (unknown values from newer servers are kept in `Other`).
+    /// Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub enum RenderDatasetResponseTokenCounts {
         /// `"estimated"`
