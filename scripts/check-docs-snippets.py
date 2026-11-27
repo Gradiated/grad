@@ -15,6 +15,14 @@ Blocks that can't run self-contained are listed in SKIP with a reason. Hugging F
 imports run online (with a small `limit` injected) unless --offline. Blocks that load a
 downloaded artifact with torch run in --cloud mode under GRAD_TRAINER_PYTHON. Stdlib + the
 Python SDK only (PYTHONPATH=sdks/python is set for the blocks; the SDK needs httpx).
+
+    python3 scripts/check-docs-snippets.py --docs DOCS --compile    # TypeScript, Go and Rust blocks
+
+--compile needs no stack: it type-checks every ```ts, ```go and ```rust block against this
+checkout's SDK (tsc with sdks/typescript's node_modules, `go build`, `cargo check`). A block may
+continue an earlier one on its page (`dataset` from the block above), so each is compiled after
+the page's earlier blocks of its language, and only errors inside the block itself count.
+Blocks that import another vendor's SDK are skipped.
 """
 
 from __future__ import annotations
@@ -477,6 +485,181 @@ class Runner:
         return p.returncode == 0, (p.stderr or p.stdout).strip()[-1500:]
 
 
+# --compile: TypeScript, Go and Rust blocks, type-checked against this checkout's SDKs.
+COMPILE_LANGS = {"ts": "ts", "typescript": "ts", "go": "go", "rust": "rust"}
+# (page, text in the block, reason): fragments that continue another vendor's SDK.
+COMPILE_SKIP = [("integrations/braintrust.mdx", "logger.logFeedback", "continues the Braintrust SDK block above")]
+# Errors that come from compiling a block after the page's earlier ones, not from the block.
+TS_IGNORED = {"TS2451", "TS2300", "TS6133", "TS6196", "TS7022"}  # redeclared, unused
+GO_IGNORED = ("declared and not used", "imported and not used", "no new variables on left side of :=", "redeclared in this block")
+RUST_IGNORED = ("unused variable", "unused import", "redefinition")
+GO_IMPORTS = {"fmt": "fmt", "os": "os", "log": "log", "errors": "errors", "time": "time", "strings": "strings",
+              "context": "context", "json": "encoding/json", "filepath": "path/filepath", "io": "io"}
+
+
+def compile_blocks(docs: Path) -> list[dict]:
+    """Every ts/go/rust block of the v0 pages, with the page's earlier blocks of its language."""
+    out, earlier = [], {}
+    for path in sorted(docs.rglob("*.mdx")):
+        page = path.relative_to(docs).as_posix()
+        if page in WAVE2:
+            continue
+        lines = path.read_text().split("\n")
+        i = 0
+        while i < len(lines):
+            m = re.match(r"^```(\w+)\s*$", lines[i])
+            if m and m.group(1) in COMPILE_LANGS:
+                lang = COMPILE_LANGS[m.group(1)]
+                j = next(k for k in range(i + 1, len(lines)) if lines[k].startswith("```"))
+                code = "\n".join(lines[i + 1 : j]) + "\n"
+                vendor = re.findall(r"""^import .* from ["']((?!@gradiated/grad)[^"'.][^"']*)["']""", code, re.M) if lang == "ts" else []
+                skip = f"imports {vendor[0]}" if vendor else next((r for p, text, r in COMPILE_SKIP if page.startswith(p) and text in code), None)
+                prior = earlier.setdefault((page, lang), [])
+                out.append({"page": page, "line": i + 1, "lang": lang, "code": code, "skip": skip, "prior": list(prior)})
+                if not skip:
+                    prior.append(code)
+                i = j
+            i += 1
+    return out
+
+
+def _ts_source(block: dict) -> tuple[str, int, int]:
+    """A module: the block's imports on top, then one async function running the page's earlier
+    blocks and this one. Returns the source and the line range of this block."""
+    imports, body = [], []
+    for code in [*block["prior"], block["code"]]:
+        keep = []
+        for line in code.split("\n"):
+            (imports if line.startswith("import ") else keep).append(line)
+        body.append(keep)
+    head = ['import { Grad } from "@gradiated/grad";', *dict.fromkeys(i for i in imports if i), "",
+            "export async function block(grad: Grad, ctx: unknown) {", "  void grad; void ctx;"]
+    lines = list(head)
+    for keep in body[:-1]:
+        lines += keep
+    start = len(lines) + 1
+    lines += body[-1]
+    end = len(lines)
+    lines.append("}")
+    return "\n".join(lines) + "\n", start, end
+
+
+def _go_source(block: dict) -> tuple[str, int, int]:
+    if block["code"].lstrip().startswith("package main"):  # a whole program
+        return block["code"], 1, block["code"].count("\n")
+    codes = [*block["prior"], block["code"]]
+    text = "".join(codes)
+    pkgs = sorted({GO_IMPORTS[p] for p in re.findall(r"\b(" + "|".join(GO_IMPORTS) + r")\.[A-Z]", text)} | {"context"})
+    head = ["package main", "", "import (", *[f'\t"{p}"' for p in pkgs], '\tgrad "github.com/Gradiated/grad/sdks/go"', ")", "",
+            "func main() { _ = block() }", "", "func block() error {", "\tctx := context.Background()", "\tclient := grad.NewClient()",
+            "\t_, _ = ctx, client"]
+    lines = list(head)
+    for code in codes[:-1]:
+        lines += code.rstrip("\n").split("\n")
+    start = len(lines) + 1
+    lines += codes[-1].rstrip("\n").split("\n")
+    end = len(lines)
+    lines += ["\treturn nil", "}"]
+    return "\n".join(lines) + "\n", start, end
+
+
+def _rust_source(block: dict) -> tuple[str, int, int]:
+    codes = [*block["prior"], block["code"]]
+    uses = [l for c in codes for l in c.split("\n") if l.startswith("use ")]
+    head = ["#![allow(unused)]", *dict.fromkeys(uses), "", "async fn block() -> Result<(), Box<dyn std::error::Error>> {",
+            "    let client = grad::Client::new();"]
+    lines = list(head)
+    for code in codes[:-1]:
+        lines += [l for l in code.rstrip("\n").split("\n") if not l.startswith("use ")]
+    start = len(lines) + 1
+    lines += [l for l in codes[-1].rstrip("\n").split("\n") if not l.startswith("use ")]
+    end = len(lines)
+    lines += ["    Ok(())", "}", "", "fn main() {}"]
+    return "\n".join(lines) + "\n", start, end
+
+
+def compile_check(docs: Path, only: str | None) -> int:
+    found = [b for b in compile_blocks(docs) if not only or only in b["page"]]
+    work = Path(tempfile.mkdtemp(prefix="grad-docs-compile-"))
+    results = {"pass": 0, "fail": 0, "skip": 0}
+    by_lang: dict[str, list[tuple[int, dict, int, int]]] = {"ts": [], "go": [], "rust": []}
+    for n, b in enumerate(found):
+        if b["skip"]:
+            results["skip"] += 1
+            print(f"SKIP {b['page']}:{b['line']} ({b['lang']}): {b['skip']}", flush=True)
+            continue
+        src, start, end = {"ts": _ts_source, "go": _go_source, "rust": _rust_source}[b["lang"]](b)
+        if b["lang"] == "ts":
+            f = work / "ts" / f"b{n}.ts"
+        elif b["lang"] == "go":
+            f = work / "go" / f"b{n}" / "main.go"
+        else:
+            f = work / "rust" / "src" / "bin" / f"b{n}.rs"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(src)
+        by_lang[b["lang"]].append((n, b, start, end))
+    errors: dict[int, list[str]] = {}
+
+    def keep(n: int, line: int, msg: str, ignored) -> None:
+        _, _, start, end = next(x for x in by_lang_flat if x[0] == n)
+        if start <= line <= end and not any(i in msg for i in ignored):
+            errors.setdefault(n, []).append(f"line {line - start + 1}: {msg}")
+
+    by_lang_flat = [x for xs in by_lang.values() for x in xs]
+
+    def check_output(tool: str, p: subprocess.CompletedProcess, located: str) -> None:
+        """A failing tool must point at a block; anything else is a broken harness, not a pass."""
+        if p.returncode != 0 and not re.search(located, p.stdout + p.stderr, re.M):
+            raise SystemExit(f"{tool} failed without naming a block:\n{(p.stdout + p.stderr)[-3000:]}")
+    ts_dir = REPO / "sdks" / "typescript"
+    if by_lang["ts"]:
+        if not (ts_dir / "node_modules").exists():
+            raise SystemExit("run `pnpm -C sdks/typescript install` first (tsc and @types/node)")
+        (work / "ts" / "tsconfig.json").write_text(json.dumps({"compilerOptions": {
+            "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext", "strict": True, "skipLibCheck": True,
+            "noEmit": True, "types": ["node"], "typeRoots": [str(ts_dir / "node_modules" / "@types")],
+            "baseUrl": ".", "paths": {"@gradiated/grad": [str(ts_dir / "src" / "index.ts")]}}, "include": ["*.ts"]}))
+        (work / "ts" / "package.json").write_text('{"type": "module"}')
+        p = subprocess.run([str(ts_dir / "node_modules" / ".bin" / "tsc"), "-p", "."], cwd=work / "ts", capture_output=True, text=True)
+        check_output("tsc", p, r"^b(\d+)\.ts\(\d+,\d+\): error")
+        for m in re.finditer(r"^b(\d+)\.ts\((\d+),\d+\): error (TS\d+): (.*)$", p.stdout, re.M):
+            if m.group(3) not in TS_IGNORED:
+                keep(int(m.group(1)), int(m.group(2)), f"{m.group(3)} {m.group(4)}", ())
+    if by_lang["go"]:
+        (work / "go" / "go.mod").write_text(f"module docscheck\n\ngo 1.24\n\nrequire github.com/Gradiated/grad/sdks/go v0.0.0\n\n"
+                                            f"replace github.com/Gradiated/grad/sdks/go => {REPO / 'sdks' / 'go'}\n")
+        env = {**os.environ, "GOFLAGS": "-mod=mod", "GOPROXY": "off", "GOWORK": "off"}
+        p = subprocess.run(["go", "build", "-gcflags=-e", "./..."], cwd=work / "go", capture_output=True, text=True, env=env)
+        check_output("go build", p, r"b\d+/main\.go:\d+")
+        for m in re.finditer(r"^(?:\./)?b(\d+)/main\.go:(\d+):\d+: (.*)$", p.stderr, re.M):
+            keep(int(m.group(1)), int(m.group(2)), m.group(3), GO_IGNORED)
+    if by_lang["rust"]:
+        (work / "rust" / "Cargo.toml").write_text(
+            '[package]\nname = "docscheck"\nversion = "0.0.0"\nedition = "2021"\npublish = false\n\n[workspace]\n\n'
+            f'[dependencies]\ngrad = {{ package = "grad-sdk", path = "{REPO / "sdks" / "rust"}" }}\n'
+            'tokio = { version = "1", features = ["full"] }\n')
+        target = os.environ.get("CARGO_TARGET_DIR") or str(REPO / "target")
+        p = subprocess.run(["cargo", "check", "--bins", "--offline", "--message-format", "short", "--target-dir", target],
+                           cwd=work / "rust", capture_output=True, text=True)
+        check_output("cargo check", p, r"^src/bin/b\d+\.rs:\d+")
+        for m in re.finditer(r"^src/bin/b(\d+)\.rs:(\d+):\d+: error[^:]*: (.*)$", p.stderr, re.M):
+            keep(int(m.group(1)), int(m.group(2)), m.group(3), RUST_IGNORED)
+    for n, b, _, _ in sorted(by_lang_flat, key=lambda x: x[0]):
+        where = f"{b['page']}:{b['line']} ({b['lang']})"
+        if n in errors:
+            results["fail"] += 1
+            print(f"FAIL {where}\n  " + "\n  ".join(errors[n][:8]), flush=True)
+        else:
+            results["pass"] += 1
+            print(f"PASS {where}", flush=True)
+    print(f"\n{results['pass']} passed, {results['fail']} failed, {results['skip']} skipped")
+    if results["fail"]:
+        print(f"wrapped sources kept in {work}")
+    else:
+        shutil.rmtree(work, ignore_errors=True)
+    return 1 if results["fail"] else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--docs", required=True, type=Path, help="product/website/src/docs/training in the docs repo")
@@ -488,7 +671,10 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900, help="seconds per block")
     ap.add_argument("--list", action="store_true", help="list the blocks and exit")
     ap.add_argument("--offline", action="store_true", help="skip the blocks that download from Hugging Face")
+    ap.add_argument("--compile", action="store_true", help="type-check the TypeScript, Go and Rust blocks instead (no stack)")
     args = ap.parse_args()
+    if args.compile:
+        return compile_check(args.docs, args.only)
 
     found = [b for b in blocks(args.docs) if not args.only or args.only in b["page"]]
     if args.list:
