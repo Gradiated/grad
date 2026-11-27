@@ -79,7 +79,7 @@ class ProviderContract:
         self.assertEqual(self.trace_ids(records), self.all_ids())
         self.assertEqual(result.records, len(records))
         self.assertTrue(all(r["messages"][0]["role"] == "user" and r["messages"][-1]["role"] == "assistant" for r in records))
-        self.assertEqual(set(result.watermark), {"traces", "scores"})
+        self.assertLessEqual({"traces", "scores"}, set(result.watermark))
 
     def test_incremental_sync_fetches_only_new_traces(self) -> None:
         _, first = self.sync()

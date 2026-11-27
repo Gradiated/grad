@@ -1,8 +1,10 @@
 """SyncEngine: runs one incremental (or full) sync of a provider and emits record batches.
 
 Watermark (opaque to grad-server, stored when the sync job completes): ``{"traces": T, "scores":
-S}``. For most providers both are ISO timestamps: traces are fetched from T, and scores from
-``min(S, now - provider.rescan_window)`` so late edits still land. Only rows up to ``now -
+S, "rescanned": R}``. For most providers these are ISO timestamps: traces are fetched from T and
+scores from S; at most every ``RESCAN_EVERY`` (``GRAD_SOURCES_RESCAN_EVERY_SECONDS``, 15 min,
+recorded as R) scores are read from ``min(S, now - provider.rescan_window)`` instead, so edits
+that keep a score's timestamp still land without re-reading the window every minute. Only rows up to ``now -
 SETTLE`` are taken (providers expose writes with a delay); the rest are picked up next time, so
 a re-sync of the same window emits nothing new. ``cursor_watermark`` providers keep their own
 opaque cursor instead. ``full=True`` ignores the watermark, re-reads everything and first emits
@@ -48,6 +50,8 @@ MAX_PAGES = 100_000
 MAX_EMPTY_PAGES = 20  # some APIs (Langfuse) may return empty pages that still carry a cursor
 MAX_ERRORS = 100
 LEFT_OUT = b""  # _seen marker of a trace the filters, sampling or the cap left out
+# How often a sync re-reads the feedback window for edits (between, scores are read from S).
+RESCAN_EVERY = timedelta(seconds=float(os.environ.get("GRAD_SOURCES_RESCAN_EVERY_SECONDS") or 900))
 # A sync's wall-clock cap, so one slow or huge source can't hold a shared import worker.
 MAX_SYNC_SECONDS = float(os.environ.get("GRAD_SOURCES_SYNC_MAX_SECONDS") or 3600)
 
@@ -184,8 +188,14 @@ class SyncEngine:
 
         traces_since = wm.get("traces")
         scores_since = wm.get("scores")
-        if not p.cursor_watermark and p.rescan_window and parse_time(scores_since):
-            scores_since = iso(min(parse_time(scores_since), now - p.rescan_window))  # type: ignore[type-var]
+        rescanned = wm.get("rescanned")
+        if not p.cursor_watermark and p.rescan_window:
+            last = parse_time(rescanned)
+            if parse_time(scores_since) and (last is None or now - last >= RESCAN_EVERY):
+                scores_since = iso(min(parse_time(scores_since), now - p.rescan_window))  # type: ignore[type-var]
+                rescanned = iso(now)
+            elif not parse_time(scores_since):
+                rescanned = iso(now)  # everything is read
 
         traces = Prefetch(pages(p.fetch_traces, traces_since, max_pages=self.max_pages))
         scores = Prefetch(pages(p.fetch_scores, scores_since, max_pages=self.max_pages))
@@ -200,6 +210,8 @@ class SyncEngine:
             self._result.watermark = {"traces": trace_resume or traces_since, "scores": score_resume or wm.get("scores")}
         else:
             self._result.watermark = {"traces": iso(self._until), "scores": iso(self._until)}
+            if rescanned:
+                self._result.watermark["rescanned"] = rescanned
         return self._result
 
     # -- streams ------------------------------------------------------------------------

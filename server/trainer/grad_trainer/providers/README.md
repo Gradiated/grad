@@ -27,7 +27,8 @@ the new watermark in the `ImportSummary`.
 ## Adding a provider
 
 1. **One file**, `grad_trainer/providers/<name>.py`: subclass `Provider`, set `name`,
-   `default_host`, `page_size` and `requests_per_minute` from the provider's docs, and implement
+   `default_host`, `page_size` and `requests_per_minute` from the provider's docs
+   (`GRAD_SOURCES_<NAME>_REQUESTS_PER_MINUTE` raises it for a bigger plan), and implement
    - `auth_headers(secret)`;
    - `fetch_traces(since, cursor) -> Page`: one page of traces created after `since` (an ISO
      timestamp, or `None` for everything); return the next page's cursor or `None`;
@@ -63,7 +64,9 @@ the new watermark in the `ImportSummary`.
 
 ## Behaviour every provider gets
 
-- **Watermark.** `{"traces": T, "scores": S}`, stored by grad-server when the job completes.
+- **Watermark.** `{"traces": T, "scores": S, "rescanned": R}`, stored by grad-server when the
+  job completes; the window re-scan below runs at most every `GRAD_SOURCES_RESCAN_EVERY_SECONDS`
+  (15 min, R), other syncs read scores from S.
   Traces are read from `T`; scores from `min(S, now - 1 h)` (`GRAD_SOURCES_RESCAN_SECONDS`;
   Braintrust and Gradiated use their own cursors instead), so feedback edited later still
   lands. Only rows up to `now - 10 min` are taken (Langfuse documents ~10 minutes before reads

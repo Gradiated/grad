@@ -180,7 +180,11 @@ class Provider(ABC):
             host,
             headers=self.auth_headers(secret),
             secrets=(secret, *secret.split(":")),
-            requests_per_minute=self.requests_per_minute,
+            # The documented default can be raised for a bigger plan (Langfuse Pro: 1000).
+            requests_per_minute=float(
+                os.environ.get(f"GRAD_SOURCES_{self.name.upper()}_REQUESTS_PER_MINUTE") or self.requests_per_minute or 0
+            )
+            or None,
             **self._http_options,
         )
 

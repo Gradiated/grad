@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import json
 import unittest
 from datetime import timedelta
@@ -75,6 +76,17 @@ class LangfuseQuirks(Served):
         self.sync(self.provider(fx, server), {"traces": iso(NOW), "scores": iso(NOW)}, now=later)
         since = [r.arg("fromTimestamp") for r in server.requests if r.path == "/api/public/v3/scores"]
         self.assertEqual(since, [iso(later - RESCAN_WINDOW)])
+        # Re-scanned under 15 min ago (GRAD_SOURCES_RESCAN_EVERY_SECONDS): scores from the watermark.
+        server.requests.clear()
+        _, result = self.sync(self.provider(fx, server), {"traces": iso(NOW), "scores": iso(NOW), "rescanned": iso(NOW)}, now=later)
+        since = [r.arg("fromTimestamp") for r in server.requests if r.path == "/api/public/v3/scores"]
+        self.assertEqual((since, result.watermark["rescanned"]), ([iso(NOW)], iso(NOW)))
+
+    def test_requests_per_minute_can_be_raised_for_a_bigger_plan(self) -> None:
+        fx, server = self.serve(LangfuseFixture())
+        self.assertEqual(self.provider(fx, server).http.requests_per_minute, 30)
+        with mock.patch.dict(os.environ, {"GRAD_SOURCES_LANGFUSE_REQUESTS_PER_MINUTE": "1000"}):
+            self.assertEqual(self.provider(fx, server).http.requests_per_minute, 1000)
 
     def test_score_types(self) -> None:
         p = LangfuseProvider()

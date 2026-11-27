@@ -151,7 +151,7 @@ class ImportSeamTests(unittest.TestCase):
             source = {"kind": "provider", "provider": "langfuse", "host": server.url, "secret": fx.secret, "watermark": None, "full": False}
             summary = import_runner.run(source, None, emit_batch=batches.append, workdir=None)  # type: ignore[arg-type]
         self.assertEqual(summary.records, 3)
-        self.assertEqual(set(summary.watermark or {}), {"traces", "scores"})
+        self.assertEqual(set(summary.watermark or {}), {"traces", "scores", "rescanned"})
 
     def test_gradiated_reads_through_the_worker_page_function(self) -> None:
         fx = GradiatedFixture()
