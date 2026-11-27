@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "expected_output": "Settings -> Security.",
+      "id": "rec_3f8c4063c51b7650",
+      "messages": [
+        {
+          "content": "Reset password?",
+          "role": "user"
+        },
+        {
+          "content": "Settings -> Security.",
+          "role": "assistant"
+        }
+      ],
+      "session_id": "s1"
+    }
+  ],
+  "dataset": "support",
+  "next_cursor": "WzFd",
+  "total": 2,
+  "version": 1
+}

@@ -1,0 +1,15 @@
+{
+  "body": {
+    "code": "validation_error",
+    "detail": "name: Invalid string: must match pattern /^[a-z0-9][a-z0-9._-]{0,63}$/; recipe.lr: Too small: expected number to be >0",
+    "request_id": "req_07dc3851c2b5454ea899064c92f2d681",
+    "status": 422,
+    "title": "Validation failed",
+    "type": "https://gradiated.com/problems/validation_error"
+  },
+  "headers": {
+    "content-type": "application/problem+json",
+    "x-request-id": "req_07dc3851c2b5454ea899064c92f2d681"
+  },
+  "status": 422
+}

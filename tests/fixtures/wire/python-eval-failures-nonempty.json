@@ -1,0 +1,55 @@
+{
+  "data": [
+    {
+      "judge_model": null,
+      "model": "test/tiny-qwen3",
+      "passed": false,
+      "record": {
+        "expected_output": "Settings -> Security.",
+        "id": "rec_3f8c4063c51b7650",
+        "messages": [
+          {
+            "content": "Reset password?",
+            "role": "user"
+          },
+          {
+            "content": "Settings -> Security.",
+            "role": "assistant"
+          }
+        ],
+        "session_id": "s1"
+      },
+      "sample_scores": [
+        0.4
+      ],
+      "score": 0.4,
+      "task_id": "rec_3f8c4063c51b7650"
+    },
+    {
+      "judge_model": null,
+      "model": "test/tiny-qwen3",
+      "passed": false,
+      "record": {
+        "id": "rec_dba14def8ed67593",
+        "messages": [
+          {
+            "content": "Invoice?",
+            "role": "user"
+          },
+          {
+            "content": "Billing -> Invoices.",
+            "role": "assistant"
+          }
+        ],
+        "session_id": "s2"
+      },
+      "sample_scores": [
+        0.4
+      ],
+      "score": 0.4,
+      "task_id": "rec_dba14def8ed67593"
+    }
+  ],
+  "eval_id": "eval_c8e9f91fab7866a8bb83eb94",
+  "next_cursor": null
+}

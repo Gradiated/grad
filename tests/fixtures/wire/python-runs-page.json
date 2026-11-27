@@ -1,0 +1,94 @@
+{
+  "data": [
+    {
+      "artifact_id": "support-sft@2026-11-27-1",
+      "attempt": 1,
+      "cost_usd": 2.3e-05,
+      "created_at": "2026-11-27T04:42:39.138Z",
+      "current_step": 1,
+      "dataset_id": "ds_fd4e4e78d90cdc9bbd16dc7d",
+      "dataset_name": "support",
+      "dataset_version": 1,
+      "error": null,
+      "eval_report": {
+        "best_step": null,
+        "eval_examples": 0,
+        "eval_loss": null,
+        "eval_records": 0,
+        "final_step": 1,
+        "metric_name": "eval_loss",
+        "reference_backend": true,
+        "selected_step": 1,
+        "train_examples": 2,
+        "train_records": 2,
+        "warnings": [
+          "Reference test backend: the base model was not trained; the artifact is not deployable.",
+          "No held-out examples: eval metrics are null and select='last' was used.",
+          "No held-out examples: eval_loss is null."
+        ]
+      },
+      "finished_at": "2026-11-27T04:42:39.199Z",
+      "id": "run_674bf5d2f414690236a912d9",
+      "latest_metric": {
+        "attempt": 1,
+        "cost_usd": 2.3e-05,
+        "epoch": 0,
+        "grad_norm": 0.6838539058765678,
+        "loss": 0.6931471805599453,
+        "lr": 0.001,
+        "seq": 1,
+        "step": 1,
+        "timestamp": "2026-11-27T04:42:39.168796Z",
+        "tokens": 23,
+        "tokens_per_sec": 309965.82241272193
+      },
+      "max_attempts": 3,
+      "max_cost_usd": 5,
+      "name": "support-sft",
+      "price_per_million_tokens": 1,
+      "recipe_kind": "sft",
+      "resolved_config": {
+        "adapter": {
+          "alpha": 32,
+          "kind": "lora",
+          "merge_on_export": false,
+          "rank": 32
+        },
+        "batch_size": 128,
+        "checkpoint_every_steps": 1,
+        "checkpoint_ttl_days": 30,
+        "dataset": "support",
+        "dataset_version": 1,
+        "epochs": 1,
+        "lr": 0.001,
+        "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+        "model": "test/tiny-qwen3",
+        "name": "support-sft",
+        "preserve_thinking": false,
+        "recipe_kind": "sft",
+        "recipe_params": {},
+        "reduction": "per_example",
+        "rule_version": "auto@2",
+        "schedule": "linear",
+        "select": "best",
+        "split": {
+          "eval_fraction": 0.1,
+          "eval_records": 0,
+          "seed": 42,
+          "strategy": "by_session",
+          "train_records": 2
+        },
+        "template_revision": "qwen3@3",
+        "thinking": "auto",
+        "train_on": "last",
+        "warmup": 0.03
+      },
+      "status": "completed",
+      "tokens_processed": 23,
+      "total_steps": 1,
+      "updated_at": "2026-11-27T04:42:39.200Z",
+      "workspace_id": "ws_e2e"
+    }
+  ],
+  "next_cursor": null
+}

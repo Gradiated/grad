@@ -1,0 +1,80 @@
+{
+  "data": [
+    {
+      "error": null,
+      "eval_id": "eval_c8e9f91fab7866a8bb83eb94",
+      "expected_output": "Settings -> Security.",
+      "id": "evout_ab36c01cfddf8e66ea74f740",
+      "input": [
+        {
+          "content": "Reset password?",
+          "role": "user"
+        }
+      ],
+      "model": "test/tiny-qwen3",
+      "output": "answer: Reset password?",
+      "record": {
+        "expected_output": "Settings -> Security.",
+        "id": "rec_3f8c4063c51b7650",
+        "messages": [
+          {
+            "content": "Reset password?",
+            "role": "user"
+          },
+          {
+            "content": "Settings -> Security.",
+            "role": "assistant"
+          }
+        ],
+        "session_id": "s1"
+      },
+      "sample_index": 0,
+      "scores": {
+        "non_empty": 1
+      },
+      "task_id": "rec_3f8c4063c51b7650",
+      "usage": {
+        "completion_tokens": 6,
+        "prompt_tokens": 10
+      }
+    },
+    {
+      "error": null,
+      "eval_id": "eval_c8e9f91fab7866a8bb83eb94",
+      "expected_output": "Billing -> Invoices.",
+      "id": "evout_a87136ef5e31869433a0418e",
+      "input": [
+        {
+          "content": "Invoice?",
+          "role": "user"
+        }
+      ],
+      "model": "test/tiny-qwen3",
+      "output": "answer: Invoice?",
+      "record": {
+        "id": "rec_dba14def8ed67593",
+        "messages": [
+          {
+            "content": "Invoice?",
+            "role": "user"
+          },
+          {
+            "content": "Billing -> Invoices.",
+            "role": "assistant"
+          }
+        ],
+        "session_id": "s2"
+      },
+      "sample_index": 0,
+      "scores": {
+        "non_empty": 1
+      },
+      "task_id": "rec_dba14def8ed67593",
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 10
+      }
+    }
+  ],
+  "next_cursor": null
+}

@@ -1,0 +1,15 @@
+{
+  "body": {
+    "code": "unauthorized",
+    "detail": "Provide a valid API key as 'Authorization: Bearer <key>' (SDKs read GRADIATED_API_KEY).",
+    "request_id": "req_028f4fefd6ee4e92b5e9abfad141278c",
+    "status": 401,
+    "title": "Authentication required",
+    "type": "https://gradiated.com/problems/unauthorized"
+  },
+  "headers": {
+    "content-type": "application/problem+json",
+    "x-request-id": "req_028f4fefd6ee4e92b5e9abfad141278c"
+  },
+  "status": 401
+}

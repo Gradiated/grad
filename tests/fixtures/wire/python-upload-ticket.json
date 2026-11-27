@@ -1,0 +1,9 @@
+{
+  "expires_at": "2026-11-27T10:42:39.679Z",
+  "headers": {
+    "Content-Type": "application/octet-stream"
+  },
+  "method": "PUT",
+  "upload_id": "upl_5e5f7681bfc9bfebc4e4676c",
+  "url": "/blobs/uploads/upl_5e5f7681bfc9bfebc4e4676c?exp=1795776159679&sig=yg6Yd8BZImrBRU2S_wmj9dTXY_h1As00Ziu2ywos0k4"
+}
