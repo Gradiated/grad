@@ -283,7 +283,7 @@ pnpm -C server/api check                     # API typecheck + tests
 pnpm -C server/api openapi:generate          # re-emit spec/openapi.yaml after API changes
 node scripts/generate-sdks.mjs               # regenerate the four SDK transports from the spec
 
-PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests
+pip install -e "sdks/python[dev]" && python3 -m unittest discover -s sdks/python/tests
 pnpm -C sdks/typescript install --frozen-lockfile && pnpm -C sdks/typescript check
 (cd sdks/go && go test ./...)
 cargo test --workspace                       # Rust SDK + CLI
