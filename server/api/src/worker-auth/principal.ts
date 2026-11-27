@@ -14,7 +14,7 @@ export type WorkerAuthMode = (typeof WORKER_AUTH_MODES)[number];
 export interface WorkerPrincipal {
   /** The job kinds it may claim. */
   kinds: readonly WorkerJobKind[];
-  /** Stable name of the credential (`trainer-worker:<label>`, `k8s:<ns>/<sa>/<pod>`, `lease:<id>`); fences leases. */
+  /** Stable name of the credential (`trainer-worker:<label>`, `k8s:<ns>/<sa>/<pod>`, `lease:<orchestrator>/<host>/<lease>`); fences leases. */
   identity: string;
   /** Lease tokens: the host the token is bound to; the claim's worker_id must match it. */
   host?: string | undefined;

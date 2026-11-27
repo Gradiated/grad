@@ -51,6 +51,7 @@ import { datasetPartKey, type DatasetService } from "../datasets.js";
 import {
   DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
+  closedBy,
   holdsLease,
   leaseLost,
   observeInterruption,
@@ -714,11 +715,7 @@ export const createEvalService = (
     if (!job) throw notFound("trainer_job", id);
     if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
       // Idempotent retry of a completion that already committed.
-      if (
-        job.attempt === body.attempt &&
-        job.worker_id === null &&
-        job.status !== "queued"
-      ) {
+      if (closedBy(principal, job, body.attempt)) {
         return toPublic(job);
       }
       throw leaseLost(id);

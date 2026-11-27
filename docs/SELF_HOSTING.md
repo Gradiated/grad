@@ -142,9 +142,9 @@ grad-server checks the token with each authenticator in `GRAD_WORKER_AUTH`, in o
 | `kubernetes` | The pod's projected service-account token with audience `grad`. grad-server sends it to the TokenReview API using its own in-cluster credentials and maps the reviewed `system:serviceaccount:<namespace>:<name>` to kinds through `GRAD_WORKER_K8S_SERVICE_ACCOUNTS`. | Helm (the chart's default). There is nothing to store or rotate: a token lives an hour and the kubelet refreshes the file. |
 | `lease` | `gradwt_` plus 256 random bits, minted by an orchestrator for one host and lease. It is bound to that host and limited to some kinds and a GPU size, and it expires with the lease. | A system that lends hosts to grad for a while, such as Gradiated Cloud's GPU fleet operator. |
 
-**kubernetes.** Only tokens shaped like a JWT are sent for review, so static keys and lease tokens never leave grad-server. A token of another audience, an account that is not mapped, or a user that is not a service account gets a 401. A successful review is reused for 60 seconds at most, and never after the token's `exp`. grad-server needs RBAC to create `tokenreviews.authentication.k8s.io` and nothing else; the chart's ClusterRole grants exactly that.
+**kubernetes.** A token is sent for review only when it is shaped like a JWT whose (unverified) claims name audience `grad`, a mapped service account as `sub`, and an `exp` in the future. Static keys, lease tokens, expired tokens and JWTs meant for anything else never leave grad-server. At most 8 reviews per replica are in flight at once; past that a request gets `503 worker_auth_unavailable` (workers retry), so a flood of forged tokens costs the Kubernetes API little. A token the review rejects (another audience, an unmapped account, a user that is not a service account) gets a 401. A successful review is reused for 60 seconds at most and never after the token's `exp`, so a deleted worker pod's token stops working within 60 seconds. grad-server needs RBAC to create `tokenreviews.authentication.k8s.io` and nothing else; the chart's ClusterRole grants exactly that. Anyone who can create pods or `serviceaccounts/token` in the release namespace can obtain a worker token, so keep that permission to the people who run grad.
 
-**lease.** The orchestrator calls grad-server's internal listener (`INTERNAL_PORT`; off by default, never the public port) with a key from `GRAD_ORCHESTRATOR_KEYS_JSON`. Workspace and worker keys are refused there.
+**lease.** The orchestrator calls grad-server's internal listener (`INTERNAL_PORT`; off by default, never the public port) with a key from `GRAD_ORCHESTRATOR_KEYS_JSON`. Workspace and worker keys are refused there. The listener binds the same `HOST` as the API, so firewall the port so that only the orchestrator can reach it: the Helm chart's Service and NetworkPolicy never expose it.
 
 ```http
 POST /internal/v1/worker-tokens
@@ -157,14 +157,14 @@ DELETE /internal/v1/worker-tokens/lease-8c1f
 200 {"lease_id": "lease-8c1f", "revoked": 1}
 ```
 
-The token is returned once; grad-server stores only its SHA-256 (`grad_worker_tokens`). `host_id` allows letters, digits, `.`, `_` and `-`. `kinds` must be within the orchestrator key's `kinds` (else `403 job_kind_forbidden`). `expires_at` must be in the future and at most 7 days ahead. To extend a lease, mint a new token for the same lease and write it to the worker's `GRAD_WORKER_TOKEN_FILE`. An orchestrator can revoke only tokens it minted, and revoking is idempotent. On every request grad-server checks the following:
+The token is returned once; grad-server stores only its SHA-256 (`grad_worker_tokens`). `host_id` allows letters, digits, `.`, `_` and `-`. `kinds` must be within the orchestrator key's `kinds` (else `403 job_kind_forbidden`). `expires_at` must be in the future and at most 7 days ahead. To extend a lease, mint a new token for the same lease and write it to the worker's `GRAD_WORKER_TOKEN_FILE`. An orchestrator can revoke only tokens it minted, and revoking is idempotent. A token's leases belong to its orchestrator, host and lease together: a token another orchestrator minted for the same `lease_id`, or one for another host, cannot touch them. On every request grad-server checks the following:
 
 - The token has not expired and has not been revoked (else 401).
 - The claim asks only for the token's kinds (`403 job_kind_forbidden`).
 - The claim's `worker_id` is the `host_id`, or the `host_id` followed by `-` and an alphanumeric suffix of up to 32 characters (`403 worker_host_mismatch`). Start the trainer with `GRAD_WORKER_ID=<host_id>`; it appends a random `-<6 hex>` for each process.
 - The GPU memory the claim reports is no more than `gpu_memory_gb` (`403 gpu_memory_exceeds_token`). Claims are filtered as if the worker had at most that much, including a claim that reports no GPU.
 
-Revoke after the worker has drained. A revoked token's next request gets a 401 and the worker stops; any lease it still held expires and its job is requeued. The maintenance tick deletes expired tokens.
+Lease tokens are looked up on every request (they are never cached), so revocation takes effect at once. Revoke after the worker has drained. A revoked token's next request gets a 401 and the worker stops; any lease it still held expires and its job is requeued. The maintenance tick deletes expired tokens.
 
 ### Object storage
 

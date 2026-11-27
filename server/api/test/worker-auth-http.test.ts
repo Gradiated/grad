@@ -20,6 +20,7 @@ import { createSftRun, FakeWorker } from "./fixtures/worker.js";
 
 const FLEET_KEY = "grad_orch_fleet_key";
 const IMPORTER_KEY = "grad_orch_importer_key";
+const OTHER_FLEET_KEY = "grad_orch_other_fleet_key";
 
 describe("lease tokens over HTTP: mint, claim, revoke", () => {
   let t: TestApp;
@@ -59,6 +60,11 @@ describe("lease tokens over HTTP: mint, claim, revoke", () => {
           label: "importer",
           sha256: hashApiKey(IMPORTER_KEY),
           kinds: ["import"],
+        },
+        {
+          label: "other-fleet",
+          sha256: hashApiKey(OTHER_FLEET_KEY),
+          kinds: ["train"],
         },
       ],
     });
@@ -212,6 +218,61 @@ describe("lease tokens over HTTP: mint, claim, revoke", () => {
     expect(
       await t.deps.store.workerTokens.findByHash(hashApiKey(token)),
     ).toBeNull();
+  });
+
+  it("a token for the same lease id from another orchestrator or host holds none of its jobs", async () => {
+    const token = (await mint()).body.token as string;
+    await createSftRun(t);
+    const holder = new FakeWorker(t, "host-a-3fa9c1", token);
+    const job = await holder.claim({ kinds: ["train"] });
+    expect(job).not.toBeNull();
+
+    for (const other of [
+      (await mint({}, OTHER_FLEET_KEY)).body.token as string,
+      (await mint({ host_id: "host-b" })).body.token as string,
+    ]) {
+      // The holder's worker_id is not secret: only the credential counts.
+      const thief = new FakeWorker(t, "host-a-3fa9c1", other);
+      const beat = await thief.heartbeat(job!);
+      expect(beat.status).toBe(409);
+      expect(beat.body.code).toBe("lease_lost");
+      const done = await thief.complete(job!, {
+        status: "failed",
+        error: "stolen",
+      });
+      expect(done.status).toBe(409);
+    }
+    expect((await holder.heartbeat(job!)).status).toBe(200);
+  });
+
+  it("a retried /complete is answered only for the credential that closed the attempt", async () => {
+    const token = (await mint()).body.token as string;
+    await createSftRun(t);
+    const holder = new FakeWorker(t, "host-a-3fa9c1", token);
+    const job = await holder.claim({ kinds: ["train"] });
+    const first = await holder.complete(job!, {
+      status: "failed",
+      error: "boom",
+    });
+    expect(first.status).toBe(200);
+
+    // Another worker credential replaying the same worker_id and attempt
+    // learns nothing about the (terminal) run.
+    const other = new FakeWorker(t, "host-a-3fa9c1", TRAINER_KEY);
+    const replay = await other.complete(job!, {
+      status: "failed",
+      error: "boom",
+    });
+    expect(replay.status).toBe(409);
+    expect(replay.body).toMatchObject({ code: "lease_lost" });
+    expect(replay.body).not.toHaveProperty("run");
+
+    const retry = await holder.complete(job!, {
+      status: "failed",
+      error: "boom",
+    });
+    expect(retry.status).toBe(200);
+    expect(retry.body).toMatchObject({ kind: "train", status: "failed" });
   });
 
   it("only orchestrator keys reach the internal routes, within their kinds", async () => {

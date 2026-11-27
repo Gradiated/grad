@@ -181,12 +181,29 @@ export const holdsLease = (
   job.worker_key === workerKeyOf(principal) &&
   job.attempt === attempt;
 
-/** Clears the lease: part of every patch that closes an attempt. */
+/**
+ * Clears the lease: part of every patch that closes an attempt. worker_key
+ * stays (the next claim overwrites it), so a retried /complete is answered
+ * only for the credential that closed the attempt (closedBy).
+ */
 export const RELEASE = {
   worker_id: null,
-  worker_key: null,
   lease_expires_at: null,
 } as const;
+
+/**
+ * True when `attempt` of `job` was closed with a result, by `principal`:
+ * a /complete retry whose first response was lost gets that result again.
+ */
+export const closedBy = (
+  principal: AuthPrincipal,
+  job: Pick<JobRow, "worker_id" | "worker_key" | "attempt" | "status">,
+  attempt: number,
+): boolean =>
+  job.attempt === attempt &&
+  job.worker_id === null &&
+  job.status !== "queued" &&
+  job.worker_key === workerKeyOf(principal);
 
 /** The guard for a write by the holder of `job`'s current attempt. */
 export const fenceOf = (

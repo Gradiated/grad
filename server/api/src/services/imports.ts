@@ -29,6 +29,7 @@ import type { DatasetService } from "./datasets.js";
 import {
   DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
+  closedBy,
   holdsLease,
   leaseLost,
   observeInterruption,
@@ -424,11 +425,7 @@ export const createImportService = (
       const job = await load(row.id);
       if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
         // Idempotent retry of a completion that already committed.
-        if (
-          job.attempt === body.attempt &&
-          job.worker_id === null &&
-          job.status !== "queued"
-        ) {
+        if (closedBy(principal, job, body.attempt)) {
           return toPublicImport(job);
         }
         throw leaseLost(id);

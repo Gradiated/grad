@@ -43,10 +43,17 @@ import { workerTokenSource } from "../src/worker-auth/token-source.js";
 import { createWorkerClient } from "../src/worker/client.js";
 import { ManualClock } from "./fixtures/clock.js";
 
+/** A projected-token-shaped JWT (aud grad, the train pool's account) with `payload` on top. */
 const jwt = (payload: Record<string, unknown>): string =>
   [
     Buffer.from('{"alg":"RS256"}').toString("base64url"),
-    Buffer.from(JSON.stringify(payload)).toString("base64url"),
+    Buffer.from(
+      JSON.stringify({
+        aud: ["grad"],
+        sub: "system:serviceaccount:grad:grad-train-worker",
+        ...payload,
+      }),
+    ).toString("base64url"),
     "c2lnbmF0dXJl",
   ].join(".");
 
@@ -188,20 +195,68 @@ describe("kubernetes service-account tokens", () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  it("never caches past the token's exp, and does not cache tokens without one", async () => {
+  it("never caches past the token's exp", async () => {
     const { auth, spy } = make(async () => ok("grad/grad-train-worker"));
     const short = jwt({ exp: nowSec() + 10 });
     await auth.authenticate(short);
-    clock.advanceSeconds(11);
+    clock.advanceSeconds(9);
     await auth.authenticate(short);
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Past its exp the token is not even sent for review.
+    clock.advanceSeconds(2);
+    expect(await auth.authenticate(short)).toBeNull();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
 
-    const noExp = jwt({ sub: "x" });
-    await auth.authenticate(noExp);
-    await auth.authenticate(noExp);
-    expect(spy).toHaveBeenCalledTimes(4);
-    const garbled = "eyJhbGciOiJSUzI1NiJ9.bm90LWpzb24.c2ln";
-    expect((await auth.authenticate(garbled))?.expiresAt).toBeUndefined();
+  it("only sends tokens that claim audience grad, a mapped account and a future exp", async () => {
+    const { auth, spy } = make(async () => ok("grad/grad-train-worker"));
+    const exp = nowSec() + 600;
+    for (const token of [
+      jwt({}),
+      jwt({ exp: nowSec() - 1 }),
+      jwt({ exp: String(exp) }),
+      jwt({ exp, aud: ["https://kubernetes.default.svc"] }),
+      jwt({ exp, aud: "grad-other" }),
+      jwt({ exp, sub: "system:serviceaccount:grad:someone-else" }),
+      jwt({ exp, sub: "alice" }),
+      jwt({ exp, sub: undefined }),
+      "eyJhbGciOiJSUzI1NiJ9.bm90LWpzb24.c2ln",
+      `eyJhbGciOiJSUzI1NiJ9.${Buffer.from("null").toString("base64url")}.c2ln`,
+    ]) {
+      expect(await auth.authenticate(token)).toBeNull();
+    }
+    expect(spy).not.toHaveBeenCalled();
+    // A string audience is fine, as the API server may issue one.
+    expect(await auth.authenticate(jwt({ exp, aud: "grad" }))).not.toBeNull();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 503 past maxInFlight concurrent reviews, and recovers", async () => {
+    const pending: Array<() => void> = [];
+    const spy = vi.fn(
+      () =>
+        new Promise<TokenReviewStatus>((resolve) => {
+          pending.push(() => resolve(ok("grad/grad-train-worker")));
+        }),
+    );
+    const auth = createKubernetesWorkerAuth({
+      serviceAccounts: accounts,
+      review: spy,
+      clock,
+      maxInFlight: 2,
+    });
+    const exp = nowSec() + 600;
+    const first = auth.authenticate(jwt({ exp, i: 1 }));
+    const second = auth.authenticate(jwt({ exp, i: 2 }));
+    await expectApiError(auth.authenticate(jwt({ exp, i: 3 })), 503);
+    expect(spy).toHaveBeenCalledTimes(2);
+    for (const done of pending.splice(0)) done();
+    expect(await first).not.toBeNull();
+    expect(await second).not.toBeNull();
+    const third = auth.authenticate(jwt({ exp, i: 3 }));
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    pending[0]?.();
+    expect(await third).not.toBeNull();
   });
 
   it("does not cache rejections and bounds the cache", async () => {
@@ -387,7 +442,7 @@ describe("lease tokens", () => {
     const { auth, token } = await setup();
     expect(await auth.authenticate(token)).toMatchObject({
       kinds: ["train"],
-      identity: "lease:lease-1",
+      identity: "lease:fleet/host-a/lease-1",
       host: "host-a",
       lease: "lease-1",
       gpuMemoryGb: 80,
@@ -535,14 +590,18 @@ describe("the authenticator chain", () => {
   it("builds the configured modes in order", async () => {
     const tokens = memoryTokens();
     const review = vi.fn(async () => ({}));
+    const clock = new ManualClock();
     const chain = buildWorkerAuthenticator(
-      { modes: ["kubernetes", "static", "lease"], serviceAccounts: {} },
+      {
+        modes: ["kubernetes", "static", "lease"],
+        serviceAccounts: { "grad/grad-train-worker": ["train"] },
+      },
       {
         staticKeys: [
           { label: "s", sha256: hashApiKey("k-static"), kinds: ["train"] },
         ],
         tokens,
-        clock: new ManualClock(),
+        clock,
         review,
       },
     );
@@ -550,7 +609,11 @@ describe("the authenticator chain", () => {
     expect((await chain.authenticate("k-static"))?.identity).toBe(
       "trainer-worker:s",
     );
-    expect(await chain.authenticate("a.b.c")).toBeNull();
+    expect(
+      await chain.authenticate(
+        jwt({ exp: Math.floor(clock.now().getTime() / 1000) + 60 }),
+      ),
+    ).toBeNull();
     expect(review).toHaveBeenCalledTimes(1);
   });
 });

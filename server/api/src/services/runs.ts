@@ -68,6 +68,7 @@ import {
 import {
   DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
+  closedBy,
   holdsLease,
   leaseLost,
   RELEASE,
@@ -1471,8 +1472,7 @@ export const createRunLifecycle = (
         // Idempotent retry of a completion that already committed: this
         // attempt was closed with a result (not requeued by the reaper).
         if (
-          run.attempt === body.attempt &&
-          run.worker_id === null &&
+          closedBy(principal, run, body.attempt) &&
           TERMINAL.includes(run.status)
         ) {
           const artifact = run.artifact_id

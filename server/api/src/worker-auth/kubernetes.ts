@@ -138,19 +138,40 @@ const SA_USER_RE =
   /^system:serviceaccount:([a-z0-9][-a-z0-9]*):([a-z0-9][-.a-z0-9]*)$/;
 const POD_NAME_KEY = "authentication.kubernetes.io/pod-name";
 
-/** The `exp` claim of a token the API server has just authenticated (only used to bound caching). */
-const jwtExpiry = (token: string): Date | undefined => {
+/** A JWT's payload, unverified: only used to skip review of tokens that cannot pass it, and to bound caching. */
+const jwtClaims = (token: string): Record<string, unknown> | undefined => {
   try {
-    const payload = JSON.parse(
+    const payload: unknown = JSON.parse(
       Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
-    ) as { exp?: unknown };
+    );
 
-    return typeof payload.exp === "number"
-      ? new Date(payload.exp * 1000)
+    return payload !== null && typeof payload === "object"
+      ? (payload as Record<string, unknown>)
       : undefined;
   } catch {
     return undefined;
   }
+};
+
+/**
+ * Whether a token could pass review: a projected service-account token for
+ * audience `grad`, of a mapped account, not yet expired. Anyone can forge
+ * these claims, so this only keeps random and foreign JWTs (a console
+ * session, a token for another audience) away from the API server.
+ */
+const worthReviewing = (
+  claims: Record<string, unknown> | undefined,
+  accounts: Readonly<Record<string, unknown>>,
+  nowMs: number,
+): boolean => {
+  if (!claims) return false;
+  const { aud, exp, sub } = claims;
+  const audiences = Array.isArray(aud) ? aud : [aud];
+  if (!audiences.includes(WORKER_TOKEN_AUDIENCE)) return false;
+  if (typeof exp !== "number" || exp * 1000 <= nowMs) return false;
+  const match = SA_USER_RE.exec(typeof sub === "string" ? sub : "");
+
+  return match !== null && Object.hasOwn(accounts, `${match[1]}/${match[2]}`);
 };
 
 export const createKubernetesWorkerAuth = (options: {
@@ -161,29 +182,51 @@ export const createKubernetesWorkerAuth = (options: {
   /** Longest a positive review is reused (default 60 s; never past the token's exp). */
   cacheTtlMs?: number;
   maxCacheEntries?: number;
+  /** Most TokenReviews in flight at once (default 8); past it: 503. */
+  maxInFlight?: number;
 }): WorkerAuthenticator => {
   const ttlMs = options.cacheTtlMs ?? 60_000;
   const maxEntries = options.maxCacheEntries ?? 1_000;
+  const maxInFlight = options.maxInFlight ?? 8;
+  let inFlight = 0;
   const cache = new Map<
     string,
     { principal: WorkerPrincipal; until: number }
   >();
   const warned = new Set<string>();
 
-  const review = async (token: string): Promise<WorkerPrincipal | null> => {
+  const unavailable = (detail: string) =>
+    new ApiError(
+      503,
+      "worker_auth_unavailable",
+      "Worker authentication unavailable",
+      detail,
+    );
+
+  /** `expMs`: the token's exp, which the API server checks before it authenticates. */
+  const review = async (
+    token: string,
+    expMs: number,
+  ): Promise<WorkerPrincipal | null> => {
+    // Bounds what a flood of forged tokens can cost the API server.
+    if (inFlight >= maxInFlight) {
+      throw unavailable(
+        "grad-server is verifying too many service-account tokens at once; retry shortly.",
+      );
+    }
     let status: TokenReviewStatus;
+    inFlight += 1;
     try {
       status = await options.review(token, [WORKER_TOKEN_AUDIENCE]);
     } catch (error) {
       log("error", "kubernetes TokenReview failed", {
         error: errorMessage(error),
       });
-      throw new ApiError(
-        503,
-        "worker_auth_unavailable",
-        "Worker authentication unavailable",
+      throw unavailable(
         "grad-server could not verify the worker's service-account token with the Kubernetes API (TokenReview); retry shortly.",
       );
+    } finally {
+      inFlight -= 1;
     }
     if (status.authenticated !== true) return null;
     if (!(status.audiences ?? []).includes(WORKER_TOKEN_AUDIENCE)) return null;
@@ -207,24 +250,27 @@ export const createKubernetesWorkerAuth = (options: {
     return {
       kinds,
       identity: pod ? `k8s:${account}/${pod}` : `k8s:${account}`,
-      expiresAt: jwtExpiry(token),
+      expiresAt: new Date(expMs),
     };
   };
 
   return {
     mode: "kubernetes",
     authenticate: async (token) => {
-      // Only JWTs go to the API server: static keys and lease tokens never leave grad-server.
+      // Only JWTs go to the API server: static keys and lease tokens never
+      // leave grad-server, nor do JWTs that claim another audience or account.
       if (token.length > 16_384 || !JWT_RE.test(token)) return null;
       const now = options.clock.now().getTime();
+      const claims = jwtClaims(token);
+      if (!worthReviewing(claims, options.serviceAccounts, now)) return null;
       const key = createHash("sha256").update(token).digest("hex");
       const hit = cache.get(key);
       if (hit && hit.until > now) return hit.principal;
       if (hit) cache.delete(key);
 
-      const principal = await review(token);
-      const exp = principal?.expiresAt?.getTime();
-      if (principal && exp !== undefined && exp > now) {
+      const exp = (claims?.exp as number) * 1000;
+      const principal = await review(token, exp);
+      if (principal) {
         if (cache.size >= maxEntries) {
           const oldest = cache.keys().next().value;
           if (oldest !== undefined) cache.delete(oldest);
