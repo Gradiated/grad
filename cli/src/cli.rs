@@ -1048,6 +1048,7 @@ Examples:
   grad local up --gpu
   grad local up --observability  # plus Prometheus and Grafana dashboards
   grad local up --build          # build images from a source checkout
+  grad local up --dev-models     # tiny test models: train end to end on a laptop in seconds
 
 First run generates an admin key, a trainer key and the workspace-secrets
 key and saves them in the 'local' profile, so the local server runs with
@@ -1065,6 +1066,11 @@ authentication on.")]
         /// Build images from this source checkout instead of pulling them
         #[arg(long)]
         build: bool,
+        /// Also register tiny, randomly initialised test models (test/tiny-qwen3,
+        /// test/tiny-qwen3-teacher, test/tiny-bert) that train in seconds on a CPU.
+        /// For trying the workflow only: their artifacts are marked test_only
+        #[arg(long)]
+        dev_models: bool,
         /// Tag of the published images to pull (default: this binary's version for a
         /// release build, `main` for a source build; see SELF_HOSTING.md)
         #[arg(long, value_name = "TAG", conflicts_with = "build")]

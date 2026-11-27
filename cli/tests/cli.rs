@@ -2601,9 +2601,47 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let failing = docker_shim(&sb, 3);
     let mut c = sb.grad(None);
     c.env("GRAD_DOCKER", &failing);
-    let r = run(c, &["local", "up", "--no-wait"]);
+    let r = run(c, &["local", "up", "--no-wait", "--port", &port]);
     expect(&r, 1);
-    assert!(r.stderr.contains("--port"));
+    assert!(
+        r.stderr.contains(&format!("Port {} is in use", port)),
+        "{}",
+        r.stderr
+    );
+    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let free_port = free.local_addr().unwrap().port().to_string();
+    drop(free);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &failing);
+    let r = run(c, &["local", "up", "--no-wait", "--port", &free_port]);
+    expect(&r, 1);
+    assert!(
+        r.stderr.contains("docker output above") && !r.stderr.contains("--port"),
+        "a free port is not blamed: {}",
+        r.stderr
+    );
+
+    // --dev-models layers the tiny-model override on the compose file.
+    let shim = docker_shim(&sb, 0);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["--json", "local", "up", "--no-wait", "--dev-models"]);
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["dev_models"], true);
+    let dev = sb.path("data/gradiated/local/dev-models.yml");
+    assert!(std::fs::read_to_string(&dev)
+        .unwrap()
+        .contains("GRAD_DEV_MODELS: \"1\""));
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    assert!(
+        log.contains(&format!(
+            "-f {} -f {} up -d",
+            compose.display(),
+            dev.display()
+        )),
+        "{}",
+        log
+    );
 
     // --image-tag picks the tag; tags are validated; --build builds instead.
     let shim = docker_shim(&sb, 0);
@@ -2670,6 +2708,33 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
         assert!(h.contains(hint) && h.contains("--build"), "{}", h);
         let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
         assert!(!log.contains("up -d"), "{}", log);
+
+        // Inside a grad checkout the same failure builds the images from it instead.
+        let checkout = sb.path("checkout");
+        std::fs::create_dir_all(checkout.join("server/sub")).unwrap();
+        std::fs::write(checkout.join("server/docker-compose.yml"), "name: x\n").unwrap();
+        std::fs::remove_file(sb.path("docker.log")).unwrap();
+        let mut c = sb.grad(None);
+        c.env("GRAD_DOCKER", &shim)
+            .current_dir(checkout.join("server/sub"));
+        let r = run(c, &["local", "up", "--no-wait"]);
+        expect(&r, 0);
+        assert!(r.stderr.contains("building them from this checkout"), "{}", r.stderr);
+        let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+        let source = checkout.join("server/docker-compose.yml");
+        assert!(
+            log.contains(&format!("-f {} up -d --build", source.display())),
+            "{}",
+            log
+        );
+        // ...unless a tag was asked for explicitly.
+        let mut c = sb.grad(None);
+        c.env("GRAD_DOCKER", &shim)
+            .current_dir(checkout.join("server/sub"));
+        let r = run(c, &["--json", "local", "up", "--no-wait", "--image-tag", "9.9.9"]);
+        expect(&r, 1);
+        assert_eq!(r.err_json()["error"]["code"], code);
+        std::fs::remove_dir_all(&checkout).unwrap();
     }
 }
 

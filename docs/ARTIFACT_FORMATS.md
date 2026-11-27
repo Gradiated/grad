@@ -58,7 +58,7 @@ The stable fields are below. [`manifest.schema.json`](../spec/artifacts/manifest
 | `files` | object | Maps each payload path to its lowercase hex SHA-256. It never lists `manifest.json` or `eval_report.json`. |
 | `eval_report_sha256` | string | SHA-256 of `eval_report.json`, when the bundle has one. |
 
-Every other field is informational training metadata, which may change without a version bump. Examples are `lr`, `seed`, `select`, `selected_step`, `steps_completed`, `tokens_total`, `status`, `template_revision`, `thinking`, `train_on`, `adapter`, `versions` (torch, transformers and peft) and per-recipe summaries such as `candidates` or `questions`. Serving must take its runtime config from the format's config file, not from these fields.
+Every other field is informational training metadata, which may change without a version bump. Examples are `test_only` (`true` for a run on the `--dev-models` test models), `lr`, `seed`, `select`, `selected_step`, `steps_completed`, `tokens_total`, `status`, `template_revision`, `thinking`, `train_on`, `adapter`, `versions` (torch, transformers and peft) and per-recipe summaries such as `candidates` or `questions`. Serving must take its runtime config from the format's config file, not from these fields.
 
 grad-server stores the final bundle's manifest as the artifact's `manifest` and adds `run_id`, `attempt`, `dataset`, `dataset_version` and `resolved_config`. For a promoted checkpoint, the API manifest is the checkpoint's training metadata instead. Either way, the `manifest.json` inside the bundle is authoritative.
 

@@ -183,7 +183,7 @@ class ModelResolutionTests(TempDirCase):
         patcher = mock.patch.dict(os.environ, {}, clear=False)
         patcher.start()
         self.addCleanup(patcher.stop)
-        for var in ("GRAD_MODEL_PATHS", "GRAD_MODELS_MIRROR", "HF_HUB_OFFLINE", "GRAD_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        for var in ("GRAD_MODEL_PATHS", "GRAD_MODELS_MIRROR", "HF_HUB_OFFLINE", "GRAD_OFFLINE", "TRANSFORMERS_OFFLINE", "GRAD_DEV_MODELS", "GRAD_DEV_MODELS_DIR"):
             os.environ.pop(var, None)
 
     def model_dir(self, model_type: str = "qwen3") -> Path:
@@ -220,6 +220,35 @@ class ModelResolutionTests(TempDirCase):
         self.assertEqual(resolve_model("baai/bge-small-en-v1.5").family, "encoder")
         with self.assertRaisesRegex(ModelUnavailableError, "offline"):
             resolve_model("qwen/qwen3-8b")
+
+    def test_dev_models_build_once_and_mark_artifacts_test_only(self) -> None:
+        from grad_trainer import dev_models
+        from grad_trainer.models import describe_model
+
+        root = self.tmpdir()
+        builds: list[int] = []
+
+        def fake_build(directory: Path, seed: int) -> None:
+            builds.append(seed)
+            (directory / "config.json").write_text(json.dumps({"model_type": "bert" if seed == 3 else "qwen3"}))
+
+        with mock.patch.dict(dev_models.DEV_MODELS, {k: (fake_build, s) for k, (_, s) in dev_models.DEV_MODELS.items()}):
+            with self.assertRaisesRegex(ModelUnavailableError, "built-in catalog"):
+                resolve_model("test/tiny-qwen3")  # off unless GRAD_DEV_MODELS=1
+            os.environ.update({"GRAD_DEV_MODELS": "1", "GRAD_DEV_MODELS_DIR": str(root)})
+            first = resolve_model("test/tiny-qwen3")
+            self.assertEqual((first.path, first.source, first.family), (root / "test" / "tiny-qwen3", "dev", "causal_lm"))
+            self.assertEqual(resolve_model("test/tiny-qwen3").path, first.path)
+            self.assertEqual(resolve_model("test/tiny-bert").family, "encoder")
+            self.assertEqual(builds, [1, 3], "each model is built once")
+            self.assertEqual(sorted(p.name for p in (root / "test").iterdir()), ["tiny-bert", "tiny-qwen3"], "no temp dirs left")
+            self.assertIs(describe_model(first)["test_only"], True)
+            os.environ["GRAD_MODEL_PATHS"] = json.dumps({"test/tiny-qwen3": str(self.model_dir())})
+            self.assertEqual(resolve_model("test/tiny-qwen3").source, "path", "explicit paths win")
+            self.assertNotIn("test_only", describe_model(resolve_model("test/tiny-qwen3")))
+        os.environ.pop("GRAD_DEV_MODELS_DIR")
+        os.environ["HF_HOME"] = str(root / "hf")
+        self.assertEqual(dev_models.models_dir(), root / "hf" / "grad-dev-models")
 
     def test_unknown_and_private_models_fail_clearly(self) -> None:
         with self.assertRaisesRegex(ModelUnavailableError, "not public"):

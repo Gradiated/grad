@@ -297,7 +297,7 @@ jobs:
           files: lcov.info
 
       - name: grad local up compose file is valid
-        run: docker compose -f cli/assets/docker-compose.yml config --quiet
+        run: docker compose -f cli/assets/docker-compose.yml -f cli/assets/dev-models.yml config --quiet
 
   stack-smoke:
     name: grad local up --build and Helm on kind (smoke tests)

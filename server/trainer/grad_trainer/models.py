@@ -3,9 +3,10 @@
 Resolution order for a model id:
 
 1. ``GRAD_MODEL_PATHS``: a JSON object mapping model id -> local directory or HF repo id.
-2. ``GRAD_MODELS_MIRROR``: a directory (or ``s3://bucket/prefix``) holding
+2. With ``GRAD_DEV_MODELS=1``, the tiny test models of ``dev_models`` (built locally).
+3. ``GRAD_MODELS_MIRROR``: a directory (or ``s3://bucket/prefix``) holding
    ``<mirror>/<model id>/`` or ``<mirror>/<HF repo id>/``. For air-gapped installs.
-3. The built-in map below, downloaded from the Hugging Face Hub.
+4. The built-in map below, downloaded from the Hugging Face Hub.
 
 Offline mode (``HF_HUB_OFFLINE=1`` or ``GRAD_OFFLINE=1``) never touches the network: a model
 that is not already local raises ``ModelUnavailableError`` with what to set.
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import dev_models
 from .errors import ModelUnavailableError
 
 
@@ -52,7 +54,7 @@ class ResolvedModel:
     revision: str | None
     family: str
     template_revision: str
-    source: str  # "path" | "mirror" | "hub"
+    source: str  # "path" | "mirror" | "hub" | "dev"
 
 
 def is_offline() -> bool:
@@ -184,6 +186,8 @@ def resolve_model(model_id: str) -> ResolvedModel:
     repo = catalog.repo if catalog else None
 
     override = _model_paths().get(key)
+    if not override and key in dev_models.DEV_MODELS and dev_models.enabled():
+        return _resolved(key, dev_models.ensure(key), key, "dev")
     if override:
         candidate = Path(override).expanduser()
         if candidate.is_dir():
@@ -212,8 +216,11 @@ def resolve_model(model_id: str) -> ResolvedModel:
 
 
 def describe_model(resolved: ResolvedModel) -> dict[str, Any]:
-    return {
+    described: dict[str, Any] = {
         "base_model": resolved.model_id,
         "base_model_repo": resolved.repo,
         "base_model_revision": resolved.revision,
     }
+    if resolved.source == "dev":
+        described["test_only"] = True  # random tiny weights (grad local up --dev-models)
+    return described

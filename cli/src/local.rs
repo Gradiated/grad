@@ -22,6 +22,8 @@ use crate::commands::{on_interrupt, Ctx};
 use crate::output::{CliError, CliResult, EXIT_AUTH};
 
 pub const EMBEDDED_COMPOSE: &str = include_str!("../assets/docker-compose.yml");
+/// The `--dev-models` override: tiny test models in the catalog and the trainer.
+pub const DEV_MODELS_COMPOSE: &str = include_str!("../assets/dev-models.yml");
 /// The Grafana dashboards (deploy/grafana) the embedded compose file mounts.
 const DASHBOARDS: [(&str, &str); 3] = [
     (
@@ -102,6 +104,40 @@ pub fn write_embedded(tag: &str) -> CliResult<PathBuf> {
             .map_err(|e| CliError::general("io_error", format!("{}: {}", file.display(), e)))?;
     }
     Ok(path)
+}
+
+/// Write the `--dev-models` override next to the embedded compose file.
+fn write_dev_models_override() -> CliResult<PathBuf> {
+    let dir = data_dir()?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| CliError::general("io_error", format!("{}: {}", dir.display(), e)))?;
+    let path = dir.join("dev-models.yml");
+    std::fs::write(&path, DEV_MODELS_COMPOSE)
+        .map_err(|e| CliError::general("io_error", format!("{}: {}", path.display(), e)))?;
+    Ok(path)
+}
+
+/// When the published images can't be pulled, a source checkout can build them:
+/// its compose file, if `up` used the embedded one and runs inside a checkout.
+fn build_fallback(err: &CliError, args: &ComposeArgs, cwd: &Path) -> Option<PathBuf> {
+    let unpullable = err.code == "image_pull_denied" || err.code == "image_not_found";
+    if unpullable && args.file.is_empty() {
+        find_source_compose(cwd)
+    } else {
+        None
+    }
+}
+
+/// The hint for a failed `docker compose up`: name the port only when it is taken.
+fn up_failed_hint(port: u16) -> String {
+    if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+        format!(
+            "Port {} is in use (maybe by another stack): pick another with --port, or stop it with `grad local down`.",
+            port
+        )
+    } else {
+        "See the docker output above, and `grad local logs` for container errors.".into()
+    }
 }
 
 /// Find `server/docker-compose.yml` in this directory or a parent.
@@ -440,23 +476,24 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             compose: args,
             gpu,
             observability,
-            build,
+            mut build,
+            dev_models,
             image_tag,
             port,
             no_wait,
             timeout,
         } => {
             let tag = image_tag.as_deref().unwrap_or(DEFAULT_IMAGE_TAG);
-            let files = compose_files(&args, build, tag)?;
+            let overrides = if dev_models {
+                vec![write_dev_models_override()?]
+            } else {
+                vec![]
+            };
+            let mut files = compose_files(&args, build, tag)?;
+            files.extend(overrides.iter().cloned());
             let base_url = format!("http://127.0.0.1:{}", port);
             let profile = local_profile(ctx)?;
             let keys = ensure_keys(profile, &base_url)?;
-            if keys.created {
-                out.note(format!(
-                    "Generated an admin key and a trainer key (saved in profile '{}')",
-                    profile
-                ));
-            }
             out.note(format!(
                 "Starting grad on {} ({})",
                 base_url,
@@ -468,7 +505,23 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             ));
             on_interrupt("stopped waiting; the containers keep starting (`grad local status`)");
             if pulls_published_images(&args, build) {
-                pull_images(ctx, &args, &files, (gpu, observability), tag).await?;
+                if let Err(e) = pull_images(ctx, &args, &files, (gpu, observability), tag).await {
+                    let cwd = std::env::current_dir()?;
+                    let fallback = image_tag
+                        .is_none()
+                        .then(|| build_fallback(&e, &args, &cwd))
+                        .flatten();
+                    let Some(source) = fallback else {
+                        return Err(e);
+                    };
+                    out.note(format!(
+                        "{}; building them from this checkout instead ({}, like --build)",
+                        e.message,
+                        source.display()
+                    ));
+                    build = true;
+                    files = std::iter::once(source).chain(overrides).collect();
+                }
             }
             let mut cmd = compose(&args, &files);
             profiles(&mut cmd, gpu, observability);
@@ -486,10 +539,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 .env("GRAD_PORT", port.to_string());
             run(ctx, cmd, "up").await.map_err(|e| {
                 if e.code == "docker_failed" {
-                    e.hint(format!(
-                        "If port {} is taken, pick another with --port; see `grad local logs` for container errors.",
-                        port
-                    ))
+                    e.hint(up_failed_hint(port))
                 } else {
                     e
                 }
@@ -518,6 +568,18 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 "✓ grad is running at {} (profile '{}')",
                 base_url, profile
             ));
+            if keys.created {
+                out.line(format!(
+                    "  Generated an admin key and a trainer key (saved in profile '{}')",
+                    profile
+                ));
+            }
+            if dev_models {
+                out.line(
+                    "  Dev models: test/tiny-qwen3, test/tiny-qwen3-teacher, test/tiny-bert (random tiny weights; \
+                     artifacts are test-only), e.g. grad train --model test/tiny-qwen3 ...",
+                );
+            }
             out.line(format!(
                 "  Web UI: {}/  (grad --profile {} ui opens it signed in)",
                 base_url, profile
@@ -546,6 +608,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 "compose_files": files,
                 "project": args.project_name,
                 "keys_created": keys.created,
+                "dev_models": dev_models,
+                "built": build,
                 "healthy": !no_wait,
             }))
         }
@@ -712,5 +776,67 @@ mod tests {
             Some(root.join("server/docker-compose.yml"))
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unpullable_images_fall_back_to_a_checkout_build() {
+        let root = std::env::var_os("TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("grad-local-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("server")).unwrap();
+        std::fs::write(root.join("server/docker-compose.yml"), "name: x\n").unwrap();
+        let embedded = ComposeArgs {
+            file: vec![],
+            project_name: "grad-local".into(),
+        };
+        let source = Some(root.join("server/docker-compose.yml"));
+        for code in ["image_pull_denied", "image_not_found"] {
+            let err = CliError::general(code, "no images");
+            assert_eq!(build_fallback(&err, &embedded, &root), source, "{code}");
+        }
+        let docker = CliError::general("docker_failed", "boom");
+        assert_eq!(build_fallback(&docker, &embedded, &root), None);
+        let own_file = ComposeArgs {
+            file: vec![root.join("server/docker-compose.yml")],
+            ..embedded
+        };
+        let denied = CliError::general("image_pull_denied", "no images");
+        assert_eq!(build_fallback(&denied, &own_file, &root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn up_failure_names_the_port_only_when_it_is_taken() {
+        let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = taken.local_addr().unwrap().port();
+        assert!(up_failed_hint(port).contains(&format!("Port {} is in use", port)));
+        drop(taken);
+        assert!(up_failed_hint(port).contains("docker output above"));
+    }
+
+    #[test]
+    fn dev_models_override_registers_the_tiny_models() {
+        // The folded (`>-`) YAML value: its lines joined by spaces must be the JSON catalog.
+        let json: String = DEV_MODELS_COMPOSE
+            .split("GRAD_EXTRA_MODELS_JSON: >-")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .take_while(|l| !l.trim_start().starts_with("grad-trainer:"))
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let models: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        let ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert_eq!(
+            ids,
+            [
+                "test/tiny-qwen3",
+                "test/tiny-qwen3-teacher",
+                "test/tiny-bert"
+            ]
+        );
+        assert!(DEV_MODELS_COMPOSE.contains("GRAD_DEV_MODELS: \"1\""));
     }
 }

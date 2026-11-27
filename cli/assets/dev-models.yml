@@ -1,0 +1,14 @@
+# `grad local up --dev-models` (embedded in the grad binary): an override that
+# registers tiny, randomly initialised test models so a run finishes in seconds
+# on a CPU. They learn nothing useful; their artifacts are marked test_only.
+# The trainer builds the weights on first use (grad_trainer/dev_models).
+services:
+  grad-server:
+    environment:
+      GRAD_EXTRA_MODELS_JSON: >-
+        [{"id":"test/tiny-qwen3","hf_repo":null,"family":"llm","adapters":["lora","prefix_kv"],"default_for":[],"price_per_million_tokens_usd":1,"max_context_tokens":2048,"template_revision":"qwen3@3","calibrated_lrs":{"sft":0.001,"dpo":0.0001,"router":0.001,"cartridge":0.01,"distill":0.001,"reward":0.001}},
+        {"id":"test/tiny-qwen3-teacher","hf_repo":null,"family":"llm","adapters":["lora","prefix_kv"],"default_for":[],"price_per_million_tokens_usd":2,"max_context_tokens":2048,"template_revision":"qwen3@3","calibrated_lrs":{"sft":0.001}},
+        {"id":"test/tiny-bert","hf_repo":null,"family":"encoder","adapters":["encoder_full"],"default_for":[],"price_per_million_tokens_usd":0.5,"max_context_tokens":512,"template_revision":"bge@1","calibrated_lrs":{"embedding":0.0001}}]
+  grad-trainer:
+    environment:
+      GRAD_DEV_MODELS: "1"

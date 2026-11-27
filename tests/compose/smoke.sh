@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Boot the local stack from source with `grad local up --build`, run the
-# quickstart through the CLI and the Python SDK (CPU torch trainer, tiny
-# models, fake OpenAI-compatible inference), restart it to check the data
-# persists, then `grad local down --volumes` and check nothing is left.
+# Boot the local stack from source with `grad local up --build --dev-models`,
+# run the quickstarts (including the README's router on the sample traces)
+# through the CLI and the Python SDK (CPU torch trainer, tiny dev models, fake
+# OpenAI-compatible inference), restart it to check the data persists, then
+# `grad local down --volumes` and check nothing is left.
 #
 #   GRAD_BIN=target/debug/grad GRAD_SMOKE_PYTHON=python3 tests/compose/smoke.sh
 #
@@ -43,7 +44,7 @@ cleanup() {
 trap cleanup EXIT
 
 step "grad local up --build"
-"$GRAD" local up --build --timeout 600
+"$GRAD" local up --build --dev-models --timeout 600
 "$GRAD" models list | grep -q test/tiny-qwen3 || fail "tiny model not in the catalog"
 
 step "CLI quickstart: import, plan, train, download, eval"
@@ -65,6 +66,15 @@ grep -q "support-sft@" eval.out || fail "eval"
 "$GRAD" --json deploy support-sft@latest 2>deploy.err && fail "deploy must be unavailable self-hosted"
 grep -q deploy_unavailable deploy.err || fail "deploy error code"
 
+step "README quickstart: a router on examples/support_traces.jsonl (dev models)"
+"$GRAD" import "$ROOT/examples/support_traces.jsonl" --dataset support-traces | tee readme-import.out
+grep -q "imported 96 records" readme-import.out || fail "README import"
+"$GRAD" train --dataset support-traces --name support-router --recipe router --model test/tiny-qwen3 \
+  --set rubric=resolved --max-cost-usd 1 --wait | tee router.out
+grep -q "Exported artifact support-router@" router.out || fail "README router"
+"$GRAD" artifacts download support-router@latest --output ./support-router
+test -f support-router/router_config.json || fail "router artifact files"
+
 step "workspace secrets (GRAD_SECRETS_KEY from the local profile)"
 printf 'hf_smoke_not_a_real_token' | "$GRAD" secrets set hf-token
 "$GRAD" secrets list | tee secrets.out
@@ -81,7 +91,7 @@ grep -q "ready" status.out || fail "status"
 
 step "restart: data persists"
 "$GRAD" local down
-"$GRAD" local up --build --timeout 600
+"$GRAD" local up --build --dev-models --timeout 600
 "$GRAD" --json runs list | grep -q '"support-sft"' || fail "run lost across restart"
 "$GRAD" secrets list | grep -q hf-token || fail "secret lost across restart"
 rm -rf support-sft

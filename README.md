@@ -152,6 +152,20 @@ client.deployments().create(&deploy, None).await?;
 
 </details>
 
+### Try it on your laptop
+
+`grad local up` runs the same server in Docker. `--dev-models` adds tiny, randomly initialised test models (`test/tiny-qwen3`, `test/tiny-bert`) so a run finishes in seconds on a CPU; what they produce is for trying the workflow only.
+
+```bash
+grad local up --dev-models
+export GRADIATED_PROFILE=local   # the CLI and every SDK now use the local stack
+curl -LO https://raw.githubusercontent.com/Gradiated/grad/main/examples/support_traces.jsonl
+grad import ./support_traces.jsonl --dataset support-prod
+grad train --dataset support-prod --name support-router --recipe router --model test/tiny-qwen3 \
+  --set rubric=resolved --max-cost-usd 1 --wait
+grad artifacts download support-router@latest --output ./support-router
+```
+
 New to it? The [training overview](https://gradiated.com/docs/training/) walks the full loop, and the [router guide](https://gradiated.com/docs/training/recipes/router/) covers the data a router needs.
 
 ## What you can train
@@ -237,6 +251,7 @@ Self-hosted `grad` needs only Postgres and S3 (or a local directory for `grad lo
 ```bash
 grad local up                 # Postgres, grad-server on 127.0.0.1:8787, a CPU trainer
 grad local up --gpu           # add the CUDA trainer (NVIDIA Container Toolkit)
+grad local up --dev-models    # add tiny test models that train in seconds (try-it-out only)
 export GRADIATED_PROFILE=local
 ```
 
