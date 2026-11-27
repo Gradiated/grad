@@ -1196,6 +1196,37 @@ fn runs_commands() {
 }
 
 #[test]
+fn reimporting_the_same_file_says_nothing_new_was_added() {
+    let srv = MockServer::start(|r| match (r.method.as_str(), r.path()) {
+        ("POST", p) if p.ends_with("/imports") => Reply::json(
+            200,
+            json!({"id": "imp_old", "dataset": "support-prod", "status": "completed", "connector": "auto",
+                   "imported_count": 80, "dropped_count": 0, "dataset_version": 2, "detected_scores": [],
+                   "drop_reasons": [], "created_at": "2026-11-26T10:00:00.000Z", "updated_at": "2026-11-26T10:00:00.000Z"}),
+        ),
+        ("GET", "/v1/imports/imp_old") => Reply::json(
+            200,
+            json!({"id": "imp_old", "dataset": "support-prod", "status": "completed", "connector": "auto",
+                   "imported_count": 80, "dropped_count": 0, "dataset_version": 2, "detected_scores": [],
+                   "drop_reasons": [], "created_at": "2026-11-26T10:00:00.000Z", "updated_at": "2026-11-26T10:00:00.000Z"}),
+        ),
+        _ => handler(r),
+    });
+    let sb = Sandbox::new("reimport");
+    std::fs::write(sb.path("t.jsonl"), "{}\n").unwrap();
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["import", "./t.jsonl", "--dataset", "support-prod"],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stderr.contains("already imported into support-prod as version 2 (import imp_old); nothing new was added"),
+        "{}",
+        r.stderr
+    );
+}
+
+#[test]
 fn cancel_and_resume_by_name_never_pick_one_of_several_runs() {
     let srv = MockServer::start(|r| match (r.method.as_str(), r.path()) {
         ("GET", "/v1/runs") => Reply::json(

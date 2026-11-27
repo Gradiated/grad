@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   Dataset,
   DatasetRecord,
@@ -6,7 +8,6 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
-import { newId } from "../ids.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
   DatasetPart,
@@ -97,9 +98,16 @@ export const datasetPartKey = (
 ): string =>
   `ws/${encodeURIComponent(workspaceId)}/datasets/${datasetId}/${sha256}.jsonl.gz`;
 
+/**
+ * A record without an id gets one from its content, so pushing the same
+ * records again writes a byte-identical part (and changes nothing).
+ */
+export const contentRecordId = (record: DatasetRecord): string =>
+  `rec_${createHash("sha256").update(canonicalJson(record)).digest("hex").slice(0, 16)}`;
+
 const stampIds = (records: readonly DatasetRecord[]): DatasetRecord[] =>
   records.map((record) =>
-    record.id ? record : { ...record, id: newId("rec").slice(0, 20) },
+    record.id ? record : { ...record, id: contentRecordId(record) },
   );
 
 export const createDatasetService = (deps: AppDependencies): DatasetService => {
@@ -192,6 +200,15 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
             dataset.id,
             stampIds(records),
           );
+          // Re-pushing records the dataset already holds is a no-op: the
+          // current version is returned and no new one is created.
+          const current = await store.datasets.getVersion(
+            dataset.id,
+            dataset.version,
+          );
+          if (current?.parts.some((p) => p.sha256 === part.sha256)) {
+            return get(workspaceId, name);
+          }
           return store.datasets.appendVersion({
             datasetId: dataset.id,
             parts: [part],

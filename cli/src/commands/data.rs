@@ -2,8 +2,8 @@
 
 use grad_sdk::{
     recipes, Client, FilterDatasetRequest, HfColumnMapping, ImportFileOptions, ImportJob,
-    ImportSource, ImportSourceKind, PushOptions, RenderDatasetRequest, ScoreDatasetRequest,
-    WaitOptions,
+    ImportSource, ImportSourceKind, ImportStatus, PushOptions, RenderDatasetRequest,
+    ScoreDatasetRequest, WaitOptions,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -439,6 +439,18 @@ pub async fn import(ctx: &Ctx, a: ImportArgs) -> CliResult {
             &ImportFileOptions { format, connector },
         )
         .await?;
+    // The server imports a file into a dataset once; a re-run gets that import back.
+    if job.status == ImportStatus::Completed {
+        ctx.out.note(format!(
+            "{} was already imported into {} as version {} (import {}); nothing new was added.",
+            a.file.display(),
+            job.dataset,
+            job.dataset_version
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
+            job.id
+        ));
+    }
     finish_import(ctx, &c, job, &a.wait).await
 }
 

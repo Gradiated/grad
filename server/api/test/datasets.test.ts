@@ -103,12 +103,16 @@ describe("datasets, uploads and imports", () => {
   it("stores parts gzip-compressed, addressed by the uncompressed JSONL", async () => {
     const records = sftRecords(50).map((r, i) => ({ ...r, id: `r${i}` }));
     await t.json("/v1/datasets/packed/records", { body: { records } });
-    await t.json("/v1/datasets/packed/records", { body: { records } });
+    // Pushing the same records again is a no-op: no new version.
+    const again = await t.json("/v1/datasets/packed/records", {
+      body: { records },
+    });
+    expect(again.body).toMatchObject({ version: 1, record_count: 50 });
+    const more = sftRecords(3, "more").map((r, i) => ({ ...r, id: `m${i}` }));
+    await t.json("/v1/datasets/packed/records", { body: { records: more } });
     const dataset = await t.deps.store.datasets.get("ws_a", "packed");
     const version = await t.deps.store.datasets.getVersion(dataset!.id, 2);
-    const [part, again] = version!.parts;
-    // The same records are the same object, whatever the compressor emits.
-    expect(again!.key).toBe(part!.key);
+    const [part, second] = version!.parts;
     expect(part!.key).toBe(
       `ws/ws_a/datasets/${dataset!.id}/${part!.sha256}.jsonl.gz`,
     );
@@ -129,7 +133,7 @@ describe("datasets, uploads and imports", () => {
     const listed = await t.json<{ total: number }>(
       "/v1/datasets/packed/records?limit=1",
     );
-    expect(listed.body.total).toBe(50);
+    expect(listed.body.total).toBe(53);
     const run = await t.json("/v1/runs", {
       body: {
         dataset: "packed",
@@ -146,8 +150,9 @@ describe("datasets, uploads and imports", () => {
     const body = Buffer.from(await res.arrayBuffer());
     expect(body.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
     // Two parts streamed as two gzip members; gunzip yields both, in order.
+    const jsonl2 = gunzipSync(await t.deps.storage.get(second!.key));
     expect(gunzipSync(body).toString("utf8")).toBe(
-      `${jsonl.toString("utf8")}${jsonl.toString("utf8")}`,
+      `${jsonl.toString("utf8")}${jsonl2.toString("utf8")}`,
     );
   });
 
@@ -169,6 +174,23 @@ describe("datasets, uploads and imports", () => {
     await swap(gzipSync(Buffer.from('{"id":"other"}\n')));
     res = await t.json("/v1/datasets/broken/records");
     expect(res.status).toBe(500);
+  });
+
+  it("gives records without ids content ids, so a re-push changes nothing", async () => {
+    const first = await t.json("/v1/datasets/repush/records", {
+      body: { records: sftRecords(4) },
+    });
+    expect(first.body).toMatchObject({ version: 1, record_count: 4 });
+    const again = await t.json("/v1/datasets/repush/records", {
+      body: { records: sftRecords(4) },
+    });
+    expect(again.body).toMatchObject({ version: 1, record_count: 4 });
+    const listed = await t.json<{ data: Array<{ id: string }> }>(
+      "/v1/datasets/repush/records",
+    );
+    const ids = listed.body.data.map((r) => r.id);
+    expect(ids).toHaveLength(4);
+    expect(ids.every((id) => /^rec_[0-9a-f]{16}$/.test(id))).toBe(true);
   });
 
   it("keeps every concurrent append (no in-process locks)", async () => {
