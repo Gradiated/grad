@@ -84,16 +84,23 @@ async fn typed_errors_carry_status_code_request_id_and_url() {
 
     let e = c
         .deployments()
-        .create(&DeployRequest {
-            artifact: "a@latest".into(),
-            ..Default::default()
-        })
+        .create(
+            &DeployArtifactRequest {
+                artifact: "a@latest".into(),
+                ..Default::default()
+            },
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(e, Error::DeployUnavailable(_)));
     assert!(e.to_string().contains("vLLM"));
 
-    let e = c.evals().create(&EvalRequest::default()).await.unwrap_err();
+    let e = c
+        .evals()
+        .create(&PlanEvalRequest::default(), None)
+        .await
+        .unwrap_err();
     assert!(matches!(e, Error::InferenceUnavailable(_)));
 
     let e = c.keys().create("k", &["admin".into()]).await.unwrap_err();
@@ -101,7 +108,11 @@ async fn typed_errors_carry_status_code_request_id_and_url() {
 
     let e = c
         .runs()
-        .plan(&RunRequest::new("ds", "n", recipes::sft()))
+        .plan(&PlanRunRequest::new(
+            "ds",
+            "n",
+            RecipeSpec::new(RecipeKind::Sft),
+        ))
         .await
         .unwrap_err();
     assert!(matches!(e, Error::Validation(_)));
@@ -194,7 +205,6 @@ async fn idempotent_and_keyed_requests_retry_with_backoff() {
             }
         }
         ("POST", "/v1/runs") => Reply::problem(503, "store_unavailable", "busy"),
-        ("POST", "/v1/env-workers/tasks") => Reply::problem(503, "store_unavailable", "busy"),
         ("POST", "/v1/runs/plan") => Reply::problem(502, "bad_gateway", "nope"),
         ("GET", "/v1/datasets") => Reply::Drop,
         _ => Reply::problem(404, "nf", "nf"),
@@ -206,7 +216,10 @@ async fn idempotent_and_keyed_requests_retry_with_backoff() {
 
     let e = c
         .runs()
-        .create(&RunRequest::new("d", "n", recipes::sft()))
+        .create(
+            &PlanRunRequest::new("d", "n", RecipeSpec::new(RecipeKind::Sft)),
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(e, Error::Server(_)));
@@ -223,15 +236,6 @@ async fn idempotent_and_keyed_requests_retry_with_backoff() {
         .collect();
     assert_eq!(keys.len(), 1, "every retry reuses one Idempotency-Key");
     assert_eq!(keys.iter().next().unwrap().len(), 36);
-
-    let task: EnvTaskDispatch =
-        serde_json::from_value(json!({"env_name": "e", "task": {}, "model_id": "m"})).unwrap();
-    assert!(c.env_workers().dispatch(&task).await.is_err());
-    assert_eq!(
-        srv.count("POST", "/v1/env-workers/tasks"),
-        1,
-        "an unkeyed POST is not retried on 503"
-    );
 
     let e = c.datasets().list(&ListParams::default()).await.unwrap_err();
     assert!(
@@ -263,7 +267,7 @@ async fn posts_retry_on_429_and_honour_retry_after() {
     let c = client(&srv.url);
     let r = c
         .feedback()
-        .record(&[FeedbackEvent {
+        .record(&[FeedbackEventInput {
             idempotency_key: "k1".into(),
             score: Some(1.0),
             ..Default::default()
@@ -341,7 +345,10 @@ async fn redirects_same_origin_get_only() {
 
     let e = c
         .runs()
-        .create(&RunRequest::new("d", "n", recipes::sft()))
+        .create(
+            &PlanRunRequest::new("d", "n", RecipeSpec::new(RecipeKind::Sft)),
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(e, Error::Redirect { .. }));
@@ -374,10 +381,7 @@ async fn wait_backs_off_tolerates_transient_errors_and_types_failures() {
     let run = c.runs().wait("r_ok", &fast_wait()).await.unwrap();
     assert_eq!(run.status, RunStatus::Completed);
     assert_eq!(run.artifact_id.as_deref(), Some("art_1"));
-    assert!(
-        run.extra.contains_key("brand_new_field"),
-        "unknown fields are kept"
-    );
+    // `run_json` carries a field this SDK does not know: decoding still succeeds.
 
     let e = c.runs().wait("r_fail", &fast_wait()).await.unwrap_err();
     match &e {
@@ -1051,12 +1055,6 @@ async fn resources_send_documented_wire_shapes() {
         ("DELETE", "/v1/keys/key_1") => {
             Reply::json(200, json!({"id": "key_1", "revoked_at": "now"}))
         }
-        ("POST", "/v1/env-workers/tasks") => {
-            Reply::json(202, json!({"id": "task_1", "status": "queued"}))
-        }
-        ("GET", "/v1/env-workers/tasks/task_1") => {
-            Reply::json(200, json!({"id": "task_1", "status": "completed"}))
-        }
         ("POST", "/v1/evals/e1/scores") => Reply::json(
             200,
             json!({"accepted": 1, "status": "completed", "pending_local_scores": 0}),
@@ -1080,10 +1078,6 @@ async fn resources_send_documented_wire_shapes() {
             200,
             json!({"id": "e2", "status": "failed", "error": "judge down"}),
         ),
-        ("GET", "/v1/evals/e3") => Reply::json(
-            200,
-            json!({"id": "e3", "status": "stopped_budget", "max_cost_usd": 0.1}),
-        ),
         ("POST", "/v1/datasets/ds/render") => Reply::json(
             200,
             json!({"examples": [{"record_id": "r", "spans": [{"text": "hi", "trained": true}]}]}),
@@ -1096,11 +1090,14 @@ async fn resources_send_documented_wire_shapes() {
     });
     let c = client(&srv.url);
     c.deployments()
-        .create(&DeployRequest {
-            artifact: "support-router@latest".into(),
-            explore_rate: Some(0.1),
-            ..Default::default()
-        })
+        .create(
+            &DeployArtifactRequest {
+                artifact: "support-router@latest".into(),
+                explore_rate: Some(0.1),
+                ..Default::default()
+            },
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1158,26 +1155,12 @@ async fn resources_send_documented_wire_shapes() {
             .await
             .unwrap()
             .data[0]
-            .is_final
+            .r#final
     );
     let k = c.keys().create("ci", &["runs:read".into()]).await.unwrap();
     assert!(!format!("{:?}", k).contains("grad_live_secret"));
     assert_eq!(k.secret, "grad_live_secret");
     c.keys().revoke("key_1").await.unwrap();
-    let t = c
-        .env_workers()
-        .dispatch(&EnvTaskDispatch {
-            env_name: "e".into(),
-            model_id: "m".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(t["id"], "task_1");
-    assert_eq!(
-        c.env_workers().get_task("task_1").await.unwrap()["status"],
-        "completed"
-    );
     c.evals()
         .post_scores(
             "e1",
@@ -1224,15 +1207,11 @@ async fn resources_send_documented_wire_shapes() {
         .unwrap_err();
     assert!(matches!(e, Error::EvalFailed(_)));
     assert!(e.to_string().contains("judge down"));
-    let capped = c.evals().wait("e3", &fast_wait(), |_| {}).await.unwrap();
-    assert_eq!(capped.status, EvalStatus::StoppedBudget);
-    assert!(capped.status.is_terminal());
-    assert_eq!(capped.max_cost_usd, Some(0.1));
     let r = c
         .datasets()
         .render(
             "ds",
-            &RenderRequest {
+            &RenderDatasetRequest {
                 limit: Some(2),
                 ..Default::default()
             },
@@ -1416,13 +1395,11 @@ fn eval_reports_and_metric_points_are_typed() {
     let pareto = report.pareto_summary.unwrap();
     assert_eq!(pareto.quality_drop_ci95, Some(vec![-0.004, 0.019]));
     assert_eq!(pareto.offload_rate, None);
-    assert_eq!(report.extra["future"], 1);
     let other = EvalReport {
         metric_name: "custom".into(),
-        extra: serde_json::from_value(json!({"custom": 2.5})).unwrap(),
         ..Default::default()
     };
-    assert_eq!(other.metric(), Some(2.5));
+    assert_eq!(other.metric(), None);
     for (name, field) in [
         ("preference_accuracy", 1),
         ("eval_kl", 2),

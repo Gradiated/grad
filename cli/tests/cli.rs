@@ -421,7 +421,6 @@ fn help_documents_exit_codes_and_every_command_has_help() {
         vec!["local", "up"],
         vec!["artifacts", "download"],
         vec!["datasets", "import", "hf"],
-        vec!["env", "serve"],
         vec!["runs", "inspect"],
         vec!["keys", "create"],
         vec!["deploy"],
@@ -477,21 +476,13 @@ fn usage_errors_exit_2_and_json_mode_wraps_them() {
     );
     expect(&r, 2);
     assert!(r.stderr.contains("decision-model"), "{}", r.stderr);
-    let r = run(sb.grad(None), &["secrets", "set", "langfuse-prod"]);
-    expect(&r, 2);
-    assert!(r.stderr.contains("not available in v0"));
-    assert!(r.stderr.contains("credentials"), "{}", r.stderr);
-    let r = run(
-        sb.grad(None),
-        &["sources", "add", "langfuse", "--dataset", "x"],
-    );
-    expect(&r, 2);
-    assert!(r.stderr.contains("Langfuse"), "{}", r.stderr);
-    assert!(
-        r.stderr.contains("grad import FILE --dataset NAME"),
-        "{}",
-        r.stderr
-    );
+    for cut in [
+        &["secrets", "set", "x"][..],
+        &["env", "serve", "m:e"],
+        &["rollback", "x"],
+    ] {
+        expect(&run(sb.grad(None), cut), 2);
+    }
     let r = run(
         sb.grad(None),
         &["--base-url", "localhost:8787", "models", "list"],
@@ -1044,8 +1035,6 @@ fn runs_commands() {
     let r = run(sb.grad(u), &["--json", "runs", "logs", "run_1", "--follow"]);
     expect(&r, 0);
     assert_eq!(r.json()["data"]["metrics"].as_array().unwrap().len(), 2);
-    let r = run(sb.grad(u), &["runs", "logs", "run_1", "--samples", "5"]);
-    expect(&r, 2);
     let r = run(sb.grad(u), &["runs", "wait", "run_1"]);
     expect(&r, 0);
     assert!(r.stdout.contains("Next: grad deploy"));
@@ -1132,20 +1121,6 @@ fn import_uploads_streams_and_waits() {
         &["import", "./missing.jsonl", "--dataset", "x"],
     );
     expect(&r, 2);
-    let r = run(
-        sb.grad(Some(&srv.url)),
-        &[
-            "datasets",
-            "import",
-            "file",
-            "./support_traces.jsonl",
-            "--name",
-            "support-prod",
-            "--format",
-            "jsonl",
-        ],
-    );
-    expect(&r, 0);
     let r = run(sb.grad(Some(&srv.url)), &["imports", "list"]);
     expect(&r, 0);
     let r = run(sb.grad(Some(&srv.url)), &["imports", "status", "imp_1"]);
@@ -1215,16 +1190,13 @@ fn datasets_commands() {
     );
     expect(&r, 0);
     assert!(r.stdout.contains("TRAIN │ hello"), "{}", r.stdout);
-    let r = run(
-        sb.grad(u),
-        &["datasets", "render", "support-sft", "--thinking", "false"],
-    );
+    let r = run(sb.grad(u), &["render", "support-sft", "--thinking", "off"]);
     expect(&r, 0);
     assert_eq!(
         srv.last("POST", "/v1/datasets/support-sft/render")
             .unwrap()
             .json()["thinking"],
-        false
+        "off"
     );
     let r = run(sb.grad(u), &["render", "support-sft", "--limit", "99"]);
     expect(&r, 2);
@@ -1411,11 +1383,9 @@ fn deploy_route_rollback_embed_and_keys() {
     assert!(r.stdout.contains("94.1%"), "{}", r.stdout);
     let r = run(sb.grad(u), &["deployments", "list"]);
     expect(&r, 0);
-    let r = run(sb.grad(u), &["rollback", "support-router"]);
-    expect(&r, 0);
-    assert!(r.stdout.contains("art_0"));
     let r = run(sb.grad(u), &["deployments", "rollback", "support-router"]);
     expect(&r, 0);
+    assert!(r.stdout.contains("art_0"));
     let r = run(
         sb.grad(u),
         &[
@@ -1593,7 +1563,7 @@ fn eval_commands() {
         ],
     );
     expect(&r, 2);
-    assert!(r.stderr.contains(".py"), "{}", r.stderr);
+    assert!(r.stderr.contains("Python SDK"), "{}", r.stderr);
     let r = run(
         sb.grad(u),
         &[
@@ -1608,363 +1578,6 @@ fn eval_commands() {
     );
     expect(&r, 2);
     let r = run(sb.grad(u), &["eval", "--models", "a"]);
-    expect(&r, 2);
-}
-
-// ---------------------------------------------------------------- env serve
-
-fn fake_python_sdk(sb: &Sandbox) -> PathBuf {
-    let pkg = sb.path("pylib/grad");
-    std::fs::create_dir_all(&pkg).unwrap();
-    std::fs::write(
-        pkg.join("__init__.py"),
-        r#"
-import json, os
-class Environment:
-    def setup(self, task): pass
-    def evaluate(self): return 1.0
-class _Eval(dict):
-    def wait(self):
-        self["status"] = os.environ.get("GRAD_TEST_EVAL_STATUS", "completed")
-        return self
-class _Evals:
-    def create(self, **kw):
-        with open(os.environ["GRAD_TEST_RECORD"], "w") as f:
-            json.dump({k: (v if k != "rubric" else repr(v)) for k, v in kw.items()}, f)
-        return _Eval(id="eval_py", name=kw.get("name", "x"), status="queued", samples=kw.get("samples", 1),
-                     summary=[{"model": m, "overall": 0.5, "ci_low": 0.4, "ci_high": 0.6, "tasks": 3} for m in kw["models"]])
-class Grad:
-    def __init__(self, base_url=None, api_key=None):
-        assert base_url, "base_url"
-        self.evals = _Evals()
-class ChatCompletionsPolicy:
-    def __init__(self, base_url, api_key=None, *, model=None):
-        self.base_url, self.api_key, self.model = base_url, api_key, model
-    def __call__(self, messages, **kw):
-        return "unused"
-def serve_environment(env, *, name, policy, base_url, api_key=None, concurrency=4, wait_ms=5000, max_tasks=None, worker_id=None):
-    with open(os.environ["GRAD_TEST_RECORD"], "w") as f:
-        json.dump({"type": type(env).__name__, "is_instance": isinstance(env, Environment), "name": name,
-                   "policy": getattr(policy, "__name__", None) or {"url": policy.base_url, "key": policy.api_key, "model": policy.model},
-                   "base_url": base_url, "api_key": api_key, "concurrency": concurrency, "wait_ms": wait_ms,
-                   "max_tasks": max_tasks, "worker_id": worker_id}, f)
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        sb.path("my_env.py"),
-        "from grad import Environment\nclass MyEnv(Environment):\n    pass\nenv = MyEnv()\ndef make():\n    return MyEnv()\nnot_env = 42\ndef respond(messages, **kw):\n    return 'ok'\n",
-    )
-    .unwrap();
-    sb.path("pylib")
-}
-
-#[test]
-fn env_serve_instantiates_classes_and_passes_the_resolved_config() {
-    if std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skipping: python3 not available");
-        return;
-    }
-    let sb = Sandbox::new("envserve");
-    let lib = fake_python_sdk(&sb);
-    let rec = sb.path("record.json");
-    for target in ["my_env:MyEnv", "my_env:env", "my_env:make"] {
-        let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-        c.env("PYTHONPATH", &lib).env("GRAD_TEST_RECORD", &rec);
-        let r = run(
-            c,
-            &[
-                "env",
-                "serve",
-                target,
-                "--name",
-                "support-app",
-                "--concurrency",
-                "32",
-                "--max-tasks",
-                "1",
-                "--policy",
-                "my_env:respond",
-            ],
-        );
-        expect(&r, 0);
-        let got: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
-        assert_eq!(got["policy"], "respond", "{}", target);
-        assert_eq!(got["type"], "MyEnv", "{}", target);
-        assert_eq!(got["is_instance"], true);
-        assert_eq!(got["name"], "support-app");
-        assert_eq!(got["base_url"], "http://127.0.0.1:8787");
-        assert_eq!(got["api_key"], "grad_cli_test");
-        assert_eq!(got["concurrency"], 32);
-        assert_eq!(got["max_tasks"], 1);
-        assert!(got["worker_id"].is_null());
-    }
-    // --policy-url builds a ChatCompletionsPolicy with the key from GRAD_POLICY_API_KEY.
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", &lib)
-        .env("GRAD_TEST_RECORD", &rec)
-        .env("GRAD_POLICY_API_KEY", "vllm-key");
-    let r = run(
-        c,
-        &[
-            "env",
-            "serve",
-            "my_env:env",
-            "--name",
-            "x",
-            "--policy-url",
-            "http://127.0.0.1:8000/v1",
-            "--policy-model",
-            "support-sft",
-        ],
-    );
-    expect(&r, 0);
-    let got: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
-    assert_eq!(
-        got["policy"],
-        json!({"url": "http://127.0.0.1:8000/v1", "key": "vllm-key", "model": "support-sft"})
-    );
-    // No policy: usage error naming both flags, before Python starts.
-    let r = run(
-        sb.grad(Some("http://127.0.0.1:8787")),
-        &["env", "serve", "my_env:env", "--name", "x"],
-    );
-    expect(&r, 2);
-    assert!(
-        r.stderr.contains("--policy-url") && r.stderr.contains("--policy MODULE:ATTRIBUTE"),
-        "{}",
-        r.stderr
-    );
-    // A policy that does not load or is not callable.
-    for bad in ["nope_mod:respond", "my_env:not_env"] {
-        let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-        c.env("PYTHONPATH", &lib);
-        let r = run(
-            c,
-            &["env", "serve", "my_env:env", "--name", "x", "--policy", bad],
-        );
-        expect(&r, 2);
-    }
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", &lib).env("GRAD_TEST_RECORD", &rec);
-    let r = run(
-        c,
-        &[
-            "env",
-            "serve",
-            "my_env:not_env",
-            "--name",
-            "x",
-            "--policy",
-            "my_env:respond",
-        ],
-    );
-    expect(&r, 2);
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", &lib);
-    let r = run(
-        c,
-        &[
-            "env",
-            "serve",
-            "nope_mod:env",
-            "--name",
-            "x",
-            "--policy",
-            "my_env:respond",
-        ],
-    );
-    expect(&r, 2);
-    // No SDK installed for the interpreter.
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", sb.path("empty"));
-    let r = run(
-        c,
-        &[
-            "env",
-            "serve",
-            "my_env:env",
-            "--name",
-            "x",
-            "--policy",
-            "my_env:respond",
-        ],
-    );
-    expect(&r, 2);
-    assert!(r.stderr.contains("pip install grad-sdk"), "{}", r.stderr);
-    let r = run(
-        sb.grad(None),
-        &["env", "serve", "123:456", "--name", "bad-env"],
-    );
-    expect(&r, 2);
-    let r = run(
-        sb.grad(None),
-        &[
-            "env",
-            "serve",
-            "a:b",
-            "--name",
-            "x",
-            "--python",
-            "/nonexistent/python",
-        ],
-    );
-    expect(&r, 2);
-    let r = run(
-        sb.grad(None),
-        &["env", "serve", "a:b", "--name", "x", "--concurrency", "0"],
-    );
-    expect(&r, 2);
-    let r = run(sb.grad(None), &["env", "check", "owner/env@1"]);
-    expect(&r, 2);
-}
-
-#[test]
-fn eval_with_a_python_rubric_runs_through_the_python_sdk() {
-    if std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skipping: python3 not available");
-        return;
-    }
-    let sb = Sandbox::new("pyeval");
-    let lib = fake_python_sdk(&sb);
-    let rec = sb.path("record.json");
-    std::fs::write(sb.path("rubric.py"), "rubric = 'my-rubric'\n").unwrap();
-    std::fs::write(sb.path("norubric.py"), "x = 1\n").unwrap();
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", &lib).env("GRAD_TEST_RECORD", &rec);
-    let r = run(
-        c,
-        &[
-            "eval",
-            "--name",
-            "py",
-            "--models",
-            "qwen/qwen3-8b,sql-agent@latest",
-            "--dataset",
-            "holdout",
-            "--rubric",
-            "./rubric.py",
-            "--samples",
-            "4",
-            "--temperature",
-            "0.7",
-            "--wait",
-        ],
-    );
-    expect(&r, 0);
-    assert!(
-        r.stdout.contains("sql-agent@latest") && r.stdout.contains("50.0%"),
-        "{}",
-        r.stdout
-    );
-    let got: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
-    assert_eq!(got["rubric"], "'my-rubric'");
-    assert_eq!(got["samples"], 4);
-    assert_eq!(got["temperature"], 0.7);
-    assert_eq!(got["dataset"], "holdout");
-    assert!(
-        got.get("baseline").is_none(),
-        "unset options are not passed"
-    );
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", &lib)
-        .env("GRAD_TEST_RECORD", &rec)
-        .env("GRAD_TEST_EVAL_STATUS", "failed");
-    let r = run(
-        c,
-        &[
-            "--json",
-            "eval",
-            "--models",
-            "a",
-            "--dataset",
-            "d",
-            "--rubric",
-            "rubric.py",
-            "--wait",
-        ],
-    );
-    expect(&r, 7);
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", &lib);
-    let r = run(
-        c,
-        &[
-            "eval",
-            "--models",
-            "a",
-            "--dataset",
-            "d",
-            "--rubric",
-            "norubric.py",
-        ],
-    );
-    expect(&r, 1);
-    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
-    c.env("PYTHONPATH", sb.path("empty"));
-    let r = run(
-        c,
-        &[
-            "eval",
-            "--models",
-            "a",
-            "--dataset",
-            "d",
-            "--rubric",
-            "rubric.py",
-        ],
-    );
-    expect(&r, 2);
-    let r = run(
-        sb.grad(None),
-        &[
-            "eval",
-            "--models",
-            "a",
-            "--dataset",
-            "d",
-            "--rubric",
-            "rubric.py",
-            "--dry-run",
-        ],
-    );
-    expect(&r, 2);
-    let r = run(
-        sb.grad(None),
-        &[
-            "eval",
-            "plan",
-            "--models",
-            "a",
-            "--dataset",
-            "d",
-            "--rubric",
-            "rubric.py",
-        ],
-    );
-    expect(&r, 2);
-    let r = run(
-        sb.grad(None),
-        &[
-            "eval",
-            "--models",
-            "a",
-            "--dataset",
-            "d",
-            "--rubric",
-            "rubric.py",
-            "--python",
-            "/nonexistent/py",
-        ],
-    );
     expect(&r, 2);
 }
 

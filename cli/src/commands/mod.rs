@@ -2,7 +2,6 @@
 
 pub mod auth;
 pub mod data;
-pub mod envserve;
 pub mod eval;
 pub mod serve;
 pub mod train;
@@ -49,18 +48,7 @@ impl Ctx {
         if let Some(p) = &self.global.profile {
             b = b.profile(p);
         }
-        if let Some(t) = std::env::var("GRAD_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-        {
-            b = b.timeout(std::time::Duration::from_secs_f64(t.max(0.1)));
-        }
-        if let Some(n) = std::env::var("GRAD_MAX_RETRIES")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-        {
-            b = b.max_retries(n);
-        }
+        // Test-only knob: shortens retry backoff in the CLI suite.
         if let Some(ms) = std::env::var("GRAD_RETRY_BASE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())

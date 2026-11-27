@@ -15,39 +15,21 @@
 //! Every other top-level key is a recipe parameter. Unknown keys are errors so
 //! a typo (`lerning_rate`) never trains silently with the default.
 
-use grad_sdk::{recipes, RecipeSpec, Run, RunRequest, SplitSpec};
+use grad_sdk::{recipes, PlanRunRequest, RecipeSpec, Run, SplitSpec};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 use crate::output::{CliError, CliResult};
 
-/// Recipe parameters accepted at the top level of a run file.
-pub const RECIPE_KEYS: &[&str] = &[
-    "model",
-    "adapter",
-    "lr",
-    "lr_scale",
-    "batch_size",
-    "epochs",
-    "schedule",
-    "warmup",
-    "train_on",
-    "thinking",
-    "preserve_thinking",
-    "reduction",
-    "select",
-    "checkpoint_ttl_days",
-    "beta",
-    "models",
-    "max_quality_drop",
-    "context_text",
-    "context_uri",
-    "num_tokens",
-    "temp",
-    "teacher",
-    "env_name",
-    "group_size",
-];
+/// Recipe parameters accepted at the top level of a run file: every
+/// `RecipeSpec` property (generated from the OpenAPI schema) except `kind`.
+fn recipe_keys() -> impl Iterator<Item = &'static str> {
+    RecipeSpec::FIELDS.iter().copied().filter(|k| *k != "kind")
+}
+
+fn is_recipe_key(k: &str) -> bool {
+    recipe_keys().any(|r| r == k)
+}
 
 const RUN_KEYS: &[&str] = &[
     "dataset",
@@ -205,11 +187,11 @@ pub fn parse_str(path: &Path, raw: &str) -> CliResult<RunFile> {
                     )))
                 }
             },
-            other if RECIPE_KEYS.contains(&other) => {
+            other if is_recipe_key(other) => {
                 rf.params.insert(k, val);
             }
             other => {
-                let all = RUN_KEYS.iter().chain(RECIPE_KEYS.iter()).copied();
+                let all = RUN_KEYS.iter().copied().chain(recipe_keys());
                 let hint = closest(other, all)
                     .map(|c| format!(" (did you mean '{}'?)", c))
                     .unwrap_or_default();
@@ -231,8 +213,8 @@ pub fn parse_set(spec: &str) -> CliResult<(String, Value)> {
         .split_once('=')
         .ok_or_else(|| CliError::usage(format!("--set expects KEY=VALUE, got '{}'", spec)))?;
     let k = k.trim().to_string();
-    if !RECIPE_KEYS.contains(&k.as_str()) {
-        let hint = closest(&k, RECIPE_KEYS.iter().copied())
+    if !is_recipe_key(&k) {
+        let hint = closest(&k, recipe_keys())
             .map(|c| format!(" (did you mean '{}'?)", c))
             .unwrap_or_default();
         return Err(CliError::usage(format!(
@@ -245,7 +227,7 @@ pub fn parse_set(spec: &str) -> CliResult<(String, Value)> {
 }
 
 /// Assemble a typed request; field types are checked by the SDK model.
-pub fn build_request(rf: RunFile) -> CliResult<RunRequest> {
+pub fn build_request(rf: RunFile) -> CliResult<PlanRunRequest> {
     let dataset = rf
         .dataset
         .ok_or_else(|| CliError::usage("missing --dataset (or `dataset:` in the run file)"))?;
@@ -273,85 +255,56 @@ pub fn build_request(rf: RunFile) -> CliResult<RunRequest> {
                 .map_err(|e| CliError::usage(format!("invalid split: {}", e)))?,
         ),
     };
-    Ok(RunRequest {
+    Ok(PlanRunRequest {
         dataset,
         name,
         recipe,
         split,
         max_cost_usd: rf.max_cost_usd,
+        ..Default::default()
     })
 }
 
 /// Export a run's resolved configuration as a run file (round-trips through `parse`).
 pub fn export(run: &Run) -> CliResult<String> {
     let rc = &run.resolved_config;
+    let resolved = serde_json::to_value(rc).unwrap_or(Value::Null);
     let mut m = serde_norway::Mapping::new();
     let mut put = |k: &str, v: Value| {
-        if !v.is_null() {
+        let empty = v.is_null() || v.as_str() == Some("") || v.as_f64() == Some(0.0);
+        if !empty {
             if let Ok(y) = serde_norway::to_value(&v) {
                 m.insert(serde_norway::Value::String(k.into()), y);
             }
         }
     };
-    let dataset = if rc.dataset.is_empty() {
-        run.dataset_name.clone()
-    } else {
-        rc.dataset.clone()
-    };
-    put("dataset", Value::String(dataset));
-    put(
-        "name",
-        Value::String(if rc.name.is_empty() {
-            run.name.clone()
-        } else {
-            rc.name.clone()
-        }),
-    );
-    let kind = if rc.recipe_kind.as_str() == "unknown" {
+    let or = |a: &str, b: &str| Value::String(if a.is_empty() { b } else { a }.to_string());
+    put("dataset", or(&rc.dataset, &run.dataset_name));
+    put("name", or(&rc.name, &run.name));
+    let kind = if rc.rule_version.is_empty() {
         &run.recipe_kind
     } else {
         &rc.recipe_kind
     };
-    put("recipe", Value::String(kind.as_str().into()));
-    if !rc.model.is_empty() {
-        put("model", Value::String(rc.model.clone()));
-    }
-    put("adapter", rc.adapter.clone());
-    let num = |x: f64| {
-        serde_json::Number::from_f64(x)
-            .map(Value::Number)
-            .unwrap_or(Value::Null)
-    };
-    if rc.lr > 0.0 {
-        put("lr", num(rc.lr));
-    }
-    if rc.batch_size > 0 {
-        put("batch_size", Value::from(rc.batch_size));
-    }
-    if rc.epochs > 0 {
-        put("epochs", Value::from(rc.epochs));
-    }
-    for (k, v) in [
-        ("schedule", &rc.schedule),
-        ("train_on", &rc.train_on),
-        ("reduction", &rc.reduction),
-        ("select", &rc.select),
+    put("recipe", Value::String(kind.to_string()));
+    for k in [
+        "model",
+        "adapter",
+        "lr",
+        "batch_size",
+        "epochs",
+        "schedule",
+        "warmup",
+        "train_on",
+        "thinking",
+        "preserve_thinking",
+        "reduction",
+        "select",
+        "checkpoint_ttl_days",
     ] {
-        if !v.is_empty() {
-            put(k, Value::String(v.clone()));
-        }
+        put(k, resolved.get(k).cloned().unwrap_or(Value::Null));
     }
-    if rc.warmup > 0.0 {
-        put("warmup", num(rc.warmup));
-    }
-    put("thinking", rc.thinking.clone());
-    if rc.epochs > 0 {
-        put("preserve_thinking", Value::Bool(rc.preserve_thinking));
-    }
-    if rc.checkpoint_ttl_days > 0 {
-        put("checkpoint_ttl_days", Value::from(rc.checkpoint_ttl_days));
-    }
-    if !rc.split.strategy.is_empty() {
+    if !rc.split.strategy.as_str().is_empty() && !rc.rule_version.is_empty() {
         put(
             "split",
             serde_json::json!({
@@ -362,12 +315,12 @@ pub fn export(run: &Run) -> CliResult<String> {
         );
     }
     for (k, v) in &rc.recipe_params {
-        if RECIPE_KEYS.contains(&k.as_str()) {
+        if is_recipe_key(k) {
             put(k, v.clone());
         }
     }
     if let Some(c) = run.max_cost_usd {
-        put("max_cost_usd", num(c));
+        put("max_cost_usd", serde_json::json!(c));
     }
     let body = serde_norway::to_string(&serde_norway::Value::Mapping(m))
         .map_err(|e| CliError::general("encode_error", e.to_string()))?;
@@ -407,7 +360,10 @@ mod tests {
         let req = build_request(rf).unwrap();
         assert_eq!(req.recipe.kind.as_str(), "decision");
         assert_eq!(req.max_cost_usd, Some(5.0));
-        assert_eq!(req.split.unwrap().strategy.as_deref(), Some("random"));
+        assert_eq!(
+            req.split.unwrap().strategy,
+            Some(grad_sdk::SplitSpecStrategy::Random)
+        );
 
         let rf = p("dataset: d\nname: n\nrecipe: {kind: dpo, beta: 0.2}\n").unwrap();
         assert_eq!(build_request(rf).unwrap().recipe.beta, Some(0.2));

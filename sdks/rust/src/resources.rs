@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use crate::download::{self, DownloadOptions, DownloadedArtifact, TempDir, TempFile};
 use crate::error::{Error, Result};
-use crate::generated;
 use crate::models::*;
 use crate::sse::{MetricEvent, MetricStream};
 use crate::transport::{Body, Deadline, Req};
@@ -124,7 +123,6 @@ resource!(Artifacts);
 resource!(Deployments);
 resource!(Evals);
 resource!(Feedback);
-resource!(EnvWorkers);
 
 async fn get<T: DeserializeOwned>(c: &Client, req: Req) -> Result<T> {
     c.t().json(req).await
@@ -250,13 +248,7 @@ impl Keys<'_> {
     }
 
     pub async fn list_all(&self) -> Result<Vec<ApiKey>> {
-        collect_all(
-            self.c,
-            "/v1/keys",
-            generated::LIST_API_KEYS_LIMIT_MAX,
-            vec![],
-        )
-        .await
+        collect_all(self.c, "/v1/keys", LIST_API_KEYS_LIMIT_MAX, vec![]).await
     }
 
     pub async fn revoke(&self, id: &str) -> Result<ApiKey> {
@@ -309,13 +301,7 @@ impl Datasets<'_> {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Dataset>> {
-        collect_all(
-            self.c,
-            "/v1/datasets",
-            generated::LIST_DATASETS_LIMIT_MAX,
-            vec![],
-        )
-        .await
+        collect_all(self.c, "/v1/datasets", LIST_DATASETS_LIMIT_MAX, vec![]).await
     }
 
     pub async fn get(&self, name: &str) -> Result<Dataset> {
@@ -429,7 +415,11 @@ impl Datasets<'_> {
     }
 
     /// Preview chat-template rendering and loss masks.
-    pub async fn render(&self, name: &str, req: &RenderRequest) -> Result<RenderDatasetResponse> {
+    pub async fn render(
+        &self,
+        name: &str,
+        req: &RenderDatasetRequest,
+    ) -> Result<RenderDatasetResponse> {
         check_path_param("dataset name", name)?;
         get(
             self.c,
@@ -459,11 +449,16 @@ impl Datasets<'_> {
         self.create_import(
             name,
             &CreateImportRequest {
-                source: ImportSource::Upload {
-                    upload_id: ticket.upload_id,
-                    format: opts.format.clone(),
+                source: ImportSource {
+                    kind: ImportSourceKind::Upload,
+                    upload_id: Some(ticket.upload_id),
+                    format: opts.format.as_deref().map(ImportSourceFormat::from),
+                    ..Default::default()
                 },
-                connector: opts.connector.clone(),
+                connector: opts
+                    .connector
+                    .as_deref()
+                    .map(CreateImportRequestConnector::from),
             },
         )
         .await
@@ -476,6 +471,7 @@ impl Datasets<'_> {
         source: ImportSource,
         connector: Option<String>,
     ) -> Result<ImportJob> {
+        let connector = connector.as_deref().map(CreateImportRequestConnector::from);
         self.create_import(name, &CreateImportRequest { source, connector })
             .await
     }
@@ -630,13 +626,18 @@ fn finish_run(run: Run) -> Result<Run> {
 
 impl Runs<'_> {
     /// Dry-run a recipe at zero cost.
-    pub async fn plan(&self, req: &RunRequest) -> Result<RunPlan> {
+    pub async fn plan(&self, req: &PlanRunRequest) -> Result<PlanRunResponse> {
         get(self.c, Req::post("/v1/runs/plan").json(body(req)?)).await
     }
 
-    /// Create and enqueue a run.
-    pub async fn create(&self, req: &RunRequest) -> Result<Run> {
-        get(self.c, Req::post("/v1/runs").json(body(req)?)).await
+    /// Create and enqueue a run. Pass your own `idempotency_key` to retry the
+    /// call (even from another process) without starting a second run.
+    pub async fn create(&self, req: &PlanRunRequest, idempotency_key: Option<&str>) -> Result<Run> {
+        get(
+            self.c,
+            Req::post("/v1/runs").key(idempotency_key).json(body(req)?),
+        )
+        .await
     }
 
     pub async fn get(&self, id: &str) -> Result<Run> {
@@ -649,7 +650,7 @@ impl Runs<'_> {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Run>> {
-        collect_all(self.c, "/v1/runs", generated::LIST_RUNS_LIMIT_MAX, vec![]).await
+        collect_all(self.c, "/v1/runs", LIST_RUNS_LIMIT_MAX, vec![]).await
     }
 
     /// Find the newest run with this `name` (runs are addressed by id on the wire).
@@ -662,7 +663,7 @@ impl Runs<'_> {
             }
             let page = self
                 .list(&ListParams {
-                    limit: Some(generated::LIST_RUNS_LIMIT_MAX),
+                    limit: Some(LIST_RUNS_LIMIT_MAX),
                     cursor: cursor.clone(),
                 })
                 .await?;
@@ -756,7 +757,7 @@ impl Runs<'_> {
     ) -> Result<Run> {
         check_path_param("run id", id)?;
         let poll = Poller::new(opts);
-        let mut last_seq: u64 = 0;
+        let mut last_seq: i64 = 0;
         let mut stream = self.stream_metrics(id, None);
         loop {
             let next = match poll.remaining() {
@@ -800,7 +801,7 @@ impl Runs<'_> {
                     &MetricsQuery {
                         cursor: cursor.clone(),
                         after_step: None,
-                        limit: Some(generated::LIST_RUN_METRICS_LIMIT_MAX),
+                        limit: Some(LIST_RUN_METRICS_LIMIT_MAX),
                     },
                 )
                 .await
@@ -1048,8 +1049,18 @@ impl Artifacts<'_> {
 
 impl Deployments<'_> {
     /// Deploy or update an artifact under a stable model name.
-    pub async fn create(&self, req: &DeployRequest) -> Result<Deployment> {
-        get(self.c, Req::post("/v1/deployments").json(body(req)?)).await
+    pub async fn create(
+        &self,
+        req: &DeployArtifactRequest,
+        idempotency_key: Option<&str>,
+    ) -> Result<Deployment> {
+        get(
+            self.c,
+            Req::post("/v1/deployments")
+                .key(idempotency_key)
+                .json(body(req)?),
+        )
+        .await
     }
 
     pub async fn list(&self, p: &ListParams) -> Result<Page<Deployment>> {
@@ -1073,12 +1084,22 @@ impl Deployments<'_> {
 }
 
 impl Evals<'_> {
-    pub async fn plan(&self, req: &EvalRequest) -> Result<EvalPlan> {
+    /// Estimate tasks, model and judge calls and cost at zero cost.
+    pub async fn plan(&self, req: &PlanEvalRequest) -> Result<PlanEvalResponse> {
         get(self.c, Req::post("/v1/evals/plan").json(body(req)?)).await
     }
 
-    pub async fn create(&self, req: &EvalRequest) -> Result<EvalRun> {
-        get(self.c, Req::post("/v1/evals").json(body(req)?)).await
+    /// Queue an eval (billed; `total_cost_usd` on the result).
+    pub async fn create(
+        &self,
+        req: &PlanEvalRequest,
+        idempotency_key: Option<&str>,
+    ) -> Result<EvalRun> {
+        get(
+            self.c,
+            Req::post("/v1/evals").key(idempotency_key).json(body(req)?),
+        )
+        .await
     }
 
     pub async fn get(&self, id: &str) -> Result<EvalRun> {
@@ -1147,7 +1168,11 @@ impl Evals<'_> {
         .await
     }
 
-    pub async fn post_scores(&self, id: &str, scores: &[LocalScore]) -> Result<PostScoresResponse> {
+    pub async fn post_scores(
+        &self,
+        id: &str,
+        scores: &[LocalScore],
+    ) -> Result<PostEvalScoresResponse> {
         check_path_param("eval id", id)?;
         get(
             self.c,
@@ -1170,7 +1195,7 @@ impl Evals<'_> {
                 Ok(ev) => {
                     on_progress(&ev);
                     match ev.status {
-                        EvalStatus::Completed | EvalStatus::StoppedBudget => return Ok(ev),
+                        EvalStatus::Completed => return Ok(ev),
                         EvalStatus::Failed | EvalStatus::Cancelled => {
                             return Err(Error::EvalFailed(Box::new(ev)))
                         }
@@ -1195,33 +1220,10 @@ impl Evals<'_> {
 
 impl Feedback<'_> {
     /// Record outcome scores and gold corrections (deduplicated by `idempotency_key`).
-    pub async fn record(&self, events: &[FeedbackEvent]) -> Result<FeedbackResponse> {
+    pub async fn record(&self, events: &[FeedbackEventInput]) -> Result<RecordFeedbackResponse> {
         get(
             self.c,
             Req::post("/v1/feedback").json(json!({ "events": events })),
-        )
-        .await
-    }
-}
-
-impl EnvWorkers<'_> {
-    /// Dispatch a task to a connected `grad env serve` worker.
-    pub async fn dispatch(&self, task: &EnvTaskDispatch) -> Result<Value> {
-        get(
-            self.c,
-            Req::post("/v1/env-workers/tasks")
-                .unkeyed()
-                .json(body(task)?),
-        )
-        .await
-    }
-
-    /// Inspect an environment task and its result.
-    pub async fn get_task(&self, id: &str) -> Result<Value> {
-        check_path_param("task id", id)?;
-        get(
-            self.c,
-            Req::get(format!("/v1/env-workers/tasks/{}", seg(id))),
         )
         .await
     }

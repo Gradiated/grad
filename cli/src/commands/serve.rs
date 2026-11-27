@@ -1,6 +1,6 @@
-//! `grad artifacts`, `grad deploy`, `grad deployments`, `grad rollback`, `grad route`, `grad embed`.
+//! `grad artifacts`, `grad deploy`, `grad deployments`, `grad route`, `grad embed`.
 
-use grad_sdk::{Artifact, ChatMessage, DeployRequest, DownloadOptions, RouteRequest};
+use grad_sdk::{Artifact, ChatMessage, DeployArtifactRequest, DownloadOptions, RouteRequest};
 use serde_json::json;
 
 use super::{in_range, page, Ctx};
@@ -73,7 +73,7 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
                 out.line(format!(
                     "✓ Verified {} ({} bytes, sha256 {}) and extracted {} files to {}",
                     reference,
-                    thousands(res.size_bytes),
+                    thousands(res.size_bytes as i64),
                     &res.sha256[..12],
                     res.files.len(),
                     dir.display()
@@ -105,7 +105,7 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
                 out.line(format!(
                     "✓ Saved verified bundle to {} ({} bytes)",
                     a.display(),
-                    thousands(res.size_bytes)
+                    thousands(res.size_bytes as i64)
                 ));
             }
             out.done(&res)
@@ -118,12 +118,15 @@ pub async fn deploy(ctx: &Ctx, a: DeployArgs) -> CliResult {
     let rate = in_range(a.explore_rate, "--explore-rate", 0.0, 0.5)?;
     let d = c
         .deployments()
-        .create(&DeployRequest {
-            artifact: a.artifact.clone(),
-            name: a.name,
-            fallback: a.fallback,
-            explore_rate: rate,
-        })
+        .create(
+            &DeployArtifactRequest {
+                artifact: a.artifact.clone(),
+                name: a.name,
+                fallback: a.fallback,
+                explore_rate: rate,
+            },
+            a.idempotency_key.as_deref(),
+        )
         .await?;
     let out = &ctx.out;
     out.line(format!(
@@ -132,7 +135,7 @@ pub async fn deploy(ctx: &Ctx, a: DeployArgs) -> CliResult {
     ));
     if let Some(prev) = &d.previous_artifact_id {
         out.line(format!(
-            "  Previous artifact {}; roll back with: grad rollback {}",
+            "  Previous artifact {}; roll back with: grad deployments rollback {}",
             prev, d.name
         ));
     }
@@ -168,7 +171,7 @@ pub async fn deployments(ctx: &Ctx, action: DeploymentsCmd) -> CliResult {
                             d.name.clone(),
                             d.model_id.clone(),
                             d.active_artifact_id.clone(),
-                            d.status.clone(),
+                            d.status.to_string(),
                             when(&d.updated_at),
                         ]
                     })
@@ -183,7 +186,7 @@ pub async fn deployments(ctx: &Ctx, action: DeploymentsCmd) -> CliResult {
                 ("Model", d.model_id.clone()),
                 ("Active", d.active_artifact_id.clone()),
                 ("Previous", opt(&d.previous_artifact_id)),
-                ("Status", d.status.clone()),
+                ("Status", d.status.to_string()),
                 ("Fallback", opt(&d.fallback_model)),
                 ("Explore", num(d.explore_rate)),
             ]);

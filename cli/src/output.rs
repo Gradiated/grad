@@ -233,9 +233,9 @@ pub fn print_error(e: &CliError, json_mode: bool) {
 }
 
 /// 4820 -> "4,820".
-pub fn thousands(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::new();
+pub fn thousands(n: i64) -> String {
+    let s = n.unsigned_abs().to_string();
+    let mut out = String::from(if n < 0 { "-" } else { "" });
     for (i, c) in s.chars().enumerate() {
         if i > 0 && (s.len() - i) % 3 == 0 {
             out.push(',');
@@ -245,8 +245,13 @@ pub fn thousands(n: u64) -> String {
     out
 }
 
+/// Comma-joined display values (enum lists such as scopes or adapters).
+pub fn join<T: std::fmt::Display>(items: &[T]) -> String {
+    items.iter().map(T::to_string).collect::<Vec<_>>().join(",")
+}
+
 /// 1_100_000 -> "1.1M".
-pub fn compact(n: u64) -> String {
+pub fn compact(n: i64) -> String {
     let f = n as f64;
     if f >= 1e9 {
         format!("{:.1}B", f / 1e9)

@@ -10,6 +10,23 @@ pub fn random_hex(n: usize) -> String {
     hex::encode(buf)
 }
 
+/// A random UUIDv4 for the `Idempotency-Key` header (one per logical call).
+pub fn new_idempotency_key() -> String {
+    let mut b = [0u8; 16];
+    getrandom::getrandom(&mut b).expect("OS random number generator unavailable");
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h = hex::encode(b);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
+
 /// Lowercase SHA-256 hex digest of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};

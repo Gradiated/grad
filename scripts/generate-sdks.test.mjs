@@ -19,7 +19,7 @@ import {
   toSnake,
 } from "./generate-sdks.mjs";
 import { goName, goParamIdent } from "./codegen/go.mjs";
-import { rsIdent } from "./codegen/rust.mjs";
+import { RUST_MODELS, rsIdent } from "./codegen/rust.mjs";
 import { tsParamIdent, tsTypeName } from "./codegen/typescript.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -54,9 +54,9 @@ const writeFiles = (root, files, prefix) => {
   }
 };
 
-const fixture = async () => generateFromSpec(await parseSpecFile(fixturePath), { targets: ["ts", "go", "rs"] });
+const fixture = async () => generateFromSpec(await parseSpecFile(fixturePath), { targets: ["ts", "go", "rs"], rustModels: "all" });
 
-test("every public operation in spec/openapi.yaml is generated for TypeScript, Go and Rust", async () => {
+test("every public operation in spec/openapi.yaml is generated for TypeScript and Go; Rust gets the models its SDK uses", async () => {
   const { ir, files } = await generateAllTargets(specPath);
   assert.ok(ir.operations.length >= 56, `expected >= 56 operations, got ${ir.operations.length}`);
   const ts = files["sdks/typescript/src/generated/client.ts"];
@@ -66,47 +66,39 @@ test("every public operation in spec/openapi.yaml is generated for TypeScript, G
     const present = [
       new RegExp(`\\n  (async )?${toCamel(op.id)}\\(`).test(ts),
       go.includes(`func (c *Client) ${goName(op.id)}(`),
-      rs.includes(`pub async fn ${toSnake(op.id)}(`),
     ];
-    assert.deepEqual(present, op.internal ? [false, false, false] : [true, true, true], `${op.id} (internal: ${op.internal})`);
+    assert.deepEqual(present, op.internal ? [false, false] : [true, true], `${op.id} (internal: ${op.internal})`);
   }
+  // Rust: one client only (the hand-written one), so no generated methods; every model it uses.
+  assert.ok(!rs.includes("pub async fn") && !rs.includes("reqwest"), "Rust gets models, not a second client");
+  for (const name of RUST_MODELS) assert.ok(rs.includes(`pub struct ${name} {`), `Rust model ${name}`);
+  assert.ok(rs.includes("pub struct RecipeSpec {") && rs.includes("pub const FIELDS: &'static [&'static str] = &[\"kind\", \"model\""));
+  assert.ok(!rs.includes("pub struct ClaimJobRequest"), "only the closure of RUST_MODELS is generated");
   // Typed signatures, not untyped records/maps.
   assert.ok(ts.includes("async createRun(body: PlanRunRequest, options?: RequestOptions): Promise<Run>"));
   assert.ok(!/\): Promise<Record<string, unknown>>/.test(ts));
   assert.ok(go.includes("func (c *Client) CreateRun(ctx context.Context, body *PlanRunRequest, opts ...RequestOption) (*Run, error)"));
-  assert.ok(rs.includes("pub async fn create_run(&self, body: &PlanRunRequest, idempotency_key: Option<&str>) -> Result<Run, ApiError>"));
   // Streams: binary downloads and SSE are never buffered as JSON.
   assert.ok(ts.includes("downloadArtifact(id: string, options?: StreamOptions): Promise<RawResponse>"));
   assert.ok(ts.includes("listRunMetricsStream("));
   assert.ok(go.includes("func (c *Client) DownloadArtifact(ctx context.Context, id string, opts ...RequestOption) (*StreamResponse, error)"));
   assert.ok(go.includes("func (c *Client) ListRunMetricsStream("));
-  assert.ok(rs.includes("pub async fn download_artifact(&self, id: &str) -> Result<StreamResponse, ApiError>"));
-  assert.ok(rs.includes("pub async fn list_run_metrics_stream("));
 });
 
-test("every public operation is generated for Python, typed and natively async; env-worker ops go to the internal client", async () => {
+test("every public operation is generated for Python, typed; x-internal ops are left out", async () => {
   const { ir, files } = await generateAllTargets(specPath);
   const py = files["sdks/python/grad/_generated/client.py"];
-  const [publicPart, internalPart] = py.split("class GeneratedInternalApiClient:");
-  assert.ok(internalPart, "Python internal client missing");
   for (const op of ir.operations) {
     const name = toSnake(op.id);
-    const where = !op.internal ? publicPart : op.tags.includes("Environments") ? internalPart : null;
-    if (where === null) {
-      assert.ok(!py.includes(`def ${name}(`), `Python must not generate trainer op ${op.id}`);
-      continue;
-    }
-    assert.ok(where.includes(`    def ${name}(`), `Python sync missing ${op.id}`);
-    assert.ok(where.includes(`    async def ${name}(`), `Python async missing ${op.id}`);
-    if (op.internal) assert.ok(!publicPart.includes(`def ${name}(`), `${op.id} leaked into the public client`);
+    if (op.internal) assert.ok(!py.includes(`def ${name}(`), `Python must not generate internal op ${op.id}`);
+    else assert.ok(py.includes(`    def ${name}(`), `Python missing ${op.id}`);
   }
+  assert.ok(!py.includes("async def"), "the Python SDK is sync only");
   assert.ok(py.includes('def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:'));
   assert.ok(py.includes('headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}'));
   assert.ok(py.includes("LIST_EVAL_OUTPUTS_LIMIT_MAX = 200"));
   assert.ok(py.includes("def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:"));
-  assert.ok(py.includes("async def download_artifact(self, id: str, *, timeout: float | None = None) -> AsyncResponse:"));
   assert.ok(py.includes("def get_run(self, id: str, *, timeout: float | None = None) -> Run:"));
-  assert.ok(!py.includes("asyncio.to_thread"), "Python async client must be natively async");
 });
 
 test("generated files on disk match the spec (no drift)", async () => {
@@ -142,7 +134,6 @@ test("Idempotency-Key is transport policy and page-size maxima become constants"
   assert.ok(files["sdks/go/generated/client.go"].includes("Idempotent: true"));
   assert.ok(files["sdks/go/generated/client.go"].includes("const ListItemsLimitMax = 250"));
   assert.ok(files["sdks/rust/src/generated.rs"].includes("pub const LIST_ITEMS_LIMIT_MAX: u32 = 250;"));
-  assert.ok(files["sdks/rust/src/generated.rs"].includes('("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))'));
   const real = await generateAllTargets(specPath);
   const keyed = real.ir.operations.filter((o) => o.idempotent).map((o) => o.id);
   assert.ok(keyed.includes("createRun") && keyed.includes("cancelEval"));
@@ -179,7 +170,6 @@ test("path params follow the template order, not declaration order", async () =>
   assert.deepEqual(extractOperations(await parseSpecFile(fixturePath)).find((o) => o.operationId === "getCheckpointAtStep").pathParams, ["run_id", "step"]);
   assert.ok(files["sdks/go/generated/client.go"].includes('Path: "/v1/runs/" + p0 + "/checkpoints/" + p1'));
   assert.ok(files["sdks/go/generated/client.go"].includes('p0, err := EscapePathParam("run_id", runID)'));
-  assert.ok(files["sdks/rust/src/generated.rs"].includes('format!("/v1/runs/{}/checkpoints/{}", encode_path_segment("run_id", run_id)?, encode_path_segment("step", step)?)'));
 });
 
 test("the IR fails loudly instead of silently dropping endpoints", () => {
@@ -237,6 +227,7 @@ test("fixture spec: generated TypeScript type-checks under strict settings and b
   const dir = scratch("codegen-ts-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFiles(path.join(dir, "src"), files, "sdks/typescript/src/");
+  cpSync(path.join(repoRoot, "sdks", "typescript", "src", "transport.ts"), path.join(dir, "src", "transport.ts"));
   writeFileSync(
     path.join(dir, "tsconfig.json"),
     JSON.stringify({
@@ -262,7 +253,8 @@ test("fixture spec: generated TypeScript type-checks under strict settings and b
   writeFileSync(
     path.join(dir, "check.mjs"),
     `import assert from "node:assert/strict";
-import { ApiClient, Transport, RedirectError, LIST_ITEMS_LIMIT_MAX } from "./dist/generated/index.js";
+import { ApiClient, LIST_ITEMS_LIMIT_MAX } from "./dist/generated/index.js";
+import { Transport, RedirectError } from "./dist/transport.js";
 const calls = [];
 const fakeFetch = async (url, init) => {
   calls.push({ url, init });
@@ -332,6 +324,7 @@ test("fixture spec: generated Go is gofmt-clean, vets, and builds correct reques
   const dir = scratch("codegen-go-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFiles(path.join(dir, "generated"), files, "sdks/go/generated/");
+  cpSync(path.join(repoRoot, "sdks", "go", "generated", "transport.go"), path.join(dir, "generated", "transport.go"));
   writeFileSync(path.join(dir, "go.mod"), "module example.com/fixture\n\ngo 1.24\n");
   writeFileSync(
     path.join(dir, "generated", "fixture_test.go"),
@@ -430,12 +423,9 @@ mod tests {
         let r: Record = serde_json::from_str(r#"{"type":"t","1st_place":true,"extra":1}"#).unwrap();
         assert_eq!(r.n1st_place, Some(true));
         assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"type":"t","1st_place":true,"extra":1}"#);
-        assert!(encode_path_segment("id", "..").is_err());
-        assert_eq!(encode_path_segment("id", "a/b c").unwrap(), "a%2Fb%20c");
+        let lenient: Checkpoint = serde_json::from_str(r#"{"id":"c"}"#).unwrap();
+        assert_eq!(lenient.run_id, "", "missing fields take their defaults");
         assert_eq!(LIST_ITEMS_LIMIT_MAX, 250);
-        let key = new_idempotency_key();
-        assert_eq!((key.len(), &key[14..15]), (36, "4"));
-        assert_ne!(key, new_idempotency_key());
     }
 }
 `,

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use super::{page, Ctx};
 use crate::cli::{ConfigCmd, KeysCmd, LoginArgs};
-use crate::output::{mask, when, CliError, CliResult, EXIT_AUTH};
+use crate::output::{join, mask, when, CliError, CliResult, EXIT_AUTH};
 
 pub fn config_path() -> CliResult<PathBuf> {
     ConfigFile::default_path().ok_or_else(|| {
@@ -223,7 +223,7 @@ pub async fn keys(ctx: &Ctx, action: KeysCmd) -> CliResult {
                             k.id.clone(),
                             k.name.clone(),
                             k.prefix.clone(),
-                            k.scopes.join(","),
+                            join(&k.scopes),
                             when(&k.created_at),
                             k.revoked_at
                                 .as_deref()
@@ -245,7 +245,7 @@ pub async fn keys(ctx: &Ctx, action: KeysCmd) -> CliResult {
             out.line(format!(
                 "✓ Created key {} ({})",
                 created.key.id,
-                created.key.scopes.join(",")
+                join(&created.key.scopes)
             ));
             out.line("  Secret (shown once, store it now):");
             out.line(format!("  {}", created.secret));

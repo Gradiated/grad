@@ -1,8 +1,8 @@
 //! `grad train` and `grad runs`.
 
 use grad_sdk::{
-    Artifact, Client, Error as SdkError, EvalReport, MetricEvent, MetricPoint, MetricsQuery, Run,
-    RunPlan, RunRequest, RunStatus, WaitOptions,
+    Artifact, Client, Error as SdkError, EvalReport, MetricEvent, MetricPoint, MetricsQuery,
+    PlanRunRequest, PlanRunResponse, Run, RunStatus, WaitOptions,
 };
 use serde_json::{json, Value};
 use std::io::Write;
@@ -14,7 +14,7 @@ use crate::output::{compact, num, opt, pct, thousands, usd, when, CliError, CliR
 use crate::trainfile::{self, RunFile};
 
 /// Merge `-f FILE` with flags (flags win) into a typed request.
-pub fn build_request(a: &TrainArgs) -> CliResult<RunRequest> {
+pub fn build_request(a: &TrainArgs) -> CliResult<PlanRunRequest> {
     let mut rf = match &a.file {
         Some(p) => trainfile::parse(p)?,
         None => RunFile::default(),
@@ -67,14 +67,7 @@ pub fn build_request(a: &TrainArgs) -> CliResult<RunRequest> {
     set("epochs", a.epochs.map(|x| json!(x)));
     set("batch_size", a.batch_size.map(|x| json!(x)));
     set("train_on", a.train_on.clone().map(Value::String));
-    set(
-        "thinking",
-        a.thinking.as_deref().map(|t| match t {
-            "true" => json!(true),
-            "false" => json!(false),
-            other => json!(other),
-        }),
-    );
+    set("thinking", a.thinking.clone().map(Value::String));
     set("beta", positive(a.beta, "--beta")?.map(|x| json!(x)));
     set(
         "max_quality_drop",
@@ -112,7 +105,7 @@ pub fn build_request(a: &TrainArgs) -> CliResult<RunRequest> {
     trainfile::build_request(rf)
 }
 
-fn print_plan(out: &Out, req: &RunRequest, plan: &RunPlan) {
+fn print_plan(out: &Out, req: &PlanRunRequest, plan: &PlanRunResponse) {
     let rc = &plan.resolved_config;
     out.line(format!(
         "Plan for {} ({} on {}, dataset {} v{})",
@@ -168,8 +161,8 @@ fn print_plan(out: &Out, req: &RunRequest, plan: &RunPlan) {
             ),
         ),
     ];
-    if rc.adapter.is_object() {
-        rows.push(("adapter", compact_json(&rc.adapter)));
+    if let Ok(adapter) = serde_json::to_value(&rc.adapter) {
+        rows.push(("adapter", compact_json(&adapter)));
     }
     for (k, v) in rows {
         out.line(format!("  {:<10}: {}", k, v));
@@ -224,7 +217,7 @@ pub async fn train(ctx: &Ctx, a: TrainArgs) -> CliResult {
             Err(e) => return Err(e.into()),
         }
     }
-    let run = c.runs().create(&req).await?;
+    let run = c.runs().create(&req, a.idempotency_key.as_deref()).await?;
     if !a.wait {
         out.line(format!(
             "✓ Started run {} ({} on {}, {} steps)",
@@ -242,7 +235,7 @@ struct Live {
     tty: bool,
     json: bool,
     last_print: Option<Instant>,
-    total: u64,
+    total: i64,
     open_line: bool,
 }
 
@@ -301,7 +294,7 @@ async fn follow_run(ctx: &Ctx, c: &Client, run: &Run, timeout: Duration) -> CliR
             "✓ Split: {} train / {} eval ({})",
             thousands(split.train_records),
             thousands(split.eval_records),
-            split.strategy.replace('_', " ")
+            split.strategy.as_str().replace('_', " ")
         ));
     }
     out.line(format!(
@@ -365,7 +358,7 @@ async fn report_finished(ctx: &Ctx, c: &Client, run: &Run) -> Option<Artifact> {
     match &artifact {
         Some(a) => {
             out.line(format!("✓ Exported artifact {}", a.reference()));
-            if a.format.as_deref() == Some("reference") {
+            if a.format.as_ref().map(|f| f.as_str()) == Some("reference") {
                 out.line("  This is a reference-backend test artifact; it cannot be deployed.");
             } else {
                 out.line(format!("  Next: grad deploy {}", a.reference()));
@@ -397,7 +390,7 @@ fn print_report(out: &Out, report: &EvalReport) {
             Value::Number(n) => {
                 let f = n.as_f64().unwrap_or(0.0);
                 let shown = if n.is_i64() || n.is_u64() {
-                    thousands(f as u64)
+                    thousands(f as i64)
                 } else {
                     num(f)
                 };
@@ -623,16 +616,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             run,
             follow,
             after_step,
-            samples,
         } => {
-            if samples.is_some() {
-                return Err(CliError::new(
-                    crate::output::EXIT_USAGE,
-                    "not_available",
-                    "`grad runs logs --samples` is not available in v0: the server does not record sampled completions",
-                )
-                .hint("Use `grad eval` on the run's artifact to read real model outputs."));
-            }
             let r = resolve_run(&c, &run).await?;
             if !follow {
                 let pg = c
@@ -658,7 +642,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             while let Some(ev) = stream.next().await {
                 match ev? {
                     MetricEvent::Metric(m) => {
-                        if after_step.is_some_and(|a| (m.step as i64) <= a) {
+                        if after_step.is_some_and(|a| m.step <= a) {
                             continue;
                         }
                         if !out.json {
@@ -733,7 +717,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
                             k.step.to_string(),
                             k.eval_score.map(num).unwrap_or_else(|| "-".into()),
                             if k.best { "yes".into() } else { "".into() },
-                            if k.is_final { "yes".into() } else { "".into() },
+                            if k.r#final { "yes".into() } else { "".into() },
                             opt(&k.format),
                             k.expires_at
                                 .as_deref()
@@ -809,7 +793,7 @@ mod tests {
             models: Some(vec!["a".into(), " b ".into()]),
             lr: Some("0.001".into()),
             adapter_rank: Some(16),
-            thinking: Some("false".into()),
+            thinking: Some("off".into()),
             split: Some("random".into()),
             eval_fraction: Some(0.2),
             set: vec!["warmup=0.1".into()],
@@ -821,7 +805,11 @@ mod tests {
         assert_eq!(v["recipe"]["models"], json!(["a", "b"]));
         assert_eq!(v["recipe"]["lr"], json!(0.001));
         assert_eq!(v["recipe"]["adapter"], json!({"kind": "lora", "rank": 16}));
-        assert_eq!(v["recipe"]["thinking"], json!(false));
+        assert_eq!(
+            v["recipe"]["thinking"],
+            json!("off"),
+            "the server takes auto/on/off"
+        );
         assert_eq!(v["recipe"]["warmup"], json!(0.1));
         assert_eq!(
             v["split"],
