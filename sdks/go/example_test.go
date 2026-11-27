@@ -155,7 +155,7 @@ func Example_metrics() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println(m.Step, m.Loss, m.EvalMetric)
+		fmt.Println(m.Step, m.Loss, m.EvalMetrics)
 	}
 }
 

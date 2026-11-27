@@ -18,6 +18,10 @@ type (
 	ResolvedRunConfig = generated.ResolvedRunConfig
 	// RunStatus is a run's lifecycle state.
 	RunStatus = generated.RunStatus
+	// EvalReport is a run's held-out report: the shared core plus the fields its recipe writes.
+	EvalReport = generated.EvalReport
+	// RouterParetoSummary is a router run's quality vs. cost summary (EvalReport.ParetoSummary).
+	RouterParetoSummary = generated.RouterParetoSummary
 )
 
 // Run statuses.
@@ -317,7 +321,7 @@ func (r *Run) Metrics(ctx context.Context, follow bool) iter.Seq2[MetricPoint, e
 			if err != nil {
 				return nil, nil, err
 			}
-			page, err := api.ListRunMetrics(ctx, r.ID, &generated.ListRunMetricsParams{Cursor: cursor, Limit: ptr(1000)})
+			page, err := api.ListRunMetrics(ctx, r.ID, &generated.ListRunMetricsParams{Cursor: cursor, Limit: ptr(generated.ListRunMetricsLimitMax)})
 			if err != nil {
 				return nil, nil, err
 			}

@@ -464,7 +464,7 @@ func (e *Eval) scoreLocally(ctx context.Context, api *generated.Client) error {
 		fn := e.scorers[name]
 		lastFirst := ""
 		for {
-			page, err := api.ListEvalOutputs(ctx, e.ID, &generated.ListEvalOutputsParams{MissingScorer: &name, Limit: ptr(200)}) // the spec caps this listing at 200
+			page, err := api.ListEvalOutputs(ctx, e.ID, &generated.ListEvalOutputsParams{MissingScorer: &name, Limit: ptr(generated.ListEvalOutputsLimitMax)})
 			if err != nil {
 				return err
 			}

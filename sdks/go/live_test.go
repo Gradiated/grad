@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,8 @@ type liveStack struct {
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key"`
 	Mode    string `json:"mode"`
+	// FaultURL proxies BaseURL but drops the first response of every keyed POST.
+	FaultURL string `json:"fault_url"`
 }
 
 func repoRoot(t *testing.T) string {
@@ -148,6 +151,29 @@ func TestLiveSelfHosted(t *testing.T) {
 	defer cancel()
 	dir := t.TempDir()
 	client := grad.NewClient(grad.WithBaseURL(stack.BaseURL), grad.WithAPIKey(stack.APIKey))
+
+	t.Run("a POST whose response was lost is replayed", func(t *testing.T) {
+		// The fault proxy lets the server commit the first attempt, then answers 503; the
+		// retry carries the same Idempotency-Key, so the server replays 201 instead of 409.
+		flaky := grad.NewClient(grad.WithBaseURL(stack.FaultURL), grad.WithAPIKey(stack.APIKey))
+		ds := must(flaky.Datasets.Create(ctx, "go-idempotent-create"))(t)
+		if ds.Name != "go-idempotent-create" {
+			t.Fatalf("dataset %+v", ds)
+		}
+		resp, err := http.Get(stack.FaultURL + "/__fault/stats")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var stats struct{ Dropped, Replayed int }
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil || stats.Dropped < 1 || stats.Replayed < 1 {
+			t.Fatalf("fault stats %+v, %v", stats, err)
+		}
+		var conflict *grad.ConflictError
+		if _, err := client.Datasets.Create(ctx, "go-idempotent-create"); !errors.As(err, &conflict) {
+			t.Fatalf("a new logical create must not be replayed: %v", err)
+		}
+	})
 
 	t.Run("quickstart", func(t *testing.T) {
 		traces := filepath.Join(dir, "support_traces.jsonl")

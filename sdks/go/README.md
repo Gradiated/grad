@@ -84,8 +84,11 @@ compiles every Go snippet of the public docs.
 Every error unwraps to `*grad.GradError` (`Status`, `Code`, `RequestID`); use
 `errors.As` with `*grad.NotFoundError`, `*grad.ValidationError`,
 `*grad.RateLimitError`, `*grad.DeployUnavailableError`, `*grad.RunFailedError`
-and friends. Idempotent requests retry twice on 408/429/5xx with jittered
-backoff honouring `Retry-After`; redirects that leave the API origin are refused.
+and friends. Requests retry twice on 408/429/5xx with jittered backoff
+honouring `Retry-After`; every POST carries one `Idempotency-Key` (a UUIDv4, or
+`generated.WithIdempotencyKey` on `client.API` calls) across its retries, so the server replays the
+first response instead of running it twice. Redirects that leave the API origin
+are refused.
 
 ## Development
 

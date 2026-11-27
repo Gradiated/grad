@@ -10,6 +10,7 @@ import (
 	"time"
 
 	grad "github.com/Gradiated/grad/sdks/go"
+	"github.com/Gradiated/grad/sdks/go/generated"
 )
 
 func runFixture(t *testing.T, status string) map[string]any {
@@ -307,17 +308,16 @@ func TestMetricsFollowGivesUpOnPermanentErrors(t *testing.T) {
 }
 
 func TestMetricsPagesWithoutFollow(t *testing.T) {
-	// The server hands back a tail cursor even on the last page; following it yields an empty page.
+	// next_cursor is null on the last page (tail_cursor is only for tailing), so one request suffices.
 	page := wireMap(t, "metrics-page.json")
-	tail := map[string]any{"run_id": "run_x", "status": "completed", "data": []any{}, "next_cursor": page["next_cursor"]}
-	f := newFake(t, map[string]route{"GET /v1/runs/run_x/metrics": sequence(jsonValue(200, page), jsonValue(200, tail))})
+	f := newFake(t, map[string]route{"GET /v1/runs/run_x/metrics": jsonValue(200, page)})
 	c, _ := f.client()
 	points, err := grad.Collect(c.Runs.Metrics(context.Background(), "run_x", false))
 	if err != nil || len(points) != 6 || points[5].Loss == 0 {
 		t.Fatalf("points %d %v", len(points), err)
 	}
-	if q := f.reqs[0].Query; q != "limit=1000" {
-		t.Fatalf("query %s", q)
+	if n, q := len(f.requests()), f.reqs[0].Query; n != 1 || q != fmt.Sprintf("limit=%d", generated.ListRunMetricsLimitMax) {
+		t.Fatalf("requests %d, query %s", n, q)
 	}
 }
 

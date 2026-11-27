@@ -9,11 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	grad "github.com/Gradiated/grad/sdks/go"
+	"github.com/Gradiated/grad/sdks/go/generated"
 )
 
 type errorCase struct {
@@ -195,12 +197,61 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 			t.Fatalf("sleeps = %v", got)
 		}
 	})
-	t.Run("POST 500 is not retried", func(t *testing.T) {
+	t.Run("keyed POST is retried on 5xx with one Idempotency-Key", func(t *testing.T) {
+		f := newFake(t, map[string]route{"POST /v1/runs": sequence(problem(500, "internal_error"), problem(503, "unavailable"), jsonBody(202, wire(t, "run-queued.json")))})
+		c, _ := f.client()
+		if _, err := c.Runs.Create(ctx, grad.RunParams{Dataset: grad.DatasetName("d"), Name: "n", Recipe: grad.SFTRecipe{}}).Result(); err != nil {
+			t.Fatal(err)
+		}
+		keys := map[string]bool{}
+		for _, r := range f.requests() {
+			if r.Method == "POST" {
+				keys[r.Header.Get("Idempotency-Key")] = true
+			}
+		}
+		if f.count("POST", "/v1/runs") != 3 || len(keys) != 1 {
+			t.Fatalf("requests = %d, keys = %v", f.count("POST", "/v1/runs"), keys)
+		}
+		for key := range keys {
+			if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(key) {
+				t.Fatalf("key %q is not a UUIDv4", key)
+			}
+		}
+		body := &generated.PlanRunRequest{Dataset: "d", Name: "n", Recipe: generated.RecipeSpec{Kind: "sft"}}
+		if _, err := c.API.CreateRun(ctx, body, generated.WithIdempotencyKey("mine")); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.last("POST", "/v1/runs").Header.Get("Idempotency-Key"); got != "mine" {
+			t.Fatalf("caller key = %q", got)
+		}
+	})
+	t.Run("keyed 409 is retried only while the first attempt is in progress", func(t *testing.T) {
+		busy := func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+			w.Header().Set("Retry-After", "1")
+			problem(409, "idempotency_in_progress")(w, nil, nil)
+		}
+		f := newFake(t, map[string]route{"POST /v1/runs": sequence(busy, jsonBody(202, wire(t, "run-queued.json")))})
+		c, clk := f.client()
+		if _, err := c.Runs.Create(ctx, grad.RunParams{Dataset: grad.DatasetName("d"), Name: "n", Recipe: grad.SFTRecipe{}}).Result(); err != nil {
+			t.Fatal(err)
+		}
+		if got := clk.Sleeps(); len(got) != 1 || got[0] != time.Second {
+			t.Fatalf("sleeps = %v", got)
+		}
+		g := newFake(t, map[string]route{"POST /v1/runs": problem(409, "conflict")})
+		c2, _ := g.client()
+		_, err := c2.Runs.Create(ctx, grad.RunParams{Dataset: grad.DatasetName("d"), Name: "n", Recipe: grad.SFTRecipe{}}).Result()
+		var ce *grad.ConflictError
+		if !errors.As(err, &ce) || g.count("POST", "/v1/runs") != 1 {
+			t.Fatalf("err = %v, requests = %d", err, g.count("POST", "/v1/runs"))
+		}
+	})
+	t.Run("unkeyed POST 500 is not retried", func(t *testing.T) {
 		f := newFake(t, map[string]route{"POST /v1/runs": problem(500, "internal_error")})
 		c, _ := f.client()
-		_, err := c.Runs.Create(ctx, grad.RunParams{Dataset: grad.DatasetName("d"), Name: "n", Recipe: grad.SFTRecipe{}}).Result()
+		err := c.API.T.DoJSON(ctx, generated.RequestSpec{Method: "POST", Path: "/v1/runs", Body: map[string]any{}}, nil)
 		var se *grad.ServerError
-		if !errors.As(err, &se) || f.count("POST", "/v1/runs") != 1 {
+		if !errors.As(err, &se) || f.count("POST", "/v1/runs") != 1 || f.last("POST", "/v1/runs").Header.Get("Idempotency-Key") != "" {
 			t.Fatalf("err = %v, requests = %d", err, f.count("POST", "/v1/runs"))
 		}
 	})
