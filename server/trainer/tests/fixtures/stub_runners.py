@@ -1,4 +1,4 @@
-"""Recipe/import runner doubles implementing the grad_trainer.protocol seam."""
+"""Recipe/import runner doubles for the worker's recipe-runner seam (grad_trainer.runner_types)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from grad_trainer.protocol import ImportSummary, RunOutput
+from grad_trainer.runner_types import ImportSummary, RunOutput
 
 
 class StubRunner:

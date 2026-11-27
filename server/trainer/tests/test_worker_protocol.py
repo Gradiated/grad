@@ -108,7 +108,7 @@ class WorkerProtocolTests(unittest.TestCase):
             worker_id="w-test",
             workdir=self.tmp.name,
             recipe_runner_factory=lambda _kind: runner or StubRunner(),
-            import_runner=importer,
+            import_runner=importer or StubImporter(),
             recipes=["sft"],
             heartbeat_interval_s=kwargs.pop("heartbeat_interval_s", 0.05),
             client=client,
@@ -424,13 +424,6 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(
             [len(b["records"]) for b in srv.bodies("records")], [10_000, 1]
         )
-
-    def test_import_without_runner_fails_clearly(self) -> None:
-        srv = self.server(jobs=[import_job({"kind": "hf", "repo": "a/b"})])
-        self.worker(srv, importer=lambda: None).run_once()
-        complete = srv.bodies("complete")[0]
-        self.assertEqual(complete["status"], "failed")
-        self.assertIn("no dataset import runner", complete["error"])
 
     def test_idle_claim_returns_none(self) -> None:
         srv = self.server()

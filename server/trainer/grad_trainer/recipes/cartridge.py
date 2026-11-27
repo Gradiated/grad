@@ -30,11 +30,11 @@ from ..backends import torch_common as tc
 from ..backends.torch_task import TorchTask
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
-from ..safetensors_io import CARTRIDGE_FORMAT
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .data import prompt_messages, record_id
 
+CARTRIDGE_FORMAT = "gradiated.cartridge/1"
 SLOT_TOKEN_CANDIDATES = ("<|vision_pad|>", "<|image_pad|>", "<|video_pad|>", "<|fim_pad|>")
 DEFAULT_SEPARATOR = "\n\n"
 

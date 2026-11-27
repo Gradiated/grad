@@ -28,18 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
+from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
-from .protocol import (
-    BaseArtifact,
-    Budget,
-    ImportRunner,
-    RecipeRunner,
-    ResumeState,
-    RunCallbacks,
-    resolve_import_runner,
-    resolve_recipe_runner,
-    supported_recipe_kinds,
-)
+from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
+from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
 RECORDS_BATCH_LIMIT = 10_000
@@ -311,10 +303,8 @@ class TrainerWorker:
         lease_seconds: int = 180,
         poll_interval_s: float = 1.0,
         workdir: str | os.PathLike[str] | None = None,
-        recipe_runner_factory: Callable[[str], RecipeRunner] = resolve_recipe_runner,
-        import_runner: ImportRunner
-        | Callable[[], ImportRunner | None]
-        | None = resolve_import_runner,
+        recipe_runner_factory: Callable[[str], RecipeRunner] = get_recipe_runner,
+        import_runner: Any = connector_import_runner,
         recipes: list[str] | None = None,
         heartbeat_interval_s: float | None = None,
         client: ProtocolClient | None = None,
@@ -330,16 +320,8 @@ class TrainerWorker:
             Path(workdir) if workdir else Path(tempfile.gettempdir()) / "grad-trainer"
         )
         self.recipe_runner_factory = recipe_runner_factory
-        self._import_runner = import_runner
-        self.recipes = (
-            recipes
-            if recipes is not None
-            else (
-                supported_recipe_kinds()
-                if recipe_runner_factory is resolve_recipe_runner
-                else None
-            )
-        )
+        self.import_runner = import_runner
+        self.recipes = recipes if recipes is not None else sorted(V0_RECIPES)
         self.heartbeat_interval_s = heartbeat_interval_s or max(1.0, lease_seconds / 3)
         self.complete_attempts = complete_attempts
         self._shutdown = threading.Event()
@@ -673,25 +655,11 @@ class TrainerWorker:
 
     # -- import jobs ----------------------------------------------------------
 
-    def _resolve_import_runner(self) -> ImportRunner | None:
-        runner = self._import_runner
-        if runner is None or hasattr(runner, "run"):
-            return runner  # type: ignore[return-value]
-        return runner()
-
     def _run_import(
         self, job: dict[str, Any], state: _JobState, job_dir: Path
     ) -> dict[str, Any]:
         spec = job.get("import") or {}
-        runner = self._resolve_import_runner()
-        if runner is None:
-            return self._complete(
-                state,
-                {
-                    "status": "failed",
-                    "error": "This trainer image has no dataset import runner (grad_trainer.import_runner); upgrade the trainer.",
-                },
-            )
+        runner = self.import_runner
         source = dict(spec.get("source") or {})
         connector = spec.get("connector")
         try:

@@ -29,19 +29,22 @@ class CartridgeTests(TorchCase):
         from safetensors import safe_open
         from transformers import AutoTokenizer
 
+        import torch
+
         from fixtures.tiny_models import ensure_tiny_models
-        from grad_trainer.safetensors_io import inspect_safetensors, validate_cartridge
 
         rec = Recorder(self.tmpdir())
         out = run_recipe("cartridge", CARTRIDGE, PROMPTS, self.tmpdir(), recorder=rec)
         self.assertEqual((out.status, out.artifact_format), ("completed", "cartridge"))
         path = out.artifact_dir / "cartridge.safetensors"
-        meta, header = inspect_safetensors(path)
-        self.assertEqual(validate_cartridge(meta, header, hidden_size=32, max_context=512), 8)
-        self.assertEqual(header["embeddings"]["dtype"], "BF16")
-        self.assertEqual((meta["placement"], meta["separator"]), ("system_prompt_start", "\n\n"))
         with safe_open(str(path), "pt") as fh:
+            meta = fh.metadata()
+            self.assertEqual(sorted(fh.keys()), ["embeddings", "slot_token_ids"])
+            embeddings = fh.get_tensor("embeddings")
             slots = fh.get_tensor("slot_token_ids").tolist()
+        self.assertEqual(meta["format"], "gradiated.cartridge/1")
+        self.assertEqual((tuple(embeddings.shape), embeddings.dtype), ((8, 32), torch.bfloat16))
+        self.assertEqual((meta["placement"], meta["separator"]), ("system_prompt_start", "\n\n"))
         tok = AutoTokenizer.from_pretrained(str(ensure_tiny_models()[QWEN_ID]))
         slot_text = meta["slot_token"] * 8
         self.assertEqual(tok(slot_text, add_special_tokens=False)["input_ids"], slots)
