@@ -40,6 +40,7 @@ import {
   type WorkerAuthenticator,
 } from "../src/worker-auth/principal.js";
 import { workerTokenSource } from "../src/worker-auth/token-source.js";
+import { createWorkerClient } from "../src/worker/client.js";
 import { ManualClock } from "./fixtures/clock.js";
 
 const jwt = (payload: Record<string, unknown>): string =>
@@ -686,5 +687,27 @@ describe("the TypeScript worker's token source", () => {
     ).toBeUndefined();
     expect(workerTokenSource({ TRAINER_API_KEY: "static" })()).toBe("static");
     expect(workerTokenSource({})()).toBeUndefined();
+  });
+});
+
+describe("the eval worker's client", () => {
+  it("reads its token source on every request", async () => {
+    const seen: Array<string | null> = [];
+    const tokens = ["tok-1", "tok-2", undefined];
+    const client = createWorkerClient({
+      serverUrl: "http://grad.test",
+      apiKey: () => tokens.shift(),
+      workerId: "w",
+      retryDelaysMs: [],
+      fetch: async (_url, init) => {
+        seen.push(new Headers(init?.headers).get("authorization"));
+        return new Response(JSON.stringify({ protocol: "x", job: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+    for (let i = 0; i < 3; i += 1) await client.claim(["eval"], 30);
+    expect(seen).toEqual(["Bearer tok-1", "Bearer tok-2", null]);
   });
 });

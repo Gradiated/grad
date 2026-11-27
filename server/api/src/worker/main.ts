@@ -9,6 +9,7 @@ import { createOpenAICompatibleClient } from "../services/evals/inference.js";
 import { createRegexEvaluator } from "../services/evals/regex.js";
 import type { InferenceClients } from "../services/evals/types.js";
 import { log } from "../telemetry/log.js";
+import { workerTokenSource } from "../worker-auth/token-source.js";
 import { createWorkerClient } from "./client.js";
 import {
   createEvalWorker,
@@ -52,7 +53,8 @@ export const runWorker = async (args: readonly string[]): Promise<void> => {
   const worker = createEvalWorker({
     client: createWorkerClient({
       serverUrl: env.GRAD_SERVER_URL,
-      apiKey: env.TRAINER_API_KEY,
+      // GRAD_WORKER_TOKEN, else GRAD_WORKER_TOKEN_FILE (re-read per request), else TRAINER_API_KEY.
+      apiKey: workerTokenSource(),
       workerId,
     }),
     inference,

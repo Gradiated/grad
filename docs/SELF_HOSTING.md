@@ -132,7 +132,7 @@ GPU workers send their GPU memory with each claim (`nvidia-smi`, or `GRAD_WORKER
 
 ### Worker authentication
 
-Workers (`grad-trainer`) send a bearer token with every worker-protocol request (`/v1/trainer-jobs/*`). They read it from `GRAD_WORKER_TOKEN`, else from the file named by `GRAD_WORKER_TOKEN_FILE`, else `TRAINER_API_KEY`. The file is re-read on every request (and once more after a 401), so a rotated token takes effect without a restart. Workers never log the token. A worker token is not a workspace key: it grants only the `trainer:worker` scope for some job kinds, and `admin` never implies it.
+Workers (`grad-trainer` and the eval worker) send a bearer token with every worker-protocol request (`/v1/trainer-jobs/*`). They read it from `GRAD_WORKER_TOKEN`, else from the file named by `GRAD_WORKER_TOKEN_FILE`, else `TRAINER_API_KEY`. The file is re-read on every request (and once more after a 401), so a rotated token takes effect without a restart. Workers never log the token. A worker token is not a workspace key: it grants only the `trainer:worker` scope for some job kinds, and `admin` never implies it.
 
 grad-server checks the token with each authenticator in `GRAD_WORKER_AUTH`, in order, and the first one that recognises it wins. When one cannot decide (the Kubernetes API is unreachable) and no other matches, the request fails with `503 worker_auth_unavailable`, never with a match or a 401.
 

@@ -28,7 +28,8 @@ export class ServerUnavailable extends Error {}
 
 export interface WorkerClientOptions {
   serverUrl: string;
-  apiKey?: string | undefined;
+  /** The bearer token, or a source read on every request (GRAD_WORKER_TOKEN_FILE rotation). */
+  apiKey?: string | (() => string | undefined) | undefined;
   workerId: string;
   fetch?: typeof fetch;
   /** Waits between retries of a failed request (default about 30 s in total). */
@@ -89,10 +90,15 @@ export const createWorkerClient = (
     retry = true,
   ): Promise<Response> => {
     const headers: Record<string, string> = {};
-    if (options.apiKey) headers.Authorization = `Bearer ${options.apiKey}`;
     if (init.body !== undefined) headers["Content-Type"] = "application/json";
     let last = "";
     for (let i = 0; ; i += 1) {
+      const token =
+        typeof options.apiKey === "function"
+          ? options.apiKey()
+          : options.apiKey;
+      if (token) headers.Authorization = `Bearer ${token}`;
+      else delete headers.Authorization;
       let res: Response | null = null;
       try {
         res = await fetchImpl(`${base}${path}`, {
