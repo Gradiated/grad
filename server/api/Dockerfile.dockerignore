@@ -1,16 +1,12 @@
-# Context is the repository root; send only what server/api/Dockerfile copies.
-*
-!server/api/package.json
-!server/api/pnpm-lock.yaml
-!server/api/tsconfig.json
-!server/api/tsconfig.build.json
-!server/api/src
-!server/api/migrations
-!server/ui/package.json
-!server/ui/pnpm-lock.yaml
-!server/ui/index.html
-!server/ui/vite.config.ts
-!server/ui/tsconfig.json
-!server/ui/public
-!server/ui/src
-!sdks/typescript/src
+# The build context is the repo root and the Dockerfile copies explicit paths; keep local
+# state and credentials out of the context anyway.
+.git
+**/.env
+**/.env.*
+**/.grad-data
+**/node_modules
+**/dist
+**/target
+**/.venv*
+**/__pycache__
+.agents

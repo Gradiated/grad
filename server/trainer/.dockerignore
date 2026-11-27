@@ -1,0 +1,9 @@
+# The Dockerfile copies explicit paths; keep local state and credentials out of the context.
+**/.env
+**/.env.*
+**/.grad-data
+**/.venv*
+**/__pycache__
+**/*.egg-info
+.coverage
+tests
