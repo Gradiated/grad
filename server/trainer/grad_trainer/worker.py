@@ -35,6 +35,7 @@ from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
+from .loggers import Loggers
 from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
 from .records import merge_records
 from .sources import redact
@@ -244,6 +245,7 @@ class _JobState:
     auth_error: WorkerAuthError | None = None
     max_tokens: int = 0
     batches: int = 0
+    final_status: str = "failed"
 
     def request_stop(self, reason: str) -> None:
         if self.stop_reason is None:
@@ -511,6 +513,7 @@ class TrainerWorker:
         """Retries until the server answers: completion is idempotent per attempt,
         and the bundle stays on disk meanwhile. Gives up only when the lease is
         lost (409/404) or the worker is shutting down."""
+        state.final_status = str(payload.get("status") or "failed")
         while True:
             try:
                 return self._post(
@@ -544,11 +547,34 @@ class TrainerWorker:
                 state, {"status": "failed", "error": f"setup failed: {exc}"[:4000]}
             )
 
+        trackers = Loggers(
+            list(job.get("loggers") or []),
+            {"id": run.get("id"), "name": run.get("name"), "config": run.get("resolved_config") or {}},
+            lambda message: _log(f"run {run.get('id')}: {message}"),
+        )
+        try:
+            return self._train(job, run, state, job_dir, records, resume, base, runner, trackers)
+        finally:
+            trackers.finish(state.final_status)
+
+    def _train(
+        self,
+        job: dict[str, Any],
+        run: dict[str, Any],
+        state: _JobState,
+        job_dir: Path,
+        records: list[dict[str, Any]],
+        resume: ResumeState | None,
+        base: BaseArtifact | None,
+        runner: RecipeRunner,
+        trackers: Loggers,
+    ) -> dict[str, Any]:
         def on_step(metric: dict[str, Any]) -> bool:
             if state.stop.is_set():
                 return True
             point = {**metric}
             point.setdefault("timestamp", _now_iso())
+            trackers.log(point)
             tokens = point.get("tokens")
             if isinstance(tokens, (int, float)):
                 state.max_tokens = max(state.max_tokens, int(tokens))
