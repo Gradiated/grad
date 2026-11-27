@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compareStrings, sanitizeSingleLine, toPascal, toSnake } from "./ir.mjs";
+import { compareStrings, parameterMaxima, sanitizeSingleLine, toPascal, toSnake } from "./ir.mjs";
 
 const runtimeDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime", "go");
 
@@ -430,6 +430,7 @@ export const generateGoFiles = async (ir, { sdkVersion = "0.0.0" } = {}) => {
     if (op.queryParams.length > 0) specFields.push("Query: q");
     if (op.headerParams.length > 0) specFields.push("Header: h");
     if (bodyArg) specFields.push("Body: body");
+    if (op.idempotent) specFields.push("Idempotent: true");
     const summary = sanitizeSingleLine(op.summary || op.id);
     const sentence = /[.!?]$/.test(summary) ? summary : `${summary}.`;
     const doc = `// ${methodName} calls ${op.method} ${op.path}.\n//\n// ${sentence}\n${op.deprecated ? "//\n// Deprecated: see the API reference.\n" : ""}`;
@@ -499,7 +500,12 @@ export const generateGoFiles = async (ir, { sdkVersion = "0.0.0" } = {}) => {
   if (clientBody.includes("strconv.")) imports.push("strconv");
   imports.sort(compareStrings);
   const importBlock = imports.length === 1 ? `import "${imports[0]}"` : `import (\n${imports.map((i) => `\t"${i}"`).join("\n")}\n)`;
-  const client = `${HEADER}\npackage generated\n\n${importBlock}\n\n// Client is the generated low-level client: one typed method per OpenAPI operation.\ntype Client struct {\n\tT *Transport\n}\n\n// NewClient wraps a Transport.\nfunc NewClient(t *Transport) *Client { return &Client{T: t} }\n\n${clientBody}\n`;
+  const maxima = parameterMaxima(ir).map((m) => {
+    const name = `${goName(m.op)}${goName(m.param)}Max`;
+    return `// ${name} is the largest ${m.param} accepted by ${goName(m.op)} (the server clamps larger values).\nconst ${name} = ${m.maximum}`;
+  });
+  const maximaBlock = maxima.length ? `${maxima.join("\n\n")}\n\n` : "";
+  const client = `${HEADER}\npackage generated\n\n${importBlock}\n\n${maximaBlock}// Client is the generated low-level client: one typed method per OpenAPI operation.\ntype Client struct {\n\tT *Transport\n}\n\n// NewClient wraps a Transport.\nfunc NewClient(t *Transport) *Client { return &Client{T: t} }\n\n${clientBody}\n`;
 
   const transport = (await readFile(path.join(runtimeDir, "transport.go"), "utf8")).replace("__SDK_VERSION__", sdkVersion);
   const doc = `${HEADER}\n// Package generated is the low-level wire client for the Gradiated training and serving API.\n// Use the github.com/Gradiated/grad/sdks/go package instead; this one tracks spec/openapi.yaml exactly.\npackage generated\n`;

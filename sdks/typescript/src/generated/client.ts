@@ -15,10 +15,6 @@ import type {
   ApiKey,
   Artifact,
   Checkpoint,
-  ClaimJobRequest,
-  ClaimJobResponse,
-  CompleteTrainerJobRequest,
-  CompleteTrainerJobResponse,
   CreateApiKeyRequest,
   CreateDatasetRequest,
   CreateImportRequest,
@@ -31,9 +27,6 @@ import type {
   DeploymentStatus,
   EmbedRequest,
   EmbedResponse,
-  EnvTaskDispatch,
-  EnvTaskResult,
-  EnvWorkerRegister,
   EvalOutput,
   EvalRun,
   EvalTaskOutcome,
@@ -45,26 +38,17 @@ import type {
   PlanRunResponse,
   PostEvalScoresRequest,
   PostEvalScoresResponse,
-  PostImportRecordsRequest,
-  PostImportRecordsResponse,
   PromoteCheckpointRequest,
   PushDatasetRequest,
   RecordFeedbackRequest,
   RecordFeedbackResponse,
-  RegisterTrainerCheckpointRequest,
   RenderDatasetRequest,
   RenderDatasetResponse,
-  ReportTrainerProgressRequest,
-  ReportTrainerProgressResponse,
   ResumeRunRequest,
   RouteRequest,
   RouteResponse,
   Run,
   TrainableModel,
-  TrainerHeartbeatRequest,
-  TrainerHeartbeatResponse,
-  TrainerQueueStats,
-  TrainerUploadRequest,
   UploadTicket,
 } from "./models.js";
 
@@ -72,106 +56,70 @@ import type {
 export const CODEC: CodecTable = {
   "AdapterSpec": { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } },
   "ApiKey": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["revokedAt", "revoked_at", 0]] },
-  "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["evalReport", "eval_report", 0], ["createdAt", "created_at", 0]] },
+  "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["evalReport", "eval_report", "EvalReport"], ["createdAt", "created_at", 0]] },
   "ChatMessage": { o: [["toolCalls", "tool_calls", 0], ["toolCallId", "tool_call_id", 0]] },
   "Checkpoint": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["evalScore", "eval_score", 0], ["sizeBytes", "size_bytes", 0], ["expiresAt", "expires_at", 0], ["createdAt", "created_at", 0]] },
-  "ClaimJobRequest": { o: [["workerId", "worker_id", 0], ["leaseSeconds", "lease_seconds", 0]] },
-  "ClaimJobResponse": { o: [["job", "job", "TrainerJob"]] },
-  "CompleteTrainerJobRequest": { o: [["workerId", "worker_id", 0], ["uploadId", "upload_id", 0], ["evalReport", "eval_report", 0], ["tokensProcessed", "tokens_processed", 0], ["importSummary", "import_summary", { o: [["droppedCount", "dropped_count", 0], ["detectedScores", "detected_scores", 0], ["dropReasons", "drop_reasons", 0]] }]] },
-  "CompleteTrainerJobResponse": { o: [["jobId", "job_id", 0], ["run", "run", "Run"], ["artifact", "artifact", "Artifact"], ["import", "import", "ImportJob"]] },
   "CreateImportRequest": { o: [["source", "source", "ImportSource"]] },
   "CreateUploadRequest": { o: [["sizeBytes", "size_bytes", 0]] },
   "CreatedApiKey": { o: [["key", "key", "ApiKey"]] },
   "Dataset": { o: [["workspaceId", "workspace_id", 0], ["recordCount", "record_count", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "DatasetRecord": { o: [["sessionId", "session_id", 0], ["groupId", "group_id", 0], ["messages", "messages", { a: "ChatMessage" }], ["input", "input", "TrajectoryInput"], ["output", "output", "TrajectoryOutput"], ["prompt", "prompt", { u: { a: { a: "ChatMessage" } } }], ["completion", "completion", { u: { a: { a: "ChatMessage" } } }], ["chosen", "chosen", { u: { a: { a: "ChatMessage" } } }], ["rejected", "rejected", { u: { a: { a: "ChatMessage" } } }], ["expectedOutput", "expected_output", 0]] },
   "DatasetRecordsPage": { o: [["data", "data", { a: "DatasetRecord" }], ["nextCursor", "next_cursor", 0]] },
+  "DecisionHeadReport": { o: [["macroF1", "macro_f1", 0], ["perOption", "per_option", 0], ["confusionMatrix", "confusion_matrix", 0]] },
   "DeployArtifactRequest": { o: [["exploreRate", "explore_rate", 0]] },
   "Deployment": { o: [["workspaceId", "workspace_id", 0], ["modelId", "model_id", 0], ["activeArtifactId", "active_artifact_id", 0], ["previousArtifactId", "previous_artifact_id", 0], ["fallbackModel", "fallback_model", 0], ["exploreRate", "explore_rate", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "DeploymentStatus": { o: [["deployment", "deployment", "Deployment"], ["feedbackCount", "feedback_count", 0], ["averageScore", "average_score", 0]] },
   "EmbedResponse": { o: [["usage", "usage", { o: [["promptTokens", "prompt_tokens", 0], ["totalTokens", "total_tokens", 0]] }]] },
-  "EnvTaskDispatch": { o: [["envName", "env_name", 0], ["modelId", "model_id", 0], ["systemPrompt", "system_prompt", 0], ["timeoutS", "timeout_s", 0]] },
-  "EnvTaskResult": { o: [["workerId", "worker_id", 0]] },
-  "EnvWorkerRegister": { o: [["workerId", "worker_id", 0]] },
   "EvalModelSummary": { o: [["ciLow", "ci_low", 0], ["ciHigh", "ci_high", 0], ["passAtK", "pass_at_k", 0], ["vsBaseline", "vs_baseline", { o: [["ciLow", "ci_low", 0], ["ciHigh", "ci_high", 0]] }], ["tokensPerTask", "tokens_per_task", 0], ["costPer1kTasksUsd", "cost_per_1k_tasks_usd", 0]] },
   "EvalOutput": { o: [["evalId", "eval_id", 0], ["taskId", "task_id", 0], ["sampleIndex", "sample_index", 0], ["input", "input", { a: "ChatMessage" }], ["expectedOutput", "expected_output", 0], ["record", "record", "DatasetRecord"], ["usage", "usage", { o: [["promptTokens", "prompt_tokens", 0], ["completionTokens", "completion_tokens", 0]] }]] },
+  "EvalReport": { o: [["metricName", "metric_name", 0], ["selectedStep", "selected_step", 0], ["bestStep", "best_step", 0], ["finalStep", "final_step", 0], ["trainRecords", "train_records", 0], ["evalRecords", "eval_records", 0], ["evalLoss", "eval_loss", 0], ["evalTokenAccuracy", "eval_token_accuracy", 0], ["trainedTokenFraction", "trained_token_fraction", 0], ["trainExamples", "train_examples", 0], ["evalExamples", "eval_examples", 0], ["selectionExamples", "selection_examples", 0], ["preferenceAccuracy", "preference_accuracy", 0], ["rewardMargin", "reward_margin", 0], ["trainPairs", "train_pairs", 0], ["evalPairs", "eval_pairs", 0], ["droppedRecords", "dropped_records", 0], ["evalKl", "eval_kl", 0], ["noContextKl", "no_context_kl", 0], ["klReduction", "kl_reduction", 0], ["numTokens", "num_tokens", 0], ["fallbackModel", "fallback_model", 0], ["fallbackQuality", "fallback_quality", 0], ["routesAnyTraffic", "routes_any_traffic", 0], ["paretoSummary", "pareto_summary", "RouterParetoSummary"], ["heads", "heads", { m: "DecisionHeadReport" }], ["recallAt1", "recall_at_1", 0], ["recallAt5", "recall_at_5", 0], ["recallAt10", "recall_at_10", 0], ["corpusSize", "corpus_size", 0], ["baseline", "baseline", { o: [["recallAt1", "recall_at_1", 0], ["recallAt5", "recall_at_5", 0], ["recallAt10", "recall_at_10", 0]] }]] },
   "EvalRun": { o: [["workspaceId", "workspace_id", 0], ["taskSource", "task_source", 0], ["maxTokens", "max_tokens", 0], ["passThreshold", "pass_threshold", 0], ["judgeModels", "judge_models", 0], ["localScorers", "local_scorers", 0], ["progress", "progress", { o: [["totalOutputs", "total_outputs", 0], ["pendingLocalScores", "pending_local_scores", 0]] }], ["summary", "summary", { a: "EvalModelSummary" }], ["totalCostUsd", "total_cost_usd", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["completedAt", "completed_at", 0]] },
   "EvalTaskOutcome": { o: [["taskId", "task_id", 0], ["sampleScores", "sample_scores", 0], ["judgeModel", "judge_model", 0], ["record", "record", "DatasetRecord"]] },
   "FeedbackEventInput": { o: [["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0]] },
   "FeedbackRecord": { o: [["workspaceId", "workspace_id", 0], ["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0], ["createdAt", "created_at", 0]] },
   "ImportJob": { o: [["workspaceId", "workspace_id", 0], ["importedCount", "imported_count", 0], ["droppedCount", "dropped_count", 0], ["detectedScores", "detected_scores", 0], ["dropReasons", "drop_reasons", 0], ["datasetVersion", "dataset_version", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "ImportSource": { u: { o: { o: [["uploadId", "upload_id", 0]] } } },
-  "MetricPoint": { o: [["evalLoss", "eval_loss", 0], ["evalMetric", "eval_metric", 0], ["gradNorm", "grad_norm", 0], ["tokensPerSec", "tokens_per_sec", 0], ["costUsd", "cost_usd", 0]] },
-  "MetricPointInput": { o: [["evalLoss", "eval_loss", 0], ["evalMetric", "eval_metric", 0], ["gradNorm", "grad_norm", 0], ["tokensPerSec", "tokens_per_sec", 0], ["costUsd", "cost_usd", 0]] },
-  "MetricsPage": { o: [["runId", "run_id", 0], ["data", "data", { a: "MetricPoint" }], ["nextCursor", "next_cursor", 0]] },
+  "MetricPoint": { o: [["evalLoss", "eval_loss", 0], ["evalMetrics", "eval_metrics", 0], ["gradNorm", "grad_norm", 0], ["tokensPerSec", "tokens_per_sec", 0], ["costUsd", "cost_usd", 0]] },
+  "MetricsPage": { o: [["runId", "run_id", 0], ["data", "data", { a: "MetricPoint" }], ["nextCursor", "next_cursor", 0], ["tailCursor", "tail_cursor", 0]] },
   "PlanEvalRequest": { o: [["datasetVersion", "dataset_version", 0], ["envName", "env_name", 0], ["maxTokens", "max_tokens", 0], ["passThreshold", "pass_threshold", 0], ["maxCostUsd", "max_cost_usd", 0]] },
   "PlanEvalResponse": { o: [["taskSourceKind", "task_source_kind", 0], ["datasetVersion", "dataset_version", 0], ["estimatedTasks", "estimated_tasks", 0], ["estimatedModelCalls", "estimated_model_calls", 0], ["estimatedJudgeCalls", "estimated_judge_calls", 0], ["estimatedCostUsd", "estimated_cost_usd", 0], ["judgeModels", "judge_models", 0], ["localScorers", "local_scorers", 0], ["passThreshold", "pass_threshold", 0]] },
   "PlanRunRequest": { o: [["recipe", "recipe", "RecipeSpec"], ["split", "split", "SplitSpec"], ["maxCostUsd", "max_cost_usd", 0]] },
   "PlanRunResponse": { o: [["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["datasetVersion", "dataset_version", 0], ["usableRecords", "usable_records", 0], ["totalRecords", "total_records", 0], ["estimatedSteps", "estimated_steps", 0], ["estimatedTokens", "estimated_tokens", 0], ["estimatedCostUsd", "estimated_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["trainedTokenFraction", "trained_token_fraction", 0]] },
   "PostEvalScoresRequest": { o: [["scores", "scores", { a: { o: [["outputId", "output_id", 0]] } }]] },
   "PostEvalScoresResponse": { o: [["pendingLocalScores", "pending_local_scores", 0]] },
-  "PostImportRecordsRequest": { o: [["workerId", "worker_id", 0]] },
-  "Problem": { o: [["requestId", "request_id", 0]] },
   "PushDatasetRequest": { o: [["records", "records", { a: "DatasetRecord" }]] },
   "RecipeSpec": { o: [["adapter", "adapter", "AdapterSpec"], ["lrScale", "lr_scale", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["maxQualityDrop", "max_quality_drop", 0], ["contextText", "context_text", 0], ["contextUri", "context_uri", 0], ["numTokens", "num_tokens", 0], ["envName", "env_name", 0], ["groupSize", "group_size", 0]] },
   "RecordFeedbackRequest": { o: [["events", "events", { a: "FeedbackEventInput" }]] },
   "RecordFeedbackResponse": { o: [["records", "records", { a: "FeedbackRecord" }]] },
-  "RegisterTrainerCheckpointRequest": { o: [["workerId", "worker_id", 0], ["evalScore", "eval_score", 0], ["uploadId", "upload_id", 0]] },
   "RenderDatasetRequest": { o: [["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0]] },
   "RenderDatasetResponse": { o: [["templateRevision", "template_revision", 0], ["tokenCounts", "token_counts", 0], ["examples", "examples", { a: { o: [["recordId", "record_id", 0], ["templateRevision", "template_revision", 0], ["totalTokens", "total_tokens", 0], ["trainedTokens", "trained_tokens", 0], ["trainedFraction", "trained_fraction", 0]] } }]] },
-  "ReportTrainerProgressRequest": { o: [["workerId", "worker_id", 0], ["metric", "metric", "MetricPointInput"]] },
-  "ReportTrainerProgressResponse": { o: [["shouldStop", "should_stop", 0], ["stopReason", "stop_reason", 0], ["costUsd", "cost_usd", 0]] },
   "ResolvedRunConfig": { o: [["ruleVersion", "rule_version", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["templateRevision", "template_revision", 0], ["adapter", "adapter", { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } }], ["lrSource", "lr_source", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointEverySteps", "checkpoint_every_steps", 0], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["split", "split", { o: [["evalFraction", "eval_fraction", 0], ["trainRecords", "train_records", 0], ["evalRecords", "eval_records", 0]] }], ["recipeParams", "recipe_params", 0]] },
   "ResumeRunRequest": { o: [["maxCostUsd", "max_cost_usd", 0]] },
   "RouteRequest": { o: [["messages", "messages", { a: "ChatMessage" }], ["sessionId", "session_id", 0]] },
   "RouteResponse": { o: [["inferenceId", "inference_id", 0], ["artifactId", "artifact_id", 0], ["isExploration", "is_exploration", 0]] },
-  "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", 0], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
+  "RouterParetoSummary": { o: [["targetMaxDrop", "target_max_drop", 0], ["routedQuality", "routed_quality", 0], ["qualityDrop", "quality_drop", 0], ["qualityDropCi95", "quality_drop_ci95", 0], ["offloadRate", "offload_rate", 0], ["costSavingsPct", "cost_savings_pct", 0]] },
+  "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", "EvalReport"], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
   "SplitSpec": { o: [["evalFraction", "eval_fraction", 0]] },
   "TrainableModel": { o: [["hfRepo", "hf_repo", 0], ["defaultFor", "default_for", 0], ["pricePerMillionTokensUsd", "price_per_million_tokens_usd", 0], ["maxContextTokens", "max_context_tokens", 0], ["templateRevision", "template_revision", 0], ["calibratedLrs", "calibrated_lrs", 0]] },
-  "TrainerHeartbeatRequest": { o: [["workerId", "worker_id", 0], ["leaseSeconds", "lease_seconds", 0]] },
-  "TrainerHeartbeatResponse": { o: [["shouldStop", "should_stop", 0], ["stopReason", "stop_reason", 0], ["leaseExpiresAt", "lease_expires_at", 0]] },
-  "TrainerJob": { o: [["leaseSeconds", "lease_seconds", 0], ["leaseExpiresAt", "lease_expires_at", 0], ["run", "run", { o: [["workspaceId", "workspace_id", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["totalSteps", "total_steps", 0]] }], ["import", "import", { o: [["workspaceId", "workspace_id", 0]] }], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["maxCostUsd", "max_cost_usd", 0], ["dataset", "dataset", { o: [["recordCount", "record_count", 0], ["downloadUrl", "download_url", 0]] }], ["resume", "resume", { o: [["checkpointId", "checkpoint_id", 0], ["downloadUrl", "download_url", 0]] }]] },
-  "TrainerQueueStats": { o: [["byKind", "by_kind", 0]] },
-  "TrainerUploadRequest": { o: [["workerId", "worker_id", 0], ["sizeBytes", "size_bytes", 0]] },
   "TrajectoryInput": { o: [["messages", "messages", { a: "ChatMessage" }]] },
   "TrajectoryOutput": { o: [["turns", "turns", { a: "ChatMessage" }]] },
   "UploadTicket": { o: [["uploadId", "upload_id", 0], ["expiresAt", "expires_at", 0]] },
 };
 
-export type ClaimEnvTaskRequest = {
-  workerId: string;
-  waitMs?: number | undefined;
-};
-
-export type ClaimEnvTaskResponse = {
-  task: Record<string, unknown> | null;
-};
-
-export type CompleteEnvTaskResponse = Record<string, unknown>;
-
-export type DispatchEnvTaskResponse = {
-  id: string;
-  envName: string;
-  status: string;
-  activeWorkers: number;
-};
-
-export interface DownloadTrainerDatasetParams {
-  attempt: number;
-}
-
-export type GetEnvTaskResponse = Record<string, unknown>;
-
 export interface ListApiKeysParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export type ListApiKeysResponse = {
   data: Array<ApiKey>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListArtifactsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
   name?: string | undefined;
@@ -179,36 +127,43 @@ export interface ListArtifactsParams {
 
 export type ListArtifactsResponse = {
   data: Array<Artifact>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListDatasetRecordsParams {
   version?: number | undefined;
+  /** Page size (default 100). Values above 1000 are clamped to 1000. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export interface ListDatasetsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export type ListDatasetsResponse = {
   data: Array<Dataset>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListDeploymentsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export type ListDeploymentsResponse = {
   data: Array<Deployment>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListEvalFailuresParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
   model?: string | undefined;
@@ -218,10 +173,12 @@ export interface ListEvalFailuresParams {
 export type ListEvalFailuresResponse = {
   evalId: string;
   data: Array<EvalTaskOutcome>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListEvalOutputsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
   model?: string | undefined;
@@ -230,10 +187,12 @@ export interface ListEvalOutputsParams {
 
 export type ListEvalOutputsResponse = {
   data: Array<EvalOutput>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListEvalResultsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
   model?: string | undefined;
@@ -241,26 +200,31 @@ export interface ListEvalResultsParams {
 
 export type ListEvalResultsResponse = {
   data: Array<EvalTaskOutcome>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListEvalsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export type ListEvalsResponse = {
   data: Array<EvalRun>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListImportsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export type ListImportsResponse = {
   data: Array<ImportJob>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
@@ -269,37 +233,62 @@ export type ListModelsResponse = {
 };
 
 export interface ListRunCheckpointsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export type ListRunCheckpointsResponse = {
   data: Array<Checkpoint>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
 export interface ListRunMetricsParams {
   cursor?: string | undefined;
   afterStep?: number | undefined;
+  /** Page size (default 1000). Values above 5000 are clamped to 5000. */
   limit?: number | undefined;
 }
 
 export interface ListRunsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
 }
 
 export type ListRunsResponse = {
   data: Array<Run>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
 
-export type RegisterEnvWorkerResponse = {
-  name: string;
-  workerId: string;
-  concurrency: number;
-  lastHeartbeatAt: string;
-};
+/** Largest `limit` accepted by `listApiKeys` (the server clamps larger values). */
+export const LIST_API_KEYS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listArtifacts` (the server clamps larger values). */
+export const LIST_ARTIFACTS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listDatasetRecords` (the server clamps larger values). */
+export const LIST_DATASET_RECORDS_LIMIT_MAX = 1000;
+/** Largest `limit` accepted by `listDatasets` (the server clamps larger values). */
+export const LIST_DATASETS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listDeployments` (the server clamps larger values). */
+export const LIST_DEPLOYMENTS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listEvalFailures` (the server clamps larger values). */
+export const LIST_EVAL_FAILURES_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listEvalOutputs` (the server clamps larger values). */
+export const LIST_EVAL_OUTPUTS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listEvalResults` (the server clamps larger values). */
+export const LIST_EVAL_RESULTS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listEvals` (the server clamps larger values). */
+export const LIST_EVALS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listImports` (the server clamps larger values). */
+export const LIST_IMPORTS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listRunCheckpoints` (the server clamps larger values). */
+export const LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listRunMetrics` (the server clamps larger values). */
+export const LIST_RUN_METRICS_LIMIT_MAX = 5000;
+/** Largest `limit` accepted by `listRuns` (the server clamps larger values). */
+export const LIST_RUNS_LIMIT_MAX = 200;
 
 /** Low-level client: one typed method per OpenAPI operation. */
 export class ApiClient {
@@ -311,7 +300,7 @@ export class ApiClient {
    * `POST /v1/evals/{id}/cancel`
    */
   async cancelEval(id: string, options?: RequestOptions): Promise<EvalRun> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/evals/${encodePathParam(id, "id")}/cancel` }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals/${encodePathParam(id, "id")}/cancel`, idempotent: true }, options);
     return convertKeys(CODEC, "EvalRun", data, "decode") as EvalRun;
   }
 
@@ -321,48 +310,8 @@ export class ApiClient {
    * `POST /v1/runs/{id}/cancel`
    */
   async cancelRun(id: string, options?: RequestOptions): Promise<Run> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/runs/${encodePathParam(id, "id")}/cancel` }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs/${encodePathParam(id, "id")}/cancel`, idempotent: true }, options);
     return convertKeys(CODEC, "Run", data, "decode") as Run;
-  }
-
-  /**
-   * Long-poll for the next task assigned to a `grad env serve` worker
-   *
-   * `POST /v1/env-workers/{name}/claim`
-   */
-  async claimEnvTask(name: string, body: ClaimEnvTaskRequest, options?: RequestOptions): Promise<ClaimEnvTaskResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/${encodePathParam(name, "name")}/claim`, json: convertKeys(CODEC, { o: [["workerId", "worker_id", 0], ["waitMs", "wait_ms", 0]] }, body, "encode") }, options);
-    return data as ClaimEnvTaskResponse;
-  }
-
-  /**
-   * Claim the next queued train or import job (trainer:worker)
-   *
-   * `POST /v1/trainer-jobs/claim`
-   */
-  async claimTrainerJob(body: ClaimJobRequest, options?: RequestOptions): Promise<ClaimJobResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/claim`, json: convertKeys(CODEC, "ClaimJobRequest", body, "encode") }, options);
-    return convertKeys(CODEC, "ClaimJobResponse", data, "decode") as ClaimJobResponse;
-  }
-
-  /**
-   * Submit scored trajectory output for an environment task
-   *
-   * `POST /v1/env-workers/tasks/{id}/complete`
-   */
-  async completeEnvTask(id: string, body: EnvTaskResult, options?: RequestOptions): Promise<CompleteEnvTaskResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/tasks/${encodePathParam(id, "id")}/complete`, json: convertKeys(CODEC, "EnvTaskResult", body, "encode") }, options);
-    return data as CompleteEnvTaskResponse;
-  }
-
-  /**
-   * Finish a job attempt: publish its artifact, bill it, release the lease
-   *
-   * `POST /v1/trainer-jobs/{id}/complete`
-   */
-  async completeTrainerJob(id: string, body: CompleteTrainerJobRequest, options?: RequestOptions): Promise<CompleteTrainerJobResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/complete`, json: convertKeys(CODEC, "CompleteTrainerJobRequest", body, "encode") }, options);
-    return convertKeys(CODEC, "CompleteTrainerJobResponse", data, "decode") as CompleteTrainerJobResponse;
   }
 
   /**
@@ -371,7 +320,7 @@ export class ApiClient {
    * `POST /v1/keys`
    */
   async createApiKey(body: CreateApiKeyRequest, options?: RequestOptions): Promise<CreatedApiKey> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/keys`, json: body }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/keys`, json: body, idempotent: true }, options);
     return convertKeys(CODEC, "CreatedApiKey", data, "decode") as CreatedApiKey;
   }
 
@@ -381,7 +330,7 @@ export class ApiClient {
    * `POST /v1/datasets`
    */
   async createDataset(body: CreateDatasetRequest, options?: RequestOptions): Promise<Dataset> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/datasets`, json: body }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets`, json: body, idempotent: true }, options);
     return convertKeys(CODEC, "Dataset", data, "decode") as Dataset;
   }
 
@@ -391,7 +340,7 @@ export class ApiClient {
    * `POST /v1/datasets/{name}/imports`
    */
   async createDatasetImport(name: string, body: CreateImportRequest, options?: RequestOptions): Promise<ImportJob> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/imports`, json: convertKeys(CODEC, "CreateImportRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/imports`, json: convertKeys(CODEC, "CreateImportRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "ImportJob", data, "decode") as ImportJob;
   }
 
@@ -401,7 +350,7 @@ export class ApiClient {
    * `POST /v1/embeddings`
    */
   async createEmbeddings(body: EmbedRequest, options?: RequestOptions): Promise<EmbedResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/embeddings`, json: body }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/embeddings`, json: body, idempotent: true }, options);
     return convertKeys(CODEC, "EmbedResponse", data, "decode") as EmbedResponse;
   }
 
@@ -411,7 +360,7 @@ export class ApiClient {
    * `POST /v1/evals`
    */
   async createEval(body: PlanEvalRequest, options?: RequestOptions): Promise<EvalRun> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/evals`, json: convertKeys(CODEC, "PlanEvalRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals`, json: convertKeys(CODEC, "PlanEvalRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "EvalRun", data, "decode") as EvalRun;
   }
 
@@ -421,18 +370,8 @@ export class ApiClient {
    * `POST /v1/runs`
    */
   async createRun(body: PlanRunRequest, options?: RequestOptions): Promise<Run> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/runs`, json: convertKeys(CODEC, "PlanRunRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs`, json: convertKeys(CODEC, "PlanRunRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "Run", data, "decode") as Run;
-  }
-
-  /**
-   * Get an upload URL for a checkpoint or artifact bundle
-   *
-   * `POST /v1/trainer-jobs/{id}/uploads`
-   */
-  async createTrainerUpload(id: string, body: TrainerUploadRequest, options?: RequestOptions): Promise<UploadTicket> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/uploads`, json: convertKeys(CODEC, "TrainerUploadRequest", body, "encode") }, options);
-    return convertKeys(CODEC, "UploadTicket", data, "decode") as UploadTicket;
   }
 
   /**
@@ -441,7 +380,7 @@ export class ApiClient {
    * `POST /v1/uploads`
    */
   async createUpload(body: CreateUploadRequest, options?: RequestOptions): Promise<UploadTicket> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/uploads`, json: convertKeys(CODEC, "CreateUploadRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/uploads`, json: convertKeys(CODEC, "CreateUploadRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "UploadTicket", data, "decode") as UploadTicket;
   }
 
@@ -451,18 +390,8 @@ export class ApiClient {
    * `POST /v1/deployments`
    */
   async deployArtifact(body: DeployArtifactRequest, options?: RequestOptions): Promise<Deployment> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/deployments`, json: convertKeys(CODEC, "DeployArtifactRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/deployments`, json: convertKeys(CODEC, "DeployArtifactRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "Deployment", data, "decode") as Deployment;
-  }
-
-  /**
-   * Dispatch an evaluation or rollout task to a connected `grad env serve` worker
-   *
-   * `POST /v1/env-workers/tasks`
-   */
-  async dispatchEnvTask(body: EnvTaskDispatch, options?: RequestOptions): Promise<DispatchEnvTaskResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/tasks`, json: convertKeys(CODEC, "EnvTaskDispatch", body, "encode") }, options);
-    return convertKeys(CODEC, { o: [["envName", "env_name", 0], ["activeWorkers", "active_workers", 0]] }, data, "decode") as DispatchEnvTaskResponse;
   }
 
   /**
@@ -472,15 +401,6 @@ export class ApiClient {
    */
   downloadArtifact(id: string, options?: StreamOptions): Promise<RawResponse> {
     return this.transport.raw({ method: "GET", path: `/v1/artifacts/${encodePathParam(id, "id")}/download`, accept: "application/octet-stream" }, options);
-  }
-
-  /**
-   * Stream the pinned dataset version of a claimed train job as JSONL
-   *
-   * `GET /v1/trainer-jobs/{id}/dataset`
-   */
-  downloadTrainerDataset(id: string, params: DownloadTrainerDatasetParams, options?: StreamOptions): Promise<RawResponse> {
-    return this.transport.raw({ method: "GET", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/dataset`, query: [["attempt", params.attempt]], accept: "application/x-ndjson" }, options);
   }
 
   /**
@@ -514,16 +434,6 @@ export class ApiClient {
   }
 
   /**
-   * Inspect an environment task and its result
-   *
-   * `GET /v1/env-workers/tasks/{id}`
-   */
-  async getEnvTask(id: string, options?: RequestOptions): Promise<GetEnvTaskResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/env-workers/tasks/${encodePathParam(id, "id")}` }, options);
-    return data as GetEnvTaskResponse;
-  }
-
-  /**
    * Get an evaluation run by ID
    *
    * `GET /v1/evals/{id}`
@@ -551,26 +461,6 @@ export class ApiClient {
   async getRun(id: string, options?: RequestOptions): Promise<Run> {
     const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}` }, options);
     return convertKeys(CODEC, "Run", data, "decode") as Run;
-  }
-
-  /**
-   * Queue depth for autoscaling: queued plus running jobs (trainer:worker)
-   *
-   * `GET /v1/trainer-jobs/queue`
-   */
-  async getTrainerQueueStats(options?: RequestOptions): Promise<TrainerQueueStats> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/trainer-jobs/queue` }, options);
-    return convertKeys(CODEC, "TrainerQueueStats", data, "decode") as TrainerQueueStats;
-  }
-
-  /**
-   * Renew the job lease; reports whether the worker should stop
-   *
-   * `POST /v1/trainer-jobs/{id}/heartbeat`
-   */
-  async heartbeatTrainerJob(id: string, body: TrainerHeartbeatRequest, options?: RequestOptions): Promise<TrainerHeartbeatResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/heartbeat`, json: convertKeys(CODEC, "TrainerHeartbeatRequest", body, "encode") }, options);
-    return convertKeys(CODEC, "TrainerHeartbeatResponse", data, "decode") as TrainerHeartbeatResponse;
   }
 
   /**
@@ -726,7 +616,7 @@ export class ApiClient {
    * `POST /v1/evals/plan`
    */
   async planEval(body: PlanEvalRequest, options?: RequestOptions): Promise<PlanEvalResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/evals/plan`, json: convertKeys(CODEC, "PlanEvalRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals/plan`, json: convertKeys(CODEC, "PlanEvalRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "PlanEvalResponse", data, "decode") as PlanEvalResponse;
   }
 
@@ -736,7 +626,7 @@ export class ApiClient {
    * `POST /v1/runs/plan`
    */
   async planRun(body: PlanRunRequest, options?: RequestOptions): Promise<PlanRunResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/runs/plan`, json: convertKeys(CODEC, "PlanRunRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs/plan`, json: convertKeys(CODEC, "PlanRunRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "PlanRunResponse", data, "decode") as PlanRunResponse;
   }
 
@@ -746,18 +636,8 @@ export class ApiClient {
    * `POST /v1/evals/{id}/scores`
    */
   async postEvalScores(id: string, body: PostEvalScoresRequest, options?: RequestOptions): Promise<PostEvalScoresResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/evals/${encodePathParam(id, "id")}/scores`, json: convertKeys(CODEC, "PostEvalScoresRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals/${encodePathParam(id, "id")}/scores`, json: convertKeys(CODEC, "PostEvalScoresRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "PostEvalScoresResponse", data, "decode") as PostEvalScoresResponse;
-  }
-
-  /**
-   * Append a batch of parsed records to an import job
-   *
-   * `POST /v1/trainer-jobs/{id}/records`
-   */
-  async postImportRecords(id: string, body: PostImportRecordsRequest, options?: RequestOptions): Promise<PostImportRecordsResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/records`, json: convertKeys(CODEC, "PostImportRecordsRequest", body, "encode") }, options);
-    return data as PostImportRecordsResponse;
   }
 
   /**
@@ -766,7 +646,7 @@ export class ApiClient {
    * `POST /v1/checkpoints/{id}/promote`
    */
   async promoteCheckpoint(id: string, body?: PromoteCheckpointRequest, options?: RequestOptions): Promise<Artifact> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/checkpoints/${encodePathParam(id, "id")}/promote`, json: body }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/checkpoints/${encodePathParam(id, "id")}/promote`, json: body, idempotent: true }, options);
     return convertKeys(CODEC, "Artifact", data, "decode") as Artifact;
   }
 
@@ -776,7 +656,7 @@ export class ApiClient {
    * `POST /v1/datasets/{name}/records`
    */
   async pushDatasetRecords(name: string, body: PushDatasetRequest, options?: RequestOptions): Promise<Dataset> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/records`, json: convertKeys(CODEC, "PushDatasetRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/records`, json: convertKeys(CODEC, "PushDatasetRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "Dataset", data, "decode") as Dataset;
   }
 
@@ -786,28 +666,8 @@ export class ApiClient {
    * `POST /v1/feedback`
    */
   async recordFeedback(body: RecordFeedbackRequest, options?: RequestOptions): Promise<RecordFeedbackResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/feedback`, json: convertKeys(CODEC, "RecordFeedbackRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/feedback`, json: convertKeys(CODEC, "RecordFeedbackRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "RecordFeedbackResponse", data, "decode") as RecordFeedbackResponse;
-  }
-
-  /**
-   * Register or heartbeat an outbound `grad env serve` worker
-   *
-   * `POST /v1/env-workers/register`
-   */
-  async registerEnvWorker(body: EnvWorkerRegister, options?: RequestOptions): Promise<RegisterEnvWorkerResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/register`, json: convertKeys(CODEC, "EnvWorkerRegister", body, "encode") }, options);
-    return convertKeys(CODEC, { o: [["workerId", "worker_id", 0], ["lastHeartbeatAt", "last_heartbeat_at", 0]] }, data, "decode") as RegisterEnvWorkerResponse;
-  }
-
-  /**
-   * Register an uploaded checkpoint bundle
-   *
-   * `POST /v1/trainer-jobs/{id}/checkpoints`
-   */
-  async registerTrainerCheckpoint(id: string, body: RegisterTrainerCheckpointRequest, options?: RequestOptions): Promise<Checkpoint> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/checkpoints`, json: convertKeys(CODEC, "RegisterTrainerCheckpointRequest", body, "encode") }, options);
-    return convertKeys(CODEC, "Checkpoint", data, "decode") as Checkpoint;
   }
 
   /**
@@ -816,18 +676,8 @@ export class ApiClient {
    * `POST /v1/datasets/{name}/render`
    */
   async renderDataset(name: string, body: RenderDatasetRequest, options?: RequestOptions): Promise<RenderDatasetResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/render`, json: convertKeys(CODEC, "RenderDatasetRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/render`, json: convertKeys(CODEC, "RenderDatasetRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "RenderDatasetResponse", data, "decode") as RenderDatasetResponse;
-  }
-
-  /**
-   * Report one training step's metrics
-   *
-   * `POST /v1/trainer-jobs/{id}/progress`
-   */
-  async reportTrainerProgress(id: string, body: ReportTrainerProgressRequest, options?: RequestOptions): Promise<ReportTrainerProgressResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/progress`, json: convertKeys(CODEC, "ReportTrainerProgressRequest", body, "encode") }, options);
-    return convertKeys(CODEC, "ReportTrainerProgressResponse", data, "decode") as ReportTrainerProgressResponse;
   }
 
   /**
@@ -836,7 +686,7 @@ export class ApiClient {
    * `POST /v1/runs/{id}/resume`
    */
   async resumeRun(id: string, body?: ResumeRunRequest, options?: RequestOptions): Promise<Run> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/runs/${encodePathParam(id, "id")}/resume`, json: convertKeys(CODEC, "ResumeRunRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs/${encodePathParam(id, "id")}/resume`, json: convertKeys(CODEC, "ResumeRunRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "Run", data, "decode") as Run;
   }
 
@@ -856,7 +706,7 @@ export class ApiClient {
    * `POST /v1/deployments/{name}/rollback`
    */
   async rollbackDeployment(name: string, options?: RequestOptions): Promise<Deployment> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/deployments/${encodePathParam(name, "name")}/rollback` }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/deployments/${encodePathParam(name, "name")}/rollback`, idempotent: true }, options);
     return convertKeys(CODEC, "Deployment", data, "decode") as Deployment;
   }
 
@@ -866,7 +716,7 @@ export class ApiClient {
    * `POST /v1/route`
    */
   async routeRequest(body: RouteRequest, options?: RequestOptions): Promise<RouteResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/route`, json: convertKeys(CODEC, "RouteRequest", body, "encode") }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/route`, json: convertKeys(CODEC, "RouteRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "RouteResponse", data, "decode") as RouteResponse;
   }
 }

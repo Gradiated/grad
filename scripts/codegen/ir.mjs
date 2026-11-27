@@ -11,6 +11,8 @@
 
 export const HTTP_METHODS = ["get", "put", "post", "delete", "patch", "head", "options"];
 
+const IDEMPOTENCY_HEADER = "idempotency-key";
+
 const OPERATION_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const TEMPLATE_PARAM_RE = /\{([^}]+)\}/g;
 
@@ -354,19 +356,24 @@ export const buildIR = (spec) => {
         if (!(scalarOk(base) || (base.k === "array" && scalarOk(base.items)))) {
           throw new Error(`${where}: parameter '${p.name}' must be a scalar or an array of scalars.`);
         }
+        const maximum = base.k === "prim" && base.t === "integer" && typeof p.schema?.maximum === "number" ? p.schema.maximum : undefined;
         return {
           name: p.name,
           in: p.in,
           required: p.in === "path" ? true : Boolean(p.required),
           type,
           ...(typeof p.description === "string" ? { description: p.description } : {}),
+          ...(maximum !== undefined ? { maximum } : {}),
         };
       };
 
       // Path params are listed in *template* order so positional formatting can never swap them.
       const pathParams = templateNames.map((name) => toParam(declaredPath.get(name)));
       const queryParams = params.filter((p) => p.in === "query").map(toParam);
-      const headerParams = params.filter((p) => p.in === "header").map(toParam);
+      // `Idempotency-Key` is transport policy, not a method argument: the SDK
+      // transports generate one per logical call and reuse it across retries.
+      const idempotent = params.some((p) => p.in === "header" && p.name.toLowerCase() === IDEMPOTENCY_HEADER);
+      const headerParams = params.filter((p) => p.in === "header" && p.name.toLowerCase() !== IDEMPOTENCY_HEADER).map(toParam);
       const segments = routePath.split(TEMPLATE_PARAM_RE);
 
       operations.push({
@@ -379,6 +386,8 @@ export const buildIR = (spec) => {
         description: typeof op.description === "string" ? op.description : "",
         deprecated: op.deprecated === true,
         tags: Array.isArray(op.tags) ? [...op.tags] : [],
+        internal: op["x-internal"] === true,
+        idempotent,
         pathParams,
         queryParams,
         headerParams,
@@ -404,6 +413,9 @@ export const extractOperations = (spec) =>
     path: op.path,
     pathParams: op.pathParams.map((p) => p.name),
     queryParams: op.queryParams.map((q) => ({ name: q.name, required: q.required })),
+    tags: op.tags,
+    internal: op.internal,
+    idempotent: op.idempotent,
     hasBody: op.body !== null,
     bodyRequired: Boolean(op.body?.required),
     isBinary: op.response.kind === "binary",
@@ -437,3 +449,39 @@ export const sanitizeSingleLine = (text) =>
   String(text ?? "")
     .replace(/\s*\r?\n\s*/g, " ")
     .trim();
+
+/** Schema names reachable from `operations` (following refs transitively). */
+const reachableSchemas = (schemas, operations) => {
+  const seen = new Set();
+  const pending = [];
+  const visit = (node) => {
+    if (node.k === "ref" && !seen.has(node.name)) {
+      seen.add(node.name);
+      pending.push(schemas[node.name]);
+    }
+  };
+  for (const op of operations) {
+    for (const p of [...op.pathParams, ...op.queryParams, ...op.headerParams]) walkType(p.type, visit);
+    if (op.body?.type) walkType(op.body.type, visit);
+    if (op.response.type) walkType(op.response.type, visit);
+  }
+  while (pending.length > 0) walkType(pending.pop(), visit);
+  return seen;
+};
+
+/**
+ * The IR without `x-internal` operations (worker protocols) and without the
+ * schemas only they use: what the public SDK clients are generated from.
+ */
+export const publicIR = (ir) => {
+  const operations = ir.operations.filter((op) => !op.internal);
+  const keep = reachableSchemas(ir.schemas, operations);
+  const schemas = Object.fromEntries(Object.entries(ir.schemas).filter(([name]) => keep.has(name)));
+  return { ...ir, operations, schemas };
+};
+
+/** Integer query parameters with a documented `maximum` (page sizes), per operation. */
+export const parameterMaxima = (ir) =>
+  ir.operations.flatMap((op) =>
+    op.queryParams.filter((p) => p.maximum !== undefined).map((p) => ({ op: op.id, param: p.name, maximum: p.maximum })),
+  );

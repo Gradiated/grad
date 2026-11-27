@@ -312,6 +312,16 @@ fn jitter() -> f64 {
     (x >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// A random UUIDv4 for the Idempotency-Key header.
+pub fn new_idempotency_key() -> String {
+    let mut b = [0u8; 16];
+    getrandom::getrandom(&mut b).expect("reading random bytes for an Idempotency-Key");
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+}
+
 /// Exponential backoff (0.5 s, 1 s, 2 s, ... capped at 8 s) scaled into [50%, 100%].
 pub fn backoff(attempt: u32) -> Duration {
     let base = (500.0 * 2f64.powi(attempt as i32)).min(8000.0);
@@ -548,7 +558,9 @@ impl GeneratedClient {
             ));
         }
         let method_name = method.as_str().to_string();
-        let idempotent = matches!(method_name.as_str(), "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS");
+        // A request with an Idempotency-Key (one per call, reused by every retry) retries like a GET.
+        let keyed = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("idempotency-key"));
+        let idempotent = keyed || matches!(method_name.as_str(), "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS");
         let mut url = reqwest::Url::parse(&format!("{}{}", self.base_url, path)).map_err(|e| {
             ApiError::local(ErrorKind::InvalidRequest, "invalid_request", format!("{method_name} {path}: {e}"))
         })?;
@@ -648,7 +660,9 @@ impl GeneratedClient {
                 let resp_headers = resp.headers().clone();
                 let text = tokio::time::timeout(self.timeout, resp.text()).await.ok().and_then(|r| r.ok()).unwrap_or_default();
                 let err = ApiError::from_response(status, &resp_headers, &text, &method_name, &url_text, self.api_key.is_some());
-                let retryable = matches!(status, 408 | 429 | 500 | 502 | 503 | 504) && (idempotent || status == 429);
+                // 409 + Retry-After on a keyed request: the first attempt is still running server-side.
+                let in_progress = status == 409 && keyed && err.retry_after.is_some();
+                let retryable = (matches!(status, 408 | 429 | 500 | 502 | 503 | 504) && (idempotent || status == 429)) || in_progress;
                 if retryable && attempt < self.max_retries {
                     let delay = err.retry_after.unwrap_or_else(|| backoff(attempt));
                     if delay <= MAX_RETRY_AFTER {
@@ -957,7 +971,7 @@ pub mod models {
         pub size_bytes: i64,
         pub manifest: BTreeMap<String, Value>,
         #[serde(default)]
-        pub eval_report: Option<BTreeMap<String, Value>>,
+        pub eval_report: Option<EvalReport>,
         pub created_at: String,
     }
 
@@ -1220,210 +1234,6 @@ pub mod models {
         #[serde(default)]
         pub expires_at: Option<String>,
         pub created_at: String,
-    }
-
-    /// Generated from the OpenAPI schema `ClaimEnvTaskRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct ClaimEnvTaskRequest {
-        pub worker_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub wait_ms: Option<i64>,
-    }
-
-    /// Generated from the OpenAPI schema `ClaimEnvTaskResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct ClaimEnvTaskResponse {
-        #[serde(default)]
-        pub task: Option<BTreeMap<String, Value>>,
-    }
-
-    /// Generated from the OpenAPI schema `ClaimJobRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct ClaimJobRequest {
-        pub worker_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub lease_seconds: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub kinds: Option<Vec<JobKind>>,
-        /// Recipe kinds this worker can run; train jobs for other recipes are left queued.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub recipes: Option<Vec<RecipeKind>>,
-    }
-
-    /// Generated from the OpenAPI schema `ClaimJobResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct ClaimJobResponse {
-        pub protocol: ClaimJobResponseProtocol,
-        #[serde(default)]
-        pub job: Option<TrainerJob>,
-    }
-
-    /// Allowed values of `ClaimJobResponseProtocol` (unknown values from newer servers are kept in `Other`).
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum ClaimJobResponseProtocol {
-        /// `"grad.trainer-protocol/1"`
-        GradTrainerProtocol1,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for ClaimJobResponseProtocol {
-        fn default() -> Self {
-            Self::GradTrainerProtocol1
-        }
-    }
-
-    impl ClaimJobResponseProtocol {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::GradTrainerProtocol1 => "grad.trainer-protocol/1",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for ClaimJobResponseProtocol {
-        fn from(s: &str) -> Self {
-            match s {
-                "grad.trainer-protocol/1" => Self::GradTrainerProtocol1,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for ClaimJobResponseProtocol {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for ClaimJobResponseProtocol {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for ClaimJobResponseProtocol {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
-    /// Generated from the OpenAPI schema `CompleteTrainerJobRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct CompleteTrainerJobRequest {
-        pub worker_id: String,
-        pub attempt: i64,
-        /// `abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure.
-        pub status: CompleteTrainerJobRequestStatus,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub upload_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub format: Option<ArtifactFormat>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub manifest: Option<BTreeMap<String, Value>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub eval_report: Option<BTreeMap<String, Value>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub tokens_processed: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub error: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub import_summary: Option<CompleteTrainerJobRequestImportSummary>,
-    }
-
-    /// Generated from the OpenAPI schema `CompleteTrainerJobRequestImportSummary`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct CompleteTrainerJobRequestImportSummary {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub dropped_count: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub detected_scores: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub drop_reasons: Option<Vec<String>>,
-    }
-
-    /// `abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure.
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum CompleteTrainerJobRequestStatus {
-        /// `"completed"`
-        Completed,
-        /// `"stopped_budget"`
-        StoppedBudget,
-        /// `"failed"`
-        Failed,
-        /// `"cancelled"`
-        Cancelled,
-        /// `"abandoned"`
-        Abandoned,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for CompleteTrainerJobRequestStatus {
-        fn default() -> Self {
-            Self::Completed
-        }
-    }
-
-    impl CompleteTrainerJobRequestStatus {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::Completed => "completed",
-                Self::StoppedBudget => "stopped_budget",
-                Self::Failed => "failed",
-                Self::Cancelled => "cancelled",
-                Self::Abandoned => "abandoned",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for CompleteTrainerJobRequestStatus {
-        fn from(s: &str) -> Self {
-            match s {
-                "completed" => Self::Completed,
-                "stopped_budget" => Self::StoppedBudget,
-                "failed" => Self::Failed,
-                "cancelled" => Self::Cancelled,
-                "abandoned" => Self::Abandoned,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for CompleteTrainerJobRequestStatus {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for CompleteTrainerJobRequestStatus {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for CompleteTrainerJobRequestStatus {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
-    /// Generated from the OpenAPI schema `CompleteTrainerJobResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct CompleteTrainerJobResponse {
-        pub job_id: String,
-        pub kind: JobKind,
-        pub status: String,
-        #[serde(default)]
-        pub run: Option<Run>,
-        #[serde(default)]
-        pub artifact: Option<Artifact>,
-        #[serde(default)]
-        pub import: Option<ImportJob>,
     }
 
     /// Generated from the OpenAPI schema `CreateApiKeyRequest`.
@@ -1806,8 +1616,115 @@ pub mod models {
         pub version: i64,
         pub total: i64,
         pub data: Vec<DatasetRecord>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
+    }
+
+    /// Generated from the OpenAPI schema `DecisionHeadReport`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct DecisionHeadReport {
+        pub r#type: DecisionHeadReportType,
+        pub examples: i64,
+        #[serde(default)]
+        pub accuracy: Option<f64>,
+        #[serde(default)]
+        pub ece: Option<f64>,
+        pub temperature: f64,
+        /// Written by: noul heads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub brier: Option<f64>,
+        /// Written by: score heads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub mae: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub macro_f1: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub per_option: Option<BTreeMap<String, DecisionHeadReportPerOptionValue>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub confusion_matrix: Option<DecisionHeadReportConfusionMatrix>,
+        /// Members not declared in the schema (round-tripped verbatim).
+        #[serde(flatten)]
+        pub additional_properties: BTreeMap<String, Value>,
+    }
+
+    /// Generated from the OpenAPI schema `DecisionHeadReportConfusionMatrix`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct DecisionHeadReportConfusionMatrix {
+        pub labels: Vec<String>,
+        pub matrix: Vec<Vec<i64>>,
+    }
+
+    /// Generated from the OpenAPI schema `DecisionHeadReportPerOptionValue`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct DecisionHeadReportPerOptionValue {
+        #[serde(default)]
+        pub precision: Option<f64>,
+        #[serde(default)]
+        pub recall: Option<f64>,
+        #[serde(default)]
+        pub f1: Option<f64>,
+        pub support: i64,
+    }
+
+    /// Allowed values of `DecisionHeadReportType` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum DecisionHeadReportType {
+        /// `"choice"`
+        Choice,
+        /// `"noul"`
+        Noul,
+        /// `"score"`
+        Score,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for DecisionHeadReportType {
+        fn default() -> Self {
+            Self::Choice
+        }
+    }
+
+    impl DecisionHeadReportType {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::Choice => "choice",
+                Self::Noul => "noul",
+                Self::Score => "score",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for DecisionHeadReportType {
+        fn from(s: &str) -> Self {
+            match s {
+                "choice" => Self::Choice,
+                "noul" => Self::Noul,
+                "score" => Self::Score,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for DecisionHeadReportType {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for DecisionHeadReportType {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for DecisionHeadReportType {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
     }
 
     /// Generated from the OpenAPI schema `DeployArtifactRequest`.
@@ -1905,21 +1822,6 @@ pub mod models {
         }
     }
 
-    /// Generated from the OpenAPI schema `DispatchEnvTaskResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct DispatchEnvTaskResponse {
-        pub id: String,
-        pub env_name: String,
-        pub status: String,
-        pub active_workers: i64,
-    }
-
-    /// Query and header parameters of `download_trainer_dataset`.
-    #[derive(Debug, Clone, PartialEq, Default)]
-    pub struct DownloadTrainerDatasetParams {
-        pub attempt: i64,
-    }
-
     /// Generated from the OpenAPI schema `EmbedRequest`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct EmbedRequest {
@@ -1948,41 +1850,6 @@ pub mod models {
     pub struct EmbedResponseUsage {
         pub prompt_tokens: i64,
         pub total_tokens: i64,
-    }
-
-    /// Generated from the OpenAPI schema `EnvTaskDispatch`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct EnvTaskDispatch {
-        pub env_name: String,
-        pub task: BTreeMap<String, Value>,
-        pub model_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub system_prompt: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub timeout_s: Option<i64>,
-    }
-
-    /// Generated from the OpenAPI schema `EnvTaskResult`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct EnvTaskResult {
-        pub worker_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub score: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub scores: Option<BTreeMap<String, f64>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub trajectory: Option<BTreeMap<String, Value>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub error: Option<String>,
-    }
-
-    /// Generated from the OpenAPI schema `EnvWorkerRegister`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct EnvWorkerRegister {
-        pub name: String,
-        pub worker_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub concurrency: Option<i64>,
     }
 
     /// Generated from the OpenAPI schema `EvalModelSummary`.
@@ -2035,6 +1902,131 @@ pub mod models {
     pub struct EvalOutputUsage {
         pub prompt_tokens: i64,
         pub completion_tokens: i64,
+    }
+
+    /// Generated from the OpenAPI schema `EvalReport`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct EvalReport {
+        /// Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge), recall_at_10 (embedding).
+        pub metric_name: String,
+        pub selected_step: i64,
+        #[serde(default)]
+        pub best_step: Option<i64>,
+        pub final_step: i64,
+        pub train_records: i64,
+        pub eval_records: i64,
+        pub warnings: Vec<String>,
+        /// Written by: sft, dpo, router, decision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub eval_loss: Option<f64>,
+        /// Written by: sft.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub eval_token_accuracy: Option<f64>,
+        /// Written by: sft.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub trained_token_fraction: Option<f64>,
+        /// Written by: sft.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub train_examples: Option<i64>,
+        /// Written by: sft, router, decision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub eval_examples: Option<i64>,
+        /// Written by: router, decision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub selection_examples: Option<i64>,
+        /// Written by: sft, dpo.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub truncated: Option<i64>,
+        /// Written by: dpo.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub preference_accuracy: Option<f64>,
+        /// Written by: dpo.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub reward_margin: Option<f64>,
+        /// Written by: dpo.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub beta: Option<f64>,
+        /// Written by: dpo, embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub train_pairs: Option<i64>,
+        /// Written by: dpo, embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub eval_pairs: Option<i64>,
+        /// Written by: dpo, embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dropped_records: Option<i64>,
+        /// Written by: cartridge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub eval_kl: Option<f64>,
+        /// Written by: cartridge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub no_context_kl: Option<f64>,
+        /// Written by: cartridge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub kl_reduction: Option<f64>,
+        /// Written by: cartridge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub num_tokens: Option<i64>,
+        /// Written by: cartridge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub teacher: Option<String>,
+        /// Written by: router.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub candidates: Option<Vec<String>>,
+        /// Written by: router.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub fallback_model: Option<String>,
+        /// Written by: router.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub fallback_quality: Option<f64>,
+        /// Written by: router.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub routes_any_traffic: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub pareto_summary: Option<RouterParetoSummary>,
+        /// Written by: decision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub ece: Option<f64>,
+        /// Written by: decision (one entry per question).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub heads: Option<BTreeMap<String, DecisionHeadReport>>,
+        /// Written by: embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub recall_at_1: Option<f64>,
+        /// Written by: embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub recall_at_5: Option<f64>,
+        /// Written by: embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub recall_at_10: Option<f64>,
+        /// Written by: embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub mrr: Option<f64>,
+        /// Written by: embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub corpus_size: Option<i64>,
+        /// Retrieval metrics of the untrained base encoder. Written by: embedding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub baseline: Option<EvalReportBaseline>,
+        /// Members not declared in the schema (round-tripped verbatim).
+        #[serde(flatten)]
+        pub additional_properties: BTreeMap<String, Value>,
+    }
+
+    /// Retrieval metrics of the untrained base encoder. Written by: embedding.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct EvalReportBaseline {
+        #[serde(default)]
+        pub recall_at_1: Option<f64>,
+        #[serde(default)]
+        pub recall_at_5: Option<f64>,
+        #[serde(default)]
+        pub recall_at_10: Option<f64>,
+        #[serde(default)]
+        pub mrr: Option<f64>,
+        /// Members not declared in the schema (round-tripped verbatim).
+        #[serde(flatten)]
+        pub additional_properties: BTreeMap<String, Value>,
     }
 
     /// Generated from the OpenAPI schema `EvalRubricItem`.
@@ -2789,65 +2781,10 @@ pub mod models {
         }
     }
 
-    /// Allowed values of `JobKind` (unknown values from newer servers are kept in `Other`).
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum JobKind {
-        /// `"train"`
-        Train,
-        /// `"import"`
-        Import,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for JobKind {
-        fn default() -> Self {
-            Self::Train
-        }
-    }
-
-    impl JobKind {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::Train => "train",
-                Self::Import => "import",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for JobKind {
-        fn from(s: &str) -> Self {
-            match s {
-                "train" => Self::Train,
-                "import" => Self::Import,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for JobKind {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for JobKind {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for JobKind {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
     /// Query and header parameters of `list_api_keys`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListApiKeysParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -2856,6 +2793,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListApiKeysResponse {
         pub data: Vec<ApiKey>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2863,6 +2801,7 @@ pub mod models {
     /// Query and header parameters of `list_artifacts`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListArtifactsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
         pub name: Option<String>,
@@ -2872,6 +2811,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListArtifactsResponse {
         pub data: Vec<Artifact>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2880,6 +2820,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListDatasetRecordsParams {
         pub version: Option<i64>,
+        /// Page size (default 100). Values above 1000 are clamped to 1000.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -2887,6 +2828,7 @@ pub mod models {
     /// Query and header parameters of `list_datasets`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListDatasetsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -2895,6 +2837,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListDatasetsResponse {
         pub data: Vec<Dataset>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2902,6 +2845,7 @@ pub mod models {
     /// Query and header parameters of `list_deployments`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListDeploymentsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -2910,6 +2854,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListDeploymentsResponse {
         pub data: Vec<Deployment>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2917,6 +2862,7 @@ pub mod models {
     /// Query and header parameters of `list_eval_failures`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListEvalFailuresParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
         pub model: Option<String>,
@@ -2928,6 +2874,7 @@ pub mod models {
     pub struct ListEvalFailuresResponse {
         pub eval_id: String,
         pub data: Vec<EvalTaskOutcome>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2935,6 +2882,7 @@ pub mod models {
     /// Query and header parameters of `list_eval_outputs`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListEvalOutputsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
         pub model: Option<String>,
@@ -2945,6 +2893,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListEvalOutputsResponse {
         pub data: Vec<EvalOutput>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2952,6 +2901,7 @@ pub mod models {
     /// Query and header parameters of `list_eval_results`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListEvalResultsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
         pub model: Option<String>,
@@ -2961,6 +2911,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListEvalResultsResponse {
         pub data: Vec<EvalTaskOutcome>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2968,6 +2919,7 @@ pub mod models {
     /// Query and header parameters of `list_evals`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListEvalsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -2976,6 +2928,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListEvalsResponse {
         pub data: Vec<EvalRun>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -2983,6 +2936,7 @@ pub mod models {
     /// Query and header parameters of `list_imports`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListImportsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -2991,6 +2945,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListImportsResponse {
         pub data: Vec<ImportJob>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -3004,6 +2959,7 @@ pub mod models {
     /// Query and header parameters of `list_run_checkpoints`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListRunCheckpointsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -3012,6 +2968,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListRunCheckpointsResponse {
         pub data: Vec<Checkpoint>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -3021,12 +2978,14 @@ pub mod models {
     pub struct ListRunMetricsParams {
         pub cursor: Option<String>,
         pub after_step: Option<i64>,
+        /// Page size (default 1000). Values above 5000 are clamped to 5000.
         pub limit: Option<i64>,
     }
 
     /// Query and header parameters of `list_runs`.
     #[derive(Debug, Clone, PartialEq, Default)]
     pub struct ListRunsParams {
+        /// Page size (default 50). Values above 200 are clamped to 200.
         pub limit: Option<i64>,
         pub cursor: Option<String>,
     }
@@ -3035,6 +2994,7 @@ pub mod models {
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ListRunsResponse {
         pub data: Vec<Run>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
     }
@@ -3048,8 +3008,9 @@ pub mod models {
         pub loss: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub eval_loss: Option<f64>,
+        /// Held-out metrics of an eval step by name (including the recipe's selection metric, eval_report.metric_name); absent on steps without an eval.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub eval_metric: Option<f64>,
+        pub eval_metrics: Option<BTreeMap<String, f64>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub grad_norm: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3064,38 +3025,17 @@ pub mod models {
         pub additional_properties: BTreeMap<String, Value>,
     }
 
-    /// Generated from the OpenAPI schema `MetricPointInput`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct MetricPointInput {
-        pub step: i64,
-        pub loss: f64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub eval_loss: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub eval_metric: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub grad_norm: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub lr: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub tokens_per_sec: Option<f64>,
-        pub tokens: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub cost_usd: Option<f64>,
-        pub timestamp: String,
-        /// Members not declared in the schema (round-tripped verbatim).
-        #[serde(flatten)]
-        pub additional_properties: BTreeMap<String, Value>,
-    }
-
     /// Generated from the OpenAPI schema `MetricsPage`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct MetricsPage {
         pub run_id: String,
         pub status: RunStatus,
         pub data: Vec<MetricPoint>,
+        /// Pass back as `cursor` for the next page; null on the last page (every list endpoint).
         #[serde(default)]
         pub next_cursor: Option<String>,
+        /// Cursor after the newest point returned so far; pass it back as `cursor` to poll for points written later (tailing a running run).
+        pub tail_cursor: String,
     }
 
     /// Generated from the OpenAPI schema `PlanEvalRequest`.
@@ -3247,40 +3187,6 @@ pub mod models {
         pub accepted: i64,
         pub status: EvalStatus,
         pub pending_local_scores: i64,
-    }
-
-    /// Generated from the OpenAPI schema `PostImportRecordsRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct PostImportRecordsRequest {
-        pub worker_id: String,
-        pub attempt: i64,
-        pub records: Vec<Value>,
-    }
-
-    /// Generated from the OpenAPI schema `PostImportRecordsResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct PostImportRecordsResponse {
-        pub accepted: i64,
-        pub rejected: i64,
-        pub errors: Vec<PostImportRecordsResponseErrorsItem>,
-    }
-
-    /// Generated from the OpenAPI schema `PostImportRecordsResponseErrorsItem`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct PostImportRecordsResponseErrorsItem {
-        pub index: i64,
-        pub error: String,
-    }
-
-    /// Generated from the OpenAPI schema `Problem`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct Problem {
-        pub r#type: String,
-        pub title: String,
-        pub status: i64,
-        pub detail: String,
-        pub code: String,
-        pub request_id: String,
     }
 
     /// Generated from the OpenAPI schema `PromoteCheckpointRequest`.
@@ -3738,30 +3644,6 @@ pub mod models {
         pub records: Vec<FeedbackRecord>,
     }
 
-    /// Generated from the OpenAPI schema `RegisterEnvWorkerResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct RegisterEnvWorkerResponse {
-        pub name: String,
-        pub worker_id: String,
-        pub concurrency: i64,
-        pub last_heartbeat_at: String,
-    }
-
-    /// Generated from the OpenAPI schema `RegisterTrainerCheckpointRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct RegisterTrainerCheckpointRequest {
-        pub worker_id: String,
-        pub attempt: i64,
-        pub step: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub eval_score: Option<f64>,
-        pub upload_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub format: Option<ArtifactFormat>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub metadata: Option<BTreeMap<String, Value>>,
-    }
-
     /// Generated from the OpenAPI schema `RenderDatasetRequest`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct RenderDatasetRequest {
@@ -3968,80 +3850,6 @@ pub mod models {
     }
 
     impl<'de> Deserialize<'de> for RenderDatasetResponseTokenCounts {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
-    /// Generated from the OpenAPI schema `ReportTrainerProgressRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct ReportTrainerProgressRequest {
-        pub worker_id: String,
-        pub attempt: i64,
-        pub metric: MetricPointInput,
-    }
-
-    /// Generated from the OpenAPI schema `ReportTrainerProgressResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct ReportTrainerProgressResponse {
-        pub status: RunStatus,
-        pub should_stop: bool,
-        #[serde(default)]
-        pub stop_reason: Option<ReportTrainerProgressResponseStopReason>,
-        pub cost_usd: f64,
-    }
-
-    /// Allowed values of `ReportTrainerProgressResponseStopReason` (unknown values from newer servers are kept in `Other`).
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum ReportTrainerProgressResponseStopReason {
-        /// `"cancelled"`
-        Cancelled,
-        /// `"budget"`
-        Budget,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for ReportTrainerProgressResponseStopReason {
-        fn default() -> Self {
-            Self::Cancelled
-        }
-    }
-
-    impl ReportTrainerProgressResponseStopReason {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::Cancelled => "cancelled",
-                Self::Budget => "budget",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for ReportTrainerProgressResponseStopReason {
-        fn from(s: &str) -> Self {
-            match s {
-                "cancelled" => Self::Cancelled,
-                "budget" => Self::Budget,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for ReportTrainerProgressResponseStopReason {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for ReportTrainerProgressResponseStopReason {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for ReportTrainerProgressResponseStopReason {
         fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             let s = String::deserialize(deserializer)?;
             Ok(Self::from(s.as_str()))
@@ -4542,6 +4350,31 @@ pub mod models {
         pub scores: BTreeMap<String, f64>,
     }
 
+    /// Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no report prompt was scored for every candidate.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct RouterParetoSummary {
+        pub target_max_drop: f64,
+        #[serde(default)]
+        pub routed_quality: Option<f64>,
+        #[serde(default)]
+        pub quality_drop: Option<f64>,
+        /// 95% bootstrap interval [low, high].
+        #[serde(default)]
+        pub quality_drop_ci95: Option<Vec<f64>>,
+        #[serde(default)]
+        pub offload_rate: Option<f64>,
+        #[serde(default)]
+        pub cost_savings_pct: Option<f64>,
+        #[serde(default)]
+        pub ece: Option<f64>,
+        #[serde(default)]
+        pub threshold: Option<f64>,
+        pub temperature: f64,
+        /// Members not declared in the schema (round-tripped verbatim).
+        #[serde(flatten)]
+        pub additional_properties: BTreeMap<String, Value>,
+    }
+
     /// Generated from the OpenAPI schema `Run`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct Run {
@@ -4566,7 +4399,7 @@ pub mod models {
         #[serde(default)]
         pub latest_metric: Option<MetricPoint>,
         #[serde(default)]
-        pub eval_report: Option<BTreeMap<String, Value>>,
+        pub eval_report: Option<EvalReport>,
         #[serde(default)]
         pub artifact_id: Option<String>,
         #[serde(default)]
@@ -4856,321 +4689,6 @@ pub mod models {
         }
     }
 
-    /// Generated from the OpenAPI schema `TrainerHeartbeatRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerHeartbeatRequest {
-        pub worker_id: String,
-        pub attempt: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub lease_seconds: Option<i64>,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerHeartbeatResponse`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerHeartbeatResponse {
-        pub status: String,
-        pub should_stop: bool,
-        #[serde(default)]
-        pub stop_reason: Option<TrainerHeartbeatResponseStopReason>,
-        pub lease_expires_at: String,
-    }
-
-    /// Allowed values of `TrainerHeartbeatResponseStopReason` (unknown values from newer servers are kept in `Other`).
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum TrainerHeartbeatResponseStopReason {
-        /// `"cancelled"`
-        Cancelled,
-        /// `"budget"`
-        Budget,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for TrainerHeartbeatResponseStopReason {
-        fn default() -> Self {
-            Self::Cancelled
-        }
-    }
-
-    impl TrainerHeartbeatResponseStopReason {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::Cancelled => "cancelled",
-                Self::Budget => "budget",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for TrainerHeartbeatResponseStopReason {
-        fn from(s: &str) -> Self {
-            match s {
-                "cancelled" => Self::Cancelled,
-                "budget" => Self::Budget,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for TrainerHeartbeatResponseStopReason {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for TrainerHeartbeatResponseStopReason {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for TrainerHeartbeatResponseStopReason {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
-    /// Generated from the OpenAPI schema `TrainerJob`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerJob {
-        pub id: String,
-        pub kind: JobKind,
-        pub attempt: i64,
-        pub lease_seconds: i64,
-        pub lease_expires_at: String,
-        #[serde(default)]
-        pub run: Option<TrainerJobRun>,
-        #[serde(default)]
-        pub import: Option<TrainerJobImport>,
-        #[serde(default)]
-        pub price_per_million_tokens: Option<f64>,
-        /// Remaining budget for this attempt (the run cap minus cost billed by earlier attempts).
-        #[serde(default)]
-        pub max_cost_usd: Option<f64>,
-        #[serde(default)]
-        pub dataset: Option<TrainerJobDataset>,
-        #[serde(default)]
-        pub resume: Option<TrainerJobResume>,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerJobDataset`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerJobDataset {
-        pub version: i64,
-        pub record_count: i64,
-        pub download_url: String,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerJobImport`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerJobImport {
-        pub id: String,
-        pub workspace_id: String,
-        pub dataset: String,
-        pub source: BTreeMap<String, Value>,
-        pub connector: TrainerJobImportConnector,
-    }
-
-    /// Allowed values of `TrainerJobImportConnector` (unknown values from newer servers are kept in `Other`).
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum TrainerJobImportConnector {
-        /// `"auto"`
-        Auto,
-        /// `"grad_trajectories"`
-        GradTrajectories,
-        /// `"openai_chat"`
-        OpenaiChat,
-        /// `"gradiated"`
-        Gradiated,
-        /// `"otel"`
-        Otel,
-        /// `"langfuse"`
-        Langfuse,
-        /// `"posthog"`
-        Posthog,
-        /// `"braintrust"`
-        Braintrust,
-        /// `"langsmith"`
-        Langsmith,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for TrainerJobImportConnector {
-        fn default() -> Self {
-            Self::Auto
-        }
-    }
-
-    impl TrainerJobImportConnector {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::Auto => "auto",
-                Self::GradTrajectories => "grad_trajectories",
-                Self::OpenaiChat => "openai_chat",
-                Self::Gradiated => "gradiated",
-                Self::Otel => "otel",
-                Self::Langfuse => "langfuse",
-                Self::Posthog => "posthog",
-                Self::Braintrust => "braintrust",
-                Self::Langsmith => "langsmith",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for TrainerJobImportConnector {
-        fn from(s: &str) -> Self {
-            match s {
-                "auto" => Self::Auto,
-                "grad_trajectories" => Self::GradTrajectories,
-                "openai_chat" => Self::OpenaiChat,
-                "gradiated" => Self::Gradiated,
-                "otel" => Self::Otel,
-                "langfuse" => Self::Langfuse,
-                "posthog" => Self::Posthog,
-                "braintrust" => Self::Braintrust,
-                "langsmith" => Self::Langsmith,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for TrainerJobImportConnector {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for TrainerJobImportConnector {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for TrainerJobImportConnector {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
-    /// Generated from the OpenAPI schema `TrainerJobResume`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerJobResume {
-        pub checkpoint_id: String,
-        pub step: i64,
-        pub download_url: String,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerJobRun`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerJobRun {
-        pub id: String,
-        pub workspace_id: String,
-        pub name: String,
-        pub recipe_kind: RecipeKind,
-        pub resolved_config: ResolvedRunConfig,
-        pub total_steps: i64,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerQueueStats`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerQueueStats {
-        pub queued: i64,
-        pub running: i64,
-        pub total: i64,
-        pub by_kind: TrainerQueueStatsByKind,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerQueueStatsByKind`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerQueueStatsByKind {
-        pub train: TrainerQueueStatsByKindTrain,
-        pub import: TrainerQueueStatsByKindImport,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerQueueStatsByKindImport`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerQueueStatsByKindImport {
-        pub queued: i64,
-        pub running: i64,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerQueueStatsByKindTrain`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerQueueStatsByKindTrain {
-        pub queued: i64,
-        pub running: i64,
-    }
-
-    /// Generated from the OpenAPI schema `TrainerUploadRequest`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct TrainerUploadRequest {
-        pub worker_id: String,
-        pub attempt: i64,
-        pub kind: TrainerUploadRequestKind,
-        pub sha256: String,
-        pub size_bytes: i64,
-    }
-
-    /// Allowed values of `TrainerUploadRequestKind` (unknown values from newer servers are kept in `Other`).
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum TrainerUploadRequestKind {
-        /// `"checkpoint"`
-        Checkpoint,
-        /// `"artifact"`
-        Artifact,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for TrainerUploadRequestKind {
-        fn default() -> Self {
-            Self::Checkpoint
-        }
-    }
-
-    impl TrainerUploadRequestKind {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::Checkpoint => "checkpoint",
-                Self::Artifact => "artifact",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for TrainerUploadRequestKind {
-        fn from(s: &str) -> Self {
-            match s {
-                "checkpoint" => Self::Checkpoint,
-                "artifact" => Self::Artifact,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for TrainerUploadRequestKind {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for TrainerUploadRequestKind {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for TrainerUploadRequestKind {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
     /// Generated from the OpenAPI schema `TrajectoryInput`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct TrajectoryInput {
@@ -5267,133 +4785,122 @@ pub mod models {
 
 pub use models::*;
 
+/// Largest `limit` accepted by `list_api_keys` (the server clamps larger values).
+pub const LIST_API_KEYS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_artifacts` (the server clamps larger values).
+pub const LIST_ARTIFACTS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_dataset_records` (the server clamps larger values).
+pub const LIST_DATASET_RECORDS_LIMIT_MAX: u32 = 1000;
+/// Largest `limit` accepted by `list_datasets` (the server clamps larger values).
+pub const LIST_DATASETS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_deployments` (the server clamps larger values).
+pub const LIST_DEPLOYMENTS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_eval_failures` (the server clamps larger values).
+pub const LIST_EVAL_FAILURES_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_eval_outputs` (the server clamps larger values).
+pub const LIST_EVAL_OUTPUTS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_eval_results` (the server clamps larger values).
+pub const LIST_EVAL_RESULTS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_evals` (the server clamps larger values).
+pub const LIST_EVALS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_imports` (the server clamps larger values).
+pub const LIST_IMPORTS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_run_checkpoints` (the server clamps larger values).
+pub const LIST_RUN_CHECKPOINTS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_run_metrics` (the server clamps larger values).
+pub const LIST_RUN_METRICS_LIMIT_MAX: u32 = 5000;
+/// Largest `limit` accepted by `list_runs` (the server clamps larger values).
+pub const LIST_RUNS_LIMIT_MAX: u32 = 200;
+
 impl GeneratedClient {
     /// Cancel a queued, running or awaiting_scores evaluation
     ///
     /// `POST /v1/evals/{id}/cancel`
-    pub async fn cancel_eval(&self, id: &str) -> Result<EvalRun, ApiError> {
+    pub async fn cancel_eval(&self, id: &str, idempotency_key: Option<&str>) -> Result<EvalRun, ApiError> {
         let path = format!("/v1/evals/{}/cancel", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, None::<&()>).await
     }
 
     /// Cancel a training run (a running attempt is stopped and billed)
     ///
     /// `POST /v1/runs/{id}/cancel`
-    pub async fn cancel_run(&self, id: &str) -> Result<Run, ApiError> {
+    pub async fn cancel_run(&self, id: &str, idempotency_key: Option<&str>) -> Result<Run, ApiError> {
         let path = format!("/v1/runs/{}/cancel", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>).await
-    }
-
-    /// Long-poll for the next task assigned to a `grad env serve` worker
-    ///
-    /// `POST /v1/env-workers/{name}/claim`
-    pub async fn claim_env_task(&self, name: &str, body: &ClaimEnvTaskRequest) -> Result<ClaimEnvTaskResponse, ApiError> {
-        let path = format!("/v1/env-workers/{}/claim", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Claim the next queued train or import job (trainer:worker)
-    ///
-    /// `POST /v1/trainer-jobs/claim`
-    pub async fn claim_trainer_job(&self, body: &ClaimJobRequest) -> Result<ClaimJobResponse, ApiError> {
-        let path = "/v1/trainer-jobs/claim".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Submit scored trajectory output for an environment task
-    ///
-    /// `POST /v1/env-workers/tasks/{id}/complete`
-    pub async fn complete_env_task(&self, id: &str, body: &EnvTaskResult) -> Result<BTreeMap<String, Value>, ApiError> {
-        let path = format!("/v1/env-workers/tasks/{}/complete", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Finish a job attempt: publish its artifact, bill it, release the lease
-    ///
-    /// `POST /v1/trainer-jobs/{id}/complete`
-    pub async fn complete_trainer_job(&self, id: &str, body: &CompleteTrainerJobRequest) -> Result<CompleteTrainerJobResponse, ApiError> {
-        let path = format!("/v1/trainer-jobs/{}/complete", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, None::<&()>).await
     }
 
     /// Create a scoped workspace API key (trainer worker keys are platform config, not keys)
     ///
     /// `POST /v1/keys`
-    pub async fn create_api_key(&self, body: &CreateApiKeyRequest) -> Result<CreatedApiKey, ApiError> {
+    pub async fn create_api_key(&self, body: &CreateApiKeyRequest, idempotency_key: Option<&str>) -> Result<CreatedApiKey, ApiError> {
         let path = "/v1/keys".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Create an empty dataset
     ///
     /// `POST /v1/datasets`
-    pub async fn create_dataset(&self, body: &CreateDatasetRequest) -> Result<Dataset, ApiError> {
+    pub async fn create_dataset(&self, body: &CreateDatasetRequest, idempotency_key: Option<&str>) -> Result<Dataset, ApiError> {
         let path = "/v1/datasets".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Import an uploaded file or a Hugging Face dataset into a dataset (async job)
     ///
     /// `POST /v1/datasets/{name}/imports`
-    pub async fn create_dataset_import(&self, name: &str, body: &CreateImportRequest) -> Result<ImportJob, ApiError> {
+    pub async fn create_dataset_import(&self, name: &str, body: &CreateImportRequest, idempotency_key: Option<&str>) -> Result<ImportJob, ApiError> {
         let path = format!("/v1/datasets/{}/imports", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Generate embeddings from a deployed embedding artifact
     ///
     /// `POST /v1/embeddings`
-    pub async fn create_embeddings(&self, body: &EmbedRequest) -> Result<EmbedResponse, ApiError> {
+    pub async fn create_embeddings(&self, body: &EmbedRequest, idempotency_key: Option<&str>) -> Result<EmbedResponse, ApiError> {
         let path = "/v1/embeddings".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Queue an evaluation across models on a pinned dataset version (executed by the server)
     ///
     /// `POST /v1/evals`
-    pub async fn create_eval(&self, body: &PlanEvalRequest) -> Result<EvalRun, ApiError> {
+    pub async fn create_eval(&self, body: &PlanEvalRequest, idempotency_key: Option<&str>) -> Result<EvalRun, ApiError> {
         let path = "/v1/evals".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Create and enqueue a training run (pins the dataset version)
     ///
     /// `POST /v1/runs`
-    pub async fn create_run(&self, body: &PlanRunRequest) -> Result<Run, ApiError> {
+    pub async fn create_run(&self, body: &PlanRunRequest, idempotency_key: Option<&str>) -> Result<Run, ApiError> {
         let path = "/v1/runs".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Get an upload URL for a checkpoint or artifact bundle
-    ///
-    /// `POST /v1/trainer-jobs/{id}/uploads`
-    pub async fn create_trainer_upload(&self, id: &str, body: &TrainerUploadRequest) -> Result<UploadTicket, ApiError> {
-        let path = format!("/v1/trainer-jobs/{}/uploads", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Get an upload URL for a file to import (PUT the bytes, then create an import)
     ///
     /// `POST /v1/uploads`
-    pub async fn create_upload(&self, body: &CreateUploadRequest) -> Result<UploadTicket, ApiError> {
+    pub async fn create_upload(&self, body: &CreateUploadRequest, idempotency_key: Option<&str>) -> Result<UploadTicket, ApiError> {
         let path = "/v1/uploads".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Deploy or update an artifact under a stable model name
     ///
     /// `POST /v1/deployments`
-    pub async fn deploy_artifact(&self, body: &DeployArtifactRequest) -> Result<Deployment, ApiError> {
+    pub async fn deploy_artifact(&self, body: &DeployArtifactRequest, idempotency_key: Option<&str>) -> Result<Deployment, ApiError> {
         let path = "/v1/deployments".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Dispatch an evaluation or rollout task to a connected `grad env serve` worker
-    ///
-    /// `POST /v1/env-workers/tasks`
-    pub async fn dispatch_env_task(&self, body: &EnvTaskDispatch) -> Result<DispatchEnvTaskResponse, ApiError> {
-        let path = "/v1/env-workers/tasks".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256
@@ -5402,16 +4909,6 @@ impl GeneratedClient {
     pub async fn download_artifact(&self, id: &str) -> Result<StreamResponse, ApiError> {
         let path = format!("/v1/artifacts/{}/download", encode_path_segment("id", id)?);
         self.request_stream(reqwest::Method::GET, &path, &[], &[], None::<&()>, "application/octet-stream").await
-    }
-
-    /// Stream the pinned dataset version of a claimed train job as JSONL
-    ///
-    /// `GET /v1/trainer-jobs/{id}/dataset`
-    pub async fn download_trainer_dataset(&self, id: &str, params: &DownloadTrainerDatasetParams) -> Result<StreamResponse, ApiError> {
-        let path = format!("/v1/trainer-jobs/{}/dataset", encode_path_segment("id", id)?);
-        let mut query: Vec<(&str, String)> = Vec::new();
-        query.push(("attempt", params.attempt.query_value()));
-        self.request_stream(reqwest::Method::GET, &path, &query, &[], None::<&()>, "application/x-ndjson").await
     }
 
     /// Get an artifact by id or name@latest
@@ -5438,14 +4935,6 @@ impl GeneratedClient {
         self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
-    /// Inspect an environment task and its result
-    ///
-    /// `GET /v1/env-workers/tasks/{id}`
-    pub async fn get_env_task(&self, id: &str) -> Result<BTreeMap<String, Value>, ApiError> {
-        let path = format!("/v1/env-workers/tasks/{}", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
-    }
-
     /// Get an evaluation run by ID
     ///
     /// `GET /v1/evals/{id}`
@@ -5468,22 +4957,6 @@ impl GeneratedClient {
     pub async fn get_run(&self, id: &str) -> Result<Run, ApiError> {
         let path = format!("/v1/runs/{}", encode_path_segment("id", id)?);
         self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
-    }
-
-    /// Queue depth for autoscaling: queued plus running jobs (trainer:worker)
-    ///
-    /// `GET /v1/trainer-jobs/queue`
-    pub async fn get_trainer_queue_stats(&self) -> Result<TrainerQueueStats, ApiError> {
-        let path = "/v1/trainer-jobs/queue".to_string();
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
-    }
-
-    /// Renew the job lease; reports whether the worker should stop
-    ///
-    /// `POST /v1/trainer-jobs/{id}/heartbeat`
-    pub async fn heartbeat_trainer_job(&self, id: &str, body: &TrainerHeartbeatRequest) -> Result<TrainerHeartbeatResponse, ApiError> {
-        let path = format!("/v1/trainer-jobs/{}/heartbeat", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// List workspace API keys
@@ -5760,97 +5233,73 @@ impl GeneratedClient {
     /// Estimate tasks, model/judge calls, and cost before running an eval
     ///
     /// `POST /v1/evals/plan`
-    pub async fn plan_eval(&self, body: &PlanEvalRequest) -> Result<PlanEvalResponse, ApiError> {
+    pub async fn plan_eval(&self, body: &PlanEvalRequest, idempotency_key: Option<&str>) -> Result<PlanEvalResponse, ApiError> {
         let path = "/v1/evals/plan".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Dry-run a training recipe at zero cost
     ///
     /// `POST /v1/runs/plan`
-    pub async fn plan_run(&self, body: &PlanRunRequest) -> Result<PlanRunResponse, ApiError> {
+    pub async fn plan_run(&self, body: &PlanRunRequest, idempotency_key: Option<&str>) -> Result<PlanRunResponse, ApiError> {
         let path = "/v1/runs/plan".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing
     ///
     /// `POST /v1/evals/{id}/scores`
-    pub async fn post_eval_scores(&self, id: &str, body: &PostEvalScoresRequest) -> Result<PostEvalScoresResponse, ApiError> {
+    pub async fn post_eval_scores(&self, id: &str, body: &PostEvalScoresRequest, idempotency_key: Option<&str>) -> Result<PostEvalScoresResponse, ApiError> {
         let path = format!("/v1/evals/{}/scores", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Append a batch of parsed records to an import job
-    ///
-    /// `POST /v1/trainer-jobs/{id}/records`
-    pub async fn post_import_records(&self, id: &str, body: &PostImportRecordsRequest) -> Result<PostImportRecordsResponse, ApiError> {
-        let path = format!("/v1/trainer-jobs/{}/records", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Copy an exportable checkpoint into a new immutable artifact
     ///
     /// `POST /v1/checkpoints/{id}/promote`
-    pub async fn promote_checkpoint(&self, id: &str, body: Option<&PromoteCheckpointRequest>) -> Result<Artifact, ApiError> {
+    pub async fn promote_checkpoint(&self, id: &str, body: Option<&PromoteCheckpointRequest>, idempotency_key: Option<&str>) -> Result<Artifact, ApiError> {
         let path = format!("/v1/checkpoints/{}/promote", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], body).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, body).await
     }
 
     /// Append records as a new dataset version (creates the dataset if needed)
     ///
     /// `POST /v1/datasets/{name}/records`
-    pub async fn push_dataset_records(&self, name: &str, body: &PushDatasetRequest) -> Result<Dataset, ApiError> {
+    pub async fn push_dataset_records(&self, name: &str, body: &PushDatasetRequest, idempotency_key: Option<&str>) -> Result<Dataset, ApiError> {
         let path = format!("/v1/datasets/{}/records", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Record deduplicated outcome scores and gold corrections
     ///
     /// `POST /v1/feedback`
-    pub async fn record_feedback(&self, body: &RecordFeedbackRequest) -> Result<RecordFeedbackResponse, ApiError> {
+    pub async fn record_feedback(&self, body: &RecordFeedbackRequest, idempotency_key: Option<&str>) -> Result<RecordFeedbackResponse, ApiError> {
         let path = "/v1/feedback".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Register or heartbeat an outbound `grad env serve` worker
-    ///
-    /// `POST /v1/env-workers/register`
-    pub async fn register_env_worker(&self, body: &EnvWorkerRegister) -> Result<RegisterEnvWorkerResponse, ApiError> {
-        let path = "/v1/env-workers/register".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Register an uploaded checkpoint bundle
-    ///
-    /// `POST /v1/trainer-jobs/{id}/checkpoints`
-    pub async fn register_trainer_checkpoint(&self, id: &str, body: &RegisterTrainerCheckpointRequest) -> Result<Checkpoint, ApiError> {
-        let path = format!("/v1/trainer-jobs/{}/checkpoints", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Preview chat-template rendering and loss masks (estimated token counts)
     ///
     /// `POST /v1/datasets/{name}/render`
-    pub async fn render_dataset(&self, name: &str, body: &RenderDatasetRequest) -> Result<RenderDatasetResponse, ApiError> {
+    pub async fn render_dataset(&self, name: &str, body: &RenderDatasetRequest, idempotency_key: Option<&str>) -> Result<RenderDatasetResponse, ApiError> {
         let path = format!("/v1/datasets/{}/render", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
-    }
-
-    /// Report one training step's metrics
-    ///
-    /// `POST /v1/trainer-jobs/{id}/progress`
-    pub async fn report_trainer_progress(&self, id: &str, body: &ReportTrainerProgressRequest) -> Result<ReportTrainerProgressResponse, ApiError> {
-        let path = format!("/v1/trainer-jobs/{}/progress", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 
     /// Resume a stopped, failed or cancelled run from its latest checkpoint
     ///
     /// `POST /v1/runs/{id}/resume`
-    pub async fn resume_run(&self, id: &str, body: Option<&ResumeRunRequest>) -> Result<Run, ApiError> {
+    pub async fn resume_run(&self, id: &str, body: Option<&ResumeRunRequest>, idempotency_key: Option<&str>) -> Result<Run, ApiError> {
         let path = format!("/v1/runs/{}/resume", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], body).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, body).await
     }
 
     /// Revoke a workspace API key
@@ -5864,16 +5313,18 @@ impl GeneratedClient {
     /// Roll a deployment back to its previous artifact
     ///
     /// `POST /v1/deployments/{name}/rollback`
-    pub async fn rollback_deployment(&self, name: &str) -> Result<Deployment, ApiError> {
+    pub async fn rollback_deployment(&self, name: &str, idempotency_key: Option<&str>) -> Result<Deployment, ApiError> {
         let path = format!("/v1/deployments/{}/rollback", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, None::<&()>).await
     }
 
     /// Ask a deployed model router which model to call
     ///
     /// `POST /v1/route`
-    pub async fn route_request(&self, body: &RouteRequest) -> Result<RouteResponse, ApiError> {
+    pub async fn route_request(&self, body: &RouteRequest, idempotency_key: Option<&str>) -> Result<RouteResponse, ApiError> {
         let path = "/v1/route".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
+        let headers: Vec<(&str, String)> = vec![("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))];
+        self.request_json(reqwest::Method::POST, &path, &[], &headers, Some(body)).await
     }
 }

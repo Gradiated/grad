@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildIR,
   extractOperations,
+  publicIR,
   generateAllTargets,
   generateFromSpec,
   parseSpecFile,
@@ -55,22 +56,25 @@ const writeFiles = (root, files, prefix) => {
 
 const fixture = async () => generateFromSpec(await parseSpecFile(fixturePath), { targets: ["ts", "go", "rs"] });
 
-test("every operation in spec/openapi.yaml is generated for TypeScript, Go and Rust", async () => {
+test("every public operation in spec/openapi.yaml is generated for TypeScript, Go and Rust", async () => {
   const { ir, files } = await generateAllTargets(specPath);
   assert.ok(ir.operations.length >= 56, `expected >= 56 operations, got ${ir.operations.length}`);
   const ts = files["sdks/typescript/src/generated/client.ts"];
   const go = files["sdks/go/generated/client.go"];
   const rs = files["sdks/rust/src/generated.rs"];
   for (const op of ir.operations) {
-    assert.match(ts, new RegExp(`\\n  (async )?${toCamel(op.id)}\\(`), `TS missing ${op.id}`);
-    assert.ok(go.includes(`func (c *Client) ${goName(op.id)}(`), `Go missing ${op.id}`);
-    assert.ok(rs.includes(`pub async fn ${toSnake(op.id)}(`), `Rust missing ${op.id}`);
+    const present = [
+      new RegExp(`\\n  (async )?${toCamel(op.id)}\\(`).test(ts),
+      go.includes(`func (c *Client) ${goName(op.id)}(`),
+      rs.includes(`pub async fn ${toSnake(op.id)}(`),
+    ];
+    assert.deepEqual(present, op.internal ? [false, false, false] : [true, true, true], `${op.id} (internal: ${op.internal})`);
   }
   // Typed signatures, not untyped records/maps.
   assert.ok(ts.includes("async createRun(body: PlanRunRequest, options?: RequestOptions): Promise<Run>"));
   assert.ok(!/\): Promise<Record<string, unknown>>/.test(ts));
   assert.ok(go.includes("func (c *Client) CreateRun(ctx context.Context, body *PlanRunRequest, opts ...RequestOption) (*Run, error)"));
-  assert.ok(rs.includes("pub async fn create_run(&self, body: &PlanRunRequest) -> Result<PlanRunRequestRun, ApiError>") || rs.includes("pub async fn create_run(&self, body: &PlanRunRequest) -> Result<Run, ApiError>"));
+  assert.ok(rs.includes("pub async fn create_run(&self, body: &PlanRunRequest, idempotency_key: Option<&str>) -> Result<Run, ApiError>"));
   // Streams: binary downloads and SSE are never buffered as JSON.
   assert.ok(ts.includes("downloadArtifact(id: string, options?: StreamOptions): Promise<RawResponse>"));
   assert.ok(ts.includes("listRunMetricsStream("));
@@ -80,13 +84,25 @@ test("every operation in spec/openapi.yaml is generated for TypeScript, Go and R
   assert.ok(rs.includes("pub async fn list_run_metrics_stream("));
 });
 
-test("every operation is generated for Python, typed and natively async", async () => {
+test("every public operation is generated for Python, typed and natively async; env-worker ops go to the internal client", async () => {
   const { ir, files } = await generateAllTargets(specPath);
   const py = files["sdks/python/grad/_generated/client.py"];
+  const [publicPart, internalPart] = py.split("class GeneratedInternalApiClient:");
+  assert.ok(internalPart, "Python internal client missing");
   for (const op of ir.operations) {
-    assert.ok(py.includes(`    def ${toSnake(op.id)}(`), `Python sync missing ${op.id}`);
-    assert.ok(py.includes(`    async def ${toSnake(op.id)}(`), `Python async missing ${op.id}`);
+    const name = toSnake(op.id);
+    const where = !op.internal ? publicPart : op.tags.includes("Environments") ? internalPart : null;
+    if (where === null) {
+      assert.ok(!py.includes(`def ${name}(`), `Python must not generate trainer op ${op.id}`);
+      continue;
+    }
+    assert.ok(where.includes(`    def ${name}(`), `Python sync missing ${op.id}`);
+    assert.ok(where.includes(`    async def ${name}(`), `Python async missing ${op.id}`);
+    if (op.internal) assert.ok(!publicPart.includes(`def ${name}(`), `${op.id} leaked into the public client`);
   }
+  assert.ok(py.includes('def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:'));
+  assert.ok(py.includes('headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}'));
+  assert.ok(py.includes("LIST_EVAL_OUTPUTS_LIMIT_MAX = 200"));
   assert.ok(py.includes("def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:"));
   assert.ok(py.includes("async def download_artifact(self, id: str, *, timeout: float | None = None) -> AsyncResponse:"));
   assert.ok(py.includes("def get_run(self, id: str, *, timeout: float | None = None) -> Run:"));
@@ -98,6 +114,40 @@ test("generated files on disk match the spec (no drift)", async () => {
   for (const [rel, expected] of Object.entries(files)) {
     assert.equal(readFileSync(path.join(repoRoot, rel), "utf8"), expected, `${rel} drifted; run node scripts/generate-sdks.mjs`);
   }
+});
+
+test("x-internal operations and the schemas only they use are left out of the public IR", async () => {
+  const ir = buildIR(await parseSpecFile(fixturePath));
+  const pub = publicIR(ir);
+  assert.ok(ir.operations.some((o) => o.id === "claimJob" && o.internal));
+  assert.ok(!pub.operations.some((o) => o.id === "claimJob"));
+  assert.ok("InternalJob" in ir.schemas && !("InternalJob" in pub.schemas));
+  assert.ok("TreeNode" in pub.schemas, "schemas reachable through refs are kept");
+
+  const spec = await generateAllTargets(specPath);
+  const internal = spec.ir.operations.filter((o) => o.internal).map((o) => o.id).sort();
+  assert.deepEqual(internal.filter((id) => !/TrainerJob|Trainer|ImportRecords|EnvTask|EnvWorker/.test(id)), []);
+  assert.ok(internal.length >= 14, `trainer-job and env-worker ops are x-internal (${internal.length})`);
+  assert.ok(!spec.files["sdks/typescript/src/generated/models.ts"].includes("export interface ClaimJobRequest"));
+});
+
+test("Idempotency-Key is transport policy and page-size maxima become constants", async () => {
+  const { ir, files } = await fixture();
+  const create = ir.operations.find((o) => o.id === "createItem");
+  assert.equal(create.idempotent, true);
+  assert.deepEqual(create.headerParams, []);
+  assert.equal(ir.operations.find((o) => o.id === "listItems").queryParams[0].maximum, 250);
+  assert.ok(files["sdks/typescript/src/generated/client.ts"].includes("idempotent: true"));
+  assert.ok(files["sdks/typescript/src/generated/client.ts"].includes("export const LIST_ITEMS_LIMIT_MAX = 250;"));
+  assert.ok(files["sdks/go/generated/client.go"].includes("Idempotent: true"));
+  assert.ok(files["sdks/go/generated/client.go"].includes("const ListItemsLimitMax = 250"));
+  assert.ok(files["sdks/rust/src/generated.rs"].includes("pub const LIST_ITEMS_LIMIT_MAX: u32 = 250;"));
+  assert.ok(files["sdks/rust/src/generated.rs"].includes('("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))'));
+  const real = await generateAllTargets(specPath);
+  const keyed = real.ir.operations.filter((o) => o.idempotent).map((o) => o.id);
+  assert.ok(keyed.includes("createRun") && keyed.includes("cancelEval"));
+  assert.ok(real.ir.operations.filter((o) => o.idempotent).every((o) => o.method === "POST" && !o.internal));
+  assert.ok(real.ir.operations.filter((o) => o.method === "POST" && !o.internal).every((o) => o.idempotent), "every public POST takes a key");
 });
 
 test("naming helpers sanitize any parameter name", () => {
@@ -212,7 +262,7 @@ test("fixture spec: generated TypeScript type-checks under strict settings and b
   writeFileSync(
     path.join(dir, "check.mjs"),
     `import assert from "node:assert/strict";
-import { ApiClient, Transport, RedirectError } from "./dist/generated/index.js";
+import { ApiClient, Transport, RedirectError, LIST_ITEMS_LIMIT_MAX } from "./dist/generated/index.js";
 const calls = [];
 const fakeFetch = async (url, init) => {
   calls.push({ url, init });
@@ -245,6 +295,11 @@ assert.deepEqual(ckpt, { id: "c1", runId: "r1", step: 5, evalScore: null, format
 const created = await api.createItem({ name: "n", tree: { value: "root", lastSeen: { type: "t", camelCase: 1 } } });
 assert.deepEqual(JSON.parse(calls[1].init.body), { name: "n", tree: { value: "root", last_seen: { type: "t", camelCase: 1 } } });
 assert.deepEqual(created, { id: "i1", createdAt: "t", shape: { kind: "square", sideLen: 2 } });
+assert.match(calls[1].init.headers.get("idempotency-key"), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+await api.createItem({ name: "n" }, { idempotencyKey: "mine" });
+assert.equal(calls[2].init.headers.get("idempotency-key"), "mine");
+assert.equal(api.claimJob, undefined);
+assert.equal(LIST_ITEMS_LIMIT_MAX, 250);
 
 const items = await api.listItems();
 assert.deepEqual(items, [{ type: "x", "1stPlace": true, kebabCase: "k", extra_key: { keep_me: 1 }, content: [{ type: "y", nested: { innerValue: "v" } }] }]);
@@ -320,10 +375,13 @@ func TestFixtureRequests(t *testing.T) {
 	if got.URL.RawQuery != "ctx=true&page-size=10&type=a&type=b" || got.Header.Get("X-Trace-Id") != "trace" || got.Header.Get("Authorization") != "Bearer k" {
 		t.Fatalf("bad request: %s %v", got.URL.RawQuery, got.Header)
 	}
+	if ListItemsLimitMax != 250 || len(NewIdempotencyKey()) != 36 || NewIdempotencyKey() == NewIdempotencyKey() {
+		t.Fatal("bad constants or idempotency keys")
+	}
 	if out.RunID != "r1" || out.EvalScore != nil || out.Format == nil || *out.Format != Format2bit || out.Scores["a"] != 1 {
 		t.Fatalf("bad decode: %+v", out)
 	}
-	items, err := c.ListItems(ctx)
+	items, err := c.ListItems(ctx, nil)
 	if err != nil || len(items) != 1 || items[0].X1stPlace == nil || !*items[0].X1stPlace || items[0].AdditionalProperties["extra"] == nil {
 		t.Fatalf("bad items: %+v %v", items, err)
 	}
@@ -374,6 +432,10 @@ mod tests {
         assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"type":"t","1st_place":true,"extra":1}"#);
         assert!(encode_path_segment("id", "..").is_err());
         assert_eq!(encode_path_segment("id", "a/b c").unwrap(), "a%2Fb%20c");
+        assert_eq!(LIST_ITEMS_LIMIT_MAX, 250);
+        let key = new_idempotency_key();
+        assert_eq!((key.len(), &key[14..15]), (36, "4"));
+        assert_ne!(key, new_idempotency_key());
     }
 }
 `,

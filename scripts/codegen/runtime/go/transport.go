@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -315,6 +316,7 @@ type Config struct {
 }
 
 // Transport sends requests with retries, backoff, Retry-After, timeouts and same-origin-only redirects.
+// Operations that accept an Idempotency-Key send one (reused by every retry) and retry like GETs.
 type Transport struct {
 	baseURL    string
 	origin     string
@@ -403,11 +405,12 @@ type ResponseInfo struct {
 }
 
 type requestOptions struct {
-	timeout     time.Duration
-	idleTimeout time.Duration
-	maxRetries  *int
-	header      http.Header
-	onResponse  func(ResponseInfo)
+	timeout        time.Duration
+	idleTimeout    time.Duration
+	maxRetries     *int
+	header         http.Header
+	onResponse     func(ResponseInfo)
+	idempotencyKey string
 }
 
 // RequestOption customizes one call.
@@ -438,6 +441,24 @@ func WithHeader(key, value string) RequestOption {
 	}
 }
 
+// WithIdempotencyKey sets the Idempotency-Key of one call to an operation that
+// accepts one (default: a fresh UUIDv4 per call, reused by its retries). Pass
+// your own to retry a call across processes.
+func WithIdempotencyKey(key string) RequestOption {
+	return func(o *requestOptions) { o.idempotencyKey = key }
+}
+
+// NewIdempotencyKey returns a random UUIDv4 for the Idempotency-Key header.
+func NewIdempotencyKey() string {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		panic(fmt.Sprintf("grad: reading random bytes for an Idempotency-Key: %v", err))
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 // WithLastEventID resumes a Server-Sent Events stream after the given event id.
 func WithLastEventID(id string) RequestOption {
 	return WithHeader("Last-Event-ID", id)
@@ -457,6 +478,9 @@ type RequestSpec struct {
 	// Body is JSON-encoded when non-nil.
 	Body   any
 	Accept string
+	// Idempotent marks an operation that accepts an Idempotency-Key: it is sent
+	// with one and retried like a GET.
+	Idempotent bool
 }
 
 var errTimeout = errors.New("grad: request timed out")
@@ -537,6 +561,12 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 	}
 	target := t.buildURL(spec)
 	redirects := 0
+	idemKey := o.idempotencyKey
+	if idemKey == "" && spec.Idempotent && o.header.Get("Idempotency-Key") == "" {
+		idemKey = NewIdempotencyKey()
+	}
+	keyed := idemKey != "" || o.header.Get("Idempotency-Key") != ""
+	retrySafe := idempotent[method] || keyed
 
 	for try := 0; ; try++ {
 		if err := ctx.Err(); err != nil {
@@ -578,6 +608,9 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 		for k, vs := range o.header {
 			req.Header[http.CanonicalHeaderKey(k)] = vs
 		}
+		if idemKey != "" {
+			req.Header.Set("Idempotency-Key", idemKey)
+		}
 
 		resp, err := t.httpClient.Do(req)
 		if err != nil {
@@ -593,7 +626,7 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 			} else {
 				wrapped = &ConnectionError{&GradError{Code: "connection_error", Message: fmt.Sprintf("%s %s failed: could not reach %s (%v). Is the server running? Check GRADIATED_BASE_URL or grad.WithBaseURL.", method, target, t.origin, err), Cause: err}}
 			}
-			if try < maxRetries && (idempotent[method] || (!timedOut && neverSent(err))) {
+			if try < maxRetries && (retrySafe || (!timedOut && neverSent(err))) {
 				if werr := t.wait(ctx, t.Backoff(try), method, target); werr != nil {
 					return nil, werr
 				}
@@ -628,9 +661,11 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 			timer.Stop()
 			cancel(nil)
 			apiErr := NewAPIError(resp.StatusCode, resp.Header, raw, method, target, t.apiKey != "")
-			if retryableStatus(resp.StatusCode) && (idempotent[method] || resp.StatusCode == http.StatusTooManyRequests) && try < maxRetries {
-				delay, ok := ParseRetryAfter(resp.Header, time.Now())
-				if !ok {
+			delay, hinted := ParseRetryAfter(resp.Header, time.Now())
+			// 409 + Retry-After on a keyed request: the first attempt is still running server-side.
+			inProgress := resp.StatusCode == http.StatusConflict && keyed && hinted
+			if ((retryableStatus(resp.StatusCode) && (retrySafe || resp.StatusCode == http.StatusTooManyRequests)) || inProgress) && try < maxRetries {
+				if !hinted {
 					delay = t.Backoff(try)
 				}
 				if delay <= MaxRetryAfter {

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compareStrings, sanitizeSingleLine, toPascal, toSnake } from "./ir.mjs";
+import { compareStrings, parameterMaxima, sanitizeSingleLine, toPascal, toSnake } from "./ir.mjs";
 
 const runtimeDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime", "rust");
 
@@ -16,7 +16,7 @@ const RS_KEYWORDS = new Set(
   "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while abstract become box do final macro override priv try typeof unsized virtual yield gen union".split(" "),
 );
 const RS_NO_RAW = new Set(["self", "Self", "super", "crate", "_"]);
-const RS_RESERVED_LOCALS = new Set(["body", "params", "path", "query", "headers", "last_event_id"]);
+const RS_RESERVED_LOCALS = new Set(["body", "params", "path", "query", "headers", "last_event_id", "idempotency_key"]);
 const RS_RESERVED_TYPES = new Set(
   "Option Result Vec String Box Value Default Clone Debug Copy Send Sync Sized Drop Fn Iterator Error ErrorKind ApiError FieldError GeneratedClient StreamResponse SseEvent SseStream QueryValue BTreeMap Serialize Deserialize".split(" "),
 );
@@ -358,6 +358,18 @@ impl<'de> Deserialize<'de> for ${enumName} {
       headerExpr = build("header", "headers") ?? "&[]";
     }
 
+    if (op.idempotent) {
+      // One key per call (reused by every retry); pass your own to retry a call across processes.
+      args.push("idempotency_key: Option<&str>");
+      const key = '("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))';
+      if (headerExpr === "&[]") {
+        pre.push(`        let headers: Vec<(&str, String)> = vec![${key}];`);
+        headerExpr = "&headers";
+      } else {
+        pre.push(`        headers.push(${key});`);
+      }
+    }
+
     const summary = sanitizeSingleLine(op.summary || op.id);
     const header = `    /// ${summary}\n    ///\n    /// \`${op.method} ${op.path}\`\n`;
     const method = `reqwest::Method::${op.method}`;
@@ -388,6 +400,9 @@ impl<'de> Deserialize<'de> for ${enumName} {
 
   const transport = (await readFile(path.join(runtimeDir, "transport.rs"), "utf8")).replace("__SDK_VERSION__", sdkVersion);
   const sorted = decls.sort((a, b) => compareStrings(a.name, b.name)).map((d) => d.text);
+  const maxima = parameterMaxima(ir).map(
+    (m) => `/// Largest \`${m.param}\` accepted by \`${rsIdent(m.op)}\` (the server clamps larger values).\npub const ${rsIdent(m.op).toUpperCase()}_${rsIdent(m.param).toUpperCase()}_MAX: u32 = ${m.maximum};`,
+  );
   return `${HEADER}#![allow(clippy::all, clippy::pedantic, dead_code, unused_imports, non_camel_case_types)]
 
 ${transport}
@@ -401,7 +416,7 @@ ${sorted.map((t) => t.replace(/^(?=.)/gm, "    ")).join("\n\n")}
 }
 
 pub use models::*;
-
+${maxima.length ? `\n${maxima.join("\n")}\n` : ""}
 impl GeneratedClient {
 ${methods.join("\n\n")}
 }

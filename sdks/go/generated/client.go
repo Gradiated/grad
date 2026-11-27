@@ -7,6 +7,45 @@ import (
 	"net/url"
 )
 
+// ListAPIKeysLimitMax is the largest limit accepted by ListAPIKeys (the server clamps larger values).
+const ListAPIKeysLimitMax = 200
+
+// ListArtifactsLimitMax is the largest limit accepted by ListArtifacts (the server clamps larger values).
+const ListArtifactsLimitMax = 200
+
+// ListDatasetRecordsLimitMax is the largest limit accepted by ListDatasetRecords (the server clamps larger values).
+const ListDatasetRecordsLimitMax = 1000
+
+// ListDatasetsLimitMax is the largest limit accepted by ListDatasets (the server clamps larger values).
+const ListDatasetsLimitMax = 200
+
+// ListDeploymentsLimitMax is the largest limit accepted by ListDeployments (the server clamps larger values).
+const ListDeploymentsLimitMax = 200
+
+// ListEvalFailuresLimitMax is the largest limit accepted by ListEvalFailures (the server clamps larger values).
+const ListEvalFailuresLimitMax = 200
+
+// ListEvalOutputsLimitMax is the largest limit accepted by ListEvalOutputs (the server clamps larger values).
+const ListEvalOutputsLimitMax = 200
+
+// ListEvalResultsLimitMax is the largest limit accepted by ListEvalResults (the server clamps larger values).
+const ListEvalResultsLimitMax = 200
+
+// ListEvalsLimitMax is the largest limit accepted by ListEvals (the server clamps larger values).
+const ListEvalsLimitMax = 200
+
+// ListImportsLimitMax is the largest limit accepted by ListImports (the server clamps larger values).
+const ListImportsLimitMax = 200
+
+// ListRunCheckpointsLimitMax is the largest limit accepted by ListRunCheckpoints (the server clamps larger values).
+const ListRunCheckpointsLimitMax = 200
+
+// ListRunMetricsLimitMax is the largest limit accepted by ListRunMetrics (the server clamps larger values).
+const ListRunMetricsLimitMax = 5000
+
+// ListRunsLimitMax is the largest limit accepted by ListRuns (the server clamps larger values).
+const ListRunsLimitMax = 200
+
 // Client is the generated low-level client: one typed method per OpenAPI operation.
 type Client struct {
 	T *Transport
@@ -23,7 +62,7 @@ func (c *Client) CancelEval(ctx context.Context, id string, opts ...RequestOptio
 	if err != nil {
 		return nil, err
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/evals/" + p0 + "/cancel"}
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals/" + p0 + "/cancel", Idempotent: true}
 	var out EvalRun
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -39,80 +78,8 @@ func (c *Client) CancelRun(ctx context.Context, id string, opts ...RequestOption
 	if err != nil {
 		return nil, err
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/runs/" + p0 + "/cancel"}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs/" + p0 + "/cancel", Idempotent: true}
 	var out Run
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// ClaimEnvTask calls POST /v1/env-workers/{name}/claim.
-//
-// Long-poll for the next task assigned to a `grad env serve` worker.
-func (c *Client) ClaimEnvTask(ctx context.Context, name string, body *ClaimEnvTaskRequest, opts ...RequestOption) (*ClaimEnvTaskResponse, error) {
-	p0, err := EscapePathParam("name", name)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "ClaimEnvTask: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/" + p0 + "/claim", Body: body}
-	var out ClaimEnvTaskResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// ClaimTrainerJob calls POST /v1/trainer-jobs/claim.
-//
-// Claim the next queued train or import job (trainer:worker).
-func (c *Client) ClaimTrainerJob(ctx context.Context, body *ClaimJobRequest, opts ...RequestOption) (*ClaimJobResponse, error) {
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "ClaimTrainerJob: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/claim", Body: body}
-	var out ClaimJobResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// CompleteEnvTask calls POST /v1/env-workers/tasks/{id}/complete.
-//
-// Submit scored trajectory output for an environment task.
-func (c *Client) CompleteEnvTask(ctx context.Context, id string, body *EnvTaskResult, opts ...RequestOption) (map[string]any, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "CompleteEnvTask: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/tasks/" + p0 + "/complete", Body: body}
-	var out map[string]any
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// CompleteTrainerJob calls POST /v1/trainer-jobs/{id}/complete.
-//
-// Finish a job attempt: publish its artifact, bill it, release the lease.
-func (c *Client) CompleteTrainerJob(ctx context.Context, id string, body *CompleteTrainerJobRequest, opts ...RequestOption) (*CompleteTrainerJobResponse, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "CompleteTrainerJob: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/complete", Body: body}
-	var out CompleteTrainerJobResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -126,7 +93,7 @@ func (c *Client) CreateAPIKey(ctx context.Context, body *CreateAPIKeyRequest, op
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateAPIKey: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/keys", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/keys", Body: body, Idempotent: true}
 	var out CreatedAPIKey
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -141,7 +108,7 @@ func (c *Client) CreateDataset(ctx context.Context, body *CreateDatasetRequest, 
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateDataset: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/datasets", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets", Body: body, Idempotent: true}
 	var out Dataset
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -160,7 +127,7 @@ func (c *Client) CreateDatasetImport(ctx context.Context, name string, body *Cre
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateDatasetImport: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/imports", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/imports", Body: body, Idempotent: true}
 	var out ImportJob
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -175,7 +142,7 @@ func (c *Client) CreateEmbeddings(ctx context.Context, body *EmbedRequest, opts 
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateEmbeddings: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/embeddings", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/embeddings", Body: body, Idempotent: true}
 	var out EmbedResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -190,7 +157,7 @@ func (c *Client) CreateEval(ctx context.Context, body *PlanEvalRequest, opts ...
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateEval: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/evals", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals", Body: body, Idempotent: true}
 	var out EvalRun
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -205,27 +172,8 @@ func (c *Client) CreateRun(ctx context.Context, body *PlanRunRequest, opts ...Re
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateRun: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/runs", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs", Body: body, Idempotent: true}
 	var out Run
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// CreateTrainerUpload calls POST /v1/trainer-jobs/{id}/uploads.
-//
-// Get an upload URL for a checkpoint or artifact bundle.
-func (c *Client) CreateTrainerUpload(ctx context.Context, id string, body *TrainerUploadRequest, opts ...RequestOption) (*UploadTicket, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "CreateTrainerUpload: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/uploads", Body: body}
-	var out UploadTicket
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -239,7 +187,7 @@ func (c *Client) CreateUpload(ctx context.Context, body *CreateUploadRequest, op
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateUpload: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/uploads", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/uploads", Body: body, Idempotent: true}
 	var out UploadTicket
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -254,23 +202,8 @@ func (c *Client) DeployArtifact(ctx context.Context, body *DeployArtifactRequest
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "DeployArtifact: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/deployments", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/deployments", Body: body, Idempotent: true}
 	var out Deployment
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// DispatchEnvTask calls POST /v1/env-workers/tasks.
-//
-// Dispatch an evaluation or rollout task to a connected `grad env serve` worker.
-func (c *Client) DispatchEnvTask(ctx context.Context, body *EnvTaskDispatch, opts ...RequestOption) (*DispatchEnvTaskResponse, error) {
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "DispatchEnvTask: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/tasks", Body: body}
-	var out DispatchEnvTaskResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -286,20 +219,6 @@ func (c *Client) DownloadArtifact(ctx context.Context, id string, opts ...Reques
 		return nil, err
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/artifacts/" + p0 + "/download", Accept: "application/octet-stream"}
-	return c.T.DoStream(ctx, spec, opts...)
-}
-
-// DownloadTrainerDataset calls GET /v1/trainer-jobs/{id}/dataset.
-//
-// Stream the pinned dataset version of a claimed train job as JSONL.
-func (c *Client) DownloadTrainerDataset(ctx context.Context, id string, params DownloadTrainerDatasetParams, opts ...RequestOption) (*StreamResponse, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	q := url.Values{}
-	q.Add("attempt", FormatScalar(params.Attempt))
-	spec := RequestSpec{Method: "GET", Path: "/v1/trainer-jobs/" + p0 + "/dataset", Query: q, Accept: "application/x-ndjson"}
 	return c.T.DoStream(ctx, spec, opts...)
 }
 
@@ -351,22 +270,6 @@ func (c *Client) GetDeployment(ctx context.Context, name string, opts ...Request
 	return &out, nil
 }
 
-// GetEnvTask calls GET /v1/env-workers/tasks/{id}.
-//
-// Inspect an environment task and its result.
-func (c *Client) GetEnvTask(ctx context.Context, id string, opts ...RequestOption) (map[string]any, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	spec := RequestSpec{Method: "GET", Path: "/v1/env-workers/tasks/" + p0}
-	var out map[string]any
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // GetEval calls GET /v1/evals/{id}.
 //
 // Get an evaluation run by ID.
@@ -409,37 +312,6 @@ func (c *Client) GetRun(ctx context.Context, id string, opts ...RequestOption) (
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0}
 	var out Run
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// GetTrainerQueueStats calls GET /v1/trainer-jobs/queue.
-//
-// Queue depth for autoscaling: queued plus running jobs (trainer:worker).
-func (c *Client) GetTrainerQueueStats(ctx context.Context, opts ...RequestOption) (*TrainerQueueStats, error) {
-	spec := RequestSpec{Method: "GET", Path: "/v1/trainer-jobs/queue"}
-	var out TrainerQueueStats
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// HeartbeatTrainerJob calls POST /v1/trainer-jobs/{id}/heartbeat.
-//
-// Renew the job lease; reports whether the worker should stop.
-func (c *Client) HeartbeatTrainerJob(ctx context.Context, id string, body *TrainerHeartbeatRequest, opts ...RequestOption) (*TrainerHeartbeatResponse, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "HeartbeatTrainerJob: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/heartbeat", Body: body}
-	var out TrainerHeartbeatResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -808,7 +680,7 @@ func (c *Client) PlanEval(ctx context.Context, body *PlanEvalRequest, opts ...Re
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "PlanEval: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/evals/plan", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals/plan", Body: body, Idempotent: true}
 	var out PlanEvalResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -823,7 +695,7 @@ func (c *Client) PlanRun(ctx context.Context, body *PlanRunRequest, opts ...Requ
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "PlanRun: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/runs/plan", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs/plan", Body: body, Idempotent: true}
 	var out PlanRunResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -842,27 +714,8 @@ func (c *Client) PostEvalScores(ctx context.Context, id string, body *PostEvalSc
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "PostEvalScores: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/evals/" + p0 + "/scores", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals/" + p0 + "/scores", Body: body, Idempotent: true}
 	var out PostEvalScoresResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// PostImportRecords calls POST /v1/trainer-jobs/{id}/records.
-//
-// Append a batch of parsed records to an import job.
-func (c *Client) PostImportRecords(ctx context.Context, id string, body *PostImportRecordsRequest, opts ...RequestOption) (*PostImportRecordsResponse, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "PostImportRecords: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/records", Body: body}
-	var out PostImportRecordsResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -877,7 +730,7 @@ func (c *Client) PromoteCheckpoint(ctx context.Context, id string, body *Promote
 	if err != nil {
 		return nil, err
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/checkpoints/" + p0 + "/promote", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/checkpoints/" + p0 + "/promote", Body: body, Idempotent: true}
 	var out Artifact
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -896,7 +749,7 @@ func (c *Client) PushDatasetRecords(ctx context.Context, name string, body *Push
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "PushDatasetRecords: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/records", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/records", Body: body, Idempotent: true}
 	var out Dataset
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -911,42 +764,8 @@ func (c *Client) RecordFeedback(ctx context.Context, body *RecordFeedbackRequest
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "RecordFeedback: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/feedback", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/feedback", Body: body, Idempotent: true}
 	var out RecordFeedbackResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// RegisterEnvWorker calls POST /v1/env-workers/register.
-//
-// Register or heartbeat an outbound `grad env serve` worker.
-func (c *Client) RegisterEnvWorker(ctx context.Context, body *EnvWorkerRegister, opts ...RequestOption) (*RegisterEnvWorkerResponse, error) {
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "RegisterEnvWorker: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/register", Body: body}
-	var out RegisterEnvWorkerResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// RegisterTrainerCheckpoint calls POST /v1/trainer-jobs/{id}/checkpoints.
-//
-// Register an uploaded checkpoint bundle.
-func (c *Client) RegisterTrainerCheckpoint(ctx context.Context, id string, body *RegisterTrainerCheckpointRequest, opts ...RequestOption) (*Checkpoint, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "RegisterTrainerCheckpoint: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/checkpoints", Body: body}
-	var out Checkpoint
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -964,27 +783,8 @@ func (c *Client) RenderDataset(ctx context.Context, name string, body *RenderDat
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "RenderDataset: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/render", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/render", Body: body, Idempotent: true}
 	var out RenderDatasetResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// ReportTrainerProgress calls POST /v1/trainer-jobs/{id}/progress.
-//
-// Report one training step's metrics.
-func (c *Client) ReportTrainerProgress(ctx context.Context, id string, body *ReportTrainerProgressRequest, opts ...RequestOption) (*ReportTrainerProgressResponse, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "ReportTrainerProgress: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/progress", Body: body}
-	var out ReportTrainerProgressResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -999,7 +799,7 @@ func (c *Client) ResumeRun(ctx context.Context, id string, body *ResumeRunReques
 	if err != nil {
 		return nil, err
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/runs/" + p0 + "/resume", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs/" + p0 + "/resume", Body: body, Idempotent: true}
 	var out Run
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -1031,7 +831,7 @@ func (c *Client) RollbackDeployment(ctx context.Context, name string, opts ...Re
 	if err != nil {
 		return nil, err
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/deployments/" + p0 + "/rollback"}
+	spec := RequestSpec{Method: "POST", Path: "/v1/deployments/" + p0 + "/rollback", Idempotent: true}
 	var out Deployment
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
@@ -1046,7 +846,7 @@ func (c *Client) RouteRequest(ctx context.Context, body *RouteRequest, opts ...R
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "RouteRequest: body is required"}
 	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/route", Body: body}
+	spec := RequestSpec{Method: "POST", Path: "/v1/route", Body: body, Idempotent: true}
 	var out RouteResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err

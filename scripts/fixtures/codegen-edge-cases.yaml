@@ -63,6 +63,9 @@ paths:
     post:
       operationId: createItem
       summary: Inline request and response bodies
+      # A reusable Idempotency-Key header is transport policy, not an argument.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -89,6 +92,8 @@ paths:
     get:
       operationId: listItems
       summary: Array of refs at the top level
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 250, default: 50 } }
       responses:
         "200":
           description: ok
@@ -109,6 +114,18 @@ paths:
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
+  /v1/jobs/claim:
+    # Worker protocol: left out of the public clients, with its only schema.
+    post:
+      operationId: claimJob
+      summary: Internal operation
+      x-internal: true
+      responses:
+        "200":
+          description: claimed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InternalJob" }
   /v1/events:
     get:
       operationId: streamEvents
@@ -145,7 +162,17 @@ paths:
             application/x-ndjson:
               schema: { type: string }
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, maxLength: 255 }
   schemas:
+    InternalJob:
+      type: object
+      properties:
+        lease: { type: string }
     Checkpoint:
       type: object
       required: [id, step, run_id, eval_score, format]

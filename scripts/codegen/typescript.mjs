@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compareStrings, sanitizeSingleLine, toCamel, toPascal } from "./ir.mjs";
+import { compareStrings, parameterMaxima, sanitizeSingleLine, toCamel, toPascal, toSnake } from "./ir.mjs";
 
 const runtimeDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime", "typescript");
 
@@ -310,6 +310,7 @@ export const generateTypeScriptFiles = async (ir, { sdkVersion = "0.0.0" } = {})
     if (query.length > 0) specParts.push(`query: [${query.map((p) => `[${literal(p.name)}, ${access(p)}]`).join(", ")}]`);
     if (headers.length > 0) specParts.push(`headers: [${headers.map((p) => `[${literal(p.name)}, ${access(p)}]`).join(", ")}]`);
     if (op.body) specParts.push(`json: ${bodyCodec === "0" ? "body" : `convertKeys(CODEC, ${bodyCodec}, body, "encode")`}`);
+    if (op.idempotent) specParts.push("idempotent: true");
 
     const docLines = [];
     const summary = sanitizeSingleLine(op.summary || op.id).replace(/\*\//g, "*\\/");
@@ -355,6 +356,9 @@ export const generateTypeScriptFiles = async (ir, { sdkVersion = "0.0.0" } = {})
   const usedModels = [...names.values()].filter((n) => new RegExp(`\\b${n}\\b`).test(methodText)).sort(compareStrings);
 
   const models = `${HEADER}/* eslint-disable */\n\n${modelBlocks.join("\n\n")}\n`;
+  const maxima = parameterMaxima(ir).map(
+    (m) => `/** Largest \`${m.param}\` accepted by \`${methodName(m.op)}\` (the server clamps larger values). */\nexport const ${toSnake(m.op).toUpperCase()}_${toSnake(m.param).toUpperCase()}_MAX = ${m.maximum};`,
+  );
 
   const client = `${HEADER}/* eslint-disable */
 import {
@@ -376,7 +380,7 @@ ${codecEntries.join("\n")}
 
 ${clientTypes.join("\n\n")}
 
-/** Low-level client: one typed method per OpenAPI operation. */
+${maxima.join("\n")}${maxima.length ? "\n\n" : ""}/** Low-level client: one typed method per OpenAPI operation. */
 export class ApiClient {
   constructor(readonly transport: TransportLike) {}
 

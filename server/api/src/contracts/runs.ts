@@ -183,7 +183,7 @@ const EvalMetricsSchema = z
   .optional()
   .openapi({
     description:
-      "Held-out metrics of an eval step, keyed by name (the recipe's selection metric first); absent on steps without an eval.",
+      "Held-out metrics of an eval step by name (including the recipe's selection metric, eval_report.metric_name); absent on steps without an eval.",
   });
 
 /** Metric point as reported by a trainer worker (extra numeric keys allowed). */

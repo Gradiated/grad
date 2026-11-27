@@ -309,6 +309,16 @@ fn jitter() -> f64 {
     (x >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// A random UUIDv4 for the Idempotency-Key header.
+pub fn new_idempotency_key() -> String {
+    let mut b = [0u8; 16];
+    getrandom::getrandom(&mut b).expect("reading random bytes for an Idempotency-Key");
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
+}
+
 /// Exponential backoff (0.5 s, 1 s, 2 s, ... capped at 8 s) scaled into [50%, 100%].
 pub fn backoff(attempt: u32) -> Duration {
     let base = (500.0 * 2f64.powi(attempt as i32)).min(8000.0);
@@ -545,7 +555,9 @@ impl GeneratedClient {
             ));
         }
         let method_name = method.as_str().to_string();
-        let idempotent = matches!(method_name.as_str(), "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS");
+        // A request with an Idempotency-Key (one per call, reused by every retry) retries like a GET.
+        let keyed = headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("idempotency-key"));
+        let idempotent = keyed || matches!(method_name.as_str(), "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS");
         let mut url = reqwest::Url::parse(&format!("{}{}", self.base_url, path)).map_err(|e| {
             ApiError::local(ErrorKind::InvalidRequest, "invalid_request", format!("{method_name} {path}: {e}"))
         })?;
@@ -645,7 +657,9 @@ impl GeneratedClient {
                 let resp_headers = resp.headers().clone();
                 let text = tokio::time::timeout(self.timeout, resp.text()).await.ok().and_then(|r| r.ok()).unwrap_or_default();
                 let err = ApiError::from_response(status, &resp_headers, &text, &method_name, &url_text, self.api_key.is_some());
-                let retryable = matches!(status, 408 | 429 | 500 | 502 | 503 | 504) && (idempotent || status == 429);
+                // 409 + Retry-After on a keyed request: the first attempt is still running server-side.
+                let in_progress = status == 409 && keyed && err.retry_after.is_some();
+                let retryable = (matches!(status, 408 | 429 | 500 | 502 | 503 | 504) && (idempotent || status == 429)) || in_progress;
                 if retryable && attempt < self.max_retries {
                     let delay = err.retry_after.unwrap_or_else(|| backoff(attempt));
                     if delay <= MAX_RETRY_AFTER {

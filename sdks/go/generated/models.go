@@ -65,7 +65,7 @@ type Artifact struct {
 	SHA256       string          `json:"sha256"`
 	SizeBytes    int             `json:"size_bytes"`
 	Manifest     map[string]any  `json:"manifest"`
-	EvalReport   map[string]any  `json:"eval_report"`
+	EvalReport   *EvalReport     `json:"eval_report"`
 	CreatedAt    string          `json:"created_at"`
 }
 
@@ -172,84 +172,6 @@ type Checkpoint struct {
 	Final       bool            `json:"final"`
 	ExpiresAt   *string         `json:"expires_at"`
 	CreatedAt   string          `json:"created_at"`
-}
-
-// ClaimEnvTaskRequest is generated from the OpenAPI schema.
-type ClaimEnvTaskRequest struct {
-	WorkerID string `json:"worker_id"`
-	WaitMs   *int   `json:"wait_ms,omitempty"`
-}
-
-// ClaimEnvTaskResponse is generated from the OpenAPI schema.
-type ClaimEnvTaskResponse struct {
-	Task map[string]any `json:"task"`
-}
-
-// ClaimJobRequest is generated from the OpenAPI schema.
-type ClaimJobRequest struct {
-	WorkerID     string    `json:"worker_id"`
-	LeaseSeconds *int      `json:"lease_seconds,omitempty"`
-	Kinds        []JobKind `json:"kinds,omitempty"`
-	// Recipes Recipe kinds this worker can run; train jobs for other recipes are left queued.
-	Recipes []RecipeKind `json:"recipes,omitempty"`
-}
-
-// ClaimJobResponse is generated from the OpenAPI schema.
-type ClaimJobResponse struct {
-	Protocol ClaimJobResponseProtocol `json:"protocol"`
-	Job      *TrainerJob              `json:"job"`
-}
-
-// ClaimJobResponseProtocol is an enumeration of allowed values.
-type ClaimJobResponseProtocol string
-
-// Values of ClaimJobResponseProtocol.
-const (
-	ClaimJobResponseProtocolGradTrainerProtocol1 ClaimJobResponseProtocol = "grad.trainer-protocol/1"
-)
-
-// CompleteTrainerJobRequest is generated from the OpenAPI schema.
-type CompleteTrainerJobRequest struct {
-	WorkerID string `json:"worker_id"`
-	Attempt  int    `json:"attempt"`
-	// Status `abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure.
-	Status          CompleteTrainerJobRequestStatus         `json:"status"`
-	UploadID        *string                                 `json:"upload_id,omitempty"`
-	Format          *ArtifactFormat                         `json:"format,omitempty"`
-	Manifest        map[string]any                          `json:"manifest,omitempty"`
-	EvalReport      map[string]any                          `json:"eval_report,omitempty"`
-	TokensProcessed *int                                    `json:"tokens_processed,omitempty"`
-	Error           *string                                 `json:"error,omitempty"`
-	ImportSummary   *CompleteTrainerJobRequestImportSummary `json:"import_summary,omitempty"`
-}
-
-// CompleteTrainerJobRequestImportSummary is generated from the OpenAPI schema.
-type CompleteTrainerJobRequestImportSummary struct {
-	DroppedCount   *int     `json:"dropped_count,omitempty"`
-	DetectedScores []string `json:"detected_scores,omitempty"`
-	DropReasons    []string `json:"drop_reasons,omitempty"`
-}
-
-// CompleteTrainerJobRequestStatus `abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure.
-type CompleteTrainerJobRequestStatus string
-
-// Values of CompleteTrainerJobRequestStatus.
-const (
-	CompleteTrainerJobRequestStatusCompleted     CompleteTrainerJobRequestStatus = "completed"
-	CompleteTrainerJobRequestStatusStoppedBudget CompleteTrainerJobRequestStatus = "stopped_budget"
-	CompleteTrainerJobRequestStatusFailed        CompleteTrainerJobRequestStatus = "failed"
-	CompleteTrainerJobRequestStatusCancelled     CompleteTrainerJobRequestStatus = "cancelled"
-	CompleteTrainerJobRequestStatusAbandoned     CompleteTrainerJobRequestStatus = "abandoned"
-)
-
-// CompleteTrainerJobResponse is generated from the OpenAPI schema.
-type CompleteTrainerJobResponse struct {
-	JobID    string     `json:"job_id"`
-	Kind     JobKind    `json:"kind"`
-	Status   string     `json:"status"`
-	Run      *Run       `json:"run"`
-	Artifact *Artifact  `json:"artifact"`
-	Import   *ImportJob `json:"import"`
 }
 
 // CreateAPIKeyRequest is generated from the OpenAPI schema.
@@ -373,12 +295,90 @@ const (
 
 // DatasetRecordsPage is generated from the OpenAPI schema.
 type DatasetRecordsPage struct {
-	Dataset    string          `json:"dataset"`
-	Version    int             `json:"version"`
-	Total      int             `json:"total"`
-	Data       []DatasetRecord `json:"data"`
-	NextCursor *string         `json:"next_cursor"`
+	Dataset string          `json:"dataset"`
+	Version int             `json:"version"`
+	Total   int             `json:"total"`
+	Data    []DatasetRecord `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
+
+// DecisionHeadReport is generated from the OpenAPI schema.
+type DecisionHeadReport struct {
+	Type        DecisionHeadReportType `json:"type"`
+	Examples    int                    `json:"examples"`
+	Accuracy    *float64               `json:"accuracy"`
+	Ece         *float64               `json:"ece"`
+	Temperature float64                `json:"temperature"`
+	// Brier Written by: noul heads.
+	Brier *float64 `json:"brier,omitempty"`
+	// Mae Written by: score heads.
+	Mae             *float64                                    `json:"mae,omitempty"`
+	MacroF1         *float64                                    `json:"macro_f1,omitempty"`
+	PerOption       map[string]DecisionHeadReportPerOptionValue `json:"per_option,omitempty"`
+	ConfusionMatrix *DecisionHeadReportConfusionMatrix          `json:"confusion_matrix,omitempty"`
+	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
+	AdditionalProperties map[string]any `json:"-"`
+}
+
+var knownDecisionHeadReportFields = map[string]bool{
+	"type":             true,
+	"examples":         true,
+	"accuracy":         true,
+	"ece":              true,
+	"temperature":      true,
+	"brier":            true,
+	"mae":              true,
+	"macro_f1":         true,
+	"per_option":       true,
+	"confusion_matrix": true,
+}
+
+// MarshalJSON encodes declared fields plus AdditionalProperties.
+func (m DecisionHeadReport) MarshalJSON() ([]byte, error) {
+	type plain DecisionHeadReport
+	return MarshalWithAdditional(plain(m), m.AdditionalProperties)
+}
+
+// UnmarshalJSON decodes declared fields and keeps the rest in AdditionalProperties.
+func (m *DecisionHeadReport) UnmarshalJSON(data []byte) error {
+	type plain DecisionHeadReport
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	extra, err := AdditionalFields(data, knownDecisionHeadReportFields)
+	if err != nil {
+		return err
+	}
+	*m = DecisionHeadReport(p)
+	m.AdditionalProperties = extra
+	return nil
+}
+
+// DecisionHeadReportConfusionMatrix is generated from the OpenAPI schema.
+type DecisionHeadReportConfusionMatrix struct {
+	Labels []string `json:"labels"`
+	Matrix [][]int  `json:"matrix"`
+}
+
+// DecisionHeadReportPerOptionValue is generated from the OpenAPI schema.
+type DecisionHeadReportPerOptionValue struct {
+	Precision *float64 `json:"precision"`
+	Recall    *float64 `json:"recall"`
+	F1        *float64 `json:"f1"`
+	Support   int      `json:"support"`
+}
+
+// DecisionHeadReportType is an enumeration of allowed values.
+type DecisionHeadReportType string
+
+// Values of DecisionHeadReportType.
+const (
+	DecisionHeadReportTypeChoice DecisionHeadReportType = "choice"
+	DecisionHeadReportTypeNoul   DecisionHeadReportType = "noul"
+	DecisionHeadReportTypeScore  DecisionHeadReportType = "score"
+)
 
 // DeployArtifactRequest is generated from the OpenAPI schema.
 type DeployArtifactRequest struct {
@@ -419,19 +419,6 @@ const (
 	DeploymentStatusTypeDisabled DeploymentStatusType = "disabled"
 )
 
-// DispatchEnvTaskResponse is generated from the OpenAPI schema.
-type DispatchEnvTaskResponse struct {
-	ID            string `json:"id"`
-	EnvName       string `json:"env_name"`
-	Status        string `json:"status"`
-	ActiveWorkers int    `json:"active_workers"`
-}
-
-// DownloadTrainerDatasetParams holds the query and header parameters of DownloadTrainerDataset.
-type DownloadTrainerDatasetParams struct {
-	Attempt int
-}
-
 // EmbedRequest is generated from the OpenAPI schema.
 type EmbedRequest struct {
 	// Model Name of a deployed embedding artifact.
@@ -456,31 +443,6 @@ type EmbedResponseDataItem struct {
 type EmbedResponseUsage struct {
 	PromptTokens int `json:"prompt_tokens"`
 	TotalTokens  int `json:"total_tokens"`
-}
-
-// EnvTaskDispatch is generated from the OpenAPI schema.
-type EnvTaskDispatch struct {
-	EnvName      string         `json:"env_name"`
-	Task         map[string]any `json:"task"`
-	ModelID      string         `json:"model_id"`
-	SystemPrompt *string        `json:"system_prompt,omitempty"`
-	TimeoutS     *int           `json:"timeout_s,omitempty"`
-}
-
-// EnvTaskResult is generated from the OpenAPI schema.
-type EnvTaskResult struct {
-	WorkerID   string             `json:"worker_id"`
-	Score      *float64           `json:"score,omitempty"`
-	Scores     map[string]float64 `json:"scores,omitempty"`
-	Trajectory map[string]any     `json:"trajectory,omitempty"`
-	Error      *string            `json:"error,omitempty"`
-}
-
-// EnvWorkerRegister is generated from the OpenAPI schema.
-type EnvWorkerRegister struct {
-	Name        string `json:"name"`
-	WorkerID    string `json:"worker_id"`
-	Concurrency *int   `json:"concurrency,omitempty"`
 }
 
 // EvalModelSummary is generated from the OpenAPI schema.
@@ -524,6 +486,183 @@ type EvalOutput struct {
 type EvalOutputUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
+}
+
+// EvalReport is generated from the OpenAPI schema.
+type EvalReport struct {
+	// MetricName Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge), recall_at_10 (embedding).
+	MetricName   string   `json:"metric_name"`
+	SelectedStep int      `json:"selected_step"`
+	BestStep     *int     `json:"best_step"`
+	FinalStep    int      `json:"final_step"`
+	TrainRecords int      `json:"train_records"`
+	EvalRecords  int      `json:"eval_records"`
+	Warnings     []string `json:"warnings"`
+	// EvalLoss Written by: sft, dpo, router, decision.
+	EvalLoss *float64 `json:"eval_loss,omitempty"`
+	// EvalTokenAccuracy Written by: sft.
+	EvalTokenAccuracy *float64 `json:"eval_token_accuracy,omitempty"`
+	// TrainedTokenFraction Written by: sft.
+	TrainedTokenFraction *float64 `json:"trained_token_fraction,omitempty"`
+	// TrainExamples Written by: sft.
+	TrainExamples *int `json:"train_examples,omitempty"`
+	// EvalExamples Written by: sft, router, decision.
+	EvalExamples *int `json:"eval_examples,omitempty"`
+	// SelectionExamples Written by: router, decision.
+	SelectionExamples *int `json:"selection_examples,omitempty"`
+	// Truncated Written by: sft, dpo.
+	Truncated *int `json:"truncated,omitempty"`
+	// PreferenceAccuracy Written by: dpo.
+	PreferenceAccuracy *float64 `json:"preference_accuracy,omitempty"`
+	// RewardMargin Written by: dpo.
+	RewardMargin *float64 `json:"reward_margin,omitempty"`
+	// Beta Written by: dpo.
+	Beta *float64 `json:"beta,omitempty"`
+	// TrainPairs Written by: dpo, embedding.
+	TrainPairs *int `json:"train_pairs,omitempty"`
+	// EvalPairs Written by: dpo, embedding.
+	EvalPairs *int `json:"eval_pairs,omitempty"`
+	// DroppedRecords Written by: dpo, embedding.
+	DroppedRecords *int `json:"dropped_records,omitempty"`
+	// EvalKL Written by: cartridge.
+	EvalKL *float64 `json:"eval_kl,omitempty"`
+	// NoContextKL Written by: cartridge.
+	NoContextKL *float64 `json:"no_context_kl,omitempty"`
+	// KLReduction Written by: cartridge.
+	KLReduction *float64 `json:"kl_reduction,omitempty"`
+	// NumTokens Written by: cartridge.
+	NumTokens *int `json:"num_tokens,omitempty"`
+	// Teacher Written by: cartridge.
+	Teacher *string `json:"teacher,omitempty"`
+	// Candidates Written by: router.
+	Candidates []string `json:"candidates,omitempty"`
+	// FallbackModel Written by: router.
+	FallbackModel *string `json:"fallback_model,omitempty"`
+	// FallbackQuality Written by: router.
+	FallbackQuality *float64 `json:"fallback_quality,omitempty"`
+	// RoutesAnyTraffic Written by: router.
+	RoutesAnyTraffic *bool                `json:"routes_any_traffic,omitempty"`
+	ParetoSummary    *RouterParetoSummary `json:"pareto_summary,omitempty"`
+	// Ece Written by: decision.
+	Ece *float64 `json:"ece,omitempty"`
+	// Heads Written by: decision (one entry per question).
+	Heads map[string]DecisionHeadReport `json:"heads,omitempty"`
+	// RecallAt1 Written by: embedding.
+	RecallAt1 *float64 `json:"recall_at_1,omitempty"`
+	// RecallAt5 Written by: embedding.
+	RecallAt5 *float64 `json:"recall_at_5,omitempty"`
+	// RecallAt10 Written by: embedding.
+	RecallAt10 *float64 `json:"recall_at_10,omitempty"`
+	// Mrr Written by: embedding.
+	Mrr *float64 `json:"mrr,omitempty"`
+	// CorpusSize Written by: embedding.
+	CorpusSize *int `json:"corpus_size,omitempty"`
+	// Baseline Retrieval metrics of the untrained base encoder. Written by: embedding.
+	Baseline *EvalReportBaseline `json:"baseline,omitempty"`
+	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
+	AdditionalProperties map[string]any `json:"-"`
+}
+
+var knownEvalReportFields = map[string]bool{
+	"metric_name":            true,
+	"selected_step":          true,
+	"best_step":              true,
+	"final_step":             true,
+	"train_records":          true,
+	"eval_records":           true,
+	"warnings":               true,
+	"eval_loss":              true,
+	"eval_token_accuracy":    true,
+	"trained_token_fraction": true,
+	"train_examples":         true,
+	"eval_examples":          true,
+	"selection_examples":     true,
+	"truncated":              true,
+	"preference_accuracy":    true,
+	"reward_margin":          true,
+	"beta":                   true,
+	"train_pairs":            true,
+	"eval_pairs":             true,
+	"dropped_records":        true,
+	"eval_kl":                true,
+	"no_context_kl":          true,
+	"kl_reduction":           true,
+	"num_tokens":             true,
+	"teacher":                true,
+	"candidates":             true,
+	"fallback_model":         true,
+	"fallback_quality":       true,
+	"routes_any_traffic":     true,
+	"pareto_summary":         true,
+	"ece":                    true,
+	"heads":                  true,
+	"recall_at_1":            true,
+	"recall_at_5":            true,
+	"recall_at_10":           true,
+	"mrr":                    true,
+	"corpus_size":            true,
+	"baseline":               true,
+}
+
+// MarshalJSON encodes declared fields plus AdditionalProperties.
+func (m EvalReport) MarshalJSON() ([]byte, error) {
+	type plain EvalReport
+	return MarshalWithAdditional(plain(m), m.AdditionalProperties)
+}
+
+// UnmarshalJSON decodes declared fields and keeps the rest in AdditionalProperties.
+func (m *EvalReport) UnmarshalJSON(data []byte) error {
+	type plain EvalReport
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	extra, err := AdditionalFields(data, knownEvalReportFields)
+	if err != nil {
+		return err
+	}
+	*m = EvalReport(p)
+	m.AdditionalProperties = extra
+	return nil
+}
+
+// EvalReportBaseline Retrieval metrics of the untrained base encoder. Written by: embedding.
+type EvalReportBaseline struct {
+	RecallAt1  *float64 `json:"recall_at_1"`
+	RecallAt5  *float64 `json:"recall_at_5"`
+	RecallAt10 *float64 `json:"recall_at_10"`
+	Mrr        *float64 `json:"mrr"`
+	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
+	AdditionalProperties map[string]any `json:"-"`
+}
+
+var knownEvalReportBaselineFields = map[string]bool{
+	"recall_at_1":  true,
+	"recall_at_5":  true,
+	"recall_at_10": true,
+	"mrr":          true,
+}
+
+// MarshalJSON encodes declared fields plus AdditionalProperties.
+func (m EvalReportBaseline) MarshalJSON() ([]byte, error) {
+	type plain EvalReportBaseline
+	return MarshalWithAdditional(plain(m), m.AdditionalProperties)
+}
+
+// UnmarshalJSON decodes declared fields and keeps the rest in AdditionalProperties.
+func (m *EvalReportBaseline) UnmarshalJSON(data []byte) error {
+	type plain EvalReportBaseline
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	extra, err := AdditionalFields(data, knownEvalReportBaselineFields)
+	if err != nil {
+		return err
+	}
+	*m = EvalReportBaseline(p)
+	m.AdditionalProperties = extra
+	return nil
 }
 
 // EvalRubricItem is generated from the OpenAPI schema.
@@ -757,29 +896,23 @@ const (
 	ImportStatusFailed    ImportStatus = "failed"
 )
 
-// JobKind is an enumeration of allowed values.
-type JobKind string
-
-// Values of JobKind.
-const (
-	JobKindTrain  JobKind = "train"
-	JobKindImport JobKind = "import"
-)
-
 // ListAPIKeysParams holds the query and header parameters of ListAPIKeys.
 type ListAPIKeysParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 }
 
 // ListAPIKeysResponse is generated from the OpenAPI schema.
 type ListAPIKeysResponse struct {
-	Data       []APIKey `json:"data"`
-	NextCursor *string  `json:"next_cursor"`
+	Data []APIKey `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListArtifactsParams holds the query and header parameters of ListArtifacts.
 type ListArtifactsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 	Name   *string
@@ -787,43 +920,50 @@ type ListArtifactsParams struct {
 
 // ListArtifactsResponse is generated from the OpenAPI schema.
 type ListArtifactsResponse struct {
-	Data       []Artifact `json:"data"`
-	NextCursor *string    `json:"next_cursor"`
+	Data []Artifact `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListDatasetRecordsParams holds the query and header parameters of ListDatasetRecords.
 type ListDatasetRecordsParams struct {
 	Version *int
-	Limit   *int
-	Cursor  *string
+	// Limit Page size (default 100). Values above 1000 are clamped to 1000.
+	Limit  *int
+	Cursor *string
 }
 
 // ListDatasetsParams holds the query and header parameters of ListDatasets.
 type ListDatasetsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 }
 
 // ListDatasetsResponse is generated from the OpenAPI schema.
 type ListDatasetsResponse struct {
-	Data       []Dataset `json:"data"`
-	NextCursor *string   `json:"next_cursor"`
+	Data []Dataset `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListDeploymentsParams holds the query and header parameters of ListDeployments.
 type ListDeploymentsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 }
 
 // ListDeploymentsResponse is generated from the OpenAPI schema.
 type ListDeploymentsResponse struct {
-	Data       []Deployment `json:"data"`
-	NextCursor *string      `json:"next_cursor"`
+	Data []Deployment `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListEvalFailuresParams holds the query and header parameters of ListEvalFailures.
 type ListEvalFailuresParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit     *int
 	Cursor    *string
 	Model     *string
@@ -832,13 +972,15 @@ type ListEvalFailuresParams struct {
 
 // ListEvalFailuresResponse is generated from the OpenAPI schema.
 type ListEvalFailuresResponse struct {
-	EvalID     string            `json:"eval_id"`
-	Data       []EvalTaskOutcome `json:"data"`
-	NextCursor *string           `json:"next_cursor"`
+	EvalID string            `json:"eval_id"`
+	Data   []EvalTaskOutcome `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListEvalOutputsParams holds the query and header parameters of ListEvalOutputs.
 type ListEvalOutputsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit         *int
 	Cursor        *string
 	Model         *string
@@ -847,12 +989,14 @@ type ListEvalOutputsParams struct {
 
 // ListEvalOutputsResponse is generated from the OpenAPI schema.
 type ListEvalOutputsResponse struct {
-	Data       []EvalOutput `json:"data"`
-	NextCursor *string      `json:"next_cursor"`
+	Data []EvalOutput `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListEvalResultsParams holds the query and header parameters of ListEvalResults.
 type ListEvalResultsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 	Model  *string
@@ -860,32 +1004,37 @@ type ListEvalResultsParams struct {
 
 // ListEvalResultsResponse is generated from the OpenAPI schema.
 type ListEvalResultsResponse struct {
-	Data       []EvalTaskOutcome `json:"data"`
-	NextCursor *string           `json:"next_cursor"`
+	Data []EvalTaskOutcome `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListEvalsParams holds the query and header parameters of ListEvals.
 type ListEvalsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 }
 
 // ListEvalsResponse is generated from the OpenAPI schema.
 type ListEvalsResponse struct {
-	Data       []EvalRun `json:"data"`
-	NextCursor *string   `json:"next_cursor"`
+	Data []EvalRun `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListImportsParams holds the query and header parameters of ListImports.
 type ListImportsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 }
 
 // ListImportsResponse is generated from the OpenAPI schema.
 type ListImportsResponse struct {
-	Data       []ImportJob `json:"data"`
-	NextCursor *string     `json:"next_cursor"`
+	Data []ImportJob `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListModelsResponse is generated from the OpenAPI schema.
@@ -895,49 +1044,55 @@ type ListModelsResponse struct {
 
 // ListRunCheckpointsParams holds the query and header parameters of ListRunCheckpoints.
 type ListRunCheckpointsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 }
 
 // ListRunCheckpointsResponse is generated from the OpenAPI schema.
 type ListRunCheckpointsResponse struct {
-	Data       []Checkpoint `json:"data"`
-	NextCursor *string      `json:"next_cursor"`
+	Data []Checkpoint `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
 }
 
 // ListRunMetricsParams holds the query and header parameters of ListRunMetrics.
 type ListRunMetricsParams struct {
 	Cursor    *string
 	AfterStep *int
-	Limit     *int
+	// Limit Page size (default 1000). Values above 5000 are clamped to 5000.
+	Limit *int
 }
 
 // ListRunsParams holds the query and header parameters of ListRuns.
 type ListRunsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
 }
 
 // ListRunsResponse is generated from the OpenAPI schema.
 type ListRunsResponse struct {
-	Data       []Run   `json:"data"`
+	Data []Run `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
 	NextCursor *string `json:"next_cursor"`
 }
 
 // MetricPoint is generated from the OpenAPI schema.
 type MetricPoint struct {
-	Seq          int      `json:"seq"`
-	Attempt      int      `json:"attempt"`
-	Step         int      `json:"step"`
-	Loss         float64  `json:"loss"`
-	EvalLoss     *float64 `json:"eval_loss,omitempty"`
-	EvalMetric   *float64 `json:"eval_metric,omitempty"`
-	GradNorm     *float64 `json:"grad_norm,omitempty"`
-	LR           *float64 `json:"lr,omitempty"`
-	TokensPerSec *float64 `json:"tokens_per_sec,omitempty"`
-	Tokens       int      `json:"tokens"`
-	CostUSD      float64  `json:"cost_usd"`
-	Timestamp    string   `json:"timestamp"`
+	Seq      int      `json:"seq"`
+	Attempt  int      `json:"attempt"`
+	Step     int      `json:"step"`
+	Loss     float64  `json:"loss"`
+	EvalLoss *float64 `json:"eval_loss,omitempty"`
+	// EvalMetrics Held-out metrics of an eval step by name (including the recipe's selection metric, eval_report.metric_name); absent on steps without an eval.
+	EvalMetrics  map[string]*float64 `json:"eval_metrics,omitempty"`
+	GradNorm     *float64            `json:"grad_norm,omitempty"`
+	LR           *float64            `json:"lr,omitempty"`
+	TokensPerSec *float64            `json:"tokens_per_sec,omitempty"`
+	Tokens       int                 `json:"tokens"`
+	CostUSD      float64             `json:"cost_usd"`
+	Timestamp    string              `json:"timestamp"`
 	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
 	AdditionalProperties map[string]any `json:"-"`
 }
@@ -948,7 +1103,7 @@ var knownMetricPointFields = map[string]bool{
 	"step":           true,
 	"loss":           true,
 	"eval_loss":      true,
-	"eval_metric":    true,
+	"eval_metrics":   true,
 	"grad_norm":      true,
 	"lr":             true,
 	"tokens_per_sec": true,
@@ -979,63 +1134,15 @@ func (m *MetricPoint) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MetricPointInput is generated from the OpenAPI schema.
-type MetricPointInput struct {
-	Step         int      `json:"step"`
-	Loss         float64  `json:"loss"`
-	EvalLoss     *float64 `json:"eval_loss,omitempty"`
-	EvalMetric   *float64 `json:"eval_metric,omitempty"`
-	GradNorm     *float64 `json:"grad_norm,omitempty"`
-	LR           *float64 `json:"lr,omitempty"`
-	TokensPerSec *float64 `json:"tokens_per_sec,omitempty"`
-	Tokens       int      `json:"tokens"`
-	CostUSD      *float64 `json:"cost_usd,omitempty"`
-	Timestamp    string   `json:"timestamp"`
-	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
-	AdditionalProperties map[string]any `json:"-"`
-}
-
-var knownMetricPointInputFields = map[string]bool{
-	"step":           true,
-	"loss":           true,
-	"eval_loss":      true,
-	"eval_metric":    true,
-	"grad_norm":      true,
-	"lr":             true,
-	"tokens_per_sec": true,
-	"tokens":         true,
-	"cost_usd":       true,
-	"timestamp":      true,
-}
-
-// MarshalJSON encodes declared fields plus AdditionalProperties.
-func (m MetricPointInput) MarshalJSON() ([]byte, error) {
-	type plain MetricPointInput
-	return MarshalWithAdditional(plain(m), m.AdditionalProperties)
-}
-
-// UnmarshalJSON decodes declared fields and keeps the rest in AdditionalProperties.
-func (m *MetricPointInput) UnmarshalJSON(data []byte) error {
-	type plain MetricPointInput
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	extra, err := AdditionalFields(data, knownMetricPointInputFields)
-	if err != nil {
-		return err
-	}
-	*m = MetricPointInput(p)
-	m.AdditionalProperties = extra
-	return nil
-}
-
 // MetricsPage is generated from the OpenAPI schema.
 type MetricsPage struct {
-	RunID      string        `json:"run_id"`
-	Status     RunStatus     `json:"status"`
-	Data       []MetricPoint `json:"data"`
-	NextCursor *string       `json:"next_cursor"`
+	RunID  string        `json:"run_id"`
+	Status RunStatus     `json:"status"`
+	Data   []MetricPoint `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
+	// TailCursor Cursor after the newest point returned so far; pass it back as `cursor` to poll for points written later (tailing a running run).
+	TailCursor string `json:"tail_cursor"`
 }
 
 // PlanEvalRequest is generated from the OpenAPI schema.
@@ -1120,36 +1227,6 @@ type PostEvalScoresResponse struct {
 	Accepted           int        `json:"accepted"`
 	Status             EvalStatus `json:"status"`
 	PendingLocalScores int        `json:"pending_local_scores"`
-}
-
-// PostImportRecordsRequest is generated from the OpenAPI schema.
-type PostImportRecordsRequest struct {
-	WorkerID string `json:"worker_id"`
-	Attempt  int    `json:"attempt"`
-	Records  []any  `json:"records"`
-}
-
-// PostImportRecordsResponse is generated from the OpenAPI schema.
-type PostImportRecordsResponse struct {
-	Accepted int                                   `json:"accepted"`
-	Rejected int                                   `json:"rejected"`
-	Errors   []PostImportRecordsResponseErrorsItem `json:"errors"`
-}
-
-// PostImportRecordsResponseErrorsItem is generated from the OpenAPI schema.
-type PostImportRecordsResponseErrorsItem struct {
-	Index int    `json:"index"`
-	Error string `json:"error"`
-}
-
-// Problem is generated from the OpenAPI schema.
-type Problem struct {
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	Status    int    `json:"status"`
-	Detail    string `json:"detail"`
-	Code      string `json:"code"`
-	RequestID string `json:"request_id"`
 }
 
 // PromoteCheckpointRequest is generated from the OpenAPI schema.
@@ -1267,25 +1344,6 @@ type RecordFeedbackResponse struct {
 	Records      []FeedbackRecord `json:"records"`
 }
 
-// RegisterEnvWorkerResponse is generated from the OpenAPI schema.
-type RegisterEnvWorkerResponse struct {
-	Name            string `json:"name"`
-	WorkerID        string `json:"worker_id"`
-	Concurrency     int    `json:"concurrency"`
-	LastHeartbeatAt string `json:"last_heartbeat_at"`
-}
-
-// RegisterTrainerCheckpointRequest is generated from the OpenAPI schema.
-type RegisterTrainerCheckpointRequest struct {
-	WorkerID  string          `json:"worker_id"`
-	Attempt   int             `json:"attempt"`
-	Step      int             `json:"step"`
-	EvalScore *float64        `json:"eval_score,omitempty"`
-	UploadID  string          `json:"upload_id"`
-	Format    *ArtifactFormat `json:"format,omitempty"`
-	Metadata  map[string]any  `json:"metadata,omitempty"`
-}
-
 // RenderDatasetRequest is generated from the OpenAPI schema.
 type RenderDatasetRequest struct {
 	Model            *string                       `json:"model,omitempty"`
@@ -1346,30 +1404,6 @@ type RenderDatasetResponseTokenCounts string
 // Values of RenderDatasetResponseTokenCounts.
 const (
 	RenderDatasetResponseTokenCountsEstimated RenderDatasetResponseTokenCounts = "estimated"
-)
-
-// ReportTrainerProgressRequest is generated from the OpenAPI schema.
-type ReportTrainerProgressRequest struct {
-	WorkerID string           `json:"worker_id"`
-	Attempt  int              `json:"attempt"`
-	Metric   MetricPointInput `json:"metric"`
-}
-
-// ReportTrainerProgressResponse is generated from the OpenAPI schema.
-type ReportTrainerProgressResponse struct {
-	Status     RunStatus                                `json:"status"`
-	ShouldStop bool                                     `json:"should_stop"`
-	StopReason *ReportTrainerProgressResponseStopReason `json:"stop_reason"`
-	CostUSD    float64                                  `json:"cost_usd"`
-}
-
-// ReportTrainerProgressResponseStopReason is an enumeration of allowed values.
-type ReportTrainerProgressResponseStopReason string
-
-// Values of ReportTrainerProgressResponseStopReason.
-const (
-	ReportTrainerProgressResponseStopReasonCancelled ReportTrainerProgressResponseStopReason = "cancelled"
-	ReportTrainerProgressResponseStopReasonBudget    ReportTrainerProgressResponseStopReason = "budget"
 )
 
 // ResolvedRunConfig is generated from the OpenAPI schema.
@@ -1509,6 +1543,56 @@ type RouteResponse struct {
 	Scores        map[string]float64 `json:"scores"`
 }
 
+// RouterParetoSummary Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no report prompt was scored for every candidate.
+type RouterParetoSummary struct {
+	TargetMaxDrop float64  `json:"target_max_drop"`
+	RoutedQuality *float64 `json:"routed_quality"`
+	QualityDrop   *float64 `json:"quality_drop"`
+	// QualityDropCi95 95% bootstrap interval [low, high].
+	QualityDropCi95 []float64 `json:"quality_drop_ci95"`
+	OffloadRate     *float64  `json:"offload_rate"`
+	CostSavingsPct  *float64  `json:"cost_savings_pct"`
+	Ece             *float64  `json:"ece"`
+	Threshold       *float64  `json:"threshold"`
+	Temperature     float64   `json:"temperature"`
+	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
+	AdditionalProperties map[string]any `json:"-"`
+}
+
+var knownRouterParetoSummaryFields = map[string]bool{
+	"target_max_drop":   true,
+	"routed_quality":    true,
+	"quality_drop":      true,
+	"quality_drop_ci95": true,
+	"offload_rate":      true,
+	"cost_savings_pct":  true,
+	"ece":               true,
+	"threshold":         true,
+	"temperature":       true,
+}
+
+// MarshalJSON encodes declared fields plus AdditionalProperties.
+func (m RouterParetoSummary) MarshalJSON() ([]byte, error) {
+	type plain RouterParetoSummary
+	return MarshalWithAdditional(plain(m), m.AdditionalProperties)
+}
+
+// UnmarshalJSON decodes declared fields and keeps the rest in AdditionalProperties.
+func (m *RouterParetoSummary) UnmarshalJSON(data []byte) error {
+	type plain RouterParetoSummary
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	extra, err := AdditionalFields(data, knownRouterParetoSummaryFields)
+	if err != nil {
+		return err
+	}
+	*m = RouterParetoSummary(p)
+	m.AdditionalProperties = extra
+	return nil
+}
+
 // Run is generated from the OpenAPI schema.
 type Run struct {
 	ID                    string            `json:"id"`
@@ -1529,7 +1613,7 @@ type Run struct {
 	Attempt               int               `json:"attempt"`
 	MaxAttempts           int               `json:"max_attempts"`
 	LatestMetric          *MetricPoint      `json:"latest_metric"`
-	EvalReport            map[string]any    `json:"eval_report"`
+	EvalReport            *EvalReport       `json:"eval_report"`
 	ArtifactID            *string           `json:"artifact_id"`
 	Error                 *string           `json:"error"`
 	CreatedAt             string            `json:"created_at"`
@@ -1599,139 +1683,6 @@ type TrainableModelFamily string
 const (
 	TrainableModelFamilyLlm     TrainableModelFamily = "llm"
 	TrainableModelFamilyEncoder TrainableModelFamily = "encoder"
-)
-
-// TrainerHeartbeatRequest is generated from the OpenAPI schema.
-type TrainerHeartbeatRequest struct {
-	WorkerID     string `json:"worker_id"`
-	Attempt      int    `json:"attempt"`
-	LeaseSeconds *int   `json:"lease_seconds,omitempty"`
-}
-
-// TrainerHeartbeatResponse is generated from the OpenAPI schema.
-type TrainerHeartbeatResponse struct {
-	Status         string                              `json:"status"`
-	ShouldStop     bool                                `json:"should_stop"`
-	StopReason     *TrainerHeartbeatResponseStopReason `json:"stop_reason"`
-	LeaseExpiresAt string                              `json:"lease_expires_at"`
-}
-
-// TrainerHeartbeatResponseStopReason is an enumeration of allowed values.
-type TrainerHeartbeatResponseStopReason string
-
-// Values of TrainerHeartbeatResponseStopReason.
-const (
-	TrainerHeartbeatResponseStopReasonCancelled TrainerHeartbeatResponseStopReason = "cancelled"
-	TrainerHeartbeatResponseStopReasonBudget    TrainerHeartbeatResponseStopReason = "budget"
-)
-
-// TrainerJob is generated from the OpenAPI schema.
-type TrainerJob struct {
-	ID                    string            `json:"id"`
-	Kind                  JobKind           `json:"kind"`
-	Attempt               int               `json:"attempt"`
-	LeaseSeconds          int               `json:"lease_seconds"`
-	LeaseExpiresAt        string            `json:"lease_expires_at"`
-	Run                   *TrainerJobRun    `json:"run"`
-	Import                *TrainerJobImport `json:"import"`
-	PricePerMillionTokens *float64          `json:"price_per_million_tokens"`
-	// MaxCostUSD Remaining budget for this attempt (the run cap minus cost billed by earlier attempts).
-	MaxCostUSD *float64           `json:"max_cost_usd"`
-	Dataset    *TrainerJobDataset `json:"dataset"`
-	Resume     *TrainerJobResume  `json:"resume"`
-}
-
-// TrainerJobDataset is generated from the OpenAPI schema.
-type TrainerJobDataset struct {
-	Version     int    `json:"version"`
-	RecordCount int    `json:"record_count"`
-	DownloadURL string `json:"download_url"`
-}
-
-// TrainerJobImport is generated from the OpenAPI schema.
-type TrainerJobImport struct {
-	ID          string                    `json:"id"`
-	WorkspaceID string                    `json:"workspace_id"`
-	Dataset     string                    `json:"dataset"`
-	Source      map[string]any            `json:"source"`
-	Connector   TrainerJobImportConnector `json:"connector"`
-}
-
-// TrainerJobImportConnector is an enumeration of allowed values.
-type TrainerJobImportConnector string
-
-// Values of TrainerJobImportConnector.
-const (
-	TrainerJobImportConnectorAuto             TrainerJobImportConnector = "auto"
-	TrainerJobImportConnectorGradTrajectories TrainerJobImportConnector = "grad_trajectories"
-	TrainerJobImportConnectorOpenaiChat       TrainerJobImportConnector = "openai_chat"
-	TrainerJobImportConnectorGradiated        TrainerJobImportConnector = "gradiated"
-	TrainerJobImportConnectorOTEL             TrainerJobImportConnector = "otel"
-	TrainerJobImportConnectorLangfuse         TrainerJobImportConnector = "langfuse"
-	TrainerJobImportConnectorPosthog          TrainerJobImportConnector = "posthog"
-	TrainerJobImportConnectorBraintrust       TrainerJobImportConnector = "braintrust"
-	TrainerJobImportConnectorLangsmith        TrainerJobImportConnector = "langsmith"
-)
-
-// TrainerJobResume is generated from the OpenAPI schema.
-type TrainerJobResume struct {
-	CheckpointID string `json:"checkpoint_id"`
-	Step         int    `json:"step"`
-	DownloadURL  string `json:"download_url"`
-}
-
-// TrainerJobRun is generated from the OpenAPI schema.
-type TrainerJobRun struct {
-	ID             string            `json:"id"`
-	WorkspaceID    string            `json:"workspace_id"`
-	Name           string            `json:"name"`
-	RecipeKind     RecipeKind        `json:"recipe_kind"`
-	ResolvedConfig ResolvedRunConfig `json:"resolved_config"`
-	TotalSteps     int               `json:"total_steps"`
-}
-
-// TrainerQueueStats is generated from the OpenAPI schema.
-type TrainerQueueStats struct {
-	Queued  int                     `json:"queued"`
-	Running int                     `json:"running"`
-	Total   int                     `json:"total"`
-	ByKind  TrainerQueueStatsByKind `json:"by_kind"`
-}
-
-// TrainerQueueStatsByKind is generated from the OpenAPI schema.
-type TrainerQueueStatsByKind struct {
-	Train  TrainerQueueStatsByKindTrain  `json:"train"`
-	Import TrainerQueueStatsByKindImport `json:"import"`
-}
-
-// TrainerQueueStatsByKindImport is generated from the OpenAPI schema.
-type TrainerQueueStatsByKindImport struct {
-	Queued  int `json:"queued"`
-	Running int `json:"running"`
-}
-
-// TrainerQueueStatsByKindTrain is generated from the OpenAPI schema.
-type TrainerQueueStatsByKindTrain struct {
-	Queued  int `json:"queued"`
-	Running int `json:"running"`
-}
-
-// TrainerUploadRequest is generated from the OpenAPI schema.
-type TrainerUploadRequest struct {
-	WorkerID  string                   `json:"worker_id"`
-	Attempt   int                      `json:"attempt"`
-	Kind      TrainerUploadRequestKind `json:"kind"`
-	SHA256    string                   `json:"sha256"`
-	SizeBytes int                      `json:"size_bytes"`
-}
-
-// TrainerUploadRequestKind is an enumeration of allowed values.
-type TrainerUploadRequestKind string
-
-// Values of TrainerUploadRequestKind.
-const (
-	TrainerUploadRequestKindCheckpoint TrainerUploadRequestKind = "checkpoint"
-	TrainerUploadRequestKindArtifact   TrainerUploadRequestKind = "artifact"
 )
 
 // TrajectoryInput is generated from the OpenAPI schema.

@@ -1370,8 +1370,8 @@ components:
             type:
               - number
               - "null"
-          description: Held-out metrics of an eval step, keyed by name (the recipe's selection metric first); absent on steps
-            without an eval.
+          description: Held-out metrics of an eval step by name (including the recipe's selection metric,
+            eval_report.metric_name); absent on steps without an eval.
         grad_norm:
           type:
             - number
@@ -2238,8 +2238,8 @@ components:
             type:
               - number
               - "null"
-          description: Held-out metrics of an eval step, keyed by name (the recipe's selection metric first); absent on steps
-            without an eval.
+          description: Held-out metrics of an eval step by name (including the recipe's selection metric,
+            eval_report.metric_name); absent on steps without an eval.
         grad_norm:
           type:
             - number

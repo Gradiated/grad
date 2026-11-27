@@ -40,7 +40,7 @@ export interface Artifact {
   sha256: string;
   sizeBytes: number;
   manifest: Record<string, unknown>;
-  evalReport: Record<string, unknown> | null;
+  evalReport: EvalReport | null;
   createdAt: string;
 }
 
@@ -79,46 +79,6 @@ export interface Checkpoint {
   final: boolean;
   expiresAt: string | null;
   createdAt: string;
-}
-
-export interface ClaimJobRequest {
-  workerId: string;
-  leaseSeconds?: number | undefined;
-  kinds?: Array<JobKind> | undefined;
-  /** Recipe kinds this worker can run; train jobs for other recipes are left queued. */
-  recipes?: Array<RecipeKind> | undefined;
-}
-
-export interface ClaimJobResponse {
-  protocol: "grad.trainer-protocol/1";
-  job: TrainerJob | null;
-}
-
-export interface CompleteTrainerJobRequest {
-  workerId: string;
-  attempt: number;
-  /** `abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure. */
-  status: "completed" | "stopped_budget" | "failed" | "cancelled" | "abandoned";
-  uploadId?: string | undefined;
-  format?: ArtifactFormat | null | undefined;
-  manifest?: Record<string, unknown> | undefined;
-  evalReport?: Record<string, unknown> | null | undefined;
-  tokensProcessed?: number | undefined;
-  error?: string | undefined;
-  importSummary?: {
-    droppedCount?: number | undefined;
-    detectedScores?: Array<string> | undefined;
-    dropReasons?: Array<string> | undefined;
-  } | undefined;
-}
-
-export interface CompleteTrainerJobResponse {
-  jobId: string;
-  kind: JobKind;
-  status: string;
-  run: Run | null;
-  artifact: Artifact | null;
-  import: ImportJob | null;
 }
 
 export interface CreateApiKeyRequest {
@@ -191,7 +151,32 @@ export interface DatasetRecordsPage {
   version: number;
   total: number;
   data: Array<DatasetRecord>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
+}
+
+export interface DecisionHeadReport {
+  type: "choice" | "noul" | "score";
+  examples: number;
+  accuracy: number | null;
+  ece: number | null;
+  temperature: number;
+  /** Written by: noul heads. */
+  brier?: number | undefined;
+  /** Written by: score heads. */
+  mae?: number | undefined;
+  macroF1?: number | null | undefined;
+  perOption?: Record<string, {
+    precision: number | null;
+    recall: number | null;
+    f1: number | null;
+    support: number;
+  }> | undefined;
+  confusionMatrix?: {
+    labels: Array<string>;
+    matrix: Array<Array<number>>;
+  } | undefined;
+  [key: string]: unknown;
 }
 
 export interface DeployArtifactRequest {
@@ -239,28 +224,6 @@ export interface EmbedResponse {
   };
 }
 
-export interface EnvTaskDispatch {
-  envName: string;
-  task: Record<string, unknown>;
-  modelId: string;
-  systemPrompt?: string | undefined;
-  timeoutS?: number | undefined;
-}
-
-export interface EnvTaskResult {
-  workerId: string;
-  score?: number | null | undefined;
-  scores?: Record<string, number> | undefined;
-  trajectory?: Record<string, unknown> | undefined;
-  error?: string | undefined;
-}
-
-export interface EnvWorkerRegister {
-  name: string;
-  workerId: string;
-  concurrency?: number | undefined;
-}
-
 export interface EvalModelSummary {
   model: string;
   overall: number;
@@ -294,6 +257,85 @@ export interface EvalOutput {
     promptTokens: number;
     completionTokens: number;
   };
+}
+
+export interface EvalReport {
+  /** Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge), recall_at_10 (embedding). */
+  metricName: string;
+  selectedStep: number;
+  bestStep: number | null;
+  finalStep: number;
+  trainRecords: number;
+  evalRecords: number;
+  warnings: Array<string>;
+  /** Written by: sft, dpo, router, decision. */
+  evalLoss?: number | null | undefined;
+  /** Written by: sft. */
+  evalTokenAccuracy?: number | null | undefined;
+  /** Written by: sft. */
+  trainedTokenFraction?: number | undefined;
+  /** Written by: sft. */
+  trainExamples?: number | undefined;
+  /** Written by: sft, router, decision. */
+  evalExamples?: number | undefined;
+  /** Written by: router, decision. */
+  selectionExamples?: number | undefined;
+  /** Written by: sft, dpo. */
+  truncated?: number | undefined;
+  /** Written by: dpo. */
+  preferenceAccuracy?: number | null | undefined;
+  /** Written by: dpo. */
+  rewardMargin?: number | null | undefined;
+  /** Written by: dpo. */
+  beta?: number | undefined;
+  /** Written by: dpo, embedding. */
+  trainPairs?: number | undefined;
+  /** Written by: dpo, embedding. */
+  evalPairs?: number | undefined;
+  /** Written by: dpo, embedding. */
+  droppedRecords?: number | undefined;
+  /** Written by: cartridge. */
+  evalKl?: number | null | undefined;
+  /** Written by: cartridge. */
+  noContextKl?: number | null | undefined;
+  /** Written by: cartridge. */
+  klReduction?: number | null | undefined;
+  /** Written by: cartridge. */
+  numTokens?: number | undefined;
+  /** Written by: cartridge. */
+  teacher?: string | undefined;
+  /** Written by: router. */
+  candidates?: Array<string> | undefined;
+  /** Written by: router. */
+  fallbackModel?: string | undefined;
+  /** Written by: router. */
+  fallbackQuality?: number | null | undefined;
+  /** Written by: router. */
+  routesAnyTraffic?: boolean | undefined;
+  paretoSummary?: RouterParetoSummary | undefined;
+  /** Written by: decision. */
+  ece?: number | null | undefined;
+  /** Written by: decision (one entry per question). */
+  heads?: Record<string, DecisionHeadReport | null> | undefined;
+  /** Written by: embedding. */
+  recallAt1?: number | null | undefined;
+  /** Written by: embedding. */
+  recallAt5?: number | null | undefined;
+  /** Written by: embedding. */
+  recallAt10?: number | null | undefined;
+  /** Written by: embedding. */
+  mrr?: number | null | undefined;
+  /** Written by: embedding. */
+  corpusSize?: number | undefined;
+  /** Retrieval metrics of the untrained base encoder. Written by: embedding. */
+  baseline?: {
+    recallAt1: number | null;
+    recallAt5: number | null;
+    recallAt10: number | null;
+    mrr: number | null;
+    [key: string]: unknown;
+  } | null | undefined;
+  [key: string]: unknown;
 }
 
 export interface EvalRubricItem {
@@ -426,17 +468,14 @@ export type ImportStatus = "queued" | "running" | "completed" | "failed";
 
 export const ImportStatusValues = ["queued", "running", "completed", "failed"] as const;
 
-export type JobKind = "train" | "import";
-
-export const JobKindValues = ["train", "import"] as const;
-
 export interface MetricPoint {
   seq: number;
   attempt: number;
   step: number;
   loss: number;
   evalLoss?: number | null | undefined;
-  evalMetric?: number | null | undefined;
+  /** Held-out metrics of an eval step by name (including the recipe's selection metric, eval_report.metric_name); absent on steps without an eval. */
+  evalMetrics?: Record<string, number | null> | null | undefined;
   gradNorm?: number | null | undefined;
   lr?: number | null | undefined;
   tokensPerSec?: number | null | undefined;
@@ -446,25 +485,14 @@ export interface MetricPoint {
   [key: string]: unknown;
 }
 
-export interface MetricPointInput {
-  step: number;
-  loss: number;
-  evalLoss?: number | null | undefined;
-  evalMetric?: number | null | undefined;
-  gradNorm?: number | null | undefined;
-  lr?: number | null | undefined;
-  tokensPerSec?: number | null | undefined;
-  tokens: number;
-  costUsd?: number | undefined;
-  timestamp: string;
-  [key: string]: unknown;
-}
-
 export interface MetricsPage {
   runId: string;
   status: RunStatus;
   data: Array<MetricPoint | null>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
+  /** Cursor after the newest point returned so far; pass it back as `cursor` to poll for points written later (tailing a running run). */
+  tailCursor: string;
 }
 
 export interface PlanEvalRequest {
@@ -534,30 +562,6 @@ export interface PostEvalScoresResponse {
   pendingLocalScores: number;
 }
 
-export interface PostImportRecordsRequest {
-  workerId: string;
-  attempt: number;
-  records: Array<unknown>;
-}
-
-export interface PostImportRecordsResponse {
-  accepted: number;
-  rejected: number;
-  errors: Array<{
-    index: number;
-    error: string;
-  }>;
-}
-
-export interface Problem {
-  type: string;
-  title: string;
-  status: number;
-  detail: string;
-  code: string;
-  requestId: string;
-}
-
 export interface PromoteCheckpointRequest {
   name?: string | undefined;
 }
@@ -609,16 +613,6 @@ export interface RecordFeedbackResponse {
   records: Array<FeedbackRecord>;
 }
 
-export interface RegisterTrainerCheckpointRequest {
-  workerId: string;
-  attempt: number;
-  step: number;
-  evalScore?: number | null | undefined;
-  uploadId: string;
-  format?: ArtifactFormat | null | undefined;
-  metadata?: Record<string, unknown> | undefined;
-}
-
 export interface RenderDatasetRequest {
   model?: string | undefined;
   trainOn?: "last" | "all_assistant" | undefined;
@@ -644,19 +638,6 @@ export interface RenderDatasetResponse {
       tokens: number;
     }>;
   }>;
-}
-
-export interface ReportTrainerProgressRequest {
-  workerId: string;
-  attempt: number;
-  metric: MetricPointInput;
-}
-
-export interface ReportTrainerProgressResponse {
-  status: RunStatus;
-  shouldStop: boolean;
-  stopReason: ("cancelled" | "budget") | null;
-  costUsd: number;
 }
 
 export interface ResolvedRunConfig {
@@ -724,6 +705,21 @@ export interface RouteResponse {
   scores: Record<string, number>;
 }
 
+/** Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no report prompt was scored for every candidate. */
+export interface RouterParetoSummary {
+  targetMaxDrop: number;
+  routedQuality: number | null;
+  qualityDrop: number | null;
+  /** 95% bootstrap interval [low, high]. */
+  qualityDropCi95: Array<number> | null;
+  offloadRate: number | null;
+  costSavingsPct: number | null;
+  ece: number | null;
+  threshold: number | null;
+  temperature: number;
+  [key: string]: unknown;
+}
+
 export interface Run {
   id: string;
   workspaceId: string;
@@ -743,7 +739,7 @@ export interface Run {
   attempt: number;
   maxAttempts: number;
   latestMetric: MetricPoint | null;
-  evalReport: Record<string, unknown> | null;
+  evalReport: EvalReport | null;
   artifactId: string | null;
   error: string | null;
   createdAt: string;
@@ -772,79 +768,6 @@ export interface TrainableModel {
   maxContextTokens: number;
   templateRevision: string;
   calibratedLrs: Record<string, number>;
-}
-
-export interface TrainerHeartbeatRequest {
-  workerId: string;
-  attempt: number;
-  leaseSeconds?: number | undefined;
-}
-
-export interface TrainerHeartbeatResponse {
-  status: string;
-  shouldStop: boolean;
-  stopReason: ("cancelled" | "budget") | null;
-  leaseExpiresAt: string;
-}
-
-export interface TrainerJob {
-  id: string;
-  kind: JobKind;
-  attempt: number;
-  leaseSeconds: number;
-  leaseExpiresAt: string;
-  run: {
-    id: string;
-    workspaceId: string;
-    name: string;
-    recipeKind: RecipeKind;
-    resolvedConfig: ResolvedRunConfig;
-    totalSteps: number;
-  } | null;
-  import: {
-    id: string;
-    workspaceId: string;
-    dataset: string;
-    source: Record<string, unknown>;
-    connector: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
-  } | null;
-  pricePerMillionTokens: number | null;
-  /** Remaining budget for this attempt (the run cap minus cost billed by earlier attempts). */
-  maxCostUsd: number | null;
-  dataset: {
-    version: number;
-    recordCount: number;
-    downloadUrl: string;
-  } | null;
-  resume: {
-    checkpointId: string;
-    step: number;
-    downloadUrl: string;
-  } | null;
-}
-
-export interface TrainerQueueStats {
-  queued: number;
-  running: number;
-  total: number;
-  byKind: {
-    train: {
-      queued: number;
-      running: number;
-    };
-    import: {
-      queued: number;
-      running: number;
-    };
-  };
-}
-
-export interface TrainerUploadRequest {
-  workerId: string;
-  attempt: number;
-  kind: "checkpoint" | "artifact";
-  sha256: string;
-  sizeBytes: number;
 }
 
 export interface TrajectoryInput {

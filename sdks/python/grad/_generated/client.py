@@ -12,13 +12,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Mapping, NotRequired, TypeAlias, TypedDict, cast
 
 from .._errors import GradAPIError as GradApiError
-from .._transport import quote_path_param
+from .._transport import new_idempotency_key, quote_path_param
 
 if TYPE_CHECKING:
     from .._http import AsyncResponse, Response
     from .._transport import AsyncTransport, SyncTransport
 
-__all__ = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = ["AsyncGeneratedApiClient", "AsyncGeneratedInternalApiClient", "GeneratedApiClient", "GeneratedInternalApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -52,7 +52,7 @@ Artifact = TypedDict(
         "sha256": "str",
         "size_bytes": "int",
         "manifest": "dict[str, Any]",
-        "eval_report": "dict[str, Any] | None",
+        "eval_report": "EvalReport",
         "created_at": "str",
     },
 )
@@ -126,7 +126,7 @@ CompleteTrainerJobRequest = TypedDict(
         "upload_id": "NotRequired[str]",
         "format": "NotRequired[ArtifactFormat]",
         "manifest": "NotRequired[dict[str, Any]]",
-        "eval_report": "NotRequired[dict[str, Any] | None]",
+        "eval_report": "NotRequired[EvalReport]",
         "tokens_processed": "NotRequired[int]",
         "error": "NotRequired[str]",
         "import_summary": "NotRequired[dict[str, Any]]",
@@ -239,6 +239,22 @@ DatasetRecordsPage = TypedDict(
         "total": "int",
         "data": "list[DatasetRecord]",
         "next_cursor": "str | None",
+    },
+)
+
+DecisionHeadReport = TypedDict(
+    "DecisionHeadReport",
+    {
+        "type": "Literal['choice', 'noul', 'score']",
+        "examples": "int",
+        "accuracy": "float | None",
+        "ece": "float | None",
+        "temperature": "float",
+        "brier": "NotRequired[float]",
+        "mae": "NotRequired[float]",
+        "macro_f1": "NotRequired[float | None]",
+        "per_option": "NotRequired[dict[str, dict[str, Any]]]",
+        "confusion_matrix": "NotRequired[dict[str, Any]]",
     },
 )
 
@@ -360,6 +376,50 @@ EvalOutput = TypedDict(
     },
 )
 
+EvalReport = TypedDict(
+    "EvalReport",
+    {
+        "metric_name": "str",
+        "selected_step": "int",
+        "best_step": "int | None",
+        "final_step": "int",
+        "train_records": "int",
+        "eval_records": "int",
+        "warnings": "list[str]",
+        "eval_loss": "NotRequired[float | None]",
+        "eval_token_accuracy": "NotRequired[float | None]",
+        "trained_token_fraction": "NotRequired[float]",
+        "train_examples": "NotRequired[int]",
+        "eval_examples": "NotRequired[int]",
+        "selection_examples": "NotRequired[int]",
+        "truncated": "NotRequired[int]",
+        "preference_accuracy": "NotRequired[float | None]",
+        "reward_margin": "NotRequired[float | None]",
+        "beta": "NotRequired[float]",
+        "train_pairs": "NotRequired[int]",
+        "eval_pairs": "NotRequired[int]",
+        "dropped_records": "NotRequired[int]",
+        "eval_kl": "NotRequired[float | None]",
+        "no_context_kl": "NotRequired[float | None]",
+        "kl_reduction": "NotRequired[float | None]",
+        "num_tokens": "NotRequired[int]",
+        "teacher": "NotRequired[str]",
+        "candidates": "NotRequired[list[str]]",
+        "fallback_model": "NotRequired[str]",
+        "fallback_quality": "NotRequired[float | None]",
+        "routes_any_traffic": "NotRequired[bool]",
+        "pareto_summary": "NotRequired[RouterParetoSummary]",
+        "ece": "NotRequired[float | None]",
+        "heads": "NotRequired[dict[str, DecisionHeadReport]]",
+        "recall_at_1": "NotRequired[float | None]",
+        "recall_at_5": "NotRequired[float | None]",
+        "recall_at_10": "NotRequired[float | None]",
+        "mrr": "NotRequired[float | None]",
+        "corpus_size": "NotRequired[int]",
+        "baseline": "NotRequired[dict[str, Any] | None]",
+    },
+)
+
 EvalRubricItem = TypedDict(
     "EvalRubricItem",
     {
@@ -460,6 +520,8 @@ HfColumnMapping = TypedDict(
     },
 )
 
+IdempotencyKey: TypeAlias = "str"
+
 ImportJob = TypedDict(
     "ImportJob",
     {
@@ -495,7 +557,7 @@ MetricPoint = TypedDict(
         "step": "int",
         "loss": "float",
         "eval_loss": "NotRequired[float | None]",
-        "eval_metric": "NotRequired[float | None]",
+        "eval_metrics": "NotRequired[dict[str, float | None] | None]",
         "grad_norm": "NotRequired[float | None]",
         "lr": "NotRequired[float | None]",
         "tokens_per_sec": "NotRequired[float | None]",
@@ -511,7 +573,7 @@ MetricPointInput = TypedDict(
         "step": "int",
         "loss": "float",
         "eval_loss": "NotRequired[float | None]",
-        "eval_metric": "NotRequired[float | None]",
+        "eval_metrics": "NotRequired[dict[str, float | None] | None]",
         "grad_norm": "NotRequired[float | None]",
         "lr": "NotRequired[float | None]",
         "tokens_per_sec": "NotRequired[float | None]",
@@ -528,6 +590,7 @@ MetricsPage = TypedDict(
         "status": "RunStatus",
         "data": "list[MetricPoint]",
         "next_cursor": "str | None",
+        "tail_cursor": "str",
     },
 )
 
@@ -818,6 +881,21 @@ RouteResponse = TypedDict(
     },
 )
 
+RouterParetoSummary = TypedDict(
+    "RouterParetoSummary",
+    {
+        "target_max_drop": "float",
+        "routed_quality": "float | None",
+        "quality_drop": "float | None",
+        "quality_drop_ci95": "list[float] | None",
+        "offload_rate": "float | None",
+        "cost_savings_pct": "float | None",
+        "ece": "float | None",
+        "threshold": "float | None",
+        "temperature": "float",
+    },
+)
+
 Run = TypedDict(
     "Run",
     {
@@ -839,7 +917,7 @@ Run = TypedDict(
         "attempt": "int",
         "max_attempts": "int",
         "latest_metric": "MetricPoint",
-        "eval_report": "dict[str, Any] | None",
+        "eval_report": "EvalReport",
         "artifact_id": "str | None",
         "error": "str | None",
         "created_at": "str",
@@ -962,23 +1040,6 @@ UploadTicket = TypedDict(
     },
 )
 
-ClaimEnvTaskResponse = TypedDict(
-    "ClaimEnvTaskResponse",
-    {
-        "task": "dict[str, Any] | None",
-    },
-)
-
-DispatchEnvTaskResponse = TypedDict(
-    "DispatchEnvTaskResponse",
-    {
-        "id": "str",
-        "env_name": "str",
-        "status": "str",
-        "active_workers": "int",
-    },
-)
-
 ListApiKeysResponse = TypedDict(
     "ListApiKeysResponse",
     {
@@ -1075,6 +1136,23 @@ ListRunsResponse = TypedDict(
     },
 )
 
+ClaimEnvTaskResponse = TypedDict(
+    "ClaimEnvTaskResponse",
+    {
+        "task": "dict[str, Any] | None",
+    },
+)
+
+DispatchEnvTaskResponse = TypedDict(
+    "DispatchEnvTaskResponse",
+    {
+        "id": "str",
+        "env_name": "str",
+        "status": "str",
+        "active_workers": "int",
+    },
+)
+
 RegisterEnvWorkerResponse = TypedDict(
     "RegisterEnvWorkerResponse",
     {
@@ -1103,6 +1181,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "Dataset": frozenset({"created_at", "id", "metadata", "name", "record_count", "updated_at", "version", "workspace_id"}),
     "DatasetRecord": frozenset({"chosen", "completion", "expected_output", "group_id", "id", "input", "messages", "metadata", "metrics", "negatives", "output", "positive", "prompt", "query", "questions", "rejected", "role", "schema", "scores", "session_id", "source", "state", "timestamp", "tools"}),
     "DatasetRecordsPage": frozenset({"data", "dataset", "next_cursor", "total", "version"}),
+    "DecisionHeadReport": frozenset({"accuracy", "brier", "confusion_matrix", "ece", "examples", "macro_f1", "mae", "per_option", "temperature", "type"}),
     "DeployArtifactRequest": frozenset({"artifact", "explore_rate", "fallback", "name"}),
     "Deployment": frozenset({"active_artifact_id", "created_at", "explore_rate", "fallback_model", "id", "model_id", "name", "previous_artifact_id", "status", "updated_at", "workspace_id"}),
     "DeploymentStatus": frozenset({"average_score", "deployment", "feedback_count"}),
@@ -1113,6 +1192,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "EnvWorkerRegister": frozenset({"concurrency", "name", "worker_id"}),
     "EvalModelSummary": frozenset({"ci_high", "ci_low", "cost_per_1k_tasks_usd", "errors", "model", "overall", "pass_at_k", "tasks", "tokens_per_task", "vs_baseline"}),
     "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
+    "EvalReport": frozenset({"baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_records", "trained_token_fraction", "truncated", "warnings"}),
     "EvalRubricItem": frozenset({"flags", "kind", "model", "name", "pattern", "prompt", "runtime", "validator", "weight"}),
     "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "models", "name", "pass_threshold", "progress", "rubric", "samples", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
     "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),
@@ -1120,9 +1200,9 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "FeedbackRecord": frozenset({"created_at", "deployment_name", "expected_output", "id", "idempotency_key", "inference_id", "metrics", "score", "session_id", "workspace_id"}),
     "HfColumnMapping": frozenset({"answer", "chosen", "completion", "messages", "positive", "prompt", "query", "rejected"}),
     "ImportJob": frozenset({"attempt", "connector", "created_at", "dataset", "dataset_version", "detected_scores", "drop_reasons", "dropped_count", "error", "id", "imported_count", "source", "status", "updated_at", "workspace_id"}),
-    "MetricPoint": frozenset({"attempt", "cost_usd", "eval_loss", "eval_metric", "grad_norm", "loss", "lr", "seq", "step", "timestamp", "tokens", "tokens_per_sec"}),
-    "MetricPointInput": frozenset({"cost_usd", "eval_loss", "eval_metric", "grad_norm", "loss", "lr", "step", "timestamp", "tokens", "tokens_per_sec"}),
-    "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status"}),
+    "MetricPoint": frozenset({"attempt", "cost_usd", "eval_loss", "eval_metrics", "grad_norm", "loss", "lr", "seq", "step", "timestamp", "tokens", "tokens_per_sec"}),
+    "MetricPointInput": frozenset({"cost_usd", "eval_loss", "eval_metrics", "grad_norm", "loss", "lr", "step", "timestamp", "tokens", "tokens_per_sec"}),
+    "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
     "PlanEvalRequest": frozenset({"baseline", "benchmarks", "dataset", "dataset_version", "env_name", "limit", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "tasks", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
     "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
@@ -1146,6 +1226,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ResumeRunRequest": frozenset({"max_cost_usd"}),
     "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
+    "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
     "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
@@ -1174,31 +1255,21 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
 OPERATIONS: dict[str, tuple[str, str]] = {
     "cancel_eval": ("POST", "/v1/evals/{id}/cancel"),
     "cancel_run": ("POST", "/v1/runs/{id}/cancel"),
-    "claim_env_task": ("POST", "/v1/env-workers/{name}/claim"),
-    "claim_trainer_job": ("POST", "/v1/trainer-jobs/claim"),
-    "complete_env_task": ("POST", "/v1/env-workers/tasks/{id}/complete"),
-    "complete_trainer_job": ("POST", "/v1/trainer-jobs/{id}/complete"),
     "create_api_key": ("POST", "/v1/keys"),
     "create_dataset": ("POST", "/v1/datasets"),
     "create_dataset_import": ("POST", "/v1/datasets/{name}/imports"),
     "create_embeddings": ("POST", "/v1/embeddings"),
     "create_eval": ("POST", "/v1/evals"),
     "create_run": ("POST", "/v1/runs"),
-    "create_trainer_upload": ("POST", "/v1/trainer-jobs/{id}/uploads"),
     "create_upload": ("POST", "/v1/uploads"),
     "deploy_artifact": ("POST", "/v1/deployments"),
-    "dispatch_env_task": ("POST", "/v1/env-workers/tasks"),
     "download_artifact": ("GET", "/v1/artifacts/{id}/download"),
-    "download_trainer_dataset": ("GET", "/v1/trainer-jobs/{id}/dataset"),
     "get_artifact": ("GET", "/v1/artifacts/{id}"),
     "get_dataset": ("GET", "/v1/datasets/{name}"),
     "get_deployment": ("GET", "/v1/deployments/{name}"),
-    "get_env_task": ("GET", "/v1/env-workers/tasks/{id}"),
     "get_eval": ("GET", "/v1/evals/{id}"),
     "get_import": ("GET", "/v1/imports/{id}"),
     "get_run": ("GET", "/v1/runs/{id}"),
-    "get_trainer_queue_stats": ("GET", "/v1/trainer-jobs/queue"),
-    "heartbeat_trainer_job": ("POST", "/v1/trainer-jobs/{id}/heartbeat"),
     "list_api_keys": ("GET", "/v1/keys"),
     "list_artifacts": ("GET", "/v1/artifacts"),
     "list_dataset_records": ("GET", "/v1/datasets/{name}/records"),
@@ -1216,99 +1287,82 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "plan_eval": ("POST", "/v1/evals/plan"),
     "plan_run": ("POST", "/v1/runs/plan"),
     "post_eval_scores": ("POST", "/v1/evals/{id}/scores"),
-    "post_import_records": ("POST", "/v1/trainer-jobs/{id}/records"),
     "promote_checkpoint": ("POST", "/v1/checkpoints/{id}/promote"),
     "push_dataset_records": ("POST", "/v1/datasets/{name}/records"),
     "record_feedback": ("POST", "/v1/feedback"),
-    "register_env_worker": ("POST", "/v1/env-workers/register"),
-    "register_trainer_checkpoint": ("POST", "/v1/trainer-jobs/{id}/checkpoints"),
     "render_dataset": ("POST", "/v1/datasets/{name}/render"),
-    "report_trainer_progress": ("POST", "/v1/trainer-jobs/{id}/progress"),
     "resume_run": ("POST", "/v1/runs/{id}/resume"),
     "revoke_api_key": ("DELETE", "/v1/keys/{id}"),
     "rollback_deployment": ("POST", "/v1/deployments/{name}/rollback"),
     "route_request": ("POST", "/v1/route"),
 }
-"""operationId (snake_case) -> (HTTP method, path template)."""
+"""Public operationId (snake_case) -> (HTTP method, path template)."""
+
+# Page-size maxima from spec/openapi.yaml (the server clamps larger values).
+LIST_API_KEYS_LIMIT_MAX = 200
+LIST_ARTIFACTS_LIMIT_MAX = 200
+LIST_DATASET_RECORDS_LIMIT_MAX = 1000
+LIST_DATASETS_LIMIT_MAX = 200
+LIST_DEPLOYMENTS_LIMIT_MAX = 200
+LIST_EVAL_FAILURES_LIMIT_MAX = 200
+LIST_EVAL_OUTPUTS_LIMIT_MAX = 200
+LIST_EVAL_RESULTS_LIMIT_MAX = 200
+LIST_EVALS_LIMIT_MAX = 200
+LIST_IMPORTS_LIMIT_MAX = 200
+LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200
+LIST_RUN_METRICS_LIMIT_MAX = 5000
+LIST_RUNS_LIMIT_MAX = 200
 
 
 class GeneratedApiClient:
-    """Blocking wire client: one method per operation in spec/openapi.yaml."""
+    """Blocking wire client: one method per public operation in spec/openapi.yaml."""
 
     def __init__(self, transport: SyncTransport) -> None:
         self._t = transport
 
-    def cancel_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
+    def cancel_eval(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
         """Cancel a queued, running or awaiting_scores evaluation."""
-        return cast("EvalRun", self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
+        return cast("EvalRun", self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/cancel", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def cancel_run(self, id: str, *, timeout: float | None = None) -> Run:
+    def cancel_run(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
         """Cancel a training run (a running attempt is stopped and billed)."""
-        return cast("Run", self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
+        return cast("Run", self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
-        """Long-poll for the next task assigned to a `grad env serve` worker."""
-        return cast("ClaimEnvTaskResponse", self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
-
-    def claim_trainer_job(self, body: ClaimJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> ClaimJobResponse:
-        """Claim the next queued train or import job (trainer:worker)."""
-        return cast("ClaimJobResponse", self._t.request("POST", "/v1/trainer-jobs/claim", json_body=body, timeout=timeout))
-
-    def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
-        """Submit scored trajectory output for an environment task."""
-        return cast("dict[str, Any]", self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
-
-    def complete_trainer_job(self, id: str, body: CompleteTrainerJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> CompleteTrainerJobResponse:
-        """Finish a job attempt: publish its artifact, bill it, release the lease."""
-        return cast("CompleteTrainerJobResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
-
-    def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, timeout: float | None = None) -> CreatedApiKey:
+    def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> CreatedApiKey:
         """Create a scoped workspace API key (trainer worker keys are platform config, not keys)."""
-        return cast("CreatedApiKey", self._t.request("POST", "/v1/keys", json_body=body, timeout=timeout))
+        return cast("CreatedApiKey", self._t.request("POST", "/v1/keys", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+    def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
         """Create an empty dataset."""
-        return cast("Dataset", self._t.request("POST", "/v1/datasets", json_body=body, timeout=timeout))
+        return cast("Dataset", self._t.request("POST", "/v1/datasets", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def create_dataset_import(self, name: str, body: CreateImportRequest | Mapping[str, Any], *, timeout: float | None = None) -> ImportJob:
+    def create_dataset_import(self, name: str, body: CreateImportRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> ImportJob:
         """Import an uploaded file or a Hugging Face dataset into a dataset (async job)."""
-        return cast("ImportJob", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, timeout=timeout))
+        return cast("ImportJob", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, timeout: float | None = None) -> EmbedResponse:
+    def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EmbedResponse:
         """Generate embeddings from a deployed embedding artifact."""
-        return cast("EmbedResponse", self._t.request("POST", "/v1/embeddings", json_body=body, timeout=timeout))
+        return cast("EmbedResponse", self._t.request("POST", "/v1/embeddings", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> EvalRun:
+    def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
         """Queue an evaluation across models on a pinned dataset version (executed by the server)."""
-        return cast("EvalRun", self._t.request("POST", "/v1/evals", json_body=body, timeout=timeout))
+        return cast("EvalRun", self._t.request("POST", "/v1/evals", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> Run:
+    def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
         """Create and enqueue a training run (pins the dataset version)."""
-        return cast("Run", self._t.request("POST", "/v1/runs", json_body=body, timeout=timeout))
+        return cast("Run", self._t.request("POST", "/v1/runs", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def create_trainer_upload(self, id: str, body: TrainerUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
-        """Get an upload URL for a checkpoint or artifact bundle."""
-        return cast("UploadTicket", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/uploads", json_body=body, timeout=timeout))
-
-    def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
+    def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> UploadTicket:
         """Get an upload URL for a file to import (PUT the bytes, then create an import)."""
-        return cast("UploadTicket", self._t.request("POST", "/v1/uploads", json_body=body, timeout=timeout))
+        return cast("UploadTicket", self._t.request("POST", "/v1/uploads", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, timeout: float | None = None) -> Deployment:
+    def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
         """Deploy or update an artifact under a stable model name."""
-        return cast("Deployment", self._t.request("POST", "/v1/deployments", json_body=body, timeout=timeout))
-
-    def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
-        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
-        return cast("DispatchEnvTaskResponse", self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
+        return cast("Deployment", self._t.request("POST", "/v1/deployments", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:
         """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 (streams `application/octet-stream`; read or close the response)."""
         return self._t.stream("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}/download", accept="application/octet-stream", timeout=timeout)
-
-    def download_trainer_dataset(self, id: str, *, attempt: int | None = None, timeout: float | None = None) -> Response:
-        """Stream the pinned dataset version of a claimed train job as JSONL (streams `application/x-ndjson`; read or close the response)."""
-        return self._t.stream("GET", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/dataset", query={"attempt": attempt}, accept="application/x-ndjson", timeout=timeout)
 
     def get_artifact(self, id: str, *, timeout: float | None = None) -> Artifact:
         """Get an artifact by id or name@latest."""
@@ -1322,10 +1376,6 @@ class GeneratedApiClient:
         """Get deployment status and feedback summary."""
         return cast("DeploymentStatus", self._t.request("GET", f"/v1/deployments/{quote_path_param(name, 'name')}", timeout=timeout))
 
-    def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
-        """Inspect an environment task and its result."""
-        return cast("dict[str, Any]", self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
-
     def get_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
         """Get an evaluation run by ID."""
         return cast("EvalRun", self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}", timeout=timeout))
@@ -1337,14 +1387,6 @@ class GeneratedApiClient:
     def get_run(self, id: str, *, timeout: float | None = None) -> Run:
         """Get a training run."""
         return cast("Run", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    def get_trainer_queue_stats(self, *, timeout: float | None = None) -> TrainerQueueStats:
-        """Queue depth for autoscaling: queued plus running jobs (trainer:worker)."""
-        return cast("TrainerQueueStats", self._t.request("GET", "/v1/trainer-jobs/queue", timeout=timeout))
-
-    def heartbeat_trainer_job(self, id: str, body: TrainerHeartbeatRequest | Mapping[str, Any], *, timeout: float | None = None) -> TrainerHeartbeatResponse:
-        """Renew the job lease; reports whether the worker should stop."""
-        return cast("TrainerHeartbeatResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/heartbeat", json_body=body, timeout=timeout))
 
     def list_api_keys(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListApiKeysResponse:
         """List workspace API keys."""
@@ -1406,144 +1448,100 @@ class GeneratedApiClient:
         """List training runs (newest first)."""
         return cast("ListRunsResponse", self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanEvalResponse:
+    def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanEvalResponse:
         """Estimate tasks, model/judge calls, and cost before running an eval."""
-        return cast("PlanEvalResponse", self._t.request("POST", "/v1/evals/plan", json_body=body, timeout=timeout))
+        return cast("PlanEvalResponse", self._t.request("POST", "/v1/evals/plan", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def plan_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanRunResponse:
+    def plan_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanRunResponse:
         """Dry-run a training recipe at zero cost."""
-        return cast("PlanRunResponse", self._t.request("POST", "/v1/runs/plan", json_body=body, timeout=timeout))
+        return cast("PlanRunResponse", self._t.request("POST", "/v1/runs/plan", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def post_eval_scores(self, id: str, body: PostEvalScoresRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostEvalScoresResponse:
+    def post_eval_scores(self, id: str, body: PostEvalScoresRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PostEvalScoresResponse:
         """Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing."""
-        return cast("PostEvalScoresResponse", self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, timeout=timeout))
+        return cast("PostEvalScoresResponse", self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def post_import_records(self, id: str, body: PostImportRecordsRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostImportRecordsResponse:
-        """Append a batch of parsed records to an import job."""
-        return cast("PostImportRecordsResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/records", json_body=body, timeout=timeout))
-
-    def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Artifact:
+    def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> Artifact:
         """Copy an exportable checkpoint into a new immutable artifact."""
-        return cast("Artifact", self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, timeout=timeout))
+        return cast("Artifact", self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+    def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
         """Append records as a new dataset version (creates the dataset if needed)."""
-        return cast("Dataset", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, timeout=timeout))
+        return cast("Dataset", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, timeout: float | None = None) -> RecordFeedbackResponse:
+    def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RecordFeedbackResponse:
         """Record deduplicated outcome scores and gold corrections."""
-        return cast("RecordFeedbackResponse", self._t.request("POST", "/v1/feedback", json_body=body, timeout=timeout))
+        return cast("RecordFeedbackResponse", self._t.request("POST", "/v1/feedback", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
-        """Register or heartbeat an outbound `grad env serve` worker."""
-        return cast("RegisterEnvWorkerResponse", self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))
-
-    def register_trainer_checkpoint(self, id: str, body: RegisterTrainerCheckpointRequest | Mapping[str, Any], *, timeout: float | None = None) -> Checkpoint:
-        """Register an uploaded checkpoint bundle."""
-        return cast("Checkpoint", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/checkpoints", json_body=body, timeout=timeout))
-
-    def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> RenderDatasetResponse:
+    def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RenderDatasetResponse:
         """Preview chat-template rendering and loss masks (estimated token counts)."""
-        return cast("RenderDatasetResponse", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, timeout=timeout))
+        return cast("RenderDatasetResponse", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def report_trainer_progress(self, id: str, body: ReportTrainerProgressRequest | Mapping[str, Any], *, timeout: float | None = None) -> ReportTrainerProgressResponse:
-        """Report one training step's metrics."""
-        return cast("ReportTrainerProgressResponse", self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/progress", json_body=body, timeout=timeout))
-
-    def resume_run(self, id: str, body: ResumeRunRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Run:
+    def resume_run(self, id: str, body: ResumeRunRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
         """Resume a stopped, failed or cancelled run from its latest checkpoint."""
-        return cast("Run", self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/resume", json_body=body, timeout=timeout))
+        return cast("Run", self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/resume", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def revoke_api_key(self, id: str, *, timeout: float | None = None) -> ApiKey:
         """Revoke a workspace API key."""
         return cast("ApiKey", self._t.request("DELETE", f"/v1/keys/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    def rollback_deployment(self, name: str, *, timeout: float | None = None) -> Deployment:
+    def rollback_deployment(self, name: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
         """Roll a deployment back to its previous artifact."""
-        return cast("Deployment", self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", timeout=timeout))
+        return cast("Deployment", self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def route_request(self, body: RouteRequest | Mapping[str, Any], *, timeout: float | None = None) -> RouteResponse:
+    def route_request(self, body: RouteRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RouteResponse:
         """Ask a deployed model router which model to call."""
-        return cast("RouteResponse", self._t.request("POST", "/v1/route", json_body=body, timeout=timeout))
+        return cast("RouteResponse", self._t.request("POST", "/v1/route", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
 
 class AsyncGeneratedApiClient:
-    """asyncio wire client: one coroutine per operation in spec/openapi.yaml."""
+    """asyncio wire client: one coroutine per public operation in spec/openapi.yaml."""
 
     def __init__(self, transport: AsyncTransport) -> None:
         self._t = transport
 
-    async def cancel_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
+    async def cancel_eval(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
         """Cancel a queued, running or awaiting_scores evaluation."""
-        return cast("EvalRun", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
+        return cast("EvalRun", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/cancel", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def cancel_run(self, id: str, *, timeout: float | None = None) -> Run:
+    async def cancel_run(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
         """Cancel a training run (a running attempt is stopped and billed)."""
-        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", timeout=timeout))
+        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
-        """Long-poll for the next task assigned to a `grad env serve` worker."""
-        return cast("ClaimEnvTaskResponse", await self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
-
-    async def claim_trainer_job(self, body: ClaimJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> ClaimJobResponse:
-        """Claim the next queued train or import job (trainer:worker)."""
-        return cast("ClaimJobResponse", await self._t.request("POST", "/v1/trainer-jobs/claim", json_body=body, timeout=timeout))
-
-    async def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
-        """Submit scored trajectory output for an environment task."""
-        return cast("dict[str, Any]", await self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
-
-    async def complete_trainer_job(self, id: str, body: CompleteTrainerJobRequest | Mapping[str, Any], *, timeout: float | None = None) -> CompleteTrainerJobResponse:
-        """Finish a job attempt: publish its artifact, bill it, release the lease."""
-        return cast("CompleteTrainerJobResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
-
-    async def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, timeout: float | None = None) -> CreatedApiKey:
+    async def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> CreatedApiKey:
         """Create a scoped workspace API key (trainer worker keys are platform config, not keys)."""
-        return cast("CreatedApiKey", await self._t.request("POST", "/v1/keys", json_body=body, timeout=timeout))
+        return cast("CreatedApiKey", await self._t.request("POST", "/v1/keys", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+    async def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
         """Create an empty dataset."""
-        return cast("Dataset", await self._t.request("POST", "/v1/datasets", json_body=body, timeout=timeout))
+        return cast("Dataset", await self._t.request("POST", "/v1/datasets", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def create_dataset_import(self, name: str, body: CreateImportRequest | Mapping[str, Any], *, timeout: float | None = None) -> ImportJob:
+    async def create_dataset_import(self, name: str, body: CreateImportRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> ImportJob:
         """Import an uploaded file or a Hugging Face dataset into a dataset (async job)."""
-        return cast("ImportJob", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, timeout=timeout))
+        return cast("ImportJob", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, timeout: float | None = None) -> EmbedResponse:
+    async def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EmbedResponse:
         """Generate embeddings from a deployed embedding artifact."""
-        return cast("EmbedResponse", await self._t.request("POST", "/v1/embeddings", json_body=body, timeout=timeout))
+        return cast("EmbedResponse", await self._t.request("POST", "/v1/embeddings", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> EvalRun:
+    async def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
         """Queue an evaluation across models on a pinned dataset version (executed by the server)."""
-        return cast("EvalRun", await self._t.request("POST", "/v1/evals", json_body=body, timeout=timeout))
+        return cast("EvalRun", await self._t.request("POST", "/v1/evals", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> Run:
+    async def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
         """Create and enqueue a training run (pins the dataset version)."""
-        return cast("Run", await self._t.request("POST", "/v1/runs", json_body=body, timeout=timeout))
+        return cast("Run", await self._t.request("POST", "/v1/runs", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def create_trainer_upload(self, id: str, body: TrainerUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
-        """Get an upload URL for a checkpoint or artifact bundle."""
-        return cast("UploadTicket", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/uploads", json_body=body, timeout=timeout))
-
-    async def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, timeout: float | None = None) -> UploadTicket:
+    async def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> UploadTicket:
         """Get an upload URL for a file to import (PUT the bytes, then create an import)."""
-        return cast("UploadTicket", await self._t.request("POST", "/v1/uploads", json_body=body, timeout=timeout))
+        return cast("UploadTicket", await self._t.request("POST", "/v1/uploads", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, timeout: float | None = None) -> Deployment:
+    async def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
         """Deploy or update an artifact under a stable model name."""
-        return cast("Deployment", await self._t.request("POST", "/v1/deployments", json_body=body, timeout=timeout))
-
-    async def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
-        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
-        return cast("DispatchEnvTaskResponse", await self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
+        return cast("Deployment", await self._t.request("POST", "/v1/deployments", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     async def download_artifact(self, id: str, *, timeout: float | None = None) -> AsyncResponse:
         """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 (streams `application/octet-stream`; read or close the response)."""
         return await self._t.stream("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}/download", accept="application/octet-stream", timeout=timeout)
-
-    async def download_trainer_dataset(self, id: str, *, attempt: int | None = None, timeout: float | None = None) -> AsyncResponse:
-        """Stream the pinned dataset version of a claimed train job as JSONL (streams `application/x-ndjson`; read or close the response)."""
-        return await self._t.stream("GET", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/dataset", query={"attempt": attempt}, accept="application/x-ndjson", timeout=timeout)
 
     async def get_artifact(self, id: str, *, timeout: float | None = None) -> Artifact:
         """Get an artifact by id or name@latest."""
@@ -1557,10 +1555,6 @@ class AsyncGeneratedApiClient:
         """Get deployment status and feedback summary."""
         return cast("DeploymentStatus", await self._t.request("GET", f"/v1/deployments/{quote_path_param(name, 'name')}", timeout=timeout))
 
-    async def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
-        """Inspect an environment task and its result."""
-        return cast("dict[str, Any]", await self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
-
     async def get_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
         """Get an evaluation run by ID."""
         return cast("EvalRun", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}", timeout=timeout))
@@ -1572,14 +1566,6 @@ class AsyncGeneratedApiClient:
     async def get_run(self, id: str, *, timeout: float | None = None) -> Run:
         """Get a training run."""
         return cast("Run", await self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    async def get_trainer_queue_stats(self, *, timeout: float | None = None) -> TrainerQueueStats:
-        """Queue depth for autoscaling: queued plus running jobs (trainer:worker)."""
-        return cast("TrainerQueueStats", await self._t.request("GET", "/v1/trainer-jobs/queue", timeout=timeout))
-
-    async def heartbeat_trainer_job(self, id: str, body: TrainerHeartbeatRequest | Mapping[str, Any], *, timeout: float | None = None) -> TrainerHeartbeatResponse:
-        """Renew the job lease; reports whether the worker should stop."""
-        return cast("TrainerHeartbeatResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/heartbeat", json_body=body, timeout=timeout))
 
     async def list_api_keys(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListApiKeysResponse:
         """List workspace API keys."""
@@ -1641,62 +1627,100 @@ class AsyncGeneratedApiClient:
         """List training runs (newest first)."""
         return cast("ListRunsResponse", await self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    async def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanEvalResponse:
+    async def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanEvalResponse:
         """Estimate tasks, model/judge calls, and cost before running an eval."""
-        return cast("PlanEvalResponse", await self._t.request("POST", "/v1/evals/plan", json_body=body, timeout=timeout))
+        return cast("PlanEvalResponse", await self._t.request("POST", "/v1/evals/plan", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def plan_run(self, body: PlanRunRequest | Mapping[str, Any], *, timeout: float | None = None) -> PlanRunResponse:
+    async def plan_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanRunResponse:
         """Dry-run a training recipe at zero cost."""
-        return cast("PlanRunResponse", await self._t.request("POST", "/v1/runs/plan", json_body=body, timeout=timeout))
+        return cast("PlanRunResponse", await self._t.request("POST", "/v1/runs/plan", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def post_eval_scores(self, id: str, body: PostEvalScoresRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostEvalScoresResponse:
+    async def post_eval_scores(self, id: str, body: PostEvalScoresRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PostEvalScoresResponse:
         """Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing."""
-        return cast("PostEvalScoresResponse", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, timeout=timeout))
+        return cast("PostEvalScoresResponse", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def post_import_records(self, id: str, body: PostImportRecordsRequest | Mapping[str, Any], *, timeout: float | None = None) -> PostImportRecordsResponse:
-        """Append a batch of parsed records to an import job."""
-        return cast("PostImportRecordsResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/records", json_body=body, timeout=timeout))
-
-    async def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Artifact:
+    async def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> Artifact:
         """Copy an exportable checkpoint into a new immutable artifact."""
-        return cast("Artifact", await self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, timeout=timeout))
+        return cast("Artifact", await self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> Dataset:
+    async def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
         """Append records as a new dataset version (creates the dataset if needed)."""
-        return cast("Dataset", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, timeout=timeout))
+        return cast("Dataset", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, timeout: float | None = None) -> RecordFeedbackResponse:
+    async def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RecordFeedbackResponse:
         """Record deduplicated outcome scores and gold corrections."""
-        return cast("RecordFeedbackResponse", await self._t.request("POST", "/v1/feedback", json_body=body, timeout=timeout))
+        return cast("RecordFeedbackResponse", await self._t.request("POST", "/v1/feedback", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
-        """Register or heartbeat an outbound `grad env serve` worker."""
-        return cast("RegisterEnvWorkerResponse", await self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))
-
-    async def register_trainer_checkpoint(self, id: str, body: RegisterTrainerCheckpointRequest | Mapping[str, Any], *, timeout: float | None = None) -> Checkpoint:
-        """Register an uploaded checkpoint bundle."""
-        return cast("Checkpoint", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/checkpoints", json_body=body, timeout=timeout))
-
-    async def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, timeout: float | None = None) -> RenderDatasetResponse:
+    async def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RenderDatasetResponse:
         """Preview chat-template rendering and loss masks (estimated token counts)."""
-        return cast("RenderDatasetResponse", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, timeout=timeout))
+        return cast("RenderDatasetResponse", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def report_trainer_progress(self, id: str, body: ReportTrainerProgressRequest | Mapping[str, Any], *, timeout: float | None = None) -> ReportTrainerProgressResponse:
-        """Report one training step's metrics."""
-        return cast("ReportTrainerProgressResponse", await self._t.request("POST", f"/v1/trainer-jobs/{quote_path_param(id, 'id')}/progress", json_body=body, timeout=timeout))
-
-    async def resume_run(self, id: str, body: ResumeRunRequest | Mapping[str, Any] | None = None, *, timeout: float | None = None) -> Run:
+    async def resume_run(self, id: str, body: ResumeRunRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
         """Resume a stopped, failed or cancelled run from its latest checkpoint."""
-        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/resume", json_body=body, timeout=timeout))
+        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/resume", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     async def revoke_api_key(self, id: str, *, timeout: float | None = None) -> ApiKey:
         """Revoke a workspace API key."""
         return cast("ApiKey", await self._t.request("DELETE", f"/v1/keys/{quote_path_param(id, 'id')}", timeout=timeout))
 
-    async def rollback_deployment(self, name: str, *, timeout: float | None = None) -> Deployment:
+    async def rollback_deployment(self, name: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
         """Roll a deployment back to its previous artifact."""
-        return cast("Deployment", await self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", timeout=timeout))
+        return cast("Deployment", await self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    async def route_request(self, body: RouteRequest | Mapping[str, Any], *, timeout: float | None = None) -> RouteResponse:
+    async def route_request(self, body: RouteRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RouteResponse:
         """Ask a deployed model router which model to call."""
-        return cast("RouteResponse", await self._t.request("POST", "/v1/route", json_body=body, timeout=timeout))
+        return cast("RouteResponse", await self._t.request("POST", "/v1/route", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
+
+class GeneratedInternalApiClient:
+    """Blocking client for the SDK's own worker protocols (x-internal operations); not a public API and may change without notice."""
+
+    def __init__(self, transport: SyncTransport) -> None:
+        self._t = transport
+
+    def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
+        """Long-poll for the next task assigned to a `grad env serve` worker."""
+        return cast("ClaimEnvTaskResponse", self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
+
+    def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        """Submit scored trajectory output for an environment task."""
+        return cast("dict[str, Any]", self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
+
+    def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
+        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
+        return cast("DispatchEnvTaskResponse", self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
+
+    def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
+        """Inspect an environment task and its result."""
+        return cast("dict[str, Any]", self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
+
+    def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
+        """Register or heartbeat an outbound `grad env serve` worker."""
+        return cast("RegisterEnvWorkerResponse", self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))
+
+
+class AsyncGeneratedInternalApiClient:
+    """asyncio client for the SDK's own worker protocols (x-internal operations); not a public API and may change without notice."""
+
+    def __init__(self, transport: AsyncTransport) -> None:
+        self._t = transport
+
+    async def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
+        """Long-poll for the next task assigned to a `grad env serve` worker."""
+        return cast("ClaimEnvTaskResponse", await self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
+
+    async def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        """Submit scored trajectory output for an environment task."""
+        return cast("dict[str, Any]", await self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
+
+    async def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
+        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
+        return cast("DispatchEnvTaskResponse", await self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
+
+    async def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
+        """Inspect an environment task and its result."""
+        return cast("dict[str, Any]", await self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
+
+    async def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
+        """Register or heartbeat an outbound `grad env serve` worker."""
+        return cast("RegisterEnvWorkerResponse", await self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))

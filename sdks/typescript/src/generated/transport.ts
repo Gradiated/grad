@@ -1,6 +1,7 @@
 // AUTO-GENERATED from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.
 /* HTTP runtime shared by every generated operation: typed errors, retries with
- * backoff and Retry-After, same-origin-only redirects, per-attempt timeouts
+ * backoff and Retry-After (POSTs carry one Idempotency-Key across retries, so
+ * they retry like GETs), same-origin-only redirects, per-attempt timeouts
  * that stop at the response headers for streams, SSE parsing, request ids,
  * and the camelCase <-> wire key codec. Browser-safe: no Node imports. */
 
@@ -316,6 +317,11 @@ export interface RequestOptions {
   maxRetries?: number | undefined;
   /** Extra headers for this call. */
   headers?: Record<string, string> | undefined;
+  /**
+   * Idempotency-Key for an operation that accepts one (default: a fresh UUIDv4
+   * per call, reused by its retries). Pass your own to retry across processes.
+   */
+  idempotencyKey?: string | undefined;
   /** Called with status, headers and request id of the final response. */
   onResponse?: ((info: ResponseInfo) => void) | undefined;
 }
@@ -340,6 +346,8 @@ export interface RequestSpec {
   /** Raw, replayable body (for uploads); ignored when `json` is set. */
   body?: Blob | Uint8Array | string | undefined;
   accept?: string | undefined;
+  /** The operation accepts an Idempotency-Key, so it is sent with one and retried like a GET. */
+  idempotent?: boolean | undefined;
 }
 
 export interface RawResponse extends ResponseInfo {
@@ -427,6 +435,9 @@ const describeCause = (error: unknown): string => {
   const text = cause instanceof Error ? cause.message : error instanceof Error ? error.message : String(error);
   return codes.length > 0 && !text.includes(codes[0] ?? "") ? `${codes[0]}: ${text}` : text;
 };
+
+/** A UUIDv4 for the Idempotency-Key header. */
+export const newIdempotencyKey = (): string => globalThis.crypto.randomUUID();
 
 export const encodePathParam = (value: unknown, name: string): string => {
   const text = typeof value === "string" ? value : String(value ?? "");
@@ -523,7 +534,7 @@ export class Transport implements TransportLike {
     return Math.round(base * (0.5 + this.random() * 0.5));
   }
 
-  private async headersFor(spec: RequestSpec, options: RequestOptions | undefined): Promise<{ headers: Headers; keyed: boolean }> {
+  private async headersFor(spec: RequestSpec, options: RequestOptions | undefined): Promise<{ headers: Headers; authed: boolean }> {
     const headers = new Headers(this.defaultHeaders);
     if (this.userAgent) headers.set("User-Agent", this.userAgent);
     headers.set("Accept", spec.accept ?? "application/json");
@@ -534,7 +545,9 @@ export class Transport implements TransportLike {
       if (value !== undefined && value !== null) headers.set(name, scalar(value));
     }
     for (const [name, value] of Object.entries(options?.headers ?? {})) headers.set(name, value);
-    return { headers, keyed: Boolean(key) };
+    if (options?.idempotencyKey !== undefined) headers.set("Idempotency-Key", options.idempotencyKey);
+    else if (spec.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", newIdempotencyKey());
+    return { headers, authed: Boolean(key) };
   }
 
   /**
@@ -548,11 +561,12 @@ export class Transport implements TransportLike {
     streaming: boolean,
   ): Promise<{ response: Response; url: string; done: () => void; signal: AbortSignal; abort: (reason: unknown) => void }> {
     const method = spec.method.toUpperCase();
-    const idempotent = IDEMPOTENT.has(method);
     const maxRetries = Math.max(0, options?.maxRetries ?? this.maxRetries);
     const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
     const userSignal = options?.signal;
-    const { headers, keyed } = await this.headersFor(spec, options);
+    const { headers, authed } = await this.headersFor(spec, options);
+    const keyed = headers.has("Idempotency-Key");
+    const idempotent = IDEMPOTENT.has(method) || keyed;
     const body: BodyInit | undefined = spec.json === undefined ? (spec.body as BodyInit | undefined) : JSON.stringify(spec.json);
     let url = this.buildURL(spec);
     let redirects = 0;
@@ -624,8 +638,10 @@ export class Transport implements TransportLike {
           // Body unreadable; the status alone still classifies the error.
         }
         done();
-        const error = makeAPIError(response.status, response.headers, text, { method, url, apiKeyConfigured: keyed });
-        const retryable = RETRY_STATUSES.has(response.status) && (idempotent || response.status === 429);
+        const error = makeAPIError(response.status, response.headers, text, { method, url, apiKeyConfigured: authed });
+        // 409 + Retry-After on a keyed request: the first attempt is still running server-side.
+        const inProgress = response.status === 409 && keyed && error.retryAfterMs !== undefined;
+        const retryable = (RETRY_STATUSES.has(response.status) && (idempotent || response.status === 429)) || inProgress;
         if (retryable && attempt < maxRetries) {
           const retryAfter = error.retryAfterMs;
           if (retryAfter === undefined || retryAfter <= MAX_RETRY_AFTER_MS) {

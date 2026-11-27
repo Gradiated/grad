@@ -129,8 +129,17 @@ const pyQueryParams = (spec, op) => {
     ident: pyIdent(p.name),
     type: schemaToPyType(p.schema),
     required: Boolean(p.required),
+    maximum: p.schema?.maximum,
   }));
 };
+
+/** Integer query parameters with a documented `maximum`, as `<OP>_<PARAM>_MAX` constants. */
+const pyMaxima = (spec, ops) =>
+  ops.flatMap((op) =>
+    pyQueryParams(spec, op)
+      .filter((q) => q.type === "int" && typeof q.maximum === "number")
+      .map((q) => `${toSnake(op.operationId).toUpperCase()}_${toSnake(q.name).toUpperCase()}_MAX = ${q.maximum}`),
+  );
 
 const pyPathParams = (op) => (op.path.match(/\{([^}]+)\}/g) ?? []).map((m) => m.slice(1, -1));
 
@@ -148,13 +157,14 @@ const pyMethod = (spec, op, { isAsync, inlineTypes }) => {
   if (op.hasBody) sig.push(op.bodyRequired ? `body: ${bodyType}` : `body: ${bodyType} | None = None`);
   sig.push("*");
   for (const q of query) sig.push(`${q.ident}: ${q.type.includes("None") ? q.type : `${q.type} | None`} = None`);
+  if (op.idempotent) sig.push("idempotency_key: str | None = None");
   sig.push("timeout: float | None = None");
 
   const pathExpr = pathParams.length
     ? `f${pyString(op.path.replace(/\{([^}]+)\}/g, (_, p) => `{quote_path_param(${pyIdent(p)}, ${JSON.stringify(p).replace(/"/g, "'")})}`))}`
     : pyString(op.path);
   const queryArg = query.length ? `query={${query.map((q) => `${pyString(q.name)}: ${q.ident}`).join(", ")}}, ` : "";
-  const bodyArg = op.hasBody ? "json_body=body, " : "";
+  const bodyArg = `${op.hasBody ? "json_body=body, " : ""}${op.idempotent ? 'headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, ' : ""}`;
   const doc = escapePyDocstring(op.summary || op.operationId);
   const def = isAsync ? "async def" : "def";
   const awaitKw = isAsync ? "await " : "";
@@ -201,7 +211,15 @@ const pyMethod = (spec, op, { isAsync, inlineTypes }) => {
   return methods;
 };
 
-export const generatePython = (spec, ops) => {
+const pyClient = (name, doc, ops, spec, { isAsync, inlineTypes }) => {
+  const methods = ops.flatMap((op) => pyMethod(spec, op, { isAsync, inlineTypes }));
+  const transport = isAsync ? "AsyncTransport" : "SyncTransport";
+  return `class ${name}:\n    """${doc}"""\n\n    def __init__(self, transport: ${transport}) -> None:\n        self._t = transport\n\n${methods.join("\n\n")}`;
+};
+
+export const generatePython = (spec, allOps, { internalTags = [] } = {}) => {
+  const ops = allOps.filter((op) => !op.internal);
+  const internalOps = allOps.filter((op) => op.internal && op.tags.some((t) => internalTags.includes(t)));
   const schemas = spec.components?.schemas ?? {};
   const names = Object.keys(schemas).sort();
   const blocks = [];
@@ -222,8 +240,28 @@ export const generatePython = (spec, ops) => {
 
   const syncInline = [];
   const asyncInline = [];
-  const syncMethods = ops.flatMap((op) => pyMethod(spec, op, { isAsync: false, inlineTypes: syncInline }));
-  const asyncMethods = ops.flatMap((op) => pyMethod(spec, op, { isAsync: true, inlineTypes: asyncInline }));
+  const clients = [
+    pyClient("GeneratedApiClient", "Blocking wire client: one method per public operation in spec/openapi.yaml.", ops, spec, {
+      isAsync: false,
+      inlineTypes: syncInline,
+    }),
+    pyClient("AsyncGeneratedApiClient", "asyncio wire client: one coroutine per public operation in spec/openapi.yaml.", ops, spec, {
+      isAsync: true,
+      inlineTypes: asyncInline,
+    }),
+  ];
+  if (internalOps.length > 0) {
+    const doc = "the SDK's own worker protocols (x-internal operations); not a public API and may change without notice.";
+    clients.push(
+      pyClient("GeneratedInternalApiClient", `Blocking client for ${doc}`, internalOps, spec, { isAsync: false, inlineTypes: syncInline }),
+      pyClient("AsyncGeneratedInternalApiClient", `asyncio client for ${doc}`, internalOps, spec, { isAsync: true, inlineTypes: asyncInline }),
+    );
+  }
+  const exported = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"];
+  if (internalOps.length > 0) exported.push("AsyncGeneratedInternalApiClient", "GeneratedInternalApiClient");
+  const maxima = pyMaxima(spec, ops);
+  exported.push(...maxima.map((line) => line.split(" ")[0]));
+  exported.sort();
   const operations = ops.map((op) => `    ${pyString(toSnake(op.operationId))}: (${pyString(op.method)}, ${pyString(op.path)}),`);
 
   return `# AUTO-GENERATED from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.
@@ -240,13 +278,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Mapping, NotRequired, TypeAlias, TypedDict, cast
 
 from .._errors import GradAPIError as GradApiError
-from .._transport import quote_path_param
+from .._transport import new_idempotency_key, quote_path_param
 
 if TYPE_CHECKING:
     from .._http import AsyncResponse, Response
     from .._transport import AsyncTransport, SyncTransport
 
-__all__ = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = [${exported.map(pyString).join(", ")}]
 
 ${blocks.join("\n\n")}
 
@@ -265,25 +303,10 @@ ${enumTable.join("\n")}
 OPERATIONS: dict[str, tuple[str, str]] = {
 ${operations.join("\n")}
 }
-"""operationId (snake_case) -> (HTTP method, path template)."""
+"""Public operationId (snake_case) -> (HTTP method, path template)."""
 
-
-class GeneratedApiClient:
-    """Blocking wire client: one method per operation in spec/openapi.yaml."""
-
-    def __init__(self, transport: SyncTransport) -> None:
-        self._t = transport
-
-${syncMethods.join("\n\n")}
-
-
-class AsyncGeneratedApiClient:
-    """asyncio wire client: one coroutine per operation in spec/openapi.yaml."""
-
-    def __init__(self, transport: AsyncTransport) -> None:
-        self._t = transport
-
-${asyncMethods.join("\n\n")}
+${maxima.length ? `# Page-size maxima from spec/openapi.yaml (the server clamps larger values).\n${maxima.join("\n")}\n\n` : ""}
+${clients.join("\n\n\n")}
 `;
 };
 
