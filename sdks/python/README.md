@@ -1,14 +1,103 @@
 # grad-sdk (Python)
 
-Thin, zero-dependency Python SDK wrapping the OpenAPI-generated wire client for `grad-server`.
+The Python SDK for the Gradiated training platform: push datasets, preview and launch managed
+fine-tuning runs, evaluate models, download PEFT adapters, deploy, route and record feedback.
+
+- Zero runtime dependencies (Python 3.11+); sync `Grad` and native asyncio `AsyncGrad`.
+- Typed objects with a `.raw` escape hatch, `py.typed`, typed errors, retries with backoff.
+- Works against Gradiated Cloud or a self-hosted `grad-server`.
+
+```bash
+pip install grad-sdk
+export GRADIATED_API_KEY=grad_...
+# Self-hosted server: export GRADIATED_BASE_URL=http://localhost:8787
+```
+
+## Quickstart
 
 ```python
-from grad import Grad, SFTRecipe
+from grad import Grad
+from grad.recipes import SFTRecipe
 
-client = Grad(base_url="http://127.0.0.1:8080")
-client.datasets.push("support", [
-    {"messages": [{"role": "user", "content": "Reset password?"}, {"role": "assistant", "content": "Settings -> Reset."}]}
+client = Grad()  # reads GRADIATED_API_KEY and GRADIATED_BASE_URL
+
+dataset = client.datasets.push("sql-quickstart", [
+    {"messages": [
+        {"role": "user", "content": "Count active users from yesterday."},
+        {"role": "assistant", "content": "SELECT count(*) FROM users WHERE active_at >= current_date - 1;"},
+    ]},
+    {"messages": [
+        {"role": "user", "content": "Total revenue by plan this month."},
+        {"role": "assistant", "content": "SELECT plan, sum(amount_usd) FROM invoices GROUP BY plan;"},
+    ]},
 ])
-plan = client.runs.plan("support", name="support-sft", recipe=SFTRecipe(model="qwen/qwen3-8b"))
-run = client.runs.create("support", name="support-sft", recipe=SFTRecipe(model="qwen/qwen3-8b"), max_cost_usd=5.0)
+
+recipe = SFTRecipe(model="qwen/qwen3-8b")
+
+# $0 preview: resolved defaults, warnings, tokens and cost
+print(client.runs.plan(dataset=dataset, name="sql-helper", recipe=recipe))
+
+run = client.runs.create(dataset=dataset, name="sql-helper", recipe=recipe, max_cost_usd=5).wait()
+print(run.status, run.artifact)
+
+# Self-hosted: download the PEFT LoRA and serve it with vLLM or SGLang.
+# Gradiated Cloud: run.deploy() serves it behind a stable name.
+run.artifact.download("./sql-helper-bundle.grad.tar.gz", format="bundle")
 ```
+
+`run.artifact.download("./sql-helper")` (the default `format="peft"`) extracts a verified PEFT
+directory (`adapter_config.json` + `adapter_model.safetensors`) that `vllm serve <base>
+--enable-lora --lora-modules sql-helper=./sql-helper` loads directly.
+
+## Configuration
+
+| Setting  | Explicit argument       | Environment          | Config file (`grad login`)                          |
+| -------- | ----------------------- | -------------------- | --------------------------------------------------- |
+| API key  | `Grad(api_key=...)`     | `GRADIATED_API_KEY`  | `$XDG_CONFIG_HOME/gradiated/config.json` (profiles) |
+| Base URL | `Grad(base_url=...)`    | `GRADIATED_BASE_URL` | same file; default `https://api.gradiated.com`      |
+
+Explicit arguments win over the environment, which wins over the config file. `Grad(profile=...)`
+selects a profile from the file. Also: `timeout=` (per request), `max_retries=` (default 2).
+
+## Errors
+
+Every error subclasses `grad.GradError`. HTTP errors are `grad.GradAPIError` subclasses carrying
+`status`, `code`, `detail`, `request_id`, the method and URL: `AuthenticationError` (401),
+`PermissionDeniedError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationError`
+(422, with field `errors`), `RateLimitError` (429), `DeployUnavailableError` and
+`InferenceUnavailableError` (501), `ServerError` (5xx). Network failures raise
+`APIConnectionError` / `APITimeoutError`; `wait()` raises `RunFailedError`, `EvalFailedError`,
+`ImportFailedError` or `WaitTimeoutError`; a list endpoint that repeats its cursor raises
+`PaginationLoopError` instead of looping. Features documented for later waves raise
+`NotAvailableInV0Error` with an alternative.
+
+## Async
+
+```python
+import asyncio
+from grad import AsyncGrad
+from grad.recipes import SFTRecipe
+
+async def main() -> None:
+    async with AsyncGrad() as client:
+        ds = await client.datasets.push("sql-quickstart", [{"prompt": "2+2?", "completion": "4"}])
+        run = await client.runs.create(dataset=ds, name="sql-helper", recipe=SFTRecipe(), max_cost_usd=5)
+        await run.wait()
+        async for point in client.runs.metrics(run.id):
+            print(point.step, point.loss)
+
+asyncio.run(main())
+```
+
+## Development
+
+```bash
+PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests
+```
+
+Unit tests use a scripted fake transport and the shared wire fixtures in `tests/fixtures/wire`.
+`test_live.py` runs these snippets against `tests/harness/stack.ts`; it skips unless
+`server/api/node_modules` exists (`pnpm -C server/api install --frozen-lockfile`), and the Cloud
+deploy flow also needs `GRAD_TRAINER_PYTHON` (a Python with torch, transformers and peft). The
+transport in `grad/_generated/client.py` is generated from `spec/openapi.yaml` by
+`node scripts/generate-sdks.mjs`.

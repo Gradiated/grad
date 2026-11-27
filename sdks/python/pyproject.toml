@@ -4,13 +4,58 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grad-sdk"
-version = "0.1.0"
-description = "Python SDK for the Gradiated training and serving platform"
+dynamic = ["version"]
+description = "Python SDK for the Gradiated training platform: datasets, managed fine-tuning runs, evals, artifacts and deployments."
 readme = "README.md"
 license = { text = "Apache-2.0" }
+authors = [{ name = "Gradiated" }]
 requires-python = ">=3.11"
+# Zero runtime dependencies: HTTP (sync and asyncio), SSE, retries and bundle extraction use the standard library.
 dependencies = []
+keywords = ["llm", "fine-tuning", "lora", "peft", "evals", "routing", "gradiated"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: AsyncIO",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://gradiated.com"
+Documentation = "https://gradiated.com/docs/training"
+
+[project.optional-dependencies]
+dev = ["coverage>=7.6", "mypy>=1.13"]
+
+[tool.setuptools.dynamic]
+version = { attr = "grad._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["grad*"]
+
+[tool.setuptools.package-data]
+grad = ["py.typed"]
+
+[tool.coverage.run]
+branch = true
+source = ["grad"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["grad"]
