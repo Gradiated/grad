@@ -15,6 +15,7 @@ import contextlib
 import io
 import json
 import os
+import signal
 import re
 import tempfile
 import unittest
@@ -70,7 +71,19 @@ class _LiveCase(unittest.TestCase):
         cls.env.stop()
         cls.stack.close()
 
+    #: Hard per-test limit: a live test that waits forever (wait() defaults to 24 h) must fail, not hang CI.
+    test_timeout_s: ClassVar[int] = int(os.environ.get("GRAD_LIVE_TEST_TIMEOUT_S", "300"))
+
     def setUp(self) -> None:
+        if hasattr(signal, "SIGALRM"):
+
+            def _timeout(_signum: int, _frame: Any) -> None:
+                raise TimeoutError(f"{self.id()} exceeded {self.test_timeout_s}s")
+
+            previous = signal.signal(signal.SIGALRM, _timeout)
+            signal.alarm(self.test_timeout_s)
+            self.addCleanup(signal.signal, signal.SIGALRM, previous)
+            self.addCleanup(signal.alarm, 0)
         self.tmp = Path(tempfile.mkdtemp(prefix="grad-py-live-", dir=os.environ.get("TMPDIR")))
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
 
