@@ -78,6 +78,8 @@ const EnvironmentSchema = z.object({
     .min(1)
     .max(3650)
     .default(90),
+  /** Days an unreferenced job blob is kept before the sweep deletes it. */
+  ORPHAN_BLOB_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
   MAINTENANCE_INTERVAL_MS: z.coerce.number().int().min(100).default(15_000),
   /** Serve Prometheus metrics at /metrics. */
   METRICS_ENABLED: booleanFlag("true"),

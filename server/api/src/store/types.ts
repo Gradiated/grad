@@ -937,5 +937,7 @@ export interface Store extends Repositories {
   ping(): Promise<boolean>;
   /** The database clock (`SELECT now()`). */
   dbNow(): Promise<Date>;
+  /** The storage keys no artifact or dataset part references. */
+  unreferencedKeys(keys: readonly string[]): Promise<string[]>;
   close(): Promise<void>;
 }

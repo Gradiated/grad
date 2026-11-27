@@ -35,6 +35,8 @@ export interface AppSettings {
   sourceSyncIntervalSeconds?: number;
   /** Job events (metrics) older than this are deleted (default 90 days). */
   jobEventRetentionDays?: number;
+  /** Unreferenced job blobs older than this are deleted (default 7 days). */
+  orphanBlobDays?: number;
   /** Prometheus endpoint (default: on, on the API port, no token). */
   metrics?: MetricsSettings;
 }

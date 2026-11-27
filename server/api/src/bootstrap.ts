@@ -175,6 +175,7 @@ export const buildDependencies = async (
       workerAutoscaling: env.GRAD_WORKER_AUTOSCALING,
       evalConcurrency: env.EVAL_CONCURRENCY,
       jobEventRetentionDays: env.JOB_EVENT_RETENTION_DAYS,
+      orphanBlobDays: env.ORPHAN_BLOB_DAYS,
       usageFlushTokens: env.USAGE_FLUSH_TOKENS,
       usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
       usageExportLagSeconds: env.USAGE_EXPORT_LAG_SECONDS,

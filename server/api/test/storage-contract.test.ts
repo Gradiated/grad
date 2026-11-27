@@ -221,6 +221,13 @@ const describeObjectStoreContract = (
         `${prefix}/two.bin`,
       ]);
       expect(await store.listOlder(prefix, future, 1)).toHaveLength(1);
+      // Pages in key order after a cursor.
+      expect(await store.listOlder(prefix, future, 1, `${prefix}/a`)).toEqual([
+        `${prefix}/a/one.bin`,
+      ]);
+      expect(
+        await store.listOlder(prefix, future, 5, `${prefix}/a/one.bin`),
+      ).toEqual([`${prefix}/two.bin`]);
       expect(await store.listOlder(prefix, new Date(0), 10)).toEqual([]);
       expect(await store.listOlder(uniqueKey("empty"), future, 10)).toEqual([]);
     });

@@ -60,8 +60,16 @@ export interface ObjectStore {
   /** Throws ObjectNotFoundError. */
   getStream(key: string): Promise<ReadableStream<Uint8Array>>;
   head(key: string): Promise<ObjectHead | null>;
-  /** Up to `limit` keys under `prefix` last modified before `before`. */
-  listOlder(prefix: string, before: Date, limit: number): Promise<string[]>;
+  /**
+   * Up to `limit` keys under `prefix` last modified before `before`, in key
+   * order, after the key `after` when given (to page through a prefix).
+   */
+  listOlder(
+    prefix: string,
+    before: Date,
+    limit: number,
+    after?: string,
+  ): Promise<string[]>;
   /** Idempotent. */
   delete(key: string): Promise<void>;
   /**

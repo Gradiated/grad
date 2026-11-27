@@ -193,6 +193,29 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
     ).toBe(0);
   });
 
+  it("sweeps job blobs nothing references once ORPHAN_BLOB_DAYS pass (r8 B3)", async () => {
+    const run = await createSftRun(t);
+    const job = (await worker.claim())!;
+    await worker.checkpoint(job, 5, "kept");
+    // A worker killed between upload and register leaves its blob behind.
+    const orphan = jobBlobKey(run as never, 1, sha256Hex("never registered"));
+    await t.deps.storage.put(orphan, Buffer.from("never registered"));
+    const part = `ws/${WORKSPACE_A}/datasets/ds_x/${sha256Hex("p")}.jsonl.gz`;
+    await t.deps.storage.put(part, Buffer.from("p"));
+    const kept = jobBlobKey(run as never, 1, sha256Hex("kept"));
+
+    expect((await t.services.maintenance.tick()).deletedOrphanBlobs).toBe(0);
+    expect(await t.deps.storage.head(orphan)).not.toBeNull();
+    // Object ages come from the filesystem, so age them by moving "now".
+    t.clock.set(new Date(Date.now() + 8 * 86_400_000));
+    await worker.heartbeat(job).catch(() => undefined);
+    expect((await t.services.maintenance.tick()).deletedOrphanBlobs).toBe(1);
+    expect(await t.deps.storage.head(orphan)).toBeNull();
+    expect(await t.deps.storage.head(kept)).not.toBeNull();
+    // Dataset parts are content-addressed and reused: never swept.
+    expect(await t.deps.storage.head(part)).not.toBeNull();
+  });
+
   it("sweeps staged uploads after 7 days and job events after the retention", async () => {
     const file = Buffer.from("old upload");
     const key = stagingKey(WORKSPACE_A, sha256Hex(file));

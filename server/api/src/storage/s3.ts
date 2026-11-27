@@ -301,6 +301,7 @@ export class S3ObjectStore implements ObjectStore {
     prefix: string,
     before: Date,
     limit: number,
+    after?: string,
   ): Promise<string[]> => {
     const keys: string[] = [];
     let token: string | undefined;
@@ -310,6 +311,7 @@ export class S3ObjectStore implements ObjectStore {
           Bucket: this.bucket,
           Prefix: `${validateObjectKey(prefix)}/`,
           ContinuationToken: token,
+          StartAfter: token ? undefined : after,
         }),
         { abortSignal: this.signal(15_000) },
       );

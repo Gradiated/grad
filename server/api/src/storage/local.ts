@@ -235,9 +235,12 @@ export class LocalObjectStore implements ObjectStore {
     prefix: string,
     before: Date,
     limit: number,
+    after?: string,
   ): Promise<string[]> => {
     const base = path.resolve(this.root, validateObjectKey(prefix));
     const keys: string[] = [];
+    // Directory order is not key order: with a page cursor, walk it all.
+    const cap = after === undefined ? limit : Number.POSITIVE_INFINITY;
     const walk = async (dir: string): Promise<void> => {
       let entries;
       try {
@@ -247,7 +250,7 @@ export class LocalObjectStore implements ObjectStore {
         throw error;
       }
       for (const entry of entries) {
-        if (keys.length >= limit) return;
+        if (keys.length >= cap) return;
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) await walk(full);
         else if (
@@ -260,8 +263,12 @@ export class LocalObjectStore implements ObjectStore {
       }
     };
     await walk(base);
+    if (after === undefined) return keys;
 
-    return keys;
+    return keys
+      .filter((key) => key > after)
+      .sort()
+      .slice(0, limit);
   };
 
   delete = async (key: string): Promise<void> => {

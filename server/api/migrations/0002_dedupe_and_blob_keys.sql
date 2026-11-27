@@ -28,3 +28,7 @@ WHERE a.kind = 'release' AND a.source_id IS NOT NULL
   );
 CREATE UNIQUE INDEX grad_artifacts_promoted_idx
   ON grad_artifacts (workspace_id, source_id, name) WHERE kind = 'release';
+
+-- The orphaned-blob sweep looks storage keys up in both tables.
+CREATE INDEX grad_artifacts_storage_key_idx ON grad_artifacts (storage_key);
+CREATE INDEX grad_dataset_parts_key_idx ON grad_dataset_parts (key) WHERE key IS NOT NULL;

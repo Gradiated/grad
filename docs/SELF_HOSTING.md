@@ -104,6 +104,7 @@ To work on it, run the API (for example `grad local up` or the harness) and `pnp
 | `MAX_PREEMPTIONS` | `20` | Attempts that may end because the worker's compute was reclaimed (SIGTERM or a termination notice). They don't count toward `MAX_ATTEMPTS`. |
 | `USAGE_FLUSH_TOKENS` / `USAGE_FLUSH_SECONDS` | `1000000` / `300` | A running attempt appends a usage row (GET /v1/usage) whenever this many tokens or seconds are unbilled, at each checkpoint, and when it ends. A worker killed outright is billed up to its last progress report. |
 | `JOB_EVENT_RETENTION_DAYS` | `90` | Days job events (training metrics) are kept; older ones are deleted by the maintenance tick. |
+| `ORPHAN_BLOB_DAYS` | `7` | Days a job blob that nothing references (a checkpoint a crashed worker uploaded but never registered, a staged import part whose delete was interrupted) is kept before the maintenance tick deletes it. |
 | `METRICS_ENABLED` | `true` | Serve Prometheus metrics at `/metrics` and the queue depth at `/metrics/queue` (see [Monitoring](#monitoring)). |
 | `METRICS_PORT` | the API port | Serve them on this port instead, so they stay off the public listener. |
 | `METRICS_TOKEN` | none | Require `Authorization: Bearer <token>` on both. |

@@ -107,6 +107,17 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
 
       return new Date(rows[0]?.now ?? Date.now());
     },
+    unreferencedKeys: async (keys) =>
+      keys.length === 0
+        ? []
+        : (
+            await db.query<{ key: string }>(
+              `SELECT k.key FROM unnest($1::text[]) AS k(key)
+               WHERE NOT EXISTS (SELECT 1 FROM grad_artifacts a WHERE a.storage_key = k.key)
+                 AND NOT EXISTS (SELECT 1 FROM grad_dataset_parts p WHERE p.key = k.key)`,
+              [[...keys]],
+            )
+          ).map((r) => r.key),
     close: () => {
       unwatch();
 

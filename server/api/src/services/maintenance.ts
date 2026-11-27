@@ -12,6 +12,11 @@ import type { UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
 
 export const DEFAULT_JOB_EVENT_RETENTION_DAYS = 90;
+export const DEFAULT_ORPHAN_BLOB_DAYS = 7;
+/** Keys checked per tick while a pass over the bucket is in progress. */
+const ORPHAN_PAGE = 1000;
+/** A finished pass waits this long before the next one starts. */
+const ORPHAN_PASS_INTERVAL_MS = 3_600_000;
 
 export interface MaintenanceReport {
   expiredJobs: number;
@@ -20,6 +25,7 @@ export interface MaintenanceReport {
   deletedCheckpoints: number;
   deletedUploads: number;
   deletedEvents: number;
+  deletedOrphanBlobs: number;
   exportedUsage: number;
   syncedSources: number;
   /** 1 when the metric gauges were refreshed. */
@@ -47,6 +53,40 @@ export const createMaintenance = (
 ): Maintenance => {
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<unknown> | null = null;
+
+  // The orphaned-blob sweep pages through `ws/` a page per tick (this
+  // replica's cursor), then rests. Deletes are idempotent, so replicas
+  // sweeping the same keys is harmless.
+  let orphanCursor: string | undefined;
+  let nextOrphanPass = 0;
+
+  /**
+   * The backstop for best-effort blob deletes: deletes job blobs (worker
+   * uploads, staged import parts) older than ORPHAN_BLOB_DAYS that no
+   * artifact or dataset part references (an upload never registered, a
+   * delete a crash skipped). Dataset parts are content-addressed and reused
+   * by an identical later write, so they are left alone.
+   */
+  const sweepOrphanBlobs = async (now: Date): Promise<number> => {
+    if (orphanCursor === undefined && now.getTime() < nextOrphanPass) return 0;
+    const days = deps.settings.orphanBlobDays ?? DEFAULT_ORPHAN_BLOB_DAYS;
+    const keys = await deps.storage.listOlder(
+      "ws",
+      addSeconds(now, -days * 86_400),
+      ORPHAN_PAGE,
+      orphanCursor,
+    );
+    orphanCursor = keys.length < ORPHAN_PAGE ? undefined : keys.at(-1);
+    if (orphanCursor === undefined) {
+      nextOrphanPass = now.getTime() + ORPHAN_PASS_INTERVAL_MS;
+    }
+    const orphans = await deps.store.unreferencedKeys(
+      keys.filter((key) => /^ws\/[^/]+\/jobs\//.test(key)),
+    );
+    for (const key of orphans) await deps.storage.delete(key);
+
+    return orphans.length;
+  };
 
   /** One step's failure (an S3 outage, say) is logged and never stops the others. */
   const step = async (name: string, fn: () => Promise<number>) => {
@@ -91,6 +131,9 @@ export const createMaintenance = (
           addSeconds(now, -retentionDays * 86_400),
           1000,
         ),
+      ),
+      deletedOrphanBlobs: await step("gc_orphan_blobs", () =>
+        sweepOrphanBlobs(now),
       ),
       exportedUsage: await step("export_usage", () =>
         services.usage.exportPending(),
