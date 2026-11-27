@@ -20,6 +20,13 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   IPv4-compatible IPv6 addresses, so `64:ff9b::a9fe:a9fe` can't reach a metadata endpoint.
 - Worker errors shown on runs and imports no longer quote presigned URL query strings or
   object-storage response bodies.
+- Hugging Face imports accept only Hub ids (no `.`/`..` segments, never a path that exists on
+  the worker) and use the workspace's token or none, never the worker's own Hugging Face login.
+- A job's model id can't name a directory outside `GRAD_MODELS_MIRROR`.
+- The Python SDK names a downloaded bundle from the artifact's base name only, like the
+  TypeScript and Go SDKs.
+- `AUTH_MODE=none` refuses a non-loopback `HOST` unless `AUTH_MODE_NONE_ALLOW_REMOTE=true`
+  (`server/docker-compose.yml` sets it; its port is published on loopback only).
 
 ### Changed
 

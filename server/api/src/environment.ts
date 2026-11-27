@@ -57,6 +57,7 @@ const EnvironmentSchema = z.object({
   /** Workers scale from zero (KEDA): say "a GPU worker is starting". */
   GRAD_WORKER_AUTOSCALING: booleanFlag("false"),
   MIGRATE_ON_BOOT: booleanFlag("true"),
+  AUTH_MODE_NONE_ALLOW_REMOTE: booleanFlag("false"),
   /** Bill a running attempt every this many tokens... */
   USAGE_FLUSH_TOKENS: z.coerce.number().int().min(1).default(1_000_000),
   /** ...or every this many seconds, whichever comes first. */
@@ -180,8 +181,15 @@ export const parseServerEnvironment = (
       "AUTH_MODE=none: authentication is DISABLED and every request is a platform admin. Use this for local development only.",
     );
     if (!isLoopbackHost(env.HOST)) {
+      // Every request is a platform admin (trainer:worker included), so refuse to
+      // listen beyond loopback unless the operator says the network is private.
+      if (!env.AUTH_MODE_NONE_ALLOW_REMOTE) {
+        throw new Error(
+          `AUTH_MODE=none refuses to listen on non-loopback HOST=${env.HOST}: anyone who can reach this port would have full admin access. Use AUTH_MODE=api_key, listen on 127.0.0.1, or set AUTH_MODE_NONE_ALLOW_REMOTE=true when only trusted hosts can reach the port (for example a compose network published on loopback).`,
+        );
+      }
       warnings.push(
-        `AUTH_MODE=none while listening on non-loopback HOST=${env.HOST}: anyone who can reach this port has full admin access.`,
+        `AUTH_MODE=none while listening on non-loopback HOST=${env.HOST} (AUTH_MODE_NONE_ALLOW_REMOTE=true): anyone who can reach this port has full admin access.`,
       );
     }
   }

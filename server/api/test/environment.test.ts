@@ -77,8 +77,17 @@ describe("parseServerEnvironment", () => {
     });
     expect(local.warnings).toHaveLength(1);
     expect(local.warnings[0]).toMatch(/DISABLED/);
+    // r8 P2-16: full admin for anyone who can reach the port needs an explicit opt-in.
+    expect(() =>
+      parseServerEnvironment({
+        AUTH_MODE: "none",
+        HOST: "0.0.0.0",
+        DATABASE_URL: "postgres://x",
+      }),
+    ).toThrow(/refuses to listen on non-loopback HOST=0.0.0.0/);
     const exposed = parseServerEnvironment({
       AUTH_MODE: "none",
+      AUTH_MODE_NONE_ALLOW_REMOTE: "true",
       HOST: "0.0.0.0",
       DATABASE_URL: "postgres://x",
     });

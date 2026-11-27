@@ -30,8 +30,10 @@ services:
       HOST: "0.0.0.0"
       PORT: "8787"
       DATABASE_URL: "postgres://grad:${GRAD_POSTGRES_PASSWORD:-grad_local_dev_only}@postgres:5432/grad"
-      # Local development default; the port is published on loopback only.
+      # Local development default; the port is published on loopback only, so only this
+      # machine and the compose network reach it (AUTH_MODE=none needs that opt-in).
       AUTH_MODE: "${GRAD_AUTH_MODE:-none}"
+      AUTH_MODE_NONE_ALLOW_REMOTE: "true"
       ADMIN_API_KEY_HASH: "${GRAD_ADMIN_API_KEY_HASH:-}"
       TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
       # Encrypts workspace secrets (32 random bytes, base64); `grad local up` generates it.
