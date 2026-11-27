@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -43,6 +44,19 @@ describe("runs", () => {
     expect(plan).toBeInstanceOf(RunPlan);
     expect(plan.resolvedRecipe).toBe(plan.resolvedConfig);
     expect(plan.estimatedSteps).toBeGreaterThan(0);
+    // console.log(plan) prints the same readout as Python's print(plan), Go and the CLI.
+    const text = inspect(plan);
+    expect(text).toBe(String(plan));
+    for (const want of [
+      "Dataset     support-prod v2",
+      "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=",
+      "Breakdown   train ~$0.0002 · teacher ~$0.00 · evals ~$0.00 (held-out evals during training aren't billed)",
+      "on one GPU",
+      "Warnings    2",
+      "  ! 6 steps are below",
+    ]) {
+      expect(text).toContain(want);
+    }
     expect(server.lastBody("POST", "/v1/runs/plan")).toEqual({
       dataset: "support-prod",
       name: "support-sft",

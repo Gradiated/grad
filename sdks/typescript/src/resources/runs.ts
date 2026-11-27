@@ -14,6 +14,7 @@ import type {
 import { convertKeys, GradError, type RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { GradUsageError, RunFailedError, WaitTimeoutError } from "../errors.js";
+import { formatPlan } from "../format.js";
 import { collect, pages, Paginator } from "../pagination.js";
 import { Pending } from "../pending.js";
 import { isTransient, pollUntil, type WaitOptions } from "../polling.js";
@@ -69,6 +70,15 @@ export class RunPlan {
   /** Alias of `resolvedConfig` (the docs' name). */
   get resolvedRecipe(): ResolvedRunConfig {
     return this.resolvedConfig;
+  }
+
+  /** The readout the Python and Go SDKs and the CLI print; `console.log(plan)` uses it. */
+  toString(): string {
+    return formatPlan(this);
+  }
+
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return this.toString();
   }
 }
 
