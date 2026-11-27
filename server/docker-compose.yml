@@ -229,7 +229,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
       GF_SECURITY_ADMIN_PASSWORD: "${GRAD_GRAFANA_PASSWORD:-admin}"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/grad/overview.json"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/grad/grad.json"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_NEWS_NEWS_FEED_ENABLED: "false"
@@ -263,13 +263,19 @@ configs:
       global:
         scrape_interval: 15s
       scrape_configs:
+        # `pod` and `pool` match the labels Kubernetes scrapes add, so the
+        # dashboard's legends and pool variable work here too.
         - job_name: grad-server
           static_configs:
             - targets: ["grad-server:8787"]
+              labels: {pod: grad-server}
         # Worker metrics (GRAD_WORKER_METRICS_PORT); the GPU worker only with --gpu.
         - job_name: grad-trainer
           static_configs:
-            - targets: ["grad-trainer:9465", "grad-trainer-gpu:9465"]
+            - targets: ["grad-trainer:9465"]
+              labels: {pod: grad-trainer, pool: cpu}
+            - targets: ["grad-trainer-gpu:9465"]
+              labels: {pod: grad-trainer-gpu, pool: gpu}
   grad-grafana-datasource:
     content: |
       apiVersion: 1

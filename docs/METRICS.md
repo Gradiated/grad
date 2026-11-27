@@ -6,8 +6,10 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
+| `grad_auth_cache_lookups_total` | counter | `mode`, `result` | Credential cache lookups, by mode (cloud_key, kubernetes) and result (hit, miss). |
 | `grad_billed_cost_usd_total` | counter | `kind` | Cost written to the usage ledger in USD, by usage kind (run, eval). |
 | `grad_billed_tokens_total` | counter | `kind` | Tokens written to the usage ledger, by usage kind (run, eval). |
+| `grad_billing_checks_total` | counter | `op`, `result` | Cloud: balance checks, by op (start: a new run or eval; continue: a running job's heartbeat) and result (allowed, refused, error). A refused continue stops the job (stopped_balance). |
 | `grad_build_info` | gauge | `version` | Always 1; the server version. |
 | `grad_checkpoint_upload_bytes_total` | counter | `recipe_kind` | Bytes of registered checkpoint bundles. |
 | `grad_checkpoint_upload_duration_seconds` | histogram | `recipe_kind` | Checkpoint upload time the worker reported. |
@@ -17,8 +19,10 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_db_pool_connections` | gauge | `state` | Postgres pool connections by state (in_use, idle, waiting). |
 | `grad_db_query_duration_seconds` | histogram |  | Postgres query duration. |
 | `grad_db_query_errors_total` | counter |  | Postgres queries that failed. |
+| `grad_eval_inference_errors_total` | counter | `target`, `reason` | Failed eval model and judge calls (after retries), by target (model, judge) and reason (rate_limited, capacity_unavailable, timeout, unreachable, server_error, rejected, malformed). |
 | `grad_eval_judge_calls_total` | counter | `result` | Judge calls evals made, by result (ok, error). |
 | `grad_eval_outputs_total` | counter | `result` | Model outputs evals generated, by result (ok, error). |
+| `grad_http_errors_total` | counter | `code` | problem+json error responses by error code (queue_limit, lease_lost, auth_unavailable, ...). |
 | `grad_http_request_duration_seconds` | histogram | `method`, `route`, `status_class` | HTTP request duration by route template, method and status class. |
 | `grad_http_requests_in_flight` | gauge |  | HTTP requests being served. |
 | `grad_http_requests_total` | counter | `method`, `route`, `status_class` | HTTP requests by route template, method and status class. |
@@ -26,6 +30,7 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_job_attempts_total` | counter | `kind` | Job attempts started (claims). |
 | `grad_job_claim_latency_seconds` | histogram | `kind` | Time from creating a job to its first claim. |
 | `grad_job_duration_seconds` | histogram | `kind`, `recipe_kind`, `status` | Time from creating a job to its terminal status, by kind, recipe and status. |
+| `grad_job_failures_total` | counter | `kind`, `recipe_kind`, `error_code` | Jobs that ended failed, by kind, recipe and error code (attempts_exhausted, preemptions_exhausted, invalid_artifact, source_unavailable, job_error). |
 | `grad_job_fair_share_wait_seconds` | gauge | `kind` | Longest wait of a job next in its workspace's fair share (the oldest claimable job of a workspace below its running cap), by kind (0 when none). |
 | `grad_job_oldest_queued_age_seconds` | gauge | `kind` | Age of the oldest claimable queued job by kind (0 when none). |
 | `grad_job_requeues_total` | counter | `kind`, `reason` | Attempts that ended without a result, by reason (lease_lost, compute_reclaimed, worker_error, oom). |
@@ -33,12 +38,15 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_jobs_open` | gauge | `kind` | Claimable queued plus leased jobs by kind: what KEDA scales workers on. |
 | `grad_jobs_over_workspace_limit` | gauge | `kind` | Queued jobs that wait because their workspace is at its running cap (GRAD_MAX_RUNNING_PER_WORKSPACE_*), by kind; not counted in grad_jobs_open. |
 | `grad_jobs_unfit` | gauge |  | Queued train jobs that need more GPU memory (min_gpu_memory_gb) than any online train worker has. |
+| `grad_maintenance_last_tick_timestamp_seconds` | gauge |  | Unix time the maintenance loop last finished a tick (lease expiry, requeues, gauges, usage). |
 | `grad_maintenance_step_duration_seconds` | histogram | `step` | Maintenance step duration. |
 | `grad_maintenance_step_errors_total` | counter | `step` | Maintenance steps that failed. |
+| `grad_price_list_age_seconds` | gauge |  | Cloud: seconds since the price list was last confirmed (new work is refused past 24 h). |
 | `grad_queue_limit_rejections_total` | counter | `kind` | Creates refused with 429 queue_limit (GRAD_MAX_QUEUED_PER_WORKSPACE), by the kind of job refused. |
 | `grad_source_consecutive_failures` | gauge | `provider` | The most consecutive failed syncs of any source, by provider. |
 | `grad_source_records_synced_total` | counter | `provider` | Records source syncs added, by provider. |
 | `grad_source_score_updates_total` | counter | `provider` | Score updates source syncs added, by provider. |
+| `grad_source_sync_lag_seconds` | gauge | `provider` | Longest time an active scheduled source has gone without a successful sync, by provider. |
 | `grad_source_syncs_total` | counter | `provider`, `status` | Source syncs finished, by provider and status. |
 | `grad_sources` | gauge | `provider` | Sources by provider. |
 | `grad_sources_paused` | gauge | `provider` | Sources paused after repeated failed syncs, by provider. |
@@ -49,11 +57,15 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_sse_streams` | gauge |  | Open SSE event streams (run events and metrics) on this replica. |
 | `grad_storage_operation_duration_seconds` | histogram | `op` | Object storage operation duration, by operation. |
 | `grad_storage_operation_errors_total` | counter | `op` | Object storage operations that failed, by operation. |
+| `grad_token_review_duration_seconds` | histogram |  | Kubernetes TokenReview call duration. |
+| `grad_token_reviews_in_flight` | gauge |  | Kubernetes TokenReviews in flight on this replica. |
+| `grad_token_reviews_total` | counter | `result` | Kubernetes TokenReviews, by result (authenticated, rejected, error, saturated: refused because 8 were in flight). |
 | `grad_training_tokens_total` | counter | `recipe_kind`, `model_family` | Tokens processed by training attempts, by recipe and model family. |
 | `grad_usage_export_failures_total` | counter |  | Cloud: usage pushes to billing that failed (the rows stay and are retried). |
 | `grad_usage_export_lag_seconds` | gauge |  | Cloud: age of the oldest usage row not yet pushed to billing (0 when none). |
 | `grad_usage_export_pending_rows` | gauge |  | Cloud: usage ledger rows not yet pushed to billing. |
 | `grad_usage_flush_lag_seconds` | gauge |  | Longest time a running attempt has gone without writing usage. |
+| `grad_worker_auth_total` | counter | `mode`, `result` | Worker-protocol requests by auth mode (static, kubernetes, lease; none: no worker credential) and result (ok, rejected, unavailable). |
 | `grad_worker_gpu_memory_used_bytes` | gauge | `kind` | Sum of the GPU memory leased workers last reported. |
 | `grad_worker_gpu_utilization_ratio` | gauge | `kind` | Mean GPU utilisation (0-1) leased workers last reported. |
 | `grad_worker_heartbeats_total` | counter | `kind` | Worker heartbeats received. |

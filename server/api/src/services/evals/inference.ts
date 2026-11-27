@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../../contracts.js";
+import type { InferenceErrorReason } from "../../contracts/trainer-jobs.js";
 import { ApiError, errorMessage } from "../../errors.js";
 import type {
   ChatCompletionClient,
@@ -32,7 +33,40 @@ const toWireMessage = (message: ChatMessage): Record<string, unknown> => {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-class RetryableError extends Error {}
+class CallError extends Error {
+  constructor(
+    message: string,
+    readonly reason: InferenceErrorReason,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+  }
+}
+
+const reasonOfStatus = (status: number, body: string): InferenceErrorReason =>
+  body.includes("capacity_unavailable")
+    ? "capacity_unavailable"
+    : status === 429
+      ? "rate_limited"
+      : status === 408 || status === 504
+        ? "timeout"
+        : status >= 500
+          ? "server_error"
+          : "rejected";
+
+/** An eval inference call that failed after its retries. */
+export class InferenceError extends ApiError {
+  constructor(
+    detail: string,
+    readonly reason: InferenceErrorReason,
+  ) {
+    super(502, "inference_error", "Inference endpoint failed", detail);
+  }
+}
+
+/** The reason of a failed call (`server_error` for anything unclassified). */
+export const inferenceErrorReason = (error: unknown): InferenceErrorReason =>
+  error instanceof InferenceError ? error.reason : "server_error";
 
 const parseCompletion = (body: unknown): ChatCompletionResult => {
   const payload = (body ?? {}) as {
@@ -104,20 +138,33 @@ export const createOpenAICompatibleClient = (
         }),
       });
     } catch (error) {
-      throw new RetryableError(`request failed: ${errorMessage(error)}`);
+      const timedOut =
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.name === "AbortError");
+      throw new CallError(
+        `request failed: ${errorMessage(error)}`,
+        timedOut ? "timeout" : "unreachable",
+        true,
+      );
     }
 
     const text = await response.text();
     if (!response.ok) {
-      const detail = `HTTP ${response.status}: ${text.slice(0, 300)}`;
-      if (RETRYABLE.has(response.status)) throw new RetryableError(detail);
-      throw new Error(detail);
+      throw new CallError(
+        `HTTP ${response.status}: ${text.slice(0, 300)}`,
+        reasonOfStatus(response.status, text),
+        RETRYABLE.has(response.status),
+      );
     }
 
     try {
       return parseCompletion(JSON.parse(text) as unknown);
     } catch (error) {
-      throw new Error(`malformed completion: ${errorMessage(error)}`);
+      throw new CallError(
+        `malformed completion: ${errorMessage(error)}`,
+        "malformed",
+        false,
+      );
     }
   };
 
@@ -129,17 +176,18 @@ export const createOpenAICompatibleClient = (
           return await attempt(request);
         } catch (error) {
           lastError = error;
-          if (!(error instanceof RetryableError) || i === maxAttempts - 1)
+          if (
+            !(error instanceof CallError && error.retryable) ||
+            i === maxAttempts - 1
+          )
             break;
           await sleep(retryDelayMs * 2 ** i);
         }
       }
 
-      throw new ApiError(
-        502,
-        "inference_error",
-        "Inference endpoint failed",
+      throw new InferenceError(
         `Model '${request.model}' at ${baseUrl}: ${errorMessage(lastError)}`,
+        lastError instanceof CallError ? lastError.reason : "server_error",
       );
     },
   };

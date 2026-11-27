@@ -22,7 +22,7 @@ import { createServices, type Services } from "./services/index.js";
 import { isDatabaseUnavailable } from "./store/postgres/db.js";
 import { registerMetricsEndpoints } from "./telemetry/endpoint.js";
 import { httpTelemetry } from "./telemetry/http.js";
-import { log } from "./telemetry/log.js";
+import { log, withLogContext } from "./telemetry/log.js";
 import { metrics } from "./telemetry/metrics.js";
 import { serveUiFallback, serveUiFile } from "./ui.js";
 
@@ -49,6 +49,14 @@ export const CORS_EXPOSED_HEADERS = [
   "X-Artifact-Sha256",
   "Content-Disposition",
 ];
+
+/** The worker-auth mode behind a principal's identity (WorkerPrincipal.identity). */
+const workerAuthMode = (identity: string): string =>
+  identity.startsWith("k8s:")
+    ? "kubernetes"
+    : identity.startsWith("lease:")
+      ? "lease"
+      : "static";
 
 const parseBearer = (header: string | undefined): string | undefined =>
   header?.match(/^Bearer\s+(\S+)$/i)?.[1];
@@ -145,8 +153,7 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     log("error", "unhandled error", {
       request_id: c.get("requestId"),
       path: c.req.path,
-      error:
-        error instanceof Error ? (error.stack ?? error.message) : String(error),
+      error,
     });
 
     return problemResponse(
@@ -246,9 +253,32 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   });
 
   app.use("/v1/*", async (c, next) => {
-    const principal = await deps.auth.authenticate(
-      parseBearer(c.req.header("authorization")),
-    );
+    const workerRoute = c.req.path.startsWith("/v1/trainer-jobs/");
+    let principal: Awaited<ReturnType<typeof deps.auth.authenticate>>;
+    try {
+      principal = await deps.auth.authenticate(
+        parseBearer(c.req.header("authorization")),
+      );
+    } catch (error) {
+      if (workerRoute) {
+        metrics.workerAuth.inc({
+          mode:
+            error instanceof ApiError &&
+            error.code === "worker_auth_unavailable"
+              ? "kubernetes"
+              : "none",
+          result: "unavailable",
+        });
+      }
+      throw error;
+    }
+    if (workerRoute) {
+      metrics.workerAuth.inc(
+        principal?.worker
+          ? { mode: workerAuthMode(principal.worker.identity), result: "ok" }
+          : { mode: "none", result: "rejected" },
+      );
+    }
     if (!principal) {
       return problemResponse(
         c,
@@ -260,7 +290,13 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     }
 
     c.set("principal", principal);
-    await next();
+    // Log lines of a workspace request carry its workspace (never a metric label).
+    if (principal.kind === "worker") await next();
+    else {
+      await withLogContext({ workspace_id: principal.workspaceId }, () =>
+        next(),
+      );
+    }
   });
 
   // Worker routes check the platform scope before body validation so tenants

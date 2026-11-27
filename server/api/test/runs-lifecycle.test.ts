@@ -1121,7 +1121,7 @@ describe("run lifecycle and worker protocol", () => {
     t.deps.storage.delete = storageDown;
     t.services.runs.collectExpiredCheckpoints = storageDown;
     t.services.uploads.sweepStaging = storageDown;
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "log").mockImplementation(() => {});
     t.clock.advanceSeconds(600);
     const report = await t.services.maintenance.tick();
     const logged = errors.mock.calls.map((c) => String(c[0])).join();

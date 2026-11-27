@@ -11,24 +11,43 @@ const ROOT = path.resolve(
   "../../..",
 );
 const GRAFANA = path.join(ROOT, "deploy/grafana");
-const DASHBOARDS = ["overview.json", "training.json", "evals-sources.json"];
-/** Labels Prometheus adds when it scrapes, plus histogram buckets. */
+const DASHBOARDS = ["grad.json"];
+/** Labels Prometheus adds when it scrapes (pool: the worker pool, see the PodMonitor), plus histogram buckets. */
 const TARGET_LABELS = new Set([
   "job",
   "instance",
   "namespace",
   "pod",
   "service",
+  "pool",
   "le",
 ]);
+/** Series from outside grad a panel may read (Kubernetes only), with their labels. */
+const EXTERNAL = new Map([
+  ["kube_deployment_status_replicas_available", new Set(["deployment"])],
+]);
+/** The sections the dashboard must keep, in order. */
+const SECTIONS = [
+  "Overview",
+  "Queue & scheduling",
+  "Runs & jobs",
+  "Workers & GPUs",
+  "Evals",
+  "Sources",
+  "Billing & usage (Cloud)",
+  "Auth & security",
+  "API & SSE",
+  "Dependencies (Postgres, S3)",
+  "Logs",
+];
 
 interface Panel {
   id: number;
   type: string;
   title: string;
-  datasource?: { uid: string };
+  datasource?: { type: string; uid: string };
   gridPos: { x: number; y: number; w: number; h: number };
-  targets?: Array<{ expr: string; datasource: { uid: string } }>;
+  targets?: Array<{ expr: string; datasource: { type: string; uid: string } }>;
 }
 
 const load = (file: string) =>
@@ -36,6 +55,7 @@ const load = (file: string) =>
     uid: string;
     schemaVersion: number;
     __inputs: Array<{ name: string; pluginId: string }>;
+    title: string;
     templating: { list: Array<{ name: string; type: string }> };
     panels: Panel[];
   };
@@ -51,6 +71,31 @@ const exported = async (): Promise<Map<string, Set<string>>> => {
         : [m.name];
     for (const s of series) names.set(s, labels);
   }
+  // The workers' grad_trainer_* metrics (grad_trainer/telemetry.py):
+  // counters gain _total, histograms _bucket/_sum/_count.
+  const telemetry = readFileSync(
+    path.join(ROOT, "server/trainer/grad_trainer/telemetry.py"),
+    "utf8",
+  );
+  // Constructor(name, help[, [labels] | labels=[labels]]).
+  const TRAINER_METRIC =
+    /(Counter|Gauge|Histogram|GaugeMetricFamily)\(\s*"(grad_trainer_\w+)",\s*"(?:[^"\\]|\\.)*"(?:,\s*(?:labels=)?\[([^\]]*)\])?/g;
+  let trainerMetrics = 0;
+  for (const [, type, name, list] of telemetry.matchAll(TRAINER_METRIC)) {
+    const labels = new Set(
+      [...(list ?? "").matchAll(/"(\w+)"/g)].map((l) => l[1] as string),
+    );
+    const series =
+      type === "Counter"
+        ? [`${name}_total`]
+        : type === "Histogram"
+          ? [`${name}_bucket`, `${name}_sum`, `${name}_count`]
+          : [name as string];
+    for (const n of series) names.set(n, labels);
+    trainerMetrics += 1;
+  }
+  if (trainerMetrics < 10) throw new Error("telemetry.py: metrics not found");
+  for (const [name, labels] of EXTERNAL) names.set(name, labels);
   // Default process metrics (process_*, nodejs_*), with histogram series.
   for (const m of await registry.getMetricsAsJSON()) {
     if (m.name.startsWith("grad_")) continue;
@@ -69,7 +114,9 @@ const exported = async (): Promise<Map<string, Set<string>>> => {
 /** Metric names, and label names used in their selectors, of a PromQL expression. */
 const references = (expr: string) => {
   const metrics = [
-    ...expr.matchAll(/\b((?:grad|process|nodejs)_[a-z0-9_]+)(\{[^}]*\})?/g),
+    ...expr.matchAll(
+      /\b((?:grad|process|nodejs|kube)_[a-z0-9_]+)(\{[^}]*\})?/g,
+    ),
   ].map((m) => ({
     name: m[1] as string,
     labels: [...(m[2] ?? "").matchAll(/(\w+)\s*(?:=~|!~|!=|=)/g)].map(
@@ -123,7 +170,7 @@ describe("Grafana dashboards", () => {
     ).not.toThrow();
   });
 
-  it("import anywhere: a DS_PROMETHEUS input, recent schema, unique ids", () => {
+  it("import anywhere: DS_PROMETHEUS and DS_LOKI inputs, recent schema, unique ids", () => {
     const uids = new Set<string>();
     for (const file of DASHBOARDS) {
       const d = load(file);
@@ -135,10 +182,20 @@ describe("Grafana dashboards", () => {
           name: "DS_PROMETHEUS",
           pluginId: "prometheus",
         }),
+        expect.objectContaining({ name: "DS_LOKI", pluginId: "loki" }),
       ]);
+      const vars = Object.fromEntries(
+        d.templating.list.map((v) => [v.name, v.type]),
+      );
+      expect(vars).toEqual({
+        DS_PROMETHEUS: "datasource",
+        DS_LOKI: "datasource",
+        namespace: "query",
+        pool: "query",
+      });
       expect(
-        d.templating.list.find((v) => v.name === "DS_PROMETHEUS")?.type,
-      ).toBe("datasource");
+        d.panels.filter((p) => p.type === "row").map((p) => p.title),
+      ).toEqual(SECTIONS);
       const ids = new Set<number>();
       for (const panel of d.panels) {
         expect(ids.has(panel.id), `${file} panel id ${panel.id}`).toBe(false);
@@ -148,10 +205,12 @@ describe("Grafana dashboards", () => {
           panel.title,
         ).toBeLessThanOrEqual(24);
         if (panel.type === "row") continue;
-        expect(panel.datasource?.uid, panel.title).toBe("${DS_PROMETHEUS}");
+        const uid =
+          panel.datasource?.type === "loki" ? "${DS_LOKI}" : "${DS_PROMETHEUS}";
+        expect(panel.datasource?.uid, panel.title).toBe(uid);
         expect(panel.targets?.length, panel.title).toBeGreaterThan(0);
         for (const t of panel.targets ?? [])
-          expect(t.datasource.uid).toBe("${DS_PROMETHEUS}");
+          expect(t.datasource.uid, panel.title).toBe(uid);
       }
     }
   });
@@ -162,11 +221,19 @@ describe("Grafana dashboards", () => {
     for (const file of DASHBOARDS) {
       for (const panel of load(file).panels) {
         for (const t of panel.targets ?? []) {
+          if (t.datasource.type === "loki") continue;
           found.push(
             ...problems(t.expr, names).map(
               (p) => `${file} "${panel.title}": ${p}`,
             ),
           );
+          // Every selector honours the namespace variable.
+          for (const m of references(t.expr).metrics) {
+            if (!m.labels.includes("namespace"))
+              found.push(
+                `${file} "${panel.title}": ${m.name} ignores $namespace`,
+              );
+          }
         }
       }
     }
@@ -181,7 +248,10 @@ describe("Grafana dashboards", () => {
       const used = [...text.matchAll(/\bgrad_[a-z0-9_]+/g)].map((m) => m[0]);
       expect(used.length, file).toBeGreaterThan(0);
       for (const name of used)
-        expect(names.has(name), `${file}: ${name}`).toBe(true);
+        expect(
+          names.has(name) || names.has(`${name}_count`),
+          `${file}: ${name}`,
+        ).toBe(true);
     }
   });
 

@@ -13,8 +13,9 @@ import https from "node:https";
 
 import type { WorkerJobKind } from "../adapters.js";
 import type { Clock } from "../clock.js";
-import { ApiError, errorMessage } from "../errors.js";
+import { ApiError } from "../errors.js";
 import { log } from "../telemetry/log.js";
+import { metrics, secondsSince } from "../telemetry/metrics.js";
 import type { WorkerAuthenticator, WorkerPrincipal } from "./principal.js";
 
 /** The audience worker tokens are minted for; tokens for any other audience fail review. */
@@ -210,31 +211,44 @@ export const createKubernetesWorkerAuth = (options: {
   ): Promise<WorkerPrincipal | null> => {
     // Bounds what a flood of forged tokens can cost the API server.
     if (inFlight >= maxInFlight) {
+      metrics.tokenReviews.inc({ result: "saturated" });
       throw unavailable(
         "grad-server is verifying too many service-account tokens at once; retry shortly.",
       );
     }
     let status: TokenReviewStatus;
     inFlight += 1;
+    metrics.tokenReviewsInFlight.inc();
+    const start = performance.now();
     try {
       status = await options.review(token, [WORKER_TOKEN_AUDIENCE]);
     } catch (error) {
+      metrics.tokenReviews.inc({ result: "error" });
       log("error", "kubernetes TokenReview failed", {
-        error: errorMessage(error),
+        error,
       });
       throw unavailable(
         "grad-server could not verify the worker's service-account token with the Kubernetes API (TokenReview); retry shortly.",
       );
     } finally {
       inFlight -= 1;
+      metrics.tokenReviewsInFlight.dec();
+      metrics.tokenReviewDuration.observe(secondsSince(start));
     }
-    if (status.authenticated !== true) return null;
-    if (!(status.audiences ?? []).includes(WORKER_TOKEN_AUDIENCE)) return null;
+    const rejected = () => {
+      metrics.tokenReviews.inc({ result: "rejected" });
+      return null;
+    };
+    if (status.authenticated !== true) return rejected();
+    if (!(status.audiences ?? []).includes(WORKER_TOKEN_AUDIENCE)) {
+      return rejected();
+    }
     const match = SA_USER_RE.exec(status.user?.username ?? "");
-    if (!match) return null;
+    if (!match) return rejected();
     const account = `${match[1]}/${match[2]}`;
     const kinds = options.serviceAccounts[account];
     if (!kinds) {
+      metrics.tokenReviews.inc({ result: "rejected" });
       if (!warned.has(account)) {
         warned.add(account);
         log(
@@ -246,6 +260,7 @@ export const createKubernetesWorkerAuth = (options: {
       return null;
     }
     const pod = status.user?.extra?.[POD_NAME_KEY]?.[0];
+    metrics.tokenReviews.inc({ result: "authenticated" });
 
     return {
       kinds,
@@ -265,8 +280,12 @@ export const createKubernetesWorkerAuth = (options: {
       if (!worthReviewing(claims, options.serviceAccounts, now)) return null;
       const key = createHash("sha256").update(token).digest("hex");
       const hit = cache.get(key);
-      if (hit && hit.until > now) return hit.principal;
+      if (hit && hit.until > now) {
+        metrics.authCache.inc({ mode: "kubernetes", result: "hit" });
+        return hit.principal;
+      }
       if (hit) cache.delete(key);
+      metrics.authCache.inc({ mode: "kubernetes", result: "miss" });
 
       const exp = (claims?.exp as number) * 1000;
       const principal = await review(token, exp);

@@ -12,13 +12,7 @@ import {
 } from "../contracts.js";
 import { CronError, parseCron } from "../cron.js";
 import type { AppDependencies } from "../deps.js";
-import {
-  conflict,
-  errorMessage,
-  invalid,
-  notFound,
-  unavailable,
-} from "../errors.js";
+import { conflict, invalid, notFound, unavailable } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import {
   assertSecretHost,
@@ -591,7 +585,7 @@ export const createSourceService = (
             workspace_id: workspaceId,
             secret: name,
             key_id: sealed.keyId,
-            error: errorMessage(error),
+            error,
           });
         }
       }

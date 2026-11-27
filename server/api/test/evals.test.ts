@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { EvalRubricItemSchema, type EvalRubricItem } from "../src/contracts.js";
 import { aggregateEval } from "../src/services/evals/aggregate.js";
-import { createOpenAICompatibleClient } from "../src/services/evals/inference.js";
+import {
+  createOpenAICompatibleClient,
+  inferenceErrorReason,
+} from "../src/services/evals/inference.js";
 import { resolvePassThreshold } from "../src/services/evals/planner.js";
 import { createRegexEvaluator } from "../src/services/evals/regex.js";
 import {
@@ -370,6 +373,53 @@ describe("OpenAI-compatible client", () => {
       }),
     ).rejects.toMatchObject({ status: 502, code: "inference_error" });
     expect(fake.requests.length - before).toBe(1);
+  });
+
+  it("classifies failures by reason, capacity_unavailable included", async () => {
+    const answer = (status: number, body = "{}") =>
+      createOpenAICompatibleClient({
+        baseUrl: "http://gateway.test",
+        retryDelayMs: 1,
+        maxAttempts: 1,
+        fetchImpl: async () => new Response(body, { status }),
+      });
+    const reason = (client: ReturnType<typeof answer>) =>
+      client
+        .complete({
+          model: "m",
+          workspace: "ws_a",
+          messages: [],
+          temperature: 0,
+          max_tokens: 4,
+        })
+        .then(
+          () => "ok",
+          (error: unknown) => inferenceErrorReason(error),
+        );
+    expect(await reason(answer(503, '{"error":"capacity_unavailable"}'))).toBe(
+      "capacity_unavailable",
+    );
+    expect(await reason(answer(429))).toBe("rate_limited");
+    expect(await reason(answer(504))).toBe("timeout");
+    expect(await reason(answer(500))).toBe("server_error");
+    expect(await reason(answer(400))).toBe("rejected");
+    expect(await reason(answer(200, "not json"))).toBe("malformed");
+    const refused = createOpenAICompatibleClient({
+      baseUrl: "http://gateway.test",
+      maxAttempts: 1,
+      fetchImpl: async () => {
+        throw new TypeError("fetch failed");
+      },
+    });
+    expect(await reason(refused)).toBe("unreachable");
+    const slow = createOpenAICompatibleClient({
+      baseUrl: "http://gateway.test",
+      maxAttempts: 1,
+      fetchImpl: async () => {
+        throw new DOMException("timed out", "TimeoutError");
+      },
+    });
+    expect(await reason(slow)).toBe("timeout");
   });
 
   it("gives up after max attempts and on unreachable or malformed endpoints", async () => {

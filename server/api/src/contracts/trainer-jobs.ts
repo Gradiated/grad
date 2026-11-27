@@ -391,16 +391,47 @@ export const EvalOutputInputSchema = z
   })
   .openapi("TrainerEvalOutput");
 
+/** Why an eval model or judge call failed (grad_eval_inference_errors_total). */
+export const INFERENCE_ERROR_REASONS = [
+  "rate_limited",
+  "capacity_unavailable",
+  "timeout",
+  "unreachable",
+  "server_error",
+  "rejected",
+  "malformed",
+] as const;
+export type InferenceErrorReason = (typeof INFERENCE_ERROR_REASONS)[number];
+
+const count = z.number().int().min(0);
+
+const InferenceErrorCountsSchema = z
+  .object({
+    rate_limited: count.optional(),
+    capacity_unavailable: count.optional(),
+    timeout: count.optional(),
+    unreachable: count.optional(),
+    server_error: count.optional(),
+    rejected: count.optional(),
+    malformed: count.optional(),
+  })
+  .openapi("TrainerEvalErrorCounts", {
+    description:
+      "Failed calls by reason: rate_limited (429), capacity_unavailable (the endpoint has no capacity, e.g. a pool waking from zero), timeout, unreachable, server_error (other 5xx), rejected (other 4xx), malformed (an unparsable answer).",
+  });
+
 export const EvalCallCountsSchema = z
   .object({
-    model_ok: z.number().int().min(0).default(0),
-    model_error: z.number().int().min(0).default(0),
-    judge_ok: z.number().int().min(0).default(0),
-    judge_error: z.number().int().min(0).default(0),
+    model_ok: count.default(0),
+    model_error: count.default(0),
+    judge_ok: count.default(0),
+    judge_error: count.default(0),
+    model_errors: InferenceErrorCountsSchema.optional(),
+    judge_errors: InferenceErrorCountsSchema.optional(),
   })
   .openapi("TrainerEvalCallCounts", {
     description:
-      "Model and judge calls since the worker's last batch (grad_eval_outputs_total, grad_eval_judge_calls_total).",
+      "Model and judge calls since the worker's last batch (grad_eval_outputs_total, grad_eval_judge_calls_total, grad_eval_inference_errors_total).",
   });
 
 export const PostEvalOutputsRequestSchema = z

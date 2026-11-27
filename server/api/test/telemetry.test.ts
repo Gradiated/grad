@@ -6,6 +6,7 @@ import {
   ObjectNotFoundError,
   type ObjectStore,
 } from "../src/storage/types.js";
+import { failureCode } from "../src/store/postgres/jobs.js";
 import { describeMetrics, LABELS, metrics } from "../src/telemetry/metrics.js";
 import { instrumentObjectStore } from "../src/telemetry/storage.js";
 import {
@@ -54,9 +55,9 @@ const value = (samples: Sample[], name: string, labels: object = {}) =>
     )
     .reduce((sum, s) => sum + s.value, 0);
 
-/** Label values that would make series grow with ids. */
+/** Label values that would make series grow with ids (`run_<24 hex>`, UUIDs, digests); error codes like `run_not_found` are fine. */
 const ID_LIKE =
-  /^(?:run|ds|imp|eval|src|req|key|ckpt|art|rec|job|up|ws)_[A-Za-z0-9]|[0-9a-f]{8}-[0-9a-f]{4}-|[0-9a-f]{24,}/;
+  /^(?:run|ds|imp|eval|src|req|key|ckpt|art|rec|job|up|ws)_[A-Za-z0-9]{6,}$|[0-9a-f]{8}-[0-9a-f]{4}-|[0-9a-f]{24,}/;
 
 describe("Prometheus metrics", () => {
   let t: TestApp;
@@ -217,6 +218,74 @@ describe("Prometheus metrics", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
+  it("counts error codes, worker auth, failures by error code and the maintenance tick", async () => {
+    const { done } = await exercise();
+    expect(
+      value(done, "grad_http_errors_total", { code: "run_not_found" }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      value(done, "grad_http_errors_total", { code: "route_not_found" }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      value(done, "grad_worker_auth_total", { mode: "static", result: "ok" }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      value(done, "grad_maintenance_last_tick_timestamp_seconds"),
+    ).toBeGreaterThan(Date.now() / 1000 - 60);
+
+    // A workspace key on the worker protocol is rejected and counted.
+    const tenant = await t.request("/v1/trainer-jobs/claim", {
+      method: "POST",
+      body: { worker_id: "w" },
+      token: "nope",
+    });
+    expect(tenant.status).toBe(401);
+
+    // A run the worker fails is counted with its error code.
+    await createSftRun(t);
+    const job = await worker.claim();
+    await worker.complete(job!, { status: "failed", error: "bad data" });
+    const after = await scrape(t);
+    expect(
+      value(after, "grad_worker_auth_total", {
+        mode: "none",
+        result: "rejected",
+      }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      value(after, "grad_job_failures_total", {
+        kind: "train",
+        recipe_kind: "sft",
+        error_code: "job_error",
+      }),
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("classifies failed jobs by error code", () => {
+    const job = { failed_attempts: 0, max_attempts: 3, error: "boom" };
+    expect(failureCode(job, {})).toBe("job_error");
+    expect(failureCode({ ...job, failed_attempts: 3 }, null)).toBe(
+      "attempts_exhausted",
+    );
+    expect(
+      failureCode(
+        {
+          ...job,
+          error:
+            "Attempt 4 was abandoned by its worker; its GPU was reclaimed 20 time(s) (limit 20).",
+        },
+        {},
+      ),
+    ).toBe("preemptions_exhausted");
+    expect(
+      failureCode(job, { artifact: { error_code: "invalid_artifact" } }),
+    ).toBe("invalid_artifact");
+    // Codes outside the vocabulary never become label values.
+    expect(failureCode(job, { artifact: { error_code: "x".repeat(99) } })).toBe(
+      "job_error",
+    );
+  });
+
   it("never labels a series with an id (cardinality guard)", async () => {
     await exercise();
     const allowed = new Set<string>(LABELS);
@@ -324,6 +393,23 @@ describe("Prometheus metrics", () => {
       status: "paused",
       consecutive_failures: 10,
     });
+    // An active scheduled source that hasn't synced for an hour lags by an hour.
+    await t.deps.store.sources.create({
+      workspaceId: "ws_a",
+      datasetId: dataset!.id,
+      provider: "braintrust",
+      host: null,
+      secretName: null,
+      project: null,
+      filters: {},
+      sampleRate: 1,
+      maxRecordsPerSync: null,
+      maxRecordsPerDay: null,
+      versionInterval: 900,
+      schedule: "0 0 1 1 *",
+      nextSyncAt: null,
+    });
+    t.clock.advanceSeconds(3600);
     await t.services.maintenance.tick();
     const samples = await scrape(t);
     expect(value(samples, "grad_sources", { provider: "langfuse" })).toBe(1);
@@ -335,6 +421,15 @@ describe("Prometheus metrics", () => {
         provider: "langfuse",
       }),
     ).toBe(10);
+    expect(
+      value(samples, "grad_source_sync_lag_seconds", {
+        provider: "braintrust",
+      }),
+    ).toBeGreaterThanOrEqual(3600);
+    // Paused or unscheduled sources don't lag.
+    expect(
+      value(samples, "grad_source_sync_lag_seconds", { provider: "langfuse" }),
+    ).toBe(0);
   });
 
   it("leaves tracing off by default", async () => {

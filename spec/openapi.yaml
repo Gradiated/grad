@@ -4250,7 +4250,39 @@ components:
           type: integer
           minimum: 0
           default: 0
-      description: Model and judge calls since the worker's last batch (grad_eval_outputs_total, grad_eval_judge_calls_total).
+        model_errors:
+          $ref: "#/components/schemas/TrainerEvalErrorCounts"
+        judge_errors:
+          $ref: "#/components/schemas/TrainerEvalErrorCounts"
+      description: Model and judge calls since the worker's last batch (grad_eval_outputs_total, grad_eval_judge_calls_total,
+        grad_eval_inference_errors_total).
+    TrainerEvalErrorCounts:
+      type: object
+      properties:
+        rate_limited:
+          type: integer
+          minimum: 0
+        capacity_unavailable:
+          type: integer
+          minimum: 0
+        timeout:
+          type: integer
+          minimum: 0
+        unreachable:
+          type: integer
+          minimum: 0
+        server_error:
+          type: integer
+          minimum: 0
+        rejected:
+          type: integer
+          minimum: 0
+        malformed:
+          type: integer
+          minimum: 0
+      description: "Failed calls by reason: rate_limited (429), capacity_unavailable (the endpoint has no capacity, e.g. a
+        pool waking from zero), timeout, unreachable, server_error (other 5xx), rejected (other 4xx), malformed (an
+        unparsable answer)."
     CompleteTrainerJobResponse:
       type: object
       properties:

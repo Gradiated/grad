@@ -1,6 +1,5 @@
 import { addSeconds } from "../clock.js";
 import type { AppDependencies } from "../deps.js";
-import { errorMessage } from "../errors.js";
 import { log } from "../telemetry/log.js";
 import { metrics, secondsSince } from "../telemetry/metrics.js";
 import type { TelemetrySampler } from "../telemetry/sampler.js";
@@ -125,7 +124,7 @@ export const createMaintenance = (
       metrics.maintenanceErrors.inc({ step: name });
       log("error", "maintenance step failed", {
         step: name,
-        error: errorMessage(error),
+        error,
       });
       return 0;
     } finally {
@@ -138,7 +137,7 @@ export const createMaintenance = (
     const retentionDays =
       deps.settings.jobEventRetentionDays ?? DEFAULT_JOB_EVENT_RETENTION_DAYS;
 
-    return {
+    const report: MaintenanceReport = {
       expiredJobs: await step("expire_jobs", () =>
         services.queue.expireLeases(now),
       ),
@@ -191,6 +190,10 @@ export const createMaintenance = (
         return services.telemetry ? 1 : 0;
       }),
     };
+    // A stale timestamp means the loop is stuck (GradMaintenanceStalled).
+    metrics.maintenanceLastTick.set(Date.now() / 1000);
+
+    return report;
   };
 
   return {
@@ -202,7 +205,7 @@ export const createMaintenance = (
         running = tick()
           .catch((error: unknown) => {
             log("error", "maintenance tick failed", {
-              error: errorMessage(error),
+              error,
             });
           })
           .finally(() => {

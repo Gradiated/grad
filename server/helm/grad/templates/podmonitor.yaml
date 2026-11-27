@@ -20,4 +20,8 @@ spec:
     - port: metrics
       path: /metrics
       interval: {{ .Values.metrics.podMonitor.interval }}
+      relabelings:
+        # The worker pool (workers.<pool>): the dashboard's pool variable.
+        - sourceLabels: [__meta_kubernetes_pod_label_grad_gradiated_com_worker]
+          targetLabel: pool
 {{- end }}

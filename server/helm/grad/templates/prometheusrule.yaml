@@ -1,8 +1,10 @@
 {{- if .Values.metrics.prometheusRule.enabled }}
 {{- $sel := include "grad.metricsSelector" . }}
 {{- $r := .Values.metrics.prometheusRule }}
-# A few alerts on grad-server's metrics. Gauges sampled from Postgres are the
-# same on every API replica, so they are read with max().
+# The recommended alerts on grad's metrics. Every alert is a warning: none is
+# meant to page (raise `severity` in your own copy if you want that). Gauges
+# sampled from Postgres are the same on every API replica, so they are read
+# with max(). Dashboard: deploy/grafana/grad.json ("grad / Training platform").
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -20,36 +22,47 @@ spec:
           expr: |
             sum(rate(grad_http_requests_total{ {{- $sel }}, status_class="5xx"}[5m]))
               / clamp_min(sum(rate(grad_http_requests_total{ {{- $sel }}}[5m])), 1e-9) > {{ $r.error5xxRatio }}
+              and sum(rate(grad_http_requests_total{ {{- $sel }}}[5m])) > 0.1
           for: 10m
-          labels: {severity: critical}
+          labels: {severity: warning}
           annotations:
             summary: grad-server answers {{ "{{" }} $value | humanizePercentage {{ "}}" }} of requests with a 5xx.
-            description: Check `kubectl logs` of the API pods (5xx lines carry request_id and trace_id) and the database.
+            description: Check `kubectl logs` of the API pods (5xx lines carry request_id and trace_id), the database and object storage.
         - alert: GradJobQueuedTooLong
           expr: max by (kind) (grad_job_oldest_queued_age_seconds{ {{- $sel }}}) > {{ $r.oldestQueuedSeconds }}
           for: 5m
           labels: {severity: warning}
           annotations:
             summary: A {{ "{{" }} $labels.kind {{ "}}" }} job has waited {{ "{{" }} $value | humanizeDuration {{ "}}" }} for a worker.
-            description: No worker of that kind claimed it. Check the worker pools, KEDA, and GPU capacity.
-        {{- range $kind := list "train" "import" }}
+            description: The queue is stuck for this kind. Check the worker pools, KEDA and GPU capacity (runs waiting for a GPU that fits show as waiting_for_compute).
+        {{- range $kind := list "train" "import" "eval" }}
         - alert: GradNoWorkersForQueuedJobs
           expr: |
-            max(sum by (pod) (grad_jobs{ {{- $sel }}, kind=~"{{ ternary "import|sync" $kind (eq $kind "import") }}", status=~"queued|waiting_for_compute"})) > 0
+            max(sum by (pod, instance) (grad_jobs{ {{- $sel }}, kind=~"{{ ternary "import|sync" $kind (eq $kind "import") }}", status=~"queued|waiting_for_compute"})) > 0
               unless max(grad_workers_online{ {{- $sel }}, kind="{{ $kind }}"}) > 0
           for: 15m
           labels: {severity: warning, kind: {{ $kind }}}
           annotations:
             summary: {{ $kind }} jobs are queued and no {{ $kind }} worker has been online for 15 minutes.
-            description: The {{ $kind }} worker pool is scaled to zero or can't start (image, GPU quota, worker key).
+            description: The {{ $kind }} worker pool is scaled to zero or can't start or authenticate (image, GPU quota, worker token; see grad_worker_auth_total).
         {{- end }}
-        - alert: GradSourcePaused
-          expr: max by (provider) (grad_sources_paused{ {{- $sel }}}) > 0
-          for: 5m
+        - alert: GradJobFailureRateHigh
+          expr: |
+            sum by (kind) (increase(grad_job_failures_total{ {{- $sel }}}[30m])) >= {{ $r.failureMinJobs }}
+              and sum by (kind) (increase(grad_job_failures_total{ {{- $sel }}}[30m]))
+                / clamp_min(sum by (kind) (increase(grad_job_duration_seconds_count{ {{- $sel }}}[30m])), 1) > {{ $r.failureRatio }}
+          for: 10m
           labels: {severity: warning}
           annotations:
-            summary: "{{ "{{" }} $value {{ "}}" }} {{ "{{" }} $labels.provider {{ "}}" }} source(s) paused after repeated failed syncs."
-            description: "`grad sources list` shows the error; fix the provider key (`grad secrets set NAME` resumes its sources) or run `grad sources sync ID`."
+            summary: "{{ "{{" }} $value | humanizePercentage {{ "}}" }} of {{ "{{" }} $labels.kind {{ "}}" }} jobs failed in the last 30 minutes."
+            description: grad_job_failures_total's error_code says why (attempts_exhausted, preemptions_exhausted, invalid_artifact, source_unavailable, job_error); the worker logs carry the stack, keyed by job_id.
+        - alert: GradUsagePushLagging
+          expr: max(grad_usage_export_lag_seconds{ {{- $sel }}}) > {{ $r.usagePushLagSeconds }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: Gradiated Cloud has not received usage for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
+            description: Cloud mode only. Usage rows stay in grad's ledger and are retried; check grad_usage_export_failures_total and the API logs for the billing ingest error.
         - alert: GradUsageFlushLagging
           expr: max(grad_usage_flush_lag_seconds{ {{- $sel }}}) > {{ $r.usageFlushLagSeconds }}
           for: 10m
@@ -57,4 +70,41 @@ spec:
           annotations:
             summary: A running attempt has written no usage for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
             description: Its worker stopped reporting progress, or billing writes are failing (see grad_maintenance_step_errors_total and the API logs).
+        - alert: GradTokenReviewSaturated
+          expr: sum(increase(grad_token_reviews_total{ {{- $sel }}, result="saturated"}[5m])) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: grad-server keeps refusing worker tokens because 8 TokenReviews are in flight.
+            description: Workers get 503 worker_auth_unavailable and retry. The Kubernetes API is slow (grad_token_review_duration_seconds) or something floods grad-server with service-account tokens.
+        - alert: GradDatabaseErrors
+          expr: |
+            sum(rate(grad_db_query_errors_total{ {{- $sel }}}[5m]))
+              / clamp_min(sum(rate(grad_db_query_duration_seconds_count{ {{- $sel }}}[5m])), 1e-9) > {{ $r.dbErrorRatio }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ "{{" }} $value | humanizePercentage {{ "}}" }} of grad-server's Postgres queries fail."
+            description: Check Postgres (connections, disk, failover) and the API logs ("postgres connection lost", 503 database_unavailable).
+        - alert: GradStorageErrors
+          expr: sum by (op) (rate(grad_storage_operation_errors_total{ {{- $sel }}}[5m])) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: grad-server object storage {{ "{{" }} $labels.op {{ "}}" }} operations are failing.
+            description: Check the bucket, its credentials (IRSA / Pod Identity or the static keys) and KMS grants.
+        - alert: GradMaintenanceStalled
+          expr: time() - max(grad_maintenance_last_tick_timestamp_seconds{ {{- $sel }}}) > 300
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: grad-server's maintenance loop has not finished a tick for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
+            description: Lease expiry, requeues, source syncs, usage pushes and the queue gauges (and KEDA) are stale. Check the API pods and the database.
+        - alert: GradSourcePaused
+          expr: max by (provider) (grad_sources_paused{ {{- $sel }}}) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} {{ "{{" }} $labels.provider {{ "}}" }} source(s) paused after repeated failed syncs."
+            description: "`grad sources list` shows the error; fix the provider key (`grad secrets set NAME` resumes its sources) or run `grad sources sync ID`."
 {{- end }}

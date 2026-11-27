@@ -117,9 +117,11 @@ export const createTelemetrySampler = (
     metrics.sources.reset();
     metrics.sourcesPaused.reset();
     metrics.sourceFailures.reset();
+    metrics.sourceSyncLag.reset();
     for (const row of snap.sources) {
       const labels = { provider: row.provider };
       metrics.sources.set(labels, row.count);
+      metrics.sourceSyncLag.set(labels, row.sync_lag_seconds);
       metrics.sourcesPaused.set(labels, row.paused);
       metrics.sourceFailures.set(labels, row.max_consecutive_failures);
     }

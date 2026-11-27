@@ -15,6 +15,7 @@ import {
 } from "../src/adapters.js";
 import { parseServerEnvironment } from "../src/environment.js";
 import { ApiError } from "../src/errors.js";
+import { metrics } from "../src/telemetry/metrics.js";
 import type {
   WorkerTokenRecord,
   WorkerTokenRepository,
@@ -231,6 +232,58 @@ describe("kubernetes service-account tokens", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it("counts reviews by result, their latency and cache hits", async () => {
+    const reviews = async (result: string) =>
+      (await metrics.tokenReviews.get()).values.find(
+        (v) => v.labels.result === result,
+      )?.value ?? 0;
+    const cache = async (result: string) =>
+      (await metrics.authCache.get()).values.find(
+        (v) =>
+          (v.labels as Record<string, unknown>).mode === "kubernetes" &&
+          (v.labels as Record<string, unknown>).result === result,
+      )?.value ?? 0;
+    const before = {
+      authenticated: await reviews("authenticated"),
+      rejected: await reviews("rejected"),
+      error: await reviews("error"),
+      hit: await cache("hit"),
+      miss: await cache("miss"),
+      timed:
+        (await metrics.tokenReviewDuration.get()).values.find(
+          (v) => v.metricName === "grad_token_review_duration_seconds_count",
+        )?.value ?? 0,
+    };
+    let answer: () => Promise<TokenReviewStatus> = async () =>
+      ok("grad/grad-train-worker");
+    const { auth } = make(() => answer());
+    const token = jwt({ exp: nowSec() + 3600 });
+    expect(await auth.authenticate(token)).not.toBeNull();
+    expect(await auth.authenticate(token)).not.toBeNull(); // cached
+    answer = async () => ({ authenticated: false });
+    expect(
+      await auth.authenticate(jwt({ exp: nowSec() + 3600, i: 2 })),
+    ).toBeNull();
+    answer = async () => {
+      throw new Error("connection refused");
+    };
+    await expectApiError(
+      auth.authenticate(jwt({ exp: nowSec() + 3600, i: 3 })),
+      503,
+    );
+    expect(await reviews("authenticated")).toBe(before.authenticated + 1);
+    expect(await reviews("rejected")).toBe(before.rejected + 1);
+    expect(await reviews("error")).toBe(before.error + 1);
+    expect(await cache("hit")).toBe(before.hit + 1);
+    expect(await cache("miss")).toBe(before.miss + 3);
+    expect(
+      (await metrics.tokenReviewDuration.get()).values.find(
+        (v) => v.metricName === "grad_token_review_duration_seconds_count",
+      )?.value,
+    ).toBe(before.timed + 3);
+    expect((await metrics.tokenReviewsInFlight.get()).values[0]?.value).toBe(0);
+  });
+
   it("answers 503 past maxInFlight concurrent reviews, and recovers", async () => {
     const pending: Array<() => void> = [];
     const spy = vi.fn(
@@ -248,7 +301,13 @@ describe("kubernetes service-account tokens", () => {
     const exp = nowSec() + 600;
     const first = auth.authenticate(jwt({ exp, i: 1 }));
     const second = auth.authenticate(jwt({ exp, i: 2 }));
+    const saturated = async () =>
+      (await metrics.tokenReviews.get()).values.find(
+        (v) => v.labels.result === "saturated",
+      )?.value ?? 0;
+    const beforeSaturated = await saturated();
     await expectApiError(auth.authenticate(jwt({ exp, i: 3 })), 503);
+    expect(await saturated()).toBe(beforeSaturated + 1);
     expect(spy).toHaveBeenCalledTimes(2);
     for (const done of pending.splice(0)) done();
     expect(await first).not.toBeNull();

@@ -1,7 +1,11 @@
 import type { Clock } from "../../clock.js";
 import { queueLimit, workspaceInactive } from "../../errors.js";
 import { newId } from "../../ids.js";
-import { metricKind, metrics } from "../../telemetry/metrics.js";
+import {
+  metricKind,
+  metrics,
+  PREEMPTION_LIMIT_MARK,
+} from "../../telemetry/metrics.js";
 import { currentTraceparent } from "../../telemetry/tracing.js";
 import type {
   IdempotencyInput,
@@ -100,6 +104,34 @@ const updateJobRow = async (
   return row;
 };
 
+/**
+ * A failed job's grad_job_failures_total error_code, from its row: the
+ * artifact import's code, else whether it ran out of attempts or
+ * preemptions, else `job_error` (the worker reported the failure, or the job
+ * could not be built).
+ */
+export const failureCode = (
+  job: { failed_attempts: number; max_attempts: number; error: string | null },
+  payload: unknown,
+): string => {
+  const artifact = (payload as { artifact?: { error_code?: unknown } } | null)
+    ?.artifact;
+  if (
+    typeof artifact?.error_code === "string" &&
+    FAILURE_CODES.has(artifact.error_code)
+  ) {
+    return artifact.error_code;
+  }
+  if (job.failed_attempts >= job.max_attempts) return "attempts_exhausted";
+  if (job.error?.includes(PREEMPTION_LIMIT_MARK)) {
+    return "preemptions_exhausted";
+  }
+
+  return "job_error";
+};
+
+const FAILURE_CODES = new Set(["invalid_artifact", "source_unavailable"]);
+
 /** grad_job_duration_seconds for a job that just reached a terminal status. */
 const observeJobFinished = (row: Row): void => {
   const job = toJob(row);
@@ -114,11 +146,19 @@ const observeJobFinished = (row: Row): void => {
       status: job.status,
     });
   }
+  const recipeKind =
+    typeof row.recipe_kind === "string" ? row.recipe_kind : "none";
+  if (job.status === "failed") {
+    metrics.jobFailures.inc({
+      kind,
+      recipe_kind: recipeKind,
+      error_code: failureCode(job, row.payload),
+    });
+  }
   metrics.jobDuration.observe(
     {
       kind,
-      recipe_kind:
-        typeof row.recipe_kind === "string" ? row.recipe_kind : "none",
+      recipe_kind: recipeKind,
       status: job.status,
     },
     Math.max(

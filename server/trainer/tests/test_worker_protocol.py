@@ -126,7 +126,7 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_happy_path_train(self) -> None:
         srv = self.server(jobs=[train_job()])
         runner = StubRunner()
-        with contextlib.redirect_stderr(io.StringIO()) as err:
+        with contextlib.redirect_stdout(io.StringIO()) as err:
             result = self.worker(srv, runner).run_once()
         self.assertEqual(result["status"], "completed")
         self.assertIn("claimed train job run_1 attempt 1", err.getvalue())
@@ -312,7 +312,7 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_reclaimed_compute_saves_the_current_step_and_hands_the_run_back(self) -> None:
         srv = self.server(jobs=[train_job()])
         worker = self.worker(srv, StubRunner(steps=200, checkpoint_at=None, step_sleep=0.03))
-        with contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()):
             thread, out = self._run_until_progress(worker, srv, 3)
             worker.request_shutdown()
             worker.request_shutdown()  # a second notice changes nothing
@@ -338,7 +338,7 @@ class WorkerProtocolTests(unittest.TestCase):
         worker = self.worker(
             srv, StubRunner(steps=50, checkpoint_at=None, step_sleep=0.4), reclaim_grace_s=0.1
         )
-        with contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()):
             thread, out = self._run_until_progress(worker, srv, 2)
             worker.request_shutdown()
             for _ in range(100):  # handed back before the running step ends
@@ -445,7 +445,7 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_out_of_memory_retries_once_with_half_the_micro_batch(self) -> None:
         srv = self.server(jobs=[train_job()])
         runner = StubRunner(oom_runs=1, checkpoint_at=None)
-        with contextlib.redirect_stderr(io.StringIO()) as err:
+        with contextlib.redirect_stdout(io.StringIO()) as err:
             result = self.worker(srv, runner).run_once()
         self.assertEqual(result["status"], "completed")
         self.assertEqual([c["config"].get("micro_batch_tokens") for c in runner.calls], [None, 8192])
@@ -455,7 +455,7 @@ class WorkerProtocolTests(unittest.TestCase):
     def test_out_of_memory_twice_fails_naming_model_and_gpu(self) -> None:
         srv = self.server(jobs=[train_job()])
         runner = StubRunner(oom_runs=2, checkpoint_at=None)
-        with contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()):
             self.worker(srv, runner).run_once()
         self.assertEqual(len(runner.calls), 2)
         error = srv.bodies("complete")[0]["error"]
@@ -548,7 +548,7 @@ class WorkerProtocolTests(unittest.TestCase):
         srv.api_key = "other-key"
         worker = self.worker(srv)
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
+        with contextlib.redirect_stdout(stderr):
             code = worker.serve_forever()
         self.assertEqual(code, 2)
         self.assertIn("rejected the worker token (HTTP 401", stderr.getvalue())
@@ -567,7 +567,7 @@ class WorkerProtocolTests(unittest.TestCase):
         )
         stderr = io.StringIO()
         threading.Timer(0.2, worker.request_shutdown).start()
-        with contextlib.redirect_stderr(stderr):
+        with contextlib.redirect_stdout(stderr):
             self.assertEqual(worker.serve_forever(), 0)
         self.assertIn(
             "grad-server unreachable at http://127.0.0.1:9", stderr.getvalue()
@@ -825,7 +825,7 @@ class WorkerTokenTests(unittest.TestCase):
         srv = self.server("something-else")
         worker = worker_from_env({"GRAD_SERVER_URL": srv.base_url, "GRAD_WORKER_TOKEN_FILE": str(self.path)})
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
+        with contextlib.redirect_stdout(stderr):
             self.assertEqual(worker.serve_forever(), 2)
         self.assertIn("GRAD_WORKER_TOKEN_FILE", stderr.getvalue())
         self.assertNotIn("gradwt_secret_token_value", stderr.getvalue())
@@ -833,7 +833,7 @@ class WorkerTokenTests(unittest.TestCase):
 
         missing = FileToken(Path(self.tmp.name) / "absent")
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
+        with contextlib.redirect_stdout(stderr):
             self.assertIsNone(missing())
             self.assertIsNone(missing())
         self.assertEqual(stderr.getvalue().count("cannot read GRAD_WORKER_TOKEN_FILE"), 1)

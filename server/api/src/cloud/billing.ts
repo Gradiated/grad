@@ -2,6 +2,7 @@ import type { BillingAdapter, UsageEvent } from "../adapters.js";
 import { nanoUsd } from "../catalog.js";
 import type { Clock } from "../clock.js";
 import { ApiError, errorMessage } from "../errors.js";
+import { metrics } from "../telemetry/metrics.js";
 import { cloudRequest, detailOf, isOk, type CloudResponse } from "./http.js";
 import type { CloudPrices } from "./prices.js";
 
@@ -31,6 +32,13 @@ const billingUnavailable = (detail: string) =>
     "Billing service unavailable",
     detail,
   );
+
+const counted = (
+  op: "start" | "continue",
+  result: "allowed" | "refused" | "error",
+): void => {
+  metrics.billingChecks.inc({ op, result });
+};
 
 const REASONS: Record<string, string> = {
   insufficient_balance:
@@ -75,20 +83,27 @@ export const createCloudBilling = (
       try {
         res = await check(workspaceId, estimatedCostUsd);
       } catch (error) {
+        counted("start", "error");
         throw billingUnavailable(errorMessage(error));
       }
       if (res.status === 404) {
+        counted("start", "refused");
         return {
           allowed: false,
           reason: "Gradiated Cloud billing does not know this workspace.",
         };
       }
       if (!isOk(res.status)) {
+        counted("start", "error");
         throw billingUnavailable(
           `The Gradiated Cloud balance check returned HTTP ${res.status}${detailOf(res)}.`,
         );
       }
-      if (res.json.allowed === true) return { allowed: true };
+      if (res.json.allowed === true) {
+        counted("start", "allowed");
+        return { allowed: true };
+      }
+      counted("start", "refused");
       const reason = String(res.json.reason ?? "insufficient_balance");
 
       return { allowed: false, reason: REASONS[reason] ?? reason };
@@ -103,8 +118,13 @@ export const createCloudBilling = (
         const res = await check(workspaceId, 0);
         // A billing outage never stops running work.
         allowed = !isOk(res.status) || res.json.allowed !== false;
+        counted(
+          "continue",
+          !isOk(res.status) ? "error" : allowed ? "allowed" : "refused",
+        );
       } catch {
         allowed = true;
+        counted("continue", "error");
       }
       continued.set(workspaceId, { allowed, at: now });
       if (continued.size > 10_000) {

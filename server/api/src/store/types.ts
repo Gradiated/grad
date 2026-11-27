@@ -1288,6 +1288,8 @@ export interface TelemetrySnapshot {
     count: number;
     paused: number;
     max_consecutive_failures: number;
+    /** Longest an active scheduled source has gone without a successful sync. */
+    sync_lag_seconds: number;
   }>;
 }
 

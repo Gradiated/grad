@@ -704,6 +704,14 @@ export const createEvalService = (
       if (c.judge_error) {
         metrics.judgeCalls.inc({ result: "error" }, c.judge_error);
       }
+      for (const [target, errors] of [
+        ["model", c.model_errors],
+        ["judge", c.judge_errors],
+      ] as const) {
+        for (const [reason, n] of Object.entries(errors ?? {})) {
+          if (n) metrics.evalInferenceErrors.inc({ target, reason }, n);
+        }
+      }
     }
 
     return result;

@@ -232,6 +232,23 @@ describe("eval worker (grad-server worker --kinds eval)", () => {
     expect(done.total_cost_usd).toBeCloseTo(3 * (first?.cost_usd ?? 0), 8);
   });
 
+  it("counts failed model calls by reason (grad_eval_inference_errors_total)", async () => {
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(2));
+    fake.setModel("qwen/qwen3-8b", () => ({ status: 429 }));
+    const rateLimited = async () =>
+      (await metrics.evalInferenceErrors.get()).values.find(
+        (v) =>
+          (v.labels as Record<string, unknown>).target === "model" &&
+          (v.labels as Record<string, unknown>).reason === "rate_limited",
+      )?.value ?? 0;
+    const before = await rateLimited();
+    await createEval(t.services.evals, WORKSPACE_A, request({}));
+    await h.worker.drain();
+    expect((await rateLimited()) - before).toBe(2);
+  });
+
   it("guards the worker endpoints", async () => {
     h = await makeEvalHarness();
     const { t } = h;

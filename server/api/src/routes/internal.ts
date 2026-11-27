@@ -89,7 +89,7 @@ export const createInternalApp = (deps: {
     if (error instanceof ApiError) return problem(c, error);
     log("error", "internal route failed", {
       path: c.req.path,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
 
     return problem(c, {

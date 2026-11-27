@@ -29,6 +29,17 @@ import { createSftRun, FakeWorker } from "./fixtures/worker.js";
 const lag = async (): Promise<number> =>
   (await metrics.usageExportLag.get()).values[0]?.value ?? 0;
 
+const priceAge = async (): Promise<number | undefined> =>
+  (await metrics.priceListAge.get()).values[0]?.value;
+
+const checks = async (op: string, result: string): Promise<number> =>
+  (await metrics.billingChecks.get()).values
+    .filter((v) => {
+      const l = v.labels as Record<string, unknown>;
+      return l.op === op && l.result === result;
+    })
+    .reduce((sum, v) => sum + v.value, 0);
+
 describe("Cloud price list", () => {
   let cloud: FakeCloudApi;
   let clock: ManualClock;
@@ -78,6 +89,8 @@ describe("Cloud price list", () => {
     await p.refresh(true);
     expect(p.fresh()).toBe(false);
     expect(p.current()?.version).toBe("pv_2");
+    // grad_price_list_age_seconds: since the list was last confirmed.
+    expect(await priceAge()).toBe(301 + 24 * 3600);
   });
 
   it("rejects a malformed list and keeps the previous one", async () => {
@@ -132,6 +145,12 @@ describe("Cloud billing: balance check, stop on balance, usage push", () => {
   it("checks the balance in nano-USD and says why it refuses", async () => {
     const clock = new ManualClock();
     const { billing } = await cloudBillingDeps(cloud, clock);
+    const before = {
+      allowed: await checks("start", "allowed"),
+      refused: await checks("start", "refused"),
+      error: await checks("start", "error"),
+      continueError: await checks("continue", "error"),
+    };
     expect(await billing.checkCanStartRun(WORKSPACE_A, 1.5)).toEqual({
       allowed: true,
     });
@@ -174,6 +193,11 @@ describe("Cloud billing: balance check, stop on balance, usage push", () => {
     );
     // A billing outage never stops running work.
     expect(await dead.canContinue?.("ws")).toBe(true);
+    // grad_billing_checks_total by op and result.
+    expect(await checks("start", "allowed")).toBe(before.allowed + 1);
+    expect(await checks("start", "refused")).toBe(before.refused + 3);
+    expect(await checks("start", "error")).toBe(before.error + 2);
+    expect(await checks("continue", "error")).toBe(before.continueError + 1);
   });
 
   it("refuses new runs with 503 billing_unavailable once the price list is stale", async () => {

@@ -139,7 +139,7 @@ export const createEventHub = (
         ok = false;
         for (const id of chunk) if (jobs.has(id)) dirty.add(id);
         log("warn", "event hub fetch failed", {
-          error: error instanceof Error ? error.message : String(error),
+          error,
         });
       }
     }
@@ -264,7 +264,7 @@ export const createEventHub = (
       schedule(true);
     } catch (error) {
       log("warn", "event hub LISTEN failed; streams use the safety poll", {
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
       relisten();
     }

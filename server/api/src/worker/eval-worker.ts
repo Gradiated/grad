@@ -7,6 +7,7 @@ import {
   type TrainerJob,
 } from "../contracts.js";
 import { errorMessage } from "../errors.js";
+import { inferenceErrorReason } from "../services/evals/inference.js";
 import {
   recordPromptAndReference,
   recordPromptAndResponse,
@@ -20,7 +21,7 @@ import type {
 } from "../services/evals/types.js";
 import { mergeRecords } from "../services/record-merge.js";
 import type { EvalTask } from "../store/types.js";
-import { log } from "../telemetry/log.js";
+import { log, withLogContext } from "../telemetry/log.js";
 import {
   LeaseLost,
   ServerUnavailable,
@@ -107,7 +108,11 @@ const counted = (
 
       return reply;
     } catch (error) {
-      counts()[`${prefix}_error`] += 1;
+      const c = counts();
+      c[`${prefix}_error`] += 1;
+      const reason = inferenceErrorReason(error);
+      const byReason = (c[`${prefix}_errors`] ??= {});
+      byReason[reason] = (byReason[reason] ?? 0) + 1;
       throw error;
     }
   },
@@ -305,7 +310,26 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     };
   };
 
-  const runJob = async (job: TrainerJob): Promise<void> => {
+  const runJob = (job: TrainerJob): Promise<void> =>
+    withLogContext(
+      {
+        job_id: job.id,
+        attempt: job.attempt,
+        ...(job.eval ? { workspace_id: job.eval.workspace_id } : {}),
+      },
+      async () => {
+        const started = Date.now();
+        log("info", "eval claimed", { kind: job.kind });
+        const outcome = await runAttempt(job);
+        log("info", "eval attempt finished", {
+          outcome,
+          duration_ms: Date.now() - started,
+        });
+      },
+    );
+
+  /** Runs one attempt; returns how it ended (completed, cancelled, handed_back, lease_lost, failed). */
+  const runAttempt = async (job: TrainerJob): Promise<string> => {
     const ev = job.eval;
     const ref: AttemptRef = { id: job.id, attempt: job.attempt };
     if (!ev || !job.dataset) {
@@ -315,7 +339,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
           error: "The claimed eval job carries no eval or dataset.",
         })
         .catch(() => undefined);
-      return;
+      return "failed";
     }
     // lost: the lease is gone, drop everything; cancelled: post what is in
     // flight, then close the attempt.
@@ -409,25 +433,27 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
         await send();
         if (halt !== null || stopping) break;
       }
-      if (halt === "lost") return;
+      if (halt === "lost") return "lease_lost";
 
       // A graceful stop (deploy, scale-down) hands the eval back: the next
       // attempt resumes after the outputs already stored.
+      const status =
+        halt === "cancelled"
+          ? "cancelled"
+          : stopping
+            ? "handed_back"
+            : "completed";
       await client.complete(
         ref,
-        halt === "cancelled"
-          ? { status: "cancelled" }
-          : stopping
-            ? { status: "abandoned", reason: "compute_reclaimed" }
-            : { status: "completed" },
+        status === "handed_back"
+          ? { status: "abandoned", reason: "compute_reclaimed" }
+          : { status },
       );
+
+      return status;
     } catch (error) {
-      if (error instanceof LeaseLost || halt === "lost") return;
-      log("warn", "eval attempt failed", {
-        job_id: job.id,
-        attempt: job.attempt,
-        error: errorMessage(error),
-      });
+      if (error instanceof LeaseLost || halt === "lost") return "lease_lost";
+      log("warn", "eval attempt failed", { error });
       // grad-server unreachable: hand the attempt back (counted), or let
       // its lease expire; anything else is the eval's failure.
       await client
@@ -442,6 +468,8 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
             : { status: "failed", error: errorMessage(error).slice(0, 4000) },
         )
         .catch(() => undefined);
+
+      return error instanceof ServerUnavailable ? "handed_back" : "failed";
     } finally {
       clearInterval(heartbeat);
     }
@@ -478,7 +506,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
           await drain();
         } catch (error) {
           log("warn", "eval worker claim failed", {
-            error: errorMessage(error),
+            error,
           });
         }
         if (!stopping) await new Promise((r) => setTimeout(r, pollMs));

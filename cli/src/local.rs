@@ -26,20 +26,7 @@ pub const EMBEDDED_COMPOSE: &str = include_str!("../assets/docker-compose.yml");
 /// The `--dev-models` override: tiny test models in the catalog and the trainer.
 pub const DEV_MODELS_COMPOSE: &str = include_str!("../assets/dev-models.yml");
 /// The Grafana dashboards (deploy/grafana) the embedded compose file mounts.
-const DASHBOARDS: [(&str, &str); 3] = [
-    (
-        "overview.json",
-        include_str!("../assets/grafana/overview.json"),
-    ),
-    (
-        "training.json",
-        include_str!("../assets/grafana/training.json"),
-    ),
-    (
-        "evals-sources.json",
-        include_str!("../assets/grafana/evals-sources.json"),
-    ),
-];
+const DASHBOARDS: [(&str, &str); 1] = [("grad.json", include_str!("../assets/grafana/grad.json"))];
 pub const LOCAL_PROFILE: &str = "local";
 /// Image tag baked in at build time (see build.rs): the version for a release
 /// binary, `main` for a build from a checkout.
@@ -99,6 +86,16 @@ pub fn write_embedded(tag: &str) -> CliResult<PathBuf> {
     let grafana = dir.join("grafana");
     std::fs::create_dir_all(&grafana)
         .map_err(|e| CliError::general("io_error", format!("{}: {}", grafana.display(), e)))?;
+    // Dashboards an older CLI wrote would still be provisioned: remove them.
+    if let Ok(entries) = std::fs::read_dir(&grafana) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".json") && !DASHBOARDS.iter().any(|(n, _)| *n == name) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
     for (name, body) in DASHBOARDS {
         let file = grafana.join(name);
         std::fs::write(&file, body)

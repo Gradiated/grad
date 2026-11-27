@@ -3,8 +3,8 @@ import { z } from "zod";
 import { inferenceSku, trainSku, type ModelCatalog } from "../catalog.js";
 import type { TrainableModel } from "../contracts.js";
 import type { Clock } from "../clock.js";
-import { errorMessage } from "../errors.js";
 import { log } from "../telemetry/log.js";
+import { watchPriceList } from "../telemetry/metrics.js";
 import { cloudRequest, detailOf, isOk } from "./http.js";
 
 /**
@@ -90,6 +90,10 @@ export const createCloudPrices = (options: CloudPricesOptions): CloudPrices => {
     etag = res.headers.get("etag");
   };
 
+  watchPriceList(() =>
+    Number.isFinite(confirmedAt) ? (now() - confirmedAt) / 1000 : null,
+  );
+
   return {
     current: () => list,
     fresh: () => list !== null && now() - confirmedAt <= maxStaleMs,
@@ -107,7 +111,7 @@ export const createCloudPrices = (options: CloudPricesOptions): CloudPrices => {
         // Back off 30 s, 60 s, ... up to the poll interval.
         nextPollAt = now() + Math.min(pollMs, 30_000 * 2 ** (failures - 1));
         log("warn", "Gradiated Cloud price list unavailable", {
-          error: errorMessage(error),
+          error,
           keeping: list?.version ?? null,
         });
 

@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 from . import artifact_import
+from . import logs
 from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
 from .errors import GPUOutOfMemoryError, SourceUnavailableError
@@ -55,13 +56,13 @@ JOB_KINDS = ("train", "import")
 _CHUNK = 1024 * 1024
 
 
-def _log(message: str) -> None:
-    print(f"[grad-trainer] {message}", file=sys.stderr, flush=True)
+def _log(message: str, level: str = "info", **fields: Any) -> None:
+    logs.log(level, message, **fields)
 
 
-def _log_traceback(what: str) -> None:
-    """Log the exception being handled, with its traceback (call inside ``except``)."""
-    _log(f"{what}:\n{traceback.format_exc().rstrip()}")
+def _log_traceback(what: str, level: str = "error", **fields: Any) -> None:
+    """Log the exception being handled, with its stack (call inside ``except``)."""
+    logs.log(level, what, exc=True, **fields)
 
 
 # --- transport -------------------------------------------------------------------
@@ -132,7 +133,7 @@ class FileToken:
         except OSError as exc:
             if not self._warned:
                 self._warned = True
-                _log(f"cannot read GRAD_WORKER_TOKEN_FILE {self.path}: {exc.strerror or exc}")
+                _log(f"cannot read GRAD_WORKER_TOKEN_FILE {self.path}: {exc.strerror or exc}", "error")
             return None
         self._warned = False
         return token or None
@@ -377,14 +378,14 @@ class _Heartbeat(threading.Thread):
                 return
             except ServerError as exc:
                 if exc.status in (404, 409):
-                    _log(f"lease lost for {self.state.job_id}: {exc.detail}")
+                    _log(f"lease lost for {self.state.job_id}: {exc.detail}", "warn", code=exc.code)
                     self.state.lease_lost = True
                     self.state.request_stop("lease_lost")
                     return
-                _log(f"heartbeat failed ({exc}); retrying")
+                _log(f"heartbeat failed ({exc}); retrying", "warn", status=exc.status, code=exc.code)
                 continue
             except ServerUnreachable as exc:
-                _log(f"heartbeat failed ({exc}); retrying")
+                _log(f"heartbeat failed ({exc}); retrying", "warn")
                 continue
             wait = self.interval_s
             if resp.get("should_stop"):
@@ -442,6 +443,7 @@ class TrainerWorker:
         # take a new, billed attempt instead of re-entering its own (r8 B6/B7).
         base = worker_id or f"trainer-{socket.gethostname()}-{os.getpid()}"
         self.worker_id = f"{base[:150]}-{secrets.token_hex(3)}"
+        logs.set_worker(worker_id=self.worker_id)
         self.lease_seconds = lease_seconds
         self.poll_interval_s = poll_interval_s
         self.workdir = (
@@ -490,11 +492,11 @@ class TrainerWorker:
                 <= grace
             )
             if fits:
-                _log(f"job {state.job_id}: checkpointing after the current step (grace {grace:.0f}s)")
+                _log(f"job {state.job_id}: compute reclaimed; checkpointing after the current step (grace {grace:.0f}s)", "warn", phase=state.phase, grace_s=round(grace))
                 state.reclaim_deadline = now + grace
                 state.request_stop("reclaimed")
                 return
-            _log(f"job {state.job_id}: no time to checkpoint in phase {state.phase}; handing it back now")
+            _log(f"job {state.job_id}: compute reclaimed; no time to checkpoint in phase {state.phase}; handing it back now", "warn", phase=state.phase, grace_s=round(grace))
             state.handed_back = True
             state.request_stop("reclaimed")
         # Too little time to save: hand the attempt back now (off the signal handler).
@@ -519,7 +521,7 @@ class TrainerWorker:
                 force=True,
             )
         except Exception as exc:  # the lease expiry requeues it anyway
-            _log(f"hand-back of job {state.job_id} failed: {exc}")
+            _log_traceback(f"hand-back of job {state.job_id} failed; its lease expiry requeues it", "warn")
 
     def _report(self, state: _JobState, payload: dict[str, Any]) -> None:
         """Best effort: a lifecycle event never fails the job."""
@@ -528,13 +530,14 @@ class TrainerWorker:
         except (LeaseLost, WorkerAuthError):
             raise
         except (ServerError, ServerUnreachable) as exc:
-            _log(f"event not reported: {exc}")
+            _log(f"event not reported: {exc}", "warn")
 
     def _phase(self, state: _JobState, phase: str, step: int | None = None) -> None:
         if state.phase == phase:
             return
         state.phase = phase
         self.telemetry.set_phase(phase)
+        _log(f"phase {phase}", phase=phase, step=state.step if step is None else step)
         if phase == "checkpointing":
             state.checkpoint_started = time.monotonic()
         self._report(state, {"type": "phase", "phase": phase, "step": state.step if step is None else step})
@@ -559,14 +562,14 @@ class TrainerWorker:
         except WorkerAuthError:
             raise
         except (ServerError, ServerUnreachable) as exc:
-            _log(f"progress report skipped: {exc}")
+            _log(f"progress report skipped: {exc}", "warn")
             return state.stop.is_set()
         if resp.get("should_stop"):
             state.request_stop(str(resp.get("stop_reason") or "cancelled"))
         return state.stop.is_set()
 
     def _tracker_warning(self, state: _JobState, run: dict[str, Any], message: str) -> None:
-        _log(f"run {run.get('id')}: {message}")
+        _log(f"run {run.get('id')}: {message}", "warn")
         if state.notes < 50:  # a flapping tracker must not flood the run's events
             self._note(state, "warning", message)
 
@@ -579,7 +582,7 @@ class TrainerWorker:
         while not self._shutdown.wait(poll_s):
             seconds = check()
             if seconds is not None:
-                _log(f"termination notice: the instance goes away in {seconds:.0f}s")
+                _log(f"termination notice: the instance goes away in {seconds:.0f}s", "warn", seconds=round(seconds))
                 self.request_shutdown(grace_s=max(self.reclaim_grace_s, seconds - 5.0))
                 return
 
@@ -619,7 +622,38 @@ class TrainerWorker:
 
         state = _JobState(job_id=str(job["id"]), attempt=int(job["attempt"]))
         kind = str(job.get("kind") or "train")
-        _log(f"claimed {kind} job {state.job_id} attempt {state.attempt}")
+        owner = job.get("run") or job.get("import") or job.get("artifact_import") or {}
+        run = job.get("run") or {}
+        with logs.job_context(
+            job_id=state.job_id,
+            kind=kind,
+            attempt=state.attempt,
+            run_id=run.get("id"),
+            workspace_id=owner.get("workspace_id"),
+        ):
+            started = time.monotonic()
+            _log(
+                f"claimed {kind} job {state.job_id} attempt {state.attempt}",
+                recipe_kind=run.get("recipe_kind"),
+                resume_step=(job.get("resume") or {}).get("step"),
+            )
+            result = self._run_claimed(job, state, kind)
+            outcome = (result or {}).get("status")
+            clean = state.final_status in ("completed", "stopped_budget", "cancelled") and outcome not in (
+                "lease_lost",
+                "handed_back",
+            )
+            _log(
+                f"{kind} job {state.job_id} attempt {state.attempt} finished: {outcome or state.final_status}",
+                "info" if clean else "warn",
+                status=state.final_status,
+                outcome=outcome,
+                tokens=state.max_tokens or None,
+                duration_s=round(time.monotonic() - started, 1),
+            )
+            return result
+
+    def _run_claimed(self, job: dict[str, Any], state: _JobState, kind: str) -> dict[str, Any] | None:
         self.telemetry.set_phase("importing" if kind == "import" else "starting")
         traceparent = job.get("traceparent")
         self.client.traceparent = traceparent if isinstance(traceparent, str) else None
@@ -673,9 +707,9 @@ class TrainerWorker:
 
         def _handle(signum: int, _frame: Any) -> None:
             if self._shutdown.is_set():
-                _log("second signal received; exiting immediately")
+                _log("second signal received; exiting immediately", "warn", signal=signum)
                 raise SystemExit(128 + signum)
-            _log("shutdown requested; checkpointing the current job if there is time")
+            _log("shutdown requested; checkpointing the current job if there is time", "warn", signal=signum)
             self.request_shutdown()
 
         signal.signal(signal.SIGTERM, _handle)
@@ -691,19 +725,23 @@ class TrainerWorker:
                     f"the server rejected the worker token (HTTP {exc.status}: {exc.detail}). "
                     "Set GRAD_WORKER_TOKEN or GRAD_WORKER_TOKEN_FILE (a lease or service-account token), "
                     "or TRAINER_API_KEY (a static key from the server's TRAINER_KEYS_JSON / "
-                    "TRAINER_API_KEY_HASH); workspace and admin keys cannot run jobs."
+                    "TRAINER_API_KEY_HASH); workspace and admin keys cannot run jobs.",
+                    "error",
+                    status=exc.status,
+                    code=exc.code,
                 )
                 return 2
             except ServerUnreachable as exc:
                 wait = next(delays)
                 _log(
-                    f"grad-server unreachable at {self.client.base_url} ({exc}), retrying in {wait:.1f}s"
+                    f"grad-server unreachable at {self.client.base_url} ({exc}), retrying in {wait:.1f}s",
+                    "warn",
                 )
                 self._shutdown.wait(wait)
                 continue
             except Exception as exc:  # keep the daemon alive across bad jobs
                 wait = next(delays)
-                _log(f"job error: {exc}; retrying in {wait:.1f}s")
+                _log_traceback(f"job error: {exc}; retrying in {wait:.1f}s")
                 self._shutdown.wait(wait)
                 continue
             delays = backoff_delays(max(self.poll_interval_s, 0.5), 30.0)
@@ -782,7 +820,7 @@ class TrainerWorker:
                 if not exc.transient:
                     raise
                 error = exc
-            _log(f"complete failed ({error}); retrying until the server answers")
+            _log(f"complete failed ({error}); retrying until the server answers", "warn")
             if self._shutdown.wait(self.client.retry_cap_s):
                 raise error
 
@@ -871,6 +909,7 @@ class TrainerWorker:
                 return
             bundle = job_dir / f"checkpoint-{step}.grad.tar.gz"
             started = time.monotonic()
+            reason = "emergency" if state.emergency else "periodic"
             try:
                 inner = dict(metadata.get("manifest") or {})
                 fmt = metadata.get("artifact_format") or inner.get("format")
@@ -895,14 +934,28 @@ class TrainerWorker:
                         "metadata": {**metadata, "upload_seconds": upload_seconds},
                     },
                 )
-                self.telemetry.observe_checkpoint(time.monotonic() - started)
+                took = time.monotonic() - started
+                self.telemetry.observe_checkpoint(took, reason=reason, ok=True)
+                _log(
+                    f"checkpoint step {step} saved",
+                    step=step,
+                    reason=reason,
+                    size_bytes=info.size_bytes,
+                    upload_s=upload_seconds,
+                    duration_s=round(took, 3),
+                )
             except (LeaseLost, WorkerAuthError):
+                self.telemetry.observe_checkpoint(None, reason=reason, ok=False)
                 raise
             except ServerError as exc:
-                level = "ignored" if exc.status == 409 else "failed"
-                _log(f"checkpoint step {step} {level}: {exc}")
-            except Exception as exc:
-                _log(f"checkpoint step {step} failed: {exc}")
+                if exc.status == 409:
+                    _log(f"checkpoint step {step} ignored: {exc}", "warn", step=step, reason=reason)
+                else:
+                    self.telemetry.observe_checkpoint(None, reason=reason, ok=False)
+                    _log_traceback(f"checkpoint step {step} failed", step=step, reason=reason)
+            except Exception:
+                self.telemetry.observe_checkpoint(None, reason=reason, ok=False)
+                _log_traceback(f"checkpoint step {step} failed", step=step, reason=reason)
             finally:
                 bundle.unlink(missing_ok=True)
                 if state.checkpoint_started is not None:
@@ -967,7 +1020,11 @@ class TrainerWorker:
             # The failed attempt's model and activations are unreachable now; free them first.
             release_gpu_memory()
             self._note(state, "warning", f"The GPU ran out of memory at step {state.step}; retrying with micro_batch_tokens={retry_tokens}")
-            _log(f"retrying job {state.job_id} once with micro_batch_tokens={retry_tokens}")
+            _log(
+                f"retrying job {state.job_id} once with micro_batch_tokens={retry_tokens}",
+                "warn",
+                micro_batch_tokens=retry_tokens,
+            )
             config = {**config, "micro_batch_tokens": retry_tokens}
             retried = True
         if failure is not None:
@@ -1296,8 +1353,13 @@ def _gpu_from_env(raw: str | None) -> dict[str, Any] | None | bool:
 def main() -> None:
     # Before torch loads: grow the CUDA cache in place instead of fragmenting it (r6: 45 -> 71 GiB).
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", ALLOC_CONF)
+    logs.install()
     worker = worker_from_env(os.environ)
-    _log(f"worker '{worker.worker_id}' ({','.join(worker.kinds)}) polling {worker.client.base_url}")
+    logs.set_worker(worker_id=worker.worker_id)
+    _log(
+        f"worker '{worker.worker_id}' ({','.join(worker.kinds)}) polling {worker.client.base_url}",
+        kinds=",".join(worker.kinds),
+    )
     sys.exit(worker.serve_forever())
 
 

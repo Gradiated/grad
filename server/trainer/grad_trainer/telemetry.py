@@ -126,9 +126,15 @@ class WorkerTelemetry:
             if seconds is not None:
                 self._prom["step_seconds"].observe(seconds)
 
-    def observe_checkpoint(self, seconds: float) -> None:
+    def observe_checkpoint(
+        self, seconds: float | None, *, reason: str = "periodic", ok: bool = True
+    ) -> None:
+        """A checkpoint saved (``ok``, taking ``seconds``) or lost; ``reason`` is
+        ``periodic`` or ``emergency`` (saved because compute is being reclaimed)."""
         if self._prom:
-            self._prom["checkpoint_seconds"].observe(seconds)
+            self._prom["checkpoints"].labels(reason=reason, result="ok" if ok else "failed").inc()
+            if ok and seconds is not None:
+                self._prom["checkpoint_seconds"].observe(seconds)
 
     def observe_upload(self, kind: str, size_bytes: int, seconds: float) -> None:
         if self._prom:
@@ -207,6 +213,12 @@ class WorkerTelemetry:
                 "grad_trainer_checkpoint_duration_seconds",
                 "Time to bundle, upload and register a checkpoint.",
                 buckets=_SLOW_BUCKETS,
+                registry=registry,
+            ),
+            "checkpoints": prom.Counter(
+                "grad_trainer_checkpoints",
+                "Checkpoints this worker saved or lost, by reason (periodic, emergency) and result (ok, failed).",
+                ["reason", "result"],
                 registry=registry,
             ),
             "upload_bytes": prom.Counter(

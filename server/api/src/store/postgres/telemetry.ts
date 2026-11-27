@@ -89,11 +89,16 @@ export const createTelemetryRepository = (db: Db): TelemetryRepository => ({
       [at],
     );
 
+    // Sync lag: how long an active scheduled source has gone without a
+    // successful sync (since its creation when it never synced).
     const sources = await db.query(
       `SELECT provider, count(*) AS n,
               count(*) FILTER (WHERE status = 'paused') AS paused,
-              max(consecutive_failures) AS failures
+              max(consecutive_failures) AS failures,
+              max(EXTRACT(EPOCH FROM ($1::timestamptz - coalesce(last_synced_at, created_at))))
+                FILTER (WHERE status = 'active' AND schedule IS NOT NULL) AS lag
        FROM grad_sources GROUP BY provider`,
+      [at],
     );
 
     return {
@@ -102,6 +107,7 @@ export const createTelemetryRepository = (db: Db): TelemetryRepository => ({
         count: num(r.n),
         paused: num(r.paused),
         max_consecutive_failures: num(r.failures),
+        sync_lag_seconds: num(r.lag),
       })),
       jobs: jobs.map((r) => ({
         kind: String(r.kind),

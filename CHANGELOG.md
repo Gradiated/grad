@@ -7,6 +7,36 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+### Added
+
+- **One Grafana dashboard for production, "grad / Training platform"** (`deploy/grafana/grad.json`,
+  also the Helm chart's and `grad local up --observability`'s), with sections for the overview,
+  queue and scheduling, runs and jobs, workers and GPUs, evals, sources, billing (Cloud), auth,
+  API and SSE, dependencies and Loki logs, and variables for the Prometheus and Loki data
+  sources, the namespace and the worker pool. It replaces the Overview, Training and Evals &
+  Sources dashboards.
+- Metrics: `grad_http_errors_total{code}` (every problem+json response), `grad_job_failures_total`
+  by kind, recipe and `error_code`, `grad_worker_auth_total{mode,result}`,
+  `grad_token_reviews_total`, `grad_token_review_duration_seconds`, `grad_token_reviews_in_flight`,
+  `grad_auth_cache_lookups_total`, `grad_billing_checks_total`, `grad_price_list_age_seconds`,
+  `grad_eval_inference_errors_total{target,reason}` (with `capacity_unavailable`),
+  `grad_source_sync_lag_seconds`, `grad_maintenance_last_tick_timestamp_seconds`, and the
+  workers' `grad_trainer_checkpoints_total{reason,result}`. The PodMonitor labels worker series
+  with their `pool`.
+- Alerts (`metrics.prometheusRule.enabled`): `GradJobFailureRateHigh`, `GradUsagePushLagging`,
+  `GradTokenReviewSaturated`, `GradDatabaseErrors`, `GradStorageErrors`,
+  `GradMaintenanceStalled`, and `GradNoWorkersForQueuedJobs` for eval workers too.
+
+### Changed
+
+- Every alert in the chart's PrometheusRule is `severity: warning` (`GradApiErrorRateHigh` was
+  `critical`, and now needs more than 0.1 requests/s).
+- Logs: every component writes JSON lines to stdout (warnings and errors too) with `time`,
+  `level`, `component` and the ids that apply (`request_id`, `job_id`, `run_id`, `attempt`,
+  `worker_id`, `workspace_id`); errors carry `error_type` and `stack`, and credentials are
+  masked. The trainer's logs are JSON now (they were `[grad-trainer]` text on stderr) and
+  cover each phase, checkpoint and attempt outcome.
+
 ## [0.2.0-alpha.4] - 2026-11-27
 
 Upgrading runs migrations 0002 to 0009 (`node dist/main.js migrate`, or the Helm chart's Job).

@@ -1273,6 +1273,21 @@ TrainerEvalCallCounts = TypedDict(
         "model_error": "NotRequired[int]",
         "judge_ok": "NotRequired[int]",
         "judge_error": "NotRequired[int]",
+        "model_errors": "NotRequired[TrainerEvalErrorCounts]",
+        "judge_errors": "NotRequired[TrainerEvalErrorCounts]",
+    },
+)
+
+TrainerEvalErrorCounts = TypedDict(
+    "TrainerEvalErrorCounts",
+    {
+        "rate_limited": "NotRequired[int]",
+        "capacity_unavailable": "NotRequired[int]",
+        "timeout": "NotRequired[int]",
+        "unreachable": "NotRequired[int]",
+        "server_error": "NotRequired[int]",
+        "rejected": "NotRequired[int]",
+        "malformed": "NotRequired[int]",
     },
 )
 
@@ -1682,7 +1697,8 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
     "SyncSourceRequest": frozenset({"full"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "min_gpu_memory_gb", "price_per_million_tokens_usd", "recipes", "template_revision"}),
-    "TrainerEvalCallCounts": frozenset({"judge_error", "judge_ok", "model_error", "model_ok"}),
+    "TrainerEvalCallCounts": frozenset({"judge_error", "judge_errors", "judge_ok", "model_error", "model_errors", "model_ok"}),
+    "TrainerEvalErrorCounts": frozenset({"capacity_unavailable", "malformed", "rate_limited", "rejected", "server_error", "timeout", "unreachable"}),
     "TrainerEvalOutput": frozenset({"completion_tokens", "error", "expected_output", "input", "judge_tokens", "model", "output", "prompt_tokens", "record", "sample_index", "scores", "task_id", "task_index"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "stats", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),

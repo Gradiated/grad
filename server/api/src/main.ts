@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 
 import { API_VERSION, createGradApp, createMetricsApp } from "./app.js";
 import { buildDependencies, log } from "./bootstrap.js";
+import { setLogComponent } from "./telemetry/log.js";
 import { parseServerEnvironment } from "./environment.js";
 import { createInternalApp } from "./routes/internal.js";
 import { runMigrations } from "./migrations.js";
@@ -14,7 +15,7 @@ import { runWorker } from "./worker/main.js";
 // A stray rejection is a bug to log, not a reason to take the replica down.
 process.on("unhandledRejection", (reason: unknown) => {
   log("error", "unhandled promise rejection", {
-    error: reason instanceof Error ? reason.message : String(reason),
+    error: reason,
   });
 });
 
@@ -103,6 +104,8 @@ const migrateOnly = async () => {
 };
 
 const command = process.argv[2];
+if (command === "migrate") setLogComponent("migrate");
+if (command === "worker") setLogComponent("eval-worker");
 (command === "migrate"
   ? migrateOnly()
   : command === "worker"
@@ -113,7 +116,7 @@ const command = process.argv[2];
     "error",
     `grad-server ${command === "worker" ? "worker " : ""}failed to start`,
     {
-      error: error instanceof Error ? error.message : String(error),
+      error,
     },
   );
   process.exit(1);

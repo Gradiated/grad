@@ -82,6 +82,7 @@ class WorkerTelemetryTests(unittest.TestCase):
         t.observe_step(10)
         t.observe_step(20)
         t.observe_checkpoint(3.0)
+        t.observe_checkpoint(None, reason="emergency", ok=False)
         t.observe_upload("checkpoint", 2048, 1.5)
         t.observe_job("train", "completed")
         port = server.server_port
@@ -93,6 +94,8 @@ class WorkerTelemetryTests(unittest.TestCase):
             "grad_trainer_steps_total 2.0",
             "grad_trainer_step_duration_seconds_count 1.0",
             "grad_trainer_checkpoint_duration_seconds_sum 3.0",
+            'grad_trainer_checkpoints_total{reason="periodic",result="ok"} 1.0',
+            'grad_trainer_checkpoints_total{reason="emergency",result="failed"} 1.0',
             'grad_trainer_upload_bytes_total{kind="checkpoint"} 2048.0',
             'grad_trainer_upload_duration_seconds_count{kind="checkpoint"} 1.0',
             'grad_trainer_jobs_total{kind="train",status="completed"} 1.0',

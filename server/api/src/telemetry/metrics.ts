@@ -15,9 +15,12 @@ import {
 
 /** Every label a grad_ metric may carry (the cardinality guard's allowlist). */
 export const LABELS = [
+  "code",
+  "error_code",
   "form",
   "kind",
   "method",
+  "mode",
   "model_family",
   "op",
   "phase",
@@ -30,6 +33,7 @@ export const LABELS = [
   "status",
   "status_class",
   "step",
+  "target",
   "version",
   // Only grad_workspace_jobs, and only with METRICS_WORKSPACE_LABEL=true.
   "workspace",
@@ -58,6 +62,14 @@ export const watchPool = (pool: PoolCounts): (() => void) => {
     pools.delete(pool);
   };
 };
+/** Reads the Cloud price list's age (seconds since last confirmed; null: never fetched). */
+let priceListAge: (() => number | null) | null = null;
+
+/** Reports a price list's age on grad_price_list_age_seconds (Cloud mode). */
+export const watchPriceList = (age: () => number | null): void => {
+  priceListAge = age;
+};
+
 collectDefaultMetrics({ register: registry });
 
 const BUCKETS = {
@@ -112,6 +124,11 @@ export const metrics = {
     "grad_http_requests_in_flight",
     "HTTP requests being served.",
   ),
+  httpErrors: counter(
+    "grad_http_errors_total",
+    "problem+json error responses by error code (queue_limit, lease_lost, auth_unavailable, ...).",
+    ["code"],
+  ),
 
   // Queue (gauges refreshed from the database every maintenance tick)
   jobs: gauge(
@@ -159,6 +176,11 @@ export const metrics = {
     "Time from creating a job to its terminal status, by kind, recipe and status.",
     ["kind", "recipe_kind", "status"],
     BUCKETS.job,
+  ),
+  jobFailures: counter(
+    "grad_job_failures_total",
+    "Jobs that ended failed, by kind, recipe and error code (attempts_exhausted, preemptions_exhausted, invalid_artifact, source_unavailable, job_error).",
+    ["kind", "recipe_kind", "error_code"],
   ),
   attempts: counter(
     "grad_job_attempts_total",
@@ -230,10 +252,49 @@ export const metrics = {
     "grad_usage_export_failures_total",
     "Cloud: usage pushes to billing that failed (the rows stay and are retried).",
   ),
+  billingChecks: counter(
+    "grad_billing_checks_total",
+    "Cloud: balance checks, by op (start: a new run or eval; continue: a running job's heartbeat) and result (allowed, refused, error). A refused continue stops the job (stopped_balance).",
+    ["op", "result"],
+  ),
+  priceListAge: new Gauge({
+    name: "grad_price_list_age_seconds",
+    help: "Cloud: seconds since the price list was last confirmed (new work is refused past 24 h).",
+    registers: [registry],
+    collect() {
+      const age = priceListAge?.();
+      if (age !== null && age !== undefined) this.set(age);
+    },
+  }),
   cloudAuthLookups: counter(
     "grad_cloud_auth_lookups_total",
     "Cloud: API-key lookups in the auth view, by result (found, not_found, inactive, error).",
     ["result"],
+  ),
+  workerAuth: counter(
+    "grad_worker_auth_total",
+    "Worker-protocol requests by auth mode (static, kubernetes, lease; none: no worker credential) and result (ok, rejected, unavailable).",
+    ["mode", "result"],
+  ),
+  authCache: counter(
+    "grad_auth_cache_lookups_total",
+    "Credential cache lookups, by mode (cloud_key, kubernetes) and result (hit, miss).",
+    ["mode", "result"],
+  ),
+  tokenReviews: counter(
+    "grad_token_reviews_total",
+    "Kubernetes TokenReviews, by result (authenticated, rejected, error, saturated: refused because 8 were in flight).",
+    ["result"],
+  ),
+  tokenReviewDuration: histogram(
+    "grad_token_review_duration_seconds",
+    "Kubernetes TokenReview call duration.",
+    [],
+    BUCKETS.fast,
+  ),
+  tokenReviewsInFlight: gauge(
+    "grad_token_reviews_in_flight",
+    "Kubernetes TokenReviews in flight on this replica.",
   ),
   checkpoints: counter(
     "grad_checkpoints_total",
@@ -263,6 +324,11 @@ export const metrics = {
     "Judge calls evals made, by result (ok, error).",
     ["result"],
   ),
+  evalInferenceErrors: counter(
+    "grad_eval_inference_errors_total",
+    "Failed eval model and judge calls (after retries), by target (model, judge) and reason (rate_limited, capacity_unavailable, timeout, unreachable, server_error, rejected, malformed).",
+    ["target", "reason"],
+  ),
 
   // Sources
   sourceSyncs: counter(
@@ -284,6 +350,11 @@ export const metrics = {
   sourceFailures: gauge(
     "grad_source_consecutive_failures",
     "The most consecutive failed syncs of any source, by provider.",
+    ["provider"],
+  ),
+  sourceSyncLag: gauge(
+    "grad_source_sync_lag_seconds",
+    "Longest time an active scheduled source has gone without a successful sync, by provider.",
     ["provider"],
   ),
   sourcesPaused: gauge(
@@ -315,6 +386,10 @@ export const metrics = {
     "grad_maintenance_step_errors_total",
     "Maintenance steps that failed.",
     ["step"],
+  ),
+  maintenanceLastTick: gauge(
+    "grad_maintenance_last_tick_timestamp_seconds",
+    "Unix time the maintenance loop last finished a tick (lease expiry, requeues, gauges, usage).",
   ),
   usageFlushLag: gauge(
     "grad_usage_flush_lag_seconds",
@@ -390,6 +465,24 @@ export const metrics = {
     ["workspace", "kind", "status"],
   ),
 };
+
+// Series alerts and panels rate() over start at 0, so their first event counts.
+for (const result of ["authenticated", "rejected", "error", "saturated"]) {
+  metrics.tokenReviews.inc({ result }, 0);
+}
+for (const code of [
+  "lease_lost",
+  "queue_limit",
+  "auth_unavailable",
+  "worker_auth_unavailable",
+  "database_unavailable",
+  "internal_error",
+]) {
+  metrics.httpErrors.inc({ code }, 0);
+}
+
+/** The phrase a job failed for too many preemptions carries in its error (requeuePatch). */
+export const PREEMPTION_LIMIT_MARK = "its GPU was reclaimed";
 
 /** A job's `kind` label: imports a source started are `sync`. */
 export const metricKind = (job: {

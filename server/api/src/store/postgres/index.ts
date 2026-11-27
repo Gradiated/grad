@@ -1,6 +1,7 @@
 import { Client, Pool } from "pg";
 
 import type { Clock } from "../../clock.js";
+import { log } from "../../telemetry/log.js";
 import { migrate } from "../migrate.js";
 import type { Repositories, Store } from "../types.js";
 import { createArtifactRepository } from "./artifacts.js";
@@ -57,13 +58,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
     ].join(" "),
   });
   const logLost = (error: Error) => {
-    console.error(
-      JSON.stringify({
-        level: "error",
-        msg: "postgres connection lost",
-        error: error.message,
-      }),
-    );
+    log("error", "postgres connection lost", { error });
   };
   // The pool listens for 'error' on idle clients only. A backend that dies
   // while a client is checked out (a transaction between two queries, during

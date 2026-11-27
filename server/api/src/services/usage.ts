@@ -8,7 +8,6 @@ import {
 import type { AppDependencies } from "../deps.js";
 import { invalid } from "../errors.js";
 import type { UsageEvent } from "../adapters.js";
-import { errorMessage } from "../errors.js";
 import { log } from "../telemetry/log.js";
 import { metrics } from "../telemetry/metrics.js";
 import type {
@@ -255,7 +254,7 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
           "warn",
           "usage export to Gradiated Cloud failed; rows stay in the ledger",
           {
-            error: errorMessage(error),
+            error,
             retry_in_s: Math.round((nextExportAt - now) / 1000),
           },
         );

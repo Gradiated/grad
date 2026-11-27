@@ -79,7 +79,7 @@ export const createWorkspaceLifecycle = (
         log("warn", "could not stop a job of a suspended workspace", {
           workspace_id: workspaceId,
           job_id: job.id,
-          error: errorMessage(error),
+          error,
         });
       }
     }

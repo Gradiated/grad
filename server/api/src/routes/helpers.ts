@@ -4,6 +4,7 @@ import { z } from "@hono/zod-openapi";
 import { hasScope, type AuthPrincipal } from "../adapters.js";
 import { ProblemSchema, type Scope } from "../contracts.js";
 import { ApiError, type ProblemStatus } from "../errors.js";
+import { metrics } from "../telemetry/metrics.js";
 
 export type AppEnv = {
   Variables: {
@@ -44,20 +45,31 @@ export const notImplementedError = {
   501: problem("Capability not configured on this server."),
 };
 
+const CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * The problem+json body of an error response. Every error response is built
+ * here, so it also counts the response on grad_http_errors_total{code}
+ * (codes are a fixed vocabulary; anything else is `other`).
+ */
 export const problemBody = (
   status: number,
   code: string,
   title: string,
   detail: string,
   requestId: string,
-) => ({
-  type: `https://gradiated.com/problems/${code}`,
-  title,
-  status,
-  detail,
-  code,
-  request_id: requestId,
-});
+) => {
+  metrics.httpErrors.inc({ code: CODE_RE.test(code) ? code : "other" });
+
+  return {
+    type: `https://gradiated.com/problems/${code}`,
+    title,
+    status,
+    detail,
+    code,
+    request_id: requestId,
+  };
+};
 
 export const respondProblem = <S extends ProblemStatus>(
   c: Context<AppEnv>,

@@ -8,7 +8,11 @@ import {
   WORKER_STAT_PHASES,
   type WorkerStatsSchema,
 } from "../contracts/trainer-jobs.js";
-import { metricKind, metrics } from "../telemetry/metrics.js";
+import {
+  metricKind,
+  metrics,
+  PREEMPTION_LIMIT_MARK,
+} from "../telemetry/metrics.js";
 import { contextFromTraceparent, withSpan } from "../telemetry/tracing.js";
 import { claimGpuMemoryGb } from "../worker-auth/principal.js";
 import type { z } from "@hono/zod-openapi";
@@ -244,7 +248,7 @@ export const requeuePatch = (
           status: "failed",
           preemptions,
           finished_at: now,
-          error: `${what}; its GPU was reclaimed ${preemptions} time(s) (limit ${preemption.maxPreemptions}).`,
+          error: `${what}; ${PREEMPTION_LIMIT_MARK} ${preemptions} time(s) (limit ${preemption.maxPreemptions}).`,
         }
       : {
           ...RELEASE,

@@ -279,15 +279,16 @@ metrics:
     enabled: false
     interval: 30s
     labels: {}
-  # The Grafana dashboards (overview, training, evals and sources) as ConfigMaps
-  # labelled for the Grafana sidecar (kube-prometheus-stack, grafana chart).
+  # The Grafana dashboard ("grad / Training platform") as a ConfigMap labelled
+  # for the Grafana sidecar (kube-prometheus-stack, grafana chart).
   grafanaDashboards:
     enabled: false
     labels:
       grafana_dashboard: "1"
     # e.g. {grafana_folder: grad} with the sidecar's folderAnnotation.
     annotations: {}
-  # A PrometheusRule with a few alerts (prometheus-operator).
+  # A PrometheusRule with the recommended alerts (prometheus-operator). Every
+  # alert is severity: warning; none is meant to page.
   prometheusRule:
     enabled: false
     labels: {}
@@ -295,8 +296,15 @@ metrics:
     oldestQueuedSeconds: 1800
     # Alert when this share of API requests fail with 5xx (over 5 minutes).
     error5xxRatio: 0.05
+    # Alert when this share of a kind's jobs failed over 30 minutes, with at least failureMinJobs failures.
+    failureRatio: 0.25
+    failureMinJobs: 3
+    # Cloud: alert when usage hasn't reached billing for this long.
+    usagePushLagSeconds: 1800
     # Alert when a running attempt has written no usage for this long.
     usageFlushLagSeconds: 900
+    # Alert when this share of Postgres queries fail (over 5 minutes).
+    dbErrorRatio: 0.05
 
 # KEDA scales each worker Deployment on its open jobs (queued plus running), so a
 # scale-down never strands a running job. Needs KEDA installed in the cluster.

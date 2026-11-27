@@ -3222,6 +3222,9 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     assert!(log.contains("--profile gpu up -d"));
 
     // --observability adds Prometheus and Grafana, with the dashboards beside the compose file.
+    let stale = sb.path("data/gradiated/local/grafana/overview.json");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, "{}").unwrap();
     let grafana = free_port();
     let mut c = sb.grad(None);
     c.env("GRAD_DOCKER", &shim)
@@ -3252,10 +3255,14 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     );
     assert!(log.contains("--profile observability pull"), "{}", log);
     assert!(log.contains("--profile observability up -d"), "{}", log);
-    let overview = sb.path("data/gradiated/local/grafana/overview.json");
+    let platform = sb.path("data/gradiated/local/grafana/grad.json");
     let dashboard: Value =
-        serde_json::from_str(&std::fs::read_to_string(overview).unwrap()).unwrap();
-    assert_eq!(dashboard["uid"], "grad-overview");
+        serde_json::from_str(&std::fs::read_to_string(platform).unwrap()).unwrap();
+    assert_eq!(dashboard["uid"], "grad");
+    // An older CLI's dashboards are gone, so Grafana doesn't provision stale copies.
+    assert!(!sb
+        .path("data/gradiated/local/grafana/overview.json")
+        .exists());
     assert!(text.contains("./grafana:/var/lib/grafana/dashboards/grad:ro"));
 
     // status prints the URLs the last `up` chose.

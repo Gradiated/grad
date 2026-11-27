@@ -9,7 +9,7 @@ import { createGatewayInference } from "../cloud/gateway.js";
 import { createOpenAICompatibleClient } from "../services/evals/inference.js";
 import { createRegexEvaluator } from "../services/evals/regex.js";
 import type { InferenceClients } from "../services/evals/types.js";
-import { log } from "../telemetry/log.js";
+import { log, withLogContext } from "../telemetry/log.js";
 import { workerTokenSource } from "../worker-auth/token-source.js";
 import { createWorkerClient } from "./client.js";
 import {
@@ -75,7 +75,9 @@ export const runWorker = async (args: readonly string[]): Promise<void> => {
     server: env.GRAD_SERVER_URL,
     concurrency: env.EVAL_CONCURRENCY,
   });
-  const running = worker.run(env.GRAD_POLL_INTERVAL_S * 1000);
+  const running = withLogContext({ worker_id: workerId }, () =>
+    worker.run(env.GRAD_POLL_INTERVAL_S * 1000),
+  );
   const shutdown = (signal: string) => {
     log("info", "eval worker stopping: handing its eval back", { signal });
     void worker.stop();

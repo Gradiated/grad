@@ -68,7 +68,7 @@ export const createArtifactService = (
         await storage.delete(result.orphanKey).catch((error: unknown) => {
           log("warn", "artifact blob delete failed", {
             artifact: id,
-            error: error instanceof Error ? error.message : String(error),
+            error,
           });
         });
       }

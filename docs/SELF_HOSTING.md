@@ -275,13 +275,22 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
 
 ## Monitoring
 
-grad-server exports Prometheus metrics with a `grad_` prefix at `/metrics`: HTTP requests and latency by route template, open jobs and the oldest queued job per kind (train, import, sync, eval), claim latency, job durations, attempts and requeues by reason, workers online with their phase, tokens/s and GPU memory, training tokens, billed tokens and cost, checkpoints and uploads, eval outputs and judge calls, source syncs, failures and pauses by provider, dataset bytes, import records, maintenance steps, usage-flush lag, the Postgres pool and storage operations, plus the default process metrics. [METRICS.md](METRICS.md) lists every metric with its labels; it is generated from the code (`pnpm -C server/api metrics:docs`). Labels never carry run, dataset or workspace ids. Gauges read from Postgres are sampled by the maintenance tick every 15 seconds, so a scrape never queries the database, and they are the same on every replica: aggregate them with `max`.
+grad-server exports Prometheus metrics with a `grad_` prefix at `/metrics`. They answer:
 
-Each worker with `GRAD_WORKER_METRICS_PORT` set serves its own metrics (`grad_trainer_*`: phase, step time, tokens/s, GPU utilisation and memory, checkpoint and upload times). Workers also send their phase, tokens/s and GPU memory in every heartbeat, so the server's `grad_worker_*` gauges cover pools Prometheus can't scrape.
+- **Queue and scheduling:** open jobs per kind (train, import, sync, eval) and state, the oldest claimable job, the wait for a first claim, fair-share waits and jobs held by a workspace's running cap, `429 queue_limit` rejections, and runs no online GPU fits.
+- **Runs and jobs:** jobs finished by kind, recipe and status, failures by `error_code` (`attempts_exhausted`, `preemptions_exhausted`, `invalid_artifact`, `source_unavailable`, `job_error`), durations, attempts, requeues by reason (`compute_reclaimed` preemptions, `lease_lost` lease expiries, `worker_error`, `oom`), emergency checkpoints, and fencing rejections (`grad_http_errors_total{code="lease_lost"}`).
+- **Workers:** workers online and their phase per kind, heartbeats, tokens/s, GPU utilisation and memory (from heartbeats), and checkpoint bytes and upload time.
+- **Evals:** model outputs and judge calls, and failed calls by reason (`rate_limited`, `capacity_unavailable`, `timeout`, `unreachable`, `server_error`, `rejected`, `malformed`).
+- **Sources:** syncs, records and score updates by provider, sync lag, consecutive failures and paused sources.
+- **Billing (Cloud mode):** usage push lag, backlog and failures, balance checks by op and result, and the price list's age.
+- **Auth:** worker-protocol requests by auth mode and result, Kubernetes TokenReviews by result (with `saturated` past the in-flight cap), their latency and in-flight count, credential-cache hits, Cloud API-key lookups, and every error response by problem `code` (`auth_unavailable`, `worker_auth_unavailable`, ...).
+- **API and dependencies:** requests and latency by route template, requests in flight, SSE streams and the event hub, the Postgres pool, query latency and errors, object storage latency and errors by operation, maintenance steps and the last maintenance tick, plus the default process metrics. [METRICS.md](METRICS.md) lists every metric with its labels; it is generated from the code (`pnpm -C server/api metrics:docs`). Labels never carry run, dataset or workspace ids. Gauges read from Postgres are sampled by the maintenance tick every 15 seconds, so a scrape never queries the database, and they are the same on every replica: aggregate them with `max`.
+
+Each worker with `GRAD_WORKER_METRICS_PORT` set serves its own metrics (`grad_trainer_*`: phase, step time, tokens/s, GPU utilisation and memory per GPU from NVML, checkpoints saved or failed by reason, checkpoint and upload times, jobs finished). Workers also send their phase, tokens/s and GPU memory in every heartbeat, so the server's `grad_worker_*` gauges cover pools Prometheus can't scrape. For deeper GPU health (SM occupancy, temperatures, XID errors) run NVIDIA's dcgm-exporter on GPU nodes; grad doesn't duplicate it. The eval worker has no metrics port: its call counts reach grad-server with every batch of outputs.
 
 ### Locally
 
-`grad local up --observability` adds Prometheus (`127.0.0.1:18789`, 512 MB, 7 days of data) and Grafana (`127.0.0.1:18788`, 768 MB) with the three dashboards provisioned, and prints the Grafana URL. Anyone on the machine can view; sign in as `admin` (password `GRAD_GRAFANA_PASSWORD`, default `admin`) to edit. `GRAD_PROMETHEUS_PORT`, `GRAD_GRAFANA_PORT`, `GRAD_PROMETHEUS_MEMORY` and `GRAD_GRAFANA_MEMORY` change the defaults. `grad local down` stops them too.
+`grad local up --observability` adds Prometheus (`127.0.0.1:18789`, 512 MB, 7 days of data) and Grafana (`127.0.0.1:18788`, 768 MB) with the dashboard provisioned, and prints the Grafana URL. The local stack has no Loki, so the dashboard's Logs section stays empty; `grad local logs` shows the same JSON lines. Anyone on the machine can view; sign in as `admin` (password `GRAD_GRAFANA_PASSWORD`, default `admin`) to edit. `GRAD_PROMETHEUS_PORT`, `GRAD_GRAFANA_PORT`, `GRAD_PROMETHEUS_MEMORY` and `GRAD_GRAFANA_MEMORY` change the defaults. `grad local down` stops them too.
 
 ### Kubernetes
 
@@ -300,19 +309,25 @@ With `networkPolicy.enabled`, `metrics.allowFrom` says who may reach the metrics
 
 ### Dashboards
 
-[`deploy/grafana/`](../deploy/grafana) holds three dashboards, generated by `node deploy/grafana/generate.mjs`: **Overview** (API health, queue, workers, throughput, errors), **Training** (runs by status, durations, tokens/s, interruptions, checkpoints, GPU) and **Evals & Sources**. Each takes its data source as a `${DS_PROMETHEUS}` input, so it imports into any Grafana; `metrics.grafanaDashboards.enabled` loads them as ConfigMaps labelled `grafana_dashboard: "1"` for the Grafana sidecar. A test checks that every query names an exported metric and label.
+[`deploy/grafana/grad.json`](../deploy/grafana/grad.json) ("grad / Training platform", generated by `node deploy/grafana/generate.mjs`) has one section per question: **Overview** (5xx ratio, p95 latency, waiting and running jobs, the oldest waiting job, workers online, the job failure ratio, the maintenance tick's age), **Queue & scheduling**, **Runs & jobs**, **Workers & GPUs**, **Evals**, **Sources**, **Billing & usage** (Cloud only), **Auth & security**, **API & SSE**, **Dependencies** (Postgres, S3, maintenance, process) and **Logs** (Loki). Its variables are the Prometheus and Loki data sources (`${DS_PROMETHEUS}`, `${DS_LOKI}`, so it imports into any Grafana), the namespace and the worker pool (the PodMonitor labels worker series with `pool`). The Logs section reads the `grad-server`, `grad-eval-worker`, `grad-trainer` and `migrate` containers' streams by their `namespace` and `container` labels, which the usual collectors (Grafana Alloy, Promtail) set. `metrics.grafanaDashboards.enabled` loads it as a ConfigMap labelled `grafana_dashboard: "1"` for the Grafana sidecar, and `grad local up --observability` provisions the same file. A test checks that every query names a metric and label grad exports and honours the namespace variable.
 
 ### Alerts
 
-`metrics.prometheusRule.enabled` adds a PrometheusRule:
+`metrics.prometheusRule.enabled` adds a PrometheusRule. Every alert is `severity: warning`; none is meant to page.
 
 | Alert | Fires when | Setting |
 | --- | --- | --- |
-| `GradApiErrorRateHigh` | More than 5% of API requests return 5xx over 5 minutes | `error5xxRatio` |
-| `GradJobQueuedTooLong` | The oldest claimable job of a kind has waited 30 minutes | `oldestQueuedSeconds` |
-| `GradNoWorkersForQueuedJobs` | Jobs are queued and no worker of their pool is online | |
-| `GradSourcePaused` | A source was paused after repeated sync failures | |
+| `GradApiErrorRateHigh` | More than 5% of API requests return 5xx over 5 minutes (at more than 0.1 requests/s) | `error5xxRatio` |
+| `GradJobQueuedTooLong` | The oldest claimable job of a kind has waited 30 minutes (the queue is stuck) | `oldestQueuedSeconds` |
+| `GradNoWorkersForQueuedJobs` | Train, import or eval jobs are queued and no worker of that kind has been online for 15 minutes | |
+| `GradJobFailureRateHigh` | More than 25% of a kind's jobs failed over 30 minutes, with at least 3 failures | `failureRatio`, `failureMinJobs` |
+| `GradUsagePushLagging` | Cloud: usage hasn't reached billing for 30 minutes | `usagePushLagSeconds` |
 | `GradUsageFlushLagging` | A running attempt has written no usage row for 15 minutes | `usageFlushLagSeconds` |
+| `GradTokenReviewSaturated` | Worker tokens keep being refused because 8 TokenReviews are in flight | |
+| `GradDatabaseErrors` | More than 5% of Postgres queries fail over 5 minutes | `dbErrorRatio` |
+| `GradStorageErrors` | Object storage operations keep failing | |
+| `GradMaintenanceStalled` | The maintenance loop hasn't finished a tick for 5 minutes | |
+| `GradSourcePaused` | A source was paused after repeated sync failures | |
 
 ### KEDA
 
@@ -327,7 +342,9 @@ Both send `metrics-token` when `metrics.requireToken` is on, and neither needs d
 
 ### Tracing and logs
 
-Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) is set. grad-server then exports spans for HTTP requests, Postgres queries and storage operations, and passes a W3C `traceparent` to the worker in the job payload, so one trace links a run's creation, claim, training and completion. Logs are JSON lines carrying `request_id`, `trace_id` and `job_id` where they apply.
+Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) is set. grad-server then exports spans for HTTP requests, Postgres queries and storage operations, and passes a W3C `traceparent` to the worker in the job payload, so one trace links a run's creation, claim, training and completion.
+
+Every component logs one JSON object per line to stdout: `time`, `level` (`info`, `warn`, `error`), `component` (`api`, `eval-worker`, `migrate`, `trainer`) and `msg`, plus `request_id`, `trace_id`, `job_id`, `run_id`, `attempt`, `worker_id` and `workspace_id` where they apply (ids belong in logs, never in metric labels). Errors carry `error`, `error_type` and `stack`. The trainer logs each claim, phase change, checkpoint (step, reason, size, upload time), reclaim and termination notice, OOM retry, lease loss and the attempt's outcome, and routes library warnings (transformers, peft) through the same format. API keys, lease tokens, bearer tokens and presigned-URL signatures are masked if one ever reaches a log line, and import workers also mask the provider keys and Hugging Face tokens their job carries.
 
 ## Retention
 

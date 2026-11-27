@@ -152,12 +152,14 @@ export const createCloudAuth = (options: CloudAuthOptions): AuthAdapter => {
     const key = digest.toString("hex");
     const hit = cache.get(key);
     if (hit && hit.expiresAt > clock.now().getTime()) {
+      metrics.authCache.inc({ mode: "cloud_key", result: "hit" });
       // Refresh recency: the LRU evicts the least recently used key.
       cache.delete(key);
       cache.set(key, hit);
       if (hit.refused) throw hit.refused;
       return hit.principal;
     }
+    metrics.authCache.inc({ mode: "cloud_key", result: "miss" });
     // Concurrent requests with one key share one query.
     let pending = inFlight.get(key);
     if (!pending) {
