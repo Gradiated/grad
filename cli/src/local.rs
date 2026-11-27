@@ -7,9 +7,9 @@
 //! are public on Docker Hub (`docker.io/gradiated/*`, mirrored on GHCR) and
 //! pulled without a login; their tag defaults to
 //! [`DEFAULT_IMAGE_TAG`] (`--image-tag` overrides it). The first `up`
-//! generates an admin key, a trainer key and the workspace-secrets key and
-//! stores them in the `local` profile; the server only ever sees the admin
-//! key's SHA-256.
+//! generates an admin key, a trainer key, the workspace-secrets key and the
+//! key of the stack's S3 store (SeaweedFS) and stores them in the `local`
+//! profile; the server only ever sees the admin key's SHA-256.
 
 use grad_sdk::Client;
 use serde_json::json;
@@ -169,6 +169,9 @@ struct Ports {
     api: u16,
     grafana: u16,
     prometheus: u16,
+    /// SeaweedFS's S3 API: the CLI and SDKs PUT files to presigned URLs on it.
+    #[serde(default = "default_s3_port")]
+    s3: u16,
     /// Whether the last `up` started Grafana and Prometheus.
     #[serde(default)]
     observability: bool,
@@ -180,8 +183,13 @@ const DEFAULT_PORTS: Ports = Ports {
     api: 18787,
     grafana: 18788,
     prometheus: 18789,
+    s3: 18786,
     observability: false,
 };
+
+fn default_s3_port() -> u16 {
+    DEFAULT_PORTS.s3
+}
 /// Where a busy default (or saved) port falls back to: the 20 ports after the block.
 const FALLBACK_PORTS: std::ops::RangeInclusive<u16> = 18790..=18809;
 
@@ -320,17 +328,22 @@ fn choose_ports(
     let base = saved.unwrap_or(DEFAULT_PORTS);
     let grafana = env_port("GRAD_GRAFANA_PORT")?;
     let prometheus = env_port("GRAD_PROMETHEUS_PORT")?;
+    let s3 = env_port("GRAD_S3_PORT")?;
     let mut chosen = Ports {
         api: pinned_api.unwrap_or(base.api),
         grafana: grafana.unwrap_or(base.grafana),
         prometheus: prometheus.unwrap_or(base.prometheus),
+        s3: s3.unwrap_or(base.s3),
         observability,
     };
-    let mut services = vec![(
-        "API",
-        &mut chosen.api,
-        pinned_api.map(|_| "--port / GRAD_PORT"),
-    )];
+    let mut services = vec![
+        (
+            "API",
+            &mut chosen.api,
+            pinned_api.map(|_| "--port / GRAD_PORT"),
+        ),
+        ("S3 store", &mut chosen.s3, s3.map(|_| "GRAD_S3_PORT")),
+    ];
     if observability {
         services.push((
             "Grafana",
@@ -343,7 +356,7 @@ fn choose_ports(
             prometheus.map(|_| "GRAD_PROMETHEUS_PORT"),
         ));
     }
-    if [pinned_api, grafana, prometheus].contains(&Some(0)) {
+    if [pinned_api, grafana, prometheus, s3].contains(&Some(0)) {
         return Err(CliError::usage(
             "port 0 is not a fixed port: pick one from 1 to 65535",
         ));
@@ -367,7 +380,8 @@ fn choose_ports(
 fn port_env(cmd: &mut tokio::process::Command, ports: Ports) {
     cmd.env("GRAD_PORT", ports.api.to_string())
         .env("GRAD_GRAFANA_PORT", ports.grafana.to_string())
-        .env("GRAD_PROMETHEUS_PORT", ports.prometheus.to_string());
+        .env("GRAD_PROMETHEUS_PORT", ports.prometheus.to_string())
+        .env("GRAD_S3_PORT", ports.s3.to_string());
 }
 
 fn url(port: u16) -> String {
@@ -555,6 +569,9 @@ struct LocalKeys {
     trainer: String,
     /// GRAD_SECRETS_KEY: 32 random bytes, base64 (encrypts workspace secrets).
     secrets: String,
+    /// GRAD_S3_ACCESS_KEY / GRAD_S3_SECRET_KEY: the S3 store's only identity.
+    s3_access: String,
+    s3_secret: String,
     created: bool,
 }
 
@@ -569,30 +586,35 @@ fn ensure_keys(profile: &str, base_url: &str) -> CliResult<LocalKeys> {
     let mut out = None;
     save_profile(profile, |p| {
         let admin = p.api_key.clone().filter(|k| !k.is_empty());
-        let trainer = p
-            .extra
-            .get("trainer_key")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .filter(|k| !k.is_empty());
-        let secrets = p
-            .extra
-            .get("secrets_key")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .filter(|k| !k.is_empty());
+        let extra = |name: &str| {
+            p.extra
+                .get(name)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|k| !k.is_empty())
+        };
+        let trainer = extra("trainer_key");
+        let secrets = extra("secrets_key");
+        let s3_access = extra("s3_access_key");
+        let s3_secret = extra("s3_secret_key");
         let created = admin.is_none() || trainer.is_none();
         let admin = admin.unwrap_or_else(|| new_key("grad_local_"));
         let trainer = trainer.unwrap_or_else(|| new_key("grad_trainer_"));
         let secrets = secrets.unwrap_or_else(new_secrets_key);
+        let s3_access = s3_access.unwrap_or_else(|| new_key("grad").chars().take(20).collect());
+        let s3_secret = s3_secret.unwrap_or_else(|| new_key(""));
         p.api_key = Some(admin.clone());
         p.base_url = Some(base_url.to_string());
         p.extra.insert("trainer_key".into(), json!(trainer));
         p.extra.insert("secrets_key".into(), json!(secrets));
+        p.extra.insert("s3_access_key".into(), json!(s3_access));
+        p.extra.insert("s3_secret_key".into(), json!(s3_secret));
         out = Some(LocalKeys {
             admin,
             trainer,
             secrets,
+            s3_access,
+            s3_secret,
             created,
         });
     })?;
@@ -741,7 +763,9 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                     grad_sdk::sha256_hex(keys.admin.as_bytes()),
                 )
                 .env("GRAD_TRAINER_API_KEY", &keys.trainer)
-                .env("GRAD_SECRETS_KEY", &keys.secrets);
+                .env("GRAD_SECRETS_KEY", &keys.secrets)
+                .env("GRAD_S3_ACCESS_KEY", &keys.s3_access)
+                .env("GRAD_S3_SECRET_KEY", &keys.s3_secret);
             port_env(&mut cmd, ports);
             run(ctx, cmd, "up").await.map_err(|e| {
                 if e.code == "docker_failed" {
@@ -810,6 +834,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.done(&json!({
                 "base_url": base_url,
                 "ui_url": format!("{}/", base_url),
+                "s3_url": url(ports.s3),
                 "grafana_url": grafana_url,
                 "prometheus_url": prometheus_url,
                 "ports": ports,
@@ -932,6 +957,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 p.api_key = None;
                 p.extra.remove("trainer_key");
                 p.extra.remove("secrets_key");
+                p.extra.remove("s3_access_key");
+                p.extra.remove("s3_secret_key");
             })?;
             out.line("✓ Deleted the local stack's data and keys; `grad local up` starts fresh");
             out.done(&json!({ "project": args.project_name, "profile": profile }))
@@ -953,9 +980,16 @@ mod tests {
             "published images only"
         );
         assert!(EMBEDDED_COMPOSE.contains("__GRAD_VERSION__"));
-        // Postgres is not published at all.
-        let pg = EMBEDDED_COMPOSE.split("grad-server:").next().unwrap();
+        // Postgres is not published at all; SeaweedFS's S3 API on loopback only.
+        let pg = EMBEDDED_COMPOSE.split("\n  seaweedfs:").next().unwrap();
         assert!(!pg.contains("ports:"));
+        assert!(EMBEDDED_COMPOSE.contains("127.0.0.1:${GRAD_S3_PORT:-18786}:8333"));
+        assert!(EMBEDDED_COMPOSE
+            .contains("S3_PUBLIC_ENDPOINT: \"http://127.0.0.1:${GRAD_S3_PORT:-18786}\""));
+        // Migrations run once, before the API starts (the Helm Job).
+        assert!(EMBEDDED_COMPOSE.contains("condition: service_completed_successfully"));
+        assert!(EMBEDDED_COMPOSE.contains("MIGRATE_ON_BOOT: \"false\""));
+        assert!(!EMBEDDED_COMPOSE.contains("STORAGE_DIR"));
         let k = new_key("grad_local_");
         assert!(k.starts_with("grad_local_") && k.len() == "grad_local_".len() + 48);
     }
@@ -1084,6 +1118,15 @@ mod tests {
             .contains(&format!("port {} (--port / GRAD_PORT)", taken_port)));
         let hint = e.hint.unwrap();
         assert!(hint.contains(&format!("lsof -i :{}", taken_port)) && hint.contains("ss -ltnp"));
+    }
+
+    #[test]
+    fn ports_saved_before_the_s3_store_get_its_default() {
+        let old: Ports = serde_json::from_str(
+            r#"{"api": 18790, "grafana": 18788, "prometheus": 18789, "observability": true}"#,
+        )
+        .unwrap();
+        assert_eq!((old.api, old.s3), (18790, DEFAULT_PORTS.s3));
     }
 
     #[test]

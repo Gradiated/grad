@@ -55,6 +55,7 @@ impl Sandbox {
             .env_remove("GRAD_PORT")
             .env_remove("GRAD_GRAFANA_PORT")
             .env_remove("GRAD_PROMETHEUS_PORT")
+            .env_remove("GRAD_S3_PORT")
             .timeout(Duration::from_secs(60));
         if let Some(u) = url {
             c.env("GRADIATED_BASE_URL", u)
@@ -2516,7 +2517,7 @@ fn docker_shim(sb: &Sandbox, exit: i32) -> PathBuf {
     std::fs::write(
         &shim,
         format!(
-            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY SECRETS=$GRAD_SECRETS_KEY PORT=$GRAD_PORT GRAFANA=$GRAD_GRAFANA_PORT PROMETHEUS=$GRAD_PROMETHEUS_PORT AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nif [ \"$1\" = ps ]; then cat \"{ps}\" 2>/dev/null; fi\nexit {exit}\n",
+            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY SECRETS=$GRAD_SECRETS_KEY PORT=$GRAD_PORT GRAFANA=$GRAD_GRAFANA_PORT PROMETHEUS=$GRAD_PROMETHEUS_PORT S3=$GRAD_S3_PORT S3KEYS=$GRAD_S3_ACCESS_KEY:$GRAD_S3_SECRET_KEY AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nif [ \"$1\" = ps ]; then cat \"{ps}\" 2>/dev/null; fi\nexit {exit}\n",
             log = sb.path("docker.log").display(),
             ps = sb.path("docker-ps.txt").display(),
             exit = exit
@@ -2845,6 +2846,21 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let secrets = local["secrets_key"].as_str().unwrap();
     assert_eq!(secrets.len(), 44, "32 bytes in base64: {}", secrets);
     assert!(log.contains(&format!("SECRETS={}", secrets)));
+    // The S3 store's key pair, generated once and passed to compose.
+    let s3_keys = format!(
+        "{}:{}",
+        local["s3_access_key"].as_str().unwrap(),
+        local["s3_secret_key"].as_str().unwrap()
+    );
+    assert!(s3_keys.starts_with("grad") && s3_keys.len() == 20 + 1 + 48);
+    assert!(log.contains(&format!("S3KEYS={}", s3_keys)), "{}", log);
+    // ...and its loopback port, probed like the API's.
+    let s3_port: u16 = log
+        .split("S3=")
+        .skip(1)
+        .find_map(|rest| rest.split(' ').next()?.parse().ok())
+        .expect("GRAD_S3_PORT");
+    assert_ne!(s3_port.to_string(), port);
     assert!(
         !log.contains(admin),
         "the admin key itself never reaches docker"
@@ -2964,7 +2980,8 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
         serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
     assert!(
         cfg["profiles"]["local"].get("api_key").is_none()
-            && cfg["profiles"]["local"].get("secrets_key").is_none(),
+            && cfg["profiles"]["local"].get("secrets_key").is_none()
+            && cfg["profiles"]["local"].get("s3_secret_key").is_none(),
         "reset forgets the keys"
     );
 

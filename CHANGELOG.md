@@ -9,6 +9,18 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Changed
 
+- **Storage is S3-compatible only.** grad-server always uses an S3 bucket (AWS S3, SeaweedFS,
+  MinIO, R2 and similar): `S3_BUCKET` is required, and the local-disk mode (`STORAGE_DIR`,
+  `BLOB_SIGNING_SECRET` and the server-proxied `/blobs/*` routes) is gone. `grad local up`
+  runs SeaweedFS as the store, with a key it generates into the `local` profile and its S3
+  API on `127.0.0.1:18786` (probed like the other ports), because the CLI and SDKs upload
+  files to presigned URLs. Data in the old `grad-storage` volume is not migrated: re-push
+  datasets after upgrading a local stack. `S3_PUBLIC_ENDPOINT` signs client upload tickets
+  for an endpoint other than `S3_ENDPOINT` (the Helm value `storage.s3PublicEndpoint`).
+- The compose stack migrates with a one-shot `migrate` service (`node dist/main.js
+  migrate`, as the Helm Job runs it); grad-server waits for it and starts with
+  `MIGRATE_ON_BOOT=false`.
+- The `grad_storage_operation_*` metrics drop their `backend` label.
 - `grad local up` publishes the API and web UI on `127.0.0.1:18787`, Grafana on `18788` and
   Prometheus on `18789` (was `8787`, `3000` and `9090`). Before starting it probes each port:
   a busy default moves to a free port in 18790-18809 and one line says so; a busy port set
