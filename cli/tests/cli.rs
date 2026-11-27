@@ -2394,8 +2394,37 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
     assert!(log.contains("--profile gpu up -d"));
 
+    // --observability adds Prometheus and Grafana, with the dashboards beside the compose file.
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim).env("GRAD_GRAFANA_PORT", "3123");
+    let r = run(
+        c,
+        &[
+            "--json",
+            "local",
+            "up",
+            "--observability",
+            "--port",
+            &port,
+            "--no-wait",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["grafana_url"], "http://127.0.0.1:3123/");
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    assert!(log.contains("--profile observability pull"), "{}", log);
+    assert!(log.contains("--profile observability up -d"), "{}", log);
+    let overview = sb.path("data/gradiated/local/grafana/overview.json");
+    let dashboard: Value =
+        serde_json::from_str(&std::fs::read_to_string(overview).unwrap()).unwrap();
+    assert_eq!(dashboard["uid"], "grad-overview");
+    assert!(text.contains("./grafana:/var/lib/grafana/dashboards/grad:ro"));
+
     for (args, needle) in [
-        (vec!["local", "down", "--volumes"], "down --volumes"),
+        (
+            vec!["local", "down", "--volumes"],
+            "--profile * down --volumes",
+        ),
         (
             vec!["local", "logs", "grad-server", "--tail", "50"],
             "logs --tail 50 grad-server",
@@ -2468,7 +2497,7 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
     let pair = format!("-f {} -f {}", base.display(), extra.display());
     assert!(log.contains(&format!("{} up -d", pair)), "{}", log);
-    assert!(log.contains(&format!("{} down", pair)), "{}", log);
+    assert!(log.contains(&format!("{} --profile * down", pair)), "{}", log);
     // Docker missing or failing.
     let mut c = sb.grad(None);
     c.env("GRAD_DOCKER", sb.path("no-docker-here"));

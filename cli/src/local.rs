@@ -22,6 +22,21 @@ use crate::commands::{on_interrupt, Ctx};
 use crate::output::{CliError, CliResult, EXIT_AUTH};
 
 pub const EMBEDDED_COMPOSE: &str = include_str!("../assets/docker-compose.yml");
+/// The Grafana dashboards (deploy/grafana) the embedded compose file mounts.
+const DASHBOARDS: [(&str, &str); 3] = [
+    (
+        "overview.json",
+        include_str!("../assets/grafana/overview.json"),
+    ),
+    (
+        "training.json",
+        include_str!("../assets/grafana/training.json"),
+    ),
+    (
+        "evals-sources.json",
+        include_str!("../assets/grafana/evals-sources.json"),
+    ),
+];
 pub const LOCAL_PROFILE: &str = "local";
 /// Image tag baked in at build time (see build.rs): the version for a release
 /// binary, `main` for a build from a checkout.
@@ -78,6 +93,14 @@ pub fn write_embedded(tag: &str) -> CliResult<PathBuf> {
     let body = EMBEDDED_COMPOSE.replace("__GRAD_VERSION__", tag);
     std::fs::write(&path, body)
         .map_err(|e| CliError::general("io_error", format!("{}: {}", path.display(), e)))?;
+    let grafana = dir.join("grafana");
+    std::fs::create_dir_all(&grafana)
+        .map_err(|e| CliError::general("io_error", format!("{}: {}", grafana.display(), e)))?;
+    for (name, body) in DASHBOARDS {
+        let file = grafana.join(name);
+        std::fs::write(&file, body)
+            .map_err(|e| CliError::general("io_error", format!("{}: {}", file.display(), e)))?;
+    }
     Ok(path)
 }
 
@@ -113,11 +136,37 @@ fn compose_files(args: &ComposeArgs, build: bool, tag: &str) -> CliResult<Vec<Pa
     Ok(vec![write_embedded(tag)?])
 }
 
+/// A port from the environment (what compose publishes), else `default`.
+fn env_port(name: &str, default: u16) -> u16 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
 fn docker_bin() -> String {
     std::env::var("GRAD_DOCKER")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "docker".into())
+}
+
+/// Compose profiles an `up` (and its pull) enables.
+fn profiles(cmd: &mut tokio::process::Command, gpu: bool, observability: bool) {
+    if gpu {
+        cmd.arg("--profile").arg("gpu");
+    }
+    if observability {
+        cmd.arg("--profile").arg("observability");
+    }
+}
+
+/// `compose` with every profile on: down, ps and logs reach the GPU worker and
+/// the observability services too.
+fn compose_all(args: &ComposeArgs, files: &[PathBuf]) -> tokio::process::Command {
+    let mut cmd = compose(args, files);
+    cmd.arg("--profile").arg("*");
+    cmd
 }
 
 fn compose(args: &ComposeArgs, files: &[PathBuf]) -> tokio::process::Command {
@@ -189,14 +238,12 @@ async fn pull_images(
     ctx: &Ctx,
     args: &ComposeArgs,
     files: &[PathBuf],
-    gpu: bool,
+    (gpu, observability): (bool, bool),
     tag: &str,
 ) -> CliResult {
     use tokio::io::{AsyncBufReadExt, BufReader};
     let mut cmd = compose(args, files);
-    if gpu {
-        cmd.arg("--profile").arg("gpu");
-    }
+    profiles(&mut cmd, gpu, observability);
     cmd.arg("pull")
         .stdin(Stdio::null())
         .stdout(if ctx.out.json {
@@ -364,6 +411,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
         LocalCmd::Up {
             compose: args,
             gpu,
+            observability,
             build,
             image_tag,
             port,
@@ -392,12 +440,10 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             ));
             on_interrupt("stopped waiting; the containers keep starting (`grad local status`)");
             if pulls_published_images(&args, build) {
-                pull_images(ctx, &args, &files, gpu, tag).await?;
+                pull_images(ctx, &args, &files, (gpu, observability), tag).await?;
             }
             let mut cmd = compose(&args, &files);
-            if gpu {
-                cmd.arg("--profile").arg("gpu");
-            }
+            profiles(&mut cmd, gpu, observability);
             cmd.arg("up").arg("-d");
             if build {
                 cmd.arg("--build");
@@ -448,6 +494,15 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 "  Web UI: {}/  (grad --profile {} ui opens it signed in)",
                 base_url, profile
             ));
+            let grafana_url = observability
+                .then(|| format!("http://127.0.0.1:{}/", env_port("GRAD_GRAFANA_PORT", 3000)));
+            if let Some(url) = &grafana_url {
+                out.line(format!(
+                    "  Grafana: {}  (dashboards in the grad folder; Prometheus: http://127.0.0.1:{}/)",
+                    url,
+                    env_port("GRAD_PROMETHEUS_PORT", 9090)
+                ));
+            }
             out.line("  Next:");
             out.line(format!("    grad --profile {} models list", profile));
             out.line(format!(
@@ -458,6 +513,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.done(&json!({
                 "base_url": base_url,
                 "ui_url": format!("{}/", base_url),
+                "grafana_url": grafana_url,
                 "profile": profile,
                 "compose_files": files,
                 "project": args.project_name,
@@ -470,7 +526,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             volumes,
         } => {
             let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
-            let mut cmd = compose(&args, &files);
+            let mut cmd = compose_all(&args, &files);
             cmd.arg("down");
             if volumes {
                 cmd.arg("--volumes");
@@ -485,7 +541,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
         }
         LocalCmd::Status { compose: args } => {
             let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
-            let mut cmd = compose(&args, &files);
+            let mut cmd = compose_all(&args, &files);
             cmd.arg("ps");
             run(ctx, cmd, "ps").await?;
             let base_url = grad_sdk::ConfigFile::default_path()
@@ -518,7 +574,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             tail,
         } => {
             let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
-            let mut cmd = compose(&args, &files);
+            let mut cmd = compose_all(&args, &files);
             cmd.arg("logs").arg("--tail").arg(&tail);
             if follow {
                 cmd.arg("--follow");
@@ -546,7 +602,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 }
             }
             let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
-            let mut cmd = compose(&args, &files);
+            let mut cmd = compose_all(&args, &files);
             cmd.arg("down").arg("--volumes").arg("--remove-orphans");
             run(ctx, cmd, "down").await?;
             let profile = profile_of(ctx);

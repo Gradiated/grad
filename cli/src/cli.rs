@@ -1046,6 +1046,7 @@ pub enum LocalCmd {
 Examples:
   grad local up
   grad local up --gpu
+  grad local up --observability  # plus Prometheus and Grafana dashboards
   grad local up --build          # build images from a source checkout
 
 First run generates an admin key, a trainer key and the workspace-secrets
@@ -1057,6 +1058,10 @@ authentication on.")]
         /// Add the CUDA trainer worker (needs the NVIDIA Container Toolkit)
         #[arg(long)]
         gpu: bool,
+        /// Add Prometheus and Grafana with the grad dashboards (loopback only;
+        /// GRAD_GRAFANA_PORT, default 3000, and GRAD_PROMETHEUS_PORT, default 9090)
+        #[arg(long)]
+        observability: bool,
         /// Build images from this source checkout instead of pulling them
         #[arg(long)]
         build: bool,
