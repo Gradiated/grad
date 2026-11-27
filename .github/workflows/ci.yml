@@ -284,6 +284,9 @@ jobs:
       - name: Install server/api dependencies for the live CLI tests
         run: pnpm -C server/api install --frozen-lockfile
 
+      - name: Install the reference worker's one dependency
+        run: python3 -m pip install "jsonschema==4.26.0"
+
       - name: Lint Rust workspace (grad-sdk + grad CLI)
         run: |
           rustup component add rustfmt clippy
