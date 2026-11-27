@@ -354,6 +354,33 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(complete[0]["tokens_processed"], 200)
         self.assertEqual(out["result"]["status"], "handed_back")
 
+    def test_reclaim_during_a_slow_checkpoint_upload_hands_back_when_the_grace_ends(self) -> None:
+        # Chaos r2: SIGTERM while a checkpoint is uploading. The save doesn't fit the
+        # grace, so the attempt must be handed back (a preemption, requeued now)
+        # before SIGKILL, not left to expire as a failed attempt.
+        srv = self.server(jobs=[train_job()], put_delay_s=3.0)
+        worker = self.worker(srv, StubRunner(steps=50, checkpoint_at=2, step_sleep=0.01), reclaim_grace_s=0.3)
+        with contextlib.redirect_stderr(io.StringIO()):
+            out: dict = {}
+            thread = threading.Thread(target=lambda: out.setdefault("result", worker.run_once()))
+            thread.start()
+            for _ in range(500):  # the checkpoint's PUT is in flight
+                if any(r.method == "PUT" for r in srv.requests) or srv.bodies("uploads"):
+                    break
+                threading.Event().wait(0.01)
+            worker.request_shutdown()
+            for _ in range(150):
+                if srv.bodies("complete"):
+                    break
+                threading.Event().wait(0.01)
+            complete = srv.bodies("complete")
+            self.assertEqual(len(complete), 1, "not handed back within the grace")
+            self.assertEqual((complete[0]["status"], complete[0]["reason"]), ("abandoned", "compute_reclaimed"))
+            thread.join(10)
+        self.assertEqual(srv.bodies("checkpoints"), [])  # the late upload never registers
+        self.assertEqual(len(srv.bodies("complete")), 1)
+        self.assertEqual(out["result"]["status"], "handed_back")
+
     def test_reclaim_before_training_hands_back_and_crash_reports_worker_error(self) -> None:
         srv = self.server(jobs=[train_job()])
         worker = self.worker(srv)

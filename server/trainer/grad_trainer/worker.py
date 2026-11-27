@@ -335,6 +335,8 @@ class _JobState:
     reclaim_deadline: float | None = None
     emergency: bool = False
     handed_back: bool = False
+    # A /complete is being sent: the reclaim deadline no longer hands it back.
+    completing: bool = False
 
     def request_stop(self, reason: str) -> None:
         if self.stop_reason is None:
@@ -495,12 +497,32 @@ class TrainerWorker:
                 _log(f"job {state.job_id}: compute reclaimed; checkpointing after the current step (grace {grace:.0f}s)", "warn", phase=state.phase, grace_s=round(grace))
                 state.reclaim_deadline = now + grace
                 state.request_stop("reclaimed")
+                self._arm_deadline(state, grace)
                 return
             _log(f"job {state.job_id}: compute reclaimed; no time to checkpoint in phase {state.phase}; handing it back now", "warn", phase=state.phase, grace_s=round(grace))
             state.handed_back = True
             state.request_stop("reclaimed")
         # Too little time to save: hand the attempt back now (off the signal handler).
         threading.Thread(target=self._hand_back, args=(state,), daemon=True).start()
+
+    def _arm_deadline(self, state: _JobState, grace: float) -> None:
+        """The grace is a promise to the platform: if the emergency save is still
+        running when it ends (a slow checkpoint upload), hand the attempt back anyway,
+        so it requeues now as a preemption instead of waiting out its lease as a
+        failure once SIGKILL lands. (A finished run's own upload is let run.)"""
+
+        def expire() -> None:
+            with self._lock:
+                if self._current is not state or state.handed_back or state.completing:
+                    return
+                _log(f"job {state.job_id}: the {grace:.0f}s grace ran out mid-{state.phase}; handing it back")
+                state.handed_back = True
+                state.request_stop("reclaimed")
+            self._hand_back(state)
+
+        timer = threading.Timer(grace, expire)
+        timer.daemon = True
+        timer.start()
 
     @staticmethod
     def _remaining_step(state: _JobState, now: float) -> float:
@@ -808,6 +830,8 @@ class TrainerWorker:
         and the bundle stays on disk meanwhile. Gives up only when the lease is
         lost (409/404) or the worker is shutting down."""
         state.final_status = str(payload.get("status") or "failed")
+        if not force:
+            state.completing = True
         self.telemetry.set_phase("completing")
         while True:
             try:

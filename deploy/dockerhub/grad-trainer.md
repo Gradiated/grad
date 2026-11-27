@@ -43,7 +43,7 @@ The CPU image is built for linux/amd64 and linux/arm64, the CUDA image for linux
 | `GRAD_WORKER_KINDS` | `train,import` | Job kinds to claim; `import` jobs are the only ones that carry workspace secrets. |
 | `GRAD_POLL_INTERVAL_S` | `1.0` | Seconds between polls for work. |
 | `GRAD_WORKER_METRICS_PORT` | off | Serve Prometheus worker metrics on this port. |
-| `GRAD_RECLAIM_GRACE_SECONDS` | `25` | Time to save a checkpoint after SIGTERM. |
+| `GRAD_RECLAIM_GRACE_SECONDS` | `25` | Time to save a checkpoint after SIGTERM; when it runs out, the run is handed back without it. |
 | `GRAD_TERMINATION_NOTICE` | off | `aws` polls EC2 instance metadata for a termination notice. |
 | `GRAD_MODELS_MIRROR` | none | A directory or `s3://` prefix holding base weights, for air-gapped installs. |
 | `GRAD_SOURCES_EGRESS_ALLOW` | none | CIDRs a source sync or logger may reach on private addresses. |

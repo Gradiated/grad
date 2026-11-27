@@ -7,6 +7,7 @@ import gzip
 import json
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
@@ -44,6 +45,8 @@ class FakeProtocolServer:
     progress_reply: Callable[[int], dict[str, Any]] | None = None
     heartbeat_reply: Callable[[int], tuple[int, dict[str, Any]]] | None = None
     checkpoint_status: int = 201
+    # Seconds each storage PUT takes (a slow upload).
+    put_delay_s: float = 0.0
     upload_origin: str | None = None
     redirect_claim_to: str | None = None
     requests: list[Recorded] = field(default_factory=list)
@@ -167,6 +170,8 @@ class FakeProtocolServer:
             return self._problem(404, "not_found")
         if rec.method == "PUT" and path.startswith("/blobs/uploads/"):
             upload_id = path.rsplit("/", 1)[-1]
+            if self.put_delay_s:
+                time.sleep(self.put_delay_s)
             if int(rec.headers.get("content-length", "-1")) != len(rec.body):
                 return self._problem(400, "bad_length")
             self.uploads[upload_id] = rec.body
