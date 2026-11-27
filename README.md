@@ -12,6 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/Gradiated/grad/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Gradiated/grad/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://codecov.io/gh/Gradiated/grad"><img alt="Coverage" src="https://codecov.io/gh/Gradiated/grad/graph/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <a href="https://gradiated.com/docs/training/"><img alt="Docs" src="https://img.shields.io/badge/docs-gradiated.com-bb5b16.svg"></a>
   <a href="#sdks-and-cli"><img alt="SDKs: Python, TypeScript, Go, Rust" src="https://img.shields.io/badge/SDKs-Python%20%C2%B7%20TypeScript%20%C2%B7%20Go%20%C2%B7%20Rust-211d17.svg"></a>
@@ -34,54 +35,70 @@ It is one open-source codebase. The same server runs on your laptop (`grad local
 
 ## Quickstart
 
-Install the Python SDK and the CLI:
+Install the CLI and an SDK. The TypeScript SDK is on npm; until the PyPI and crates.io releases, install the Python SDK, the Rust SDK and the CLI from this repository:
 
 ```bash
-pip install grad-sdk
-cargo install --git https://github.com/Gradiated/grad grad-cli   # the `grad` binary
-export GRADIATED_API_KEY=grad_...
+cargo install --locked --git https://github.com/Gradiated/grad grad-cli   # the `grad` binary
+pip install "grad-sdk @ git+https://github.com/Gradiated/grad#subdirectory=sdks/python"
+npm install @gradiated/grad
 ```
 
-Train a router on your support traces, deploy it, and route live traffic:
+Train a router on support traces that already carry a `resolved` score. [`examples/support_traces.jsonl`](examples/support_traces.jsonl) is a synthetic sample (two models answering 48 made-up tickets) you can use to try it:
 
 ```python
-from grad import Grad, Judge
+from grad import Grad
 from grad.recipes import RouterRecipe
 
-client = Grad()  # reads GRADIATED_API_KEY
+client = Grad()  # reads GRADIATED_API_KEY, or GRADIATED_PROFILE=local for `grad local up`
 
 # 1. Push traces: OpenAI chat JSONL, OTel, Langfuse, PostHog, Braintrust or LangSmith exports
-dataset = client.datasets.push("support-prod", "./support_traces.jsonl")
+dataset = client.datasets.push("support-prod", "./examples/support_traces.jsonl")
 
-# 2. Pick the candidates and a grader, then preview defaults, warnings, tokens and cost for $0
+# 2. Preview the resolved defaults, data warnings, tokens and cost for $0
+recipe = RouterRecipe(rubric="resolved")  # the score already in each trace
+print(client.runs.plan(dataset=dataset, name="support-router", recipe=recipe))
+
+# 3. Train under a hard spend cap; wait() raises if the run fails, is cancelled or hits the cap
+run = client.runs.create(
+    dataset=dataset, name="support-router", recipe=recipe, max_cost_usd=20
+).wait()
+print(run.eval_report)
+```
+
+No scores in your traces yet? Pass `models=[...]` and a `Judge` instead, and Gradiated replays the prompts against each candidate and grades the answers in a labeling eval first. That eval needs a model endpoint, which Gradiated Cloud provides (self-hosted, set `GRAD_INFERENCE_BASE_URL`):
+
+```python
+from grad import Judge
+
 recipe = RouterRecipe(
     models=["qwen/qwen3-8b", "qwen/qwen3-32b"],
     rubric=Judge(model="qwen/qwen3-32b", prompt="Did the reply resolve the customer's issue?"),
 )
-print(client.runs.plan(dataset=dataset, name="support-router", recipe=recipe))
-
-# 3. Train under a hard spend cap, then deploy
-run = client.runs.create(
-    dataset=dataset, name="support-router", recipe=recipe, max_cost_usd=20
-).wait()
-run.deploy()
-
-# 4. Route a request and log the outcome
-messages = [{"role": "user", "content": "Where is invoice #9941?"}]
-decision = client.route("support-router", messages)
-print(decision.model)  # call this model with your own client
-decision.record_feedback(score=1.0)
 ```
 
-The same loop from the CLI. It trains on the scores already in your traces; use a `Judge` from an SDK to grade unscored ones.
+On Gradiated Cloud, deploy the result and call it with any OpenAI client; only `model` changes:
+
+```python
+import os
+from openai import OpenAI
+
+deployment = run.deploy()
+oai = OpenAI(base_url="https://api.gradiated.com/v1", api_key=os.environ["GRADIATED_API_KEY"])
+reply = oai.chat.completions.create(
+    model=deployment.model_id,  # "your-org/support-router"
+    messages=[{"role": "user", "content": "Where is invoice #9941?"}],
+)
+```
+
+The same loop from the CLI:
 
 ```bash
 grad login
-grad import ./support_traces.jsonl --dataset support-prod
-grad train --dataset support-prod --name support-router --recipe router --dry-run
-grad train --dataset support-prod --name support-router --recipe router --max-cost-usd 20 --wait
-grad deploy support-router@latest
-grad route --deployment support-router --prompt "Where is invoice #9941?"
+grad import ./examples/support_traces.jsonl --dataset support-prod
+grad train --dataset support-prod --name support-router --recipe router --set rubric=resolved --dry-run
+grad train --dataset support-prod --name support-router --recipe router --set rubric=resolved --max-cost-usd 20 --wait
+grad deploy support-router@latest          # Gradiated Cloud
+grad deployments rollback support-router   # back to the previous version
 ```
 
 <details>
@@ -91,51 +108,46 @@ grad route --deployment support-router --prompt "Where is invoice #9941?"
 import { Grad, recipes } from "@gradiated/grad";
 
 const grad = new Grad();
-const dataset = await grad.datasets.create("support-prod");
-await dataset.importFile("./support_traces.jsonl").wait();
+const dataset = await grad.datasets.push("support-prod", "./examples/support_traces.jsonl");
 
-const params = { dataset, name: "support-router", recipe: recipes.router(), maxCostUsd: 20 };
+const params = { dataset, name: "support-router", recipe: recipes.router({ rubric: "resolved" }), maxCostUsd: 20 };
 console.log(await grad.runs.plan(params));
 const run = await grad.runs.create(params).wait();
-await run.deploy();
+const deployment = await run.deploy(); // Gradiated Cloud; call deployment.modelId with an OpenAI client
 ```
 
 ```go
 client := grad.NewClient()
-dataset, _ := client.Datasets.Create(ctx, "support-prod")
-dataset.ImportFile(ctx, "./support_traces.jsonl").Wait(ctx)
+dataset, _ := client.Datasets.PushFile(ctx, "support-prod", "./examples/support_traces.jsonl")
 
 params := grad.RunParams{
 	Dataset:    dataset,
 	Name:       "support-router",
-	Recipe:     grad.RouterRecipe{},
+	Recipe:     grad.RouterRecipe{Rubric: "resolved"},
 	MaxCostUSD: 20,
 }
 plan, _ := client.Runs.Plan(ctx, params)
 fmt.Println(plan)
 run, _ := client.Runs.Create(ctx, params).Wait(ctx)
-_, _ = run.Deploy(ctx)
+deployment, _ := run.Deploy(ctx) // Gradiated Cloud; call deployment.ModelID with an OpenAI client
 ```
 
 ```rust
-use grad_sdk::{recipes, Client, DeployRequest, ImportFileOptions, RunRequest, WaitOptions};
+use grad_sdk::{Client, DeployArtifactRequest, PlanRunRequest, PushOptions, RecipeKind, RecipeSpec, WaitOptions};
 
 let client = Client::new();
-let wait = WaitOptions::default();
-let path = std::path::Path::new("./support_traces.jsonl");
-let job = client.datasets().import_file("support-prod", path, &ImportFileOptions::default()).await?;
-client.imports().wait(&job.id, &wait).await?;
+let path = std::path::Path::new("./examples/support_traces.jsonl");
+client.datasets().push_file("support-prod", path, &PushOptions::default(), |_| {}).await?;
 
-let req = RunRequest {
-    max_cost_usd: Some(20.0),
-    ..RunRequest::new("support-prod", "support-router", recipes::router(vec![]))
-};
+let recipe = RecipeSpec { rubric: Some("resolved".into()), ..RecipeSpec::new(RecipeKind::Router) };
+let req = PlanRunRequest::new("support-prod", "support-router", recipe).max_cost_usd(20.0);
 println!("~${:.2}", client.runs().plan(&req).await?.estimated_cost_usd);
-let run = client.runs().create(&req).await?;
-client.runs().wait(&run.id, &wait).await?;
+let run = client.runs().create(&req, None).await?;
+client.runs().wait(&run.id, &WaitOptions::default()).await?;
 
-let deploy = DeployRequest { artifact: "support-router@latest".into(), ..Default::default() };
-client.deployments().create(&deploy).await?;
+// Gradiated Cloud
+let deploy = DeployArtifactRequest { artifact: "support-router@latest".into(), ..Default::default() };
+client.deployments().create(&deploy, None).await?;
 ```
 
 </details>
@@ -187,7 +199,7 @@ print(ev.summary_table())
 
 ## Deploy
 
-On Gradiated Cloud, `run.deploy()` or `grad deploy NAME@VERSION` serves an artifact as `your-org/<name>` behind the OpenAI-compatible API, so your app changes one `model` string. Rolling back is one command: `grad rollback NAME`, or deploy an earlier version.
+On Gradiated Cloud, `run.deploy()` or `grad deploy NAME@VERSION` serves an artifact as `your-org/<name>` behind the OpenAI-compatible API, so your app changes one `model` string. Rolling back is one command: `grad deployments rollback NAME` (or `deployment.rollback()`), or deploy an earlier version.
 
 Anywhere else, download the weights and serve them yourself:
 
@@ -209,7 +221,7 @@ flowchart LR
     A --> E["Eval<br/>judges · validators · CIs"]
     A --> C["grad deploy<br/>Gradiated Cloud"]
     A --> S["vLLM / SGLang<br/>your GPUs"]
-    C -. feedback .-> D
+    C -. new traces via sources .-> D
 ```
 
 - **`grad-server`** ([`server/api`](server/api)) is the control plane: datasets, runs, checkpoints, artifacts, evals and keys. It needs PostgreSQL and S3-compatible storage, nothing else. Every route is defined in one OpenAPI 3.1 contract, [`spec/openapi.yaml`](spec/openapi.yaml).
@@ -245,19 +257,19 @@ helm upgrade --install grad server/helm/grad --namespace grad \
   --set keda.enabled=true
 ```
 
-Datasets, training, evals (against your own OpenAI-compatible endpoint) and artifact downloads all work self-hosted; hosted `deploy` and `/v1/route` are Gradiated Cloud features. Server configuration and retention are in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) and the [self-hosting guide](https://gradiated.com/docs/training/self-hosting/).
+Datasets, training, evals (against your own OpenAI-compatible endpoint) and artifact downloads all work self-hosted; hosted `deploy` is a Gradiated Cloud feature. Server configuration and retention are in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) and the [self-hosting guide](https://gradiated.com/docs/training/self-hosting/).
 
 ## SDKs and CLI
 
 | | Install | Source |
 | --- | --- | --- |
-| Python | `pip install grad-sdk` | [`sdks/python`](sdks/python) |
+| Python | `pip install "grad-sdk @ git+https://github.com/Gradiated/grad#subdirectory=sdks/python"` (PyPI soon) | [`sdks/python`](sdks/python) |
 | TypeScript | `npm install @gradiated/grad` | [`sdks/typescript`](sdks/typescript) |
-| Go | `go get github.com/Gradiated/grad/sdks/go` | [`sdks/go`](sdks/go) |
-| Rust | `cargo add grad-sdk` | [`sdks/rust`](sdks/rust) |
-| CLI | `cargo install --git https://github.com/Gradiated/grad grad-cli` | [`cli`](cli) |
+| Go | `go get github.com/Gradiated/grad/sdks/go@main` | [`sdks/go`](sdks/go) |
+| Rust | `cargo add grad-sdk --git https://github.com/Gradiated/grad` (crates.io soon) | [`sdks/rust`](sdks/rust) |
+| CLI | `cargo install --locked --git https://github.com/Gradiated/grad grad-cli` | [`cli`](cli) |
 
-All four SDKs cover the same surface: datasets, runs, checkpoints, artifacts, evals, deployments, routing and feedback. They read `GRADIATED_API_KEY` and `GRADIATED_BASE_URL` (point it at `http://127.0.0.1:8787` for a local stack), and verify every artifact download against its SHA-256.
+All four SDKs cover the same surface: datasets, sources and secrets, runs, checkpoints, artifacts, evals, usage and deployments. They and the CLI resolve configuration the same way (explicit arguments, then the profile named by `GRADIATED_PROFILE`, then `GRADIATED_API_KEY` / `GRADIATED_BASE_URL`, then the `default` profile that `grad login` saves), fail before any request when no key is found, and verify every artifact download against its SHA-256.
 
 The CLI is built for scripts and coding agents: `--json` on any command prints one machine-readable envelope on stdout, and `grad --help` lists every command, the configuration precedence and the exit codes.
 
@@ -308,7 +320,7 @@ To check the code blocks of the public training docs (a checkout of the website 
 
 ```bash
 python3 scripts/check-docs-snippets.py --docs ../workspace/product/website/src/docs/training          # reference worker
-GRAD_TRAINER_PYTHON=/path/to/torch/python python3 scripts/check-docs-snippets.py --docs ... --cloud   # deploy, route, embed
+GRAD_TRAINER_PYTHON=/path/to/torch/python python3 scripts/check-docs-snippets.py --docs ... --cloud   # deploy blocks
 ```
 
 It prints PASS, FAIL or SKIP (with the reason) for every block. Blocks that need a GPU, Hugging Face, the inference gateway or a cluster are skipped; the skip list and fixtures are at the top of the script.

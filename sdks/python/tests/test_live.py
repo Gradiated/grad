@@ -390,6 +390,29 @@ class CloudTorchLiveTests(_LiveCase):
         plan = client.runs.plan(dataset=ds, name="sql-helper-2", recipe=SFTRecipe(model=sft.artifact))
         self.assertEqual(plan.resolved_config["base_artifact"]["id"], sft.artifact.id)
 
+    def test_root_readme_quickstart_on_the_sample_traces(self) -> None:
+        # The repository README's router quickstart on examples/support_traces.jsonl, with only the
+        # backbone swapped for the tiny one. The Judge and deploy blocks need Cloud inference and
+        # Cloud serving: they are compiled here, and deploy is covered by CloudReferenceLiveTests.
+        repo = Path(__file__).resolve().parents[3]
+        readme = (repo / "README.md").read_text(encoding="utf-8")
+        blocks = re.findall(r"```python\n(.*?)```", readme, flags=re.S)
+        quickstart = blocks[0]
+        self.assertIn('RouterRecipe(rubric="resolved")', quickstart)
+        code = quickstart.replace('RouterRecipe(rubric="resolved")', f'RouterRecipe(model="{LLM}", rubric="resolved")')
+        code = code.replace("./examples/support_traces.jsonl", str(repo / "examples" / "support_traces.jsonl"))
+        scope: dict[str, Any] = {"__name__": "readme"}
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            exec(compile(code, "README.md", "exec"), scope)
+        self.assertIn("Estimate", out.getvalue())
+        run = scope["run"]
+        self.assertEqual((run.status, run.artifact.format), ("completed", "router_bundle"))
+        assert run.eval_report is not None
+        self.assertIsNotNone(run.eval_report.pareto_summary["cost_savings_pct"], "the sample traces carry metrics.cost_usd")
+        self.assertEqual(scope["dataset"].count(), 96)
+        for block in blocks[1:3]:
+            compile(block, "README.md", "exec")
+
     def test_distill_and_reward_model(self) -> None:
         # docs: recipes/distillation.mdx and recipes/reward-models.mdx (tiny student/teacher)
         client = Grad()
