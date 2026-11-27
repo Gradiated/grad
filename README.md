@@ -15,14 +15,15 @@ grad/
 │   └── helm/grad/             # Self-hosted Kubernetes Helm chart
 ├── cli/                       # Rust `grad` CLI binary (embeds assets/docker-compose.yml for `grad local up`)
 ├── sdks/
-│   ├── python/                # `grad-sdk` (generated client + idiomatic façade + `env serve`)
+│   ├── python/                # `grad-sdk` (generated client + idiomatic façade)
 │   ├── typescript/            # `@gradiated/grad` (generated client + native-fetch façade)
 │   ├── go/                    # `github.com/Gradiated/grad/sdks/go`
 │   └── rust/                  # `grad-sdk` crate
 ├── scripts/
 │   └── generate-sdks.mjs      # Deterministic OpenAPI -> 4-SDK codegen (`--check` in CI)
 └── tests/
-    └── contract/              # Cross-language wire & E2E tests against live server + trainer
+    ├── harness/               # stack.ts: live server (+ Postgres, fake inference/Cloud, trainer) for SDK/CLI live tests
+    └── fixtures/wire/         # Shared wire fixtures replayed by every SDK's unit tests
 ```
 
 ## Quick start
