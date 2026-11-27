@@ -264,6 +264,29 @@ fn recorded_events_decode() {
 }
 
 #[test]
+fn queue_position_and_reasons() {
+    let fx = fixture();
+    let queued = run_from(&fx["queued"]);
+    let mut m = Model::new(queued.clone(), epoch(&queued.created_at));
+    m.apply_run(queued.clone());
+    let ev = json!({"type": "phase", "seq": 1, "phase": "queued", "step": 0,
+        "workers_online": 0, "autoscaling": false, "queue_position": 3,
+        "message": "Queued behind 3 runs", "gpu": null});
+    feed(&mut m, &fx, event(&fx, 0, 1, ev));
+    assert_eq!(label(&m), "Queued behind 3 runs");
+    // The polled run is live: its reason replaces the event's.
+    let mut capped = queued.clone();
+    capped.queue_position = Some(0);
+    capped.queue_message = Some("Queued: workspace concurrency limit (8 running)".into());
+    m.apply_run(capped.clone());
+    assert_eq!(label(&m), "Queued: workspace concurrency limit (8 running)");
+    // Next in line: who is online again.
+    capped.queue_message = None;
+    m.apply_run(capped);
+    assert_eq!(label(&m), "Waiting for a GPU (0 workers online)");
+}
+
+#[test]
 fn waiting_for_a_gpu() {
     let fx = fixture();
     let queued = run_from(&fx["queued"]);

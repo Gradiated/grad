@@ -326,7 +326,10 @@ fn now_secs() -> i64 {
 
 /// "Waiting for a GPU (0 workers online)" or, with scale-from-zero, "Starting a GPU worker (autoscaling)".
 pub(crate) fn waiting_line(p: &PhaseEvent, waited: Option<i64>) -> String {
-    let what = if p.autoscaling == Some(true) && p.workers_online.unwrap_or(0) == 0 {
+    // The server's reason (queue position, a workspace cap, a GPU nobody has) first.
+    let what = if let Some(message) = &p.message {
+        message.clone()
+    } else if p.autoscaling == Some(true) && p.workers_online.unwrap_or(0) == 0 {
         "Starting a GPU worker (autoscaling)…".to_string()
     } else {
         let n = p.workers_online.unwrap_or(0);
@@ -417,7 +420,9 @@ impl Live {
             if matches!(p.phase, RunPhase::Queued | RunPhase::WaitingForCompute) {
                 let since = parse_ts(&p.meta.timestamp);
                 let changed = self.waiting.as_ref().is_none_or(|(w, _)| {
-                    w.workers_online != p.workers_online || w.autoscaling != p.autoscaling
+                    w.workers_online != p.workers_online
+                        || w.autoscaling != p.autoscaling
+                        || w.message != p.message
                 });
                 self.waiting = Some((p.clone(), since));
                 if self.tty {
@@ -1189,6 +1194,12 @@ mod tests {
         assert_eq!(
             waiting_line(&p, Some(5)),
             "  Starting a GPU worker (autoscaling)… — 5s"
+        );
+        // The server's reason wins: queue position, a workspace cap, a GPU nobody has.
+        p.message = Some("Queued: workspace concurrency limit (8 running)".into());
+        assert_eq!(
+            waiting_line(&p, Some(5)),
+            "  Queued: workspace concurrency limit (8 running) — 5s"
         );
         assert_eq!(fmt_wait(3 * 3600 + 120), "3h 02m");
         let attempt = |kind: AttemptKind, attempt: i64| {

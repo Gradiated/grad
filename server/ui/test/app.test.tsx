@@ -28,7 +28,7 @@ import { byText, click, fakeServer, fixture, fixtureText, json, mount, problem, 
 
 const RUN = fixture<Record<string, unknown>>("run.json");
 const RUN_ID = RUN.id as string;
-const QUEUED = { ...RUN, id: "run_q1", name: "router-queued", status: "queued", current_step: 0, workers_online: 0, autoscaling: true, created_at: new Date(Date.now() - 90_000).toISOString(), finished_at: null };
+const QUEUED = { ...RUN, id: "run_q1", name: "router-queued", status: "queued", current_step: 0, workers_online: 0, autoscaling: true, queue_position: 2, queue_message: "Queued behind 2 runs", created_at: new Date(Date.now() - 90_000).toISOString(), finished_at: null };
 const FAILED = { ...RUN, id: "run_f1", name: "broken-dpo", recipe_kind: "dpo", status: "failed", error: "CUDA out of memory" };
 
 const DATASET = fixture("dataset.json");
@@ -274,6 +274,7 @@ describe("runs", () => {
     );
     const { container } = await boot(server, "/runs/run_q1");
     await waitFor(() => expect(container.textContent).toContain("Starting a worker"));
+    expect(container.textContent).toContain("Queued behind 2 runs");
     expect(container.textContent).toContain("No checkpoints yet");
     await click(byText(container, ".page-header button", "Cancel"));
     await click(byText(container, ".dialog button", "Cancel run"));

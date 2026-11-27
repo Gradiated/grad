@@ -201,6 +201,7 @@ const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; s
             <span style={{ width: `${(progress * 100).toFixed(1)}%` }} />
           </div>
         )}
+        {active && (phase === "queued" || phase === "waiting_for_compute") && life.queueMessage && <Banner tone="info">{life.queueMessage}</Banner>}
         {active && (phase === "queued" || phase === "waiting_for_compute") && (autoscaling || workersOnline !== null) && (
           <Banner tone="info">
             {autoscaling

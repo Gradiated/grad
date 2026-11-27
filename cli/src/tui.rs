@@ -158,6 +158,9 @@ pub(crate) mod wire {
             workers_online: Option<i64>,
             #[serde(default)]
             autoscaling: Option<bool>,
+            /// queued/waiting_for_compute: why the run waits ("Queued behind 3 runs").
+            #[serde(default)]
+            message: Option<String>,
             #[serde(default)]
             gpu: Option<Gpu>,
         },
@@ -276,8 +279,13 @@ struct Life {
     since: i64,
     workers_online: Option<i64>,
     autoscaling: Option<bool>,
+    /// Why a queued run waits, from its phase event (the polled run's is live).
+    message: Option<String>,
     gpu: Option<Gpu>,
 }
+
+/// What a queued phase event carries besides the phase.
+type QueueInfo = (Option<i64>, Option<bool>, Option<String>, Option<Gpu>);
 
 /// What the phase line shows.
 #[derive(Debug, Clone, PartialEq)]
@@ -492,12 +500,7 @@ impl Model {
         self.tok_per_sec = None;
     }
 
-    fn set_phase(
-        &mut self,
-        phase: Phase,
-        at: i64,
-        ev: Option<(Option<i64>, Option<bool>, Option<Gpu>)>,
-    ) {
+    fn set_phase(&mut self, phase: Phase, at: i64, ev: Option<QueueInfo>) {
         // Evaluating and checkpointing interrupt training briefly, and
         // waiting_for_compute only says a queued run is still unclaimed:
         // one clock for each family.
@@ -517,15 +520,16 @@ impl Model {
             .as_ref()
             .filter(|l| same || family(&l.phase, &phase))
             .map_or(at, |l| l.since);
-        let (workers_online, autoscaling, gpu) = match ev {
+        let (workers_online, autoscaling, message, gpu) = match ev {
             Some(x) => x,
-            None => (None, None, prev.filter(|_| same).and_then(|l| l.gpu)),
+            None => (None, None, None, prev.filter(|_| same).and_then(|l| l.gpu)),
         };
         self.life = Some(Life {
             phase,
             since,
             workers_online,
             autoscaling,
+            message,
             gpu,
         });
     }
@@ -648,6 +652,7 @@ impl Model {
                 phase,
                 workers_online,
                 autoscaling,
+                message,
                 gpu,
             } => {
                 if meta.attempt > self.run.attempt {
@@ -658,7 +663,7 @@ impl Model {
                 {
                     self.run.status = RunStatus::Running;
                 }
-                self.set_phase(phase, at, Some((workers_online, autoscaling, gpu)));
+                self.set_phase(phase, at, Some((workers_online, autoscaling, message, gpu)));
             }
             RunEvent::Attempt {
                 meta,
@@ -865,6 +870,21 @@ impl Model {
         })
     }
 
+    /// A queued run's label: the server's reason (queue position, a workspace
+    /// cap, a GPU nobody has), live from the polled run when the server
+    /// reports one, else from the phase event; else who is online.
+    fn queue_label(&self, l: &Life) -> String {
+        let live = self.run.status == RunStatus::Queued && self.run.queue_position.is_some();
+        let message = if live {
+            self.run.queue_message.as_ref()
+        } else {
+            l.message.as_ref()
+        };
+        message
+            .cloned()
+            .unwrap_or_else(|| waiting_label(l.workers_online, l.autoscaling))
+    }
+
     fn phase(&self) -> PhaseView {
         let v = |key, label: &str, tone| PhaseView {
             key,
@@ -887,16 +907,8 @@ impl Model {
         }
         let mut view = match &self.life {
             Some(l) => match &l.phase {
-                Phase::Queued => v(
-                    "queued",
-                    &waiting_label(l.workers_online, l.autoscaling),
-                    Tone::Plain,
-                ),
-                Phase::WaitingForCompute => v(
-                    "waiting",
-                    &waiting_label(l.workers_online, l.autoscaling),
-                    Tone::Plain,
-                ),
+                Phase::Queued => v("queued", &self.queue_label(l), Tone::Plain),
+                Phase::WaitingForCompute => v("waiting", &self.queue_label(l), Tone::Plain),
                 Phase::Starting => v("starting", &starting_label(l.gpu.as_ref()), Tone::Plain),
                 Phase::LoadingModel => v("loading", "Loading the model", Tone::Plain),
                 Phase::Training => v("training", "Training", Tone::Plain),
@@ -930,6 +942,7 @@ fn life_of(r: &Run) -> Option<Life> {
         since,
         workers_online: r.workers_online,
         autoscaling: r.autoscaling,
+        message: r.queue_message.clone(),
         gpu: None,
     })
 }

@@ -71,6 +71,10 @@ export interface RunLifecycle {
   lastInterruption: RunInterruption | null;
   workersOnline: number | null;
   autoscaling: boolean | null;
+  /** While queued: about how many runs start first (fair share across workspaces). */
+  queuePosition: number | null;
+  /** While queued: why it waits ("Queued behind 3 runs", a workspace cap, a GPU nobody has). */
+  queueMessage: string | null;
 }
 
 const pick = (run: Record<string, unknown>, camel: string, wire: string): unknown => run[camel] ?? run[wire] ?? null;
@@ -94,6 +98,8 @@ export const lifecycleOf = (run: Run): RunLifecycle => {
       : null,
     workersOnline: (pick(r, "workersOnline", "workers_online") as number | null) ?? null,
     autoscaling: (r.autoscaling as boolean | null | undefined) ?? null,
+    queuePosition: (pick(r, "queuePosition", "queue_position") as number | null) ?? null,
+    queueMessage: (pick(r, "queueMessage", "queue_message") as string | null) ?? null,
   };
 };
 

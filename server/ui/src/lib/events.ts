@@ -13,7 +13,7 @@ interface Base {
 }
 
 export type RunEvent =
-  | (Base & { type: "phase"; phase: RunPhase; step: number; workersOnline: number | null; autoscaling: boolean | null; gpu: { name: string; memoryGb: number } | null })
+  | (Base & { type: "phase"; phase: RunPhase; step: number; workersOnline: number | null; autoscaling: boolean | null; message: string | null; gpu: { name: string; memoryGb: number } | null })
   | (Base & { type: "metric"; step: number; metric: MetricPoint })
   | (Base & { type: "checkpoint"; step: number; checkpointId: string; evalScore: number | null; format: string | null })
   | (Base & { type: "attempt"; event: "started" | "interrupted" | "gave_up"; reason: string | null; step: number | null; resumeStep: number | null; maxAttempts: number; message: string })
@@ -54,6 +54,7 @@ export const decodeEvent = (name: string, data: string): RunEvent | null => {
         step: num(w.step),
         workersOnline: numOrNull(w.workers_online),
         autoscaling: typeof w.autoscaling === "boolean" ? w.autoscaling : null,
+        message: typeof w.message === "string" ? w.message : null,
         gpu: gpu ? { name: str(gpu.name), memoryGb: num(gpu.memory_gb) } : null,
       };
     }
@@ -204,7 +205,9 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
           seenTraining.add(String(ev.attempt));
         }
         const detail =
-          ev.phase === "starting" && ev.gpu
+          ev.message !== null && (ev.phase === "queued" || ev.phase === "waiting_for_compute")
+            ? ev.message
+            : ev.phase === "starting" && ev.gpu
             ? `${ev.gpu.name} · ${ev.gpu.memoryGb} GB`
             : ev.phase === "waiting_for_compute" && ev.autoscaling
               ? "Starting a worker (autoscaling from zero)"

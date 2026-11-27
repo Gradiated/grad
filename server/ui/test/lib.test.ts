@@ -123,13 +123,15 @@ describe("router", () => {
 
 describe("run lifecycle fields", () => {
   it("reads phase fields in either casing and defaults them to null", () => {
-    expect(lifecycleOf(run())).toEqual({ phase: null, phaseSince: null, lastInterruption: null, workersOnline: null, autoscaling: null });
-    const wire = run({ phase: "training", phase_since: "2026-11-27T12:00:00Z", workers_online: 2, autoscaling: true, last_interruption: { attempt: 1, reason: "preempted", step: 120, resume_step: 100, at: "t", message: "m" } });
+    expect(lifecycleOf(run())).toEqual({ phase: null, phaseSince: null, lastInterruption: null, workersOnline: null, autoscaling: null, queuePosition: null, queueMessage: null });
+    const wire = run({ phase: "training", phase_since: "2026-11-27T12:00:00Z", workers_online: 2, autoscaling: true, queue_position: 3, queue_message: "Queued behind 3 runs", last_interruption: { attempt: 1, reason: "preempted", step: 120, resume_step: 100, at: "t", message: "m" } });
     expect(lifecycleOf(wire)).toEqual({
       phase: "training",
       phaseSince: "2026-11-27T12:00:00Z",
       workersOnline: 2,
       autoscaling: true,
+      queuePosition: 3,
+      queueMessage: "Queued behind 3 runs",
       lastInterruption: { attempt: 1, reason: "preempted", step: 120, resumeStep: 100, at: "t", message: "m" },
     });
   });
@@ -167,7 +169,7 @@ describe("run events", () => {
   it("decodes /events shapes and builds a calm timeline", () => {
     const base = { run_id: "run_1", timestamp: "2026-11-27T12:00:00Z" };
     const wire: [string, Record<string, unknown>][] = [
-      ["phase", { ...base, seq: 1, attempt: 1, phase: "queued", step: 0, workers_online: null, autoscaling: null, gpu: null }],
+      ["phase", { ...base, seq: 1, attempt: 1, phase: "queued", step: 0, workers_online: null, autoscaling: null, queue_position: 4, message: "Queued behind 4 runs", gpu: null }],
       ["phase", { ...base, seq: 2, attempt: 1, phase: "waiting_for_compute", step: 0, workers_online: 2, autoscaling: false, gpu: null }],
       ["attempt", { ...base, seq: 3, attempt: 1, event: "started", reason: null, step: null, resume_step: null, max_attempts: 3, message: "" }],
       ["phase", { ...base, seq: 4, attempt: 1, phase: "starting", step: 0, workers_online: null, autoscaling: null, gpu: { name: "H100", memory_gb: 80 } }],
@@ -221,6 +223,7 @@ describe("run events", () => {
       "Gave up",
       "Failed",
     ]);
+    expect(state.timeline[0]?.detail).toBe("Queued behind 4 runs");
     expect(state.timeline[1]?.detail).toBe("2 workers online, all busy");
     expect(state.timeline[3]?.detail).toBe("H100 · 80 GB");
     expect(state.timeline[8]?.detail).toBe("from step 10");
