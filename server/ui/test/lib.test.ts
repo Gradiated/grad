@@ -32,6 +32,11 @@ describe("auth", () => {
     expect(takeFragmentKey(store)).toBe(false);
     history.replaceState(null, "", "/#key=");
     expect(takeFragmentKey(store)).toBe(false);
+    // A link carrying another key never replaces the signed-in one (it is still stripped).
+    history.replaceState(null, "", "/runs#key=grad_attacker_key");
+    expect(takeFragmentKey(store)).toBe(false);
+    expect(store.get()).toBe("grad_secret_abc");
+    expect(location.href).not.toContain("grad_attacker_key");
     store.clear();
     expect(store.get()).toBeUndefined();
   });

@@ -48,17 +48,23 @@ export const sessionKeyStore = (storage: Storage | undefined = safeSession()): K
   };
 };
 
-/** Reads a one-time `#key=` fragment, stores the key and removes it from the URL. */
+/**
+ * Reads a one-time `#key=` fragment, stores the key and removes it from the URL.
+ * A tab that is already signed in keeps its key: a link with someone else's
+ * `#key=` must not silently switch the user into another workspace.
+ */
 export const takeFragmentKey = (store: KeyStore, loc: Location = location, hist: History = history): boolean => {
   if (!loc.hash.startsWith("#")) return false;
   const params = new URLSearchParams(loc.hash.slice(1));
   const key = params.get("key")?.trim();
   if (!key) return false;
-  store.set(key);
+  const current = store.get();
+  const taken = current === undefined || current === key;
+  if (taken) store.set(key);
   params.delete("key");
   const rest = params.toString();
   hist.replaceState(hist.state, "", `${loc.pathname}${loc.search}${rest ? `#${rest}` : ""}`);
-  return true;
+  return taken;
 };
 
 /** Masks a key for display: `grad_abcd…wxyz`. */
