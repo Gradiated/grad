@@ -1,0 +1,42 @@
+{
+  "dataset": "support-prod",
+  "version": 1,
+  "total": 3,
+  "data": [
+    {
+      "session_id": "s1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reset my password?"
+        },
+        {
+          "role": "assistant",
+          "content": "Settings -> Security."
+        }
+      ],
+      "scores": {
+        "resolved": 1
+      },
+      "id": "rec_56f5c3cfc4e0e7d4"
+    },
+    {
+      "session_id": "s2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Where is invoice #9941?"
+        },
+        {
+          "role": "assistant",
+          "content": "Billing -> Invoices."
+        }
+      ],
+      "metadata": {
+        "model": "qwen/qwen3-8b"
+      },
+      "id": "rec_eb1842e4a9890ad7"
+    }
+  ],
+  "next_cursor": "WzJd"
+}

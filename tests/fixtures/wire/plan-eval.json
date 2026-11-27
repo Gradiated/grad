@@ -1,0 +1,17 @@
+{
+  "task_source_kind": "dataset",
+  "dataset_version": 1,
+  "estimated_tasks": 3,
+  "estimated_model_calls": 6,
+  "estimated_judge_calls": 0,
+  "estimated_cost_usd": 0,
+  "judge_models": [],
+  "local_scorers": [
+    "mentions_menu"
+  ],
+  "pass_threshold": 0.5,
+  "warnings": [
+    "samples=1 is fine for a quick check; use samples>=3 for decisions you will act on.",
+    "Code scorers (mentions_menu) run in your SDK process: the eval waits in 'awaiting_scores' until their scores are posted."
+  ]
+}

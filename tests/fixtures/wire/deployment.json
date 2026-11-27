@@ -1,0 +1,13 @@
+{
+  "id": "dep_7c1f0e2b9a4d",
+  "workspace_id": "ws_e2e",
+  "name": "support-router",
+  "model_id": "ws_e2e/support-router",
+  "active_artifact_id": "art_3b8e5d1c2a7f",
+  "previous_artifact_id": null,
+  "fallback_model": "qwen/qwen3-32b",
+  "explore_rate": 0.05,
+  "status": "active",
+  "created_at": "2026-11-27T04:40:00.000Z",
+  "updated_at": "2026-11-27T04:40:00.000Z"
+}

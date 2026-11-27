@@ -1,0 +1,239 @@
+{
+  "data": [
+    {
+      "id": "evout_f029184eec9766b6b3137a50",
+      "eval_id": "eval_a2839abdbaf9592de1f9cc28",
+      "task_id": "rec_137ae23e1730a19f",
+      "model": "qwen/qwen3-8b",
+      "sample_index": 0,
+      "input": [
+        {
+          "role": "user",
+          "content": "Reset my password?"
+        }
+      ],
+      "output": "answer: Reset my password?",
+      "expected_output": "Settings -> Security.",
+      "record": {
+        "session_id": "s1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reset my password?"
+          },
+          {
+            "role": "assistant",
+            "content": "Settings -> Security."
+          }
+        ],
+        "scores": {
+          "resolved": 1
+        },
+        "id": "rec_137ae23e1730a19f"
+      },
+      "scores": {
+        "non_empty": 1
+      },
+      "error": null,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 7
+      }
+    },
+    {
+      "id": "evout_4a0cceb8390531230578dd7f",
+      "eval_id": "eval_a2839abdbaf9592de1f9cc28",
+      "task_id": "rec_137ae23e1730a19f",
+      "model": "test/tiny-qwen3",
+      "sample_index": 0,
+      "input": [
+        {
+          "role": "user",
+          "content": "Reset my password?"
+        }
+      ],
+      "output": "answer: Reset my password?",
+      "expected_output": "Settings -> Security.",
+      "record": {
+        "session_id": "s1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reset my password?"
+          },
+          {
+            "role": "assistant",
+            "content": "Settings -> Security."
+          }
+        ],
+        "scores": {
+          "resolved": 1
+        },
+        "id": "rec_137ae23e1730a19f"
+      },
+      "scores": {
+        "non_empty": 1
+      },
+      "error": null,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 7
+      }
+    },
+    {
+      "id": "evout_f2b569ce8321f86c2a7a28a4",
+      "eval_id": "eval_a2839abdbaf9592de1f9cc28",
+      "task_id": "rec_e560cb9725dc9ebb",
+      "model": "qwen/qwen3-8b",
+      "sample_index": 0,
+      "input": [
+        {
+          "role": "user",
+          "content": "Where is invoice #9941?"
+        }
+      ],
+      "output": "answer: Where is invoice #9941?",
+      "expected_output": "Billing -> Invoices.",
+      "record": {
+        "session_id": "s2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Where is invoice #9941?"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Invoices."
+          }
+        ],
+        "metadata": {
+          "model": "qwen/qwen3-8b"
+        },
+        "id": "rec_e560cb9725dc9ebb"
+      },
+      "scores": {
+        "non_empty": 1
+      },
+      "error": null,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 8
+      }
+    },
+    {
+      "id": "evout_641e09dbe6323f15c7cbb92b",
+      "eval_id": "eval_a2839abdbaf9592de1f9cc28",
+      "task_id": "rec_e560cb9725dc9ebb",
+      "model": "test/tiny-qwen3",
+      "sample_index": 0,
+      "input": [
+        {
+          "role": "user",
+          "content": "Where is invoice #9941?"
+        }
+      ],
+      "output": "answer: Where is invoice #9941?",
+      "expected_output": "Billing -> Invoices.",
+      "record": {
+        "session_id": "s2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Where is invoice #9941?"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Invoices."
+          }
+        ],
+        "metadata": {
+          "model": "qwen/qwen3-8b"
+        },
+        "id": "rec_e560cb9725dc9ebb"
+      },
+      "scores": {
+        "non_empty": 1
+      },
+      "error": null,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 8
+      }
+    },
+    {
+      "id": "evout_48f75d7a3ff318aeb5705dd7",
+      "eval_id": "eval_a2839abdbaf9592de1f9cc28",
+      "task_id": "rec_1cd4247bd9028b70",
+      "model": "qwen/qwen3-8b",
+      "sample_index": 0,
+      "input": [
+        {
+          "role": "user",
+          "content": "Cancel my plan"
+        }
+      ],
+      "output": "answer: Cancel my plan",
+      "expected_output": "Billing -> Plan -> Cancel.",
+      "record": {
+        "session_id": "s3",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Cancel my plan"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Plan -> Cancel."
+          }
+        ],
+        "id": "rec_1cd4247bd9028b70"
+      },
+      "scores": {
+        "non_empty": 1
+      },
+      "error": null,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 6
+      }
+    },
+    {
+      "id": "evout_d644ae317a498194157afbe4",
+      "eval_id": "eval_a2839abdbaf9592de1f9cc28",
+      "task_id": "rec_1cd4247bd9028b70",
+      "model": "test/tiny-qwen3",
+      "sample_index": 0,
+      "input": [
+        {
+          "role": "user",
+          "content": "Cancel my plan"
+        }
+      ],
+      "output": "answer: Cancel my plan",
+      "expected_output": "Billing -> Plan -> Cancel.",
+      "record": {
+        "session_id": "s3",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Cancel my plan"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Plan -> Cancel."
+          }
+        ],
+        "id": "rec_1cd4247bd9028b70"
+      },
+      "scores": {
+        "non_empty": 1
+      },
+      "error": null,
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 6
+      }
+    }
+  ],
+  "next_cursor": null
+}

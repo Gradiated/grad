@@ -1,0 +1,15 @@
+{
+  "status": 501,
+  "headers": {
+    "content-type": "application/problem+json",
+    "x-request-id": "req_e27361b1-998e-4f2b-9ba3-e816308c39c4"
+  },
+  "body": {
+    "type": "https://gradiated.com/problems/deploy_unavailable",
+    "title": "Hosted serving is not available",
+    "status": 501,
+    "detail": "Hosted serving is disabled on this self-hosted server (DEPLOY_MODE=disabled). Download the artifact with `grad artifacts download <id> --output ./adapter` and serve it with vLLM or SGLang (`vllm serve <base> --enable-lora --lora-modules name=./adapter`).",
+    "code": "deploy_unavailable",
+    "request_id": "req_e27361b1-998e-4f2b-9ba3-e816308c39c4"
+  }
+}

@@ -1,0 +1,397 @@
+{
+  "description": "Error-mapping cases every SDK replays through a fake transport. `body` is JSON, `body_text` is sent verbatim. `expect.class` names the typed error (APIError = the base API error type). `retryable` is whether a GET would be retried.",
+  "cases": [
+    {
+      "name": "problem+json 404 with x-request-id header",
+      "status": 404,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_hdr_404"
+      },
+      "body": {
+        "type": "https://gradiated.com/problems/run_not_found",
+        "title": "Run not found",
+        "status": 404,
+        "detail": "run 'run_missing' was not found.",
+        "code": "run_not_found",
+        "request_id": "req_body_404"
+      },
+      "expect": {
+        "class": "NotFoundError",
+        "status": 404,
+        "code": "run_not_found",
+        "request_id": "req_hdr_404",
+        "message_contains": [
+          "run 'run_missing' was not found.",
+          "req_hdr_404"
+        ],
+        "retryable": false
+      }
+    },
+    {
+      "name": "request id from body when header missing",
+      "status": 409,
+      "headers": {
+        "content-type": "application/problem+json"
+      },
+      "body": {
+        "type": "https://gradiated.com/problems/dataset_exists",
+        "title": "Conflict",
+        "status": 409,
+        "detail": "dataset 'x' already exists.",
+        "code": "dataset_exists",
+        "request_id": "req_body_409"
+      },
+      "expect": {
+        "class": "ConflictError",
+        "status": 409,
+        "code": "dataset_exists",
+        "request_id": "req_body_409",
+        "retryable": false
+      }
+    },
+    {
+      "name": "400 malformed",
+      "status": 400,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_400"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Malformed request",
+        "status": 400,
+        "detail": "Malformed JSON in request body",
+        "code": "malformed_request",
+        "request_id": "req_400"
+      },
+      "expect": {
+        "class": "BadRequestError",
+        "status": 400,
+        "code": "malformed_request",
+        "request_id": "req_400",
+        "retryable": false
+      }
+    },
+    {
+      "name": "401 without key",
+      "status": 401,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_401"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Unauthorized",
+        "status": 401,
+        "detail": "Missing or invalid API key.",
+        "code": "unauthorized",
+        "request_id": "req_401"
+      },
+      "expect": {
+        "class": "AuthenticationError",
+        "status": 401,
+        "code": "unauthorized",
+        "request_id": "req_401",
+        "retryable": false
+      }
+    },
+    {
+      "name": "403 scope",
+      "status": 403,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_403"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Forbidden",
+        "status": 403,
+        "detail": "This key lacks the runs:write scope.",
+        "code": "insufficient_scope",
+        "request_id": "req_403"
+      },
+      "expect": {
+        "class": "PermissionDeniedError",
+        "status": 403,
+        "code": "insufficient_scope",
+        "request_id": "req_403",
+        "retryable": false
+      }
+    },
+    {
+      "name": "422 field errors parsed from detail",
+      "status": 422,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_422"
+      },
+      "body": {
+        "type": "https://gradiated.com/problems/validation_error",
+        "title": "Validation failed",
+        "status": 422,
+        "detail": "name: Invalid string: must match pattern /^[a-z0-9][a-z0-9._-]{0,63}$/; recipe.batch_size: Too small: expected number to be >=1",
+        "code": "validation_error",
+        "request_id": "req_422"
+      },
+      "expect": {
+        "class": "ValidationError",
+        "status": 422,
+        "code": "validation_error",
+        "request_id": "req_422",
+        "retryable": false,
+        "field_errors": [
+          {
+            "field": "name",
+            "message": "Invalid string: must match pattern /^[a-z0-9][a-z0-9._-]{0,63}$/"
+          },
+          {
+            "field": "recipe.batch_size",
+            "message": "Too small: expected number to be >=1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "422 with structured errors array",
+      "status": 422,
+      "headers": {
+        "content-type": "application/problem+json"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Validation failed",
+        "status": 422,
+        "detail": "2 fields invalid",
+        "code": "validation_error",
+        "request_id": "req_422b",
+        "errors": [
+          {
+            "field": "models",
+            "message": "Required"
+          },
+          {
+            "field": "rubric.0.weight",
+            "message": "Must be positive"
+          }
+        ]
+      },
+      "expect": {
+        "class": "ValidationError",
+        "status": 422,
+        "code": "validation_error",
+        "request_id": "req_422b",
+        "retryable": false,
+        "field_errors": [
+          {
+            "field": "models",
+            "message": "Required"
+          },
+          {
+            "field": "rubric.0.weight",
+            "message": "Must be positive"
+          }
+        ]
+      }
+    },
+    {
+      "name": "429 with Retry-After seconds",
+      "status": 429,
+      "headers": {
+        "content-type": "application/problem+json",
+        "retry-after": "2",
+        "x-request-id": "req_429"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Too many requests",
+        "status": 429,
+        "detail": "Slow down.",
+        "code": "rate_limited",
+        "request_id": "req_429"
+      },
+      "expect": {
+        "class": "RateLimitError",
+        "status": 429,
+        "code": "rate_limited",
+        "request_id": "req_429",
+        "retry_after_ms": 2000,
+        "retryable": true
+      }
+    },
+    {
+      "name": "500 internal",
+      "status": 500,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_500"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Internal server error",
+        "status": 500,
+        "detail": "An unexpected error occurred. Quote the request_id when reporting it.",
+        "code": "internal_error",
+        "request_id": "req_500"
+      },
+      "expect": {
+        "class": "ServerError",
+        "status": 500,
+        "code": "internal_error",
+        "request_id": "req_500",
+        "retryable": true
+      }
+    },
+    {
+      "name": "502 HTML from a proxy",
+      "status": 502,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "body_text": "<html><body><h1>502 Bad Gateway</h1></body></html>",
+      "expect": {
+        "class": "ServerError",
+        "status": 502,
+        "code": "http_502",
+        "request_id": null,
+        "message_contains": [
+          "502 Bad Gateway"
+        ],
+        "retryable": true
+      }
+    },
+    {
+      "name": "503 empty body",
+      "status": 503,
+      "headers": {},
+      "body_text": "",
+      "expect": {
+        "class": "ServerError",
+        "status": 503,
+        "code": "http_503",
+        "request_id": null,
+        "retryable": true
+      }
+    },
+    {
+      "name": "JSON array body",
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body_text": "[\"oops\"]",
+      "expect": {
+        "class": "ServerError",
+        "status": 500,
+        "code": "http_500",
+        "request_id": null,
+        "retryable": true
+      }
+    },
+    {
+      "name": "JSON null body",
+      "status": 400,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body_text": "null",
+      "expect": {
+        "class": "BadRequestError",
+        "status": 400,
+        "code": "http_400",
+        "request_id": null,
+        "retryable": false
+      }
+    },
+    {
+      "name": "status null in body uses the HTTP status",
+      "status": 404,
+      "headers": {
+        "content-type": "application/problem+json"
+      },
+      "body": {
+        "status": null,
+        "code": "thing_not_found",
+        "detail": "no thing"
+      },
+      "expect": {
+        "class": "NotFoundError",
+        "status": 404,
+        "code": "thing_not_found",
+        "request_id": null,
+        "retryable": false
+      }
+    },
+    {
+      "name": "501 deploy_unavailable",
+      "status": 501,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_501d"
+      },
+      "body": {
+        "type": "https://gradiated.com/problems/deploy_unavailable",
+        "title": "Hosted serving is not available",
+        "status": 501,
+        "detail": "Hosted serving is disabled on this self-hosted server (DEPLOY_MODE=disabled). Download the artifact and serve it with vLLM or SGLang.",
+        "code": "deploy_unavailable",
+        "request_id": "req_501d"
+      },
+      "expect": {
+        "class": "DeployUnavailableError",
+        "status": 501,
+        "code": "deploy_unavailable",
+        "request_id": "req_501d",
+        "message_contains": [
+          "vLLM or SGLang"
+        ],
+        "retryable": false
+      }
+    },
+    {
+      "name": "501 inference_unavailable",
+      "status": 501,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_501i"
+      },
+      "body": {
+        "type": "https://gradiated.com/problems/inference_unavailable",
+        "title": "Inference is not configured",
+        "status": 501,
+        "detail": "Set INFERENCE_BASE_URL and INFERENCE_API_KEY to run evals.",
+        "code": "inference_unavailable",
+        "request_id": "req_501i"
+      },
+      "expect": {
+        "class": "InferenceUnavailableError",
+        "status": 501,
+        "code": "inference_unavailable",
+        "request_id": "req_501i",
+        "retryable": false
+      }
+    },
+    {
+      "name": "410 maps to the base API error",
+      "status": 410,
+      "headers": {
+        "content-type": "application/problem+json"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Gone",
+        "status": 410,
+        "detail": "checkpoint expired",
+        "code": "checkpoint_expired",
+        "request_id": "req_410"
+      },
+      "expect": {
+        "class": "APIError",
+        "status": 410,
+        "code": "checkpoint_expired",
+        "request_id": "req_410",
+        "retryable": false
+      }
+    }
+  ]
+}

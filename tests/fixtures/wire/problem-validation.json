@@ -1,0 +1,15 @@
+{
+  "status": 422,
+  "headers": {
+    "content-type": "application/problem+json",
+    "x-request-id": "req_a750af34-1e3a-43ec-bcd5-91cb1261f931"
+  },
+  "body": {
+    "type": "https://gradiated.com/problems/validation_error",
+    "title": "Validation failed",
+    "status": 422,
+    "detail": "name: Invalid string: must match pattern /^[a-z0-9][a-z0-9._-]{0,63}$/; recipe.batch_size: Too small: expected number to be >=1",
+    "code": "validation_error",
+    "request_id": "req_a750af34-1e3a-43ec-bcd5-91cb1261f931"
+  }
+}

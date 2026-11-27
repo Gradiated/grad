@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "id": "ds_186303b1549a36f73fe45212",
+      "workspace_id": "ws_e2e",
+      "name": "support-eval",
+      "version": 1,
+      "record_count": 3,
+      "metadata": {},
+      "created_at": "2026-11-27T04:35:20.865Z",
+      "updated_at": "2026-11-27T04:35:20.876Z"
+    }
+  ],
+  "next_cursor": "WyIyMDI2LTExLTI3VDA0OjM1OjIwLjg2NVoiLCJkc18xODYzMDNiMTU0OWEzNmY3M2ZlNDUyMTIiXQ"
+}

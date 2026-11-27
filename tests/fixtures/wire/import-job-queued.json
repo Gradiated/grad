@@ -1,0 +1,23 @@
+{
+  "id": "imp_2f0c8d6a467e2c8b0070430e",
+  "workspace_id": "ws_e2e",
+  "dataset": "support-prod",
+  "status": "queued",
+  "source": {
+    "kind": "upload",
+    "upload_id": "upl_f7b036ddfa0278553e084465",
+    "format": "jsonl",
+    "size_bytes": 471,
+    "sha256": "df3959fbd43de23f411ccbdd4119425de4592e0a7c2b3aa0c532b6ef152f9883"
+  },
+  "connector": "auto",
+  "attempt": 0,
+  "imported_count": 0,
+  "dropped_count": 0,
+  "detected_scores": [],
+  "drop_reasons": [],
+  "dataset_version": null,
+  "error": null,
+  "created_at": "2026-11-27T04:35:20.902Z",
+  "updated_at": "2026-11-27T04:35:20.902Z"
+}

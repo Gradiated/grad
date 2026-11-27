@@ -1,0 +1,273 @@
+{
+  "data": [
+    {
+      "id": "qwen/qwen3-0.6b",
+      "hf_repo": "Qwen/Qwen3-0.6B",
+      "family": "llm",
+      "adapters": [
+        "lora"
+      ],
+      "default_for": [
+        "router"
+      ],
+      "price_per_million_tokens_usd": 0.15,
+      "max_context_tokens": 32768,
+      "template_revision": "qwen3@3",
+      "calibrated_lrs": {
+        "sft": 0.0008,
+        "dpo": 0.00003,
+        "router": 0.0005,
+        "decision": 0.0005,
+        "grpo": 0.00008,
+        "distill": 0.0003,
+        "reward": 0.0002
+      },
+      "recipes": [
+        "decision",
+        "distill",
+        "dpo",
+        "grpo",
+        "reward",
+        "router",
+        "sft"
+      ]
+    },
+    {
+      "id": "qwen/qwen3-1.7b",
+      "hf_repo": "Qwen/Qwen3-1.7B",
+      "family": "llm",
+      "adapters": [
+        "lora"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 0.22,
+      "max_context_tokens": 32768,
+      "template_revision": "qwen3@3",
+      "calibrated_lrs": {
+        "sft": 0.0007,
+        "dpo": 0.00003,
+        "router": 0.0005,
+        "decision": 0.0004,
+        "grpo": 0.00007,
+        "distill": 0.00025,
+        "reward": 0.00015
+      },
+      "recipes": [
+        "decision",
+        "distill",
+        "dpo",
+        "grpo",
+        "reward",
+        "router",
+        "sft"
+      ]
+    },
+    {
+      "id": "qwen/qwen3-4b",
+      "hf_repo": "Qwen/Qwen3-4B",
+      "family": "llm",
+      "adapters": [
+        "lora",
+        "prefix_kv"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 0.3,
+      "max_context_tokens": 32768,
+      "template_revision": "qwen3@3",
+      "calibrated_lrs": {
+        "sft": 0.0006,
+        "dpo": 0.000025,
+        "cartridge": 0.012,
+        "grpo": 0.00006,
+        "distill": 0.00022,
+        "reward": 0.00012
+      },
+      "recipes": [
+        "cartridge",
+        "distill",
+        "dpo",
+        "grpo",
+        "reward",
+        "sft"
+      ]
+    },
+    {
+      "id": "qwen/qwen3-8b",
+      "hf_repo": "Qwen/Qwen3-8B",
+      "family": "llm",
+      "adapters": [
+        "lora",
+        "prefix_kv"
+      ],
+      "default_for": [
+        "sft",
+        "dpo",
+        "cartridge",
+        "distill",
+        "reward",
+        "grpo"
+      ],
+      "price_per_million_tokens_usd": 0.4,
+      "max_context_tokens": 32768,
+      "template_revision": "qwen3@3",
+      "calibrated_lrs": {
+        "sft": 0.0005,
+        "dpo": 0.00002,
+        "cartridge": 0.01,
+        "grpo": 0.00005,
+        "distill": 0.0002,
+        "reward": 0.0001
+      },
+      "recipes": [
+        "cartridge",
+        "distill",
+        "dpo",
+        "grpo",
+        "reward",
+        "sft"
+      ]
+    },
+    {
+      "id": "qwen/qwen3-14b",
+      "hf_repo": "Qwen/Qwen3-14B",
+      "family": "llm",
+      "adapters": [
+        "lora",
+        "prefix_kv"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 0.7,
+      "max_context_tokens": 32768,
+      "template_revision": "qwen3@3",
+      "calibrated_lrs": {
+        "sft": 0.0004,
+        "dpo": 0.000015,
+        "cartridge": 0.01,
+        "grpo": 0.00004,
+        "distill": 0.00018,
+        "reward": 0.00008
+      },
+      "recipes": [
+        "cartridge",
+        "distill",
+        "dpo",
+        "grpo",
+        "reward",
+        "sft"
+      ]
+    },
+    {
+      "id": "qwen/qwen3-32b",
+      "hf_repo": "Qwen/Qwen3-32B",
+      "family": "llm",
+      "adapters": [
+        "lora",
+        "prefix_kv"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 1.2,
+      "max_context_tokens": 32768,
+      "template_revision": "qwen3@3",
+      "calibrated_lrs": {
+        "sft": 0.0003,
+        "dpo": 0.00001,
+        "cartridge": 0.01,
+        "grpo": 0.00003,
+        "distill": 0.00015,
+        "reward": 0.00006
+      },
+      "recipes": [
+        "cartridge",
+        "distill",
+        "dpo",
+        "grpo",
+        "reward",
+        "sft"
+      ]
+    },
+    {
+      "id": "gradiated/linden-1",
+      "hf_repo": null,
+      "family": "llm",
+      "adapters": [
+        "lora",
+        "frozen_head"
+      ],
+      "default_for": [
+        "decision"
+      ],
+      "price_per_million_tokens_usd": 0.2,
+      "max_context_tokens": 16384,
+      "template_revision": "systemone@1",
+      "calibrated_lrs": {
+        "decision": 0.0003
+      },
+      "recipes": [
+        "decision"
+      ]
+    },
+    {
+      "id": "baai/bge-small-en-v1.5",
+      "hf_repo": "BAAI/bge-small-en-v1.5",
+      "family": "encoder",
+      "adapters": [
+        "encoder_full"
+      ],
+      "default_for": [
+        "embedding"
+      ],
+      "price_per_million_tokens_usd": 0.08,
+      "max_context_tokens": 512,
+      "template_revision": "bge@1",
+      "calibrated_lrs": {
+        "embedding": 0.00002
+      },
+      "recipes": [
+        "embedding"
+      ]
+    },
+    {
+      "id": "test/tiny-qwen3",
+      "hf_repo": null,
+      "family": "llm",
+      "adapters": [
+        "lora",
+        "prefix_kv"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 1,
+      "max_context_tokens": 2048,
+      "template_revision": "qwen3@3",
+      "calibrated_lrs": {
+        "sft": 0.001,
+        "dpo": 0.0001,
+        "router": 0.001,
+        "cartridge": 0.01
+      },
+      "recipes": [
+        "cartridge",
+        "dpo",
+        "router",
+        "sft"
+      ]
+    },
+    {
+      "id": "test/tiny-bert",
+      "hf_repo": null,
+      "family": "encoder",
+      "adapters": [
+        "encoder_full"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 0.5,
+      "max_context_tokens": 512,
+      "template_revision": "bge@1",
+      "calibrated_lrs": {
+        "embedding": 0.0001
+      },
+      "recipes": [
+        "embedding"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "data": [
+    {
+      "id": "key_58522c5fb3befc9226cf7b87",
+      "workspace_id": "ws_e2e",
+      "name": "ci",
+      "prefix": "grad_2f63fa8",
+      "scopes": [
+        "runs:read"
+      ],
+      "created_at": "2026-11-27T04:35:22.167Z",
+      "revoked_at": null
+    }
+  ],
+  "next_cursor": null
+}

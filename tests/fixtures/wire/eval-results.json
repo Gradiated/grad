@@ -1,0 +1,161 @@
+{
+  "data": [
+    {
+      "task_id": "rec_137ae23e1730a19f",
+      "model": "qwen/qwen3-8b",
+      "score": 0.5,
+      "passed": true,
+      "sample_scores": [
+        0.5
+      ],
+      "judge_model": null,
+      "record": {
+        "session_id": "s1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reset my password?"
+          },
+          {
+            "role": "assistant",
+            "content": "Settings -> Security."
+          }
+        ],
+        "scores": {
+          "resolved": 1
+        },
+        "id": "rec_137ae23e1730a19f"
+      }
+    },
+    {
+      "task_id": "rec_137ae23e1730a19f",
+      "model": "test/tiny-qwen3",
+      "score": 1,
+      "passed": true,
+      "sample_scores": [
+        1
+      ],
+      "judge_model": null,
+      "record": {
+        "session_id": "s1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reset my password?"
+          },
+          {
+            "role": "assistant",
+            "content": "Settings -> Security."
+          }
+        ],
+        "scores": {
+          "resolved": 1
+        },
+        "id": "rec_137ae23e1730a19f"
+      }
+    },
+    {
+      "task_id": "rec_e560cb9725dc9ebb",
+      "model": "qwen/qwen3-8b",
+      "score": 0.5,
+      "passed": true,
+      "sample_scores": [
+        0.5
+      ],
+      "judge_model": null,
+      "record": {
+        "session_id": "s2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Where is invoice #9941?"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Invoices."
+          }
+        ],
+        "metadata": {
+          "model": "qwen/qwen3-8b"
+        },
+        "id": "rec_e560cb9725dc9ebb"
+      }
+    },
+    {
+      "task_id": "rec_e560cb9725dc9ebb",
+      "model": "test/tiny-qwen3",
+      "score": 1,
+      "passed": true,
+      "sample_scores": [
+        1
+      ],
+      "judge_model": null,
+      "record": {
+        "session_id": "s2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Where is invoice #9941?"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Invoices."
+          }
+        ],
+        "metadata": {
+          "model": "qwen/qwen3-8b"
+        },
+        "id": "rec_e560cb9725dc9ebb"
+      }
+    },
+    {
+      "task_id": "rec_1cd4247bd9028b70",
+      "model": "qwen/qwen3-8b",
+      "score": 0.5,
+      "passed": true,
+      "sample_scores": [
+        0.5
+      ],
+      "judge_model": null,
+      "record": {
+        "session_id": "s3",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Cancel my plan"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Plan -> Cancel."
+          }
+        ],
+        "id": "rec_1cd4247bd9028b70"
+      }
+    },
+    {
+      "task_id": "rec_1cd4247bd9028b70",
+      "model": "test/tiny-qwen3",
+      "score": 1,
+      "passed": true,
+      "sample_scores": [
+        1
+      ],
+      "judge_model": null,
+      "record": {
+        "session_id": "s3",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Cancel my plan"
+          },
+          {
+            "role": "assistant",
+            "content": "Billing -> Plan -> Cancel."
+          }
+        ],
+        "id": "rec_1cd4247bd9028b70"
+      }
+    }
+  ],
+  "next_cursor": null
+}

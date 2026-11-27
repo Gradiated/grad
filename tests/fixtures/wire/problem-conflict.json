@@ -1,0 +1,15 @@
+{
+  "status": 409,
+  "headers": {
+    "content-type": "application/problem+json",
+    "x-request-id": "req_bb1ffb70-be8c-4c48-a215-5bb03daf9350"
+  },
+  "body": {
+    "type": "https://gradiated.com/problems/dataset_exists",
+    "title": "Conflict",
+    "status": 409,
+    "detail": "Dataset 'support-prod' already exists.",
+    "code": "dataset_exists",
+    "request_id": "req_bb1ffb70-be8c-4c48-a215-5bb03daf9350"
+  }
+}

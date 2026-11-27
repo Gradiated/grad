@@ -1,0 +1,82 @@
+{
+  "id": "eval_a2839abdbaf9592de1f9cc28",
+  "workspace_id": "ws_e2e",
+  "name": "support-eval",
+  "status": "completed",
+  "models": [
+    "test/tiny-qwen3",
+    "qwen/qwen3-8b"
+  ],
+  "baseline": "qwen/qwen3-8b",
+  "task_source": {
+    "kind": "dataset",
+    "dataset": "support-eval",
+    "version": 1
+  },
+  "rubric": [
+    {
+      "name": "non_empty",
+      "kind": "validator",
+      "weight": 1,
+      "validator": "non_empty"
+    },
+    {
+      "name": "mentions_menu",
+      "kind": "code",
+      "weight": 1,
+      "runtime": "local"
+    }
+  ],
+  "samples": 1,
+  "temperature": 0.7,
+  "max_tokens": 1024,
+  "pass_threshold": 0.5,
+  "judge_models": [],
+  "local_scorers": [
+    "mentions_menu"
+  ],
+  "progress": {
+    "total_outputs": 6,
+    "generated": 6,
+    "pending_local_scores": 0
+  },
+  "summary": [
+    {
+      "model": "test/tiny-qwen3",
+      "overall": 1,
+      "ci_low": 1,
+      "ci_high": 1,
+      "pass_at_k": {
+        "pass@1": 1
+      },
+      "vs_baseline": {
+        "delta": 0.5,
+        "ci_low": 0.5,
+        "ci_high": 0.5
+      },
+      "tasks": 3,
+      "errors": 0,
+      "tokens_per_task": 17,
+      "cost_per_1k_tasks_usd": 0.017
+    },
+    {
+      "model": "qwen/qwen3-8b",
+      "overall": 0.5,
+      "ci_low": 0.5,
+      "ci_high": 0.5,
+      "pass_at_k": {
+        "pass@1": 1
+      },
+      "vs_baseline": null,
+      "tasks": 3,
+      "errors": 0,
+      "tokens_per_task": 17,
+      "cost_per_1k_tasks_usd": 0.0068
+    }
+  ],
+  "total_cost_usd": 0.000071,
+  "error": null,
+  "created_at": "2026-11-27T04:35:21.543Z",
+  "updated_at": "2026-11-27T04:35:21.958Z",
+  "completed_at": "2026-11-27T04:35:21.958Z"
+}

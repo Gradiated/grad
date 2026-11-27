@@ -1,0 +1,15 @@
+{
+  "status": 404,
+  "headers": {
+    "content-type": "application/problem+json",
+    "x-request-id": "req_62f7d48b-7701-454b-a7e7-1e68e189b31d"
+  },
+  "body": {
+    "type": "https://gradiated.com/problems/run_not_found",
+    "title": "Run not found",
+    "status": 404,
+    "detail": "run 'run_missing' was not found.",
+    "code": "run_not_found",
+    "request_id": "req_62f7d48b-7701-454b-a7e7-1e68e189b31d"
+  }
+}
