@@ -350,7 +350,7 @@ fn live_self_hosted_quickstart() {
     if Command::new("python3").arg("--version").output().is_ok() {
         std::fs::write(
             home.dir.join("cli_env_fixture.py"),
-            "from grad import Environment\nclass CliEnv(Environment):\n    def evaluate(self):\n        return 1.0, {'cli_bridge': 1.0}\n",
+            "from grad import Environment\nclass CliEnv(Environment):\n    def evaluate(self, handle, trajectory):\n        return {'cli_bridge': 1.0}\ndef policy(messages, **kw):\n    return 'checked the order status'\n",
         )
         .unwrap();
         let pythonpath = format!(
@@ -365,6 +365,8 @@ fn live_self_hosted_quickstart() {
                 "cli_env_fixture:CliEnv",
                 "--name",
                 "cli-bridge-env",
+                "--policy",
+                "cli_env_fixture:policy",
                 "--max-tasks",
                 "1",
                 "--wait-ms",
@@ -420,6 +422,12 @@ fn live_self_hosted_quickstart() {
             .block_on(client.env_workers().get_task(task["id"].as_str().unwrap()))
             .unwrap();
         assert_eq!(done["status"], "completed", "{}", done);
+        assert_eq!(done["result"]["scores"]["cli_bridge"], 1.0, "{}", done);
+        assert_eq!(
+            done["result"]["trajectory"]["messages"][1]["content"], "checked the order status",
+            "{}",
+            done
+        );
     }
 }
 

@@ -832,7 +832,9 @@ pub enum EnvCmd {
     #[command(after_help = "\
 Example:
   # my_env.py defines `env = AppComposeEnv(rubric=...)` (an instance, a class or a factory)
-  grad env serve my_env:env --name support-app --concurrency 32")]
+  grad env serve my_env:env --name support-app --concurrency 32 \\
+    --policy-url http://localhost:8000/v1        # your vLLM/SGLang serving the training model
+  grad env serve my_env:env --name support-app --policy my_agent:respond")]
     Serve {
         /// MODULE:ATTRIBUTE of the Environment (instance, class or factory)
         target: String,
@@ -851,6 +853,17 @@ Example:
         /// Worker id (default: hostname and pid)
         #[arg(long)]
         worker_id: Option<String>,
+        /// MODULE:ATTRIBUTE of the policy producing the model's turns:
+        /// policy(messages, *, tools, model, task) -> str | message (a class is instantiated)
+        #[arg(long, value_name = "MODULE:ATTRIBUTE", conflicts_with = "policy_url")]
+        policy: Option<String>,
+        /// OpenAI-compatible base URL (e.g. your vLLM/SGLang `.../v1`) whose
+        /// /chat/completions produces the model's turns; key from GRAD_POLICY_API_KEY
+        #[arg(long, value_name = "URL")]
+        policy_url: Option<String>,
+        /// Model to call at --policy-url (default: the model each task names)
+        #[arg(long, requires = "policy_url")]
+        policy_model: Option<String>,
         /// Python interpreter with the grad SDK installed
         #[arg(long, env = "GRAD_PYTHON", default_value = "python3")]
         python: String,

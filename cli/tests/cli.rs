@@ -1630,9 +1630,15 @@ class Grad:
     def __init__(self, base_url=None, api_key=None):
         assert base_url, "base_url"
         self.evals = _Evals()
-def serve_environment(env, *, name, base_url, api_key=None, concurrency=4, wait_ms=5000, max_tasks=None, worker_id=None):
+class ChatCompletionsPolicy:
+    def __init__(self, base_url, api_key=None, *, model=None):
+        self.base_url, self.api_key, self.model = base_url, api_key, model
+    def __call__(self, messages, **kw):
+        return "unused"
+def serve_environment(env, *, name, policy, base_url, api_key=None, concurrency=4, wait_ms=5000, max_tasks=None, worker_id=None):
     with open(os.environ["GRAD_TEST_RECORD"], "w") as f:
         json.dump({"type": type(env).__name__, "is_instance": isinstance(env, Environment), "name": name,
+                   "policy": getattr(policy, "__name__", None) or {"url": policy.base_url, "key": policy.api_key, "model": policy.model},
                    "base_url": base_url, "api_key": api_key, "concurrency": concurrency, "wait_ms": wait_ms,
                    "max_tasks": max_tasks, "worker_id": worker_id}, f)
 "#,
@@ -1640,7 +1646,7 @@ def serve_environment(env, *, name, base_url, api_key=None, concurrency=4, wait_
     .unwrap();
     std::fs::write(
         sb.path("my_env.py"),
-        "from grad import Environment\nclass MyEnv(Environment):\n    pass\nenv = MyEnv()\ndef make():\n    return MyEnv()\nnot_env = 42\n",
+        "from grad import Environment\nclass MyEnv(Environment):\n    pass\nenv = MyEnv()\ndef make():\n    return MyEnv()\nnot_env = 42\ndef respond(messages, **kw):\n    return 'ok'\n",
     )
     .unwrap();
     sb.path("pylib")
@@ -1674,10 +1680,13 @@ fn env_serve_instantiates_classes_and_passes_the_resolved_config() {
                 "32",
                 "--max-tasks",
                 "1",
+                "--policy",
+                "my_env:respond",
             ],
         );
         expect(&r, 0);
         let got: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+        assert_eq!(got["policy"], "respond", "{}", target);
         assert_eq!(got["type"], "MyEnv", "{}", target);
         assert_eq!(got["is_instance"], true);
         assert_eq!(got["name"], "support-app");
@@ -1687,18 +1696,97 @@ fn env_serve_instantiates_classes_and_passes_the_resolved_config() {
         assert_eq!(got["max_tasks"], 1);
         assert!(got["worker_id"].is_null());
     }
+    // --policy-url builds a ChatCompletionsPolicy with the key from GRAD_POLICY_API_KEY.
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", &lib)
+        .env("GRAD_TEST_RECORD", &rec)
+        .env("GRAD_POLICY_API_KEY", "vllm-key");
+    let r = run(
+        c,
+        &[
+            "env",
+            "serve",
+            "my_env:env",
+            "--name",
+            "x",
+            "--policy-url",
+            "http://127.0.0.1:8000/v1",
+            "--policy-model",
+            "support-sft",
+        ],
+    );
+    expect(&r, 0);
+    let got: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+    assert_eq!(
+        got["policy"],
+        json!({"url": "http://127.0.0.1:8000/v1", "key": "vllm-key", "model": "support-sft"})
+    );
+    // No policy: usage error naming both flags, before Python starts.
+    let r = run(
+        sb.grad(Some("http://127.0.0.1:8787")),
+        &["env", "serve", "my_env:env", "--name", "x"],
+    );
+    expect(&r, 2);
+    assert!(
+        r.stderr.contains("--policy-url") && r.stderr.contains("--policy MODULE:ATTRIBUTE"),
+        "{}",
+        r.stderr
+    );
+    // A policy that does not load or is not callable.
+    for bad in ["nope_mod:respond", "my_env:not_env"] {
+        let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+        c.env("PYTHONPATH", &lib);
+        let r = run(
+            c,
+            &["env", "serve", "my_env:env", "--name", "x", "--policy", bad],
+        );
+        expect(&r, 2);
+    }
     let mut c = sb.grad(Some("http://127.0.0.1:8787"));
     c.env("PYTHONPATH", &lib).env("GRAD_TEST_RECORD", &rec);
-    let r = run(c, &["env", "serve", "my_env:not_env", "--name", "x"]);
+    let r = run(
+        c,
+        &[
+            "env",
+            "serve",
+            "my_env:not_env",
+            "--name",
+            "x",
+            "--policy",
+            "my_env:respond",
+        ],
+    );
     expect(&r, 2);
     let mut c = sb.grad(Some("http://127.0.0.1:8787"));
     c.env("PYTHONPATH", &lib);
-    let r = run(c, &["env", "serve", "nope_mod:env", "--name", "x"]);
+    let r = run(
+        c,
+        &[
+            "env",
+            "serve",
+            "nope_mod:env",
+            "--name",
+            "x",
+            "--policy",
+            "my_env:respond",
+        ],
+    );
     expect(&r, 2);
     // No SDK installed for the interpreter.
     let mut c = sb.grad(Some("http://127.0.0.1:8787"));
     c.env("PYTHONPATH", sb.path("empty"));
-    let r = run(c, &["env", "serve", "my_env:env", "--name", "x"]);
+    let r = run(
+        c,
+        &[
+            "env",
+            "serve",
+            "my_env:env",
+            "--name",
+            "x",
+            "--policy",
+            "my_env:respond",
+        ],
+    );
     expect(&r, 2);
     assert!(r.stderr.contains("pip install grad-sdk"), "{}", r.stderr);
     let r = run(

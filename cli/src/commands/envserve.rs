@@ -38,8 +38,23 @@ elif callable(obj) and not hasattr(obj, "setup"):
 if Environment is not None and not isinstance(obj, Environment) and not hasattr(obj, "evaluate"):
     sys.stderr.write("%s:%s is not a grad.Environment (got %s)\n" % (cfg["module"], cfg["attr"], type(obj).__name__))
     sys.exit(87)
+pol = cfg["policy"]
+try:
+    if pol.get("module"):
+        policy = getattr(importlib.import_module(pol["module"]), pol["attr"])
+        if isinstance(policy, type):
+            policy = policy()
+    else:
+        policy = grad.ChatCompletionsPolicy(pol["url"], os.environ.get("GRAD_POLICY_API_KEY") or None, model=pol.get("model"))
+except (ImportError, AttributeError) as exc:
+    sys.stderr.write("cannot load policy %s: %s\n" % (pol.get("module", "") + ":" + pol.get("attr", ""), exc))
+    sys.exit(87)
+if not callable(policy):
+    sys.stderr.write("policy %s:%s is not callable (got %s)\n" % (pol["module"], pol["attr"], type(policy).__name__))
+    sys.exit(87)
 kwargs = {
     "name": cfg["name"],
+    "policy": policy,
     "base_url": os.environ["GRADIATED_BASE_URL"],
     "api_key": os.environ.get("GRADIATED_API_KEY") or None,
     "concurrency": cfg["concurrency"],
@@ -84,6 +99,43 @@ pub fn parse_target(target: &str) -> CliResult<(String, String)> {
     Ok((module.to_string(), attr.to_string()))
 }
 
+/// Which policy produces the model's turns. There is no default: the worker
+/// never invents model output, so one of --policy / --policy-url is required.
+pub fn policy_config(
+    policy: Option<&str>,
+    policy_url: Option<&str>,
+    model: Option<String>,
+) -> CliResult<serde_json::Value> {
+    match (policy, policy_url) {
+        (Some(target), None) => {
+            let (module, attr) = parse_target(target)?;
+            Ok(json!({ "module": module, "attr": attr }))
+        }
+        (None, Some(url)) => {
+            let rest = url
+                .strip_prefix("http://")
+                .or_else(|| url.strip_prefix("https://"));
+            if !rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/') && !r.contains(' ')) {
+                return Err(CliError::usage(format!(
+                    "--policy-url must be an http(s) URL with a host (e.g. http://127.0.0.1:8000/v1), got '{}'",
+                    url
+                )));
+            }
+            Ok(json!({ "url": url, "model": model }))
+        }
+        (Some(_), Some(_)) => Err(CliError::usage(
+            "pass either --policy or --policy-url, not both",
+        )),
+        (None, None) => Err(CliError::usage(
+            "grad env serve needs a policy that produces the model's turns",
+        )
+        .hint(
+            "Pass --policy-url http://HOST:PORT/v1 (an OpenAI-compatible server such as vLLM or SGLang \
+             serving the model; key from GRAD_POLICY_API_KEY) or --policy MODULE:ATTRIBUTE (your function)",
+        )),
+    }
+}
+
 pub async fn env(ctx: &Ctx, action: EnvCmd) -> CliResult {
     match action {
         EnvCmd::Check { .. } => Err(CliError::new(
@@ -98,9 +150,13 @@ pub async fn env(ctx: &Ctx, action: EnvCmd) -> CliResult {
             max_tasks,
             wait_ms,
             worker_id,
+            policy,
+            policy_url,
+            policy_model,
             python,
         } => {
             let (module, attr) = parse_target(&target)?;
+            let policy_cfg = policy_config(policy.as_deref(), policy_url.as_deref(), policy_model)?;
             if name.trim().is_empty() {
                 return Err(CliError::usage("--name must not be empty"));
             }
@@ -115,6 +171,7 @@ pub async fn env(ctx: &Ctx, action: EnvCmd) -> CliResult {
             let cfg = json!({
                 "module": module, "attr": attr, "name": name, "concurrency": concurrency,
                 "max_tasks": max_tasks, "wait_ms": wait_ms, "worker_id": worker_id,
+                "policy": policy_cfg,
             });
             ctx.out.note(format!(
                 "Serving {} as environment '{}' to {} (concurrency {}); Ctrl-C to stop",
@@ -189,5 +246,23 @@ mod tests {
         ] {
             assert!(parse_target(bad).is_err(), "{}", bad);
         }
+    }
+
+    #[test]
+    fn a_policy_is_required_and_validated() {
+        let e = policy_config(None, None, None).unwrap_err();
+        assert!(format!("{:?}", e).contains("--policy-url"), "{:?}", e);
+        assert!(policy_config(Some("a:b"), Some("http://x/v1"), None).is_err());
+        assert!(policy_config(Some("bad target"), None, None).is_err());
+        assert!(policy_config(None, Some("ftp://x"), None).is_err());
+        assert!(policy_config(None, Some("not a url"), None).is_err());
+        assert_eq!(
+            policy_config(Some("my_agent:respond"), None, None).unwrap(),
+            json!({"module": "my_agent", "attr": "respond"})
+        );
+        assert_eq!(
+            policy_config(None, Some("http://127.0.0.1:8000/v1"), Some("m".into())).unwrap(),
+            json!({"url": "http://127.0.0.1:8000/v1", "model": "m"})
+        );
     }
 }
