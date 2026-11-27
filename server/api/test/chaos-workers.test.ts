@@ -165,3 +165,43 @@ describe("queue under load (store)", () => {
     }
   });
 });
+
+describe("preemption storms", () => {
+  let t: TestApp;
+
+  afterEach(async () => {
+    await t.close();
+  });
+
+  it("an attempt that saved a checkpoint before its GPU was reclaimed does not count toward MAX_PREEMPTIONS", async () => {
+    t = await makeTestApp({ settings: { maxAttempts: 3, maxPreemptions: 3 } });
+    const worker = new FakeWorker(t);
+    const run = await createSftRun(t, { records: 40 });
+    for (let i = 1; i <= 8; i += 1) {
+      const job = (await worker.claim())!;
+      expect(job.resume?.step ?? 0).toBe(i - 1);
+      await worker.progress(job, i, 10);
+      await worker.checkpoint(job, i, `emergency-${i}`);
+      const done = await worker.complete(job, {
+        status: "abandoned",
+        reason: "compute_reclaimed",
+        tokens_processed: 10,
+      });
+      expect(done.body.run).toMatchObject({ status: "queued" });
+    }
+
+    // Reclaims that save nothing are a loop: they still hit the cap.
+    for (let i = 0; i < 3; i += 1) {
+      const job = (await worker.claim())!;
+      await worker.complete(job, {
+        status: "abandoned",
+        reason: "compute_reclaimed",
+      });
+    }
+    const failed = await t.json<{ status: string; error: string }>(
+      `/v1/runs/${run.id}`,
+    );
+    expect(failed.body.status).toBe("failed");
+    expect(failed.body.error).toContain("reclaimed 3 time(s) (limit 3)");
+  });
+});

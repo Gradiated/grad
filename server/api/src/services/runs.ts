@@ -774,6 +774,10 @@ export const createRunLifecycle = (
       input.reason === "compute_reclaimed"
         ? {
             maxPreemptions: settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
+            // A reclaim after a checkpoint lost little and moved the run on.
+            progressed: (
+              await tx.artifacts.allCheckpoints(run.id, clock.now())
+            ).some((c) => c.attempt === run.attempt),
           }
         : undefined,
     );

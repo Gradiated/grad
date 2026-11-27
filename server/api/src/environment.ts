@@ -149,7 +149,7 @@ const EnvironmentSchema = z.object({
   GRAD_EXTRA_MODELS_JSON: optionalString,
   GRAD_JUDGE_MODELS_JSON: optionalString,
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
-  /** Preempted attempts (SIGTERM, a cloud termination notice) a job survives; separate from MAX_ATTEMPTS. */
+  /** Preempted attempts in a row (SIGTERM, a cloud termination notice) a job survives; separate from MAX_ATTEMPTS. A run's preemption after a checkpoint starts the count again. */
   MAX_PREEMPTIONS: z.coerce.number().int().min(1).max(1000).default(20),
   /** Seconds a queued run waits for a claim before it is waiting_for_compute. */
   WAITING_FOR_COMPUTE_SECONDS: z.coerce.number().int().min(1).default(30),

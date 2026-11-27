@@ -228,7 +228,8 @@ export const DEFAULT_MAX_PREEMPTIONS = 20;
  * them happened since creation or the last resume. Preemptions (a worker
  * told to stop by its platform: SIGTERM, a cloud termination notice) are not the job's
  * fault and lose at most the grace period's work, so they have their own,
- * generous cap instead.
+ * generous cap instead: on preemptions in a row that saved nothing
+ * (`progressed`, a checkpoint this attempt, starts the count again).
  */
 export const requeuePatch = (
   job: Pick<
@@ -237,10 +238,10 @@ export const requeuePatch = (
   >,
   what: string,
   now: string,
-  preemption?: { maxPreemptions: number },
+  preemption?: { maxPreemptions: number; progressed?: boolean },
 ): JobPatch => {
   if (preemption) {
-    const preemptions = job.preemptions + 1;
+    const preemptions = preemption.progressed ? 0 : job.preemptions + 1;
 
     return preemptions >= preemption.maxPreemptions
       ? {
