@@ -1,9 +1,12 @@
 //! HTTP transport: auth, retries with backoff, redirect policy, timeouts and
 //! problem+json error mapping.
 //!
-//! - Idempotent requests (GET/HEAD/PUT/DELETE) are retried on 408, 429, 500,
-//!   502, 503, 504, timeouts and connection errors; POST only on 429 and on
-//!   connection failures where the request never left the client.
+//! - Idempotent requests (GET/HEAD/PUT/DELETE, and every POST, which carries one
+//!   `Idempotency-Key` across its retries so the server replays the first
+//!   response) are retried on 408, 429, 500, 502, 503, 504, timeouts and
+//!   connection errors; a keyed POST also on 409 with `Retry-After` (the first
+//!   attempt still running). Unkeyed POSTs (internal worker endpoints) only on
+//!   429 and on connection failures where the request never left the client.
 //! - `Retry-After` (seconds) is honoured, capped at 60 s.
 //! - Redirects are followed by hand: only same-origin GET/HEAD redirects are
 //!   followed, so a bearer token never reaches another origin and a POST is
@@ -57,6 +60,8 @@ pub(crate) struct Req {
     pub deadline: Deadline,
     /// Send the bearer token (never for presigned upload URLs).
     pub auth: bool,
+    /// `Idempotency-Key` sent with every attempt of this request.
+    pub idempotency_key: Option<String>,
 }
 
 impl Req {
@@ -71,6 +76,7 @@ impl Req {
             headers: Vec::new(),
             deadline: Deadline::Default,
             auth: true,
+            idempotency_key: None,
         }
     }
 
@@ -78,8 +84,23 @@ impl Req {
         Self::new(Method::GET, path)
     }
 
+    /// A POST with a fresh UUIDv4 `Idempotency-Key`, so it retries like a GET.
     pub fn post(path: impl Into<String>) -> Self {
-        Self::new(Method::POST, path)
+        Req {
+            idempotency_key: Some(crate::generated::new_idempotency_key()),
+            ..Self::new(Method::POST, path)
+        }
+    }
+
+    /// Drops the `Idempotency-Key` (internal worker endpoints ignore it): the
+    /// POST is then retried only when it never left the client.
+    pub fn unkeyed(mut self) -> Self {
+        self.idempotency_key = None;
+        self
+    }
+
+    fn retry_safe(&self) -> bool {
+        self.idempotency_key.is_some() || idempotent(&self.method)
     }
 
     pub fn json(mut self, body: Value) -> Self {
@@ -138,10 +159,12 @@ fn idempotent(m: &Method) -> bool {
     )
 }
 
-fn retryable_status(m: &Method, s: StatusCode) -> bool {
+fn retryable_status(req: &Req, s: StatusCode, retry_after: Option<Duration>) -> bool {
     match s.as_u16() {
         429 => true,
-        408 | 500 | 502 | 503 | 504 => idempotent(m),
+        408 | 500 | 502 | 503 | 504 => req.retry_safe(),
+        // The first attempt with this key is still running server-side.
+        409 => req.idempotency_key.is_some() && retry_after.is_some(),
         _ => false,
     }
 }
@@ -247,6 +270,9 @@ impl Transport {
         }
         for (k, v) in &req.headers {
             rb = rb.header(k.as_str(), v.as_str());
+        }
+        if let Some(key) = &req.idempotency_key {
+            rb = rb.header("Idempotency-Key", key.as_str());
         }
         if let Deadline::Default = req.deadline {
             rb = rb.timeout(self.timeout);
@@ -404,8 +430,8 @@ impl Transport {
                         continue;
                     }
                     let err = self.problem(resp, &method, &url).await;
-                    if attempt < self.max_retries && retryable_status(&method, status) {
-                        let ra = err.api().and_then(|b| b.retry_after);
+                    let ra = err.api().and_then(|b| b.retry_after);
+                    if attempt < self.max_retries && retryable_status(req, status, ra) {
                         Some(ra.map(|d| d.min(MAX_RETRY_AFTER)))
                     } else {
                         return Err(err);
@@ -414,8 +440,7 @@ impl Transport {
                 Err(e) => {
                     let never_sent = e.is_connect();
                     let retry = attempt < self.max_retries
-                        && (never_sent
-                            || (idempotent(&method) && (e.is_timeout() || e.is_request())));
+                        && (never_sent || (req.retry_safe() && (e.is_timeout() || e.is_request())));
                     if retry {
                         Some(None)
                     } else {
@@ -456,7 +481,7 @@ impl Transport {
                             cause: format!("the response body was cut off: {}", cause_of(&e)),
                         }
                     };
-                    if idempotent(&method) && attempt < self.max_retries {
+                    if req.retry_safe() && attempt < self.max_retries {
                         tokio::time::sleep(util::backoff(
                             attempt,
                             self.retry_base,
@@ -502,20 +527,50 @@ mod tests {
 
     #[test]
     fn retry_rules_follow_the_contract() {
+        let get = Req::get("/v1/runs");
+        let keyed = Req::post("/v1/runs");
+        let unkeyed = Req::post("/v1/env-workers/tasks").unkeyed();
+        let hint = Some(Duration::from_secs(1));
         assert!(retryable_status(
-            &Method::GET,
-            StatusCode::SERVICE_UNAVAILABLE
+            &get,
+            StatusCode::SERVICE_UNAVAILABLE,
+            None
         ));
-        assert!(retryable_status(&Method::DELETE, StatusCode::BAD_GATEWAY));
+        assert!(retryable_status(
+            &Req::new(Method::DELETE, "/x"),
+            StatusCode::BAD_GATEWAY,
+            None
+        ));
+        assert!(retryable_status(
+            &keyed,
+            StatusCode::SERVICE_UNAVAILABLE,
+            None
+        ));
         assert!(!retryable_status(
-            &Method::POST,
-            StatusCode::SERVICE_UNAVAILABLE
+            &unkeyed,
+            StatusCode::SERVICE_UNAVAILABLE,
+            None
         ));
         assert!(retryable_status(
-            &Method::POST,
-            StatusCode::TOO_MANY_REQUESTS
+            &unkeyed,
+            StatusCode::TOO_MANY_REQUESTS,
+            None
         ));
-        assert!(!retryable_status(&Method::GET, StatusCode::NOT_FOUND));
+        assert!(retryable_status(&keyed, StatusCode::CONFLICT, hint));
+        assert!(!retryable_status(&keyed, StatusCode::CONFLICT, None));
+        assert!(!retryable_status(&get, StatusCode::CONFLICT, hint));
+        assert!(!retryable_status(&get, StatusCode::NOT_FOUND, None));
+    }
+
+    #[test]
+    fn posts_carry_one_uuid_v4_key() {
+        let a = Req::post("/v1/runs").idempotency_key.unwrap();
+        let b = Req::post("/v1/runs").idempotency_key.unwrap();
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 36);
+        assert_eq!(&a[14..15], "4");
+        assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"));
+        assert!(Req::get("/v1/runs").idempotency_key.is_none());
     }
 
     #[test]

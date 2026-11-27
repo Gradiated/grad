@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::download::{self, DownloadOptions, DownloadedArtifact, TempDir, TempFile};
 use crate::error::{Error, Result};
+use crate::generated;
 use crate::models::*;
 use crate::sse::{MetricEvent, MetricStream};
 use crate::transport::{Body, Deadline, Req};
@@ -193,7 +194,7 @@ impl CursorTrail {
     }
 }
 
-/// Page budget for collect-all helpers (200 rows per page).
+/// Page budget for collect-all helpers (at most 200 rows per page).
 const MAX_COLLECT_PAGES: usize = 500;
 
 /// Follow `next_cursor` until exhausted. Stops on an empty page, fails with
@@ -202,6 +203,7 @@ const MAX_COLLECT_PAGES: usize = 500;
 async fn collect_all<T: DeserializeOwned>(
     c: &Client,
     path: &str,
+    page_size: u32,
     extra: Vec<(String, String)>,
 ) -> Result<Vec<T>> {
     let mut out = Vec::new();
@@ -213,7 +215,7 @@ async fn collect_all<T: DeserializeOwned>(
         }
         let req = Req::get(path)
             .query(extra.clone())
-            .param("limit", 200)
+            .param("limit", page_size)
             .opt_param("cursor", cursor.clone());
         let page: Page<T> = c.t().json(req).await?;
         let n = page.data.len();
@@ -248,7 +250,13 @@ impl Keys<'_> {
     }
 
     pub async fn list_all(&self) -> Result<Vec<ApiKey>> {
-        collect_all(self.c, "/v1/keys", vec![]).await
+        collect_all(
+            self.c,
+            "/v1/keys",
+            generated::LIST_API_KEYS_LIMIT_MAX,
+            vec![],
+        )
+        .await
     }
 
     pub async fn revoke(&self, id: &str) -> Result<ApiKey> {
@@ -301,7 +309,13 @@ impl Datasets<'_> {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Dataset>> {
-        collect_all(self.c, "/v1/datasets", vec![]).await
+        collect_all(
+            self.c,
+            "/v1/datasets",
+            generated::LIST_DATASETS_LIMIT_MAX,
+            vec![],
+        )
+        .await
     }
 
     pub async fn get(&self, name: &str) -> Result<Dataset> {
@@ -635,7 +649,7 @@ impl Runs<'_> {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Run>> {
-        collect_all(self.c, "/v1/runs", vec![]).await
+        collect_all(self.c, "/v1/runs", generated::LIST_RUNS_LIMIT_MAX, vec![]).await
     }
 
     /// Find the newest run with this `name` (runs are addressed by id on the wire).
@@ -648,7 +662,7 @@ impl Runs<'_> {
             }
             let page = self
                 .list(&ListParams {
-                    limit: Some(200),
+                    limit: Some(generated::LIST_RUNS_LIMIT_MAX),
                     cursor: cursor.clone(),
                 })
                 .await?;
@@ -786,7 +800,7 @@ impl Runs<'_> {
                     &MetricsQuery {
                         cursor: cursor.clone(),
                         after_step: None,
-                        limit: Some(1000),
+                        limit: Some(generated::LIST_RUN_METRICS_LIMIT_MAX),
                     },
                 )
                 .await
@@ -798,16 +812,17 @@ impl Runs<'_> {
                             on_metric(p);
                         }
                     }
-                    // Tail semantics: an empty page echoes the cursor back (no
-                    // new points yet), but a non-empty page must advance it.
-                    if let Some(next) = page.next_cursor.as_deref().filter(|n| !n.is_empty()) {
-                        if !page.data.is_empty() && cursor.as_deref() == Some(next) {
+                    // tail_cursor stays put while no new points arrive, but a
+                    // non-empty page must advance it.
+                    let tail = page.tail_cursor.as_str();
+                    if !tail.is_empty() {
+                        if !page.data.is_empty() && cursor.as_deref() == Some(tail) {
                             return Err(Error::PaginationLoop {
                                 path: format!("/v1/runs/{}/metrics", id),
-                                cursor: next.to_string(),
+                                cursor: tail.to_string(),
                             });
                         }
-                        cursor = Some(next.to_string());
+                        cursor = Some(tail.to_string());
                     }
                     if page.status.is_terminal() {
                         let run = self.get(id).await?;
@@ -1192,7 +1207,13 @@ impl Feedback<'_> {
 impl EnvWorkers<'_> {
     /// Dispatch a task to a connected `grad env serve` worker.
     pub async fn dispatch(&self, task: &EnvTaskDispatch) -> Result<Value> {
-        get(self.c, Req::post("/v1/env-workers/tasks").json(body(task)?)).await
+        get(
+            self.c,
+            Req::post("/v1/env-workers/tasks")
+                .unkeyed()
+                .json(body(task)?),
+        )
+        .await
     }
 
     /// Inspect an environment task and its result.

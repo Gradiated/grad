@@ -157,6 +157,63 @@ fn write_sft(path: &Path, n: usize) {
     std::fs::write(path, s).unwrap();
 }
 
+/// `GET /__fault/stats` from the harness fault proxy (plain HTTP/1.0).
+fn fault_stats(fault_url: &str) -> Value {
+    use std::io::{Read, Write};
+    let addr = fault_url.trim_start_matches("http://");
+    let mut conn = std::net::TcpStream::connect(addr).unwrap();
+    write!(
+        conn,
+        "GET /__fault/stats HTTP/1.0\r\nHost: {}\r\n\r\n",
+        addr
+    )
+    .unwrap();
+    let mut text = String::new();
+    conn.read_to_string(&mut text).unwrap();
+    serde_json::from_str(text.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap()
+}
+
+#[test]
+fn live_post_whose_response_was_lost_is_replayed() {
+    let Some(stack) = start(&["--auth", "api_key", "--worker", "none"]) else {
+        return;
+    };
+    let home = Home::new("idempotent");
+    let key = stack.key();
+    let fault_url = stack.info["fault_url"].as_str().unwrap().to_string();
+    // The fault proxy lets the server commit the first attempt, then answers 503; the
+    // retry carries the same Idempotency-Key, so the server replays 201 instead of 409.
+    let flaky = [
+        ("GRADIATED_BASE_URL", fault_url.as_str()),
+        ("GRADIATED_API_KEY", key.as_str()),
+    ];
+    let o = grad(
+        &home,
+        &["--json", "datasets", "create", "rs-idempotent"],
+        &flaky,
+    );
+    ok(&o);
+    assert!(
+        o.json().to_string().contains("rs-idempotent"),
+        "{}",
+        o.stdout
+    );
+    let stats = fault_stats(&fault_url);
+    assert!(stats["dropped"].as_u64() >= Some(1), "{}", stats);
+    assert!(stats["replayed"].as_u64() >= Some(1), "{}", stats);
+    let url = stack.url();
+    let direct = [
+        ("GRADIATED_BASE_URL", url.as_str()),
+        ("GRADIATED_API_KEY", key.as_str()),
+    ];
+    let again = grad(&home, &["datasets", "create", "rs-idempotent"], &direct);
+    assert_eq!(
+        again.code, 5,
+        "a new logical create is not replayed: {}",
+        again.stderr
+    );
+}
+
 #[test]
 fn live_self_hosted_quickstart() {
     let Some(stack) = start(&["--auth", "api_key", "--worker", "reference"]) else {

@@ -179,7 +179,7 @@ async fn invalid_base_url_is_a_config_error() {
 }
 
 #[tokio::test]
-async fn idempotent_requests_retry_with_backoff_posts_do_not() {
+async fn idempotent_and_keyed_requests_retry_with_backoff() {
     let hits = Arc::new(AtomicUsize::new(0));
     let h = hits.clone();
     let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
@@ -194,6 +194,7 @@ async fn idempotent_requests_retry_with_backoff_posts_do_not() {
             }
         }
         ("POST", "/v1/runs") => Reply::problem(503, "store_unavailable", "busy"),
+        ("POST", "/v1/env-workers/tasks") => Reply::problem(503, "store_unavailable", "busy"),
         ("POST", "/v1/runs/plan") => Reply::problem(502, "bad_gateway", "nope"),
         ("GET", "/v1/datasets") => Reply::Drop,
         _ => Reply::problem(404, "nf", "nf"),
@@ -211,8 +212,25 @@ async fn idempotent_requests_retry_with_backoff_posts_do_not() {
     assert!(matches!(e, Error::Server(_)));
     assert_eq!(
         srv.count("POST", "/v1/runs"),
+        3,
+        "a keyed POST is retried on 503"
+    );
+    let keys: std::collections::HashSet<_> = srv
+        .requests()
+        .iter()
+        .filter(|r| r.method == "POST" && r.path() == "/v1/runs")
+        .map(|r| r.header("idempotency-key").unwrap_or("").to_string())
+        .collect();
+    assert_eq!(keys.len(), 1, "every retry reuses one Idempotency-Key");
+    assert_eq!(keys.iter().next().unwrap().len(), 36);
+
+    let task: EnvTaskDispatch =
+        serde_json::from_value(json!({"env_name": "e", "task": {}, "model_id": "m"})).unwrap();
+    assert!(c.env_workers().dispatch(&task).await.is_err());
+    assert_eq!(
+        srv.count("POST", "/v1/env-workers/tasks"),
         1,
-        "POST must not be retried on 503"
+        "an unkeyed POST is not retried on 503"
     );
 
     let e = c.datasets().list(&ListParams::default()).await.unwrap_err();
@@ -478,13 +496,13 @@ async fn wait_with_metrics_falls_back_to_polling() {
             "/v1/runs/r1/metrics" if sse_req => Reply::json(200, json!({"data": []})),
             "/v1/runs/r1/metrics" => {
                 let i = p2.fetch_add(1, Ordering::SeqCst);
-                let (data, status, next) = match i {
+                let (data, status, tail) = match i {
                     0 => (vec![metric(1, 1), metric(2, 2)], "running", "c2"),
                     _ => (vec![metric(2, 2), metric(3, 3)], "completed", "c3"),
                 };
                 Reply::json(
                     200,
-                    json!({"run_id": "r1", "status": status, "data": data, "next_cursor": next}),
+                    json!({"run_id": "r1", "status": status, "data": data, "next_cursor": null, "tail_cursor": tail}),
                 )
             }
             "/v1/runs/r1" => Reply::json(200, run_json("r1", "completed")),
@@ -1241,7 +1259,7 @@ async fn pagers_stop_on_a_repeated_cursor() {
     let srv = MockServer::start(|r| match r.path() {
         "/v1/runs/r1/metrics" => Reply::json(
             200,
-            json!({"run_id": "r1", "status": "running", "data": [metric(1, 1)], "next_cursor": "same"}),
+            json!({"run_id": "r1", "status": "running", "data": [metric(1, 1)], "next_cursor": null, "tail_cursor": "same"}),
         ),
         "/v1/runs/r1" => Reply::json(200, run_json("r1", "running")),
         "/v1/runs" | "/v1/datasets" | "/v1/keys" => Reply::json(
@@ -1301,12 +1319,12 @@ async fn pagers_stop_on_an_empty_page_and_tail_tolerates_an_echoed_cursor() {
             if i < 4 {
                 Reply::json(
                     200,
-                    json!({"run_id": "r1", "status": "running", "data": [], "next_cursor": "t1"}),
+                    json!({"run_id": "r1", "status": "running", "data": [], "next_cursor": null, "tail_cursor": "t1"}),
                 )
             } else {
                 Reply::json(
                     200,
-                    json!({"run_id": "r1", "status": "completed", "data": [metric(1, 1)], "next_cursor": "t2"}),
+                    json!({"run_id": "r1", "status": "completed", "data": [metric(1, 1)], "next_cursor": null, "tail_cursor": "t2"}),
                 )
             }
         }
@@ -1367,4 +1385,51 @@ fn cursor_trail_rules() {
     assert_eq!(t.advance(None, 5, Some("")).unwrap(), None);
     assert_eq!(t.advance(None, 5, None).unwrap(), None);
     assert_eq!(t.pages(), 4);
+}
+
+#[test]
+fn eval_reports_and_metric_points_are_typed() {
+    let mut run = run_json("r1", "completed");
+    run["eval_report"] = json!({
+        "metric_name": "eval_loss", "selected_step": 3, "best_step": null, "final_step": 4,
+        "train_records": 90, "eval_records": 10, "warnings": ["w"], "eval_loss": 0.4,
+        "fallback_model": "b",
+        "pareto_summary": {"target_max_drop": 0.02, "quality_drop": 0.008, "quality_drop_ci95": [-0.004, 0.019], "temperature": 1.3},
+        "future": 1
+    });
+    run["latest_metric"] = json!({"seq": 1, "attempt": 1, "step": 4, "loss": 0.5, "tokens": 1,
+        "cost_usd": 0.0, "timestamp": "t", "eval_metrics": {"eval_loss": 0.4, "eval_token_accuracy": null}});
+    let run: Run = serde_json::from_value(run).unwrap();
+    let report = run.eval_report.unwrap();
+    assert_eq!(
+        (report.selected_step, report.best_step, report.metric()),
+        (3, None, Some(0.4))
+    );
+    let pareto = report.pareto_summary.unwrap();
+    assert_eq!(pareto.quality_drop_ci95, Some(vec![-0.004, 0.019]));
+    assert_eq!(pareto.offload_rate, None);
+    assert_eq!(report.extra["future"], 1);
+    let other = EvalReport {
+        metric_name: "custom".into(),
+        extra: serde_json::from_value(json!({"custom": 2.5})).unwrap(),
+        ..Default::default()
+    };
+    assert_eq!(other.metric(), Some(2.5));
+    for (name, field) in [
+        ("preference_accuracy", 1),
+        ("eval_kl", 2),
+        ("recall_at_10", 3),
+    ] {
+        let r = EvalReport {
+            metric_name: name.into(),
+            preference_accuracy: Some(1.0),
+            eval_kl: Some(2.0),
+            recall_at_10: Some(3.0),
+            ..Default::default()
+        };
+        assert_eq!(r.metric(), Some(field as f64));
+    }
+    let metrics = run.latest_metric.unwrap().eval_metrics.unwrap();
+    assert_eq!(metrics["eval_loss"], Some(0.4));
+    assert_eq!(metrics["eval_token_accuracy"], None);
 }

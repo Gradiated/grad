@@ -1,8 +1,8 @@
 //! `grad train` and `grad runs`.
 
 use grad_sdk::{
-    Artifact, Client, Error as SdkError, MetricEvent, MetricPoint, MetricsQuery, Run, RunPlan,
-    RunRequest, RunStatus, WaitOptions,
+    Artifact, Client, Error as SdkError, EvalReport, MetricEvent, MetricPoint, MetricsQuery, Run,
+    RunPlan, RunRequest, RunStatus, WaitOptions,
 };
 use serde_json::{json, Value};
 use std::io::Write;
@@ -386,11 +386,13 @@ async fn report_finished(ctx: &Ctx, c: &Client, run: &Run) -> Option<Artifact> {
     artifact
 }
 
-fn print_report(out: &Out, report: &Value) {
-    let Value::Object(m) = report else { return };
+fn print_report(out: &Out, report: &EvalReport) {
+    let Ok(Value::Object(m)) = serde_json::to_value(report) else {
+        return;
+    };
     let mut scalars: Vec<(String, String)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-    for (k, v) in m {
+    for (k, v) in &m {
         match v {
             Value::Number(n) => {
                 let f = n.as_f64().unwrap_or(0.0);
@@ -550,7 +552,7 @@ fn metric_rows(points: &[MetricPoint]) -> Vec<Vec<String>> {
                 m.step.to_string(),
                 num(m.loss),
                 m.eval_loss.map(num).unwrap_or_else(|| "-".into()),
-                m.eval_metric.map(num).unwrap_or_else(|| "-".into()),
+                eval_metrics_cell(m),
                 m.lr.map(num).unwrap_or_else(|| "-".into()),
                 compact(m.tokens),
                 usd(m.cost_usd),
@@ -559,11 +561,27 @@ fn metric_rows(points: &[MetricPoint]) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// `name=value` pairs of an eval step's metrics, or `-` between evals.
+fn eval_metrics_cell(m: &MetricPoint) -> String {
+    let cell = m
+        .eval_metrics
+        .iter()
+        .flatten()
+        .filter_map(|(k, v)| v.map(|v| format!("{}={}", k, num(v))))
+        .collect::<Vec<_>>()
+        .join(",");
+    if cell.is_empty() {
+        "-".into()
+    } else {
+        cell
+    }
+}
+
 const METRIC_HEADERS: [&str; 7] = [
     "step",
     "loss",
     "eval_loss",
-    "eval_metric",
+    "eval_metrics",
     "lr",
     "tokens",
     "cost",
@@ -746,6 +764,21 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eval_metrics_cell_lists_set_metrics() {
+        let mut m = MetricPoint::default();
+        assert_eq!(eval_metrics_cell(&m), "-");
+        m.eval_metrics = Some(
+            [
+                ("eval_loss".to_string(), Some(0.5)),
+                ("x".to_string(), None),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(eval_metrics_cell(&m), format!("eval_loss={}", num(0.5)));
+    }
 
     #[test]
     fn timestamps_and_durations() {

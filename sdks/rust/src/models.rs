@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 macro_rules! string_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
@@ -627,7 +628,8 @@ pub struct MetricPoint {
     pub step: u64,
     pub loss: f64,
     pub eval_loss: Option<f64>,
-    pub eval_metric: Option<f64>,
+    /// Held-out metrics of an eval step by name (including the selection metric); `None` between evals.
+    pub eval_metrics: Option<BTreeMap<String, Option<f64>>>,
     pub grad_norm: Option<f64>,
     pub lr: Option<f64>,
     pub tokens_per_sec: Option<f64>,
@@ -645,7 +647,74 @@ pub struct MetricsPage {
     pub run_id: String,
     pub status: RunStatus,
     pub data: Vec<MetricPoint>,
+    /// Next page of the points written so far; `None` on the last page.
     pub next_cursor: Option<String>,
+    /// Pass back as `cursor` to poll for points written later (tailing a running run).
+    pub tail_cursor: String,
+}
+
+/// Router quality vs. cost on the held-out report fold, against the fallback model.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RouterParetoSummary {
+    pub target_max_drop: f64,
+    pub routed_quality: Option<f64>,
+    pub quality_drop: Option<f64>,
+    /// 95% bootstrap interval `[low, high]`.
+    pub quality_drop_ci95: Option<Vec<f64>>,
+    pub offload_rate: Option<f64>,
+    pub cost_savings_pct: Option<f64>,
+    pub ece: Option<f64>,
+    pub threshold: Option<f64>,
+    pub temperature: f64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// A run's held-out `eval_report`: the shared core plus the fields its recipe
+/// writes (`None` when the recipe does not write one; other keys in `extra`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct EvalReport {
+    /// Selection metric (`eval_loss`, `preference_accuracy`, `eval_kl`, `recall_at_10`).
+    pub metric_name: String,
+    pub selected_step: u64,
+    pub best_step: Option<u64>,
+    pub final_step: u64,
+    pub train_records: u64,
+    pub eval_records: u64,
+    pub warnings: Vec<String>,
+    pub eval_loss: Option<f64>,
+    pub eval_token_accuracy: Option<f64>,
+    pub preference_accuracy: Option<f64>,
+    pub reward_margin: Option<f64>,
+    pub eval_kl: Option<f64>,
+    pub kl_reduction: Option<f64>,
+    pub recall_at_1: Option<f64>,
+    pub recall_at_5: Option<f64>,
+    pub recall_at_10: Option<f64>,
+    pub mrr: Option<f64>,
+    pub ece: Option<f64>,
+    pub candidates: Option<Vec<String>>,
+    pub fallback_model: Option<String>,
+    pub fallback_quality: Option<f64>,
+    pub pareto_summary: Option<RouterParetoSummary>,
+    pub heads: Option<Map<String, Value>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl EvalReport {
+    /// The value of the selection metric (`metric_name`).
+    pub fn metric(&self) -> Option<f64> {
+        match self.metric_name.as_str() {
+            "eval_loss" => self.eval_loss,
+            "preference_accuracy" => self.preference_accuracy,
+            "eval_kl" => self.eval_kl,
+            "recall_at_10" => self.recall_at_10,
+            other => self.extra.get(other).and_then(Value::as_f64),
+        }
+    }
 }
 
 /// Query for `GET /v1/runs/{id}/metrics`.
@@ -678,7 +747,7 @@ pub struct Run {
     pub attempt: u32,
     pub max_attempts: u32,
     pub latest_metric: Option<MetricPoint>,
-    pub eval_report: Option<Value>,
+    pub eval_report: Option<EvalReport>,
     pub artifact_id: Option<String>,
     pub error: Option<String>,
     pub created_at: String,
@@ -727,7 +796,7 @@ pub struct Artifact {
     pub sha256: String,
     pub size_bytes: u64,
     pub manifest: Map<String, Value>,
-    pub eval_report: Option<Value>,
+    pub eval_report: Option<EvalReport>,
     pub created_at: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
