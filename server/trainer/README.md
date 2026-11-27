@@ -60,6 +60,11 @@ CPU pool with `import`: imports and source syncs are the only jobs that carry wo
 Also: `GRAD_WORKER_ID` (default host-pid-random), `GRAD_LEASE_SECONDS` (180),
 `GRAD_POLL_INTERVAL_S` (1.0), `GRAD_WORKDIR` (a temp dir).
 
+`GRAD_WORKER_METRICS_PORT` serves Prometheus metrics (`grad_trainer_*`: phase, step time,
+tokens/s, GPU utilisation and memory, checkpoint and upload times) on that port. Every
+heartbeat also carries the phase, tokens/s and GPU numbers, which grad-server aggregates into
+its `grad_worker_*` gauges, so pools that can't be scraped still show up.
+
 ## Models
 
 Catalog ids map to Hugging Face repos (`qwen/qwen3-8b` -> `Qwen/Qwen3-8B`, ...). Override with

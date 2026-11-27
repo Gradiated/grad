@@ -41,6 +41,7 @@ from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
 from .records import merge_records
 from .sources import redact
 from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
+from .telemetry import WorkerTelemetry
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
 JOB_KINDS = ("train", "import")
@@ -131,6 +132,8 @@ class ProtocolClient:
         self.retry_base_s = retry_base_s
         self.retry_cap_s = retry_cap_s
         self.sleep = sleep
+        # The current job's W3C traceparent: its requests join the trace that created it.
+        self.traceparent: str | None = None
         self._opener = urllib.request.build_opener(_RefuseRedirects)
 
     def resolve(self, url: str) -> str:
@@ -153,8 +156,11 @@ class ProtocolClient:
     ) -> Any:
         full = self.resolve(url)
         hdrs = dict(headers or {})
-        if self.api_key and self._same_origin(full):
-            hdrs["Authorization"] = f"Bearer {self.api_key}"
+        if self._same_origin(full):
+            if self.api_key:
+                hdrs["Authorization"] = f"Bearer {self.api_key}"
+            if self.traceparent:
+                hdrs["traceparent"] = self.traceparent
         req = urllib.request.Request(full, data=data, headers=hdrs, method=method)
         try:
             return self._opener.open(req, timeout=self.timeout_s)
@@ -281,6 +287,7 @@ class _Heartbeat(threading.Thread):
                         "worker_id": self.worker.worker_id,
                         "attempt": self.state.attempt,
                         "lease_seconds": self.worker.lease_seconds,
+                        "stats": self.worker.telemetry.heartbeat_stats(),
                     },
                 )
             except WorkerAuthError as exc:
@@ -332,6 +339,7 @@ class TrainerWorker:
         client: ProtocolClient | None = None,
         complete_attempts: int = 8,
         kinds: Sequence[str] = JOB_KINDS,
+        telemetry: WorkerTelemetry | None = None,
     ) -> None:
         unknown = sorted(set(kinds) - set(JOB_KINDS))
         if not kinds or unknown:
@@ -353,6 +361,7 @@ class TrainerWorker:
         self.recipes = recipes if recipes is not None else sorted(V0_RECIPES)
         self.heartbeat_interval_s = heartbeat_interval_s or max(1.0, lease_seconds / 3)
         self.complete_attempts = complete_attempts
+        self.telemetry = telemetry or WorkerTelemetry()
         self._shutdown = threading.Event()
         self._current: _JobState | None = None
 
@@ -389,7 +398,11 @@ class TrainerWorker:
             return None
 
         state = _JobState(job_id=str(job["id"]), attempt=int(job["attempt"]))
-        _log(f"claimed {job.get('kind', 'train')} job {state.job_id} attempt {state.attempt}")
+        kind = str(job.get("kind") or "train")
+        _log(f"claimed {kind} job {state.job_id} attempt {state.attempt}")
+        self.telemetry.set_phase("importing" if kind == "import" else "starting")
+        traceparent = job.get("traceparent")
+        self.client.traceparent = traceparent if isinstance(traceparent, str) else None
         if self._shutdown.is_set():
             state.request_stop("shutdown")
         self._current = state
@@ -418,6 +431,9 @@ class TrainerWorker:
         finally:
             heartbeat.done.set()
             heartbeat.join(timeout=5)
+            self.telemetry.observe_job(kind, state.final_status)
+            self.telemetry.set_phase("idle")
+            self.client.traceparent = None
             self._current = None
             shutil.rmtree(job_dir, ignore_errors=True)
             if state.auth_error is not None:
@@ -508,7 +524,9 @@ class TrainerWorker:
         if ticket.get("method", "PUT") != "PUT":
             raise RuntimeError(f"Unsupported upload method {ticket.get('method')!r}.")
         headers = {str(k): str(v) for k, v in (ticket.get("headers") or {}).items()}
+        started = time.monotonic()
         self.client.put_file(str(ticket["url"]), path, headers)
+        self.telemetry.observe_upload(kind, size, time.monotonic() - started)
         return str(ticket["upload_id"])
 
     def _complete(self, state: _JobState, payload: dict[str, Any]) -> dict[str, Any]:
@@ -516,6 +534,7 @@ class TrainerWorker:
         and the bundle stays on disk meanwhile. Gives up only when the lease is
         lost (409/404) or the worker is shutting down."""
         state.final_status = str(payload.get("status") or "failed")
+        self.telemetry.set_phase("completing")
         while True:
             try:
                 return self._post(
@@ -580,6 +599,7 @@ class TrainerWorker:
             tokens = point.get("tokens")
             if isinstance(tokens, (int, float)):
                 state.max_tokens = max(state.max_tokens, int(tokens))
+            self.telemetry.observe_step(tokens if isinstance(tokens, (int, float)) else None)
             try:
                 resp = self._post(state, "progress", {"metric": point}, attempts=2)
             except WorkerAuthError:
@@ -600,6 +620,8 @@ class TrainerWorker:
             if state.stop_reason == "lease_lost":
                 return
             bundle = job_dir / f"checkpoint-{step}.grad.tar.gz"
+            started = time.monotonic()
+            self.telemetry.set_phase("checkpointing")
             try:
                 inner = dict(metadata.get("manifest") or {})
                 fmt = metadata.get("artifact_format") or inner.get("format")
@@ -608,9 +630,12 @@ class TrainerWorker:
                     bundle,
                     manifest={**inner, "kind": "checkpoint", "step": step, "format": fmt},
                 )
+                self.telemetry.set_phase("uploading")
+                upload_started = time.monotonic()
                 upload_id = self._upload(
                     state, "checkpoint", bundle, info.sha256, info.size_bytes
                 )
+                upload_seconds = round(time.monotonic() - upload_started, 3)
                 self._post(
                     state,
                     "checkpoints",
@@ -619,9 +644,10 @@ class TrainerWorker:
                         "eval_score": eval_score,
                         "upload_id": upload_id,
                         "format": fmt,
-                        "metadata": metadata,
+                        "metadata": {**metadata, "upload_seconds": upload_seconds},
                     },
                 )
+                self.telemetry.observe_checkpoint(time.monotonic() - started)
             except (LeaseLost, WorkerAuthError):
                 raise
             except ServerError as exc:
@@ -631,9 +657,11 @@ class TrainerWorker:
                 _log(f"checkpoint step {step} failed: {exc}")
             finally:
                 bundle.unlink(missing_ok=True)
+                self.telemetry.set_phase("training")
 
         work = job_dir / "work"
         work.mkdir()
+        self.telemetry.set_phase("loading_model")
         try:
             output = runner.run(
                 dict(run.get("resolved_config") or {}),
@@ -702,6 +730,7 @@ class TrainerWorker:
                     state,
                     {"status": "failed", "error": f"invalid artifact bundle: {exc}"[:4000], "tokens_processed": tokens},
                 )
+            self.telemetry.set_phase("uploading")
             payload["upload_id"] = self._upload(
                 state, "artifact", bundle, info.sha256, info.size_bytes
             )
@@ -832,7 +861,8 @@ def worker_from_env(env: Mapping[str, str]) -> TrainerWorker:
 
     GRAD_WORKER_KINDS (comma-separated, default ``train,import``) picks the jobs it claims:
     GPU pods take ``train``; CPU pods take ``import`` (imports and source syncs, the only
-    jobs that carry workspace secrets).
+    jobs that carry workspace secrets). GRAD_WORKER_METRICS_PORT serves Prometheus
+    metrics (``grad_trainer_*``) on that port.
     """
     server_url = (
         env.get("GRAD_SERVER_URL")
@@ -845,6 +875,10 @@ def worker_from_env(env: Mapping[str, str]) -> TrainerWorker:
         or env.get("GRADIATED_API_KEY")
     )
     kinds = [k.strip() for k in env.get("GRAD_WORKER_KINDS", "").split(",") if k.strip()]
+    telemetry = WorkerTelemetry()
+    port = env.get("GRAD_WORKER_METRICS_PORT", "").strip()
+    if port:
+        telemetry.serve(int(port), env.get("GRAD_WORKER_METRICS_HOST", "0.0.0.0"))
     return TrainerWorker(
         server_url=server_url,
         api_key=api_key,
@@ -853,6 +887,7 @@ def worker_from_env(env: Mapping[str, str]) -> TrainerWorker:
         poll_interval_s=float(env.get("GRAD_POLL_INTERVAL_S", "1.0")),
         workdir=env.get("GRAD_WORKDIR") or None,
         kinds=kinds or JOB_KINDS,
+        telemetry=telemetry,
     )
 
 

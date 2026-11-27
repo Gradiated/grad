@@ -46,6 +46,7 @@ nvidia-cufile==1.17.1.22  # via cuda-toolkit
 nvidia-cusolver==12.2.0.11  # via cuda-toolkit
 nvidia-cusparse==12.7.10.12  # via cuda-toolkit, nvidia-cusolver
 nvidia-cusparselt-cu13==0.8.1  # via torch
+nvidia-ml-py==13.615.71    # via -r requirements.txt
 nvidia-nccl-cu13==2.30.7  # via torch
 nvidia-nvjitlink==13.5.37  # via cuda-toolkit, nvidia-cufft, nvidia-cusolver, nvidia-cusparse
 nvidia-nvshmem-cu13==3.7.2  # via torch
@@ -53,6 +54,7 @@ nvidia-nvtx==13.2.86      # via cuda-toolkit
 packaging==26.4           # via accelerate, datasets, huggingface-hub, peft, transformers
 pandas==3.1.1             # via datasets
 peft==0.21.3              # via -r requirements.txt
+prometheus-client==0.26.0  # via -r requirements.txt
 propcache==0.5.4          # via aiohttp, yarl
 psutil==7.2.2             # via accelerate, peft
 pyarrow==26.0.1           # via datasets

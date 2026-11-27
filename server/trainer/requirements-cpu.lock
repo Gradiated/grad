@@ -35,9 +35,11 @@ multidict==7.2.1          # via aiohttp, yarl
 multiprocess==0.70.19     # via datasets
 networkx==3.7             # via torch
 numpy==2.5.4              # via accelerate, datasets, pandas, peft, transformers, -r requirements.txt
+nvidia-ml-py==13.615.71    # via -r requirements.txt
 packaging==26.4           # via accelerate, datasets, huggingface-hub, peft, transformers
 pandas==3.1.1             # via datasets
 peft==0.21.3              # via -r requirements.txt
+prometheus-client==0.26.0  # via -r requirements.txt
 propcache==0.5.4          # via aiohttp, yarl
 psutil==7.2.2             # via accelerate, peft
 pyarrow==26.0.1           # via datasets
