@@ -336,3 +336,25 @@ func TestMetricsStopsOnRepeatedCursor(t *testing.T) {
 		t.Fatalf("fetched %d pages, want 2", n)
 	}
 }
+
+func TestEvalReportIsTyped(t *testing.T) {
+	run := wireMap(t, "run-completed.json")
+	run["eval_report"].(map[string]any)["pareto_summary"] = map[string]any{"target_max_drop": 0.02, "quality_drop_ci95": []any{-0.004, 0.019}, "temperature": 1.3}
+	f := newFake(t, map[string]route{"GET /v1/runs/run_x": jsonValue(200, run)})
+	c, _ := f.client()
+	got, err := c.Runs.Get(context.Background(), "run_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report *grad.EvalReport = got.EvalReport
+	if report == nil || report.MetricName != "eval_loss" || report.SelectedStep != 6 || report.BestStep != nil || report.EvalLoss != nil {
+		t.Fatalf("report %+v", report)
+	}
+	var pareto *grad.RouterParetoSummary = report.ParetoSummary
+	if pareto == nil || len(pareto.QualityDropCi95) != 2 || pareto.OffloadRate != nil {
+		t.Fatalf("pareto %+v", pareto)
+	}
+	if report.AdditionalProperties["reference_backend"] != true {
+		t.Fatalf("unknown fields are kept: %+v", report.AdditionalProperties)
+	}
+}
