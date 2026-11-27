@@ -76,18 +76,10 @@ recipe = RouterRecipe(
 )
 ```
 
-On Gradiated Cloud, deploy the result and call it with any OpenAI client; only `model` changes:
+Download the artifact, a router bundle here, and load it on your own stack with its reference loader in [docs/ARTIFACT_FORMATS.md](docs/ARTIFACT_FORMATS.md):
 
 ```python
-import os
-from openai import OpenAI
-
-deployment = run.deploy()
-oai = OpenAI(base_url="https://api.gradiated.com/v1", api_key=os.environ["GRADIATED_API_KEY"])
-reply = oai.chat.completions.create(
-    model=deployment.model_id,  # "your-org/support-router"
-    messages=[{"role": "user", "content": "Where is invoice #9941?"}],
-)
+run.download("./support-router", format="files")
 ```
 
 The same loop from the CLI:
@@ -97,8 +89,7 @@ grad login
 grad import ./examples/support_traces.jsonl --dataset support-prod
 grad train --dataset support-prod --name support-router --recipe router --set rubric=resolved --dry-run
 grad train --dataset support-prod --name support-router --recipe router --set rubric=resolved --max-cost-usd 20 --wait
-grad deploy support-router@latest          # Gradiated Cloud
-grad deployments rollback support-router   # back to the previous version
+grad artifacts download support-router@latest --output ./support-router
 ```
 
 <details>
@@ -113,7 +104,7 @@ const dataset = await grad.datasets.push("support-prod", "./examples/support_tra
 const params = { dataset, name: "support-router", recipe: recipes.router({ rubric: "resolved" }), maxCostUsd: 20 };
 console.log(await grad.runs.plan(params));
 const run = await grad.runs.create(params).wait();
-const deployment = await run.deploy(); // Gradiated Cloud; call deployment.modelId with an OpenAI client
+await run.download("./support-router");
 ```
 
 ```go
@@ -129,11 +120,11 @@ params := grad.RunParams{
 plan, _ := client.Runs.Plan(ctx, params)
 fmt.Println(plan)
 run, _ := client.Runs.Create(ctx, params).Wait(ctx)
-deployment, _ := run.Deploy(ctx) // Gradiated Cloud; call deployment.ModelID with an OpenAI client
+_, _ = run.Download(ctx, "./support-router")
 ```
 
 ```rust
-use grad::{Client, DeployArtifactRequest, PlanRunRequest, PushOptions, RecipeKind, RecipeSpec, WaitOptions};
+use grad::{Client, DownloadOptions, PlanRunRequest, PushOptions, RecipeKind, RecipeSpec, WaitOptions};
 
 let client = Client::new();
 let path = std::path::Path::new("./examples/support_traces.jsonl");
@@ -145,9 +136,8 @@ println!("~${:.2}", client.runs().plan(&req).await?.estimated_cost_usd);
 let run = client.runs().create(&req, None).await?;
 client.runs().wait(&run.id, &WaitOptions::default()).await?;
 
-// Gradiated Cloud
-let deploy = DeployArtifactRequest { artifact: "support-router@latest".into(), ..Default::default() };
-client.deployments().create(&deploy, None).await?;
+let opts = DownloadOptions { extract_to: Some("./support-router".into()), ..DownloadOptions::default() };
+client.artifacts().download("support-router@latest", &opts).await?;
 ```
 
 </details>
@@ -211,18 +201,18 @@ print(ev.summary_table())
 
 `grad eval --models ... --dataset ... --rubric rubric.yaml --wait` does the same from the CLI, and `ev.failures().to_dataset("sql-hard")` turns misses into your next training set. See [Evaluations](https://gradiated.com/docs/training/evaluations/).
 
-## Deploy
+## Artifacts
 
-On Gradiated Cloud, `run.deploy()` or `grad deploy NAME@VERSION` serves an artifact as `your-org/<name>` behind the OpenAI-compatible API, so your app changes one `model` string. Rolling back is one command: `grad deployments rollback NAME` (or `deployment.rollback()`), or deploy an earlier version.
-
-Anywhere else, download the weights and serve them yourself:
+Every run produces a versioned, immutable artifact (`sql-helper@2026-11-27-1`) under one content-addressed `artifacts/` prefix in your bucket. Download the weights and serve them yourself:
 
 ```bash
 grad artifacts download sql-helper@latest --output ./sql-helper
 vllm serve Qwen/Qwen3-8B --enable-lora --lora-modules sql-helper=./sql-helper
 ```
 
-See [Deploying](https://gradiated.com/docs/training/deploying/) for SGLang and the Cloud endpoints.
+Weights trained elsewhere become artifacts too. `grad artifacts upload ./my-lora --base qwen/qwen3-8b` and `grad artifacts import hf://acme/support-lora --base qwen/qwen3-8b` check the files against the [format spec](docs/ARTIFACT_FORMATS.md) and the base model (for a LoRA: the adapter config, base and revision, target modules and every tensor shape), then register `my-lora@YYYY-MM-DD-n`. You can evaluate an uploaded artifact, download it or continue training from it like a trained one, and its `provenance` records where it came from.
+
+On Gradiated Cloud, publishing an artifact as a model version goes through the Cloud Models API, which pins the artifact so grad never deletes it. See [Deploying](https://gradiated.com/docs/training/deploying/) for SGLang and the other bundle formats.
 
 ## How it works
 
@@ -233,7 +223,7 @@ flowchart LR
     P --> R["Run<br/>grad-trainer"]
     R --> A["Artifact<br/>LoRA · cartridge · encoder"]
     A --> E["Eval<br/>judges · validators · CIs"]
-    A --> C["grad deploy<br/>Gradiated Cloud"]
+    A --> C["Model version<br/>Gradiated Cloud"]
     A --> S["vLLM / SGLang<br/>your GPUs"]
     C -. new traces via sources .-> D
 ```
@@ -242,7 +232,7 @@ flowchart LR
 - **`grad-trainer`** ([`server/trainer`](server/trainer)) is a worker that claims jobs over HTTP, trains the recipe, uploads checkpoints and bundles, and drains cleanly on SIGTERM. Add workers to add capacity.
 - **Four SDKs and a CLI** are thin layers over transports generated from the spec, so they cannot drift from the server.
 
-Cloud adds three adapters on top of the same code (auth, per-token billing, hosted deploy); it never forks it. Details in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Cloud adds adapters on top of the same code (auth and per-token billing) and serves published artifacts from its inference stack; it never forks grad. Details in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Self-hosting
 
@@ -272,7 +262,7 @@ helm upgrade --install grad server/helm/grad --namespace grad \
   --set keda.enabled=true
 ```
 
-Datasets, training, evals (against your own OpenAI-compatible endpoint) and artifact downloads all work self-hosted; hosted `deploy` is a Gradiated Cloud feature. Server configuration and retention are in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) and the [self-hosting guide](https://gradiated.com/docs/training/self-hosting/).
+Datasets, training, evals (against your own OpenAI-compatible endpoint), artifact uploads, imports and downloads all work self-hosted; hosted serving is a Gradiated Cloud feature. Server configuration and retention are in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) and the [self-hosting guide](https://gradiated.com/docs/training/self-hosting/).
 
 ## SDKs and CLI
 
@@ -284,7 +274,7 @@ Datasets, training, evals (against your own OpenAI-compatible endpoint) and arti
 | Rust | `cargo add grad-sdk --git https://github.com/Gradiated/grad` (crates.io soon) | [`sdks/rust`](sdks/rust) |
 | CLI | `cargo install --locked --git https://github.com/Gradiated/grad grad-cli` | [`cli`](cli) |
 
-All four SDKs cover the same surface: datasets, sources and secrets, runs, checkpoints, artifacts, evals, usage and deployments. They and the CLI resolve configuration the same way (explicit arguments, then the profile named by `GRADIATED_PROFILE`, then `GRADIATED_API_KEY` / `GRADIATED_BASE_URL`, then the `default` profile that `grad login` saves), fail before any request when no key is found, and verify every artifact download against its SHA-256.
+All four SDKs cover the same surface: datasets, sources and secrets, runs, checkpoints, artifacts (including uploads and Hugging Face imports), evals and usage. They and the CLI resolve configuration the same way (explicit arguments, then the profile named by `GRADIATED_PROFILE`, then `GRADIATED_API_KEY` / `GRADIATED_BASE_URL`, then the `default` profile that `grad login` saves), fail before any request when no key is found, and verify every artifact download against its SHA-256.
 
 The CLI is built for scripts and coding agents: `--json` on any command prints one machine-readable envelope on stdout, and `grad --help` lists every command, the configuration precedence and the exit codes.
 

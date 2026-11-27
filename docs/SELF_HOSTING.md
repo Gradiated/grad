@@ -177,7 +177,26 @@ These checks have been verified on two backends:
 - **SeaweedFS 4.47** enforces all of them. The server's storage contract suite and the live stacks run on it every time (`server/api/test/storage-contract.test.ts`), and so do `grad local up` and the kind smoke test.
 - **MinIO** passed the same suite while it was the CI backend.
 
-AWS S3 documents the same behaviour. grad uses no multipart uploads, range GETs, CopyObject or bucket lifecycle rules. The maintenance tick deletes staged import files under `uploads/` after 7 days, and job blobs that no record references.
+AWS S3 documents the same behaviour. grad uses no multipart uploads, range GETs or bucket lifecycle rules; promoting a checkpoint is one server-side CopyObject (every object is under the 5 GB single-PUT cap).
+
+The bucket's prefixes:
+
+| Prefix | Holds | Lifetime |
+| --- | --- | --- |
+| `artifacts/<workspace>/<sha256>` | Released artifact bundles (trained, promoted, uploaded or imported), content-addressed | Until the artifact is deleted; never while it is pinned |
+| `ws/<workspace>/jobs/<job>/<attempt>/<sha256>` | Checkpoint bundles and staged import parts | Checkpoint retention; unreferenced blobs after `ORPHAN_BLOB_DAYS` |
+| `ws/<workspace>/datasets/...` | Dataset parts (`.jsonl.gz`) | Kept |
+| `uploads/<workspace>/<sha256>` | Staged dataset files and artifact uploads | 7 days |
+
+Serving needs only `artifacts/`: a read-only role scoped to that prefix can load every released artifact, and checkpoints are never servable until promoted. The maintenance tick deletes staged files under `uploads/` after 7 days, and job blobs and released bundles that no record references (a pinned artifact always has its record).
+
+### Artifact uploads and imports
+
+`grad artifacts upload` and `grad artifacts import hf://...` create import jobs that the CPU `import` worker pool runs, like dataset imports (see [docs/ARTIFACT_FORMATS.md](ARTIFACT_FORMATS.md#uploads-and-imports) for the checks). The worker needs the base model's `config.json`, which it finds the way a training run finds the weights (`GRAD_MODEL_PATHS`, `GRAD_MODELS_MIRROR`, or the Hugging Face Hub), but it fetches only `config.json`. Hugging Face imports download from `HF_ENDPOINT` (default `https://huggingface.co`) with the workspace's token or none, never the worker's own login, and are refused in offline mode (`HF_HUB_OFFLINE` / `GRAD_OFFLINE`). Uploads go to the bucket through `S3_PUBLIC_ENDPOINT` like dataset files and are capped at 5 GB.
+
+### Artifact pins
+
+A pin keeps a released artifact alive for a holder, such as a model version Gradiated Cloud published. `POST /v1/artifacts/{id}/pins` (`{"holder": "...", "reason": "..."}`) and `DELETE /v1/artifacts/{id}/pins/{holder}` need the `artifacts:pin` scope (only `admin` implies it); they are internal endpoints, left out of the SDKs. Pins reference the artifact with `ON DELETE RESTRICT`, so nothing deletes a pinned artifact's record: `DELETE /v1/artifacts/{id}` answers `409 artifact_pinned` naming the holders, and retention, the orphaned-blob sweep and any future workspace cleanup can't remove it either.
 
 ## Eval workers
 
@@ -312,4 +331,4 @@ Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRAC
 
 ## Retention
 
-Checkpoints expire after the recipe's `checkpoint_ttl_days` (30 by default); the best and final checkpoints of every finished run never expire. Expired checkpoints and unused uploads are deleted by the server's maintenance loop. Promoting a checkpoint copies it into a new immutable artifact.
+Checkpoints expire after the recipe's `checkpoint_ttl_days` (30 by default); the best and final checkpoints of every finished run never expire. Expired checkpoints and unused uploads are deleted by the server's maintenance loop. Promoting a checkpoint copies it into a new immutable artifact under `artifacts/`. Released artifacts never expire; `grad artifacts delete NAME@VERSION` deletes one and its bundle, unless it is [pinned](#artifact-pins).

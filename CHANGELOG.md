@@ -7,7 +7,38 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+### Added
+
+- **One artifact registry for trained, uploaded and imported weights.** `grad artifacts upload
+  PATH --base MODEL [--format F] [--name N]` (`client.artifacts.upload(...)` in Python,
+  `grad.artifacts.upload` in TypeScript, `Artifacts.Upload` in Go, `artifacts().upload` in
+  Rust) uploads a directory (tarred), a file or a `.tar.gz`; `grad artifacts import
+  hf://owner/name[@revision] --base MODEL` (`from_hf` / `fromHf` / `FromHF` / `import_hf`)
+  imports a Hugging Face repo at a pinned commit. An import worker checks the files against
+  docs/ARTIFACT_FORMATS.md and the base model's `config.json` (for a PEFT LoRA: the adapter
+  config, base model and revision, target modules and every tensor shape) and releases a normal
+  `name@YYYY-MM-DD-n` artifact you can download, evaluate or continue training from. A failed
+  check is a `422 invalid_artifact` naming the file (CLI exit 5). API: `POST
+  /v1/artifact-imports`, `GET /v1/artifact-imports/{id}`; `POST /v1/uploads` takes `purpose:
+  artifact_import`.
+- **Provenance.** Every artifact has `provenance` (`source` run, upload or import, with the
+  `run_id`, the `uploader` key or the `hf://` URI and commit), in the bundle manifest and on the
+  API object.
+- **Deleting artifacts and pins.** `grad artifacts delete NAME@VERSION` (`DELETE
+  /v1/artifacts/{id}`, `artifact.delete()` in every SDK) deletes an artifact and its bundle.
+  Internal `POST`/`DELETE /v1/artifacts/{id}/pins` (scope `artifacts:pin`, which only `admin`
+  implies) let Gradiated Cloud pin the artifacts its model versions serve; a pinned artifact is
+  never deleted (migration 0006: the pin references it `ON DELETE RESTRICT`), and a delete
+  answers `409 artifact_pinned` naming the holders.
+
 ### Changed
+
+- **Released artifacts live under `artifacts/<workspace>/<sha256>`**, the one prefix serving
+  reads. A run's final bundle is uploaded there; promoting a checkpoint copies it there
+  (checkpoints stay under their job and are never servable). The orphaned-blob sweep covers
+  `artifacts/` too. Releases created earlier keep their job-prefix key.
+- **Artifact format_version 2.** Final manifests require `provenance`; nothing else changed in
+  any format, so readers accept versions 1 and 2 (a version 1 manifest is a run's).
 
 - **Gradiated Cloud adapters** ([docs/CLOUD_MODE.md](docs/CLOUD_MODE.md)). `AUTH_MODE=cloud`
   reads API keys from the product's read-only auth view (cached 5 s) and verifies console JWTs
@@ -112,6 +143,14 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - `runs.plan` has `cost_breakdown` (`train_usd`, `teacher_usd`, `eval_usd`), and
   `estimated_cost_usd` includes `recipe.evals` on every checkpoint. `print(plan)`, Go's
   `fmt.Println(plan)` and `grad train --dry-run` show the breakdown.
+
+### Removed
+
+- **The deploy surface.** grad-server no longer has the `/v1/deployments`, `/v1/route`,
+  `/v1/embeddings` and `/v1/feedback` 501 stubs, and the SDKs and CLI drop `deploy()`,
+  `deployments`, `grad deploy`, `grad deployments` and `DeployUnavailableError`. Publishing an
+  artifact as a model version is Gradiated Cloud's Models API; self-hosted, download it and
+  serve it yourself.
 
 ### Fixed
 

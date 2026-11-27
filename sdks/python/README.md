@@ -1,7 +1,7 @@
 # grad-sdk (Python)
 
 The Python SDK for the Gradiated training platform: push datasets, preview and launch managed
-fine-tuning runs, evaluate models, download PEFT adapters and deploy them on Gradiated Cloud.
+fine-tuning runs, evaluate models, download PEFT adapters, and upload or import weights trained elsewhere.
 
 - Python 3.11+, one dependency (`httpx`); a blocking `Grad` client (from asyncio, call it via `asyncio.to_thread`).
 - Typed objects with a `.raw` escape hatch, `py.typed`, typed errors, retries with backoff.
@@ -40,14 +40,22 @@ print(client.runs.plan(dataset=dataset, name="sql-helper", recipe=recipe))
 run = client.runs.create(dataset=dataset, name="sql-helper", recipe=recipe, max_cost_usd=5).wait()
 print(run.status, run.artifact)
 
-# Self-hosted: download the PEFT LoRA and serve it with vLLM or SGLang.
-# Gradiated Cloud: run.deploy() serves it behind a stable name.
+# Download the PEFT LoRA and serve it with vLLM or SGLang.
 run.artifact.download("./sql-helper-bundle.grad.tar.gz", format="bundle")
 ```
 
 `run.artifact.download("./sql-helper")` (the default `format="peft"`) extracts a verified PEFT
 directory (`adapter_config.json` + `adapter_model.safetensors`) that `vllm serve <base>
 --enable-lora --lora-modules sql-helper=./sql-helper` loads directly.
+
+Weights trained elsewhere become artifacts too: `client.artifacts.upload("./my-lora",
+base="qwen/qwen3-8b").wait()` uploads a directory (tarred) or a `.tar.gz`, and
+`client.artifacts.from_hf("hf://acme/support-lora@main", base="qwen/qwen3-8b").wait()` imports a
+Hugging Face repo at a pinned commit. An import worker checks the files against the artifact
+format spec and the base model; a failure raises `grad.ArtifactImportFailedError` (`code`
+`invalid_artifact`, `status` 422) naming the file. The result is a normal `Artifact` (with
+`provenance.source` `upload` or `import`) that you can download, evaluate or pass as `model=`.
+`artifact.delete()` deletes one (a `ConflictError` while a published Cloud model version pins it).
 
 ## Following a run
 
@@ -107,11 +115,11 @@ authentication). A trailing `/v1` on the base URL is dropped with a warning. Als
 Every error subclasses `grad.GradError`. HTTP errors are `grad.GradAPIError` subclasses carrying
 `status`, `code`, `detail`, `request_id`, the method and URL: `AuthenticationError` (401),
 `PermissionDeniedError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationError`
-(422, with field `errors`), `RateLimitError` (429), `DeployUnavailableError` and
-`InferenceUnavailableError` (501), `ServerError` (5xx). Network failures raise
+(422, with field `errors`), `RateLimitError` (429), `InferenceUnavailableError` and
+`FeatureUnavailableError` (501), `ServerError` (5xx). Network failures raise
 `APIConnectionError` / `APITimeoutError`; `wait()` raises `RunFailedError` (code `run_failed`,
 `run_cancelled` or `run_stopped_budget`: anything but `completed`), `EvalFailedError`,
-`ImportFailedError` or `WaitTimeoutError`; a list endpoint that repeats its cursor raises
+`ImportFailedError`, `ArtifactImportFailedError` or `WaitTimeoutError`; a list endpoint that repeats its cursor raises
 `PaginationLoopError` instead of looping. Features documented for later waves raise
 `NotAvailableInV0Error` with an alternative.
 
@@ -127,7 +135,7 @@ dpo = client.runs.create(dataset="sql-prefs", name="sql-helper", recipe=DPORecip
                          idempotency_key="sql-helper-dpo-1").wait()
 ```
 
-`runs.create`, `evals.create` and `deploy` send a fresh `Idempotency-Key` per call (reused by
+`runs.create`, `evals.create` and the artifact uploads and imports send a fresh `Idempotency-Key` per call (reused by
 its retries); pass `idempotency_key=` to make a retry from another process return the first call's
 result instead of starting a second run.
 
@@ -139,7 +147,7 @@ PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests
 
 Unit tests use a scripted fake `httpx` transport and the shared wire fixtures in `tests/fixtures/wire`.
 `test_live.py` runs these snippets against `tests/harness/stack.ts`; it skips unless
-`server/api/node_modules` exists (`pnpm -C server/api install --frozen-lockfile`), and the Cloud
-deploy flow also needs `GRAD_TRAINER_PYTHON` (a Python with torch, transformers and peft). The
+`server/api/node_modules` exists (`pnpm -C server/api install --frozen-lockfile`), and the
+torch-worker tests (continued training, artifact uploads) also need `GRAD_TRAINER_PYTHON` (a Python with torch, transformers and peft). The
 transport in `grad/_generated/client.py` is generated from `spec/openapi.yaml` by
 `node scripts/generate-sdks.mjs`.

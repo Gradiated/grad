@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "grad-sdk"
 dynamic = ["version"]
-description = "Python SDK for the Gradiated training platform: datasets, managed fine-tuning runs, evals, artifacts and deployments."
+description = "Python SDK for the Gradiated training platform: datasets, managed fine-tuning runs, evals and artifacts."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Gradiated" }]

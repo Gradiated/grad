@@ -1,7 +1,7 @@
 # @gradiated/grad
 
 TypeScript SDK for the Gradiated training platform: import traces, train
-routers and fine-tunes, evaluate them, and deploy to Gradiated Cloud. ESM with
+routers and fine-tunes, evaluate them, and download or upload artifacts. ESM with
 types, Node 20+. Browser-safe except the file helpers (`importFile`,
 `download`, `Context.fromFile`), which load `node:fs` lazily.
 
@@ -24,8 +24,10 @@ const run = await grad.runs
   .create({ dataset, name: "support-router", recipe: recipes.router() })
   .wait({ onMetric: (m) => console.log(m.step, m.loss) });
 
-await run.deploy(); // Cloud; a self-hosted server raises DeployUnavailableError
-await grad.deployments.rollback("support-router"); // back to the previous artifact
+await run.download("./support-router"); // verified against its SHA-256
+
+// Weights trained elsewhere: validated against the format spec and the base model.
+const lora = await grad.artifacts.upload("./my-lora", { base: "qwen/qwen3-8b" }).wait();
 ```
 
 Follow a run's lifecycle as typed events (narrow on `ev.type`; reconnects are
@@ -57,8 +59,7 @@ real `grad-server` started by `tests/harness/stack.ts`.
 | Datasets | `grad.datasets.create/get/list/push/records/render/fromHf`, `dataset.importFile(path).wait()` |
 | Runs | `grad.runs.plan/create/get/list/cancel/resume`, `run.wait({ onEvent, onMetric, onStatus })`, `run.events({ follow: true })` (typed lifecycle events: phase, metric, checkpoint, attempt, warning, log, completed), `run.metrics({ follow: true })` (SSE with reconnect), `run.checkpoints()`, `checkpoint.promote()` |
 | Recipes | `recipes.sft/dpo/router/decisionModel/cartridge/embedding/distill/rewardModel`, `rollouts`, `adapters`, `splits`, `Context` |
-| Artifacts | `grad.artifacts.get/list/stream`, `artifact.download(dest)` (streams to disk, verifies SHA-256) |
-| Deploy (Cloud) | `grad.deploy()` / `run.deploy()` / `artifact.deploy()` (= `grad.deployments.create`), `grad.deployments.get/list/rollback` |
+| Artifacts | `grad.artifacts.get/list/stream/delete`, `artifact.download(dest)` (streams to disk, verifies SHA-256), `grad.artifacts.upload(path, { base }).wait()` and `grad.artifacts.fromHf("hf://owner/name@rev", { base }).wait()` (an `ArtifactImportFailedError`, `code` `invalid_artifact` and `status` 422, names the file that failed validation), `artifact.provenance` |
 | Evals | `grad.evals.plan/create/get/list`, `ev.wait()` (runs local scorers), `ev.summaryTable()`, `ev.failures().toDataset()`; `Rubric`, `Scorer`, `Judge`, `validators` |
 | Keys, models | `grad.keys.create/list/revoke`, `grad.models.list()` |
 | Low level | `grad.api`: one typed method per OpenAPI operation |
@@ -72,9 +73,8 @@ that repeats a cursor stops the listing with `PaginationLoopError`.
 Every error extends `GradError` (`status`, `code`, `requestId`). HTTP errors
 map to `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`,
 `NotFoundError`, `ConflictError`, `ValidationError` (`fieldErrors`),
-`RateLimitError`, `ServerError`, `DeployUnavailableError`,
-`InferenceUnavailableError`; waits throw
-`RunFailedError`, `EvalFailedError`, `ImportFailedError` or
+`RateLimitError`, `ServerError`, `InferenceUnavailableError`; waits throw
+`RunFailedError`, `EvalFailedError`, `ImportFailedError`, `ArtifactImportFailedError` or
 `WaitTimeoutError`. Requests retry twice on 408/429/5xx with jittered
 backoff that honours `Retry-After`; every POST carries one `Idempotency-Key`
 (a UUIDv4, or `{ idempotencyKey }`) across its retries, so the server replays

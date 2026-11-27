@@ -2,12 +2,12 @@
 """Run the Python and CLI code blocks of the v0 training docs against a live local stack.
 
     python3 scripts/check-docs-snippets.py --docs ../workspace/product/website/src/docs/training
-    python3 scripts/check-docs-snippets.py --docs DOCS --cloud      # deploy/route/embed blocks
+    python3 scripts/check-docs-snippets.py --docs DOCS --cloud      # torch-worker blocks (uploads, adapters)
     python3 scripts/check-docs-snippets.py --docs DOCS --list       # show blocks, run nothing
     python3 scripts/check-docs-snippets.py --docs DOCS --offline    # skip the Hugging Face blocks
 
 It starts tests/harness/stack.ts (reference worker; with --cloud the fake Cloud API and
-the torch worker, since reference artifacts can't be deployed), extracts every ```python
+the torch worker, since reference artifacts aren't real adapters), extracts every ```python
 and ```bash block from the v0 pages, and runs each one in a scratch directory with
 GRADIATED_BASE_URL/GRADIATED_API_KEY pointing at the stack. Placeholders are filled from
 the fixture maps below (files, seed datasets and artifacts, model and host rewrites).
@@ -41,8 +41,6 @@ WAVE2 = {
     "recipes/traces-to-environments.mdx",
 }
 
-CLOUD_SERVING = "Gradiated Cloud serving (coming soon); grad-server never deploys"
-
 # (page, text in the block, reason). The first match wins.
 SKIP = [
     ("", "git clone", "clones the repository"),
@@ -56,10 +54,9 @@ SKIP = [
     ("", "/v1/chat/completions", "Gradiated inference gateway, not grad-server"),
     ("", "/v1/systemone", "Gradiated inference gateway, not grad-server"),
     ("", "typesafe_sdk", "needs the SystemOne SDK and the Gradiated inference gateway"),
-    ("", ".deploy(", CLOUD_SERVING),
-    ("", "grad deploy", CLOUD_SERVING),
-    ("", "grad deployments", CLOUD_SERVING),
-    ("", "deployments.", CLOUD_SERVING),
+    ("", "artifacts.from_hf(", "needs a Hugging Face repo holding an adapter for the base (trainer tests use a fake Hub)"),
+    ("", "artifacts.fromHf(", "needs a Hugging Face repo holding an adapter for the base (trainer tests use a fake Hub)"),
+    ("", "grad artifacts import hf://", "needs a Hugging Face repo holding an adapter for the base (trainer tests use a fake Hub)"),
     ("", "from router_bundle import", "needs the reference loader saved from the artifact format spec"),
     ("", "from sentence_transformers import", "needs sentence-transformers"),
     ("", "vllm serve", "needs a GPU and vLLM"),
@@ -96,10 +93,11 @@ TORCH = {
         "sql-verifier", 'run = next(r for r in client.runs.list().data if r.name == "sql-verifier" and r.status == "completed")\n'),
 }
 
-# Blocks that need hosted serving (deploy, route, embeddings) or a real adapter (continued training,
-# evaluating an artifact; reference-worker artifacts can't be served): only run with --cloud.
+# Blocks that need a real adapter or base config (continued training, evaluating an artifact,
+# uploading one; the reference worker has neither): only run with --cloud. Uploads get the
+# harness's tiny LoRA as ./my-lora.
 CLOUD = re.compile(
-    r"\.deploy\(|grad deploy|grad route|grad embed|client\.route\(|deployments\.|embeddings\.create|grad deployments"
+    r"artifacts upload|artifacts\.upload\("
     r"|model=\w+\.artifact|model=sft_art|--model [\w-]+@|models=\[[^\]]*@|--models \S*@"
     r"|sources add gradiated|sources\.Gradiated"
     r"|\.download\("  # the SDKs check that a download is a servable adapter, which reference artifacts aren't
@@ -287,6 +285,7 @@ class Runner:
         config.chmod(0o600)
         self.synced: set[str] = set()
         self.helm_base: str | None = None
+        self.tiny_lora = (info or {}).get("tiny_lora")
 
     def model(self, model: str) -> str:
         if not self.cloud:
@@ -319,7 +318,7 @@ class Runner:
         if KEY_IDS.search(code):  # a placeholder key id: revoke a fresh key instead
             code = KEY_IDS.sub(self.client.keys.create(name=f"docs-key-{n}", scopes=["artifacts:read"]).key.id, code)
         if self.cloud:  # the model a recipe trains becomes a tiny one; router/eval candidates stay catalog models
-            code = re.sub(r"""((?:\bmodel=|\bmodel: |--model )["']?)(qwen/qwen3-[0-9.]+b|baai/bge-small-en-v1\.5|gradiated/linden-1)""",
+            code = re.sub(r"""((?:\bmodel=|\bmodel: |--model |\bbase=|--base )["']?)(qwen/qwen3-[0-9.]+b|baai/bge-small-en-v1\.5|gradiated/linden-1)""",
                           lambda m: m.group(1) + self.model(m.group(2)), code)
             code = re.sub(r"""((?:\bteacher=|\bteacher: )["']?)qwen/qwen3-[0-9.]+b""", r"\1test/tiny-qwen3-teacher", code)
             code = re.sub(r"^(grad train (?!.*(?:--model|-f )).*?)( --wait| --dry-run|$)",
@@ -446,6 +445,8 @@ class Runner:
             self.artifact(name)
             python = os.environ.get("GRAD_TRAINER_PYTHON", sys.executable)
         code = self.rewrite(block["code"], n)
+        if self.tiny_lora and "./my-lora" in code:  # what `grad artifacts upload ./my-lora` uploads
+            shutil.copytree(self.tiny_lora, self.cwd(n) / "my-lora", dirs_exist_ok=True)
         env = self.env
         if re.search(r"^\s*export GRADIATED_PROFILE=", code, re.M):  # only the profile may point the block at the stack
             env = {k: v for k, v in env.items() if k not in ("GRADIATED_BASE_URL", "GRADIATED_API_KEY")}
@@ -479,7 +480,7 @@ class Runner:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--docs", required=True, type=Path, help="product/website/src/docs/training in the docs repo")
-    ap.add_argument("--cloud", action="store_true", help="run the deploy/route/embed blocks (fake Cloud API, torch worker)")
+    ap.add_argument("--cloud", action="store_true", help="run the blocks that need the torch worker (fake Cloud API)")
     ap.add_argument("--base-url", help="use a running stack instead of starting one (with --api-key)")
     ap.add_argument("--api-key", default="")
     ap.add_argument("--grad-bin", default=shutil.which("grad") or str(Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target")) / "debug" / "grad"))

@@ -1,6 +1,6 @@
 # Artifact bundle formats
 
-Every grad training run produces one artifact bundle: a `.grad.tar.gz` file holding the trained weights, the config needed to serve them, and a manifest. This document specifies the bundle envelope (`grad.artifact/1`) and the seven formats inside it, so a serving stack can load any artifact without reading the trainer's code.
+Every grad training run produces one artifact bundle: a `.grad.tar.gz` file holding the trained weights, the config needed to serve them, and a manifest. Weights trained elsewhere become the same bundles through `grad artifacts upload` and `grad artifacts import` (see [Uploads and imports](#uploads-and-imports)). This document specifies the bundle envelope (`grad.artifact/1`) and the seven formats inside it, so a serving stack can load any artifact without reading the trainer's code.
 
 - JSON Schemas: [`spec/artifacts/`](../spec/artifacts/). [`manifest.schema.json`](../spec/artifacts/manifest.schema.json) covers `manifest.json`, and `<format>.schema.json` covers each format's config file. The trainer checks every bundle it writes against them (`grad_trainer/artifact_formats.py`) and refuses to upload one that fails.
 - Reference loaders: the Python blocks marked `# loader: <name>` below are the reference loaders. `server/trainer/tests/test_artifact_formats.py` runs them exactly as written. They use only the files this document lists, plus `torch`, `transformers`, `peft` and `safetensors`. They never import the trainer. The tests compare their outputs with the trainer's own inference code for every recipe.
@@ -19,7 +19,7 @@ Every grad training run produces one artifact bundle: a `.grad.tar.gz` file hold
 ## Versioning
 
 - `schema: "grad.artifact/1"` versions the envelope: the tar layout, `manifest.json` and checksums.
-- `format_version` (an integer, currently `1` for every format) versions one format's files and config.
+- `format_version` (an integer, currently `2` for every format) versions one format's files and config. Version 2 made `provenance` a required field of final manifests; the files and configs did not change, so readers accept `1` and `2` and read a version 1 manifest as a run's (`source: run`).
 - Additive changes keep the version: a new optional config field, a new informational manifest field, or a new file a loader can ignore.
 - Any change an existing loader would misread bumps `format_version`. That covers renamed or removed fields or files, changed tensor names, dtypes or shapes, and changed input rendering or calibration math.
 - Readers must reject a `format_version` they don't know. The trainer only ever writes the current version of each format.
@@ -55,12 +55,15 @@ The stable fields are below. [`manifest.schema.json`](../spec/artifacts/manifest
 | `base_model_revision` | string \| null | The 40-hex Hugging Face commit of those weights. It is `null` when the trainer loaded weights from a path or mirror with no revision marker (`.grad_revision`). Cloud serving requires it to equal the pool's revision, so it refuses `null`. |
 | `deployable` | boolean | `false` only for `reference` bundles, which hold no trained weights. Which formats Cloud serves is in the table above, not here. |
 | `created_by` | `{"name": "grad-trainer", "version": "0.2.0"}` | The trainer version that wrote the bundle. |
+| `provenance` | object | Where the artifact came from (required in final manifests from `format_version` 2). `source` is `run` (with `run_id`), `upload` (with `uploader`, the API key that uploaded it) or `import` (with `uri`, `hf://owner/name@<40-hex commit>`). |
 | `files` | object | Maps each payload path to its lowercase hex SHA-256. It never lists `manifest.json` or `eval_report.json`. |
 | `eval_report_sha256` | string | SHA-256 of `eval_report.json`, when the bundle has one. |
 
 Every other field is informational training metadata, which may change without a version bump. Examples are `test_only` (`true` for a run on the `--dev-models` test models), `lr`, `seed`, `select`, `selected_step`, `steps_completed`, `tokens_total`, `status`, `template_revision`, `thinking`, `train_on`, `adapter`, `versions` (torch, transformers and peft) and per-recipe summaries such as `candidates` or `questions`. Serving must take its runtime config from the format's config file, not from these fields.
 
-grad-server stores the final bundle's manifest as the artifact's `manifest` and adds `run_id`, `attempt`, `dataset`, `dataset_version` and `resolved_config`. For a promoted checkpoint, the API manifest is the checkpoint's training metadata instead. Either way, the `manifest.json` inside the bundle is authoritative.
+grad-server stores the final bundle's manifest as the artifact's `manifest` and adds `run_id`, `attempt`, `dataset`, `dataset_version` and `resolved_config` (an upload or import adds `import_id`). For a promoted checkpoint, the API manifest is the checkpoint's training metadata instead. Either way, the `manifest.json` inside the bundle is authoritative. The API also returns `provenance` on every artifact, read from the manifest (`source: run` for a release whose manifest has none).
+
+Released bundles are stored under one content-addressed prefix, `artifacts/<workspace>/<sha256>`, which is the only prefix serving needs to read. Checkpoints stay under their job's prefix and are never served until promoted; promoting copies the checkpoint bundle into `artifacts/`.
 
 ### `eval_report.json`
 
@@ -568,6 +571,18 @@ class RewardModel:
         h = pooled_state(self.tokenizer, self.backbone, self.config, messages).double()
         return float(torch.sigmoid(self.weight @ h + self.bias))
 ```
+
+## Uploads and imports
+
+`grad artifacts upload PATH --base MODEL [--format F] [--name N]` and `grad artifacts import hf://owner/name[@revision] --base MODEL ...` (and `artifacts.upload` / `from_hf` in the SDKs) turn files trained elsewhere into a bundle. An import worker extracts the upload (a tar, optionally gzip; links and unsafe paths are refused, and a single top-level directory is stripped) or downloads the repo's files at the commit the revision resolves to, keeps the files the format lists, and checks them against this spec and the base model's `config.json` (read on its own; the base weights are never downloaded). Every check that fails names the file:
+
+- **All formats:** the format's config file validates against its schema; every `.safetensors` file has a valid header whose tensor offsets and sizes match its bytes. Pickle weights (`adapter_model.bin`, `.pt`, `.pth`, `.ckpt`) are refused.
+- **`peft_lora`** (and the adapter of a LoRA-backed router, decision or reward bundle): `peft_type` `LORA` and `task_type` `CAUSAL_LM`; `base_model_name_or_path` is the base's repo or catalog id; a non-null `revision` equals the base's pinned revision; no DoRA, rsLoRA, `modules_to_save`, per-module ranks or biases; `target_modules` is a list of linear layers the base decoder has (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj` for Qwen3, Qwen2, Llama and Mistral layouts); every tensor is a `lora_A` or `lora_B` of a target module in a layer the base has, F32, F16 or BF16, shaped `[r, in_features]` or `[out_features, r]` from the base's hidden size, head counts and intermediate size, with both halves present. grad rewrites `base_model_name_or_path` and `revision` to the base's repo and pinned revision, so serving and continued training load the same base.
+- **`cartridge`:** `embeddings` is `[K, hidden_size]` of the base, `slot_token_ids` is `[K]`, and the metadata agrees (`num_tokens`, `hidden_size`, `base_model`). The manifest records `thinking: "auto"`.
+- **`merged_safetensors`, `encoder_safetensors`:** `config.json` has the base's `model_type`, `hidden_size` and `num_hidden_layers`; for an encoder, `grad_embedding.json`'s `dimensions` is the base's hidden size.
+- **`router_bundle`, `decision_bundle`, `reward_bundle`:** the config's `hidden_size` is the base's, every two-dimensional head tensor is `[n, hidden_size]`, and a LoRA backbone passes the `peft_lora` checks with the config's rank and alpha.
+
+The manifest gets the format's own `recipe_kind` (`sft` for `peft_lora` and `merged_safetensors`, so an uploaded LoRA continues like a trained SFT adapter), `deployable: true`, the base's repo and revision, the format's `adapter` for LoRAs, and `provenance` (`upload` with the uploader, or `import` with the pinned `uri`).
 
 ## `reference` (test only)
 
