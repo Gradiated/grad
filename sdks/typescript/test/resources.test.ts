@@ -1,0 +1,409 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  ApiClient,
+  Artifact,
+  ConflictError,
+  Dataset,
+  DeployUnavailableError,
+  Grad,
+  GradError,
+  GradUsageError,
+  ImportFailedError,
+  NotFoundError,
+  Paginator,
+  RouteDecision,
+  Trajectory,
+  ValidationError,
+} from "../src/index.js";
+import { BASE, FakeServer, json, makeGrad, problemFixture, wire } from "./helpers.js";
+
+const scratch = () => mkdtempSync(path.join(process.env.TMPDIR ?? tmpdir(), "grad-ts-"));
+
+describe("configuration", () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+
+  const configFile = (profiles: unknown) => {
+    const dir = scratch();
+    const file = path.join(dir, "gradiated", "config.json");
+    mkdtempSync(path.join(dir, "x"));
+    writeFileSync(path.join(dir, "config.json"), JSON.stringify({ profiles }));
+    return { dir, file: path.join(dir, "config.json") };
+  };
+
+  it("defaults to https://api.gradiated.com with no key", async () => {
+    delete process.env.GRADIATED_API_KEY;
+    delete process.env.GRADIATED_BASE_URL;
+    const grad = new Grad({ configPath: path.join(scratch(), "missing.json") });
+    expect(await grad.config()).toEqual({ baseURL: "https://api.gradiated.com", apiKeySource: "none" });
+  });
+
+  it("reads GRADIATED_API_KEY and GRADIATED_BASE_URL", async () => {
+    process.env.GRADIATED_API_KEY = "grad_env";
+    process.env.GRADIATED_BASE_URL = "http://localhost:8787";
+    const server = new FakeServer().on("GET", "/v1/models", json(wire("models.json")));
+    const grad = new Grad({ fetch: (async (u: string, i: RequestInit) => server.fetch(u.replace("http://localhost:8787", BASE), i)) as typeof fetch });
+    expect(await grad.config()).toEqual({ baseURL: "http://localhost:8787", apiKeySource: "env" });
+    await grad.models.list();
+    expect(server.calls[0]?.headers.get("authorization")).toBe("Bearer grad_env");
+  });
+
+  it("falls back to the grad login config file, honouring profiles; env and options win", async () => {
+    delete process.env.GRADIATED_API_KEY;
+    delete process.env.GRADIATED_BASE_URL;
+    const { file } = configFile({ default: { base_url: "http://file:8787", api_key: "grad_file" }, staging: { base_url: "http://staging", api_key: "grad_staging" } });
+    expect(await new Grad({ configPath: file }).config()).toEqual({ baseURL: "http://file:8787", apiKeySource: "config" });
+    expect(await new Grad({ configPath: file, profile: "staging" }).config()).toEqual({ baseURL: "http://staging", apiKeySource: "config" });
+    process.env.GRADIATED_PROFILE = "staging";
+    expect((await new Grad({ configPath: file }).config()).baseURL).toBe("http://staging");
+    process.env.GRADIATED_API_KEY = "grad_env";
+    expect(await new Grad({ configPath: file }).config()).toEqual({ baseURL: "http://staging", apiKeySource: "env" });
+    expect(await new Grad({ configPath: file, apiKey: "grad_opt", baseURL: "http://opt" }).config()).toEqual({ baseURL: "http://opt", apiKeySource: "option" });
+    expect((await new Grad({ configPath: file, profile: "nope" }).config()).baseURL).toBe("https://api.gradiated.com");
+  });
+
+  it("finds the config under XDG_CONFIG_HOME, then HOME", async () => {
+    delete process.env.GRADIATED_API_KEY;
+    delete process.env.GRADIATED_BASE_URL;
+    const xdg = scratch();
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(path.join(xdg, "gradiated"));
+    writeFileSync(path.join(xdg, "gradiated", "config.json"), JSON.stringify({ profiles: { default: { base_url: "http://xdg", api_key: "k" } } }));
+    process.env.XDG_CONFIG_HOME = xdg;
+    expect((await new Grad().config()).baseURL).toBe("http://xdg");
+    delete process.env.XDG_CONFIG_HOME;
+    const home = scratch();
+    mkdirSync(path.join(home, ".config", "gradiated"), { recursive: true });
+    writeFileSync(path.join(home, ".config", "gradiated", "config.json"), JSON.stringify({ profiles: { default: { base_url: "http://home" } } }));
+    process.env.HOME = home;
+    expect(await new Grad().config()).toEqual({ baseURL: "http://home", apiKeySource: "none" });
+  });
+
+  it("rejects malformed config files and base URLs loudly", async () => {
+    delete process.env.GRADIATED_API_KEY;
+    delete process.env.GRADIATED_BASE_URL;
+    const dir = scratch();
+    const bad = path.join(dir, "bad.json");
+    writeFileSync(bad, "{not json");
+    await expect(new Grad({ configPath: bad }).config()).rejects.toThrow(/not valid JSON/);
+    writeFileSync(bad, JSON.stringify({ profiles: { default: "x" } }));
+    await expect(new Grad({ configPath: bad }).config()).rejects.toThrow(/must be an object/);
+    await expect(new Grad({ configPath: dir }).config()).rejects.toThrow(/Could not read/);
+    expect(() => new Grad({ baseURL: "localhost:8787" })).toThrow(/absolute http\(s\) URL/);
+  });
+});
+
+describe("datasets and imports", () => {
+  it("creates, gets, lists (paginated), pushes in batches, renders and reads records", async () => {
+    const server = new FakeServer()
+      .on("POST", "/v1/datasets", json(wire("dataset-created.json"), 201))
+      .on("GET", "/v1/datasets/support-prod", json(wire("dataset.json")))
+      .on("GET", "/v1/datasets", json(wire("datasets-page-1.json")), json(wire("datasets-page-2.json")))
+      .on("POST", "/v1/datasets/support-prod/records", json(wire("dataset.json")))
+      .on("POST", "/v1/datasets/support-prod/render", json({ dataset: "support-prod", model: "m", template_revision: "t", token_counts: "estimated", examples: [] }))
+      .on("GET", "/v1/datasets/support-prod/records", json(wire("dataset-records-page.json")));
+    const { grad } = makeGrad(server);
+
+    const created = await grad.datasets.create("support-prod", { metadata: { team: "support" } });
+    expect(created).toBeInstanceOf(Dataset);
+    expect(created.recordCount).toBe(0);
+    expect(server.lastBody("POST", "/v1/datasets")).toEqual({ name: "support-prod", metadata: { team: "support" } });
+
+    const ds = await grad.datasets.get("support-prod");
+    expect(ds.recordCount).toBe(3);
+    expect(await ds.count()).toBe(3);
+
+    const firstPage = await grad.datasets.list({ limit: 1 });
+    expect(firstPage.data).toHaveLength(1);
+    expect(firstPage.nextCursor).toBeTruthy();
+    server.on("GET", "/v1/datasets", json(wire("datasets-page-1.json")), json(wire("datasets-page-2.json")));
+    const names: string[] = [];
+    for await (const d of grad.datasets.list({ limit: 1 })) names.push(d.name);
+    expect(names).toHaveLength(2);
+    expect(server.callsTo("GET", "/v1/datasets").at(-1)?.url.searchParams.get("cursor")).toBe(firstPage.nextCursor);
+
+    const records = Array.from({ length: 5 }, (_, i) => ({ sessionId: `s${i}`, messages: [{ role: "user" as const, content: `q${i}` }], scores: { tests_passed: 1 } }));
+    const pushed = await grad.datasets.push("support-prod", records, { batchSize: 2, metadata: { source: "unit" } });
+    expect(pushed.recordCount).toBe(3);
+    const pushes = server.callsTo("POST", "/v1/datasets/support-prod/records").map((c) => JSON.parse(c.body ?? "{}"));
+    expect(pushes.map((p) => p.records.length)).toEqual([2, 2, 1]);
+    expect(pushes[0].metadata).toEqual({ source: "unit" });
+    expect(pushes[1].metadata).toBeUndefined();
+    expect(pushes[0].records[0]).toEqual({ session_id: "s0", messages: [{ role: "user", content: "q0" }], scores: { tests_passed: 1 } });
+
+    await ds.push([{ messages: [] }], { maxBatchBytes: 1 });
+    await expect(grad.datasets.push("support-prod", [])).rejects.toBeInstanceOf(GradUsageError);
+
+    const dir = scratch();
+    const file = path.join(dir, "r.jsonl");
+    writeFileSync(file, `${JSON.stringify({ session_id: "f1", messages: [] })}\n\n${JSON.stringify({ messages: [] })}\n`);
+    await grad.datasets.push("support-prod", file);
+    expect(server.lastBody<{ records: unknown[] }>("POST", "/v1/datasets/support-prod/records").records).toHaveLength(2);
+    writeFileSync(file, "{bad\n");
+    await expect(grad.datasets.push("support-prod", file)).rejects.toThrow(/r.jsonl:1 is not valid JSON/);
+    writeFileSync(file, "[1]\n");
+    await expect(grad.datasets.push("support-prod", file)).rejects.toThrow(/must be a JSON object/);
+
+    await ds.render({ model: "qwen/qwen3-8b", trainOn: "all_assistant" });
+    expect(server.lastBody("POST", "/v1/datasets/support-prod/render")).toEqual({ model: "qwen/qwen3-8b", train_on: "all_assistant" });
+    await grad.datasets.render("support-prod");
+
+    const page = await grad.datasets.records("support-prod", { version: 2, limit: 2 });
+    expect(page.data[0]?.sessionId).toBeDefined();
+    expect(server.callsTo("GET", "/v1/datasets/support-prod/records")[0]?.url.search).toBe("?version=2&limit=2");
+    expect(JSON.parse(JSON.stringify(ds)).name).toBe("support-prod");
+  });
+
+  it("imports a file: upload ticket, PUT without the API key, import job, wait", async () => {
+    const ticket = wire<{ url: string }>("upload-ticket.json");
+    const ticketPath = new URL(ticket.url, BASE).pathname;
+    const server = new FakeServer()
+      .on("POST", "/v1/uploads", json(ticket, 201))
+      .on("PUT", ticketPath, json({ upload_id: "upl" }))
+      .on("POST", "/v1/datasets/support-prod/imports", json(wire("import-job-queued.json"), 202))
+      .on("GET", `/v1/imports/${wire<{ id: string }>("import-job-queued.json").id}`, json({ ...wire<Record<string, unknown>>("import-job-queued.json"), status: "running" }), json(wire("import-job-completed.json")));
+    server.on("GET", "/v1/datasets/support-prod", json(wire("dataset.json")));
+    const { grad, clock } = makeGrad(server);
+    const ds = await grad.datasets.get("support-prod");
+    const dir = scratch();
+    const file = path.join(dir, "traces.jsonl");
+    writeFileSync(file, '{"messages":[]}\n');
+
+    const job = await ds.importFile(file, { connector: "openai_chat", format: "jsonl" }).wait();
+    expect(job.status).toBe("completed");
+    expect(job.importedCount).toBe(3);
+    expect(job.detectedScores).toEqual(["resolved"]);
+    expect(clock.sleeps).toEqual([500]);
+
+    const upload = server.lastBody("POST", "/v1/uploads");
+    expect(upload).toMatchObject({ purpose: "dataset_import", filename: "traces.jsonl", size_bytes: 16 });
+    expect((upload as { sha256: string }).sha256).toMatch(/^[0-9a-f]{64}$/);
+    const put = server.callsTo("PUT", ticketPath)[0]!;
+    expect(put.headers.has("authorization")).toBe(false);
+    expect(put.headers.get("content-type")).toBe("application/octet-stream");
+    expect(put.url.search).toContain("sig=");
+    expect(put.rawBody).toBeInstanceOf(Blob);
+    expect(server.lastBody("POST", "/v1/datasets/support-prod/imports")).toEqual({
+      source: { kind: "upload", upload_id: ticket["upload_id" as keyof typeof ticket], format: "jsonl" },
+      connector: "openai_chat",
+    });
+
+    const pending = grad.datasets.importFile("support-prod", file);
+    expect((await pending).id).toBe(wire<{ id: string }>("import-job-queued.json").id);
+    await expect(ds.importFile(path.join(dir, "missing.jsonl"))).rejects.toThrow(/File not found/);
+  });
+
+  it("uploads to a presigned cross-origin URL with only the ticket headers", async () => {
+    const server = new FakeServer()
+      .on("POST", "/v1/uploads", json({ upload_id: "upl_s3", method: "PUT", url: "https://bucket.s3.example/key?X-Amz-Signature=abc", headers: { "x-amz-checksum-sha256": "z" }, expires_at: "t" }, 201))
+      .on("PUT", "/key", new Response(null, { status: 200 }))
+      .on("POST", "/v1/datasets/d/imports", json(wire("import-job-queued.json"), 202));
+    const { grad } = makeGrad(server);
+    const file = path.join(scratch(), "t.jsonl");
+    writeFileSync(file, "{}\n");
+    await grad.datasets.importFile("d", file);
+    const put = server.callsTo("PUT", "/key")[0]!;
+    expect(put.url.origin).toBe("https://bucket.s3.example");
+    expect(put.headers.has("authorization")).toBe(false);
+    expect(put.headers.get("x-amz-checksum-sha256")).toBe("z");
+  });
+
+  it("raises ImportFailedError with the server's error", async () => {
+    const failed = { ...wire<Record<string, unknown>>("import-job-completed.json"), id: "imp_1", status: "failed", error: "line 3: not JSON" };
+    const server = new FakeServer().on("GET", "/v1/imports/imp_1", json(failed));
+    const { grad } = makeGrad(server);
+    const e = await grad.imports.wait("imp_1").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ImportFailedError);
+    expect((e as Error).message).toContain("line 3: not JSON");
+    expect((e as ImportFailedError).job.status).toBe("failed");
+  });
+
+  it("imports from Hugging Face into a derived dataset name", async () => {
+    const done = { ...wire<Record<string, unknown>>("import-job-completed.json"), dataset: "openai-gsm8k-train" };
+    const server = new FakeServer()
+      .on("POST", "/v1/datasets", problemFixture("conflict"))
+      .on("POST", "/v1/datasets/openai-gsm8k-train/imports", json({ ...done, id: "imp_hf", status: "queued" }, 202))
+      .on("GET", "/v1/imports/imp_hf", json(done))
+      .on("GET", "/v1/datasets/openai-gsm8k-train", json({ ...wire<Record<string, unknown>>("dataset.json"), name: "openai-gsm8k-train" }));
+    const { grad } = makeGrad(server);
+    const ds = await grad.datasets.fromHf("openai/gsm8k", { subset: "main", split: "train", prompt: "question", answer: "answer", limit: 10, revision: "r1", connector: "auto" });
+    expect(ds.name).toBe("openai-gsm8k-train");
+    expect(server.lastBody("POST", "/v1/datasets/openai-gsm8k-train/imports")).toEqual({
+      source: { kind: "hf", repo: "openai/gsm8k", split: "train", config: "main", revision: "r1", limit: 10, columns: { prompt: "question", answer: "answer" } },
+      connector: "auto",
+    });
+
+    const other = new FakeServer().on("POST", "/v1/datasets", json({}, 403));
+    await expect(makeGrad(other).grad.datasets.fromHf("a/b")).rejects.toThrow(/403/);
+
+    const importer = new FakeServer()
+      .on("POST", "/v1/datasets/mine/imports", json({ ...done, id: "imp_2" }, 202))
+      .on("GET", "/v1/imports", json({ data: [done], next_cursor: null }))
+      .on("GET", "/v1/datasets/mine", json({ ...wire<Record<string, unknown>>("dataset.json"), name: "mine" }));
+    const g2 = makeGrad(importer).grad;
+    const mine = await g2.datasets.get("mine");
+    await mine.importHf("x/y", { columns: { messages: "conversation" } });
+    expect(importer.lastBody("POST", "/v1/datasets/mine/imports")).toEqual({ source: { kind: "hf", repo: "x/y", columns: { messages: "conversation" } } });
+    expect((await g2.imports.list()).data).toHaveLength(1);
+    expect((await g2.imports.list({ limit: 5 }).all())[0]?.status).toBe("completed");
+  });
+
+  it("builds trajectories with empty score maps", () => {
+    const t = Trajectory.fromMessages([{ role: "user", content: "hi" }], { sessionId: "pr_481", groupId: "g", id: "r1", source: "unit" });
+    t.scores.tests_passed = 1;
+    expect(t).toEqual({ schema: "grad.trajectory/1", messages: [{ role: "user", content: "hi" }], scores: { tests_passed: 1 }, metrics: {}, metadata: {}, id: "r1", sessionId: "pr_481", groupId: "g", source: "unit" });
+  });
+});
+
+describe("artifacts, deployments, routing, feedback", () => {
+  const artifactFixture = wire<{ id: string; name: string; version: string; sha256: string }>("artifact.json");
+
+  it("gets and lists artifacts and maps 404", async () => {
+    const server = new FakeServer()
+      .on("GET", `/v1/artifacts/${encodeURIComponent("support-sft@latest")}`, json(artifactFixture))
+      .on("GET", "/v1/artifacts", json(wire("artifacts-page.json")))
+      .on("GET", "/v1/artifacts/missing", problemFixture("not-found"));
+    const { grad } = makeGrad(server);
+    const art = await grad.artifacts.get("support-sft@latest");
+    expect(art).toBeInstanceOf(Artifact);
+    expect(art.ref).toBe(`${artifactFixture.name}@${artifactFixture.version}`);
+    expect(JSON.parse(JSON.stringify(art)).id).toBe(artifactFixture.id);
+    const page = await grad.artifacts.list({ name: "support-sft", limit: 10 });
+    expect(page.data[0]).toBeInstanceOf(Artifact);
+    expect(server.callsTo("GET", "/v1/artifacts")[0]?.url.search).toBe("?limit=10&name=support-sft");
+    const e = await grad.artifacts.get("missing").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(NotFoundError);
+    expect((e as NotFoundError).requestId).toMatch(/^req_/);
+  });
+
+  it("deploys, rolls back, lists and inspects deployments", async () => {
+    const server = new FakeServer()
+      .on("POST", "/v1/deployments", json(wire("deployment.json")))
+      .on("GET", "/v1/deployments/support-router", json(wire("deployment-status.json")))
+      .on("GET", "/v1/deployments", json(wire("deployments-page.json")))
+      .on("POST", "/v1/deployments/support-router/rollback", json(wire("deployment.json")));
+    server.on("GET", `/v1/artifacts/${encodeURIComponent(artifactFixture.id)}`, json(artifactFixture));
+    const { grad } = makeGrad(server);
+    const art = await grad.artifacts.get(artifactFixture.id);
+    const dep = await art.deploy({ name: "support-router", fallback: "qwen/qwen3-32b", exploreRate: 0.05 });
+    expect(dep.modelId).toBe("ws_e2e/support-router");
+    expect(server.lastBody("POST", "/v1/deployments")).toEqual({ artifact: artifactFixture.id, name: "support-router", fallback: "qwen/qwen3-32b", explore_rate: 0.05 });
+    await grad.deploy({ name: "support-sft", version: "2026-11-27-1" });
+    expect(server.lastBody("POST", "/v1/deployments")).toEqual({ artifact: "support-sft@2026-11-27-1" });
+    await grad.deployments.create({ id: "art_x" });
+    expect(server.lastBody("POST", "/v1/deployments")).toEqual({ artifact: "art_x" });
+    expect((await grad.deployments.get("support-router")).feedbackCount).toBe(2);
+    expect((await grad.deployments.list()).data[0]?.previousArtifactId).toBeNull();
+    expect((await grad.deployments.rollback("support-router")).status).toBe("active");
+  });
+
+  it("raises DeployUnavailableError on self-hosted servers with the server's hint", async () => {
+    const server = new FakeServer().on("POST", "/v1/deployments", problemFixture("deploy-unavailable"));
+    const { grad } = makeGrad(server);
+    const e = await grad.deploy("support-sft@latest").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(DeployUnavailableError);
+    expect((e as Error).message).toContain("vLLM or SGLang");
+    expect((e as Error).message).toContain("POST http://grad.test/v1/deployments");
+  });
+
+  it("routes and records feedback for the decision", async () => {
+    const server = new FakeServer().on("POST", "/v1/route", json(wire("route.json"))).on("POST", "/v1/feedback", json(wire("feedback-response.json")));
+    const { grad } = makeGrad(server);
+    const decision = await grad.route("support-router", { messages: [{ role: "user", content: "Where is invoice #9941?" }], tools: [], sessionId: "s1" });
+    expect(decision).toBeInstanceOf(RouteDecision);
+    expect(decision.model).toBe("qwen/qwen3-8b");
+    expect(server.lastBody("POST", "/v1/route")).toEqual({ deployment: "support-router", messages: [{ role: "user", content: "Where is invoice #9941?" }], tools: [], session_id: "s1" });
+    const fb = await decision.recordFeedback({ score: 1, metrics: { latency_ms: 412 } });
+    expect(fb.accepted).toBe(1);
+    expect(server.lastBody("POST", "/v1/feedback")).toEqual({
+      events: [{ idempotency_key: "inf_5d0c9e8a7b6f", inference_id: "inf_5d0c9e8a7b6f", deployment_name: "support-router", score: 1, metrics: { latency_ms: 412 } }],
+    });
+    expect(decision.toJSON().inferenceId).toBe("inf_5d0c9e8a7b6f");
+  });
+
+  it("records feedback events with documented defaults and validation", async () => {
+    const server = new FakeServer().on("POST", "/v1/feedback", json(wire("feedback-response.json")));
+    const { grad } = makeGrad(server);
+    await grad.feedback.record({ inferenceId: "inf_1", idempotencyKey: "inf_1-ci", score: 0, expectedOutput: { content: "fixed" }, sessionId: "s" });
+    expect(server.lastBody("POST", "/v1/feedback")).toEqual({ events: [{ idempotency_key: "inf_1-ci", inference_id: "inf_1", session_id: "s", score: 0, expected_output: { content: "fixed" } }] });
+    await grad.feedback.record([{ sessionId: "s2", score: 1 }, { deploymentName: "d", metrics: { x: 1 } }]);
+    const events = server.lastBody<{ events: Array<{ idempotency_key: string }> }>("POST", "/v1/feedback").events;
+    expect(events).toHaveLength(2);
+    expect(events[0]?.idempotency_key).toMatch(/[0-9a-f-]{36}/);
+    expect(events[0]?.idempotency_key).not.toBe(events[1]?.idempotency_key);
+    await expect(grad.feedback.record({ score: 2 })).rejects.toThrow(/\[0, 1\]/);
+    await expect(grad.feedback.record([])).rejects.toThrow(/at least one/);
+  });
+
+  it("creates embeddings", async () => {
+    const server = new FakeServer().on("POST", "/v1/embeddings", json(wire("embeddings.json")));
+    const { grad } = makeGrad(server);
+    const out = await grad.embeddings.create({ model: "ws_e2e/docs-embedder", input: ["a", "b"] });
+    expect(out.data).toHaveLength(2);
+    expect(out.usage.promptTokens).toBe(9);
+  });
+});
+
+describe("models, keys, low-level api", () => {
+  it("lists models and manages keys", async () => {
+    const server = new FakeServer()
+      .on("GET", "/v1/models", json(wire("models.json")))
+      .on("POST", "/v1/keys", json(wire("api-key-created.json"), 201))
+      .on("GET", "/v1/keys", json(wire("api-keys-page.json")))
+      .on("DELETE", "/v1/keys/key_1", json({ ...wire<{ key: Record<string, unknown> }>("api-key-created.json").key, revoked_at: "2026-11-27T05:00:00Z" }));
+    const { grad } = makeGrad(server);
+    const models = await grad.models.list();
+    expect(models.length).toBeGreaterThan(3);
+    expect(models[0]).toHaveProperty("pricePerMillionTokensUsd");
+    const created = await grad.keys.create({ name: "ci", scopes: ["runs:read"] });
+    expect(created.secret).toContain("grad_");
+    expect((await grad.keys.list()).data.length).toBeGreaterThan(0);
+    expect((await grad.keys.revoke("key_1")).revokedAt).toBe("2026-11-27T05:00:00Z");
+    expect(grad.api).toBeInstanceOf(ApiClient);
+  });
+
+  it("surfaces validation field errors on create calls", async () => {
+    const server = new FakeServer().on("POST", "/v1/datasets", problemFixture("validation"));
+    const { grad } = makeGrad(server);
+    const e = await grad.datasets.create("Bad Name!").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ValidationError);
+    expect((e as ValidationError).fieldErrors.map((f) => f.field)).toEqual(["name", "recipe.batch_size"]);
+    expect(e).toBeInstanceOf(GradError);
+  });
+
+  it("maps conflicts", async () => {
+    const server = new FakeServer().on("POST", "/v1/datasets", problemFixture("conflict"));
+    await expect(makeGrad(server).grad.datasets.create("support-prod")).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("Paginator.all walks every page once", async () => {
+    const fetchPage = vi.fn(async (cursor: string | undefined) => (cursor ? { data: [3], nextCursor: null } : { data: [1, 2], nextCursor: "c" }));
+    const p = new Paginator<number>(fetchPage);
+    expect(await p.all()).toEqual([1, 2, 3]);
+    expect((await p).data).toEqual([1, 2]);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("node file helpers", () => {
+  it("parses content-disposition safely", async () => {
+    const { filenameFromDisposition } = await import("../src/node/files.js");
+    expect(filenameFromDisposition('attachment; filename="support-sft-2026.grad.tar.gz"')).toBe("support-sft-2026.grad.tar.gz");
+    expect(filenameFromDisposition("attachment; filename*=UTF-8''..%2F..%2Fetc%2Fpasswd")).toBe("passwd");
+    expect(filenameFromDisposition('attachment; filename=".."')).toBeUndefined();
+    expect(filenameFromDisposition("attachment; filename*=UTF-8''%E0%A4%A")).toBe("_E0_A4_A");
+    expect(filenameFromDisposition(null)).toBeUndefined();
+    expect(filenameFromDisposition("inline")).toBeUndefined();
+    const { readTextFile } = await import("../src/node/files.js");
+    const f = path.join(scratch(), "a.txt");
+    writeFileSync(f, "ctx");
+    expect(await readTextFile(f)).toBe("ctx");
+    expect(readFileSync(f, "utf8")).toBe("ctx");
+  });
+});

@@ -3,22 +3,48 @@
   "version": "0.1.0",
   "description": "TypeScript SDK for the Gradiated training and serving platform",
   "license": "Apache-2.0",
+  "homepage": "https://gradiated.com/docs/training",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gradiated/grad.git",
+    "directory": "sdks/typescript"
+  },
+  "keywords": [
+    "gradiated",
+    "fine-tuning",
+    "lora",
+    "router",
+    "llm",
+    "sdk"
+  ],
   "engines": {
     "node": ">=20"
   },
   "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit && vitest run"
+    "check": "tsc --noEmit && vitest run --coverage",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "devDependencies": {
     "@types/node": "22.15.3",
+    "@vitest/coverage-v8": "4.1.11",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
   }

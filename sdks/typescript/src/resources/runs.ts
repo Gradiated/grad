@@ -1,0 +1,319 @@
+import { CODEC } from "../generated/client.js";
+import type {
+  Artifact as ArtifactData,
+  Checkpoint as CheckpointData,
+  Deployment,
+  MetricPoint,
+  PlanRunResponse,
+  RecipeSpec,
+  ResolvedRunConfig,
+  Run as RunData,
+  RunStatus,
+  SplitSpec,
+} from "../generated/models.js";
+import { convertKeys, GradError, type RequestOptions } from "../generated/transport.js";
+import type { Core } from "../core.js";
+import { GradUsageError, RunFailedError, WaitTimeoutError } from "../errors.js";
+import { collect, pages, Paginator } from "../pagination.js";
+import { Pending } from "../pending.js";
+import { isTransient, pollUntil, type WaitOptions } from "../polling.js";
+import { type Recipe, toRecipeSpec } from "../recipes.js";
+import { Artifact, deployArtifact, downloadArtifact, type DeployOptions, type DownloadOptions, type DownloadResult } from "./artifacts.js";
+import { datasetName, type DatasetRef } from "./datasets.js";
+
+export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["completed", "failed", "cancelled", "stopped_budget"];
+const isTerminal = (status: RunStatus): boolean => TERMINAL_RUN_STATUSES.includes(status);
+
+export interface RunParams {
+  dataset: DatasetRef;
+  name: string;
+  recipe: Recipe | RecipeSpec;
+  split?: SplitSpec;
+  /** Spend cap; the run stops with `stopped_budget` and keeps a checkpoint. */
+  maxCostUsd?: number;
+}
+
+export interface RunWaitOptions extends WaitOptions {
+  /** Streams each metric point while waiting (uses the SSE metrics stream). */
+  onMetric?: (metric: MetricPoint) => void | Promise<void>;
+  /** Called with every status change. */
+  onStatus?: (status: RunStatus, run: Run) => void | Promise<void>;
+}
+
+export interface MetricsOptions extends RequestOptions {
+  /** Keep the stream open until the run finishes (SSE with automatic reconnect). */
+  follow?: boolean;
+  /** Only points after this step (JSON pages). */
+  afterStep?: number;
+}
+
+/** A dry-run plan: resolved settings, warnings and cost before you spend anything. */
+export interface RunPlan extends PlanRunResponse {}
+export class RunPlan {
+  constructor(data: PlanRunResponse) {
+    Object.assign(this, data);
+  }
+
+  /** Alias of `resolvedConfig` (the docs' name). */
+  get resolvedRecipe(): ResolvedRunConfig {
+    return this.resolvedConfig;
+  }
+}
+
+const buildRunBody = async (params: RunParams) => {
+  if (!params.name) throw new GradUsageError("runs need a name.", "invalid_run");
+  return {
+    dataset: datasetName(params.dataset),
+    name: params.name,
+    recipe: await toRecipeSpec(params.recipe),
+    ...(params.split !== undefined ? { split: params.split } : {}),
+    ...(params.maxCostUsd !== undefined ? { maxCostUsd: params.maxCostUsd } : {}),
+  };
+};
+
+const decodeMetric = (data: string): MetricPoint => convertKeys(CODEC, "MetricPoint", JSON.parse(data), "decode") as MetricPoint;
+
+const decodeRun = (data: string): RunData => convertKeys(CODEC, "Run", JSON.parse(data), "decode") as RunData;
+
+/** A checkpoint saved during a run; `promote()` turns it into a kept artifact. */
+export interface Checkpoint extends CheckpointData {}
+export class Checkpoint {
+  readonly #core: Core;
+
+  constructor(core: Core, data: CheckpointData) {
+    this.#core = core;
+    Object.assign(this, data);
+  }
+
+  async promote(options: { name?: string } & RequestOptions = {}): Promise<Artifact> {
+    const { name, ...request } = options;
+    return new Artifact(this.#core, await this.#core.api.promoteCheckpoint(this.id, name !== undefined ? { name } : {}, request));
+  }
+
+  toJSON(): CheckpointData {
+    return { ...this } as CheckpointData;
+  }
+}
+
+/** A training run. After `wait()`, `artifact` holds the produced artifact. */
+export interface Run extends RunData {}
+export class Run {
+  readonly #core: Core;
+  /** The produced artifact, loaded by `wait()` when the run completes. */
+  artifact: Artifact | undefined;
+
+  constructor(core: Core, data: RunData) {
+    this.#core = core;
+    this.artifact = undefined;
+    Object.assign(this, data);
+  }
+
+  private update(data: RunData): void {
+    Object.assign(this, data);
+  }
+
+  async refresh(options?: RequestOptions): Promise<this> {
+    this.update(await this.#core.api.getRun(this.id, options));
+    return this;
+  }
+
+  /**
+   * Waits for a terminal status. Resolves for `completed` (with `artifact`
+   * loaded); throws RunFailedError for `failed`, `cancelled` and
+   * `stopped_budget` (resume with a raised cap).
+   */
+  async wait(options: RunWaitOptions = {}): Promise<CompletedRun> {
+    let lastStatus: RunStatus | undefined;
+    const notify = async () => {
+      if (this.status !== lastStatus) {
+        lastStatus = this.status;
+        await options.onStatus?.(this.status, this);
+      }
+    };
+    if (options.onMetric) {
+      await this.followUntilDone(options, notify);
+    } else {
+      await pollUntil(
+        `run ${this.id}`,
+        (signal) => this.#core.api.getRun(this.id, { signal }),
+        (run) => isTerminal(run.status),
+        options,
+        this.#core.poll,
+        async (run) => {
+          this.update(run);
+          await notify();
+        },
+      );
+    }
+    if (this.status !== "completed") throw new RunFailedError(this);
+    if (!this.artifactId) {
+      throw new GradError(`Run ${this.id} completed without an artifact; this is a server bug, please report it.`, { code: "missing_artifact" });
+    }
+    if (!this.artifact || this.artifact.id !== this.artifactId) {
+      this.artifact = new Artifact(this.#core, await this.#core.api.getArtifact(this.artifactId, { signal: options.signal }));
+    }
+    return this as CompletedRun;
+  }
+
+  private async followUntilDone(options: RunWaitOptions, notify: () => Promise<void>): Promise<void> {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(options.signal?.reason);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    const timer =
+      options.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(new WaitTimeoutError(`run ${this.id}`, options.timeoutMs ?? 0)), options.timeoutMs);
+    try {
+      for await (const metric of this.metrics({ follow: true, signal: controller.signal })) {
+        await options.onMetric?.(metric);
+      }
+      // metrics({ follow }) only returns after the final `status` event, which updated this run.
+      await notify();
+    } catch (error) {
+      if (controller.signal.reason instanceof WaitTimeoutError) throw controller.signal.reason;
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * Metric points. With `follow: true` this streams live over SSE, reconnects
+   * with `Last-Event-ID` after drops, and ends when the run finishes.
+   */
+  async *metrics(options: MetricsOptions = {}): AsyncGenerator<MetricPoint, void, undefined> {
+    const { follow = false, afterStep, ...request } = options;
+    if (!follow) {
+      const fetchPage = (cursor: string | undefined) =>
+        this.#core.api.listRunMetrics(this.id, { ...(afterStep !== undefined ? { afterStep } : {}), ...(cursor ? { cursor } : {}) }, request);
+      for await (const page of pages(fetchPage, request.signal)) {
+        // The spec marks MetricPoint nullable, so page items are typed `| null`; the server never sends null.
+        for (const point of page.data) if (point !== null) yield point;
+      }
+      return;
+    }
+    let lastEventId: string | undefined;
+    let failures = 0;
+    while (true) {
+      try {
+        for await (const event of this.#core.api.listRunMetricsStream(this.id, {}, { ...request, ...(lastEventId !== undefined ? { lastEventId } : {}) })) {
+          failures = 0;
+          if (event.event === "metric") {
+            if (event.id !== undefined) lastEventId = event.id;
+            const point = decodeMetric(event.data);
+            if (afterStep === undefined || point.step > afterStep) yield point;
+          } else if (event.event === "status") {
+            this.update(decodeRun(event.data));
+            return;
+          }
+        }
+        // The stream closed without a final status (proxy timeout, deploy): reconnect.
+      } catch (error) {
+        if (request.signal?.aborted || !isTransient(error)) throw error;
+      }
+      failures += 1;
+      await this.#core.poll.sleep(Math.min(500 * 2 ** Math.min(failures - 1, 4), 5_000), request.signal);
+    }
+  }
+
+  async cancel(options?: RequestOptions): Promise<this> {
+    this.update(await this.#core.api.cancelRun(this.id, options));
+    return this;
+  }
+
+  /** Re-queues a stopped run from its last checkpoint (raise `maxCostUsd` after a budget stop). */
+  async resume(options: { maxCostUsd?: number } & RequestOptions = {}): Promise<this> {
+    const { maxCostUsd, ...request } = options;
+    this.update(await this.#core.api.resumeRun(this.id, maxCostUsd !== undefined ? { maxCostUsd } : {}, request));
+    return this;
+  }
+
+  async checkpoints(options: RequestOptions = {}): Promise<Checkpoint[]> {
+    const fetchPage = (cursor: string | undefined) => this.#core.api.listRunCheckpoints(this.id, cursor ? { cursor } : {}, options);
+    return (await collect(pages(fetchPage, options.signal))).map((c) => new Checkpoint(this.#core, c));
+  }
+
+  private requireArtifact(action: string): string {
+    if (!this.artifactId) {
+      throw new GradUsageError(`Run ${this.id} has no artifact to ${action} (status ${this.status}); wait() for it to complete first.`, "no_artifact");
+    }
+    return this.artifactId;
+  }
+
+  /** Deploys the run's artifact (Cloud; self-hosted servers raise DeployUnavailableError). */
+  async deploy(options?: DeployOptions): Promise<Deployment> {
+    return deployArtifact(this.#core, this.requireArtifact("deploy"), options);
+  }
+
+  /** Streams the run's artifact to disk with SHA-256 verification. */
+  async download(dest: string, options?: DownloadOptions): Promise<DownloadResult> {
+    return downloadArtifact(this.#core, this.requireArtifact("download"), dest, options);
+  }
+
+  toJSON(): RunData & { artifact?: ArtifactData } {
+    const { artifact, ...rest } = this as unknown as RunData & { artifact?: Artifact };
+    return { ...rest, ...(artifact ? { artifact: artifact.toJSON() } : {}) } as RunData & { artifact?: ArtifactData };
+  }
+}
+
+/** A run that finished `completed`, with its artifact loaded. */
+export type CompletedRun = Run & { artifact: Artifact; artifactId: string };
+
+export type PendingRun = Pending<Run, CompletedRun, RunWaitOptions>;
+
+export class RunsResource {
+  constructor(private readonly core: Core) {}
+
+  /** Validates the dataset, resolves defaults and estimates tokens and cost; nothing is billed. */
+  async plan(params: RunParams, options?: RequestOptions): Promise<RunPlan> {
+    return new RunPlan(await this.core.api.planRun(await buildRunBody(params), options));
+  }
+
+  /** Queues a run: `await` it for the Run, or chain `.wait()`. */
+  create(params: RunParams, options?: RequestOptions): PendingRun {
+    return new Pending(
+      (async () => new Run(this.core, await this.core.api.createRun(await buildRunBody(params), options)))(),
+    );
+  }
+
+  async get(id: string, options?: RequestOptions): Promise<Run> {
+    return new Run(this.core, await this.core.api.getRun(id, options));
+  }
+
+  list(options: { limit?: number } & RequestOptions = {}): Paginator<Run> {
+    const { limit, ...request } = options;
+    return new Paginator(async (cursor) => {
+      const page = await this.core.api.listRuns({ ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) }, request);
+      return { data: page.data.map((r) => new Run(this.core, r)), nextCursor: page.nextCursor };
+    }, request.signal);
+  }
+
+  async wait(id: string, options?: RunWaitOptions): Promise<CompletedRun> {
+    return (await this.get(id)).wait(options);
+  }
+
+  async cancel(id: string, options?: RequestOptions): Promise<Run> {
+    return new Run(this.core, await this.core.api.cancelRun(id, options));
+  }
+
+  async resume(id: string, options: { maxCostUsd?: number } & RequestOptions = {}): Promise<Run> {
+    const { maxCostUsd, ...request } = options;
+    return new Run(this.core, await this.core.api.resumeRun(id, maxCostUsd !== undefined ? { maxCostUsd } : {}, request));
+  }
+
+  metrics(id: string, options?: MetricsOptions): AsyncGenerator<MetricPoint, void, undefined> {
+    return new Run(this.core, { id } as RunData).metrics(options);
+  }
+
+  checkpoints(id: string, options?: RequestOptions): Promise<Checkpoint[]> {
+    return new Run(this.core, { id } as RunData).checkpoints(options);
+  }
+}
+
+export class CheckpointsResource {
+  constructor(private readonly core: Core) {}
+
+  /** Copies a checkpoint into a versioned artifact you keep. */
+  promote(id: string, options: { name?: string } & RequestOptions = {}): Promise<Artifact> {
+    return new Checkpoint(this.core, { id } as CheckpointData).promote(options);
+  }
+}
