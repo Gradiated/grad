@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "data": [
+    {
+      "id": "qwen/qwen3-0.6b",
+      "hf_repo": null,
+      "family": "llm",
+      "adapters": [
+        "lora"
+      ],
+      "recipes": [
+        "router",
+        "sft"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 0.15,
+      "max_context_tokens": 32768,
+      "template_revision": "",
+      "calibrated_lrs": {}
+    },
+    {
+      "id": "baai/bge-small-en-v1.5",
+      "hf_repo": null,
+      "family": "encoder",
+      "adapters": [
+        "encoder_full"
+      ],
+      "recipes": [
+        "embedding"
+      ],
+      "default_for": [],
+      "price_per_million_tokens_usd": 0.08,
+      "max_context_tokens": 512,
+      "template_revision": "",
+      "calibrated_lrs": {}
+    }
+  ]
+}

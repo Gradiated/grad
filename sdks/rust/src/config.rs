@@ -261,9 +261,14 @@ pub fn validate_base_url(url: &str) -> Result<reqwest::Url> {
         Error::Config(format!("invalid base URL '{}': {}{}", trimmed, e, hint))
     })?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        let hint = if trimmed.contains("://") {
+            "for example http://127.0.0.1:8787".to_string()
+        } else {
+            format!("did you mean http://{}?", trimmed)
+        };
         return Err(Error::Config(format!(
-            "invalid base URL '{}': use an http:// or https:// URL with a host (for example http://127.0.0.1:8787)",
-            trimmed
+            "invalid base URL '{}': use an http:// or https:// URL with a host ({})",
+            trimmed, hint
         )));
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {

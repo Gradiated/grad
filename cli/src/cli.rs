@@ -40,7 +40,6 @@ Quickstart:
     version,
     about = "Train, evaluate and deploy models on Gradiated (Cloud or self-hosted)",
     after_help = format!("{}\n{}", MAIN_AFTER, EXIT_CODES),
-    propagate_version = true,
     disable_help_subcommand = false
 )]
 pub struct Cli {
@@ -948,4 +947,40 @@ pub struct PageArgs {
     /// Cursor from a previous page (`next_cursor`)
     #[arg(long)]
     pub cursor: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    fn walk(cmd: &clap::Command, path: &str, missing: &mut Vec<String>) {
+        for arg in cmd.get_arguments() {
+            if arg.is_hide_set() || matches!(arg.get_id().as_str(), "help" | "version") {
+                continue;
+            }
+            if arg.get_help().is_none() {
+                missing.push(format!("{} --{}", path, arg.get_id()));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            if sub.is_hide_set() || sub.get_name() == "help" {
+                continue;
+            }
+            let p = format!("{} {}", path, sub.get_name());
+            if sub.get_about().is_none() {
+                missing.push(p.clone());
+            }
+            walk(sub, &p, missing);
+        }
+    }
+
+    #[test]
+    fn every_command_and_flag_has_help() {
+        let cmd = Cli::command();
+        cmd.clone().debug_assert();
+        let mut missing = Vec::new();
+        walk(&cmd, "grad", &mut missing);
+        assert!(missing.is_empty(), "missing help: {:#?}", missing);
+    }
 }

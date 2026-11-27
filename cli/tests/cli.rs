@@ -1,0 +1,1920 @@
+#![recursion_limit = "512"]
+//! CLI integration tests: run the built `grad` binary against an in-process mock server.
+
+#[path = "../../sdks/rust/tests/support/mock.rs"]
+mod mock;
+
+use assert_cmd::Command;
+use mock::{MockServer, Recorded, Reply};
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+struct Sandbox {
+    dir: PathBuf,
+}
+
+impl Sandbox {
+    fn new(tag: &str) -> Sandbox {
+        let base = std::env::var_os("TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!(
+            "grad-cli-{}-{}-{}",
+            tag,
+            std::process::id(),
+            &mock::sha256_hex(format!("{:?}", std::time::Instant::now()).as_bytes())[..8]
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Sandbox { dir }
+    }
+
+    fn path(&self, p: &str) -> PathBuf {
+        self.dir.join(p)
+    }
+
+    fn config_path(&self) -> PathBuf {
+        self.dir.join("xdg").join("gradiated").join("config.json")
+    }
+
+    /// `grad` with an isolated HOME/XDG and the env pointing at `url`.
+    fn grad(&self, url: Option<&str>) -> Command {
+        let mut c = Command::cargo_bin("grad").unwrap();
+        c.current_dir(&self.dir)
+            .env("HOME", &self.dir)
+            .env("XDG_CONFIG_HOME", self.dir.join("xdg"))
+            .env("XDG_DATA_HOME", self.dir.join("data"))
+            .env("GRAD_RETRY_BASE_MS", "1")
+            .env_remove("GRADIATED_PROFILE")
+            .env_remove("GRADIATED_API_KEY")
+            .env_remove("GRADIATED_BASE_URL")
+            .env_remove("GRAD_API_KEY")
+            .env_remove("GRAD_COMPOSE_FILE")
+            .env_remove("COMPOSE_PROJECT_NAME")
+            .env_remove("GRAD_PORT")
+            .timeout(Duration::from_secs(60));
+        if let Some(u) = url {
+            c.env("GRADIATED_BASE_URL", u)
+                .env("GRADIATED_API_KEY", "grad_cli_test");
+        }
+        c
+    }
+}
+
+impl Drop for Sandbox {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+struct Ran {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+impl Ran {
+    fn json(&self) -> Value {
+        serde_json::from_str(&self.stdout)
+            .unwrap_or_else(|e| panic!("stdout is not JSON ({}): {}", e, self.stdout))
+    }
+    fn err_json(&self) -> Value {
+        serde_json::from_str(&self.stderr)
+            .unwrap_or_else(|e| panic!("stderr is not JSON ({}): {}", e, self.stderr))
+    }
+}
+
+fn run(mut c: Command, args: &[&str]) -> Ran {
+    let out = c.args(args).output().unwrap();
+    Ran {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+fn run_stdin(mut c: Command, args: &[&str], stdin: &str) -> Ran {
+    let out = c
+        .args(args)
+        .write_stdin(stdin.to_string())
+        .output()
+        .unwrap();
+    Ran {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+fn expect(r: &Ran, code: i32) {
+    assert_eq!(
+        r.code, code,
+        "exit code\nstdout:\n{}\nstderr:\n{}",
+        r.stdout, r.stderr
+    );
+}
+
+/// Replace values that vary between runs (ports, temp paths) before snapshotting.
+fn normalize(v: &Value, url: &str, dir: &Path) -> Value {
+    match v {
+        Value::String(s) => Value::String(
+            s.replace(url, "<URL>")
+                .replace(&dir.display().to_string(), "<DIR>"),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(|x| normalize(x, url, dir)).collect()),
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .map(|(k, x)| (k.clone(), normalize(x, url, dir)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn snapshot(name: &str, v: &Value) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join(format!("{}.json", name));
+    let rendered = serde_json::to_string_pretty(v).unwrap() + "\n";
+    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() || !path.exists() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &rendered).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        rendered, expected,
+        "snapshot {} differs (UPDATE_SNAPSHOTS=1 to accept)",
+        name
+    );
+}
+
+fn run_obj(id: &str, name: &str, status: &str) -> Value {
+    json!({
+        "id": id, "workspace_id": "ws", "name": name, "dataset_name": "support-prod", "dataset_version": 3,
+        "recipe_kind": "router", "status": status, "current_step": 2, "total_steps": 2, "attempt": 1, "max_attempts": 3,
+        "tokens_processed": 1100000, "cost_usd": 0.12, "max_cost_usd": if status == "stopped_budget" { json!(0.1) } else { Value::Null },
+        "created_at": "2026-11-26T10:00:00.000Z", "updated_at": "2026-11-26T10:00:42.000Z",
+        "finished_at": if status == "running" || status == "queued" { Value::Null } else { json!("2026-11-26T10:00:42.000Z") },
+        "artifact_id": if status == "completed" { json!("art_1") } else { Value::Null },
+        "error": if status == "failed" { json!("worker crashed: CUDA OOM") } else { Value::Null },
+        "eval_report": if status == "completed" { json!({"fallback_quality": 0.912, "routed_quality": 0.906, "offload_rate": 0.641, "warnings": ["small eval split"]}) } else { Value::Null },
+        "resolved_config": {
+            "rule_version": "auto@2", "dataset": "support-prod", "dataset_version": 3, "name": name, "recipe_kind": "router",
+            "model": "qwen/qwen3-0.6b", "adapter": {"kind": "lora", "rank": 32}, "lr": 0.0005, "lr_source": "auto",
+            "batch_size": 128, "epochs": 1, "schedule": "cosine", "warmup": 0.03, "train_on": "last", "thinking": "auto",
+            "preserve_thinking": false, "reduction": "per_example", "select": "best", "checkpoint_every_steps": 50,
+            "checkpoint_ttl_days": 30,
+            "split": {"strategy": "by_session", "eval_fraction": 0.15, "seed": 42, "train_records": 4097, "eval_records": 723},
+            "recipe_params": {"models": ["qwen/qwen3-8b", "qwen/qwen3-32b"]}
+        }
+    })
+}
+
+fn plan_obj() -> Value {
+    json!({
+        "resolved_config": run_obj("x", "support-router", "queued")["resolved_config"].clone(),
+        "dataset_version": 3, "usable_records": 4820, "total_records": 4820, "estimated_steps": 33,
+        "estimated_tokens": 1100000, "estimated_cost_usd": 0.165, "price_per_million_tokens": 0.15,
+        "trained_token_fraction": 0.62, "warnings": ["3 records have no scores"]
+    })
+}
+
+fn artifact_obj() -> Value {
+    json!({"id": "art_1", "name": "support-router", "version": "2026-11-26-1", "format": "router_bundle",
+           "base_model": "qwen/qwen3-0.6b", "recipe_kind": "router", "sha256": "ab".repeat(32), "size_bytes": 2048,
+           "manifest": {}, "created_at": "2026-11-26T10:00:42.000Z"})
+}
+
+fn sse_body(events: &[(&str, Option<u64>, Value)]) -> Vec<u8> {
+    let mut s = String::new();
+    for (e, id, d) in events {
+        s.push_str(&format!("event: {}\n", e));
+        if let Some(id) = id {
+            s.push_str(&format!("id: {}\n", id));
+        }
+        s.push_str(&format!("data: {}\n\n", d));
+    }
+    s.into_bytes()
+}
+
+fn metric(seq: u64) -> Value {
+    json!({"seq": seq, "attempt": 1, "step": seq, "loss": 0.5, "eval_loss": if seq == 2 { json!(0.4) } else { Value::Null },
+           "lr": 0.0005, "tokens": seq * 550000, "cost_usd": 0.06 * seq as f64, "timestamp": "2026-11-26T10:00:10Z"})
+}
+
+/// A server implementing the happy path of most endpoints.
+fn api() -> MockServer {
+    MockServer::start(handler)
+}
+
+fn handler(r: &Recorded) -> Reply {
+    let sse = r.header("accept") == Some("text/event-stream");
+    match (r.method.as_str(), r.path()) {
+        ("GET", "/health/ready") => Reply::json(200, json!({"status": "ready"})),
+        ("GET", "/v1/models") => Reply::json(
+            200,
+            json!({"data": [
+                {"id": "qwen/qwen3-0.6b", "family": "llm", "adapters": ["lora"], "recipes": ["router", "sft"], "max_context_tokens": 32768, "price_per_million_tokens_usd": 0.15},
+                {"id": "baai/bge-small-en-v1.5", "family": "encoder", "adapters": ["encoder_full"], "recipes": ["embedding"], "max_context_tokens": 512, "price_per_million_tokens_usd": 0.08}
+            ]}),
+        ),
+        ("GET", "/v1/datasets") => Reply::json(
+            200,
+            json!({"data": [{"name": "support-prod", "version": 3, "record_count": 4820, "updated_at": "2026-11-26T09:00:00Z"}], "next_cursor": null}),
+        ),
+        ("GET", "/v1/datasets/support-prod") => Reply::json(
+            200,
+            json!({"name": "support-prod", "version": 3, "record_count": 4820}),
+        ),
+        ("POST", "/v1/datasets") => Reply::json(
+            201,
+            json!({"name": r.json()["name"], "version": 0, "record_count": 0}),
+        ),
+        ("POST", p) if p.ends_with("/records") => {
+            let n = r.json()["records"].as_array().map(|a| a.len()).unwrap_or(0);
+            Reply::json(
+                200,
+                json!({"name": "support-sft", "version": 1, "record_count": n}),
+            )
+        }
+        ("GET", "/v1/datasets/support-prod/records") => Reply::json(
+            200,
+            json!({"dataset": "support-prod", "version": 3, "total": 1, "data": [{"id": "rec_1", "messages": []}], "next_cursor": null}),
+        ),
+        ("POST", "/v1/datasets/support-sft/render") => Reply::json(
+            200,
+            json!({"dataset": "support-sft", "model": "qwen/qwen3-8b", "template_revision": "qwen3@3", "token_counts": "estimated",
+            "examples": [{"record_id": "r1", "total_tokens": 10, "trained_tokens": 4, "trained_fraction": 0.4, "spans": [{"text": "<|im_start|>user\nhi", "trained": false, "tokens": 6}, {"text": "hello", "trained": true, "tokens": 4}]}]}),
+        ),
+        ("POST", "/v1/uploads") => Reply::json(
+            201,
+            json!({"upload_id": "up_1", "method": "PUT", "url": "/blobs/uploads/up_1?exp=1&sig=s", "headers": {}, "expires_at": "x"}),
+        ),
+        ("PUT", "/blobs/uploads/up_1") => Reply::json(200, json!({"upload_id": "up_1"})),
+        ("POST", p) if p.ends_with("/imports") => Reply::json(
+            202,
+            json!({"id": "imp_1", "dataset": p.split('/').nth(3).unwrap(), "status": "queued", "connector": r.json()["connector"].as_str().unwrap_or("auto")}),
+        ),
+        ("GET", "/v1/imports/imp_1") => Reply::json(
+            200,
+            json!({"id": "imp_1", "dataset": "support-prod", "status": "completed", "connector": "openai_chat", "imported_count": 4820, "dropped_count": 2, "detected_scores": ["csat"], "drop_reasons": ["line 7: invalid JSON", "line 9: no messages"], "dataset_version": 3}),
+        ),
+        ("GET", "/v1/imports") => Reply::json(
+            200,
+            json!({"data": [{"id": "imp_1", "dataset": "support-prod", "status": "completed", "imported_count": 4820}]}),
+        ),
+        ("POST", "/v1/runs/plan") => Reply::json(200, plan_obj()),
+        ("POST", "/v1/runs") => Reply::json(
+            202,
+            run_obj("run_1", r.json()["name"].as_str().unwrap_or("x"), "queued"),
+        ),
+        ("GET", "/v1/runs") => Reply::json(
+            200,
+            json!({"data": [run_obj("run_1", "support-router", "completed")], "next_cursor": null}),
+        ),
+        ("GET", "/v1/runs/run_1/metrics") if sse => Reply::Stream {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks: vec![
+                (Duration::ZERO, sse_body(&[("metric", Some(1), metric(1))])),
+                (
+                    Duration::from_millis(20),
+                    sse_body(&[
+                        ("metric", Some(2), metric(2)),
+                        (
+                            "status",
+                            None,
+                            run_obj("run_1", "support-router", "completed"),
+                        ),
+                    ]),
+                ),
+            ],
+        },
+        ("GET", "/v1/runs/run_1/metrics") => Reply::json(
+            200,
+            json!({"run_id": "run_1", "status": "completed", "data": [metric(1), metric(2)], "next_cursor": null}),
+        ),
+        ("GET", "/v1/runs/run_1") => {
+            Reply::json(200, run_obj("run_1", "support-router", "completed"))
+        }
+        ("GET", "/v1/runs/support-router") => {
+            Reply::problem(404, "run_not_found", "Run 'support-router' not found.")
+        }
+        ("POST", "/v1/runs/run_1/cancel") => {
+            Reply::json(200, run_obj("run_1", "support-router", "cancelled"))
+        }
+        ("POST", "/v1/runs/run_1/resume") => {
+            Reply::json(200, run_obj("run_1", "support-router", "queued"))
+        }
+        ("GET", "/v1/runs/run_1/checkpoints") => Reply::json(
+            200,
+            json!({"data": [{"id": "ckpt_1", "step": 2, "eval_score": 0.9, "best": true, "final": true, "format": "router_bundle"}]}),
+        ),
+        ("POST", "/v1/checkpoints/ckpt_1/promote") => Reply::json(201, artifact_obj()),
+        ("GET", "/v1/artifacts") => Reply::json(200, json!({"data": [artifact_obj()]})),
+        ("GET", "/v1/artifacts/art_1") | ("GET", "/v1/artifacts/support-router%40latest") => {
+            Reply::json(200, artifact_obj())
+        }
+        ("POST", "/v1/deployments") => Reply::json(
+            200,
+            json!({"name": "support-router", "model_id": "ws/support-router", "active_artifact_id": "art_1", "previous_artifact_id": "art_0", "status": "active"}),
+        ),
+        ("GET", "/v1/deployments") => Reply::json(
+            200,
+            json!({"data": [{"name": "support-router", "model_id": "ws/support-router", "active_artifact_id": "art_1", "status": "active"}]}),
+        ),
+        ("GET", "/v1/deployments/support-router") => Reply::json(
+            200,
+            json!({"deployment": {"name": "support-router", "model_id": "ws/support-router", "active_artifact_id": "art_1", "status": "active", "explore_rate": 0.05}, "feedback_count": 12, "average_score": 0.941}),
+        ),
+        ("POST", "/v1/deployments/support-router/rollback") => Reply::json(
+            200,
+            json!({"name": "support-router", "active_artifact_id": "art_0", "status": "active"}),
+        ),
+        ("POST", "/v1/route") => Reply::json(
+            200,
+            json!({"inference_id": "inf_1", "deployment": "support-router", "model": "qwen/qwen3-8b", "confidence": 0.91, "is_exploration": false, "scores": {}}),
+        ),
+        ("POST", "/v1/embeddings") => Reply::json(
+            200,
+            json!({"model": "docs-embedder", "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}], "usage": {}}),
+        ),
+        ("POST", "/v1/keys") => Reply::json(
+            201,
+            json!({"key": {"id": "key_1", "name": r.json()["name"], "prefix": "grad_ab", "scopes": r.json()["scopes"], "created_at": "2026-11-27T00:00:00Z"}, "secret": "grad_abcdefghijklmnop"}),
+        ),
+        ("GET", "/v1/keys") => Reply::json(
+            200,
+            json!({"data": [{"id": "key_1", "name": "ci", "prefix": "grad_ab", "scopes": ["runs:read"], "created_at": "2026-11-27T00:00:00Z"}]}),
+        ),
+        ("DELETE", "/v1/keys/key_1") => Reply::json(
+            200,
+            json!({"id": "key_1", "revoked_at": "2026-11-27T00:00:00Z"}),
+        ),
+        ("POST", "/v1/evals/plan") => Reply::json(
+            200,
+            json!({"task_source_kind": "dataset", "dataset_version": 1, "estimated_tasks": 50, "estimated_model_calls": 200, "estimated_judge_calls": 0, "estimated_cost_usd": 0.4, "pass_threshold": 1.0, "warnings": []}),
+        ),
+        ("POST", "/v1/evals") => Reply::json(
+            202,
+            json!({"id": "eval_1", "name": "sql", "status": "queued", "models": r.json()["models"]}),
+        ),
+        ("GET", "/v1/evals/eval_1") => Reply::json(
+            200,
+            json!({"id": "eval_1", "name": "sql", "status": "completed", "samples": 4, "pass_threshold": 1.0, "total_cost_usd": 0.4,
+            "summary": [{"model": "qwen/qwen3-8b", "overall": 0.71, "ci_low": 0.65, "ci_high": 0.77, "pass_at_k": {"pass@1": 0.7}, "vs_baseline": null, "tasks": 50, "errors": 0, "cost_per_1k_tasks_usd": 1.2},
+                        {"model": "sql-agent@latest", "overall": 0.86, "ci_low": 0.8, "ci_high": 0.9, "pass_at_k": {"pass@1": 0.85}, "vs_baseline": {"delta": 0.15, "ci_low": 0.1, "ci_high": 0.2}, "tasks": 50, "errors": 1, "cost_per_1k_tasks_usd": null}]}),
+        ),
+        ("GET", "/v1/evals") => Reply::json(
+            200,
+            json!({"data": [{"id": "eval_1", "name": "sql", "status": "completed", "models": ["a"]}]}),
+        ),
+        ("GET", "/v1/evals/eval_1/failures") => Reply::json(
+            200,
+            json!({"data": [{"task_id": "t1", "model": "qwen/qwen3-8b", "score": 0.2, "passed": false, "judge_model": null}]}),
+        ),
+        ("GET", "/v1/evals/eval_1/results") => Reply::json(
+            200,
+            json!({"data": [{"task_id": "t1", "model": "qwen/qwen3-8b", "score": 1.0, "passed": true}]}),
+        ),
+        ("POST", "/v1/evals/eval_1/cancel") => {
+            Reply::json(200, json!({"id": "eval_1", "status": "cancelled"}))
+        }
+        _ => Reply::problem(
+            404,
+            "not_found",
+            &format!("no mock for {} {}", r.method, r.path()),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------- help & usage
+
+#[test]
+fn help_documents_exit_codes_and_every_command_has_help() {
+    let sb = Sandbox::new("help");
+    let r = run(sb.grad(None), &["--help"]);
+    expect(&r, 0);
+    for needle in [
+        "Exit codes:",
+        "130",
+        "grad login",
+        "GRADIATED_API_KEY",
+        "--json",
+    ] {
+        assert!(
+            r.stdout.contains(needle),
+            "missing {}: {}",
+            needle,
+            r.stdout
+        );
+    }
+    for cmd in [
+        vec!["login"],
+        vec!["train"],
+        vec!["import"],
+        vec!["eval"],
+        vec!["local", "up"],
+        vec!["artifacts", "download"],
+        vec!["datasets", "import", "hf"],
+        vec!["env", "serve"],
+        vec!["runs", "inspect"],
+        vec!["keys", "create"],
+        vec!["deploy"],
+    ] {
+        let mut args = cmd.clone();
+        args.push("--help");
+        let r = run(sb.grad(None), &args);
+        expect(&r, 0);
+        assert!(
+            r.stdout.contains("Example"),
+            "{:?} has examples: {}",
+            cmd,
+            r.stdout
+        );
+    }
+    let r = run(sb.grad(None), &["--version"]);
+    expect(&r, 0);
+    assert!(r.stdout.starts_with("grad "));
+}
+
+#[test]
+fn usage_errors_exit_2_and_json_mode_wraps_them() {
+    let sb = Sandbox::new("usage");
+    let r = run(sb.grad(None), &["train", "--bogus"]);
+    expect(&r, 2);
+    let r = run(sb.grad(None), &["--json", "frobnicate"]);
+    expect(&r, 2);
+    let e = r.err_json();
+    assert_eq!(e["ok"], false);
+    assert_eq!(e["error"]["code"], "usage_error");
+    assert_eq!(e["error"]["exit_code"], 2);
+    assert!(r.stdout.is_empty());
+    let r = run(sb.grad(None), &[]);
+    expect(&r, 2);
+    // Missing required run settings without -f.
+    let r = run(
+        sb.grad(Some("http://127.0.0.1:1")),
+        &["train", "--dataset", "d", "--name", "n"],
+    );
+    expect(&r, 2);
+    assert!(r.stderr.contains("--recipe"), "{}", r.stderr);
+    let r = run(
+        sb.grad(Some("http://127.0.0.1:1")),
+        &[
+            "train",
+            "--dataset",
+            "d",
+            "--name",
+            "n",
+            "--recipe",
+            "magic",
+        ],
+    );
+    expect(&r, 2);
+    assert!(r.stderr.contains("decision-model"), "{}", r.stderr);
+    let r = run(sb.grad(None), &["secrets", "set", "langfuse-prod"]);
+    expect(&r, 2);
+    assert!(r.stderr.contains("not available in v0"));
+    let r = run(
+        sb.grad(None),
+        &["sources", "add", "langfuse", "--dataset", "x"],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(None),
+        &["--base-url", "localhost:8787", "models", "list"],
+    );
+    expect(&r, 2);
+    assert!(r.stderr.contains("http://localhost:8787"), "{}", r.stderr);
+}
+
+// ---------------------------------------------------------------- login & config
+
+#[test]
+fn login_validates_and_writes_a_private_config() {
+    let srv = MockServer::start(|r| match r.header("authorization") {
+        Some("Bearer grad_good_key_123456") => Reply::json(200, json!({"data": []})),
+        _ => Reply::problem(401, "unauthorized", "Provide a valid API key."),
+    });
+    let sb = Sandbox::new("login");
+    let r = run_stdin(
+        sb.grad(None),
+        &["login", "--base-url", &srv.url, "--api-key-stdin"],
+        "grad_good_key_123456\n",
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("Logged in"), "{}", r.stdout);
+    assert!(
+        !r.stdout.contains("grad_good_key_123456"),
+        "the key is masked"
+    );
+    let cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
+    assert_eq!(
+        cfg["profiles"]["default"],
+        json!({"base_url": srv.url, "api_key": "grad_good_key_123456"})
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(sb.config_path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    // The saved profile is used by later commands, with no env at all.
+    let r = run(sb.grad(None), &["models", "list", "--json"]);
+    expect(&r, 0);
+    assert_eq!(
+        srv.last("GET", "/v1/models")
+            .unwrap()
+            .header("authorization"),
+        Some("Bearer grad_good_key_123456")
+    );
+
+    // A rejected key exits 3 and saves nothing.
+    let r = run(
+        sb.grad(None),
+        &[
+            "login",
+            "--profile",
+            "other",
+            "--base-url",
+            &srv.url,
+            "--api-key",
+            "grad_bad_key_000000",
+        ],
+    );
+    expect(&r, 3);
+    assert!(r.stderr.contains("rejected"), "{}", r.stderr);
+    let cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
+    assert!(cfg["profiles"].get("other").is_none());
+
+    // --no-verify saves without contacting an unreachable server; profiles stay separate.
+    let r = run(
+        sb.grad(None),
+        &[
+            "--json",
+            "login",
+            "--profile",
+            "local",
+            "--base-url",
+            "http://127.0.0.1:9",
+            "--api-key",
+            "grad_local_key_99999",
+            "--no-verify",
+        ],
+    );
+    expect(&r, 0);
+    let j = r.json();
+    assert_eq!(j["data"]["profile"], "local");
+    assert_eq!(j["data"]["verified"], false);
+    let r = run(
+        sb.grad(None),
+        &["--profile", "local", "--json", "config", "show"],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["base_url"], "http://127.0.0.1:9");
+    assert_eq!(r.json()["data"]["api_key_source"], "profile 'local'");
+
+    // Nothing on stdin -> usage error.
+    let r = run_stdin(sb.grad(None), &["login", "--base-url", &srv.url], "");
+    expect(&r, 2);
+
+    // Unreachable server without --no-verify -> exit 1 naming the URL.
+    let r = run(
+        sb.grad(None),
+        &[
+            "login",
+            "--base-url",
+            "http://127.0.0.1:9",
+            "--api-key",
+            "grad_x_0000000000",
+        ],
+    );
+    expect(&r, 1);
+    assert!(r.stderr.contains("http://127.0.0.1:9"), "{}", r.stderr);
+
+    let r = run(sb.grad(None), &["config", "path"]);
+    assert_eq!(PathBuf::from(r.stdout.trim()), sb.config_path());
+    let r = run(sb.grad(None), &["--profile", "local", "logout"]);
+    expect(&r, 0);
+    let cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
+    assert!(cfg["profiles"].get("local").is_none());
+    let r = run(sb.grad(None), &["--profile", "local", "logout"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("no saved key"));
+    let r = run(sb.grad(None), &["--profile", "nope", "models", "list"]);
+    expect(&r, 2);
+    assert!(
+        r.stderr.contains("grad login --profile nope"),
+        "{}",
+        r.stderr
+    );
+}
+
+// ---------------------------------------------------------------- errors & exit codes
+
+#[test]
+fn api_errors_map_to_exit_codes_and_json_envelopes() {
+    let srv = MockServer::start(|r| match r.path() {
+        "/v1/runs/missing" => Reply::problem(404, "run_not_found", "Run 'missing' not found."),
+        "/v1/runs" => Reply::json(200, json!({"data": [], "next_cursor": null})),
+        "/v1/artifacts/missing%40latest" => Reply::problem(
+            404,
+            "artifact_not_found",
+            "Artifact 'missing@latest' not found.",
+        ),
+        "/v1/deployments" => Reply::problem(
+            501,
+            "deploy_unavailable",
+            "Hosted serving is disabled on this self-hosted server.",
+        ),
+        "/v1/evals" => Reply::problem(501, "inference_unavailable", "No inference endpoint."),
+        "/v1/keys" => Reply::problem(403, "insufficient_scope", "This key lacks the admin scope."),
+        "/v1/runs/plan" => Reply::problem(
+            422,
+            "router_candidates_required",
+            "Router training needs at least two candidate models.",
+        ),
+        "/v1/runs/run_9" => Reply::json(200, run_obj("run_9", "n", "stopped_budget")),
+        "/v1/runs/run_9/resume" => {
+            Reply::problem(409, "run_not_resumable", "Raise max_cost_usd to resume.")
+        }
+        "/v1/models" => Reply::problem(503, "store_unavailable", "Database down."),
+        _ => Reply::problem(404, "not_found", "nope"),
+    });
+    let sb = Sandbox::new("errors");
+    let u = Some(srv.url.as_str());
+    let r = run(
+        sb.grad(u),
+        &["--json", "artifacts", "inspect", "missing@latest"],
+    );
+    expect(&r, 4);
+    assert!(r.stdout.is_empty());
+    let env = r.err_json();
+    snapshot("error_not_found", &normalize(&env, &srv.url, &sb.dir));
+    let r = run(sb.grad(u), &["artifacts", "inspect", "missing@latest"]);
+    expect(&r, 4);
+    assert!(r.stderr.starts_with("error: GET "), "{}", r.stderr);
+    assert!(r.stderr.contains("req_mock"));
+    // Runs resolve by id, then by name.
+    let r = run(sb.grad(u), &["--json", "runs", "inspect", "missing"]);
+    expect(&r, 4);
+    assert_eq!(r.err_json()["error"]["code"], "run_not_found");
+    assert!(r.err_json()["error"]["hint"]
+        .as_str()
+        .unwrap()
+        .contains("grad runs list"));
+
+    let r = run(sb.grad(u), &["deploy", "x@latest"]);
+    expect(&r, 6);
+    assert!(
+        r.stderr.contains("grad artifacts download"),
+        "hint names the alternative: {}",
+        r.stderr
+    );
+    let r = run(sb.grad(u), &["eval", "--models", "a", "--dataset", "d"]);
+    expect(&r, 6);
+    assert!(r.stderr.contains("INFERENCE_BASE_URL"));
+    let r = run(
+        sb.grad(u),
+        &["keys", "create", "--name", "k", "--scopes", "admin"],
+    );
+    expect(&r, 3);
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "--dataset",
+            "d",
+            "--name",
+            "n",
+            "--recipe",
+            "router",
+            "--dry-run",
+        ],
+    );
+    expect(&r, 5);
+    let r = run(sb.grad(u), &["runs", "resume", "run_9"]);
+    expect(&r, 5);
+    let r = run(sb.grad(u), &["--json", "models", "list"]);
+    expect(&r, 1);
+    assert_eq!(r.err_json()["error"]["status"], 503);
+    assert_eq!(srv.count("GET", "/v1/models"), 3, "GETs are retried");
+
+    // Connection refused: exit 1, names the URL and the cause, no "[0] network_error".
+    let r = run(sb.grad(Some("http://127.0.0.1:9")), &["models", "list"]);
+    expect(&r, 1);
+    assert!(
+        r.stderr.contains("http://127.0.0.1:9") && r.stderr.contains("/v1/models"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.to_lowercase().contains("refused"), "{}", r.stderr);
+    assert!(!r.stderr.contains("network_error"));
+}
+
+#[test]
+fn global_flags_work_after_the_subcommand() {
+    let srv = api();
+    let sb = Sandbox::new("global");
+    let r = run(
+        sb.grad(None),
+        &[
+            "models",
+            "list",
+            "--base-url",
+            &srv.url,
+            "--api-key",
+            "grad_flag_key",
+            "--json",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["ok"], true);
+    assert_eq!(
+        srv.last("GET", "/v1/models")
+            .unwrap()
+            .header("authorization"),
+        Some("Bearer grad_flag_key")
+    );
+    snapshot("models_list", &normalize(&r.json(), &srv.url, &sb.dir));
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["models", "list", "--recipe", "embedding"],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("baai/bge-small-en-v1.5") && !r.stdout.contains("qwen3-0.6b"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.starts_with("ID"), "human table: {}", r.stdout);
+}
+
+// ---------------------------------------------------------------- train & runs
+
+#[test]
+fn train_dry_run_prints_the_plan_and_sends_the_recipe() {
+    let srv = api();
+    let sb = Sandbox::new("dryrun");
+    let u = Some(srv.url.as_str());
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "--dataset",
+            "support-prod",
+            "--name",
+            "support-router",
+            "--recipe",
+            "router",
+            "--dry-run",
+        ],
+    );
+    expect(&r, 0);
+    for needle in [
+        "Plan for support-router",
+        "4,820 usable",
+        "4,097 train / 723 eval",
+        "~1.1M",
+        "$0.17",
+        "3 records have no scores",
+    ] {
+        assert!(
+            r.stdout.contains(needle),
+            "missing {:?}:\n{}",
+            needle,
+            r.stdout
+        );
+    }
+    let body = srv.last("POST", "/v1/runs/plan").unwrap().json();
+    assert_eq!(
+        body,
+        json!({"dataset": "support-prod", "name": "support-router", "recipe": {"kind": "router"}})
+    );
+
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "--dataset",
+            "t",
+            "--name",
+            "t",
+            "--recipe",
+            "decision-model",
+            "--max-cost-usd",
+            "20",
+            "--dry-run",
+            "--json",
+        ],
+    );
+    expect(&r, 0);
+    snapshot("train_dry_run", &normalize(&r.json(), &srv.url, &sb.dir));
+    let body = srv.last("POST", "/v1/runs/plan").unwrap().json();
+    assert_eq!(body["recipe"]["kind"], "decision");
+    assert_eq!(body["max_cost_usd"], 20.0);
+
+    std::fs::write(sb.path("docs.md"), "API docs").unwrap();
+    std::fs::write(
+        sb.path("recipe.yaml"),
+        "dataset: api-docs\nname: api-docs-cartridge\nrecipe: cartridge\nmodel: qwen/qwen3-8b\ncontext:\n  file: ./docs.md\n",
+    )
+    .unwrap();
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "-f",
+            "recipe.yaml",
+            "--dry-run",
+            "--set",
+            "num_tokens=128",
+        ],
+    );
+    expect(&r, 0);
+    let body = srv.last("POST", "/v1/runs/plan").unwrap().json();
+    assert_eq!(
+        body["recipe"],
+        json!({"kind": "cartridge", "model": "qwen/qwen3-8b", "context_text": "API docs", "num_tokens": 128})
+    );
+    std::fs::write(
+        sb.path("bad.yaml"),
+        "dataset: d\nname: n\nrecipe: sft\nlerning_rate: 1\n",
+    )
+    .unwrap();
+    let r = run(sb.grad(u), &["train", "-f", "bad.yaml", "--dry-run"]);
+    expect(&r, 2);
+    assert!(r.stderr.contains("lerning_rate"));
+}
+
+#[test]
+fn train_wait_streams_metrics_and_prints_the_readout() {
+    let srv = api();
+    let sb = Sandbox::new("wait");
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "train",
+            "--dataset",
+            "support-prod",
+            "--name",
+            "support-router",
+            "--recipe",
+            "router",
+            "--wait",
+        ],
+    );
+    expect(&r, 0);
+    for needle in [
+        "✓ Dataset support-prod: 4,820 records",
+        "✓ Split: 4,097 train / 723 eval (by session)",
+        "step     2/2",
+        "eval 0.4",
+        "✓ Trained qwen/qwen3-0.6b router in 42s (~1.1M tokens",
+        "Eval report:",
+        "fallback quality",
+        "! small eval split",
+        "✓ Exported artifact support-router@2026-11-26-1",
+        "Next: grad deploy support-router@2026-11-26-1",
+    ] {
+        assert!(
+            r.stdout.contains(needle),
+            "missing {:?}:\n{}",
+            needle,
+            r.stdout
+        );
+    }
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "--json",
+            "train",
+            "--dataset",
+            "support-prod",
+            "--name",
+            "support-router",
+            "--recipe",
+            "router",
+            "--wait",
+        ],
+    );
+    expect(&r, 0);
+    let j = r.json();
+    assert_eq!(j["data"]["run"]["status"], "completed");
+    assert_eq!(j["data"]["artifact"]["version"], "2026-11-26-1");
+    // Without --wait: the run id and how to follow it.
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "train",
+            "--dataset",
+            "support-prod",
+            "--name",
+            "support-router",
+            "--recipe",
+            "router",
+        ],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("grad runs logs run_1 --follow"));
+}
+
+fn failing_server(status: &'static str) -> MockServer {
+    MockServer::start(move |r| match (r.method.as_str(), r.path()) {
+        ("POST", "/v1/runs") => Reply::json(202, run_obj("run_f", "n", "queued")),
+        ("GET", "/v1/runs/run_f/metrics") => Reply::Stream {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks: vec![(
+                Duration::ZERO,
+                sse_body(&[
+                    ("metric", Some(1), metric(1)),
+                    ("status", None, run_obj("run_f", "n", status)),
+                ]),
+            )],
+        },
+        ("GET", "/v1/datasets/d") => Reply::problem(404, "dataset_not_found", "x"),
+        _ => Reply::problem(404, "not_found", "x"),
+    })
+}
+
+#[test]
+fn unsuccessful_runs_exit_7_with_a_next_step() {
+    let sb = Sandbox::new("runfail");
+    for (status, needle) in [
+        ("failed", "CUDA OOM"),
+        ("stopped_budget", "grad runs resume run_f --max-cost-usd"),
+        ("cancelled", "grad runs resume run_f"),
+    ] {
+        let srv = failing_server(status);
+        let r = run(
+            sb.grad(Some(&srv.url)),
+            &[
+                "train",
+                "--dataset",
+                "d",
+                "--name",
+                "n",
+                "--recipe",
+                "sft",
+                "--wait",
+            ],
+        );
+        expect(&r, 7);
+        assert!(r.stderr.contains(needle), "{}: {}", status, r.stderr);
+        let r = run(
+            sb.grad(Some(&srv.url)),
+            &[
+                "--json",
+                "train",
+                "--dataset",
+                "d",
+                "--name",
+                "n",
+                "--recipe",
+                "sft",
+                "--wait",
+            ],
+        );
+        expect(&r, 7);
+        let e = r.err_json();
+        assert_eq!(e["error"]["code"], format!("run_{}", status));
+        assert_eq!(e["error"]["details"]["id"], "run_f");
+    }
+}
+
+#[test]
+fn runs_commands() {
+    let srv = api();
+    let sb = Sandbox::new("runs");
+    let u = Some(srv.url.as_str());
+    let r = run(sb.grad(u), &["runs", "list"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("run_1") && r.stdout.contains("support-router"));
+    // By name: falls back to a list lookup.
+    let r = run(sb.grad(u), &["runs", "inspect", "support-router"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("status") && r.stdout.contains("completed"),
+        "{}",
+        r.stdout
+    );
+    let r = run(sb.grad(u), &["runs", "inspect", "run_1", "--yaml"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("recipe: router") && r.stdout.contains("dataset: support-prod"),
+        "{}",
+        r.stdout
+    );
+    std::fs::write(sb.path("exported.yaml"), &r.stdout).unwrap();
+    let r = run(sb.grad(u), &["train", "-f", "exported.yaml", "--dry-run"]);
+    expect(&r, 0);
+    let body = srv.last("POST", "/v1/runs/plan").unwrap().json();
+    assert_eq!(
+        body["recipe"]["models"],
+        json!(["qwen/qwen3-8b", "qwen/qwen3-32b"])
+    );
+    assert_eq!(body["split"]["eval_fraction"], 0.15);
+
+    let r = run(sb.grad(u), &["runs", "logs", "run_1"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("STEP") && r.stdout.contains("0.4"));
+    let r = run(sb.grad(u), &["runs", "logs", "run_1", "--follow"]);
+    expect(&r, 0);
+    assert_eq!(r.stdout.lines().count(), 3, "{}", r.stdout);
+    let r = run(sb.grad(u), &["--json", "runs", "logs", "run_1", "--follow"]);
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["metrics"].as_array().unwrap().len(), 2);
+    let r = run(sb.grad(u), &["runs", "logs", "run_1", "--samples", "5"]);
+    expect(&r, 2);
+    let r = run(sb.grad(u), &["runs", "wait", "run_1"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("Next: grad deploy"));
+    let r = run(sb.grad(u), &["runs", "cancel", "run_1"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("cancelled"));
+    let r = run(
+        sb.grad(u),
+        &["runs", "resume", "run_1", "--max-cost-usd", "5"],
+    );
+    expect(&r, 0);
+    assert_eq!(
+        srv.last("POST", "/v1/runs/run_1/resume").unwrap().json(),
+        json!({"max_cost_usd": 5.0})
+    );
+    let r = run(
+        sb.grad(u),
+        &["runs", "resume", "run_1", "--max-cost-usd", "-5"],
+    );
+    expect(&r, 2);
+    let r = run(sb.grad(u), &["runs", "checkpoints", "run_1"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("ckpt_1"));
+    let r = run(
+        sb.grad(u),
+        &["runs", "promote", "ckpt_1", "--name", "support-router"],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("support-router@2026-11-26-1"));
+    let r = run(sb.grad(u), &["runs", "inspect", "run_404"]);
+    expect(&r, 4);
+}
+
+// ---------------------------------------------------------------- data
+
+#[test]
+fn import_uploads_streams_and_waits() {
+    let srv = api();
+    let sb = Sandbox::new("import");
+    let content = "{\"messages\": []}\n".repeat(100);
+    std::fs::write(sb.path("support_traces.jsonl"), &content).unwrap();
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "import",
+            "./support_traces.jsonl",
+            "--dataset",
+            "support-prod",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("imported 4,820 records, dropped 2"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("line 7: invalid JSON"));
+    let put = srv.last("PUT", "/blobs/uploads/up_1").unwrap();
+    assert_eq!(put.body, content.as_bytes());
+    assert!(put.header("authorization").is_none());
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "import",
+            "./support_traces.jsonl",
+            "--format",
+            "otel",
+            "--dataset",
+            "support-prod",
+            "--json",
+            "--no-wait",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["status"], "queued");
+    let imp = srv
+        .last("POST", "/v1/datasets/support-prod/imports")
+        .unwrap()
+        .json();
+    assert_eq!(imp["connector"], "otel");
+    assert!(imp["source"].get("format").is_none());
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["import", "./missing.jsonl", "--dataset", "x"],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "datasets",
+            "import",
+            "file",
+            "./support_traces.jsonl",
+            "--name",
+            "support-prod",
+            "--format",
+            "jsonl",
+        ],
+    );
+    expect(&r, 0);
+    let r = run(sb.grad(Some(&srv.url)), &["imports", "list"]);
+    expect(&r, 0);
+    let r = run(sb.grad(Some(&srv.url)), &["imports", "status", "imp_1"]);
+    expect(&r, 0);
+    let r = run(sb.grad(Some(&srv.url)), &["imports", "wait", "imp_1"]);
+    expect(&r, 0);
+}
+
+#[test]
+fn datasets_commands() {
+    let srv = api();
+    let sb = Sandbox::new("datasets");
+    let u = Some(srv.url.as_str());
+    let mut s = String::new();
+    for i in 0..2500 {
+        s.push_str(&format!(
+            "{{\"messages\": [{{\"role\": \"user\", \"content\": \"{}\"}}]}}\n",
+            i
+        ));
+    }
+    std::fs::write(sb.path("train.jsonl"), &s).unwrap();
+    let r = run(
+        sb.grad(u),
+        &["datasets", "push", "support-sft", "./train.jsonl"],
+    );
+    expect(&r, 0);
+    assert_eq!(
+        srv.count("POST", "/v1/datasets/support-sft/records"),
+        3,
+        "2,500 records in 1,000-record batches"
+    );
+    std::fs::write(sb.path("bad.jsonl"), "{\"a\": 1}\nnot json\n").unwrap();
+    let r = run(
+        sb.grad(u),
+        &["datasets", "push", "support-sft", "./bad.jsonl"],
+    );
+    expect(&r, 2);
+    assert!(r.stderr.contains("line 2"), "{}", r.stderr);
+    let r = run(sb.grad(u), &["datasets", "list"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("4,820"));
+    let r = run(sb.grad(u), &["datasets", "get", "support-prod"]);
+    expect(&r, 0);
+    let r = run(sb.grad(u), &["datasets", "create", "new-ds"]);
+    expect(&r, 0);
+    let r = run(
+        sb.grad(u),
+        &["datasets", "records", "support-prod", "--limit", "1"],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("rec_1"));
+    assert!(srv
+        .last("GET", "/v1/datasets/support-prod/records")
+        .unwrap()
+        .query()
+        .contains("limit=1"));
+    let r = run(
+        sb.grad(u),
+        &[
+            "render",
+            "support-sft",
+            "--model",
+            "qwen/qwen3-8b",
+            "--limit",
+            "3",
+        ],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("TRAIN │ hello"), "{}", r.stdout);
+    let r = run(
+        sb.grad(u),
+        &["datasets", "render", "support-sft", "--thinking", "false"],
+    );
+    expect(&r, 0);
+    assert_eq!(
+        srv.last("POST", "/v1/datasets/support-sft/render")
+            .unwrap()
+            .json()["thinking"],
+        false
+    );
+    let r = run(sb.grad(u), &["render", "support-sft", "--limit", "99"]);
+    expect(&r, 2);
+    let r = run(
+        sb.grad(u),
+        &[
+            "datasets",
+            "import",
+            "hf",
+            "HuggingFaceH4/ultrachat_200k",
+            "--split",
+            "train_sft",
+            "--limit",
+            "2000",
+            "--name",
+            "ultrachat",
+            "--column",
+            "messages=messages",
+            "--no-wait",
+        ],
+    );
+    expect(&r, 0);
+    let body = srv
+        .last("POST", "/v1/datasets/ultrachat/imports")
+        .unwrap()
+        .json();
+    assert_eq!(
+        body,
+        json!({"source": {"kind": "hf", "repo": "HuggingFaceH4/ultrachat_200k", "split": "train_sft", "columns": {"messages": "messages"}, "limit": 2000}})
+    );
+    let r = run(
+        sb.grad(u),
+        &["datasets", "import", "hf", "o/r", "--column", "nope=x"],
+    );
+    expect(&r, 2);
+}
+
+// ---------------------------------------------------------------- artifacts & serving
+
+#[test]
+fn artifacts_download_extracts_a_verified_peft_directory() {
+    let bundle = mock::bundle(&[
+        ("adapter_config.json", b"{\"peft_type\": \"LORA\"}"),
+        ("adapter_model.safetensors", &[1u8; 4096]),
+    ]);
+    let sha = mock::sha256_hex(&bundle);
+    let b2 = bundle.clone();
+    let srv = MockServer::start(move |r| {
+        if r.path() == "/v1/artifacts/fast-diff-merge%40latest/download" {
+            Reply::bytes(
+                200,
+                vec![
+                    ("x-artifact-sha256", sha.clone()),
+                    ("content-type", "application/octet-stream".into()),
+                ],
+                b2.clone(),
+            )
+        } else if r.path() == "/v1/artifacts/tampered/download" {
+            Reply::bytes(200, vec![("x-artifact-sha256", "0".repeat(64))], b2.clone())
+        } else {
+            handler(r)
+        }
+    });
+    let sb = Sandbox::new("download");
+    let u = Some(srv.url.as_str());
+    let r = run(
+        sb.grad(u),
+        &[
+            "artifacts",
+            "download",
+            "fast-diff-merge@latest",
+            "--output",
+            "./fast-diff-merge",
+        ],
+    );
+    expect(&r, 0);
+    assert!(sb.path("fast-diff-merge/adapter_config.json").is_file());
+    assert!(sb
+        .path("fast-diff-merge/adapter_model.safetensors")
+        .is_file());
+    assert!(
+        r.stdout.contains("--lora-modules fast-diff-merge="),
+        "{}",
+        r.stdout
+    );
+    // Second time: refuses the non-empty directory (exit 2) unless --force.
+    let r = run(
+        sb.grad(u),
+        &[
+            "artifacts",
+            "download",
+            "fast-diff-merge@latest",
+            "--output",
+            "./fast-diff-merge",
+        ],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(u),
+        &[
+            "artifacts",
+            "download",
+            "fast-diff-merge@latest",
+            "--output",
+            "./fast-diff-merge",
+            "--force",
+            "--json",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["files"].as_object().unwrap().len(), 2);
+    // --out stays as an alias that keeps the archive.
+    let r = run(
+        sb.grad(u),
+        &[
+            "artifacts",
+            "download",
+            "fast-diff-merge@latest",
+            "--out",
+            "./a.grad.tar.gz",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(std::fs::read(sb.path("a.grad.tar.gz")).unwrap(), bundle);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(sb.path("victim"), sb.path("link.tgz")).unwrap();
+        let r = run(
+            sb.grad(u),
+            &[
+                "artifacts",
+                "download",
+                "fast-diff-merge@latest",
+                "--archive",
+                "./link.tgz",
+                "--force",
+            ],
+        );
+        expect(&r, 2);
+        assert!(!sb.path("victim").exists());
+    }
+    let r = run(
+        sb.grad(u),
+        &["artifacts", "download", "tampered", "--output", "./t"],
+    );
+    expect(&r, 1);
+    assert!(r.stderr.contains("expected"), "{}", r.stderr);
+    assert!(!sb.path("t").exists());
+    let r = run(
+        sb.grad(u),
+        &["artifacts", "download", "fast-diff-merge@latest"],
+    );
+    expect(&r, 2);
+    let r = run(sb.grad(u), &["artifacts", "list"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("support-router@2026-11-26-1"));
+    let r = run(
+        sb.grad(u),
+        &["artifacts", "inspect", "support-router@latest", "--json"],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["id"], "art_1");
+}
+
+#[test]
+fn deploy_route_rollback_embed_and_keys() {
+    let srv = api();
+    let sb = Sandbox::new("serve");
+    let u = Some(srv.url.as_str());
+    let r = run(
+        sb.grad(u),
+        &["deploy", "support-router@latest", "--explore-rate", "0.05"],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("ws/support-router"));
+    assert_eq!(
+        srv.last("POST", "/v1/deployments").unwrap().json(),
+        json!({"artifact": "support-router@latest", "explore_rate": 0.05})
+    );
+    let r = run(sb.grad(u), &["deploy", "x", "--explore-rate", "0.9"]);
+    expect(&r, 2);
+    let r = run(sb.grad(u), &["deployments", "status", "support-router"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("94.1%"), "{}", r.stdout);
+    let r = run(sb.grad(u), &["deployments", "list"]);
+    expect(&r, 0);
+    let r = run(sb.grad(u), &["rollback", "support-router"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("art_0"));
+    let r = run(sb.grad(u), &["deployments", "rollback", "support-router"]);
+    expect(&r, 0);
+    let r = run(
+        sb.grad(u),
+        &[
+            "route",
+            "--deployment",
+            "support-router",
+            "--prompt",
+            "Reset password?",
+        ],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.starts_with("qwen/qwen3-8b"));
+    std::fs::write(sb.path("m.json"), r#"[{"role": "user", "content": "hi"}]"#).unwrap();
+    let r = run(
+        sb.grad(u),
+        &[
+            "--json",
+            "route",
+            "--deployment",
+            "support-router",
+            "--messages",
+            "m.json",
+            "--session-id",
+            "s1",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["model"], "qwen/qwen3-8b");
+    assert_eq!(
+        srv.last("POST", "/v1/route").unwrap().json()["session_id"],
+        "s1"
+    );
+    let r = run(sb.grad(u), &["route", "--deployment", "x"]);
+    expect(&r, 2);
+    let r = run(sb.grad(u), &["embed", "--model", "docs-embedder", "hello"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("dim 3"));
+
+    let r = run(
+        sb.grad(u),
+        &[
+            "--json",
+            "keys",
+            "create",
+            "--name",
+            "ci-nightly",
+            "--scopes",
+            "datasets:write,runs:write,artifacts:read",
+        ],
+    );
+    expect(&r, 0);
+    snapshot("keys_create", &normalize(&r.json(), &srv.url, &sb.dir));
+    assert_eq!(
+        srv.last("POST", "/v1/keys").unwrap().json()["scopes"],
+        json!(["datasets:write", "runs:write", "artifacts:read"])
+    );
+    let r = run(
+        sb.grad(u),
+        &[
+            "keys",
+            "create",
+            "--name",
+            "x",
+            "--scopes",
+            "artifacts:read",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("grad_abcdefghijklmnop"),
+        "the secret is shown once"
+    );
+    let r = run(sb.grad(u), &["keys", "list"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("key_1"));
+    let r = run(sb.grad(u), &["keys", "revoke", "key_1"]);
+    expect(&r, 0);
+}
+
+#[test]
+fn eval_commands() {
+    let srv = api();
+    let sb = Sandbox::new("eval");
+    let u = Some(srv.url.as_str());
+    std::fs::write(
+        sb.path("rubric.yaml"),
+        "- name: valid-sql\n  kind: regex\n  pattern: '^SELECT'\n- name: judge\n  kind: judge\n  model: qwen/qwen3-32b\n  prompt: Is it right?\n  weight: 0.5\n",
+    )
+    .unwrap();
+    let r = run(
+        sb.grad(u),
+        &[
+            "eval",
+            "--name",
+            "sql",
+            "--models",
+            "qwen/qwen3-8b,sql-agent@latest",
+            "--dataset",
+            "sql-eval-holdout",
+            "--rubric",
+            "./rubric.yaml",
+            "--samples",
+            "4",
+            "--temperature",
+            "0.7",
+            "--baseline",
+            "qwen/qwen3-8b",
+            "--wait",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("sql-agent@latest")
+            && r.stdout.contains("+15.0%")
+            && r.stdout.contains("86.0%"),
+        "{}",
+        r.stdout
+    );
+    let body = srv.last("POST", "/v1/evals").unwrap().json();
+    assert_eq!(body["temperature"], 0.7);
+    assert_eq!(
+        body["rubric"][0],
+        json!({"name": "valid-sql", "kind": "regex", "pattern": "^SELECT"})
+    );
+    assert_eq!(body["models"], json!(["qwen/qwen3-8b", "sql-agent@latest"]));
+    let r = run(
+        sb.grad(u),
+        &["eval", "--models", "a", "--dataset", "d", "--dry-run"],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("model calls"));
+    let r = run(
+        sb.grad(u),
+        &["eval", "plan", "--models", "a", "--dataset", "d"],
+    );
+    expect(&r, 0);
+    let r = run(sb.grad(u), &["eval", "--models", "a", "--dataset", "d"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("grad eval status eval_1"));
+    for args in [
+        vec!["eval", "status", "eval_1"],
+        vec!["eval", "list"],
+        vec!["eval", "wait", "eval_1"],
+        vec!["eval", "results", "eval_1"],
+        vec![
+            "eval",
+            "failures",
+            "eval_1",
+            "--model",
+            "qwen/qwen3-8b",
+            "--threshold",
+            "0.5",
+        ],
+        vec!["eval", "cancel", "eval_1"],
+    ] {
+        let r = run(sb.grad(u), &args);
+        expect(&r, 0);
+    }
+    assert!(srv
+        .last("GET", "/v1/evals/eval_1/failures")
+        .unwrap()
+        .query()
+        .contains("threshold=0.5"));
+    std::fs::write(sb.path("code.yaml"), "- name: mine\n  kind: code\n").unwrap();
+    let r = run(
+        sb.grad(u),
+        &[
+            "eval",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--rubric",
+            "code.yaml",
+        ],
+    );
+    expect(&r, 2);
+    assert!(r.stderr.contains(".py"), "{}", r.stderr);
+    let r = run(
+        sb.grad(u),
+        &[
+            "eval",
+            "--models",
+            "a",
+            "--dataset",
+            "d",
+            "--temperature",
+            "9",
+        ],
+    );
+    expect(&r, 2);
+    let r = run(sb.grad(u), &["eval", "--models", "a"]);
+    expect(&r, 2);
+}
+
+// ---------------------------------------------------------------- env serve
+
+fn fake_python_sdk(sb: &Sandbox) -> PathBuf {
+    let pkg = sb.path("pylib/grad");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        pkg.join("__init__.py"),
+        r#"
+import json, os
+class Environment:
+    def setup(self, task): pass
+    def evaluate(self): return 1.0
+def serve_environment(env, *, name, base_url, api_key=None, concurrency=4, wait_ms=5000, max_tasks=None, worker_id=None):
+    with open(os.environ["GRAD_TEST_RECORD"], "w") as f:
+        json.dump({"type": type(env).__name__, "is_instance": isinstance(env, Environment), "name": name,
+                   "base_url": base_url, "api_key": api_key, "concurrency": concurrency, "wait_ms": wait_ms,
+                   "max_tasks": max_tasks, "worker_id": worker_id}, f)
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        sb.path("my_env.py"),
+        "from grad import Environment\nclass MyEnv(Environment):\n    pass\nenv = MyEnv()\ndef make():\n    return MyEnv()\nnot_env = 42\n",
+    )
+    .unwrap();
+    sb.path("pylib")
+}
+
+#[test]
+fn env_serve_instantiates_classes_and_passes_the_resolved_config() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let sb = Sandbox::new("envserve");
+    let lib = fake_python_sdk(&sb);
+    let rec = sb.path("record.json");
+    for target in ["my_env:MyEnv", "my_env:env", "my_env:make"] {
+        let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+        c.env("PYTHONPATH", &lib).env("GRAD_TEST_RECORD", &rec);
+        let r = run(
+            c,
+            &[
+                "env",
+                "serve",
+                target,
+                "--name",
+                "support-app",
+                "--concurrency",
+                "32",
+                "--max-tasks",
+                "1",
+            ],
+        );
+        expect(&r, 0);
+        let got: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+        assert_eq!(got["type"], "MyEnv", "{}", target);
+        assert_eq!(got["is_instance"], true);
+        assert_eq!(got["name"], "support-app");
+        assert_eq!(got["base_url"], "http://127.0.0.1:8787");
+        assert_eq!(got["api_key"], "grad_cli_test");
+        assert_eq!(got["concurrency"], 32);
+        assert_eq!(got["max_tasks"], 1);
+        assert!(got["worker_id"].is_null());
+    }
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", &lib).env("GRAD_TEST_RECORD", &rec);
+    let r = run(c, &["env", "serve", "my_env:not_env", "--name", "x"]);
+    expect(&r, 2);
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", &lib);
+    let r = run(c, &["env", "serve", "nope_mod:env", "--name", "x"]);
+    expect(&r, 2);
+    // No SDK installed for the interpreter.
+    let mut c = sb.grad(Some("http://127.0.0.1:8787"));
+    c.env("PYTHONPATH", sb.path("empty"));
+    let r = run(c, &["env", "serve", "my_env:env", "--name", "x"]);
+    expect(&r, 2);
+    assert!(r.stderr.contains("pip install grad-sdk"), "{}", r.stderr);
+    let r = run(
+        sb.grad(None),
+        &["env", "serve", "123:456", "--name", "bad-env"],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(None),
+        &[
+            "env",
+            "serve",
+            "a:b",
+            "--name",
+            "x",
+            "--python",
+            "/nonexistent/python",
+        ],
+    );
+    expect(&r, 2);
+    let r = run(
+        sb.grad(None),
+        &["env", "serve", "a:b", "--name", "x", "--concurrency", "0"],
+    );
+    expect(&r, 2);
+    let r = run(sb.grad(None), &["env", "check", "owner/env@1"]);
+    expect(&r, 2);
+}
+
+// ---------------------------------------------------------------- local stack
+
+fn docker_shim(sb: &Sandbox, exit: i32) -> PathBuf {
+    let shim = sb.path("docker-shim.sh");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY PORT=$GRAD_PORT AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nexit {exit}\n",
+            log = sb.path("docker.log").display(),
+            exit = exit
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    shim
+}
+
+#[cfg(unix)]
+#[test]
+fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
+    let srv = api();
+    let port = srv.url.rsplit(':').next().unwrap().to_string();
+    let sb = Sandbox::new("local");
+    let shim = docker_shim(&sb, 0);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim).current_dir("/");
+    let r = run(c, &["local", "up", "--port", &port, "--timeout", "10"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout
+            .contains(&format!("grad is running at http://127.0.0.1:{}", port)),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("grad --profile local models list"));
+    let compose = sb.path("data/gradiated/local/docker-compose.yml");
+    let text = std::fs::read_to_string(&compose).unwrap();
+    assert!(text.contains(&format!(
+        "ghcr.io/gradiated/grad-server:{}",
+        env!("CARGO_PKG_VERSION")
+    )));
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    assert!(
+        log.contains(&format!(
+            "compose -p grad-local -f {} up -d",
+            compose.display()
+        )),
+        "{}",
+        log
+    );
+    let cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
+    let local = &cfg["profiles"]["local"];
+    let admin = local["api_key"].as_str().unwrap();
+    let trainer = local["trainer_key"].as_str().unwrap();
+    assert!(admin.starts_with("grad_local_") && trainer.starts_with("grad_trainer_"));
+    assert_eq!(local["base_url"], format!("http://127.0.0.1:{}", port));
+    assert!(log.contains(&format!("HASH={}", mock::sha256_hex(admin.as_bytes()))));
+    assert!(log.contains(&format!("TRAINER={}", trainer)) && log.contains("AUTH=api_key"));
+    assert!(
+        !log.contains(admin),
+        "the admin key itself never reaches docker"
+    );
+    assert!(srv.count("GET", "/health/ready") >= 1);
+    assert_eq!(
+        srv.last("GET", "/v1/models")
+            .unwrap()
+            .header("authorization"),
+        Some(format!("Bearer {}", admin).as_str())
+    );
+
+    // Keys are reused on the next run; --gpu adds the profile.
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(
+        c,
+        &[
+            "--json",
+            "local",
+            "up",
+            "--gpu",
+            "--port",
+            &port,
+            "--no-wait",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["keys_created"], false);
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    assert!(log.contains("--profile gpu up -d"));
+
+    for (args, needle) in [
+        (vec!["local", "down", "--volumes"], "down --volumes"),
+        (
+            vec!["local", "logs", "grad-server", "--tail", "50"],
+            "logs --tail 50 grad-server",
+        ),
+        (vec!["local", "status"], " ps"),
+        (
+            vec!["local", "reset", "--yes"],
+            "down --volumes --remove-orphans",
+        ),
+    ] {
+        let mut c = sb.grad(None);
+        c.env("GRAD_DOCKER", &shim);
+        let r = run(c, &args);
+        expect(&r, 0);
+        let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+        assert!(log.contains(needle), "{:?}: {}", args, log);
+    }
+    let cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
+    assert!(
+        cfg["profiles"]["local"].get("api_key").is_none(),
+        "reset forgets the keys"
+    );
+
+    // --build needs a checkout; reset needs --yes without a terminal.
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim).current_dir("/");
+    let r = run(c, &["local", "up", "--build"]);
+    expect(&r, 2);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["local", "reset"]);
+    expect(&r, 2);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["local", "up", "--file", "missing.yml"]);
+    expect(&r, 2);
+    // Docker missing or failing.
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", sb.path("no-docker-here"));
+    let r = run(c, &["local", "up", "--no-wait"]);
+    expect(&r, 1);
+    assert!(r.stderr.contains("Install Docker"), "{}", r.stderr);
+    let failing = docker_shim(&sb, 3);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &failing);
+    let r = run(c, &["local", "up", "--no-wait"]);
+    expect(&r, 1);
+    assert!(r.stderr.contains("--port"));
+}
+
+// ---------------------------------------------------------------- interrupt
+
+#[cfg(unix)]
+#[test]
+fn ctrl_c_while_waiting_exits_130_and_says_the_run_continues() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let h = hits.clone();
+    let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
+        ("POST", "/v1/runs") => Reply::json(202, run_obj("run_slow", "n", "queued")),
+        ("GET", "/v1/runs/run_slow/metrics") => {
+            h.fetch_add(1, Ordering::SeqCst);
+            Reply::Stream {
+                status: 200,
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+                chunks: vec![
+                    (Duration::ZERO, b": ping\n\n".to_vec()),
+                    (Duration::from_secs(20), b": ping\n\n".to_vec()),
+                ],
+            }
+        }
+        _ => Reply::problem(404, "not_found", "x"),
+    });
+    let sb = Sandbox::new("sigint");
+    let bin = assert_cmd::cargo::cargo_bin("grad");
+    let child = std::process::Command::new(bin)
+        .args([
+            "train",
+            "--dataset",
+            "d",
+            "--name",
+            "n",
+            "--recipe",
+            "sft",
+            "--wait",
+        ])
+        .env("GRADIATED_BASE_URL", &srv.url)
+        .env("GRADIATED_API_KEY", "k")
+        .env("XDG_CONFIG_HOME", sb.path("xdg"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while hits.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(130));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("run_slow keeps going"), "{}", stderr);
+}

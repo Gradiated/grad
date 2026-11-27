@@ -246,10 +246,14 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 .env("GRAD_PORT", port.to_string());
             on_interrupt("stopped waiting; the containers keep starting (`grad local status`)");
             run(ctx, cmd, "up").await.map_err(|e| {
-                e.hint(format!(
-                    "If port {} is taken, pick another with --port; see `grad local logs` for container errors.",
-                    port
-                ))
+                if e.code == "docker_failed" {
+                    e.hint(format!(
+                        "If port {} is taken, pick another with --port; see `grad local logs` for container errors.",
+                        port
+                    ))
+                } else {
+                    e
+                }
             })?;
             if !no_wait {
                 wait_healthy(ctx, &base_url, Duration::from_secs(timeout)).await?;
