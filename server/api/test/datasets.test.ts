@@ -477,10 +477,20 @@ describe("datasets, uploads and imports", () => {
       repo: "trl-lib/ultrafeedback_binarized",
       limit: 2000,
     });
-    const badRepo = await t.json("/v1/datasets/prefs/imports", {
-      body: { source: { kind: "hf", repo: "../etc" } },
-    });
-    expect(badRepo.status).toBe(422);
+    // r8 P2-19: dot segments and paths are not Hub ids (the worker would load a local dir).
+    for (const repo of [
+      "../etc",
+      "workerstate/..",
+      "a/.",
+      ".hidden",
+      "a..b/c",
+      "a/b/c",
+    ]) {
+      const badRepo = await t.json("/v1/datasets/prefs/imports", {
+        body: { source: { kind: "hf", repo } },
+      });
+      expect(badRepo.status, repo).toBe(422);
+    }
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const job = await worker.claim();

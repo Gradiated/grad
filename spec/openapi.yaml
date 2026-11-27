@@ -1099,7 +1099,7 @@ components:
               type: string
               minLength: 1
               maxLength: 200
-              pattern: ^[A-Za-z0-9][\w.-]*(\/[\w.-]+)?$
+              pattern: ^[A-Za-z0-9](?:[\w-]|\.(?!\.))*(\/[A-Za-z0-9](?:[\w-]|\.(?!\.))*)?$
             split:
               type: string
               minLength: 1

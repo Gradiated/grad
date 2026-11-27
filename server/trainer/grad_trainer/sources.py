@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
+import re
 from pathlib import Path
 from typing import IO, Any, Iterator
 
@@ -28,6 +30,9 @@ HF_FIELD_ALIASES = {"answer": "expected_output"}
 HF_MAPPABLE = (*NATIVE_FIELDS, *HF_FIELD_ALIASES)
 
 
+# Hub ids, as the server's ImportSourceSchema checks them: one or two segments that start
+# alphanumeric (no '.' or '..' segments).
+_HF_REPO = re.compile(r"[A-Za-z0-9][\w.-]*(/[A-Za-z0-9][\w.-]*)?")
 _GZIP_MAGIC = b"\x1f\x8b"
 _PARQUET_MAGIC = b"PAR1"
 
@@ -95,6 +100,11 @@ def hf_rows(source: dict[str, Any]) -> Iterator[Row]:
     repo = source.get("repo") or source.get("dataset") or source.get("path")
     if not repo:
         raise SourceUnavailableError("Hugging Face source needs 'repo' (for example 'HuggingFaceH4/ultrachat_200k').")
+    repo = str(repo)
+    # load_dataset() loads a local directory when one has the repo's name: only Hub ids,
+    # and never one that names a path on the worker.
+    if not _HF_REPO.fullmatch(repo) or ".." in repo or os.path.exists(repo):
+        raise SourceUnavailableError(f"'{repo}' is not a Hugging Face dataset id (expected 'owner/name').")
     if is_offline():
         raise SourceUnavailableError(
             f"Can't load Hugging Face dataset '{repo}': offline mode is on (HF_HUB_OFFLINE/GRAD_OFFLINE). "
@@ -112,7 +122,9 @@ def hf_rows(source: dict[str, Any]) -> Iterator[Row]:
     limit = source.get("limit")
     try:
         ds = datasets.load_dataset(
-            str(repo), config, split=split, revision=source.get("revision"), streaming=True, token=source.get("token") or None
+            str(repo), config, split=split, revision=source.get("revision"), streaming=True,
+            # The workspace's token or none: never the worker's own HF login.
+            token=source.get("token") or False,
         )
     except Exception as exc:
         detail = redact(str(exc), source.get("token"))

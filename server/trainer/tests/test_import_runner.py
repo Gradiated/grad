@@ -88,7 +88,7 @@ class ImportRunnerTests(TempDirCase):
             self.assertEqual(batches[0][0]["id"], "org/chats:train_sft:0")
             self.assertEqual(batches[0][0]["messages"][0]["content"], "q0")
             self.assertEqual(calls[0][2]["split"], "train_sft")
-            self.assertIsNone(calls[0][2]["token"])
+            self.assertIs(calls[0][2]["token"], False, "no secret: never the worker's own HF login")
             # A gated dataset: the token from the workspace secret reaches the Hub client only.
             self.run_import({"type": "hf", "repo": "org/gated", "messages": "conv", "token": "hf_secret_token"})
             self.assertEqual(calls[-1][2]["token"], "hf_secret_token")
@@ -103,6 +103,19 @@ class ImportRunnerTests(TempDirCase):
             self.assertNotIn("junk", batches[0][0])
             with self.assertRaisesRegex(SourceUnavailableError, "no column"):
                 self.run_import({"type": "hf", "repo": "org/pairs", "columns": {"messages": "missing"}})
+            # r8 P2-19: a repo that names a directory on the worker is never loaded.
+            local = self.tmpdir() / "workerstate"
+            (local / "data").mkdir(parents=True)
+            (local / "data.jsonl").write_text('{"messages": []}\n')
+            loads = len(calls)
+            fake.load_dataset = load_dataset
+            cwd = os.getcwd()
+            os.chdir(local)
+            self.addCleanup(os.chdir, cwd)
+            for repo in ("workerstate/..", "../etc", ".hidden", "a/./b", "a..b/c", "/abs/path", "a/b/c", str(local), "data"):
+                with self.subTest(repo=repo), self.assertRaisesRegex(SourceUnavailableError, "not a Hugging Face dataset id"):
+                    self.run_import({"type": "hf", "repo": repo})
+            self.assertEqual(len(calls), loads)
             fake.load_dataset = mock.Mock(side_effect=ValueError("404"))
             with self.assertRaisesRegex(SourceUnavailableError, "Can't load"):
                 self.run_import({"type": "hf", "repo": "org/missing"})

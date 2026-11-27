@@ -232,7 +232,10 @@ export const ImportSourceSchema = z
         .string()
         .min(1)
         .max(200)
-        .regex(/^[A-Za-z0-9][\w.-]*(\/[\w.-]+)?$/, "Expected 'owner/name'."),
+        .regex(
+          /^[A-Za-z0-9](?:[\w-]|\.(?!\.))*(\/[A-Za-z0-9](?:[\w-]|\.(?!\.))*)?$/,
+          "Expected 'owner/name'.",
+        ),
       split: z.string().min(1).max(64).default("train"),
       config: z.string().min(1).max(128).optional(),
       revision: z.string().min(1).max(128).optional(),
