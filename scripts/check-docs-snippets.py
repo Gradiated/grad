@@ -34,8 +34,8 @@ sys.path.insert(0, str(REPO / "sdks" / "python"))
 
 # Pages describing Wave 2 features: not run.
 WAVE2 = {
-    "environments.mdx", "custom-loops.mdx", "advanced-objectives.mdx", "recipes/distillation.mdx",
-    "recipes/reward-models.mdx", "recipes/rl-agents.mdx", "recipes/traces-to-environments.mdx",
+    "environments.mdx", "custom-loops.mdx", "advanced-objectives.mdx", "recipes/rl-agents.mdx",
+    "recipes/traces-to-environments.mdx",
 }
 
 # (page, text in the block, reason). The first match wins.
@@ -70,6 +70,7 @@ SKIP = [
     ("", "posthog.capture", "PostHog SDK and project"),
     ("", "--follow", "streams until the run ends; covered by `grad train --wait`"),
     ("self-hosting.mdx", "GRADIATED_PROFILE=local", "uses the profile `grad local up` writes"),
+    ("recipes/reward-models.mdx", "from peft import", "needs torch, peft and the reward model's base weights"),
     ("recipes/decision-model.mdx", "deploy", "a deployable decision model needs a linden-1 or Qwen3-0.6B backbone; the harness has no tiny one"),
 ]
 
@@ -87,7 +88,8 @@ TINY = {"baai/bge-small-en-v1.5": "test/tiny-bert", "gradiated/linden-1": "test/
 TINY_DEFAULTS = """
 import grad.recipes as _r
 for _name, _model in {"SFTRecipe": "test/tiny-qwen3", "DPORecipe": "test/tiny-qwen3", "RouterRecipe": "test/tiny-qwen3",
-                      "DecisionModelRecipe": "test/tiny-qwen3", "CartridgeRecipe": "test/tiny-qwen3", "EmbeddingRecipe": "test/tiny-bert"}.items():
+                      "DecisionModelRecipe": "test/tiny-qwen3", "CartridgeRecipe": "test/tiny-qwen3", "EmbeddingRecipe": "test/tiny-bert",
+                      "DistillRecipe": "test/tiny-qwen3", "RewardModelRecipe": "test/tiny-qwen3"}.items():
     _cls = getattr(_r, _name)
     def _init(self, *a, _orig=_cls.__init__, _model=_model, **k):
         _orig(self, *a, **k)
@@ -139,15 +141,16 @@ DATASETS = {
     **{n: CHAT for n in ("support-sft", "support-gold", "diff-merge-prod", "diff-merge-gold", "diff-merge-clean", "my-sft",
                          "sql-eval-holdout", "sql-staging-sample", "sql-sft", "eval", "clean")},
     **{n: ROUTER for n in ("support-prod", "support-traces")},
-    **{n: DPO for n in ("support-preferences", "diff-merge-preferences", "prefs")},
+    **{n: DPO for n in ("support-preferences", "diff-merge-preferences", "prefs", "sql-preferences")},
     "ticket-triage": DECISION, "docs-retrieval-triplets": TRIPLETS, "api-docs-qa-prompts": PROMPTS, "api-docs-corpus": PROMPTS,
+    "support-prompts": PROMPTS,
 }
 # Seed artifacts: name -> (recipe, dataset), trained on first use.
 ARTIFACTS = {
     "fast-diff-merge": ("sft", "diff-merge-gold"), "sql-agent": ("sft", "sql-eval-holdout"),
     "support-responder-sft": ("sft", "support-gold"), "support-router": ("router", "support-prod"),
     "ticket-triage": ("decision-model", "ticket-triage"), "docs-embedder": ("embedding", "docs-retrieval-triplets"),
-    "api-docs-cartridge": ("cartridge", "api-docs-qa-prompts"),
+    "api-docs-cartridge": ("cartridge", "api-docs-qa-prompts"), "support-4b-distilled": ("distill", "support-prompts"),
 }
 DATASET_REFS = re.compile(r"""datasets\.get\(["']([a-z0-9._-]+)|--dataset[ =]([a-z0-9._-]+)|^\s*dataset: ([a-z0-9._-]+)|grad render ([a-z0-9._-]+)|/v1/datasets/([a-z0-9._-]+)/""", re.M)
 ARTIFACT_REFS = re.compile(r"\b([a-z0-9][a-z0-9-]*)@(?:latest|20\d\d-\d\d-\d\d-\d+)")
@@ -248,6 +251,7 @@ class Runner:
         if self.cloud:  # the model a recipe trains becomes a tiny one; router/eval candidates stay catalog models
             code = re.sub(r"""((?:\bmodel=|\bmodel: |--model )["']?)(qwen/qwen3-[0-9.]+b|baai/bge-small-en-v1\.5|gradiated/linden-1)""",
                           lambda m: m.group(1) + self.model(m.group(2)), code)
+            code = re.sub(r"""((?:\bteacher=|\bteacher: )["']?)qwen/qwen3-[0-9.]+b""", r"\1test/tiny-qwen3-teacher", code)
             code = re.sub(r"^(grad train (?!.*(?:--model|-f )).*?)( --wait| --dry-run|$)",
                           lambda m: f"{m.group(1)} --model {'test/tiny-bert' if '--recipe embedding' in m.group(1) else 'test/tiny-qwen3'}{m.group(2)}",
                           code, flags=re.M)
@@ -281,6 +285,7 @@ class Runner:
             "decision-model": lambda: r.DecisionModelRecipe(model=self.model("gradiated/linden-1")),
             "embedding": lambda: r.EmbeddingRecipe(model=self.model("baai/bge-small-en-v1.5")),
             "cartridge": lambda: r.CartridgeRecipe(model=self.model("qwen/qwen3-8b"), context=__import__("grad").Context.from_text(FILES["context.md"])),
+            "distill": lambda: r.DistillRecipe(model=self.model("qwen/qwen3-4b"), teacher="test/tiny-qwen3-teacher" if self.cloud else "qwen/qwen3-32b"),
         }[kind]()
         run = self.client.runs.create(dataset=ds, name=name, recipe=recipe).wait(timeout=900)
         self.run_id = self.run_id or run.id

@@ -13,7 +13,7 @@ Every grad training run produces one artifact bundle: a `.grad.tar.gz` file hold
 | [`encoder_safetensors`](#encoder_safetensors) | `embedding` | `grad_embedding.json` | no | deploy |
 | [`router_bundle`](#router_bundle) | `router` | `router_config.json` | yes | deploy |
 | [`decision_bundle`](#decision_bundle) | `decision` | `decision_config.json` | yes | deploy |
-| [`reward_bundle`](#reward_bundle) | `reward` | `reward_config.json` | yes | deploy |
+| [`reward_bundle`](#reward_bundle) | `reward` | `reward_config.json` | yes | download only (serving planned) |
 | [`reference`](#reference-test-only) | any | none | no | never (test double) |
 
 ## Versioning
