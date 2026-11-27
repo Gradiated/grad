@@ -25,7 +25,10 @@ export const PLATFORM_SCOPES = ["trainer:worker"] as const;
 
 export const ApiKeyScopeSchema = z
   .enum(WORKSPACE_SCOPES)
-  .openapi("ApiKeyScope");
+  .openapi("ApiKeyScope", {
+    description:
+      "`x:write` implies `x:read`; `admin` implies every workspace scope. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.",
+  });
 
 export type ApiKeyScope = z.infer<typeof ApiKeyScopeSchema>;
 

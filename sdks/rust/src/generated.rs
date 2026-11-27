@@ -99,7 +99,7 @@ pub struct ApiKey {
 }
 
 string_enum! {
-    /// Allowed values of `ApiKeyScope`.
+    /// `x:write` implies `x:read`; `admin` implies every workspace scope. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.
     ApiKeyScope {
         Admin => "admin",
         DatasetsRead => "datasets:read",

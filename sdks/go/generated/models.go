@@ -15,7 +15,7 @@ type APIKey struct {
 	RevokedAt   *string       `json:"revoked_at"`
 }
 
-// APIKeyScope is an enumeration of allowed values.
+// APIKeyScope `x:write` implies `x:read`; `admin` implies every workspace scope. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.
 type APIKeyScope string
 
 // Values of APIKeyScope.
