@@ -16,6 +16,7 @@ import type {
   PageRequest,
 } from "../store/types.js";
 import { canonicalJson, compileFilter, viewName } from "./dataset-filter.js";
+import { createVersionIndexCache, readVersionPage } from "./dataset-pages.js";
 import { readVersionRecords, writeRecordsPart } from "./dataset-records.js";
 import { mergeRecords } from "./record-merge.js";
 
@@ -103,6 +104,7 @@ const stampIds = (records: readonly DatasetRecord[]): DatasetRecord[] =>
 
 export const createDatasetService = (deps: AppDependencies): DatasetService => {
   const { store, storage } = deps;
+  const indexes = createVersionIndexCache(storage);
 
   const get = async (workspaceId: string, name: string): Promise<Dataset> => {
     const dataset = await store.datasets.get(workspaceId, name);
@@ -255,17 +257,24 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
         throw invalid("invalid_cursor", "The pagination cursor is malformed.");
       }
 
-      const records = await readRecords(version);
-      const data = records.slice(offset, offset + input.limit);
+      // One page without loading the version (dataset-pages.ts).
+      const index = await indexes.get(version);
+      const data = await readVersionPage(
+        storage,
+        version.parts,
+        index,
+        offset,
+        input.limit,
+      );
       const nextOffset = offset + data.length;
 
       return {
         dataset: dataset.name,
         version: version.version,
-        total: records.length,
+        total: index.total,
         data,
         next_cursor:
-          nextOffset < records.length ? encodeCursor([nextOffset]) : null,
+          nextOffset < index.total ? encodeCursor([nextOffset]) : null,
       };
     },
     writePart,

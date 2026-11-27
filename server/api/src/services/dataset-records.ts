@@ -78,7 +78,10 @@ export const writeRecordsPart = async (
   };
 };
 
-const parsePart = (stored: Uint8Array, part: DatasetPart): DatasetRecord[] => {
+export const parsePart = (
+  stored: Uint8Array,
+  part: DatasetPart,
+): DatasetRecord[] => {
   let jsonl: Buffer;
   try {
     jsonl = gunzipSync(stored);
