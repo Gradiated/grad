@@ -30,6 +30,33 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- end -}}
 {{- end -}}
 
+{{/* How workers authenticate: kubernetes (service-account tokens) or static (per-pool keys). */}}
+{{- define "grad.workerAuth" -}}
+{{- .Values.workers.auth | default "kubernetes" -}}
+{{- end -}}
+
+{{/* A pool's ServiceAccount in workers.auth=kubernetes: (list ctx poolName) */}}
+{{- define "grad.poolServiceAccount" -}}
+{{- $ctx := index . 0 -}}
+{{- printf "%s-%s-worker" $ctx.Release.Name (index . 1) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* GRAD_WORKER_K8S_SERVICE_ACCOUNTS: each enabled pool's ServiceAccount -> its kinds. */}}
+{{- define "grad.workerServiceAccountsJson" -}}
+{{- $map := dict -}}
+{{- range $name, $w := omit .Values.workers "auth" -}}
+{{- if $w.enabled -}}
+{{- $_ := set $map (printf "%s/%s" $.Release.Namespace (include "grad.poolServiceAccount" (list $ $name))) $w.kinds -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $map -}}
+{{- end -}}
+
+{{/* The PriorityClass of low-priority (training) pools. */}}
+{{- define "grad.trainingPriorityClass" -}}
+{{- .Values.trainingPriorityClass.name | default (printf "%s-training-low" .Release.Name) -}}
+{{- end -}}
+
 {{/* The Secret every pod reads: the chart's own (secrets.create) or secrets.existingSecret. */}}
 {{- define "grad.secretName" -}}
 {{- if .Values.secrets.create -}}
@@ -97,6 +124,9 @@ capabilities:
 {{- fail (printf "values key '%s' is not part of this chart; use %s." $key $instead) -}}
 {{- end -}}
 {{- end -}}
+{{- if not (has (include "grad.workerAuth" .) (list "kubernetes" "static")) -}}
+{{- fail (printf "workers.auth: %q is not kubernetes or static" .Values.workers.auth) -}}
+{{- end -}}
 {{- if hasKey .Values.api "deployMode" -}}
 {{- fail "values key 'api.deployMode' is not part of this chart: self-hosted servers never deploy (deployments are served by Gradiated Cloud)." -}}
 {{- end -}}
@@ -120,7 +150,7 @@ capabilities:
 {{- if and (or .Values.metrics.serviceMonitor.enabled .Values.metrics.prometheusRule.enabled) (not .Values.metrics.enabled) -}}
 {{- fail "metrics.serviceMonitor and metrics.prometheusRule need metrics.enabled." -}}
 {{- end -}}
-{{- range $name, $w := .Values.workers -}}
+{{- range $name, $w := omit .Values.workers "auth" -}}
 {{- if $w.enabled -}}
 {{- range $w.kinds -}}
 {{- if not (has . (list "train" "import" "eval")) -}}

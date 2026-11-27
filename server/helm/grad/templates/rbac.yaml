@@ -1,0 +1,29 @@
+{{- if eq (include "grad.workerAuth" .) "kubernetes" }}
+# workers.auth=kubernetes: grad-server verifies worker service-account tokens
+# with the TokenReview API. That is all it may do with the Kubernetes API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "grad.fullname" . }}-tokenreview-{{ .Release.Namespace }}
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "grad.fullname" . }}-tokenreview-{{ .Release.Namespace }}
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "grad.fullname" . }}-tokenreview-{{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "grad.apiServiceAccount" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

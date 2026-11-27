@@ -1,0 +1,18 @@
+{{- with .Values.trainingPriorityClass }}
+{{- if and .enabled .create }}
+# Training yields to everything else: pods of pools with lowPriority: true run
+# below the default priority (0), so your own workloads preempt them, and they
+# never preempt anything themselves. A preempted worker gets SIGTERM, saves a
+# checkpoint and its run resumes on another worker.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "grad.trainingPriorityClass" $ }}
+  labels:
+    {{- include "grad.labels" $ | nindent 4 }}
+value: {{ .value }}
+preemptionPolicy: Never
+globalDefault: false
+description: "grad training workers: preempted by default-priority workloads, never preempt others."
+{{- end }}
+{{- end }}

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install the grad chart on a throwaway kind cluster and exercise it:
-# readiness, the migrations Job, a run claimed by a `train` worker while both
+# readiness, the migrations Job, worker auth by service-account token
+# (workers.auth=kubernetes), a run claimed by a `train` worker while both
 # API pods are force-deleted, `helm upgrade` and `helm uninstall`.
 #
 #   scripts/install-k8s-tools bin && PATH=$PWD/bin:$PATH tests/helm/smoke.sh
@@ -58,8 +59,29 @@ ADMIN_KEY=$(secret_key admin-api-key)
 [[ "$ADMIN_KEY" == grad_* ]] || { echo "FAIL: the chart did not generate an admin key" >&2; exit 1; }
 [ "$(printf '%s' "$ADMIN_KEY" | sha256sum | cut -d' ' -f1)" = "$(secret_key admin-api-key-hash)" ]
 [ "$(secret_key secrets-key | base64 -d | wc -c)" -eq 32 ] || { echo "FAIL: secrets-key is not 32 bytes" >&2; exit 1; }
-# One generated key per pool, each scoped to its pool's job kinds.
-secret_key trainer-keys-json | python3 -c 'import json,sys; keys=json.load(sys.stdin); assert sorted((k["label"],k["kinds"]) for k in keys) == [("import",["import","eval"]),("train",["train"])], keys'
+# workers.auth=kubernetes (the default): no worker keys; each pool runs as its
+# own ServiceAccount and grad-server may only create TokenReviews.
+if kubectl -n "$NS" get secret "$SECRET" -o jsonpath='{.data}' | grep -q trainer-keys-json; then
+  echo "FAIL: workers.auth=kubernetes generated static worker keys" >&2; exit 1
+fi
+API_SA="system:serviceaccount:$NS:$RELEASE-grad-api"
+[ "$(kubectl auth can-i create tokenreviews.authentication.k8s.io --as "$API_SA")" = yes ]
+for verb in "get secrets" "list pods" "create serviceaccounts/token" "create subjectaccessreviews.authorization.k8s.io"; do
+  # shellcheck disable=SC2086
+  [ "$(kubectl -n "$NS" auth can-i $verb --as "$API_SA" || true)" = no ] || { echo "FAIL: grad-server may $verb" >&2; exit 1; }
+done
+for pool in train import; do
+  sa=$(kubectl -n "$NS" get deploy "$RELEASE-grad-worker-$pool" -o jsonpath='{.spec.template.spec.serviceAccountName}')
+  [ "$sa" = "$RELEASE-$pool-worker" ] || { echo "FAIL: the $pool pool runs as '$sa'" >&2; exit 1; }
+done
+# Training runs below default priority and never preempts.
+[ "$(kubectl -n "$NS" get deploy "$RELEASE-grad-worker-train" -o jsonpath='{.spec.template.spec.priorityClassName}')" = "$RELEASE-training-low" ]
+[ -z "$(kubectl -n "$NS" get deploy "$RELEASE-grad-worker-import" -o jsonpath='{.spec.template.spec.priorityClassName}')" ]
+[ "$(kubectl get priorityclass "$RELEASE-training-low" -o jsonpath='{.value} {.preemptionPolicy}')" = "-10 Never" ]
+echo "ok: service accounts, TokenReview-only RBAC and the training PriorityClass"
+# workers.auth=static still renders one key per pool, scoped to its kinds.
+helm template "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" --set workers.auth=static \
+  | grep -q 'name: TRAINER_KEYS_JSON' || { echo "FAIL: workers.auth=static renders no TRAINER_KEYS_JSON" >&2; exit 1; }
 GENERATED=$(kubectl -n "$NS" get secret "$SECRET" -o jsonpath='{.data}')
 # KEDA's metrics-api trigger (keda.trigger=metrics-api) reads each pool's queue
 # depth from grad-server's metrics port; the prometheus trigger reads
@@ -91,6 +113,7 @@ helm uninstall "$RELEASE" -n "$NS" --wait --timeout 3m
 # Workers drain on SIGTERM (terminationGracePeriodSeconds) before their pods go.
 kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/instance=$RELEASE --timeout 120s
 left=$(kubectl -n "$NS" get all,serviceaccount,pdb,job,networkpolicy -l app.kubernetes.io/instance=$RELEASE -o name)
+left+=$(kubectl get clusterrole,clusterrolebinding,priorityclass -l app.kubernetes.io/instance=$RELEASE -o name)
 [ -z "$left" ] || { echo "FAIL: left behind: $left" >&2; exit 1; }
 # The Secret outlives the release, so a reinstall keeps its keys and workspace secrets.
 kubectl -n "$NS" get secret "$SECRET" >/dev/null

@@ -5,6 +5,9 @@
    worker never claims it, and force-deleting both API pods mid-run (one at a
    time) neither fails the run nor costs it an attempt.
 3. The worker NetworkPolicy lets workers reach S3 but not the database.
+4. Worker auth (workers.auth=kubernetes): each pool's projected service-account
+   token claims only its pool's kinds; tokens for another audience or an
+   unmapped service account are refused.
 """
 
 from __future__ import annotations
@@ -52,6 +55,20 @@ class Api:
             self.proc.wait()
             self.proc = None
 
+    def status(self, path: str, body: object, token: str) -> tuple[int, object]:
+        """POST with another bearer token: (HTTP status, problem code or job)."""
+        if self.proc is None or self.proc.poll() is not None:
+            self._forward()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}", method="POST", data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read()).get("job")
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read() or b"{}").get("code")
+
     def call(self, method: str, path: str, body: object | None = None, *, timeout: float = 120) -> dict:
         deadline = time.monotonic() + timeout
         while True:
@@ -83,6 +100,37 @@ def check(cond: bool, what: str) -> None:
     print(f"ok: {what}")
 
 
+# Claims from inside a worker pod with its projected token, the way grad_trainer does.
+CLAIM_PROBE = """import json, os, sys, urllib.error, urllib.request
+token = open(os.environ["GRAD_WORKER_TOKEN_FILE"]).read().strip()
+req = urllib.request.Request(os.environ["GRAD_SERVER_URL"] + "/v1/trainer-jobs/claim", method="POST",
+    data=json.dumps({"worker_id": "smoke-probe", "kinds": [sys.argv[1]]}).encode(),
+    headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+try:
+    with urllib.request.urlopen(req, timeout=10) as r: print(r.status, json.loads(r.read())["job"])
+except urllib.error.HTTPError as e: print(e.code, json.loads(e.read()).get("code"))
+"""
+
+
+def worker_auth_checks(api: Api, ns: str, release: str, full: str) -> None:
+    """Before any job is queued, so a probe that may claim gets nothing."""
+    probe = lambda pool, kind: kubectl(  # noqa: E731
+        "exec", f"deploy/{full}-worker-{pool}", "--", "python", "-c", CLAIM_PROBE, kind, ns=ns).strip()
+    check(probe("train", "train") == "200 None", "the train pool's service-account token claims train jobs")
+    check(probe("train", "import") == "403 job_kind_forbidden", "...but not import jobs")
+    check(probe("import", "import") == "200 None", "the import pool's service-account token claims import jobs")
+    check(probe("import", "train") == "403 job_kind_forbidden", "...but not train jobs")
+
+    claim = {"worker_id": "smoke-probe", "kinds": ["train"]}
+    token = lambda *args: kubectl("create", "token", *args, ns=ns).strip()  # noqa: E731
+    check(api.status("/v1/trainer-jobs/claim", claim, token(f"{release}-train-worker", "--audience", "grad"))[0] == 200,
+          "a fresh grad-audience token of the train account is accepted")
+    check(api.status("/v1/trainer-jobs/claim", claim, token(f"{release}-train-worker")) == (401, "unauthorized"),
+          "a token for the API server's audience is refused")
+    check(api.status("/v1/trainer-jobs/claim", claim, token("default", "--audience", "grad")) == (401, "unauthorized"),
+          "an unmapped service account is refused")
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--namespace", required=True)
@@ -102,6 +150,8 @@ def main() -> None:
         env = json.loads(kubectl("get", "deploy", f"{full}-api", "-o",
                                  "jsonpath={.spec.template.spec.containers[0].env}", ns=ns))
         check({"name": "MIGRATE_ON_BOOT", "value": "false"} in env, "API replicas do not migrate at boot")
+
+        worker_auth_checks(api, ns, a.release, full)
 
         records = [
             {"messages": [{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}]}
@@ -143,6 +193,10 @@ def main() -> None:
         import_logs = kubectl("logs", f"deploy/{full}-worker-import", "-c", "grad-trainer", ns=ns)
         check(rid in train_logs and "(train)" in train_logs, "the train worker ran it")
         check(rid not in import_logs and "(import)" in import_logs, "the import worker (kinds: import) never claimed it")
+        check("rejected the worker token" not in train_logs + import_logs, "no worker token was rejected")
+        restarts = kubectl("get", "pods", "-l", "app.kubernetes.io/component=worker", "-o",
+                           "jsonpath={.items[*].status.containerStatuses[*].restartCount}", ns=ns).split()
+        check(set(restarts) == {"0"}, f"worker pods never restarted ({restarts})")
 
         probe = ("import socket,sys\ntry: socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3).close(); print('open')\n"
                  "except OSError: print('blocked')")

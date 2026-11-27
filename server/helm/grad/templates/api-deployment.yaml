@@ -23,7 +23,8 @@ spec:
         app.kubernetes.io/component: api
     spec:
       serviceAccountName: {{ include "grad.apiServiceAccount" . }}
-      automountServiceAccountToken: false
+      # workers.auth=kubernetes: the in-cluster credentials for TokenReview (rbac.yaml).
+      automountServiceAccountToken: {{ eq (include "grad.workerAuth" .) "kubernetes" }}
       securityContext:
         {{- include "grad.podSecurity" (list 1000) | nindent 8 }}
       {{- with .Values.api.nodeSelector }}
@@ -91,8 +92,13 @@ spec:
             {{- end }}
             {{- include "grad.secretEnv" (list . "DATABASE_URL" "database-url" false) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "ADMIN_API_KEY_HASH" "admin-api-key-hash" true) | nindent 12 }}
+            - {name: GRAD_WORKER_AUTH, value: {{ include "grad.workerAuth" . | quote }}}
+            {{- if eq (include "grad.workerAuth" .) "kubernetes" }}
+            - {name: GRAD_WORKER_K8S_SERVICE_ACCOUNTS, value: {{ include "grad.workerServiceAccountsJson" . | quote }}}
+            {{- else }}
             {{- include "grad.secretEnv" (list . "TRAINER_API_KEY" "trainer-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "TRAINER_KEYS_JSON" "trainer-keys-json" true) | nindent 12 }}
+            {{- end }}
             {{- include "grad.secretEnv" (list . "GRAD_SECRETS_KEY" "secrets-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "CLOUD_SERVICE_TOKEN" "cloud-service-token" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "AWS_ACCESS_KEY_ID" "aws-access-key-id" true) | nindent 12 }}

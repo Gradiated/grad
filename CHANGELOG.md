@@ -18,6 +18,20 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   `GRAD_INFERENCE_API_KEY`, `GRAD_JUDGE_API_KEY` and `EVAL_CONCURRENCY` move to the eval workers
   (the API keeps the endpoint URLs, to refuse evals without one), and `EVAL_EXECUTOR` is gone.
 
+- **Worker authentication modes.** `GRAD_WORKER_AUTH` picks how workers authenticate, as a
+  comma-separated list tried in order: `static` (the default, `TRAINER_KEYS_JSON` as before),
+  `kubernetes` (projected service-account tokens, audience `grad`, verified with the TokenReview
+  API and mapped to job kinds by `GRAD_WORKER_K8S_SERVICE_ACCOUNTS`) and `lease` (tokens an
+  orchestrator mints through `POST /internal/v1/worker-tokens` on `INTERNAL_PORT`, bound to a
+  host, kinds, a GPU bound and an expiry, revoked with `DELETE /internal/v1/worker-tokens/{lease_id}`;
+  migration 0007). Workers read `GRAD_WORKER_TOKEN` or `GRAD_WORKER_TOKEN_FILE`, re-read on
+  every request. The Helm chart now defaults to `workers.auth=kubernetes`: one ServiceAccount
+  per pool, no worker keys, and a ClusterRole for grad-server that only creates TokenReviews.
+  `workers.auth=static` keeps the generated per-pool keys. Training pods run under a low
+  PriorityClass (`trainingPriorityClass`, `<release>-training-low`, value -10, preemptionPolicy
+  Never), so your own workloads preempt them. A train job's dataset stream now also checks that
+  the caller holds the job's lease.
+
 - **Event streams share one reader per API replica.** SSE streams of run events and metrics no
   longer poll Postgres each (two queries a second per open stream). Each replica LISTENs on
   `grad_job_events` (migration 0004 adds NOTIFY triggers on event inserts and job status

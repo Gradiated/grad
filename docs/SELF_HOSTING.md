@@ -92,7 +92,12 @@ To work on it, run the API (for example `grad local up` or the harness) and `pnp
 | `HOST` / `PORT` | `127.0.0.1` / `8787` | Bind a non-loopback `HOST` explicitly (containers set `0.0.0.0`). |
 | `AUTH_MODE` | `api_key` | `api_key` requires `ADMIN_API_KEY_HASH` (the server refuses to start without it). `none` must be set explicitly and is for development only; it refuses a non-loopback `HOST` unless `AUTH_MODE_NONE_ALLOW_REMOTE=true` (set by `server/docker-compose.yml`, whose port is published on loopback only). `cloud` delegates to Gradiated Cloud. |
 | `ADMIN_API_KEY_HASH` | none | SHA-256 hex of the bootstrap admin key; use it to mint workspace keys with `POST /v1/keys`. |
-| `TRAINER_API_KEY` or `TRAINER_API_KEY_HASH` | none | The platform trainer-worker key. Worker keys are not workspace keys: `admin` never implies `trainer:worker`, and `/v1/keys` cannot mint it. |
+| `TRAINER_API_KEY` or `TRAINER_API_KEY_HASH` | none | The platform trainer-worker key (every job kind), for `GRAD_WORKER_AUTH=static`. Worker keys are not workspace keys: `admin` never implies `trainer:worker`, and `/v1/keys` cannot mint it. |
+| `TRAINER_KEYS_JSON` | none | Static worker keys scoped by job kind: `[{"label": "gpu", "sha256": "<hex>", "kinds": ["train"]}, ...]`. See [Worker authentication](#worker-authentication). |
+| `GRAD_WORKER_AUTH` | `static` | How workers authenticate: a comma-separated list of `static`, `kubernetes`, `lease`, tried in order. |
+| `GRAD_WORKER_K8S_SERVICE_ACCOUNTS` | none | `kubernetes` mode: service account to job kinds, `{"grad/grad-train-worker": ["train"], "grad/grad-import-worker": ["import"]}`. Required with `kubernetes`. |
+| `GRAD_ORCHESTRATOR_KEYS_JSON` | none | `lease` mode: who may mint lease tokens, `[{"label": "gpu-fleet", "sha256": "<hex>", "kinds": ["train"]}]`. Accepted only on `INTERNAL_PORT`. |
+| `INTERNAL_PORT` | off | Serve the internal routes (lease-token minting and revocation) on this port only, never on `PORT`. Needs `lease` in `GRAD_WORKER_AUTH` and an orchestrator key. |
 | `DATABASE_URL` | required | PostgreSQL 17 connection string (on AWS, Amazon RDS or Aurora for PostgreSQL 17). Migrations run at boot, versioned in `grad_schema_migrations` under an advisory lock, so several replicas can start at once. |
 | `MIGRATE_ON_BOOT` | `true` | `false` skips them and refuses to start while any is pending; run `node dist/main.js migrate` first (the Helm chart's migrations Job does). |
 | `S3_BUCKET` | required | The bucket for datasets, checkpoints and artifacts. Workers and SDKs upload and download through presigned URLs. Objects are written once under unique keys and never overwritten. Credentials come from the AWS SDK's default chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, EKS Pod Identity, IRSA, an instance role). |
@@ -124,6 +129,42 @@ To work on it, run the API (for example `grad local up` or the harness) and `pnp
 Runs, imports and evals share one queue in Postgres. When a worker claims, the server picks, among the workspaces below their running cap for that job kind, the one with the fewest running jobs of the kind (ties go to the workspace whose next job is older), then that workspace's oldest queued job the worker can run. A workspace that queues 50 runs therefore doesn't hold up another's 2: with 4 workers, both of the small workspace's runs start in the first round. A claim is one transaction under a per-kind advisory lock with `FOR UPDATE SKIP LOCKED` on the row, so caps hold across every API replica and worker; with 10,000 queued jobs over 100 workspaces it takes about 5 ms.
 
 GPU workers send their GPU memory with each claim (`nvidia-smi`, or `GRAD_WORKER_GPU`), and get only runs whose plan's `min_gpu_memory_gb` fits; CPU workers aren't filtered. A run no online worker can fit stays queued and says why ("Waiting for a GPU with ≥46 GB; online workers have 24 GB"), and `grad_jobs_unfit` counts such runs. Every queued run carries `queue_position` (about how many runs start before it, counting other workspaces' fair share) and `queue_message`, which `grad train`, the TUI and the web UI show.
+
+### Worker authentication
+
+Workers (`grad-trainer`) send a bearer token with every worker-protocol request (`/v1/trainer-jobs/*`). They read it from `GRAD_WORKER_TOKEN`, else from the file named by `GRAD_WORKER_TOKEN_FILE`, else `TRAINER_API_KEY`. The file is re-read on every request (and once more after a 401), so a rotated token takes effect without a restart. Workers never log the token. A worker token is not a workspace key: it grants only the `trainer:worker` scope for some job kinds, and `admin` never implies it.
+
+grad-server checks the token with each authenticator in `GRAD_WORKER_AUTH`, in order, and the first one that recognises it wins. When one cannot decide (the Kubernetes API is unreachable) and no other matches, the request fails with `503 worker_auth_unavailable`, never with a match or a 401.
+
+| Mode | The token | Use it for |
+| --- | --- | --- |
+| `static` (default) | A key whose SHA-256 is in `TRAINER_KEYS_JSON` (its `kinds`) or is `TRAINER_API_KEY(_HASH)` (every kind). Every configured hash is compared in constant time. | `grad local up`, docker compose, a few VMs. The keys never expire: to rotate one, add the new hash, restart the workers with the new key, then remove the old hash. |
+| `kubernetes` | The pod's projected service-account token with audience `grad`. grad-server sends it to the TokenReview API using its own in-cluster credentials and maps the reviewed `system:serviceaccount:<namespace>:<name>` to kinds through `GRAD_WORKER_K8S_SERVICE_ACCOUNTS`. | Helm (the chart's default). There is nothing to store or rotate: a token lives an hour and the kubelet refreshes the file. |
+| `lease` | `gradwt_` plus 256 random bits, minted by an orchestrator for one host and lease. It is bound to that host and limited to some kinds and a GPU size, and it expires with the lease. | A system that lends hosts to grad for a while, such as Gradiated Cloud's GPU fleet operator. |
+
+**kubernetes.** Only tokens shaped like a JWT are sent for review, so static keys and lease tokens never leave grad-server. A token of another audience, an account that is not mapped, or a user that is not a service account gets a 401. A successful review is reused for 60 seconds at most, and never after the token's `exp`. grad-server needs RBAC to create `tokenreviews.authentication.k8s.io` and nothing else; the chart's ClusterRole grants exactly that.
+
+**lease.** The orchestrator calls grad-server's internal listener (`INTERNAL_PORT`; off by default, never the public port) with a key from `GRAD_ORCHESTRATOR_KEYS_JSON`. Workspace and worker keys are refused there.
+
+```http
+POST /internal/v1/worker-tokens
+Authorization: Bearer <orchestrator key>
+{"host_id": "gpu-host-17", "lease_id": "lease-8c1f", "kinds": ["train"], "gpu_memory_gb": 80, "expires_at": "2026-11-28T06:00:00Z"}
+
+201 {"token": "gradwt_...", "host_id": "gpu-host-17", "lease_id": "lease-8c1f", "kinds": ["train"], "gpu_memory_gb": 80, "expires_at": "2026-11-28T06:00:00.000Z"}
+
+DELETE /internal/v1/worker-tokens/lease-8c1f
+200 {"lease_id": "lease-8c1f", "revoked": 1}
+```
+
+The token is returned once; grad-server stores only its SHA-256 (`grad_worker_tokens`). `host_id` allows letters, digits, `.`, `_` and `-`. `kinds` must be within the orchestrator key's `kinds` (else `403 job_kind_forbidden`). `expires_at` must be in the future and at most 7 days ahead. To extend a lease, mint a new token for the same lease and write it to the worker's `GRAD_WORKER_TOKEN_FILE`. An orchestrator can revoke only tokens it minted, and revoking is idempotent. On every request grad-server checks the following:
+
+- The token has not expired and has not been revoked (else 401).
+- The claim asks only for the token's kinds (`403 job_kind_forbidden`).
+- The claim's `worker_id` is the `host_id`, or the `host_id` followed by `-` and an alphanumeric suffix of up to 32 characters (`403 worker_host_mismatch`). Start the trainer with `GRAD_WORKER_ID=<host_id>`; it appends a random `-<6 hex>` for each process.
+- The GPU memory the claim reports is no more than `gpu_memory_gb` (`403 gpu_memory_exceeds_token`). Claims are filtered as if the worker had at most that much, including a claim that reports no GPU.
+
+Revoke after the worker has drained. A revoked token's next request gets a 401 and the worker stops; any lease it still held expires and its job is requeued. The maintenance tick deletes expired tokens.
 
 ### Object storage
 
@@ -168,8 +209,8 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
    | --- | --- | --- |
    | `database-url` | API, migrations Job | PostgreSQL 17 connection string |
    | `admin-api-key-hash` | API | SHA-256 hex of the bootstrap admin key (`AUTH_MODE=api_key`) |
-   | `trainer-api-key` | API, workers | The platform worker key (`workerDefaults.apiKeySecretKey`, or per worker `workers.<name>.apiKeySecretKey`) |
-   | `trainer-keys-json` | API | `TRAINER_KEYS_JSON`: per-pool worker keys scoped by job kind, `[{"label": "gpu", "sha256": "<hex>", "kinds": ["train"]}, ...]`. Store each pool's plaintext key under its own Secret key and point `workers.<name>.apiKeySecretKey` at it, so GPU pods can never claim imports or see workspace secrets. |
+   | `trainer-api-key` | API, workers | `workers.auth=static` only: the platform worker key (`workerDefaults.apiKeySecretKey`, or per worker `workers.<name>.apiKeySecretKey`) |
+   | `trainer-keys-json` | API | `workers.auth=static` only: `TRAINER_KEYS_JSON`, per-pool worker keys scoped by job kind, `[{"label": "gpu", "sha256": "<hex>", "kinds": ["train"]}, ...]`. Store each pool's plaintext key under its own Secret key and point `workers.<name>.apiKeySecretKey` at it, so GPU pods can never claim imports or see workspace secrets. |
    | `secrets-key` | API | `GRAD_SECRETS_KEY`: 32 random bytes, base64, encrypting workspace secrets |
    | `inference-api-key`, `judge-api-key` | eval workers | Keys for `evals.inferenceBaseUrl` and `evals.judgeBaseUrl` |
    | `metrics-token` | API, Prometheus, KEDA | Bearer token for `/metrics` and `/metrics/queue` with `metrics.requireToken=true` |
@@ -181,7 +222,6 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
    kubectl -n grad create secret generic grad \
      --from-literal=database-url="postgres://..." \
      --from-literal=admin-api-key-hash="$(printf '%s' "$MY_ADMIN_KEY" | sha256sum | awk '{print $1}')" \
-     --from-literal=trainer-api-key="$(openssl rand -hex 32)" \
      --from-literal=secrets-key="$(openssl rand -base64 32)"
    ```
    With External Secrets, sync the same keys into that Secret; no credential ever goes into values.
@@ -195,6 +235,8 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
 3. What gets installed:
    - **Migrations** run once per install and upgrade in a `pre-install,pre-upgrade` hook Job (`node dist/main.js migrate`; Argo CD runs it as a PreSync hook). The API replicas start with `MIGRATE_ON_BOOT=false` and refuse to serve a database with pending migrations. `migrations.enabled=false` makes every replica migrate at boot instead, under an advisory lock.
    - **API**: `api.replicaCount` (2) replicas with liveness, readiness and startup probes, a PodDisruptionBudget and resource requests and limits. Extra settings (for example `GRAD_EXTRA_MODELS_JSON` or `MAX_ATTEMPTS`) go in `api.env`; `api.queue` sets the per-workspace caps (`maxRunningPerWorkspace.{train,import,eval}`, `maxQueuedPerWorkspace`).
+   - **Worker authentication** (`workers.auth`, see [Worker authentication](#worker-authentication)): with `kubernetes`, the default, each pool runs as its own ServiceAccount (`<release>-train-worker`, `<release>-import-worker`) and mounts a projected token for audience `grad` that lasts 3600 s, at `/var/run/secrets/grad/worker/token` (`GRAD_WORKER_TOKEN_FILE`). The pods get no Kubernetes API token. grad-server maps each account to its pool's `kinds` (`GRAD_WORKER_K8S_SERVICE_ACCOUNTS`) and may only create TokenReviews (a ClusterRole and binding). With `static`, the chart generates one key per pool, scoped to the pool's kinds (`TRAINER_KEYS_JSON`), and all pools share the `workerServiceAccount`.
+   - **Training priority**: pools with `lowPriority: true` (`workers.train` by default) run under the PriorityClass `trainingPriorityClass.name` (default `<release>-training-low`). Its value is -10, below the default priority of 0, and its `preemptionPolicy` is `Never`. So when the cluster is full, your own workloads (inference, say) preempt training, and training never preempts anything. A preempted worker gets SIGTERM, saves a checkpoint and its run resumes on another worker. PriorityClasses are cluster-scoped: with several releases, create it in one (`trainingPriorityClass.create=false` and the same `name` in the others). Set `trainingPriorityClass.enabled=false` to run training at the default priority.
    - **Workers**: `workers.train` claims only `train` jobs and requests `gpuCount` GPUs (`nodeSelector`/`tolerations` place it); `workers.import` is a small CPU pool for `import` jobs, which are file imports and source syncs, the only jobs that carry workspace secrets such as provider keys and HF tokens, and `eval` jobs. Each trainer container sets `GRAD_WORKER_KINDS` from `kinds`; a pool whose `kinds` include `eval` also runs a `grad-eval-worker` container (the `grad-server` image, `node dist/main.js worker --kinds eval`) with the pool's worker key, `evals.inferenceBaseUrl`/`evals.judgeBaseUrl`, their Secret keys, `evals.concurrency` and `evals.workerResources`. A GPU pool refuses kind `eval`, and the release notes warn when no pool runs evals. Workers drain on SIGTERM: if the next step and a checkpoint fit in `GRAD_RECLAIM_GRACE_SECONDS` (25), the worker saves a checkpoint of the current step first; then the attempt is billed, handed back and requeued at once, and a new worker resumes from that checkpoint. On Kubernetes a node termination handler delivers that SIGTERM; on a plain EC2 host, `GRAD_TERMINATION_NOTICE=aws` makes the worker poll the instance metadata (IMDSv2) for a termination notice and treat it like SIGTERM (the chart's network policy blocks the metadata endpoint). To sync from an observability tool on a private address, set `workers.import.env.GRAD_SOURCES_EGRESS_ALLOW` (CIDRs) and allow it in `networkPolicy.workerEgress`; recipe `loggers=` (W&B, MLflow) go through the same guard on the train workers, so a private MLflow server needs `workers.train.env.GRAD_SOURCES_EGRESS_ALLOW`. A source sync stops after `GRAD_SOURCES_SYNC_MAX_SECONDS` (default 3600) and every provider response after 120 s of wall-clock time, so a slow host can't hold an import worker. `models.mirror` sets `GRAD_MODELS_MIRROR` (a directory or `s3://` prefix holding `<mirror>/<model id>/`) for air-gapped installs.
 4. Optional:
    - `keda.enabled=true` (KEDA installed in the cluster) adds a ScaledObject per worker. It scales on the open jobs of that worker's kinds, queued **and running**, so a scale-down never strands a running job. `keda.workers.train.minReplicaCount=0` scales GPUs to zero. See [KEDA](#keda) for its two trigger modes; neither needs database credentials.
@@ -208,7 +250,7 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
    ```
    `--output` extracts a PEFT directory (`adapter_config.json`, `adapter_model.safetensors`) after checking the bundle's SHA-256 and every file against its manifest.
 
-`tests/helm/smoke.sh` installs the chart on a kind cluster with throwaway Postgres and SeaweedFS (`server/helm/grad/ci/kind-values.yaml`) and checks a run end to end, including API pods being killed mid-run, an upgrade and an uninstall. CI runs it on every push.
+`tests/helm/smoke.sh` installs the chart on a kind cluster with throwaway Postgres and SeaweedFS (`server/helm/grad/ci/kind-values.yaml`) and checks a run end to end, including API pods being killed mid-run, an upgrade and an uninstall. It also checks worker authentication by service account: each pool's token claims only its own kinds, a token for another audience or an unmapped account is refused, grad-server may only create TokenReviews, and the train pool runs under the training PriorityClass. CI runs it on every push.
 
 ## Monitoring
 

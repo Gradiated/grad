@@ -6,8 +6,8 @@ nameOverride: ""
 # The one Secret every pod reads its keys from.
 secrets:
   # true: the chart creates the Secret `<release>-grad` from the values below
-  # and generates every key you leave empty: secrets-key, an admin key, and one
-  # API key per worker pool, scoped to the pool's job kinds. Generated keys are
+  # and generates every key you leave empty: secrets-key, an admin key, and
+  # (workers.auth=static) one API key per worker pool, scoped to the pool's job kinds. Generated keys are
   # kept across upgrades (read back with lookup), and the Secret is kept on
   # `helm uninstall`. Read the admin key with:
   #   kubectl get secret <release>-grad -o jsonpath='{.data.admin-api-key}' | base64 -d
@@ -16,8 +16,8 @@ secrets:
   # Secrets, sealed-secrets). Every key except database-url is optional:
   #   database-url          Postgres URL (API, migrations Job)
   #   admin-api-key-hash    sha256 hex of the bootstrap admin key (AUTH_MODE=api_key)
-  #   trainer-api-key       one worker key for every pool (the API hashes it)
-  #   trainer-keys-json     per-pool keys scoped by kind: [{"label","sha256","kinds"}]
+  #   trainer-api-key       workers.auth=static: one worker key for every pool (the API hashes it)
+  #   trainer-keys-json     workers.auth=static: per-pool keys scoped by kind: [{"label","sha256","kinds"}]
   #                         (point each workers.<name>.apiKeySecretKey at its own key)
   #   secrets-key           GRAD_SECRETS_KEY, 32 random bytes in base64 (workspace secrets)
   #   inference-api-key     key for evals.inferenceBaseUrl
@@ -151,7 +151,7 @@ workerDefaults:
   image:
     repository: docker.io/gradiated/grad-trainer
     pullPolicy: IfNotPresent
-  # With secrets.existingSecret: the Secret key holding a worker's API key
+  # workers.auth=static with secrets.existingSecret: the Secret key holding a worker's API key
   # (override per pool with workers.<name>.apiKeySecretKey). The chart's own
   # Secret uses worker-<name>-api-key.
   apiKeySecretKey: trainer-api-key
@@ -159,9 +159,20 @@ workerDefaults:
   leaseSeconds: 180
 
 workers:
+  # How workers authenticate to grad-server (GRAD_WORKER_AUTH):
+  #   kubernetes  each pool runs as its own ServiceAccount (<release>-<pool>-worker)
+  #               and sends a projected token (audience grad, 1 h, rotated by the
+  #               kubelet); grad-server checks it with the TokenReview API (a
+  #               ClusterRole allowing only tokenreviews: create) and maps the
+  #               account to the pool's kinds. No worker keys to store or rotate.
+  #   static      one generated key per pool (TRAINER_KEYS_JSON in the Secret),
+  #               for clusters where grad-server may not call TokenReview.
+  auth: kubernetes
   train:
     enabled: true
     kinds: [train]
+    # Run under trainingPriorityClass, so your own workloads preempt training.
+    lowPriority: true
     replicaCount: 1
     image:
       tag: "0.2.0-alpha.3-gpu"
@@ -200,8 +211,24 @@ workers:
         cpu: "2"
         memory: 2Gi
 
-# Workers' ServiceAccount (no API token mounted). Annotate it only when
-# GRAD_MODELS_MIRROR is an s3:// prefix the workers must read.
+# A low PriorityClass for pools with lowPriority: true (train by default):
+# value below the default 0, so any default-priority pod (your inference, say)
+# preempts training when the cluster is full, and preemptionPolicy Never, so
+# training never preempts anything. A preempted worker checkpoints on SIGTERM
+# and its run resumes on another worker. PriorityClasses are cluster-scoped:
+# with several releases, create it in one (create: false and the same name in
+# the others). enabled: false runs training at the default priority.
+trainingPriorityClass:
+  enabled: true
+  create: true
+  # Default: <release>-training-low (grad-training-low for a release named grad).
+  name: ""
+  value: -10
+
+# Workers' ServiceAccount in workers.auth=static (no API token mounted). With
+# workers.auth=kubernetes each pool gets its own (<release>-<pool>-worker) and
+# these annotations apply to each. Annotate only when GRAD_MODELS_MIRROR is an
+# s3:// prefix the workers must read.
 workerServiceAccount:
   create: true
   name: ""

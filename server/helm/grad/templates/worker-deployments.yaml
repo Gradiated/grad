@@ -1,9 +1,10 @@
-{{- range $name, $w := .Values.workers }}
+{{- range $name, $w := omit .Values.workers "auth" }}
 {{- if $w.enabled }}
 {{- $d := $.Values.workerDefaults }}
 {{- $image := mergeOverwrite (deepCopy $d.image) ($w.image | default dict) }}
 {{- /* eval jobs run in a grad-server container; the trainer takes the rest. */}}
 {{- $trainerKinds := without $w.kinds "eval" }}
+{{- $k8s := eq (include "grad.workerAuth" $) "kubernetes" }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -29,8 +30,17 @@ spec:
         app.kubernetes.io/component: worker
         grad.gradiated.com/worker: {{ $name }}
     spec:
+      {{- if $k8s }}
+      serviceAccountName: {{ include "grad.poolServiceAccount" (list $ $name) }}
+      {{- else }}
       serviceAccountName: {{ include "grad.workerServiceAccount" $ }}
+      {{- end }}
+      # No Kubernetes API token: in workers.auth=kubernetes the pod gets only a
+      # grad-audience token (volume worker-token), useless against the API server.
       automountServiceAccountToken: false
+      {{- if and $w.lowPriority $.Values.trainingPriorityClass.enabled }}
+      priorityClassName: {{ include "grad.trainingPriorityClass" $ }}
+      {{- end }}
       terminationGracePeriodSeconds: {{ $w.terminationGracePeriodSeconds }}
       securityContext:
         {{- include "grad.podSecurity" (list 10001) | nindent 8 }}
@@ -74,11 +84,16 @@ spec:
             {{- with $.Values.models.mirror }}
             - {name: GRAD_MODELS_MIRROR, value: {{ . | quote }}}
             {{- end }}
+            {{- if $k8s }}
+            # The projected service-account token, re-read on every request (the kubelet rotates it).
+            - {name: GRAD_WORKER_TOKEN_FILE, value: /var/run/secrets/grad/worker/token}
+            {{- else }}
             - name: TRAINER_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "grad.secretName" $ }}
                   key: {{ include "grad.workerKeyName" (list $ $name $w) }}
+            {{- end }}
             {{- range $k, $v := $w.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
@@ -101,6 +116,11 @@ spec:
               mountPath: /tmp
             - name: hf-cache
               mountPath: /home/grad/.cache
+            {{- if $k8s }}
+            - name: worker-token
+              mountPath: /var/run/secrets/grad/worker
+              readOnly: true
+            {{- end }}
         {{- end }}
         {{- if has "eval" $w.kinds }}
         # Evals, dataset.score() and router labelling: calls the inference and
@@ -127,11 +147,15 @@ spec:
             {{- end }}
             {{- include "grad.secretEnv" (list $ "GRAD_INFERENCE_API_KEY" "inference-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list $ "GRAD_JUDGE_API_KEY" "judge-api-key" true) | nindent 12 }}
+            {{- if $k8s }}
+            - {name: GRAD_WORKER_TOKEN_FILE, value: /var/run/secrets/grad/worker/token}
+            {{- else }}
             - name: TRAINER_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "grad.secretName" $ }}
                   key: {{ include "grad.workerKeyName" (list $ $name $w) }}
+            {{- end }}
           securityContext:
             {{- include "grad.containerSecurity" $ | nindent 12 }}
             # The grad-server image's user.
@@ -142,11 +166,25 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if $k8s }}
+            - name: worker-token
+              mountPath: /var/run/secrets/grad/worker
+              readOnly: true
+            {{- end }}
         {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
         - name: hf-cache
           emptyDir: {}
+        {{- if $k8s }}
+        - name: worker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: grad
+                  expirationSeconds: 3600
+                  path: token
+        {{- end }}
 {{- end }}
 {{- end }}

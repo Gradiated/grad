@@ -13,7 +13,7 @@ spec:
       name: {{ include "grad.secretName" . }}
       key: metrics-token
 {{- end }}
-{{- range $name, $w := .Values.workers }}
+{{- range $name, $w := omit .Values.workers "auth" }}
 {{- if $w.enabled }}
 {{- $scale := index $.Values.keda.workers $name | default dict }}
 ---

@@ -1,7 +1,7 @@
 grad is installed.
 
 API (in-cluster): http://{{ include "grad.fullname" . }}-api.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.api.service.port }}
-Workers:{{ range $name, $w := .Values.workers }}{{ if $w.enabled }} {{ $name }} (kinds: {{ join "," $w.kinds }}){{ end }}{{ end }}
+Workers:{{ range $name, $w := omit .Values.workers "auth" }}{{ if $w.enabled }} {{ $name }} (kinds: {{ join "," $w.kinds }}){{ end }}{{ end }}
 
 Check readiness:
   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "grad.fullname" . }}-api
@@ -22,7 +22,7 @@ Admin API key (generated; kept across upgrades and after uninstall):
 Evals are off: set evals.inferenceBaseUrl to an OpenAI-compatible endpoint.
 {{- end }}
 {{- $evalPool := false }}
-{{- range $name, $w := .Values.workers }}{{ if and $w.enabled (has "eval" $w.kinds) }}{{ $evalPool = true }}{{ end }}{{ end }}
+{{- range $name, $w := omit .Values.workers "auth" }}{{ if and $w.enabled (has "eval" $w.kinds) }}{{ $evalPool = true }}{{ end }}{{ end }}
 {{- if not $evalPool }}
 
 No enabled worker pool has kind `eval`: evals and dataset.score() stay queued.
