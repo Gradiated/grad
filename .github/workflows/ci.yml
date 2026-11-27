@@ -107,6 +107,32 @@ jobs:
       - name: Test Rust SDK
         run: cargo test --package grad-sdk
 
+  cli-and-e2e:
+    name: Rust CLI & Cross-Language E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: node pnpm python go rust
+
+      - name: Build server/api and TypeScript SDK
+        run: |
+          pnpm -C server/api install --frozen-lockfile
+          pnpm -C sdks/typescript install --frozen-lockfile
+          pnpm -C sdks/typescript build
+
+      - name: Test and build Rust workspace (grad-sdk + grad CLI)
+        run: |
+          cargo test --workspace
+          cargo build --bin grad
+
+      - name: Run full cross-language E2E contract suite (Python + TS + Go + Rust CLI)
+        run: python3 tests/contract/run_e2e.py
+
   secrets:
     name: Secret Scan
     runs-on: ubuntu-latest

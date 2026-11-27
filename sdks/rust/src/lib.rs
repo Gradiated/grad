@@ -273,6 +273,27 @@ impl GradClient {
         self.wire.record_feedback(&body).await
     }
 
+    pub async fn plan_eval(&self, body: &Value) -> Result<Value, ApiError> {
+        self.wire.plan_eval(body).await
+    }
+
+    pub async fn create_eval(&self, body: &Value) -> Result<Value, ApiError> {
+        self.wire.create_eval(body).await
+    }
+
+    pub async fn list_eval_failures(
+        &self,
+        eval_id: &str,
+        model: Option<&str>,
+        threshold: f64,
+    ) -> Result<Value, ApiError> {
+        let mut query = vec![("threshold", threshold.to_string())];
+        if let Some(m) = model {
+            query.push(("model", m.to_string()));
+        }
+        self.wire.list_eval_failures(eval_id, &query).await
+    }
+
     pub async fn create_api_key(&self, name: &str, scopes: Vec<String>) -> Result<Value, ApiError> {
         let body = json!({ "name": name, "scopes": scopes });
         self.wire.create_api_key(&body).await
