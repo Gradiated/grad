@@ -356,6 +356,11 @@ async fn follow_run(ctx: &Ctx, c: &Client, run: &Run, timeout: Duration) -> CliR
                     usd(r.cost_usd),
                     r.id
                 ),
+                RunStatus::StoppedBalance => format!(
+                    "The workspace ran out of balance ({} spent). Top up, then continue: grad runs resume {}",
+                    usd(r.cost_usd),
+                    r.id
+                ),
                 RunStatus::Cancelled => format!("Resume it with: grad runs resume {}", r.id),
                 _ => format!(
                     "Inspect it with `grad runs inspect {}`; resume from the last checkpoint with `grad runs resume {}`",

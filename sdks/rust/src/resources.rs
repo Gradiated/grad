@@ -1023,7 +1023,7 @@ impl Runs<'_> {
     }
 
     /// Poll until terminal. `completed` returns the run; `failed`, `cancelled`
-    /// and `stopped_budget` return [`Error::RunFailed`] carrying the run.
+    /// `stopped_budget` and `stopped_balance` return [`Error::RunFailed`] carrying the run.
     pub async fn wait(&self, id: &str, opts: &WaitOptions) -> Result<Run> {
         let mut poll = Poller::new(opts);
         loop {

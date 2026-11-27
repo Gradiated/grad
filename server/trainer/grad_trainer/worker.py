@@ -714,6 +714,12 @@ class TrainerWorker:
             "eval_report": output.eval_report or None,
             "tokens_processed": tokens,
         }
+        if status == "stopped_budget":
+            # The server tells budget stops (resume with a higher cap) from balance stops
+            # (top up) by this; the trainer's own cap check is a budget stop.
+            payload["stop_reason"] = (
+                "insufficient_balance" if state.stop_reason == "insufficient_balance" else "budget"
+            )
         artifact_dir = Path(output.artifact_dir)
         if artifact_dir.is_dir() and any(artifact_dir.iterdir()):
             bundle = job_dir / "artifact.grad.tar.gz"

@@ -21,7 +21,7 @@ import { type Recipe, toRecipeSpec } from "../recipes.js";
 import { Artifact, deployArtifact, downloadArtifact, type DeployOptions, type DownloadOptions, type DownloadResult } from "./artifacts.js";
 import { datasetName, type DatasetRef } from "./datasets.js";
 
-export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["completed", "failed", "cancelled", "stopped_budget"];
+export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["completed", "failed", "cancelled", "stopped_budget", "stopped_balance"];
 const isTerminal = (status: RunStatus): boolean => TERMINAL_RUN_STATUSES.includes(status);
 
 export interface RunParams {
@@ -120,7 +120,7 @@ export class Run {
   /**
    * Waits for a terminal status. Resolves for `completed` (with `artifact`
    * loaded); throws RunFailedError for `failed`, `cancelled` and
-   * `stopped_budget` (resume with a raised cap).
+   * `stopped_budget` (resume with a raised cap) and `stopped_balance` (top up, then resume).
    */
   async wait(options: RunWaitOptions = {}): Promise<CompletedRun> {
     let lastStatus: RunStatus | undefined;

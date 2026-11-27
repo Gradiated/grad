@@ -181,7 +181,7 @@ export const HeartbeatResponseSchema = z
       .nullable()
       .openapi({
         description:
-          "Why to stop: cancelled, the run's cap (budget), or the workspace ran out of balance (Cloud). Budget and balance stops complete as stopped_budget.",
+          "Why to stop: cancelled, the run's cap (budget), or the workspace ran out of balance (Cloud). Budget and balance stops complete as stopped_budget with this stop_reason.",
       }),
     lease_expires_at: IsoTimestampSchema,
   })
@@ -267,6 +267,10 @@ export const CompleteJobRequestSchema = z
     eval_report: EvalReportSchema.nullable().optional(),
     tokens_processed: z.number().int().min(0).default(0),
     error: z.string().max(4000).optional(),
+    stop_reason: z.enum(["budget", "insufficient_balance"]).optional().openapi({
+      description:
+        "With status stopped_budget: why the run stopped. budget = the run's max_cost_usd (the worker's own check or the heartbeat's stop_reason); insufficient_balance = the heartbeat said the workspace ran out of balance (the run becomes stopped_balance).",
+    }),
     import_summary: z
       .object({
         dropped_count: z.number().int().min(0).default(0),

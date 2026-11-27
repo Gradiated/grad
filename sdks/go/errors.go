@@ -69,7 +69,7 @@ func (e *ChecksumMismatchError) Unwrap() error { return e.GradError }
 // Is reports whether target is ErrChecksumMismatch.
 func (e *ChecksumMismatchError) Is(target error) bool { return target == ErrChecksumMismatch }
 
-// RunFailedError is returned by Run.Wait when a run ends failed, cancelled or stopped_budget.
+// RunFailedError is returned by Run.Wait when a run ends failed, cancelled, stopped_budget or stopped_balance.
 // Run carries the final state (for stopped_budget, raise the cap with Run.Resume).
 type RunFailedError struct {
 	*GradError

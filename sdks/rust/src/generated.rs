@@ -1687,7 +1687,7 @@ pub struct Run {
 }
 
 string_enum! {
-    /// Allowed values of `RunStatus`.
+    /// stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints.
     RunStatus {
         Queued => "queued",
         Running => "running",
@@ -1695,6 +1695,7 @@ string_enum! {
         Failed => "failed",
         Cancelled => "cancelled",
         StoppedBudget => "stopped_budget",
+        StoppedBalance => "stopped_balance",
     }
 }
 

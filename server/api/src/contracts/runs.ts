@@ -432,9 +432,13 @@ export const RUN_STATUSES = [
   "failed",
   "cancelled",
   "stopped_budget",
+  "stopped_balance",
 ] as const;
 
-export const RunStatusSchema = z.enum(RUN_STATUSES).openapi("RunStatus");
+export const RunStatusSchema = z.enum(RUN_STATUSES).openapi("RunStatus", {
+  description:
+    "stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints.",
+});
 
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 

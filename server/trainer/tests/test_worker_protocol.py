@@ -263,6 +263,8 @@ class WorkerProtocolTests(unittest.TestCase):
                 self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
                 complete = srv.bodies("complete")[0]
                 self.assertEqual(complete["status"], "stopped_budget")
+                # The server tells a cap stop from a balance stop by the reason we send.
+                self.assertEqual(complete["stop_reason"], reason)
                 self.assertIn("upload_id", complete)
 
     def test_heartbeat_should_stop_cancels(self) -> None:

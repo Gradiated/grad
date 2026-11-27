@@ -89,6 +89,7 @@ const TERMINAL: readonly Run["status"][] = [
   "failed",
   "cancelled",
   "stopped_budget",
+  "stopped_balance",
 ];
 
 export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
@@ -173,9 +174,13 @@ export const metricMode = (
     : "max";
 };
 
-/** The error a run stopped for lack of workspace balance carries (resumable). */
+/** The error of a run stopped for lack of workspace balance (stopped_balance). */
 export const BALANCE_STOPPED =
   "Stopped because the workspace ran out of balance (insufficient_balance); top up, then resume the run.";
+
+/** The error of a run stopped at its own cost cap (stopped_budget). */
+const budgetStopped = (spent: number, cap: number | null): string =>
+  `Stopped at the run's cost cap ($${spent.toFixed(4)} of $${(cap ?? spent).toFixed(4)}); resume with a higher max_cost_usd.`;
 
 const stopReason = (run: RunRecord): StopReason => {
   if (run.status === "cancelled") return "cancelled";
@@ -844,24 +849,25 @@ export const createRunLifecycle = (
     resume: async (workspaceId, id, maxCostUsd) => {
       const run = await loadRun(workspaceId, id);
       if (
-        !["stopped_budget", "failed", "cancelled"].includes(run.status) ||
+        !["stopped_budget", "stopped_balance", "failed", "cancelled"].includes(
+          run.status,
+        ) ||
         run.worker_id !== null
       ) {
         throw conflict(
           "run_not_resumable",
-          `Run '${id}' is ${run.status}${run.worker_id ? " and its worker is still finalizing" : ""}; only stopped_budget, failed or cancelled runs can be resumed.`,
+          `Run '${id}' is ${run.status}${run.worker_id ? " and its worker is still finalizing" : ""}; only stopped_budget, stopped_balance, failed or cancelled runs can be resumed.`,
         );
       }
 
+      // A run stopped at its own cap resumes only with a higher one; a
+      // balance stop resumes with the same cap once the workspace can pay.
       const cap = maxCostUsd ?? run.max_cost_usd;
       const spent = billedCost(run);
-      const balanceStop = run.error === BALANCE_STOPPED;
       if (
         cap !== null &&
         (spent >= cap ||
-          (run.status === "stopped_budget" &&
-            maxCostUsd === undefined &&
-            !balanceStop))
+          (run.status === "stopped_budget" && maxCostUsd === undefined))
       ) {
         throw conflict(
           "budget_exhausted",
@@ -1124,6 +1130,15 @@ export const createRunLifecycle = (
       const wantsArtifact =
         run.status !== "cancelled" &&
         (body.status === "completed" || body.status === "stopped_budget");
+      // The worker says why it stopped (the heartbeat told it, or its own cap
+      // check). An older worker doesn't: then only an exhausted balance makes
+      // it a balance stop. Never inferred from cost < cap, since workers stop
+      // just under the cap.
+      const balanceStop =
+        body.status === "stopped_budget" &&
+        (body.stop_reason === "insufficient_balance" ||
+          (body.stop_reason === undefined &&
+            (await deps.billing.canContinue?.(run.workspace_id)) === false));
       if (
         run.status !== "cancelled" &&
         body.status === "completed" &&
@@ -1186,17 +1201,23 @@ export const createRunLifecycle = (
                   now,
                 )
               : {
-                  status:
-                    body.status === "cancelled" ? "cancelled" : body.status,
+                  status: balanceStop
+                    ? "stopped_balance"
+                    : body.status === "cancelled"
+                      ? "cancelled"
+                      : body.status,
                   finished_at: now,
                   error:
                     body.status === "failed"
                       ? (body.error ?? "The trainer reported a failure.")
-                      : body.status === "stopped_budget" &&
-                          (run.max_cost_usd === null ||
-                            runCost(run, tokens) < run.max_cost_usd)
+                      : balanceStop
                         ? BALANCE_STOPPED
-                        : null,
+                        : body.status === "stopped_budget"
+                          ? budgetStopped(
+                              runCost(run, tokens),
+                              run.max_cost_usd,
+                            )
+                          : null,
                   ...(artifact ? { artifact_id: artifact.id } : {}),
                   ...(body.eval_report !== undefined
                     ? { eval_report: body.eval_report }

@@ -101,7 +101,7 @@ const main = async () => {
     const run = await ok("POST", "/v1/runs", runBody);
     write("run-queued.json", run);
     let done = run;
-    for (let i = 0; i < 300 && !["completed", "failed", "cancelled", "stopped_budget"].includes(done.status); i += 1) {
+    for (let i = 0; i < 300 && !["completed", "failed", "cancelled", "stopped_budget", "stopped_balance"].includes(done.status); i += 1) {
       await sleep(200);
       done = await ok("GET", `/v1/runs/${run.id}`);
     }

@@ -214,11 +214,15 @@ describe("usage ledger: incremental billing while a run trains", () => {
     });
     const stopped = await worker.complete(
       job,
-      { status: "stopped_budget", tokens_processed: 1200 },
+      {
+        status: "stopped_budget",
+        stop_reason: "insufficient_balance",
+        tokens_processed: 1200,
+      },
       "partial",
     );
     expect(stopped.body.run).toMatchObject({
-      status: "stopped_budget",
+      status: "stopped_balance",
       error: BALANCE_STOPPED,
       tokens_processed: 1200,
     });

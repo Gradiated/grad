@@ -214,6 +214,9 @@ impl Model {
             RunStatus::StoppedBudget => {
                 format!("Stopped at the cost cap ({} spent)", usd(r.cost_usd))
             }
+            RunStatus::StoppedBalance => {
+                format!("Stopped: out of balance ({} spent)", usd(r.cost_usd))
+            }
             RunStatus::Other(s) => format!("Status {}", s),
         }
     }
@@ -274,7 +277,9 @@ impl Model {
             let tone = match self.run.status {
                 RunStatus::Completed => Tone::Good,
                 RunStatus::Failed => Tone::Bad,
-                RunStatus::Cancelled | RunStatus::StoppedBudget => Tone::Warn,
+                RunStatus::Cancelled | RunStatus::StoppedBudget | RunStatus::StoppedBalance => {
+                    Tone::Warn
+                }
                 _ => Tone::Plain,
             };
             let text = self.status_text();
@@ -484,6 +489,7 @@ impl Model {
             RunStatus::Failed => ("failed", "Failed".into(), Tone::Bad),
             RunStatus::Cancelled => ("cancelled", "Cancelled".into(), Tone::Warn),
             RunStatus::StoppedBudget => ("stopped", "Stopped at the cost cap".into(), Tone::Warn),
+            RunStatus::StoppedBalance => ("stopped", "Stopped: out of balance".into(), Tone::Warn),
             RunStatus::Queued if r.attempt > 1 || !self.samples.is_empty() => (
                 "requeued",
                 "Requeued · waiting for a GPU".into(),
@@ -637,7 +643,9 @@ fn phase_line(m: &Model) -> (Line<'static>, Line<'static>) {
     let icon = match m.run.status {
         RunStatus::Completed => Span::styled("✓", fg(GOOD)),
         RunStatus::Failed => Span::styled("✗", fg(BAD)),
-        RunStatus::Cancelled | RunStatus::StoppedBudget => Span::styled("■", fg(WARN)),
+        RunStatus::Cancelled | RunStatus::StoppedBudget | RunStatus::StoppedBalance => {
+            Span::styled("■", fg(WARN))
+        }
         _ => Span::styled(
             SPINNER[m.tick % SPINNER.len()],
             if tone == Tone::Plain {

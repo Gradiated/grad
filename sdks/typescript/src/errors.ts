@@ -22,7 +22,7 @@ export {
   type FieldError,
 } from "./transport.js";
 
-/** A run ended `failed`, `cancelled` or `stopped_budget`; `run` holds its final state. */
+/** A run ended `failed`, `cancelled`, `stopped_budget` or `stopped_balance`; `run` holds its final state. */
 export class RunFailedError extends GradError {
   readonly run: Run;
 
@@ -31,7 +31,9 @@ export class RunFailedError extends GradError {
     const hint =
       run.status === "stopped_budget"
         ? " Raise the cap and continue with grad.runs.resume(id, { maxCostUsd })."
-        : "";
+        : run.status === "stopped_balance"
+          ? " Top up the workspace balance, then continue with grad.runs.resume(id)."
+          : "";
     super(`Run ${run.id} (${run.name}) ended ${run.status}${reason}.${hint}`, {
       code: `run_${run.status}`,
     });

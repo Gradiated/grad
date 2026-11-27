@@ -32,12 +32,14 @@ const (
 	RunFailed        = generated.RunStatusFailed
 	RunCancelled     = generated.RunStatusCancelled
 	RunStoppedBudget = generated.RunStatusStoppedBudget
+	// RunStoppedBalance means the workspace ran out of balance (Cloud); top up, then Resume.
+	RunStoppedBalance = generated.RunStatusStoppedBalance
 )
 
 // IsTerminal reports whether a run in this status will not change again.
 func IsTerminal(s RunStatus) bool {
 	switch s {
-	case RunCompleted, RunFailed, RunCancelled, RunStoppedBudget:
+	case RunCompleted, RunFailed, RunCancelled, RunStoppedBudget, RunStoppedBalance:
 		return true
 	}
 	return false
@@ -266,7 +268,7 @@ func (r *Run) Refresh(ctx context.Context) error {
 
 // Wait polls until the run reaches a terminal status (backoff 0.5 s to 5 s, transient
 // errors tolerated). On completion Artifact is loaded. failed, cancelled and
-// stopped_budget return *RunFailedError carrying the run.
+// stopped_budget (and stopped_balance) return *RunFailedError carrying the run.
 func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 	w := newWaitConfig(opts)
 	var cursor *string
@@ -313,8 +315,11 @@ func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 		if msg == "" {
 			msg = "no error reported"
 		}
-		if r.Status == RunStoppedBudget {
+		switch r.Status {
+		case RunStoppedBudget:
 			msg = "the spend cap was reached; raise it with Run.Resume(ctx, maxCostUSD)"
+		case RunStoppedBalance:
+			msg = "the workspace ran out of balance; top up, then Run.Resume(ctx, 0)"
 		}
 		return &RunFailedError{GradError: newError("run_"+string(r.Status), "run %s (%s) ended %s: %s", r.ID, r.Name, r.Status, msg), Run: r}
 	}

@@ -30,6 +30,7 @@ const TERMINAL = new Set([
   "failed",
   "cancelled",
   "stopped_budget",
+  "stopped_balance",
 ]);
 const SSE_BATCH = 500;
 const SSE_PING_MS = 15_000;

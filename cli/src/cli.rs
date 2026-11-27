@@ -12,7 +12,7 @@ Exit codes:
   4    not found (404)
   5    conflict or validation error (409/422)
   6    capability unavailable on this server (deploy_unavailable, inference_unavailable)
-  7    run, eval or import finished unsuccessfully (failed, cancelled; runs also stopped_budget)
+  7    run, eval or import finished unsuccessfully (failed, cancelled; runs also stopped_budget, stopped_balance)
   130  interrupted (Ctrl-C); a started run keeps going on the server";
 
 const MAIN_AFTER: &str = "\

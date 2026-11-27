@@ -711,7 +711,7 @@ class Runs(_Resource):
 
         ``on_metric`` receives each :class:`grad.MetricPoint` live (SSE with reconnect);
         ``on_status`` each status change. Transient errors are retried. Raises
-        :class:`grad.RunFailedError` for ``failed``, ``cancelled`` and ``stopped_budget`` runs,
+        :class:`grad.RunFailedError` for ``failed``, ``cancelled``, ``stopped_budget`` and ``stopped_balance`` runs,
         as every SDK does (unless ``raise_on_failure=False``), and
         :class:`grad.WaitTimeoutError` after ``timeout`` seconds (the run keeps going).
         Ctrl-C stops waiting, not the run.
@@ -726,7 +726,10 @@ class Runs(_Resource):
             )
             raise
         if run.status != "completed" and raise_on_failure:
-            hint = " Raise the cap and continue with run.resume(max_cost_usd=...)." if run.status == "stopped_budget" else ""
+            hint = {
+                "stopped_budget": " Raise the cap and continue with run.resume(max_cost_usd=...).",
+                "stopped_balance": " Top up the workspace balance, then continue with run.resume().",
+            }.get(run.status, "")
             raise RunFailedError(
                 f"Run {run.id} ({run.name}) ended {run.status}: {run.error or 'no error reported'}.{hint}",
                 resource=run,

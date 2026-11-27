@@ -158,10 +158,12 @@ class JobFailedError(GradError):
 
 
 class RunFailedError(JobFailedError):
-    """A run ended ``failed``, ``cancelled`` or ``stopped_budget`` (code ``run_<status>``).
+    """A run ended ``failed``, ``cancelled``, ``stopped_budget`` or ``stopped_balance`` (code ``run_<status>``).
 
     ``run`` is the final :class:`grad.Run`; ``error`` the server's reason. A ``stopped_budget``
-    run keeps its checkpoints: resume it with ``run.resume(max_cost_usd=...)``.
+    run keeps its checkpoints: resume it with ``run.resume(max_cost_usd=...)`` (a higher cap).
+    A ``stopped_balance`` run (Cloud: the workspace ran out of balance) resumes with
+    ``run.resume()`` after a top-up.
     """
 
     @property

@@ -332,6 +332,7 @@ describe("run lifecycle and worker protocol", () => {
     expect(done.body.run).toMatchObject({
       status: "stopped_budget",
       cost_usd: 1.1,
+      error: expect.stringMatching(/cost cap .*higher max_cost_usd/),
     });
     expect(done.body.artifact).not.toBeNull();
 
@@ -401,6 +402,43 @@ describe("run lifecycle and worker protocol", () => {
     expect((await billed()).map((c) => c.tokensProcessed)).toEqual([
       333_333, 333_333, 333_333,
     ]);
+  });
+
+  it("reports a worker that stops just under its cap as a budget stop, never a balance stop", async () => {
+    const run = await createSftRun(t, { maxCostUsd: 1 });
+    const job = await worker.claim();
+    // The trainer's own check stops before the step that would cross the cap.
+    const done = await worker.complete(
+      job!,
+      {
+        status: "stopped_budget",
+        stop_reason: "budget",
+        tokens_processed: 990_000,
+      },
+      "partial",
+    );
+    expect(done.body.run).toMatchObject({ status: "stopped_budget" });
+    expect(done.body.run?.error).not.toMatch(/balance/);
+    // An older worker that sends no stop_reason is also a budget stop on a server
+    // without billing (self-hosted): nothing to top up.
+    const run2 = await createSftRun(t, { maxCostUsd: 1, name: "older-worker" });
+    const job2 = await worker.claim();
+    const old = await worker.complete(
+      job2!,
+      { status: "stopped_budget", tokens_processed: 990_000 },
+      "partial-2",
+    );
+    expect(old.body.run).toMatchObject({
+      id: run2.id,
+      status: "stopped_budget",
+    });
+
+    const noRaise = await t.json(`/v1/runs/${run.id}/resume`, {
+      method: "POST",
+      body: {},
+    });
+    expect(noRaise.status).toBe(409);
+    expect(noRaise.body).toMatchObject({ code: "budget_exhausted" });
   });
 
   it("marks a run stopped_budget at claim when a lowered cap is already spent", async () => {

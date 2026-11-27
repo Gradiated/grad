@@ -931,9 +931,10 @@ export interface Run {
   finishedAt: string | null;
 }
 
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopped_budget";
+/** stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints. */
+export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopped_budget" | "stopped_balance";
 
-export const RunStatusValues = ["queued", "running", "completed", "failed", "cancelled", "stopped_budget"] as const;
+export const RunStatusValues = ["queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance"] as const;
 
 export interface ScoreDatasetRequest {
   rubric: Array<EvalRubricItem>;

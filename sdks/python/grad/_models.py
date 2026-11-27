@@ -48,7 +48,7 @@ __all__ = [
     "Run",
 ]
 
-TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "stopped_budget"})
+TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "stopped_budget", "stopped_balance"})
 TERMINAL_EVAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 TERMINAL_IMPORT_STATUSES = frozenset({"completed", "failed"})
 
@@ -648,7 +648,7 @@ class Run(APIObject):
     @property
     def succeeded(self) -> bool:
         """True when the run completed (or stopped at its budget with an artifact)."""
-        return self.status == "completed" or (self.status == "stopped_budget" and self.artifact_id is not None)
+        return self.status == "completed" or (self.status in ("stopped_budget", "stopped_balance") and self.artifact_id is not None)
 
     def _no_artifact(self) -> RuntimeError:
         hint = "" if self.done else " It is still running: call run.wait() first."

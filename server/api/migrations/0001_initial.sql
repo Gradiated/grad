@@ -53,7 +53,8 @@ CREATE TABLE grad_jobs (
   workspace_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('train', 'import', 'eval')),
   status TEXT NOT NULL CHECK (status IN (
-    'queued', 'running', 'awaiting_scores', 'completed', 'failed', 'cancelled', 'stopped_budget')),
+    'queued', 'running', 'awaiting_scores', 'completed', 'failed', 'cancelled', 'stopped_budget',
+    'stopped_balance')),
   -- Every claim bumps attempt (the fencing token, and part of billing keys).
   attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
   -- Attempts that ended without a result since creation or the last resume.

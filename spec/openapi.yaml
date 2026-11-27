@@ -2150,6 +2150,9 @@ components:
         - failed
         - cancelled
         - stopped_budget
+        - stopped_balance
+      description: "stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the
+        workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints."
     MetricPoint:
       type:
         - object
@@ -3036,7 +3039,7 @@ components:
             - insufficient_balance
             - null
           description: "Why to stop: cancelled, the run's cap (budget), or the workspace ran out of balance (Cloud). Budget and
-            balance stops complete as stopped_budget."
+            balance stops complete as stopped_budget with this stop_reason."
         lease_expires_at:
           type: string
           format: date-time
@@ -3365,6 +3368,14 @@ components:
         error:
           type: string
           maxLength: 4000
+        stop_reason:
+          type: string
+          enum:
+            - budget
+            - insufficient_balance
+          description: "With status stopped_budget: why the run stopped. budget = the run's max_cost_usd (the worker's own check
+            or the heartbeat's stop_reason); insufficient_balance = the heartbeat said the workspace ran out of balance
+            (the run becomes stopped_balance)."
         import_summary:
           type: object
           properties:

@@ -1952,17 +1952,18 @@ type Run struct {
 	FinishedAt      *string                `json:"finished_at"`
 }
 
-// RunStatus is an enumeration of allowed values.
+// RunStatus stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints.
 type RunStatus string
 
 // Values of RunStatus.
 const (
-	RunStatusQueued        RunStatus = "queued"
-	RunStatusRunning       RunStatus = "running"
-	RunStatusCompleted     RunStatus = "completed"
-	RunStatusFailed        RunStatus = "failed"
-	RunStatusCancelled     RunStatus = "cancelled"
-	RunStatusStoppedBudget RunStatus = "stopped_budget"
+	RunStatusQueued         RunStatus = "queued"
+	RunStatusRunning        RunStatus = "running"
+	RunStatusCompleted      RunStatus = "completed"
+	RunStatusFailed         RunStatus = "failed"
+	RunStatusCancelled      RunStatus = "cancelled"
+	RunStatusStoppedBudget  RunStatus = "stopped_budget"
+	RunStatusStoppedBalance RunStatus = "stopped_balance"
 )
 
 // ScoreDatasetRequest is generated from the OpenAPI schema.

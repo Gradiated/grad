@@ -10,7 +10,7 @@ pub use crate::generated::*;
 pub type LocalScore = PostEvalScoresRequestScoresItem;
 
 impl RunStatus {
-    /// `completed`, `failed`, `cancelled` or `stopped_budget`.
+    /// `completed`, `failed`, `cancelled`, `stopped_budget` or `stopped_balance`.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -18,6 +18,7 @@ impl RunStatus {
                 | RunStatus::Failed
                 | RunStatus::Cancelled
                 | RunStatus::StoppedBudget
+                | RunStatus::StoppedBalance
         )
     }
 }

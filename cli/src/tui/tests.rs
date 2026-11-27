@@ -372,6 +372,7 @@ fn terminal_statuses() {
         (RunStatus::Failed, "Failed"),
         (RunStatus::Cancelled, "Cancelled"),
         (RunStatus::StoppedBudget, "Stopped at the cost cap"),
+        (RunStatus::StoppedBalance, "Stopped: out of balance"),
         (RunStatus::Other("paused".into()), "paused"),
     ] {
         let mut m = replay(&fx, 300);

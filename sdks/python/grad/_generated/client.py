@@ -148,6 +148,7 @@ CompleteTrainerJobRequest = TypedDict(
         "eval_report": "NotRequired[EvalReport]",
         "tokens_processed": "NotRequired[int]",
         "error": "NotRequired[str]",
+        "stop_reason": "NotRequired[Literal['budget', 'insufficient_balance']]",
         "import_summary": "NotRequired[dict[str, Any]]",
     },
 )
@@ -994,7 +995,7 @@ Run = TypedDict(
     },
 )
 
-RunStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed', 'cancelled', 'stopped_budget']"
+RunStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed', 'cancelled', 'stopped_budget', 'stopped_balance']"
 
 ScoreDatasetRequest = TypedDict(
     "ScoreDatasetRequest",
@@ -1359,7 +1360,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "CheckpointEvalResult": frozenset({"checkpoint_id", "cost_usd", "dataset", "dataset_version", "error", "eval_id", "name", "score", "status", "step"}),
     "ClaimJobRequest": frozenset({"kinds", "lease_seconds", "recipes", "worker_id"}),
     "ClaimJobResponse": frozenset({"job", "protocol"}),
-    "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "status", "tokens_processed", "upload_id", "worker_id"}),
+    "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "status", "stop_reason", "tokens_processed", "upload_id", "worker_id"}),
     "CompleteTrainerJobResponse": frozenset({"artifact", "import", "job_id", "kind", "run", "status"}),
     "CreateApiKeyRequest": frozenset({"name", "scopes"}),
     "CreateDatasetRequest": frozenset({"metadata", "name"}),
@@ -1449,7 +1450,7 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "ImportStatus": ("queued", "running", "completed", "failed",),
     "JobKind": ("train", "import",),
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
-    "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget",),
+    "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance",),
 }
 """Allowed values of every enum schema."""
 
