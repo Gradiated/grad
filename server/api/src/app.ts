@@ -6,7 +6,7 @@ import { HTTPException } from "hono/http-exception";
 
 import type { AppDependencies } from "./deps.js";
 import { ApiError } from "./errors.js";
-import { installIdempotency } from "./idempotency.js";
+import { documentIdempotencyHeader } from "./idempotency.js";
 import { registerArtifactRoutes } from "./routes/artifacts.js";
 import { registerBlobRoutes } from "./routes/blobs.js";
 import { registerCheckpointRoutes } from "./routes/checkpoints.js";
@@ -220,9 +220,7 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     await next();
   });
 
-  installIdempotency(app, deps.store, deps.clock, {
-    waitMs: deps.settings.idempotencyWaitMs,
-  });
+  documentIdempotencyHeader(app);
 
   registerModelsAndKeysRoutes(app, deps);
   registerDatasetRoutes(app, deps, services);

@@ -61,21 +61,13 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const input = c.req.valid("json");
-      const claimInput = {
+      // One queue, oldest first across the requested kinds.
+      const job = await services.queue.claim(principal, {
         workerId: input.worker_id,
         leaseSeconds: input.lease_seconds,
-      };
-
-      let job = null;
-      if (input.kinds.includes("import")) {
-        job = await services.imports.claim(principal, claimInput);
-      }
-      if (!job && input.kinds.includes("train")) {
-        job = await services.runs.claim(principal, {
-          ...claimInput,
-          recipes: input.recipes,
-        });
-      }
+        kinds: input.kinds,
+        recipes: input.recipes,
+      });
 
       return c.json(
         {
@@ -104,10 +96,11 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      const input = c.req.valid("json");
-      const result = isImportJob(id)
-        ? await services.imports.heartbeat(principal, id, input)
-        : await services.runs.heartbeat(principal, id, input);
+      const result = await services.queue.heartbeat(
+        principal,
+        id,
+        c.req.valid("json"),
+      );
 
       return c.json(result, 200);
     },
@@ -162,7 +155,7 @@ export const registerTrainerJobRoutes = (
       const { id } = c.req.valid("param");
       if (isImportJob(id))
         throw conflict("wrong_job_kind", "Import jobs do not upload bundles.");
-      const { ticket } = await services.runs.createUpload(
+      const ticket = await services.runs.createUpload(
         principal,
         id,
         c.req.valid("json"),

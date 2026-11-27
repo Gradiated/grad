@@ -161,7 +161,6 @@ export const RecipeSpecSchema = z
     models: z.array(ModelIdSchema).optional(),
     max_quality_drop: z.number().min(0).max(0.5).optional(),
     context_text: z.string().max(4_000_000).optional(),
-    context_uri: z.string().max(2048).optional(),
     num_tokens: z.number().int().min(16).max(4096).optional(),
     temp: z.number().positive().optional(),
     teacher: ModelIdSchema.optional().openapi({

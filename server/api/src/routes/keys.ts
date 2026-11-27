@@ -10,7 +10,8 @@ import {
   TrainableModelSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
-import { notFound } from "../errors.js";
+import { ApiError, notFound } from "../errors.js";
+import { createOnce, idempotencyOf } from "../idempotency.js";
 import {
   defaultErrors,
   IdParamSchema,
@@ -26,8 +27,8 @@ export const registerModelsAndKeysRoutes = (
   app.openapi(
     createRoute({
       method: "get",
-      path: "/v1/models",
-      operationId: "listModels",
+      path: "/v1/base-models",
+      operationId: "listBaseModels",
       summary:
         "List trainable base models (the server catalog and price source)",
       tags: ["Models"],
@@ -69,13 +70,29 @@ export const registerModelsAndKeysRoutes = (
     async (c) => {
       const workspaceId = workspaceOf(c, "admin");
       const input = c.req.valid("json");
-      const created = await deps.store.apiKeys.create({
-        workspaceId,
-        name: input.name,
-        scopes: [...new Set(input.scopes)],
-      });
+      const idempotency = await idempotencyOf(c);
+      const created = await createOnce(
+        idempotency,
+        (key) => deps.store.apiKeys.findIdempotent(workspaceId, key),
+        () => {
+          // The secret is never stored, so a replay cannot return it.
+          throw new ApiError(
+            409,
+            "idempotency_replay_unavailable",
+            "Response not replayable",
+            "The first request with this Idempotency-Key created the key, but its secret is shown only once. List the keys to find it, or revoke it and create a new one.",
+          );
+        },
+        async () =>
+          deps.store.apiKeys.create({
+            workspaceId,
+            name: input.name,
+            scopes: [...new Set(input.scopes)],
+            idempotency,
+          }),
+      );
 
-      return c.json(created, 201);
+      return c.json(created.value, 201);
     },
   );
 

@@ -1,9 +1,5 @@
 import type { EvalModelSummary } from "../../contracts.js";
-import type {
-  EvalOutputRow,
-  EvalRecord,
-  EvalResultRow,
-} from "../../store/types.js";
+import type { EvalOutputRow, EvalRecord } from "../../store/types.js";
 import { combineScores } from "./scoring.js";
 import { bootstrapMeanCI, computePassAtK } from "./stats.js";
 
@@ -20,13 +16,13 @@ interface TaskCell {
 
 export interface Aggregation {
   summary: EvalModelSummary[];
-  results: EvalResultRow[];
+  /** Each output's combined rubric score (0 for a failed generation). */
+  outputScores: Array<{ id: string; score: number }>;
   totalCostUsd: number;
 }
 
 /**
- * Aggregates per-sample outputs into per-(task, model) results and per-model
- * summaries: bootstrap 95% CI over task scores, unbiased pass@k, and a paired
+ * Aggregates per-sample outputs into combined scores and per-model summaries: bootstrap 95% CI over task scores, unbiased pass@k, and a paired
  * bootstrap diff against the baseline over the tasks both models answered.
  */
 export const aggregateEval = (
@@ -44,6 +40,7 @@ export const aggregateEval = (
   outputs: readonly EvalOutputRow[],
 ): Aggregation => {
   const cells = new Map<string, Map<number, TaskCell>>();
+  const outputScores: Aggregation["outputScores"] = [];
   let totalCost = 0;
 
   for (const output of outputs) {
@@ -59,18 +56,17 @@ export const aggregateEval = (
     };
     byTask.set(output.task_index, cell);
 
-    cell.samples.push(
-      output.output === null ? 0 : combineScores(evalRun.rubric, output.scores),
-    );
+    const score =
+      output.output === null ? 0 : combineScores(evalRun.rubric, output.scores);
+    cell.samples.push(score);
+    outputScores.push({ id: output.id, score });
     cell.tokens += output.prompt_tokens + output.completion_tokens;
     cell.cost += output.cost_usd;
     if (output.error !== null) cell.errors += 1;
     totalCost += output.cost_usd;
   }
 
-  const results: EvalResultRow[] = [];
   const taskScores = new Map<string, Map<number, number>>();
-  const judgeModel = evalRun.judge_models[0] ?? null;
 
   for (const model of evalRun.models) {
     const scores = new Map<number, number>();
@@ -83,16 +79,6 @@ export const aggregateEval = (
         cell.samples.reduce((a, b) => a + b, 0) / cell.samples.length,
       );
       scores.set(cell.taskIndex, score);
-      results.push({
-        eval_id: evalRun.id,
-        task_index: cell.taskIndex,
-        task_id: cell.taskId,
-        model,
-        score,
-        passed: cell.samples.some((s) => s >= evalRun.pass_threshold),
-        sample_scores: cell.samples.map(round4),
-        judge_model: judgeModel,
-      });
     }
   }
 
@@ -159,5 +145,9 @@ export const aggregateEval = (
     };
   });
 
-  return { summary, results, totalCostUsd: Number(totalCost.toFixed(6)) };
+  return {
+    summary,
+    outputScores,
+    totalCostUsd: Number(totalCost.toFixed(6)),
+  };
 };

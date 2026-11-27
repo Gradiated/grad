@@ -356,11 +356,6 @@ describe("recipe parameters", () => {
     );
     expectCode(
       () =>
-        plan({ kind: "cartridge", context_uri: "s3://bucket/doc.txt" }, chats),
-      "context_uri_unsupported",
-    );
-    expectCode(
-      () =>
         plan(
           {
             kind: "cartridge",

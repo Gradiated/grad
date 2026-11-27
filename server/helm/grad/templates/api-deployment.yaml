@@ -49,7 +49,6 @@ spec:
             - {name: HOST, value: "0.0.0.0"}
             - {name: PORT, value: {{ .Values.api.service.port | quote }}}
             - {name: AUTH_MODE, value: {{ .Values.api.authMode | quote }}}
-            - {name: DEPLOY_MODE, value: {{ .Values.api.deployMode | quote }}}
             - {name: BILLING_MODE, value: {{ .Values.api.billingMode | quote }}}
             - {name: DEFAULT_WORKSPACE_ID, value: {{ .Values.api.defaultWorkspaceId | quote }}}
             - {name: MIGRATE_ON_BOOT, value: {{ ternary "false" "true" .Values.migrations.enabled | quote }}}

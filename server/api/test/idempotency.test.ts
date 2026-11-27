@@ -1,37 +1,22 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-} from "vitest";
+import { createHash } from "node:crypto";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { BillingAdapter } from "../src/adapters.js";
-import type { Store } from "../src/store/types.js";
 import { makeTestApp, TRAINER_KEY, type TestApp } from "./fixtures/app.js";
-import { ManualClock } from "./fixtures/clock.js";
-import { createTestStore } from "./fixtures/postgres.js";
 import { sftRecords } from "./fixtures/worker.js";
 
-/** Billing whose start check can be held open (in-flight) or made to throw (5xx). */
+/** Billing whose start check can be held open so two creates overlap. */
 const gatedBilling = () => {
   let gate: Promise<void> | null = null;
   let open = () => undefined as void;
-  let failures = 0;
   let checks = 0;
   const adapter: BillingAdapter = {
     checkCanStartRun: async () => {
       checks += 1;
-      if (failures > 0) {
-        failures -= 1;
-        throw new Error("billing backend down");
-      }
       await gate;
       return { allowed: true };
     },
-    recordRunUsage: async () => undefined,
-    recordEvalUsage: async () => undefined,
   };
 
   return {
@@ -43,9 +28,6 @@ const gatedBilling = () => {
       });
     },
     release: () => open(),
-    failNext: (n: number) => {
-      failures = n;
-    },
   };
 };
 
@@ -64,7 +46,7 @@ const until = async (ready: () => boolean) => {
   expect(ready()).toBe(true);
 };
 
-describe("Idempotency-Key", () => {
+describe("Idempotency-Key on create endpoints", () => {
   let t: TestApp;
   let billing: ReturnType<typeof gatedBilling>;
 
@@ -80,29 +62,25 @@ describe("Idempotency-Key", () => {
     await t.close();
   });
 
-  const runCount = async () =>
-    ((await t.json<{ data: unknown[] }>("/v1/runs")).body.data ?? []).length;
+  const count = async (path: string) =>
+    ((await t.json<{ data: unknown[] }>(path)).body.data ?? []).length;
 
-  it("replays the stored response for a retry with the same key and body", async () => {
-    const first = await t.json("/v1/runs", {
+  it("returns the row the first request created, marked Idempotent-Replayed", async () => {
+    const first = await t.json<{ id: string }>("/v1/runs", {
       body: runBody(),
       headers: withKey("k-1"),
     });
     expect(first.status).toBe(202);
     expect(first.headers.get("Idempotent-Replayed")).toBeNull();
 
-    const retry = await t.json("/v1/runs", {
+    const retry = await t.json<{ id: string }>("/v1/runs", {
       body: runBody(),
       headers: withKey("k-1"),
     });
     expect(retry.status).toBe(202);
     expect(retry.headers.get("Idempotent-Replayed")).toBe("true");
-    expect(retry.headers.get("content-type")).toMatch(/application\/json/);
-    expect(retry.headers.get("x-request-id")).not.toBe(
-      first.headers.get("x-request-id"),
-    );
-    expect(retry.body).toEqual(first.body);
-    expect(await runCount()).toBe(1);
+    expect(retry.body.id).toBe(first.body.id);
+    expect(await count("/v1/runs")).toBe(1);
     expect(billing.checks()).toBe(1);
 
     const fresh = await t.json("/v1/runs", {
@@ -110,431 +88,174 @@ describe("Idempotency-Key", () => {
       headers: withKey("k-2"),
     });
     expect(fresh.status).toBe(202);
-    expect(await runCount()).toBe(2);
+    expect(await count("/v1/runs")).toBe(2);
+    // Without a key every call creates.
+    await t.json("/v1/runs", { body: runBody() });
+    expect(await count("/v1/runs")).toBe(3);
   });
 
-  it("rejects the same key with a different body or query", async () => {
-    expect(
-      (await t.json("/v1/runs", { body: runBody(), headers: withKey("k-1") }))
-        .status,
-    ).toBe(202);
-    const reused = await t.json("/v1/runs", {
-      body: runBody("other"),
+  it("rejects the same key with a different body, path or query", async () => {
+    await t.json("/v1/runs", { body: runBody(), headers: withKey("k-1") });
+    const other = await t.json("/v1/runs", {
+      body: runBody("other-name"),
       headers: withKey("k-1"),
     });
-    expect(reused.status).toBe(422);
-    expect(reused.body).toMatchObject({ code: "idempotency_key_reused" });
-    expect(reused.headers.get("content-type")).toMatch(/problem\+json/);
-    const query = await t.json("/v1/runs?x=1", {
-      body: runBody(),
+    expect(other.status).toBe(422);
+    expect(other.body).toMatchObject({ code: "idempotency_key_reused" });
+
+    // Keys are one namespace per workspace: an eval can't reuse a run's key.
+    const evalReuse = await t.json("/v1/evals", {
+      body: { models: ["qwen/qwen3-8b"], dataset: "support" },
       headers: withKey("k-1"),
     });
-    expect(query.body).toMatchObject({ code: "idempotency_key_reused" });
-    expect(await runCount()).toBe(1);
+    expect(evalReuse.status).toBe(422);
+    expect(await count("/v1/runs")).toBe(1);
   });
 
-  it("a duplicate waits for the in-flight request and replays its response", async () => {
+  it("answers a concurrent duplicate with the winner's row", async () => {
     billing.hold();
-    const first = t.json("/v1/runs", {
+    const first = t.json<{ id: string }>("/v1/runs", {
       body: runBody(),
-      headers: withKey("k-1"),
+      headers: withKey("k-race"),
     });
-    await until(() => billing.checks() === 1);
-    const second = t.json("/v1/runs", {
+    const second = t.json<{ id: string }>("/v1/runs", {
       body: runBody(),
-      headers: withKey("k-1"),
+      headers: withKey("k-race"),
     });
-    await new Promise((r) => setTimeout(r, 20));
+    await until(() => billing.checks() === 2);
     billing.release();
-
     const [a, b] = await Promise.all([first, second]);
+
     expect([a.status, b.status]).toEqual([202, 202]);
-    expect(a.headers.get("Idempotent-Replayed")).toBeNull();
-    expect(b.headers.get("Idempotent-Replayed")).toBe("true");
-    expect(b.body).toEqual(a.body);
-    expect(billing.checks()).toBe(1);
-    expect(await runCount()).toBe(1);
-  });
-
-  it("lets exactly one of two simultaneous requests run", async () => {
-    const both = await Promise.all([
-      t.json("/v1/runs", { body: runBody(), headers: withKey("k-1") }),
-      t.json("/v1/runs", { body: runBody(), headers: withKey("k-1") }),
-    ]);
-    expect(both.map((r) => r.status)).toEqual([202, 202]);
+    expect(a.body.id).toBe(b.body.id);
     expect(
-      both.filter((r) => r.headers.get("Idempotent-Replayed") === "true"),
+      [a, b].filter((r) => r.headers.get("Idempotent-Replayed") === "true"),
     ).toHaveLength(1);
-    expect(billing.checks()).toBe(1);
-    expect(await runCount()).toBe(1);
+    expect(await count("/v1/runs")).toBe(1);
   });
 
-  it("rolls the request's writes back when its response cannot be stored", async () => {
-    const repo = t.deps.store.idempotency;
-    const complete = repo.complete;
-    repo.complete = async () => {
-      throw new Error("db down");
-    };
-    const silenced = console.error;
-    console.error = () => undefined;
-    try {
-      const failed = await t.json("/v1/datasets", {
-        body: { name: "once" },
-        headers: withKey("k-1"),
-      });
-      expect(failed.status).toBe(500);
-    } finally {
-      repo.complete = complete;
-      console.error = silenced;
-    }
-    expect((await t.json("/v1/datasets/once")).status).toBe(404);
-    const retry = await t.json("/v1/datasets", {
-      body: { name: "once" },
-      headers: withKey("k-1"),
+  it("makes dataset creates, pushes and imports replayable", async () => {
+    const created = await t.json<{ id: string }>("/v1/datasets", {
+      body: { name: "fresh" },
+      headers: withKey("ds-1"),
     });
-    expect(retry.status).toBe(201);
-    expect(retry.headers.get("Idempotent-Replayed")).toBeNull();
+    expect(created.status).toBe(201);
+    const again = await t.json<{ id: string }>("/v1/datasets", {
+      body: { name: "fresh" },
+      headers: withKey("ds-1"),
+    });
+    expect(again.status).toBe(201);
+    expect(again.headers.get("Idempotent-Replayed")).toBe("true");
+    expect(again.body.id).toBe(created.body.id);
+    // A new logical create of the same name is a conflict.
+    expect(
+      (await t.json("/v1/datasets", { body: { name: "fresh" } })).status,
+    ).toBe(409);
+
+    const push = { records: sftRecords(3) };
+    const pushed = await t.json<{ version: number; record_count: number }>(
+      "/v1/datasets/support/records",
+      { body: push, headers: withKey("push-1") },
+    );
+    const repushed = await t.json<{ version: number; record_count: number }>(
+      "/v1/datasets/support/records",
+      { body: push, headers: withKey("push-1") },
+    );
+    expect(repushed.headers.get("Idempotent-Replayed")).toBe("true");
+    expect(repushed.body).toMatchObject({
+      version: pushed.body.version,
+      record_count: 11,
+    });
+    expect(
+      (
+        await t.json("/v1/datasets/support/records", {
+          body: { records: sftRecords(1) },
+          headers: withKey("push-1"),
+        })
+      ).status,
+    ).toBe(422);
+
+    const importBody = { source: { kind: "hf", repo: "o/n" } };
+    const imp = await t.json<{ id: string }>("/v1/datasets/support/imports", {
+      body: importBody,
+      headers: withKey("imp-1"),
+    });
+    const reimp = await t.json<{ id: string }>("/v1/datasets/support/imports", {
+      body: importBody,
+      headers: withKey("imp-1"),
+    });
+    expect(reimp.status).toBe(202);
+    expect(reimp.body.id).toBe(imp.body.id);
+    expect(await count("/v1/imports")).toBe(1);
   });
 
-  it("never stores a response that holds a secret", async () => {
-    const create = () =>
-      t.json<{ secret?: string; code?: string }>("/v1/keys", {
-        body: { name: "ci", scopes: ["datasets:read"] },
-        headers: withKey("k-key"),
-      });
-    const first = await create();
+  it("never replays a key's secret", async () => {
+    const body = { name: "ci", scopes: ["runs:read"] };
+    const first = await t.json<{ secret: string }>("/v1/keys", {
+      body,
+      headers: withKey("key-1"),
+    });
     expect(first.status).toBe(201);
-    expect(first.body.secret).toMatch(/^grad_/);
-    const again = await create();
-    expect(again.status).toBe(409);
-    expect(again.body).toMatchObject({
+    const retry = await t.json("/v1/keys", { body, headers: withKey("key-1") });
+    expect(retry.status).toBe(409);
+    expect(retry.body).toMatchObject({
       code: "idempotency_replay_unavailable",
     });
-    expect(JSON.stringify(again.body)).not.toContain(first.body.secret);
-    const keys = await t.json<{ data: Array<{ name: string }> }>("/v1/keys");
-    expect(keys.body.data.filter((k) => k.name === "ci")).toHaveLength(1);
+    expect(JSON.stringify(retry.body)).not.toContain(first.body.secret);
+    expect(await count("/v1/keys")).toBe(1);
   });
 
-  it("runs read-only POSTs again instead of storing them", async () => {
-    const plan = (name: string) =>
-      t.json("/v1/runs/plan", {
-        body: runBody(name),
-        headers: withKey("k-plan"),
-      });
-    const a = await plan("a");
-    const b = await plan("b");
-    expect([a.status, b.status]).toEqual([200, 200]);
-    expect(b.headers.get("Idempotent-Replayed")).toBeNull();
-  });
-
-  it("does not store 5xx responses, so the retry runs again", async () => {
-    billing.failNext(1);
-    const failed = await t.json("/v1/runs", {
-      body: runBody(),
-      headers: withKey("k-1"),
-    });
-    expect(failed.status).toBe(500);
-    const retry = await t.json("/v1/runs", {
-      body: runBody(),
-      headers: withKey("k-1"),
-    });
-    expect(retry.status).toBe(202);
-    expect(retry.headers.get("Idempotent-Replayed")).toBeNull();
-    expect(await runCount()).toBe(1);
-  });
-
-  it("stores 4xx responses and scopes keys per caller and path", async () => {
-    const invalid = await t.json("/v1/runs", {
-      body: { dataset: "support" },
-      headers: withKey("k-1"),
-    });
-    expect(invalid.status).toBe(422);
-    const replayed = await t.json("/v1/runs", {
-      body: { dataset: "support" },
-      headers: withKey("k-1"),
-    });
-    expect(replayed.status).toBe(422);
-    expect(replayed.headers.get("Idempotent-Replayed")).toBe("true");
-
-    const other = await t.mintKey("ws_a", [
-      "runs:read",
-      "runs:write",
-      "datasets:read",
-    ]);
-    const otherCaller = await t.json("/v1/runs", {
-      body: runBody(),
-      headers: withKey("k-1"),
-      token: other,
-    });
-    expect(otherCaller.status).toBe(202);
-    const otherPath = await t.json("/v1/datasets", {
-      body: { name: "fresh" },
-      headers: withKey("k-1"),
-    });
-    expect(otherPath.status).toBe(201);
-  });
-
-  it("rejects malformed keys before running the handler", async () => {
-    for (const key of ["x".repeat(256), "has space"]) {
+  it("rejects malformed keys before creating anything", async () => {
+    for (const key of ["has space", "x".repeat(256)]) {
       const res = await t.json("/v1/runs", {
         body: runBody(),
         headers: withKey(key),
       });
-      expect(res.status).toBe(422);
-      expect(res.body).toMatchObject({ code: "idempotency_key_invalid" });
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(res.body, JSON.stringify(res.body)).toMatchObject({
+        code: "idempotency_key_invalid",
+      });
     }
-    expect(
-      (
-        await t.json("/v1/runs", {
-          body: runBody(),
-          headers: withKey("x".repeat(255)),
-        })
-      ).status,
-    ).toBe(202);
-    expect(billing.checks()).toBe(1);
-  });
-
-  it("expires keys after 24 hours and maintenance purges them", async () => {
-    expect(
-      (
-        await t.json("/v1/datasets", {
-          body: { name: "once" },
-          headers: withKey("k-1"),
-        })
-      ).status,
-    ).toBe(201);
-    t.clock.advanceSeconds(24 * 3600 - 1);
-    expect(
-      (
-        await t.json("/v1/datasets", {
-          body: { name: "once" },
-          headers: withKey("k-1"),
-        })
-      ).headers.get("Idempotent-Replayed"),
-    ).toBe("true");
-    t.clock.advanceSeconds(2);
-    const expired = await t.json("/v1/datasets", {
-      body: { name: "once" },
-      headers: withKey("k-1"),
+    expect(await count("/v1/runs")).toBe(0);
+    const longest = await t.json("/v1/runs", {
+      body: runBody(),
+      headers: withKey("x".repeat(255)),
     });
-    expect(expired.status).toBe(409);
-    expect(expired.headers.get("Idempotent-Replayed")).toBeNull();
-
-    t.clock.advanceDays(2);
-    expect((await t.services.maintenance.tick()).deletedIdempotencyKeys).toBe(
-      1,
-    );
+    expect(longest.status).toBe(202);
   });
 
-  it("ignores keys on internal worker routes", async () => {
-    const claim = () =>
-      t.json("/v1/trainer-jobs/claim", {
-        token: TRAINER_KEY,
-        body: { worker_id: "w1", lease_seconds: 60 },
-        headers: withKey("k-1"),
-      });
-    expect((await claim()).status).toBe(200);
-    const again = await claim();
-    expect(again.status).toBe(200);
-    expect(again.headers.get("Idempotent-Replayed")).toBeNull();
-  });
-});
-
-describe("Idempotency-Key: bounded wait", () => {
-  it("a duplicate stops waiting after waitMs with 409 and Retry-After", async () => {
-    const billing = gatedBilling();
-    const t = await makeTestApp({
-      billing: billing.adapter,
-      settings: {
-        maxAttempts: 3,
-        evalConcurrency: 1,
-        idempotencyWaitMs: 50,
-      },
+  it("scopes keys per workspace", async () => {
+    await t.json("/v1/datasets", {
+      body: { name: "a-only" },
+      headers: withKey("shared"),
     });
-    try {
-      await t.json("/v1/datasets/support/records", {
-        body: { records: sftRecords(8) },
-      });
-      billing.hold();
-      const first = t.json("/v1/runs", {
-        body: runBody(),
-        headers: withKey("k-1"),
-      });
-      await until(() => billing.checks() === 1);
-      const busy = await t.json("/v1/runs", {
-        body: runBody(),
-        headers: withKey("k-1"),
-      });
-      expect(busy.status).toBe(409);
-      expect(busy.body).toMatchObject({ code: "idempotency_in_progress" });
-      expect(busy.headers.get("Retry-After")).toBe("1");
-      billing.release();
-      expect((await first).status).toBe(202);
-      const replay = await t.json("/v1/runs", {
-        body: runBody(),
-        headers: withKey("k-1"),
-      });
-      expect(replay.headers.get("Idempotent-Replayed")).toBe("true");
-    } finally {
-      billing.release();
-      await t.close();
-    }
-  });
-});
-
-/** A bare app with one keyed route in the given operation's policy. */
-const intentApp = async (operationId: string) => {
-  const { OpenAPIHono, createRoute } = await import("@hono/zod-openapi");
-  const { installIdempotency } = await import("../src/idempotency.js");
-  const clock = new ManualClock();
-  const { store, dispose } = await createTestStore(clock);
-  onTestFinished(dispose);
-  const app = new OpenAPIHono();
-  app.use("*", async (c, next) => {
-    c.set("principal" as never, { workspaceId: "ws", actor: "key_1" } as never);
-    await next();
-  });
-  installIdempotency(app as never, store, clock);
-  let gate: Promise<void> = Promise.resolve();
-  let open = () => undefined as void;
-  const state = { calls: 0, status: 200 };
-  app.openapi(
-    createRoute({
-      method: "post",
-      path: "/side-effect",
-      operationId,
-      responses: { 200: { description: "ok" } },
-    }),
-    async (c) => {
-      state.calls += 1;
-      await gate;
-      return c.json({ call: state.calls }, state.status as 200);
-    },
-  );
-  const post = (key = "k-1") =>
-    app.request("/side-effect", {
-      method: "POST",
-      body: "{}",
-      headers: { "Idempotency-Key": key },
+    const other = await t.mintKey("ws_b", ["admin"]);
+    const res = await t.json<{ workspace_id: string }>("/v1/datasets", {
+      body: { name: "a-only" },
+      headers: withKey("shared"),
+      token: other,
     });
-
-  return {
-    store,
-    clock,
-    state,
-    post,
-    hold: () => {
-      gate = new Promise<void>((r) => {
-        open = r;
-      });
-    },
-    release: () => open(),
-  };
-};
-
-describe("Idempotency-Key intent mode (external side effects)", () => {
-  it("commits the intent first: a duplicate gets 409 at once, then the replay", async () => {
-    const h = await intentApp("deployArtifact");
-    h.hold();
-    const first = h.post();
-    await until(() => h.state.calls === 1);
-    const busy = await h.post();
-    expect(busy.status).toBe(409);
-    expect(busy.headers.get("Retry-After")).toBe("1");
-    h.release();
-    expect((await first).status).toBe(200);
-    const replay = await h.post();
-    expect(replay.headers.get("Idempotent-Replayed")).toBe("true");
-    expect(await replay.json()).toEqual({ call: 1 });
-    expect(h.state.calls).toBe(1);
+    expect(res.status).toBe(201);
+    expect(res.headers.get("Idempotent-Replayed")).toBeNull();
+    expect(res.body.workspace_id).toBe("ws_b");
   });
 
-  it("releases the key on 5xx so the retry repeats the call", async () => {
-    const h = await intentApp("routeRequest");
-    h.state.status = 502;
-    expect((await h.post()).status).toBe(502);
-    h.state.status = 200;
-    expect((await h.post()).status).toBe(200);
-    expect(h.state.calls).toBe(2);
+  it("ignores keys on internal worker routes (they use natural keys)", async () => {
+    const res = await t.json("/v1/trainer-jobs/claim", {
+      body: { worker_id: "w1" },
+      headers: withKey("worker-1"),
+      token: TRAINER_KEY,
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Idempotent-Replayed")).toBeNull();
   });
 
-  it("answers with the side effect when recording fails; the intent expires after 60 s", async () => {
-    const h = await intentApp("createEmbeddings");
-    const complete = h.store.idempotency.complete;
-    h.store.idempotency.complete = async () => {
-      throw new Error("db down");
-    };
-    const errors: unknown[] = [];
-    const original = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
-    try {
-      expect((await h.post()).status).toBe(200);
-    } finally {
-      console.error = original;
-      h.store.idempotency.complete = complete;
-    }
-    expect(JSON.stringify(errors)).toContain("idempotency response not stored");
-    expect((await h.post()).status).toBe(409);
-    h.clock.advanceSeconds(61);
-    expect((await h.post()).status).toBe(200);
-    expect(h.state.calls).toBe(2);
-  });
-});
-
-describe("installIdempotency", () => {
-  it("refuses routes that declare their own headers and keeps route middleware", async () => {
-    const { OpenAPIHono, createRoute, z } = await import("@hono/zod-openapi");
-    const { installIdempotency } = await import("../src/idempotency.js");
-    const clock = new ManualClock();
-    const app = new OpenAPIHono();
-    installIdempotency(app as never, {} as Store, clock);
-    const ok = { 200: { description: "ok" } };
-
-    expect(() =>
-      app.openapi(
-        createRoute({
-          method: "post",
-          path: "/x",
-          request: { headers: z.object({ "x-a": z.string() }) },
-          responses: ok,
-        }),
-        (c) => c.body(null, 200),
-      ),
-    ).toThrow(/declares headers/);
-
-    const seen: string[] = [];
-    app.openapi(
-      createRoute({
-        method: "post",
-        path: "/y",
-        middleware: [
-          async (_c, next) => {
-            seen.push("route");
-            await next();
-          },
-        ] as const,
-        responses: ok,
-      }),
-      (c) => c.body(null, 200),
+  it("stores a hash of the request, never the body", async () => {
+    await t.json("/v1/runs", { body: runBody(), headers: withKey("k-h") });
+    const hit = await t.deps.store.jobs.findIdempotent("ws_a", "k-h");
+    expect(hit?.request_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hit?.request_hash).not.toBe(
+      createHash("sha256").update(JSON.stringify(runBody())).digest("hex"),
     );
-    expect((await app.request("/y", { method: "POST" })).status).toBe(200);
-    expect(seen).toEqual(["route"]);
-  });
-
-  it("has a policy for operations that exist", async () => {
-    const { buildOpenApiDocument } = await import("../src/app.js");
-    const { IDEMPOTENCY_POLICIES } = await import("../src/idempotency.js");
-    const t = await makeTestApp();
-    const ids = new Set(
-      Object.values(buildOpenApiDocument(t.app).paths ?? {}).flatMap((item) =>
-        Object.values(item as Record<string, { operationId?: string }>).map(
-          (op) => op.operationId,
-        ),
-      ),
-    );
-    for (const id of Object.keys(IDEMPOTENCY_POLICIES)) {
-      expect(ids.has(id), id).toBe(true);
-    }
-    await t.close();
   });
 });

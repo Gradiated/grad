@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import {
@@ -133,6 +135,8 @@ export interface ModelCatalog {
   find(modelId: string): TrainableModel | undefined;
   defaultModelFor(kind: RecipeKind): TrainableModel | undefined;
   priceFor(modelId: string): number | undefined;
+  /** Short hash of every model's price: recorded on each usage row. */
+  readonly priceVersion: string;
 }
 
 const withRecipes = (entry: CatalogEntry): TrainableModel => ({
@@ -172,9 +176,19 @@ export const createModelCatalog = (extraModelsJson?: string): ModelCatalog => {
   }
 
   const models = Array.from(byId.values());
+  const priceVersion = `p_${createHash("sha256")
+    .update(
+      models
+        .map((m) => `${m.id}=${m.price_per_million_tokens_usd}`)
+        .sort()
+        .join("\n"),
+    )
+    .digest("hex")
+    .slice(0, 12)}`;
 
   return {
     list: () => models,
+    priceVersion,
     find: (modelId) => byId.get(modelId.trim().toLowerCase()),
     defaultModelFor: (kind) => models.find((m) => m.default_for.includes(kind)),
     priceFor: (modelId) =>

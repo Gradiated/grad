@@ -1,10 +1,15 @@
 import pg from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { MetricPointInput, ResolvedRunConfig } from "../src/contracts.js";
+import type { ResolvedRunConfig } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
 import { loadMigrations, migrate } from "../src/store/migrate.js";
-import type { DatasetPart, RunRecord, Store } from "../src/store/types.js";
+import type {
+  DatasetPart,
+  EvalOutputRow,
+  RunRecord,
+  Store,
+} from "../src/store/types.js";
 import { ManualClock } from "./fixtures/clock.js";
 import { evalReport } from "./fixtures/eval-report.js";
 import {
@@ -26,16 +31,6 @@ const part = (key: string, count = 2): DatasetPart => ({
   sha256: "a".repeat(64),
   bytes: count * 10,
 });
-
-const metric = (step: number, extra: Record<string, number> = {}) =>
-  ({
-    step,
-    loss: 1 / (step + 1),
-    tokens: step * 100,
-    timestamp: "2026-11-27T12:00:00.000Z",
-    cost_usd: step * 0.01,
-    ...extra,
-  }) as MetricPointInput & { cost_usd: number };
 
 const drain = async <T>(
   fetchPage: (cursor: string | undefined) => Promise<{
@@ -105,7 +100,9 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
     const makeEval = async (ws = "ws_a") => {
       const dataset = await makeDataset(ws);
       return store.evals.create({
-        workspace_id: ws,
+        workspaceId: ws,
+        maxAttempts: 3,
+        totalOutputs: 8,
         name: "ev",
         models: ["m1", "m2"],
         model_targets: {
@@ -137,7 +134,13 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         workspaceId: "ws_a",
         name: "ci",
         scopes: ["datasets:read", "runs:write"],
+        idempotency: { key: "k1", hash: "h" },
       });
+      expect(await store.apiKeys.findIdempotent("ws_a", "k1")).toEqual({
+        id: key.id,
+        request_hash: "h",
+      });
+      expect(await store.apiKeys.findIdempotent("ws_b", "k1")).toBeNull();
       expect(secret.startsWith("grad_")).toBe(true);
       expect(key.prefix).toBe(secret.slice(0, 12));
       expect(key.revoked_at).toBeNull();
@@ -180,6 +183,11 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         workspaceId: "ws_a",
         name: "support",
         metadata: { team: "x" },
+        idempotency: { key: "ds-k", hash: "dh" },
+      });
+      expect(await store.datasets.findIdempotent("ws_a", "ds-k")).toEqual({
+        id: created?.id,
+        request_hash: "dh",
       });
       expect(created).toMatchObject({
         version: 0,
@@ -203,6 +211,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const v0 = await store.datasets.getVersion(created!.id, 0);
       expect(v0).toMatchObject({ version: 0, parts: [], record_count: 0 });
       expect(await store.datasets.getVersion(created!.id, 1)).toBeNull();
+      expect(await store.datasets.getVersion(created!.id, -1)).toBeNull();
+      expect(await store.datasets.getVersion("ds_missing", 0)).toBeNull();
 
       expect(await store.datasets.get("ws_b", "support")).toBeNull();
       expect(await store.datasets.getById("ws_b", created!.id)).toBeNull();
@@ -228,24 +238,27 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         parts: [part("p1", 3)],
         metadata: { a: 1 },
       });
-      expect(first.dataset).toMatchObject({
+      expect(first).toMatchObject({
         version: 1,
         record_count: 3,
         metadata: { a: 1 },
       });
-      expect(first.dataset.updated_at).toBe(clock.now().toISOString());
+      expect(first.updated_at).toBe(clock.now().toISOString());
       const second = await store.datasets.appendVersion({
         datasetId: ds.id,
         parts: [part("p2", 2), part("p3", 1)],
         metadata: { b: 2 },
+        idempotency: { key: "push-1", hash: "h1" },
       });
-      expect(second.version.parts.map((p) => p.key)).toEqual([
-        "p1",
-        "p2",
-        "p3",
-      ]);
-      expect(second.version.record_count).toBe(6);
-      expect(second.dataset.metadata).toEqual({ a: 1, b: 2 });
+      const v2 = await store.datasets.getVersion(ds.id, 2);
+      expect(v2?.parts.map((p) => p.key)).toEqual(["p1", "p2", "p3"]);
+      expect(v2?.record_count).toBe(6);
+      expect(second.metadata).toEqual({ a: 1, b: 2 });
+      expect(await store.datasets.findIdempotentPush(ds.id, "push-1")).toEqual({
+        id: ds.id,
+        request_hash: "h1",
+      });
+      expect(await store.datasets.findIdempotentPush(ds.id, "nope")).toBeNull();
       expect((await store.datasets.getVersion(ds.id, 1))?.parts).toEqual([
         part("p1", 3),
       ]);
@@ -289,1314 +302,821 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(rows.map((d) => d.name)).toEqual(["d4", "d3", "d2", "d1", "d0"]);
     });
 
-    // --- Import jobs -----------------------------------------------------
+    // --- Jobs: the one queue ---------------------------------------------
 
-    it("imports: claim FIFO, CAS update, leases, parts, counts", async () => {
+    it("jobs: one FIFO claim across kinds with workspace and recipe filters", async () => {
       const ds = await makeDataset();
-      const mk = (ws: string) =>
-        store.imports.create({
-          workspaceId: ws,
-          datasetId: ds.id,
-          datasetName: ds.name,
-          source: { kind: "upload", upload_id: "up_1" },
-          connector: "auto",
-          uploadKey: "uploads/x",
-        });
-      const a = await mk("ws_a");
+      const imp = await store.imports.create({
+        workspaceId: "ws_a",
+        maxAttempts: 3,
+        datasetId: ds.id,
+        datasetName: ds.name,
+        source: { kind: "hf", repo: "o/n" },
+        connector: "auto",
+        uploadKey: null,
+      });
       clock.advanceSeconds(1);
-      const b = await mk("ws_b");
-      expect(a).toMatchObject({
-        status: "queued",
-        attempt: 0,
-        lease_seconds: 0,
-        worker_id: null,
-        imported_count: 0,
-        detected_scores: [],
-        dataset_version: null,
-        upload_key: "uploads/x",
-      });
-      expect(await store.imports.get("ws_b", a.id)).toBeNull();
-      expect((await store.imports.getById(a.id))?.dataset).toBe("ds");
+      const dpo = await makeRun("ws_a", { recipe: "dpo" });
+      clock.advanceSeconds(1);
+      const other = await makeRun("ws_b");
+      clock.advanceSeconds(1);
+      const ev = await makeEval();
 
-      const onlyB = await store.imports.claimNext({
-        workerId: "w1",
-        leaseSeconds: 60,
-        now: clock.now(),
-        workspaceId: "ws_b",
-      });
-      expect(onlyB?.id).toBe(b.id);
-      const claimed = await store.imports.claimNext({
-        workerId: "w1",
-        leaseSeconds: 60,
-        now: clock.now(),
-      });
-      expect(claimed).toMatchObject({
-        id: a.id,
+      const claim = (
+        input: Partial<Parameters<Store["jobs"]["claimNext"]>[0]>,
+      ) =>
+        store.jobs.claimNext({
+          workerId: "w1",
+          leaseSeconds: 60,
+          now: clock.now(),
+          kinds: ["train", "import"],
+          ...input,
+        });
+      expect(
+        await claim({
+          kinds: ["train"],
+          recipes: ["sft"],
+          workspaceId: "ws_a",
+        }),
+      ).toBeNull();
+      const first = await claim({});
+      expect(first).toMatchObject({
+        id: imp.id,
+        kind: "import",
         status: "running",
         attempt: 1,
         worker_id: "w1",
         lease_seconds: 60,
+        billed_through: 0,
       });
-      expect(claimed?.lease_expires_at).toBe(
+      expect(first?.lease_expires_at).toBe(
         new Date(clock.now().getTime() + 60_000).toISOString(),
       );
+      expect((await claim({ recipes: ["sft"] }))?.id).toBe(other.id);
+      expect((await claim({}))?.id).toBe(dpo.id);
+      expect(await claim({})).toBeNull();
+      expect((await claim({ kinds: ["eval"] }))?.id).toBe(ev.id);
+
+      expect((await store.jobs.heldBy("w1", ["import"]))?.id).toBe(imp.id);
+      expect(await store.jobs.heldBy("w2", ["train", "import"])).toBeNull();
+    });
+
+    it("jobs: 20 concurrent claimers over 10 queued runs get unique runs", async () => {
+      for (let i = 0; i < 10; i += 1) await makeRun("ws_a", { name: `r${i}` });
+      const claimed = await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          store.jobs.claimNext({
+            workerId: `w${i}`,
+            leaseSeconds: 60,
+            now: clock.now(),
+            kinds: ["train"],
+          }),
+        ),
+      );
+      const ids = claimed.flatMap((j) => (j ? [j.id] : []));
+      expect(ids).toHaveLength(10);
+      expect(new Set(ids).size).toBe(10);
+    });
+
+    it("jobs: a job waiting on another is not claimable until released", async () => {
+      const ev = await makeEval();
+      const run = await makeRun("ws_a", { waitingOn: ev.id });
+      expect(run.waiting_on).toBe(ev.id);
       expect(
-        await store.imports.claimNext({
-          workerId: "w2",
+        await store.jobs.claimNext({
+          workerId: "w",
           leaseSeconds: 60,
           now: clock.now(),
+          kinds: ["train"],
         }),
       ).toBeNull();
+      expect((await store.jobs.listWaitingOn(ev.id)).map((j) => j.id)).toEqual([
+        run.id,
+      ]);
+      await store.runs.update(run.id, { waiting_on: null });
+      expect(await store.jobs.listWaitingOn(ev.id)).toEqual([]);
+      expect(
+        (
+          await store.jobs.claimNext({
+            workerId: "w",
+            leaseSeconds: 60,
+            now: clock.now(),
+            kinds: ["train"],
+          })
+        )?.id,
+      ).toBe(run.id);
+    });
 
-      expect(
-        await store.imports.update(
-          a.id,
-          { imported_count: 5 },
-          { workerId: "other" },
-        ),
-      ).toBeNull();
-      expect(
-        await store.imports.update(
-          a.id,
-          { imported_count: 5 },
-          { status: ["queued"] },
-        ),
-      ).toBeNull();
-      expect(
-        await store.imports.update(a.id, { imported_count: 5 }, { attempt: 2 }),
-      ).toBeNull();
-      const updated = await store.imports.update(
-        a.id,
-        {
-          imported_count: 5,
-          detected_scores: ["tests_passed"],
-          dataset_version: 3,
-        },
-        { status: ["running"], workerId: "w1", attempt: 1 },
-      );
-      expect(updated).toMatchObject({
-        imported_count: 5,
-        detected_scores: ["tests_passed"],
-        dataset_version: 3,
+    it("jobs: fenced updates, expired leases after a lease/3 grace, idempotency lookup", async () => {
+      const run = await makeRun();
+      await store.jobs.claimNext({
+        workerId: "w1",
+        leaseSeconds: 60,
+        now: clock.now(),
+        kinds: ["train"],
       });
+      expect(
+        await store.jobs.update(
+          run.id,
+          { lease_seconds: 90 },
+          { workerId: "w2", attempt: 1 },
+        ),
+      ).toBeNull();
+      expect(
+        (
+          await store.jobs.update(
+            run.id,
+            { error: "x" },
+            { workerId: "w1", attempt: 1, status: ["running"] },
+          )
+        )?.error,
+      ).toBe("x");
 
-      expect(await store.imports.listExpiredLeases(clock.now(), 10)).toEqual(
-        [],
-      );
-      // Reaped one heartbeat interval (lease/3) after expiry.
-      clock.advanceSeconds(79);
-      expect(await store.imports.listExpiredLeases(clock.now(), 10)).toEqual(
-        [],
-      );
-      clock.advanceSeconds(2);
-      const expired = await store.imports.listExpiredLeases(clock.now(), 10);
-      expect(expired.map((j) => j.id).sort()).toEqual([a.id, b.id].sort());
+      clock.advanceSeconds(70);
+      expect(await store.jobs.listExpiredLeases(clock.now(), 10)).toEqual([]);
+      clock.advanceSeconds(11);
+      const [expired] = await store.jobs.listExpiredLeases(clock.now(), 10);
+      expect(expired?.id).toBe(run.id);
+      expect(
+        await store.jobs.update(
+          run.id,
+          { status: "queued" },
+          { leaseExpiredBefore: new Date(0).toISOString() },
+        ),
+      ).toBeNull();
+      expect(await store.jobs.getById("run_missing")).toBeNull();
 
-      const add = (attempt: number, batch: number, key: string | null) =>
-        store.imports.addPart({
-          importId: a.id,
+      const keyed = await store.runs.create({
+        workspaceId: "ws_a",
+        maxAttempts: 3,
+        idempotency: { key: "k", hash: "h" },
+        name: "keyed",
+        datasetId: run.dataset_id,
+        datasetName: run.dataset_name,
+        datasetVersion: 0,
+        recipeKind: "sft",
+        resolvedConfig: config,
+        maxCostUsd: null,
+        pricePerMillionTokens: 1,
+        totalSteps: 1,
+      });
+      expect(await store.jobs.findIdempotent("ws_a", "k")).toEqual({
+        id: keyed.id,
+        request_hash: "h",
+      });
+      await expect(
+        store.runs.create({
+          workspaceId: "ws_a",
+          maxAttempts: 3,
+          idempotency: { key: "k", hash: "other" },
+          name: "dup",
+          datasetId: run.dataset_id,
+          datasetName: run.dataset_name,
+          datasetVersion: 0,
+          recipeKind: "sft",
+          resolvedConfig: config,
+          maxCostUsd: null,
+          pricePerMillionTokens: 1,
+          totalSteps: 1,
+        }),
+      ).rejects.toThrow(/idempotency_key/);
+    });
+
+    it("jobs: the billed mark moves by compare-and-set, per attempt", async () => {
+      const run = await makeRun();
+      await store.jobs.claimNext({
+        workerId: "w",
+        leaseSeconds: 60,
+        now: clock.now(),
+        kinds: ["train"],
+      });
+      const advance = (from: number, through: number, attempt = 1) =>
+        store.jobs.advanceBilling({
+          id: run.id,
           attempt,
-          batch,
-          part: key === null ? null : part(key),
-          dropped: 1,
+          from,
+          through,
+          cost: through / 1e6,
+          at: clock.now(),
         });
-      expect(await add(1, 1, "i2")).toBe(true);
-      expect(await add(1, 0, "i1")).toBe(true);
-      expect(await add(1, 2, null)).toBe(true);
-      // A retried batch is stored once, whatever it carries.
-      expect(await add(1, 0, "i1-retry")).toBe(false);
-      expect(await add(2, 0, "i3")).toBe(true);
-      const attempt1 = await store.imports.listParts(a.id, 1);
-      expect(attempt1.parts.map((p) => p.key)).toEqual(["i1", "i2"]);
-      expect(attempt1.dropped).toBe(3);
-      expect(await store.imports.listParts(a.id, 3)).toEqual({
-        parts: [],
-        dropped: 0,
+      expect(await advance(0, 100)).toBe(true);
+      expect(await advance(0, 150)).toBe(false);
+      expect(await advance(100, 150, 2)).toBe(false);
+      expect(await advance(100, 150)).toBe(true);
+      expect(await store.jobs.getById(run.id)).toMatchObject({
+        billed_through: 150,
+        billed_cost: 0.00015,
+        billed_at: clock.now().toISOString(),
       });
+    });
 
-      const released = await store.imports.update(a.id, {
-        worker_id: null,
-        lease_expires_at: null,
-        status: "completed",
+    it("jobs: events are stored once per (job, attempt, type, step) and expire", async () => {
+      const run = await makeRun();
+      const first = await store.jobs.appendEvent({
+        jobId: run.id,
+        attempt: 1,
+        type: "metric",
+        step: 1,
+        payload: { step: 1, loss: 2 },
       });
-      expect(released?.worker_id).toBeNull();
+      const replay = await store.jobs.appendEvent({
+        jobId: run.id,
+        attempt: 1,
+        type: "metric",
+        step: 1,
+        payload: { step: 1, loss: 999 },
+      });
+      expect(replay).toEqual(first);
+      clock.advanceSeconds(10);
+      await store.jobs.appendEvent({
+        jobId: run.id,
+        attempt: 2,
+        type: "metric",
+        step: 1,
+        payload: { step: 1, loss: 1 },
+      });
+      await store.jobs.appendEvent({
+        jobId: run.id,
+        attempt: 2,
+        type: "log",
+        step: 1,
+        payload: {},
+      });
+      const all = await store.jobs.listEvents(run.id, "metric", 0, 10);
+      expect(all.map((e) => [e.attempt, e.payload.loss])).toEqual([
+        [1, 2],
+        [2, 1],
+      ]);
+      expect(
+        await store.jobs.listEvents(run.id, "metric", first.seq, 10),
+      ).toHaveLength(1);
+      expect(await store.jobs.listEvents(run.id, "metric", 0, 1)).toHaveLength(
+        1,
+      );
+
+      expect(
+        await store.jobs.deleteEventsBefore(
+          new Date(clock.now().getTime() - 5_000),
+          10,
+        ),
+      ).toBe(1);
+      expect(await store.jobs.listEvents(run.id, "metric", 0, 10)).toHaveLength(
+        1,
+      );
+    });
+
+    // --- Imports and staged parts -----------------------------------------
+
+    it("imports: payload fields update with the job, staged parts commit as one version", async () => {
+      const ds = await makeDataset();
+      const imp = await store.imports.create({
+        workspaceId: "ws_a",
+        maxAttempts: 3,
+        datasetId: ds.id,
+        datasetName: ds.name,
+        source: { kind: "upload", sha256: "f".repeat(64), upload_id: "x" },
+        connector: "auto",
+        uploadKey: "uploads/ws_a/f",
+      });
+      expect(imp).toMatchObject({
+        kind: "import",
+        status: "queued",
+        dataset: "ds",
+        upload_key: "uploads/ws_a/f",
+        imported_count: 0,
+        dataset_version: null,
+      });
+      expect(
+        (await store.imports.findByUpload(ds.id, "f".repeat(64)))?.id,
+      ).toBe(imp.id);
+      expect(
+        await store.imports.findByUpload(ds.id, "0".repeat(64)),
+      ).toBeNull();
+      expect(await store.imports.get("ws_b", imp.id)).toBeNull();
       expect(
         (await store.imports.list("ws_a", { limit: 10 })).data.map((j) => j.id),
-      ).toEqual([a.id]);
+      ).toEqual([imp.id]);
+
+      const updated = await store.imports.update(imp.id, {
+        imported_count: 3,
+        detected_scores: ["a"],
+        status: "running",
+      });
+      expect(updated).toMatchObject({
+        imported_count: 3,
+        detected_scores: ["a"],
+        status: "running",
+        source: { kind: "upload" },
+      });
+
+      const stage = (
+        attempt: number,
+        batch: number,
+        p: DatasetPart | null,
+        dropped = 0,
+      ) =>
+        store.datasets.stagePart({
+          datasetId: ds.id,
+          jobId: imp.id,
+          attempt,
+          batch,
+          part: p,
+          dropped,
+        });
+      expect(await stage(1, 0, part("a1-0", 2))).toBe(true);
+      expect(await stage(2, 1, part("a2-1", 1))).toBe(true);
+      expect(await stage(2, 0, part("a2-0", 2), 1)).toBe(true);
+      expect(await stage(2, 0, part("a2-0", 2), 1)).toBe(false);
+      expect(await stage(2, 2, null, 4)).toBe(true);
+      expect(await store.datasets.listStaged(imp.id, 2)).toEqual({
+        parts: [part("a2-0", 2), part("a2-1", 1)],
+        dropped: 5,
+        count: 3,
+      });
+      // Staged parts are invisible until committed.
+      expect((await store.datasets.getVersion(ds.id, 0))?.parts).toEqual([]);
+
+      const { dataset, orphanKeys } = await store.datasets.commitStaged({
+        datasetId: ds.id,
+        jobId: imp.id,
+        attempt: 2,
+      });
+      expect(dataset).toMatchObject({ version: 1, record_count: 3 });
+      expect(orphanKeys).toEqual(["a1-0"]);
+      expect(
+        (await store.datasets.getVersion(ds.id, 1))?.parts.map((p) => p.key),
+      ).toEqual(["a2-0", "a2-1"]);
+      expect(await store.datasets.discardStaged(imp.id)).toEqual([]);
+      expect(await stage(3, 0, part("a3-0", 1))).toBe(true);
+      expect(await store.datasets.discardStaged(imp.id)).toEqual(["a3-0"]);
     });
 
     // --- Runs ------------------------------------------------------------
 
-    it("runs: create defaults, isolation, CAS update", async () => {
+    it("runs: create defaults, isolation, split updates, paging", async () => {
       const run = await makeRun();
       expect(run).toMatchObject({
+        kind: "train",
         status: "queued",
         attempt: 0,
         failed_attempts: 0,
+        max_attempts: 3,
+        worker_id: null,
         billed_tokens: 0,
         attempt_tokens: 0,
-        lease_seconds: 0,
-        worker_id: null,
         latest_metric: null,
-        max_cost_usd: 10,
-        price_per_million_tokens: 0.4,
-        max_attempts: 3,
-        resolved_config: config,
+        waiting_on: null,
         finished_at: null,
       });
       expect(await store.runs.get("ws_b", run.id)).toBeNull();
-      expect((await store.runs.getById(run.id))?.id).toBe(run.id);
-      expect(await store.runs.getById("run_missing")).toBeNull();
-
-      clock.advanceSeconds(3);
-      const point = { ...metric(4), seq: 1, attempt: 1 };
       const updated = await store.runs.update(
         run.id,
-        {
-          current_step: 4,
-          latest_metric: point as never,
-          eval_report: evalReport({ acc: 0.9 }),
-          billed_tokens: 12345678901,
-          finished_at: clock.now().toISOString(),
-        },
-        { status: ["queued"], workerId: null, attempt: 0 },
+        { status: "running", attempt_tokens: 5, current_step: 2, error: "e" },
+        { status: ["queued"] },
       );
       expect(updated).toMatchObject({
-        current_step: 4,
-        eval_report: evalReport({ acc: 0.9 }),
-        billed_tokens: 12345678901,
-        updated_at: clock.now().toISOString(),
-        finished_at: clock.now().toISOString(),
+        status: "running",
+        attempt_tokens: 5,
+        current_step: 2,
+        error: "e",
       });
-      expect(updated?.latest_metric).toEqual(point);
+      // A failed expectation applies neither table's fields.
       expect(
         await store.runs.update(
           run.id,
-          { error: "x" },
-          { status: ["running"] },
+          { attempt_tokens: 99, status: "failed" },
+          { status: ["queued"] },
         ),
       ).toBeNull();
-      expect(await store.runs.update("run_missing", { error: "x" })).toBeNull();
-      const cleared = await store.runs.update(run.id, {
-        eval_report: null,
-        latest_metric: null,
-      });
-      expect(cleared).toMatchObject({ eval_report: null, latest_metric: null });
-    });
+      expect((await store.runs.getById(run.id))?.attempt_tokens).toBe(5);
 
-    it("runs: claimNext FIFO with workspace and recipe filters", async () => {
-      const r1 = await makeRun("ws_a", { recipe: "sft" });
-      clock.advanceSeconds(1);
-      const r2 = await makeRun("ws_b", { recipe: "dpo" });
-      clock.advanceSeconds(1);
-      const r3 = await makeRun("ws_a", { recipe: "router" });
-      const now = clock.now();
-
-      expect(
-        await store.runs.claimNext({
-          workerId: "w",
-          leaseSeconds: 30,
-          now,
-          recipes: ["embedding"],
-        }),
-      ).toBeNull();
-      const dpo = await store.runs.claimNext({
-        workerId: "w",
-        leaseSeconds: 30,
-        now,
-        recipes: ["dpo", "router"],
-      });
-      expect(dpo?.id).toBe(r2.id);
-      const wsA = await store.runs.claimNext({
-        workerId: "w",
-        leaseSeconds: 30,
-        now,
-        workspaceId: "ws_a",
-      });
-      expect(wsA).toMatchObject({
-        id: r1.id,
-        status: "running",
-        attempt: 1,
-        worker_id: "w",
-        lease_seconds: 30,
-        attempt_tokens: 0,
-      });
-      expect(wsA?.lease_expires_at).toBe(
-        new Date(now.getTime() + 30_000).toISOString(),
-      );
-      const last = await store.runs.claimNext({
-        workerId: "w",
-        leaseSeconds: 30,
-        now,
-      });
-      expect(last?.id).toBe(r3.id);
-      expect(
-        await store.runs.claimNext({ workerId: "w", leaseSeconds: 30, now }),
-      ).toBeNull();
-
-      await store.runs.update(r1.id, {
-        status: "queued",
-        worker_id: null,
-        lease_expires_at: null,
-        attempt_tokens: 77,
-      });
-      const again = await store.runs.claimNext({
-        workerId: "w2",
-        leaseSeconds: 45,
-        now,
-      });
-      expect(again).toMatchObject({
-        id: r1.id,
-        attempt: 2,
-        attempt_tokens: 0,
-        lease_seconds: 45,
-      });
-    });
-
-    it("runs: a run waiting on its labeling eval is not claimable until released", async () => {
-      const ready = await makeRun();
-      clock.advanceSeconds(1);
-      const waiting = await makeRun("ws_a", { waitingOn: "eval_1" });
-      expect(waiting).toMatchObject({ waiting_on: "eval_1" });
-      expect(ready).toMatchObject({ waiting_on: null });
-      expect(
-        (await store.runs.listWaitingOn("eval_1")).map((r) => r.id),
-      ).toEqual([waiting.id]);
-
-      const claim = () =>
-        store.runs.claimNext({
-          workerId: "w",
-          leaseSeconds: 30,
-          now: clock.now(),
-        });
-      expect((await claim())?.id).toBe(ready.id);
-      expect(await claim()).toBeNull();
-
-      await store.runs.update(
-        waiting.id,
-        { waiting_on: null },
-        { status: ["queued"] },
-      );
-      expect(await store.runs.listWaitingOn("eval_1")).toEqual([]);
-      expect((await claim())?.id).toBe(waiting.id);
-    });
-
-    it("runs: 20 concurrent claimers over 10 queued runs get unique runs", async () => {
-      const ids = new Set<string>();
-      for (let i = 0; i < 10; i += 1) {
-        ids.add((await makeRun()).id);
-        clock.advance(1);
+      for (let i = 0; i < 4; i += 1) {
+        clock.advanceSeconds(1);
+        await makeRun("ws_a", { name: `r${i}` });
       }
-      const claims = await Promise.all(
-        Array.from({ length: 20 }, (_, i) =>
-          store.runs.claimNext({
-            workerId: `w${i}`,
-            leaseSeconds: 60,
-            now: clock.now(),
-          }),
-        ),
-      );
-      const claimed = claims.filter((c): c is RunRecord => c !== null);
-      expect(claimed).toHaveLength(10);
-      expect(new Set(claimed.map((c) => c.id))).toEqual(ids);
-      expect(claims.filter((c) => c === null)).toHaveLength(10);
-    });
-
-    it("runs: expired leases and active counts", async () => {
-      const queued = await makeRun();
-      const running = await makeRun();
-      await store.runs.update(running.id, { status: "queued" });
-      await store.runs.update(queued.id, { status: "completed" });
-      const claimed = await store.runs.claimNext({
-        workerId: "w",
-        leaseSeconds: 60,
-        now: clock.now(),
-      });
-      expect(claimed?.id).toBe(running.id);
-
-      // A cancelled run whose attempt is still open keeps its lease.
-      await store.runs.update(running.id, { status: "cancelled" });
-
-      expect(await store.runs.listExpiredLeases(clock.now(), 10)).toEqual([]);
-      // Expired, but within the grace of one heartbeat interval (lease/3).
-      clock.advanceSeconds(80);
-      expect(await store.runs.listExpiredLeases(clock.now(), 10)).toEqual([]);
-      clock.advance(1);
-      const expired = await store.runs.listExpiredLeases(clock.now(), 10);
-      expect(expired.map((r) => r.id)).toEqual([running.id]);
-      expect(await store.runs.listExpiredLeases(clock.now(), 0)).toEqual([]);
-    });
-
-    it("runs: 205 runs paginate without duplicates or gaps", async () => {
-      const created: string[] = [];
-      for (let i = 0; i < 205; i += 1) {
-        created.push((await makeRun()).id);
-        if (i % 3 === 0) clock.advance(1);
-      }
-      await makeRun("ws_b");
       const { rows, pages } = await drain((cursor) =>
-        store.runs.list("ws_a", { limit: 50, cursor }),
+        store.runs.list("ws_a", { limit: 2, cursor }),
       );
-      expect(pages).toBe(5);
-      expect(rows).toHaveLength(205);
-      expect(new Set(rows.map((r) => r.id))).toEqual(new Set(created));
-      for (let i = 1; i < rows.length; i += 1) {
-        const prev = rows[i - 1]!;
-        const cur = rows[i]!;
-        expect(
-          prev.created_at > cur.created_at ||
-            (prev.created_at === cur.created_at && prev.id > cur.id),
-        ).toBe(true);
-      }
-      const exact = await store.runs.list("ws_a", { limit: 205 });
-      expect(exact.data).toHaveLength(205);
-      expect(exact.next_cursor).toBeNull();
+      expect(pages).toBe(3);
+      expect(new Set(rows.map((r) => r.id)).size).toBe(5);
+      expect(rows[0]?.name).toBe("r3");
     });
 
     it("pagination: malformed cursors are rejected with 422", async () => {
-      await makeRun();
       for (const cursor of [
         "not-base64!",
-        Buffer.from("{}").toString("base64url"),
-        Buffer.from('["x"]').toString("base64url"),
+        "e30",
+        Buffer.from("[1]").toString("base64url"),
       ]) {
-        const error = await store.runs
-          .list("ws_a", { limit: 5, cursor })
-          .catch((e: unknown) => e);
-        expect(error).toBeInstanceOf(ApiError);
-        expect((error as ApiError).status).toBe(422);
+        await expect(
+          store.runs.list("ws_a", { limit: 2, cursor }),
+        ).rejects.toBeInstanceOf(ApiError);
       }
     });
 
-    // --- Metrics ---------------------------------------------------------
+    // --- Artifacts: checkpoints and releases -----------------------------
 
-    it("metrics: append assigns increasing seq; list honours afterSeq and limit", async () => {
+    it("artifacts: checkpoints are unique per (run, attempt, step), pin, page and expire", async () => {
       const run = await makeRun();
-      const other = await makeRun();
-      const a = await store.metrics.append(
-        run.id,
-        1,
-        metric(1, { accuracy: 0.5 }),
-      );
-      const b = await store.metrics.append(other.id, 1, metric(1));
-      const c = await store.metrics.append(run.id, 2, metric(2));
-      expect(a.seq).toBeLessThan(b.seq);
-      expect(b.seq).toBeLessThan(c.seq);
-      expect(a).toMatchObject({
-        attempt: 1,
-        step: 1,
-        accuracy: 0.5,
-        cost_usd: 0.01,
-      });
-
-      const all = await store.metrics.list(run.id, 0, 100);
-      expect(all.map((m) => m.seq)).toEqual([a.seq, c.seq]);
-      expect(all[1]).toMatchObject({ attempt: 2, step: 2 });
-      expect(
-        (await store.metrics.list(run.id, a.seq, 100)).map((m) => m.seq),
-      ).toEqual([c.seq]);
-      expect(await store.metrics.list(run.id, 0, 1)).toHaveLength(1);
-    });
-
-    // --- Checkpoints -----------------------------------------------------
-
-    it("checkpoints: unique per (run, attempt, step), retention, expiry, pages", async () => {
-      const run = await makeRun();
-      const expiresAt = (days: number) =>
-        new Date(clock.now().getTime() + days * 86_400_000).toISOString();
       const insert = (
         attempt: number,
         step: number,
-        days: number | null,
-        sha = "b",
+        key: string,
+        expiresAt: string | null,
       ) =>
-        store.checkpoints.insert({
+        store.artifacts.insertCheckpoint({
           workspaceId: "ws_a",
           runId: run.id,
           attempt,
           step,
-          evalScore: step / 100,
-          format: step === 20 ? "peft_lora" : null,
-          storageKey: `ckpt/${attempt}/${step}/${sha}`,
-          sha256: sha.repeat(64),
-          sizeBytes: 1234,
-          metadata: { step },
-          expiresAt: days === null ? null : expiresAt(days),
+          evalScore: step / 10,
+          format: step === 2 ? "peft_lora" : null,
+          baseModel: "test/tiny",
+          recipeKind: "sft",
+          storageKey: key,
+          sha256: "b".repeat(64),
+          sizeBytes: 3,
+          metadata: { s: step },
+          expiresAt,
         });
-
-      const first = await insert(1, 10, 30);
+      const soon = new Date(clock.now().getTime() + 60_000).toISOString();
+      const first = await insert(1, 1, "k1", soon);
       expect(first.created).toBe(true);
       expect(first.checkpoint).toMatchObject({
+        run_id: run.id,
         attempt: 1,
-        step: 10,
-        best: false,
-        final: false,
+        step: 1,
         format: null,
-        storage_key: "ckpt/1/10/b",
-        size_bytes: 1234,
-        metadata: { step: 10 },
+        metadata: { s: 1 },
+        best: false,
       });
-      const dup = await insert(1, 10, 30, "c");
-      expect(dup).toEqual({ checkpoint: first.checkpoint, created: false });
-      const otherAttempt = await insert(2, 10, 30);
-      expect(otherAttempt.created).toBe(true);
-      const s20 = await insert(1, 20, 30);
-      expect(s20.checkpoint.format).toBe("peft_lora");
-      const shortLived = await insert(2, 5, 1);
-
+      const again = await insert(1, 1, "other", soon);
+      expect(again).toEqual({ checkpoint: first.checkpoint, created: false });
+      await insert(1, 2, "k2", soon);
+      await insert(2, 2, "k3", soon);
       expect(
-        await store.checkpoints.get("ws_b", first.checkpoint.id),
+        await store.artifacts.getCheckpoint("ws_b", first.checkpoint.id),
       ).toBeNull();
-      expect(
-        (await store.checkpoints.get("ws_a", first.checkpoint.id))?.id,
-      ).toBe(first.checkpoint.id);
 
-      const ordered = await drain((cursor) =>
-        store.checkpoints.listByRun(
+      const { rows } = await drain((cursor) =>
+        store.artifacts.listCheckpoints(
           "ws_a",
           run.id,
           { limit: 2, cursor },
           clock.now(),
         ),
       );
-      expect(ordered.rows.map((c) => [c.step, c.attempt])).toEqual([
-        [5, 2],
-        [10, 1],
-        [10, 2],
-        [20, 1],
+      expect(rows.map((c) => [c.attempt, c.step])).toEqual([
+        [1, 1],
+        [1, 2],
+        [2, 2],
       ]);
-      expect(
-        (
-          await store.checkpoints.listByRun(
-            "ws_b",
-            run.id,
-            { limit: 10 },
-            clock.now(),
-          )
-        ).data,
-      ).toEqual([]);
-
-      expect(
-        (await store.checkpoints.latestForRun(run.id, clock.now()))?.id,
-      ).toBe(s20.checkpoint.id);
-      await store.checkpoints.pinRetention(run.id, {
-        bestId: otherAttempt.checkpoint.id,
-        finalId: s20.checkpoint.id,
-      });
-      await store.checkpoints.pinRetention(run.id, {
-        bestId: null,
-        finalId: null,
+      const all = await store.artifacts.allCheckpoints(run.id, clock.now());
+      const k2 = all.find((c) => c.storage_key === "k2")!;
+      const k3 = all.find((c) => c.storage_key === "k3")!;
+      await store.artifacts.pinCheckpoints(run.id, {
+        bestId: k2.id,
+        finalId: k3.id,
       });
 
-      clock.advanceDays(2);
-      const live = await store.checkpoints.listAllForRun(run.id, clock.now());
-      expect(live.map((c) => c.id)).not.toContain(shortLived.checkpoint.id);
-      const best = live.find((c) => c.id === otherAttempt.checkpoint.id);
-      const final = live.find((c) => c.id === s20.checkpoint.id);
-      expect(best).toMatchObject({
-        best: true,
-        final: false,
-        expires_at: null,
+      // A release promoted from k1 shares its blob: expiry keeps the blob.
+      await store.artifacts.createRelease({
+        workspaceId: "ws_a",
+        name: "rel",
+        runId: run.id,
+        sourceId: first.checkpoint.id,
+        baseModel: "test/tiny",
+        recipeKind: "sft",
+        format: "peft_lora",
+        storageKey: "k1",
+        sha256: "b".repeat(64),
+        sizeBytes: 3,
+        manifest: {},
+        evalReport: null,
       });
-      expect(final).toMatchObject({
-        best: false,
-        final: true,
-        expires_at: null,
-      });
-
-      const expiredNow = await store.checkpoints.listExpired(clock.now(), 10);
-      expect(expiredNow.map((c) => c.id)).toEqual([shortLived.checkpoint.id]);
-
-      clock.advanceDays(40);
-      const expiredLater = (
-        await store.checkpoints.listExpired(clock.now(), 10)
-      ).map((c) => c.id);
-      expect(expiredLater.sort()).toEqual(
-        [first.checkpoint.id, shortLived.checkpoint.id].sort(),
-      );
-      expect(
-        (await store.checkpoints.latestForRun(run.id, clock.now()))?.id,
-      ).toBe(s20.checkpoint.id);
-
-      await store.checkpoints.delete(shortLived.checkpoint.id);
-      expect(
-        await store.checkpoints.get("ws_a", shortLived.checkpoint.id),
-      ).toBeNull();
-      expect(
-        await store.checkpoints.latestForRun("run_none", clock.now()),
-      ).toBeNull();
-    });
-
-    // --- Artifacts -------------------------------------------------------
-
-    const artifactInput = (ws = "ws_a", artifactName = "sql-helper") => ({
-      workspaceId: ws,
-      name: artifactName,
-      runId: null,
-      checkpointId: null,
-      baseModel: "qwen/qwen3-8b",
-      recipeKind: "sft" as const,
-      format: "peft_lora" as const,
-      storageKey: `artifacts/${artifactName}/${Math.random()}`,
-      sha256: "d".repeat(64),
-      sizeBytes: 99,
-      manifest: { schema: "grad.artifact/1" },
-      evalReport: null,
-    });
-
-    it("artifacts: versions per day, rollover, @latest, list and isolation", async () => {
-      const a1 = await store.artifacts.create(artifactInput());
-      const a2 = await store.artifacts.create({
-        ...artifactInput(),
-        evalReport: evalReport({ acc: 1 }),
-      });
-      expect(a1.id).toBe("sql-helper@2026-11-27-1");
-      expect(a2).toMatchObject({
-        version: "2026-11-27-2",
-        eval_report: { acc: 1, metric_name: "eval_loss" },
-      });
-      expect(
-        (await store.artifacts.create(artifactInput("ws_a", "other"))).version,
-      ).toBe("2026-11-27-1");
-      expect(
-        (await store.artifacts.create(artifactInput("ws_b"))).version,
-      ).toBe("2026-11-27-1");
-
-      clock.advanceDays(1);
-      const next = await store.artifacts.create(artifactInput());
-      expect(next.version).toBe("2026-11-28-1");
-      expect((await store.artifacts.get("ws_a", "sql-helper@latest"))?.id).toBe(
-        next.id,
-      );
-      expect(await store.artifacts.get("ws_a", a1.id)).toMatchObject({
-        id: a1.id,
-        storage_key: a1.storage_key,
-        manifest: { schema: "grad.artifact/1" },
-      });
-      expect(await store.artifacts.get("ws_b", a2.id)).toBeNull();
-      expect(await store.artifacts.get("ws_a", "missing@latest")).toBeNull();
-
-      const named = await drain((cursor) =>
-        store.artifacts.list(
-          "ws_a",
-          { name: "sql-helper" },
-          { limit: 2, cursor },
-        ),
-      );
-      expect(named.rows.map((a) => a.id)).toEqual([next.id, a2.id, a1.id]);
-      expect(
-        (await store.artifacts.list("ws_a", {}, { limit: 50 })).data,
-      ).toHaveLength(4);
-    });
-
-    it("artifacts: 10 concurrent creates get unique versions; @latest is the highest", async () => {
-      const created = await Promise.all(
-        Array.from({ length: 10 }, () =>
-          store.artifacts.create(artifactInput()),
-        ),
-      );
-      const versions = created.map((a) => a.version).sort();
-      expect(new Set(versions).size).toBe(10);
-      expect(
-        (await store.artifacts.get("ws_a", "sql-helper@latest"))?.version,
-      ).toBe("2026-11-27-10");
-    });
-
-    // --- Uploads ---------------------------------------------------------
-
-    it("uploads: single-use consumption and expiry listing", async () => {
-      const mk = (id: string, expiresAt: string) =>
-        store.uploads.create({
-          id,
-          workspaceId: "ws_a",
-          purpose: "artifact",
-          jobId: "run_1",
-          attempt: 1,
-          storageKey: `uploads/${id}`,
-          sha256: "e".repeat(64),
-          sizeBytes: 10,
-          expiresAt,
-        });
-      const soon = new Date(clock.now().getTime() + 60_000).toISOString();
-      const up = await mk("up_1", soon);
-      expect(up).toMatchObject({
-        status: "pending",
-        consumed_by: null,
-        attempt: 1,
-      });
-      expect((await store.uploads.markUploaded("up_1"))?.status).toBe(
-        "uploaded",
-      );
-      expect(await store.uploads.markUploaded("up_1")).toBeNull();
-      expect((await store.uploads.consume("up_1", "art_x"))?.consumed_by).toBe(
-        "art_x",
-      );
-      expect(await store.uploads.consume("up_1", "art_y")).toBeNull();
-      expect(await store.uploads.consume("up_missing", "x")).toBeNull();
-
-      await mk("up_2", soon);
-      expect((await store.uploads.consume("up_2", "ckpt"))?.status).toBe(
-        "consumed",
-      );
-      await mk("up_3", soon);
-      await mk("up_4", new Date(clock.now().getTime() + 600_000).toISOString());
       clock.advanceSeconds(120);
       expect(
-        (await store.uploads.listExpired(clock.now(), 10)).map((u) => u.id),
-      ).toEqual(["up_3"]);
-      await store.uploads.delete("up_3");
-      expect(await store.uploads.get("up_3")).toBeNull();
-      expect((await store.uploads.get("up_4"))?.status).toBe("pending");
-    });
+        (await store.artifacts.allCheckpoints(run.id, clock.now())).map((c) => [
+          c.storage_key,
+          c.best,
+          c.final,
+          c.expires_at,
+        ]),
+      ).toEqual([
+        ["k2", true, false, null],
+        ["k3", false, true, null],
+      ]);
+      expect(
+        await store.artifacts.deleteExpiredCheckpoints(clock.now(), 10),
+      ).toEqual([]);
+      expect(
+        await store.artifacts.getCheckpoint("ws_a", first.checkpoint.id),
+      ).toBeNull();
+      expect(
+        (await store.artifacts.get("ws_a", "rel@latest"))?.storage_key,
+      ).toBe("k1");
 
-    // --- Deployments, inferences, feedback --------------------------------
-
-    it("deployments: upsert tracks previous artifact; isolation; lock in a transaction", async () => {
-      const base = {
-        workspaceId: "ws_a",
-        name: "support",
-        modelId: "ws_a/support",
-        fallbackModel: null,
-        exploreRate: 0,
-      };
-      const d1 = await store.deployments.upsert({
-        ...base,
-        activeArtifactId: "a@1",
-      });
-      expect(d1).toMatchObject({
-        previous_artifact_id: null,
-        status: "active",
-      });
+      await insert(3, 1, "k4", clock.now().toISOString());
       clock.advanceSeconds(1);
-      const same = await store.deployments.upsert({
-        ...base,
-        activeArtifactId: "a@1",
-        exploreRate: 0.1,
-      });
-      expect(same).toMatchObject({
-        id: d1.id,
-        previous_artifact_id: null,
-        explore_rate: 0.1,
-      });
-      expect(same.created_at).toBe(d1.created_at);
-      expect(same.updated_at).toBe(clock.now().toISOString());
-      const d2 = await store.deployments.upsert({
-        ...base,
-        activeArtifactId: "a@2",
-        fallbackModel: "qwen/qwen3-32b",
-      });
-      expect(d2).toMatchObject({
-        active_artifact_id: "a@2",
-        previous_artifact_id: "a@1",
-        fallback_model: "qwen/qwen3-32b",
-      });
-      const d3 = await store.deployments.upsert({
-        ...base,
-        activeArtifactId: "a@1",
-      });
-      expect(d3.previous_artifact_id).toBe("a@2");
-
-      expect(await store.deployments.get("ws_b", "support")).toBeNull();
       expect(
-        (await store.deployments.list("ws_a", { limit: 5 })).data,
-      ).toHaveLength(1);
-      expect(
-        (await store.deployments.list("ws_b", { limit: 5 })).data,
-      ).toHaveLength(0);
-
-      const locked = await store.transaction(async (tx) => {
-        await tx.deployments.lock("ws_a", "support");
-        return tx.deployments.upsert({ ...base, activeArtifactId: "a@3" });
-      });
-      expect(locked.previous_artifact_id).toBe("a@1");
+        await store.artifacts.deleteExpiredCheckpoints(clock.now(), 10),
+      ).toEqual(["k4"]);
     });
 
-    it("inferences: getMany keeps input order and workspace isolation", async () => {
-      for (const [id, ws] of [
-        ["inf_1", "ws_a"],
-        ["inf_2", "ws_a"],
-        ["inf_3", "ws_b"],
-      ] as const) {
-        await store.inferences.create({
-          id,
-          workspace_id: ws,
-          deployment_name: "router",
-          artifact_id: "r@1",
-          model: "qwen/qwen3-8b",
+    it("artifacts: releases version per day, @latest, promoted lookup, list and isolation", async () => {
+      const release = (
+        name: string,
+        ws = "ws_a",
+        sourceId: string | null = null,
+      ) =>
+        store.artifacts.createRelease({
+          workspaceId: ws,
+          name,
+          runId: null,
+          sourceId,
+          baseModel: "test/tiny",
+          recipeKind: "sft",
+          format: "peft_lora",
+          storageKey: `k/${name}`,
+          sha256: "c".repeat(64),
+          sizeBytes: 1,
+          manifest: { m: 1 },
+          evalReport: null,
         });
-      }
-      const got = await store.inferences.getMany("ws_a", [
-        "inf_2",
-        "inf_3",
-        "inf_x",
-        "inf_1",
+      clock.set(new Date("2026-11-27T23:59:00.000Z"));
+      const a1 = await release("a");
+      const a2 = await release("a", "ws_a", "ckpt_x");
+      clock.set(new Date("2026-11-28T00:01:00.000Z"));
+      const a3 = await release("a");
+      await release("a", "ws_b");
+      expect([a1.id, a2.id, a3.id]).toEqual([
+        "a@2026-11-27-1",
+        "a@2026-11-27-2",
+        "a@2026-11-28-1",
       ]);
-      expect(got.map((r) => r.id)).toEqual(["inf_2", "inf_1"]);
-      expect(got[0]).toMatchObject({
-        deployment_name: "router",
-        created_at: clock.now().toISOString(),
-      });
-      expect(await store.inferences.getMany("ws_a", [])).toEqual([]);
+      expect(a2.checkpoint_id).toBe("ckpt_x");
+      expect((await store.artifacts.get("ws_a", "a@latest"))?.id).toBe(a3.id);
+      expect(await store.artifacts.get("ws_a", "b@latest")).toBeNull();
+      expect(await store.artifacts.get("ws_b", a1.id)).toBeNull();
+      expect(
+        (await store.artifacts.findPromoted("ws_a", "ckpt_x", "a"))?.id,
+      ).toBe(a2.id);
+      expect(
+        await store.artifacts.findPromoted("ws_a", "ckpt_x", "b"),
+      ).toBeNull();
+      const listed = await store.artifacts.list(
+        "ws_a",
+        { name: "a" },
+        { limit: 10 },
+      );
+      expect(listed.data.map((x) => x.id)).toEqual([a3.id, a2.id, a1.id]);
+      expect(
+        (await store.artifacts.list("ws_a", {}, { limit: 10 })).data,
+      ).toHaveLength(3);
     });
 
-    const fb = (
-      key: string,
-      extra: Partial<{
-        ws: string;
-        score: number | null;
-        dep: string | null;
-      }> = {},
-    ) => ({
-      workspaceId: extra.ws ?? "ws_a",
-      inferenceId: null,
-      sessionId: "s1",
-      deploymentName: extra.dep === undefined ? "support" : extra.dep,
-      idempotencyKey: key,
-      score: extra.score === undefined ? 0.5 : extra.score,
-      expectedOutput: key === "gold" ? { content: "x" } : undefined,
-      metrics: { latency_ms: 10 },
-    });
-
-    it("feedback: idempotent within and across batches and workspaces", async () => {
-      const first = await store.feedback.insertMany([
-        fb("k1"),
-        fb("k2"),
-        fb("k1"),
-        fb("gold"),
-      ]);
-      expect(first.map((r) => r.deduplicated)).toEqual([
-        false,
-        false,
-        true,
-        false,
-      ]);
-      expect(first[2]?.record.id).toBe(first[0]?.record.id);
-      expect(first[0]?.record).toMatchObject({
-        idempotency_key: "k1",
-        expected_output: null,
-        metrics: { latency_ms: 10 },
-        score: 0.5,
-      });
-      expect(first[3]?.record.expected_output).toEqual({ content: "x" });
-
-      const second = await store.feedback.insertMany([
-        fb("k2"),
-        fb("k3"),
-        fb("k1", { ws: "ws_b" }),
-      ]);
-      expect(second.map((r) => r.deduplicated)).toEqual([true, false, false]);
-      expect(second[0]?.record.id).toBe(first[1]?.record.id);
-      expect(await store.feedback.insertMany([])).toEqual([]);
-    });
-
-    it("feedback: 10 parallel identical keys store one row", async () => {
-      const results = await Promise.all(
+    it("artifacts: 10 concurrent creates get unique versions", async () => {
+      const made = await Promise.all(
         Array.from({ length: 10 }, () =>
-          store.feedback.insertMany([fb("same")]),
+          store.artifacts.createRelease({
+            workspaceId: "ws_a",
+            name: "par",
+            runId: null,
+            sourceId: null,
+            baseModel: "m",
+            recipeKind: "sft",
+            format: "peft_lora",
+            storageKey: "k",
+            sha256: "d".repeat(64),
+            sizeBytes: 1,
+            manifest: {},
+            evalReport: evalReport(),
+          }),
         ),
       );
-      const flat = results.flat();
-      expect(flat.filter((r) => !r.deduplicated)).toHaveLength(1);
-      expect(new Set(flat.map((r) => r.record.id)).size).toBe(1);
-      expect((await store.feedback.stats("ws_a", "support")).count).toBe(1);
-    });
-
-    it("feedback: stats count every event and average non-null scores (520 rows)", async () => {
-      const events = Array.from({ length: 520 }, (_, i) =>
-        fb(`e${i}`, { score: i % 10 === 0 ? null : (i % 4) / 4 }),
-      );
-      await store.feedback.insertMany(events.slice(0, 300));
-      await store.feedback.insertMany(events.slice(300));
-      await store.feedback.insertMany([
-        fb("other", { dep: "elsewhere" }),
-        fb("nodep", { dep: null }),
-      ]);
-      const scored = events.filter((e) => e.score !== null);
-      const expected = Number(
-        (
-          scored.reduce((sum, e) => sum + (e.score ?? 0), 0) / scored.length
-        ).toFixed(4),
-      );
-      expect(await store.feedback.stats("ws_a", "support")).toEqual({
-        count: 520,
-        average_score: expected,
-      });
-      expect(await store.feedback.stats("ws_a", "none")).toEqual({
-        count: 0,
-        average_score: null,
-      });
-      expect(await store.feedback.stats("ws_b", "support")).toEqual({
-        count: 0,
-        average_score: null,
-      });
+      expect(new Set(made.map((a) => a.id)).size).toBe(10);
+      expect(
+        (await store.artifacts.get("ws_a", "par@latest"))?.version,
+      ).toMatch(/-10$/);
     });
 
     // --- Evals -----------------------------------------------------------
 
-    it("evals: create, claim, CAS update, leases, isolation", async () => {
+    it("evals: create, split updates, awaiting list, isolation", async () => {
       const ev = await makeEval();
       expect(ev).toMatchObject({
+        kind: "eval",
         status: "queued",
         attempt: 0,
-        lease_seconds: 0,
-        total_outputs: 0,
+        total_outputs: 8,
         generated: 0,
         summary: [],
-        total_cost_usd: 0,
-        error: null,
-        completed_at: null,
-        limit: null,
         local_scorers: ["local_fn"],
-        model_targets: {
-          m2: { inference_model: "m2", price_per_million_tokens: null },
-        },
       });
       expect(await store.evals.get("ws_b", ev.id)).toBeNull();
-      expect((await store.evals.getById(ev.id))?.name).toBe("ev");
-      await makeEval("ws_b");
+      const updated = await store.evals.update(ev.id, {
+        status: "awaiting_scores",
+        generated: 4,
+        summary: [],
+      });
+      expect(updated).toMatchObject({
+        status: "awaiting_scores",
+        generated: 4,
+      });
       expect(
-        (await store.evals.list("ws_a", { limit: 5 })).data.map((e) => e.id),
+        (await store.evals.listAwaitingScores(10)).map((e) => e.id),
       ).toEqual([ev.id]);
-
-      expect(
-        await store.evals.claimNext({
-          workerId: "x",
-          leaseSeconds: 30,
-          now: clock.now(),
-          workspaceId: "ws_c",
-        }),
-      ).toBeNull();
-      const claimed = await store.evals.claimNext({
-        workerId: "ex",
-        leaseSeconds: 30,
-        now: clock.now(),
-        workspaceId: "ws_a",
-      });
-      expect(claimed).toMatchObject({
-        id: ev.id,
-        status: "running",
-        attempt: 1,
-        worker_id: "ex",
-        lease_seconds: 30,
-      });
-      expect(
-        await store.evals.update(ev.id, { generated: 3 }, { workerId: "nope" }),
-      ).toBeNull();
-      const summary = [
-        {
-          model: "m1",
-          overall: 0.5,
-          ci_low: 0.4,
-          ci_high: 0.6,
-          pass_at_k: { "pass@1": 0.5 },
-          vs_baseline: null,
-          tasks: 2,
-          errors: 0,
-          tokens_per_task: 10,
-          cost_per_1k_tasks_usd: null,
-        },
-      ];
-      const done = await store.evals.update(
-        ev.id,
-        {
-          generated: 3,
-          summary,
-          status: "completed",
-          completed_at: clock.now().toISOString(),
-        },
-        { status: ["running"], workerId: "ex", attempt: 1 },
+      expect((await store.evals.list("ws_a", { limit: 5 })).data).toHaveLength(
+        1,
       );
-      expect(done).toMatchObject({
-        generated: 3,
-        summary,
-        status: "completed",
-      });
-
-      const other = (await store.evals.list("ws_b", { limit: 1 })).data[0]!;
-      await store.evals.claimNext({
-        workerId: "ex",
-        leaseSeconds: 30,
-        now: clock.now(),
-      });
-      clock.advanceSeconds(41);
-      expect(
-        (await store.evals.listExpiredLeases(clock.now(), 10))
-          .map((e) => e.id)
-          .sort(),
-      ).toEqual([ev.id, other.id].sort());
     });
 
-    it("evals: tasks, outputs, scores, results", async () => {
+    it("evals: outputs are first-write-wins; scores, usage per attempt and results", async () => {
       const ev = await makeEval();
-      await store.evals.insertTasks(ev.id, [
-        {
-          eval_id: ev.id,
-          task_index: 0,
-          task_id: "t0",
-          record: { id: "t0", query: "a" },
-        },
-        {
-          eval_id: ev.id,
-          task_index: 1,
-          task_id: "t1",
-          record: { id: "t1", query: "b" },
-        },
-      ]);
-      await store.evals.insertTasks(ev.id, [
-        {
-          eval_id: ev.id,
-          task_index: 1,
-          task_id: "dup",
-          record: { id: "dup" },
-        },
-        { eval_id: ev.id, task_index: 2, task_id: "t2", record: { id: "t2" } },
-      ]);
-      await store.evals.insertTasks(ev.id, []);
-      const tasks = await store.evals.listTasks(ev.id, -1, 10);
-      expect(tasks.map((t) => t.task_id)).toEqual(["t0", "t1", "t2"]);
-      expect(
-        (await store.evals.listTasks(ev.id, 0, 1)).map((t) => t.task_index),
-      ).toEqual([1]);
-
       const output = (
         model: string,
         task: number,
         sample: number,
-        extra: Partial<{ error: string; scores: Record<string, number> }> = {},
-      ) => ({
-        id: `out_${model}_${task}_${sample}_${Math.random().toString(16).slice(2, 8)}`,
+        attempt = 1,
+        extra: Partial<EvalOutputRow> = {},
+      ): EvalOutputRow => ({
+        id: `o_${model}_${task}_${sample}`,
         eval_id: ev.id,
+        attempt,
         task_index: task,
         task_id: `t${task}`,
         model,
         sample_index: sample,
-        input: [{ role: "user" as const, content: "q" }],
-        output: "answer",
+        record: { id: `t${task}`, messages: [] },
+        input: [],
+        output: "x",
         expected_output: null,
-        scores: extra.scores ?? { ok: 1 },
-        error: extra.error ?? null,
-        prompt_tokens: 5,
-        completion_tokens: 7,
-        cost_usd: 0.001,
+        scores: {},
+        error: null,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        cost_usd: 0.01,
         created_at: clock.now().toISOString(),
+        ...extra,
       });
-      const o1 = output("m1", 0, 0);
-      await store.evals.upsertOutput(o1);
-      // First write wins: a stale executor's replay cannot overwrite it.
-      await store.evals.upsertOutput({
-        ...output("m1", 0, 0),
-        output: "stale replay",
-      });
-      await store.evals.upsertOutput(output("m2", 0, 0));
-      await store.evals.upsertOutput(output("m1", 0, 1));
-      await store.evals.upsertOutput(
-        output("m1", 1, 0, { error: "timeout", scores: {} }),
+      for (const [m, task, sample, attempt] of [
+        ["m1", 0, 0, 1],
+        ["m1", 0, 1, 1],
+        ["m2", 0, 0, 2],
+        ["m1", 1, 0, 2],
+      ] as const) {
+        await store.evals.insertOutput(output(m, task, sample, attempt));
+      }
+      await store.evals.insertOutput(
+        output("m1", 0, 0, 3, { output: "changed" }),
       );
-      await store.evals.upsertOutput(output("m2", 1, 1));
+      await store.evals.insertOutput(
+        output("m2", 1, 0, 2, { output: null, error: "boom" }),
+      );
 
       expect(await store.evals.listOutputKeys(ev.id)).toEqual(
         new Set([
           "m1\u00000\u00000",
-          "m2\u00000\u00000",
           "m1\u00000\u00001",
+          "m2\u00000\u00000",
           "m1\u00001\u00000",
-          "m2\u00001\u00001",
+          "m2\u00001\u00000",
         ]),
       );
-      const all = await drain((cursor) =>
+      const { rows } = await drain((cursor) =>
         store.evals.listOutputs(ev.id, {}, { limit: 2, cursor }),
       );
-      expect(
-        all.rows.map((o) => [o.task_index, o.model, o.sample_index]),
-      ).toEqual([
-        [0, "m1", 0],
-        [0, "m1", 1],
-        [0, "m2", 0],
-        [1, "m1", 0],
-        [1, "m2", 1],
+      expect(rows.map((o) => o.id)).toEqual([
+        "o_m1_0_0",
+        "o_m1_0_1",
+        "o_m2_0_0",
+        "o_m1_1_0",
+        "o_m2_1_0",
       ]);
-      expect(all.rows[0]).toMatchObject({
-        id: o1.id,
-        output: "answer",
-        record: { id: "t0", query: "a" },
-      });
+      expect(rows[0]?.output).toBe("x");
+      expect(rows[0]?.record).toEqual({ id: "t0", messages: [] });
       expect(
-        (
-          await store.evals.listOutputs(ev.id, { model: "m2" }, { limit: 10 })
-        ).data.map((o) => o.task_index),
-      ).toEqual([0, 1]);
+        (await store.evals.listOutputs(ev.id, { model: "m2" }, { limit: 10 }))
+          .data,
+      ).toHaveLength(2);
+
+      expect(await store.evals.attemptUsage(ev.id, 2)).toEqual({
+        tokens: 45,
+        cost_usd: 0.03,
+      });
+      expect(await store.evals.attemptUsage(ev.id, 9)).toEqual({
+        tokens: 0,
+        cost_usd: 0,
+      });
 
       expect(await store.evals.countMissingScores(ev.id, ["local_fn"])).toBe(4);
       expect(await store.evals.countMissingScores(ev.id, [])).toBe(0);
-      const missing = await store.evals.listOutputs(
-        ev.id,
-        { missingScorer: "local_fn" },
-        { limit: 10 },
-      );
-      expect(missing.data).toHaveLength(4);
-
-      const accepted = await store.evals.setScores(ev.id, [
-        { output_id: o1.id, scorer: "local_fn", score: 1 },
-        { output_id: o1.id, scorer: "second", score: 0.25 },
-        { output_id: "out_unknown", scorer: "local_fn", score: 1 },
-        ...missing.data
-          .slice(1)
-          .map((o) => ({ output_id: o.id, scorer: "local_fn", score: 0 })),
-      ]);
-      expect(accepted).toBe(5);
-      expect(await store.evals.setScores(ev.id, [])).toBe(0);
-      expect(await store.evals.countMissingScores(ev.id, ["local_fn"])).toBe(0);
       expect(
-        await store.evals.countMissingScores(ev.id, ["local_fn", "second"]),
-      ).toBe(3);
-      const rescored = (
-        await store.evals.listOutputs(ev.id, { model: "m1" }, { limit: 1 })
-      ).data[0];
-      expect(rescored?.scores).toEqual({ ok: 1, local_fn: 1, second: 0.25 });
-
-      const result = (task: number, model: string, score: number) => ({
-        eval_id: ev.id,
-        task_index: task,
-        task_id: `t${task}`,
-        model,
-        score,
-        passed: score >= 0.5,
-        sample_scores: [score],
-        judge_model: null,
-      });
-      await store.evals.replaceResults(ev.id, [
-        result(0, "m1", 1),
-        result(0, "m2", 0.2),
-      ]);
-      await store.evals.replaceResults(ev.id, [
-        result(0, "m1", 1),
-        result(0, "m2", 0.2),
-        result(1, "m1", 0.4),
-        result(2, "m2", 0.9),
-      ]);
-      const results = await drain((cursor) =>
-        store.evals.listResults(ev.id, {}, { limit: 3, cursor }),
-      );
-      expect(results.rows.map((r) => [r.task_index, r.model])).toEqual([
-        [0, "m1"],
-        [0, "m2"],
-        [1, "m1"],
-        [2, "m2"],
-      ]);
-      expect(results.rows[3]?.record).toEqual({ id: "t2" });
-      const failures = await store.evals.listResults(
-        ev.id,
-        { maxScore: 0.5 },
-        { limit: 10 },
-      );
-      expect(failures.data.map((r) => [r.task_index, r.model])).toEqual([
-        [0, "m2"],
-        [1, "m1"],
-      ]);
+        await store.evals.setScores(ev.id, [
+          { output_id: "o_m1_0_0", scorer: "local_fn", score: 1 },
+          { output_id: "o_m1_0_0", scorer: "other", score: 0 },
+          { output_id: "o_missing", scorer: "local_fn", score: 1 },
+        ]),
+      ).toBe(2);
+      expect(await store.evals.setScores(ev.id, [])).toBe(0);
+      expect(await store.evals.countMissingScores(ev.id, ["local_fn"])).toBe(3);
       expect(
         (
-          await store.evals.listResults(
+          await store.evals.listOutputs(
             ev.id,
-            { model: "m1", maxScore: 0.5 },
+            { missingScorer: "local_fn" },
             { limit: 10 },
           )
         ).data,
-      ).toHaveLength(1);
-      await store.evals.replaceResults(ev.id, []);
+      ).toHaveLength(3);
+
+      await store.evals.setCombinedScores(ev.id, [
+        { id: "o_m1_0_0", score: 1 },
+        { id: "o_m1_0_1", score: 0.33333 },
+        { id: "o_m2_0_0", score: 0.5 },
+        { id: "o_m1_1_0", score: 0.2 },
+      ]);
+      await store.evals.setCombinedScores(ev.id, []);
+      const results = await drain((cursor) =>
+        store.evals.listResults(
+          ev.id,
+          { passThreshold: 0.5 },
+          { limit: 2, cursor },
+        ),
+      );
       expect(
-        (await store.evals.listResults(ev.id, {}, { limit: 10 })).data,
+        results.rows.map((r) => [
+          r.task_index,
+          r.model,
+          r.score,
+          r.passed,
+          r.sample_scores,
+        ]),
+      ).toEqual([
+        [0, "m1", 0.6667, true, [1, 0.3333]],
+        [0, "m2", 0.5, true, [0.5]],
+        [1, "m1", 0.2, false, [0.2]],
+        [1, "m2", 0, false, [0]],
+      ]);
+      expect(results.rows[0]?.record).toEqual({ id: "t0", messages: [] });
+      const failing = await store.evals.listResults(
+        ev.id,
+        { passThreshold: 0.5, maxScore: 0.5, model: "m1" },
+        { limit: 10 },
+      );
+      expect(failing.data.map((r) => r.task_id)).toEqual(["t1"]);
+    });
+
+    // --- Usage ledger ------------------------------------------------------
+
+    it("usage: idempotent rows, newest-first pages, export cursor reads", async () => {
+      const row = (key: string, ws = "ws_a", from = 0, through = 10) =>
+        store.usage.record({
+          idempotencyKey: key,
+          workspaceId: ws,
+          kind: "run",
+          refId: "run_1",
+          attempt: 1,
+          tokensFrom: from,
+          tokensThrough: through,
+          costUsd: 0.5,
+          priceVersion: "p_1",
+        });
+      const first = await row("k1");
+      expect(first).toMatchObject({
+        tokens_from: 0,
+        tokens_through: 10,
+        tokens: 10,
+        cost_usd: 0.5,
+        price_version: "p_1",
+        idempotency_key: "k1",
+      });
+      expect(await row("k1", "ws_a", 0, 99)).toEqual(first);
+      await row("k2", "ws_a", 10, 30);
+      await row("k3", "ws_b", 0, 5);
+      const { rows, pages } = await drain((cursor) =>
+        store.usage.list("ws_a", { limit: 1, cursor }),
+      );
+      expect(pages).toBe(2);
+      expect(rows.map((u) => u.idempotency_key)).toEqual(["k2", "k1"]);
+      expect(
+        (await store.usage.listByRef("run_1")).map((u) => u.tokens),
+      ).toEqual([10, 20, 5]);
+
+      const future = new Date(clock.now().getTime() + 1000);
+      const all = await store.usage.listAfter(0, future, 10);
+      expect(all.map((u) => [u.idempotency_key, u.workspace_id])).toEqual([
+        ["k1", "ws_a"],
+        ["k2", "ws_a"],
+        ["k3", "ws_b"],
+      ]);
+      expect(await store.usage.listAfter(all[1]!.seq, future, 10)).toHaveLength(
+        1,
+      );
+      expect(
+        await store.usage.listAfter(0, new Date(clock.now().getTime() - 1), 10),
       ).toEqual([]);
     });
-
-    // --- Billing outbox --------------------------------------------------
-
-    it("billing outbox: idempotent enqueue, leased claims, retries", async () => {
-      const input = {
-        idempotencyKey: "run-usage:run_1:1",
-        workspaceId: "ws_a",
-        kind: "run" as const,
-        runId: "run_1",
-        attempt: 1,
-        tokens: 1000,
-        costUsd: 0.0004,
-      };
-      const first = await store.billing.enqueue(input);
-      const again = await store.billing.enqueue({ ...input, tokens: 5 });
-      expect(again).toEqual(first);
-      expect(first).toMatchObject({
-        status: "pending",
-        attempts: 0,
-        tokens: 1000,
-        cost_usd: 0.0004,
-      });
-      clock.advance(1);
-      const second = await store.billing.enqueue({
-        ...input,
-        idempotencyKey: "run-usage:run_1:2",
-        attempt: 2,
-      });
-
-      const claimed = await store.billing.claimDue(clock.now(), 10, 60);
-      expect(claimed.map((e) => e.id)).toEqual([first.id, second.id]);
-      expect(claimed[0]).toMatchObject({
-        attempts: 1,
-        next_attempt_at: new Date(clock.now().getTime() + 60_000).toISOString(),
-      });
-      expect(await store.billing.claimDue(clock.now(), 10, 60)).toEqual([]);
-
-      await store.billing.markSent(first.id);
-      const retryAt = new Date(clock.now().getTime() + 5_000);
-      await store.billing.markFailed(second.id, "x".repeat(3000), retryAt);
-      clock.advanceSeconds(5);
-      const retry = await store.billing.claimDue(clock.now(), 10, 60);
-      expect(retry.map((e) => e.id)).toEqual([second.id]);
-      expect(retry[0]?.attempts).toBe(2);
-      expect(retry[0]?.last_error).toHaveLength(2000);
-
-      const byRun = await store.billing.listByRun("run_1");
-      expect(byRun.map((e) => [e.attempt, e.status])).toEqual([
-        [1, "sent"],
-        [2, "pending"],
-      ]);
-      expect(byRun[0]?.sent_at).not.toBeNull();
-      expect(await store.billing.claimDue(clock.now(), 0, 60)).toEqual([]);
-    });
-
-    // --- Idempotency keys -------------------------------------------------
-
-    const idemScope = {
-      workspaceId: "ws_a",
-      principal: "key_1",
-      method: "POST",
-      path: "/v1/runs",
-      key: "k-1",
-    };
-    const idemAt = (ttlSeconds = 86_400, lockSeconds = 300) => ({
-      now: clock.now(),
-      expiredBefore: new Date(clock.now().getTime() - ttlSeconds * 1000),
-      abandonedBefore: new Date(clock.now().getTime() - lockSeconds * 1000),
-    });
-    const stored = {
-      status: 202,
-      headers: { "content-type": "application/json" },
-      body: '{"id":"run_1"}',
-    };
-
-    it("idempotency: claim, in-progress, mismatch, replay, release", async () => {
-      const claim = await store.idempotency.claim(idemScope, "h1", idemAt());
-      expect(claim.outcome).toBe("claimed");
-      const claimId = claim.outcome === "claimed" ? claim.claimId : "";
-
-      expect(await store.idempotency.claim(idemScope, "h1", idemAt())).toEqual({
-        outcome: "in_progress",
-      });
-      expect(await store.idempotency.claim(idemScope, "h2", idemAt())).toEqual({
-        outcome: "mismatch",
-      });
-      expect(
-        (
-          await store.idempotency.claim(
-            { ...idemScope, principal: "key_2" },
-            "h1",
-            idemAt(),
-          )
-        ).outcome,
-      ).toBe("claimed");
-      expect(
-        (
-          await store.idempotency.claim(
-            { ...idemScope, path: "/v1/evals" },
-            "h1",
-            idemAt(),
-          )
-        ).outcome,
-      ).toBe("claimed");
-
-      await store.idempotency.complete(
-        idemScope,
-        "not-the-claim",
-        { ...stored, status: 500 },
-        clock.now(),
-      );
-      await store.idempotency.complete(idemScope, claimId, stored, clock.now());
-      expect(await store.idempotency.claim(idemScope, "h1", idemAt())).toEqual({
-        outcome: "completed",
-        response: stored,
-      });
-      expect(await store.idempotency.claim(idemScope, "h2", idemAt())).toEqual({
-        outcome: "mismatch",
-      });
-
-      const other = { ...idemScope, key: "k-2" };
-      const second = await store.idempotency.claim(other, "h1", idemAt());
-      const secondId = second.outcome === "claimed" ? second.claimId : "";
-      await store.idempotency.release(other, "not-the-claim");
-      expect(
-        (await store.idempotency.claim(other, "h1", idemAt())).outcome,
-      ).toBe("in_progress");
-      await store.idempotency.release(other, secondId);
-      expect(
-        (await store.idempotency.claim(other, "h2", idemAt())).outcome,
-      ).toBe("claimed");
-    });
-
-    it("idempotency: abandoned claims and expired rows are taken over and purged", async () => {
-      const first = await store.idempotency.claim(idemScope, "h1", idemAt());
-      const firstId = first.outcome === "claimed" ? first.claimId : "";
-      clock.advanceSeconds(301);
-      const takeover = await store.idempotency.claim(idemScope, "h2", idemAt());
-      expect(takeover.outcome).toBe("claimed");
-      await store.idempotency.complete(idemScope, firstId, stored, clock.now());
-      expect(await store.idempotency.claim(idemScope, "h2", idemAt())).toEqual({
-        outcome: "in_progress",
-      });
-      const takeoverId = takeover.outcome === "claimed" ? takeover.claimId : "";
-      await store.idempotency.complete(
-        idemScope,
-        takeoverId,
-        stored,
-        clock.now(),
-      );
-
-      clock.advanceSeconds(600);
-      expect(
-        (await store.idempotency.claim(idemScope, "h2", idemAt())).outcome,
-      ).toBe("completed");
-      await store.idempotency.claim(
-        { ...idemScope, key: "fresh" },
-        "h",
-        idemAt(),
-      );
-      clock.advanceDays(1);
-      expect(
-        (await store.idempotency.claim(idemScope, "h3", idemAt())).outcome,
-      ).toBe("claimed");
-      expect(
-        await store.idempotency.deleteExpired(
-          new Date(clock.now().getTime() - 1000),
-        ),
-      ).toBe(1);
-      expect(
-        await store.idempotency.deleteExpired(
-          new Date(clock.now().getTime() + 1000),
-        ),
-      ).toBe(1);
-      expect(await store.idempotency.deleteExpired(clock.now())).toBe(0);
-    });
-
-    it("idempotency: concurrent claims of one key yield exactly one winner", async () => {
-      const outcomes = await Promise.all(
-        Array.from({ length: 8 }, () =>
-          store.idempotency.claim(idemScope, "h1", idemAt()),
-        ),
-      );
-      expect(outcomes.filter((o) => o.outcome === "claimed")).toHaveLength(1);
-      expect(outcomes.filter((o) => o.outcome === "in_progress")).toHaveLength(
-        7,
-      );
-    });
-
-    // --- Transactions ----------------------------------------------------
 
     it("transactions: commit, rollback on throw, nested reuse", async () => {
       const committed = await store.transaction(async (tx) => {
@@ -1616,14 +1136,16 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           rolledBack = ds?.id;
           await store.runs.update(committed!.id, { current_step: 50 });
           await store.transaction(async (inner) => {
-            await inner.billing.enqueue({
+            await inner.usage.record({
               idempotencyKey: "nested",
               workspaceId: "ws_t",
               kind: "run",
-              runId: committed!.id,
+              refId: committed!.id,
               attempt: 1,
-              tokens: 1,
+              tokensFrom: 0,
+              tokensThrough: 1,
               costUsd: 0,
+              priceVersion: "p",
             });
           });
           throw new Error("boom");
@@ -1632,24 +1154,26 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(rolledBack).toBeDefined();
       expect(await store.datasets.get("ws_t", "tx")).toBeNull();
       expect((await store.runs.getById(committed!.id))?.current_step).toBe(9);
-      expect(await store.billing.listByRun(committed!.id)).toEqual([]);
+      expect(await store.usage.listByRef(committed!.id)).toEqual([]);
 
       const nested = await store.transaction(async () =>
         store.transaction(async (inner) => {
-          await inner.billing.enqueue({
+          await inner.usage.record({
             idempotencyKey: "nested-ok",
             workspaceId: "ws_t",
             kind: "eval",
-            runId: committed!.id,
+            refId: committed!.id,
             attempt: 1,
-            tokens: 1,
+            tokensFrom: 0,
+            tokensThrough: 1,
             costUsd: 0,
+            priceVersion: "p",
           });
           return "ok";
         }),
       );
       expect(nested).toBe("ok");
-      const [entry] = await store.billing.listByRun(committed!.id);
+      const [entry] = await store.usage.listByRef(committed!.id);
       expect(entry?.kind).toBe("eval");
       expect(await store.ping()).toBe(true);
     });

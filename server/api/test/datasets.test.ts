@@ -243,7 +243,9 @@ describe("datasets, uploads and imports", () => {
       },
     });
     expect(ticket.status).toBe(201);
-    expect(ticket.body.url.startsWith("/blobs/uploads/")).toBe(true);
+    expect(ticket.body.url.startsWith("/blobs/uploads?")).toBe(true);
+    // Uploads are content-addressed: the ticket's id is the file's sha256.
+    expect(ticket.body.upload_id).toBe(sha256Hex(file));
 
     const early = await t.json("/v1/datasets/traces/imports", {
       body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
@@ -279,15 +281,16 @@ describe("datasets, uploads and imports", () => {
       dataset: "traces",
       connector: "otel",
     });
-    const reuse = await t.json("/v1/datasets/other/imports", {
-      body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
-    });
-    expect(reuse.status).toBe(409);
-    // An unkeyed retry into the same dataset must not queue a second import.
-    const sameDataset = await t.json("/v1/datasets/traces/imports", {
-      body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
-    });
-    expect(sameDataset.body).toMatchObject({ code: "upload_already_used" });
+    // An unkeyed retry into the same dataset must not queue a second
+    // import: (dataset, file) is the import's natural key.
+    const sameDataset = await t.json<{ id: string }>(
+      "/v1/datasets/traces/imports",
+      {
+        body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
+      },
+    );
+    expect(sameDataset.status).toBe(202);
+    expect(sameDataset.body.id).toBe(imp.body.id);
 
     const job = await worker.claim();
     expect(job?.kind).toBe("import");
@@ -460,8 +463,13 @@ describe("datasets, uploads and imports", () => {
       token: other,
       body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
     });
-    expect(stolen.status).toBe(422);
-    expect(stolen.body).toMatchObject({ code: "unknown_upload" });
+    // Upload ids resolve inside the caller's workspace only.
+    expect(stolen.status).toBe(409);
+    expect(stolen.body).toMatchObject({ code: "upload_incomplete" });
+    const malformed = await t.json("/v1/datasets/x/imports", {
+      body: { source: { kind: "upload", upload_id: "../../etc" } },
+    });
+    expect(malformed.body).toMatchObject({ code: "unknown_upload" });
   });
 
   it("serves signed blob downloads only with a valid signature", async () => {

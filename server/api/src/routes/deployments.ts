@@ -1,5 +1,14 @@
-import { createRoute, type OpenAPIHono, z } from "@hono/zod-openapi";
+import {
+  createRoute,
+  type OpenAPIHono,
+  type RouteConfig,
+  z,
+} from "@hono/zod-openapi";
 
+import {
+  DEPLOY_DISABLED_DETAIL,
+  INFERENCE_DISABLED_DETAIL,
+} from "../adapters.js";
 import {
   DeployArtifactRequestSchema,
   DeploymentSchema,
@@ -12,9 +21,11 @@ import {
   RouteRequestSchema,
   RouteResponseSchema,
   SlugSchema,
+  UsageRecordSchema,
   pageOf,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
+import { ApiError } from "../errors.js";
 import type { Services } from "../services/index.js";
 import {
   defaultErrors,
@@ -26,180 +37,164 @@ import {
 
 const NameParamSchema = z.object({ name: SlugSchema });
 
+const CLOUD_NOTE =
+  " Served by Gradiated Cloud (api.gradiated.com); grad-server answers 501.";
+
 const jsonBody = <T extends z.ZodType>(schema: T) => ({
-  body: {
-    required: true,
-    content: { "application/json": { schema } },
-  },
+  body: { required: true, content: { "application/json": { schema } } },
 });
+
+/**
+ * Paths served by Gradiated Cloud (the product API and the inference
+ * gateway), documented here so the SDKs stay typed against them. grad-server
+ * keeps no serving state and answers 501 with what to do instead.
+ */
+const cloudOnly = (
+  app: OpenAPIHono<AppEnv>,
+  route: Omit<RouteConfig, "responses"> & {
+    summary: string;
+    ok: ReturnType<typeof jsonResponse>;
+  },
+  code: "deploy_unavailable" | "inference_unavailable",
+): void => {
+  const { ok, summary, ...rest } = route;
+  app.openapi(
+    createRoute({
+      ...rest,
+      summary,
+      description: `${summary}.${CLOUD_NOTE}`,
+      responses: { 200: ok, ...notImplementedError, ...defaultErrors },
+    }),
+    () => {
+      throw new ApiError(
+        501,
+        code,
+        code === "deploy_unavailable"
+          ? "Deployments are served by Gradiated Cloud"
+          : "Inference is served by Gradiated Cloud",
+        code === "deploy_unavailable"
+          ? DEPLOY_DISABLED_DETAIL
+          : INFERENCE_DISABLED_DETAIL,
+      );
+    },
+  );
+};
 
 export const registerDeploymentRoutes = (
   app: OpenAPIHono<AppEnv>,
   _deps: AppDependencies,
   services: Services,
 ): void => {
-  const { serving } = services;
-
-  app.openapi(
-    createRoute({
+  cloudOnly(
+    app,
+    {
       method: "post",
       path: "/v1/deployments",
       operationId: "deployArtifact",
       summary: "Deploy or update an artifact under a stable model name",
       tags: ["Deployments"],
       request: jsonBody(DeployArtifactRequestSchema),
-      responses: {
-        200: jsonResponse(DeploymentSchema, "Active deployment."),
-        ...notImplementedError,
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      const ws = workspaceOf(c, "deployments:write");
-      const deployment = await serving.deploy(
-        ws,
-        c.req.valid("json"),
-        c.req.header("idempotency-key"),
-      );
-
-      return c.json(deployment, 200);
+      ok: jsonResponse(DeploymentSchema, "Active deployment."),
     },
+    "deploy_unavailable",
   );
-
-  app.openapi(
-    createRoute({
+  cloudOnly(
+    app,
+    {
       method: "get",
       path: "/v1/deployments",
       operationId: "listDeployments",
       summary: "List deployments",
       tags: ["Deployments"],
       request: { query: PageQuerySchema },
-      responses: {
-        200: jsonResponse(pageOf(DeploymentSchema), "Deployments."),
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      const ws = workspaceOf(c, "artifacts:read");
-      const page = await serving.list(ws, c.req.valid("query"));
-
-      return c.json(page, 200);
+      ok: jsonResponse(pageOf(DeploymentSchema), "Deployments."),
     },
+    "deploy_unavailable",
   );
-
-  app.openapi(
-    createRoute({
+  cloudOnly(
+    app,
+    {
       method: "get",
       path: "/v1/deployments/{name}",
       operationId: "getDeployment",
       summary: "Get deployment status and feedback summary",
       tags: ["Deployments"],
       request: { params: NameParamSchema },
-      responses: {
-        200: jsonResponse(DeploymentStatusSchema, "Deployment status."),
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      const ws = workspaceOf(c, "artifacts:read");
-      const status = await serving.get(ws, c.req.valid("param").name);
-
-      return c.json(status, 200);
+      ok: jsonResponse(DeploymentStatusSchema, "Deployment status."),
     },
+    "deploy_unavailable",
   );
-
-  app.openapi(
-    createRoute({
+  cloudOnly(
+    app,
+    {
       method: "post",
       path: "/v1/deployments/{name}/rollback",
       operationId: "rollbackDeployment",
       summary: "Roll a deployment back to its previous artifact",
       tags: ["Deployments"],
       request: { params: NameParamSchema },
-      responses: {
-        200: jsonResponse(DeploymentSchema, "Rolled-back deployment."),
-        ...notImplementedError,
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      const ws = workspaceOf(c, "deployments:write");
-      const deployment = await serving.rollback(
-        ws,
-        c.req.valid("param").name,
-        c.req.header("idempotency-key"),
-      );
-
-      return c.json(deployment, 200);
+      ok: jsonResponse(DeploymentSchema, "Rolled-back deployment."),
     },
+    "deploy_unavailable",
   );
-
-  app.openapi(
-    createRoute({
+  cloudOnly(
+    app,
+    {
       method: "post",
       path: "/v1/route",
       operationId: "routeRequest",
       summary: "Ask a deployed model router which model to call",
       tags: ["Serving"],
       request: jsonBody(RouteRequestSchema),
-      responses: {
-        200: jsonResponse(RouteResponseSchema, "Routing decision."),
-        ...notImplementedError,
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      const ws = workspaceOf(c, "artifacts:read");
-      const decision = await serving.route(ws, c.req.valid("json"));
-      c.header("x-gradiated-inference-id", decision.inference_id);
-
-      return c.json(decision, 200);
+      ok: jsonResponse(RouteResponseSchema, "Routing decision."),
     },
+    "inference_unavailable",
   );
-
-  app.openapi(
-    createRoute({
+  cloudOnly(
+    app,
+    {
       method: "post",
       path: "/v1/embeddings",
       operationId: "createEmbeddings",
       summary: "Generate embeddings from a deployed embedding artifact",
       tags: ["Serving"],
       request: jsonBody(EmbedRequestSchema),
-      responses: {
-        200: jsonResponse(EmbedResponseSchema, "Embeddings."),
-        ...notImplementedError,
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      const ws = workspaceOf(c, "artifacts:read");
-      const result = await serving.embed(ws, c.req.valid("json"));
-
-      return c.json(result, 200);
+      ok: jsonResponse(EmbedResponseSchema, "Embeddings."),
     },
+    "inference_unavailable",
   );
-
-  app.openapi(
-    createRoute({
+  cloudOnly(
+    app,
+    {
       method: "post",
       path: "/v1/feedback",
       operationId: "recordFeedback",
       summary: "Record deduplicated outcome scores and gold corrections",
       tags: ["Feedback"],
       request: jsonBody(RecordFeedbackRequestSchema),
+      ok: jsonResponse(RecordFeedbackResponseSchema, "Recorded feedback."),
+    },
+    "inference_unavailable",
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/usage",
+      operationId: "listUsage",
+      summary:
+        "List billed usage, newest first: one record per run or eval attempt",
+      tags: ["Usage"],
+      request: { query: PageQuerySchema },
       responses: {
-        200: jsonResponse(RecordFeedbackResponseSchema, "Recorded feedback."),
+        200: jsonResponse(pageOf(UsageRecordSchema), "Usage records."),
         ...defaultErrors,
       },
     }),
     async (c) => {
-      const ws = workspaceOf(c, "feedback:write");
-      const result = await serving.recordFeedback(
-        ws,
-        c.req.valid("json").events,
-      );
+      const ws = workspaceOf(c, "runs:read");
 
-      return c.json(result, 200);
+      return c.json(await services.usage.list(ws, c.req.valid("query")), 200);
     },
   );
 };

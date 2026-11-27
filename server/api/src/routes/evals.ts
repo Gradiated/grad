@@ -22,6 +22,7 @@ import {
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
+import { idempotencyOf, replayAware } from "../idempotency.js";
 
 const jsonBody = <T extends z.ZodType>(schema: T) => ({
   body: {
@@ -76,11 +77,15 @@ export const registerEvalRoutes = (
         ...notImplementedError,
       },
     }),
-    async (c) =>
-      c.json(
-        await evals.create(workspaceOf(c, "runs:write"), c.req.valid("json")),
-        202,
-      ),
+    async (c) => {
+      const created = await evals.create(
+        workspaceOf(c, "runs:write"),
+        c.req.valid("json"),
+        await idempotencyOf(c),
+      );
+
+      return c.json(replayAware(c, created), 202);
+    },
   );
 
   app.openapi(

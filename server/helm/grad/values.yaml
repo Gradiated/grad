@@ -11,7 +11,7 @@ nameOverride: ""
 #   secrets-key           GRAD_SECRETS_KEY, 32 random bytes in base64 (workspace secrets)
 #   inference-api-key     key for evals.inferenceBaseUrl
 #   judge-api-key         key for evals.judgeBaseUrl
-#   cloud-service-token   AUTH/BILLING/DEPLOY_MODE=cloud
+#   cloud-service-token   AUTH/BILLING_MODE=cloud
 #   aws-access-key-id / aws-secret-access-key   static S3 keys (MinIO); omit them with Pod Identity or IRSA
 secret:
   name: grad
@@ -26,7 +26,6 @@ api:
     type: ClusterIP
     port: 8787
   authMode: api_key
-  deployMode: disabled
   billingMode: noop
   defaultWorkspaceId: default
   # Extra environment, e.g. GRAD_EXTRA_MODELS_JSON, MAX_ATTEMPTS, EVAL_CONCURRENCY.

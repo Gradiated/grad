@@ -84,39 +84,6 @@ describe("S3ObjectStore error mapping", () => {
     expect(await store.head("k")).toEqual({ sizeBytes: 3, sha256: null });
   });
 
-  it("refuses to copy over an existing destination", async () => {
-    const commands: string[] = [];
-    const store = storeWith((command) => {
-      commands.push(command.constructor.name);
-      return { ContentLength: 1 };
-    });
-
-    await expect(store.copy("a", "b")).rejects.toBeInstanceOf(
-      ObjectExistsError,
-    );
-    expect(commands).toEqual(["HeadObjectCommand"]);
-  });
-
-  it("maps copy failures", async () => {
-    const run = (error: Error) =>
-      storeWith((command) => {
-        if (command.constructor.name === "HeadObjectCommand") {
-          throw awsError("NotFound", 404);
-        }
-        throw error;
-      });
-
-    await expect(
-      run(awsError("NoSuchKey", 404)).copy("a", "b"),
-    ).rejects.toBeInstanceOf(ObjectNotFoundError);
-    await expect(
-      run(awsError("PreconditionFailed", 412)).copy("a", "b"),
-    ).rejects.toBeInstanceOf(ObjectExistsError);
-    await expect(
-      run(awsError("AccessDenied", 403)).copy("a", "b"),
-    ).rejects.toThrow("AccessDenied");
-  });
-
   it("rejects a declared size above maxBytes before sending anything", async () => {
     const store = storeWith(() => {
       throw new Error("must not be called");

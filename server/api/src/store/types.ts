@@ -7,20 +7,18 @@ import type {
   Checkpoint,
   Dataset,
   DatasetRecord,
-  Deployment,
   EvalMode,
   EvalModelSummary,
   EvalReport,
   EvalRubricItem,
   EvalStatus,
-  FeedbackRecord,
   ImportJob,
   ImportStatus,
   MetricPoint,
-  MetricPointInput,
   RecipeKind,
   ResolvedRunConfig,
   RunStatus,
+  UsageRecord,
 } from "../contracts.js";
 
 export interface PageRequest {
@@ -31,6 +29,21 @@ export interface PageRequest {
 export interface Page<T> {
   data: T[];
   next_cursor: string | null;
+}
+
+/**
+ * A create request's Idempotency-Key and the hash of its body, stored on the
+ * row it creates (unique per workspace, or per dataset for pushes).
+ */
+export interface IdempotencyInput {
+  key: string;
+  hash: string;
+}
+
+/** The row an Idempotency-Key already created, and the request that did. */
+export interface IdempotentHit {
+  id: string;
+  request_hash: string;
 }
 
 // --- API keys ----------------------------------------------------------------
@@ -47,15 +60,20 @@ export interface ApiKeyRepository {
     workspaceId: string;
     name: string;
     scopes: ApiKeyScope[];
+    idempotency?: IdempotencyInput | undefined;
   }): Promise<{ key: ApiKey; secret: string }>;
   list(workspaceId: string, page: PageRequest): Promise<Page<ApiKey>>;
   revoke(workspaceId: string, id: string): Promise<ApiKey | null>;
   findActiveByHash(keyHash: string): Promise<KeyLookupResult | null>;
+  findIdempotent(
+    workspaceId: string,
+    key: string,
+  ): Promise<IdempotentHit | null>;
 }
 
 // --- Datasets ----------------------------------------------------------------
 
-/** One immutable, append-only JSONL object holding `count` records. */
+/** One immutable JSONL object holding `count` records. */
 export interface DatasetPart {
   key: string;
   count: number;
@@ -63,12 +81,12 @@ export interface DatasetPart {
   bytes: number;
 }
 
+/** A pinned version: every part with version <= `version`, in order. */
 export interface DatasetVersion {
   dataset_id: string;
   version: number;
   parts: DatasetPart[];
   record_count: number;
-  created_at: string;
 }
 
 export interface DatasetRepository {
@@ -77,6 +95,7 @@ export interface DatasetRepository {
     workspaceId: string;
     name: string;
     metadata: Record<string, unknown>;
+    idempotency?: IdempotencyInput | undefined;
   }): Promise<Dataset | null>;
   getOrCreate(input: {
     workspaceId: string;
@@ -86,56 +105,112 @@ export interface DatasetRepository {
   get(workspaceId: string, name: string): Promise<Dataset | null>;
   getById(workspaceId: string, id: string): Promise<Dataset | null>;
   list(workspaceId: string, page: PageRequest): Promise<Page<Dataset>>;
+  findIdempotent(
+    workspaceId: string,
+    key: string,
+  ): Promise<IdempotentHit | null>;
   /**
-   * Atomically bumps the dataset version and records a new version whose
-   * parts are the previous version's parts followed by `parts`. Safe under
-   * concurrent appends from multiple API replicas (row lock / serialization).
+   * Appends `parts` as the next version (row lock on the dataset, so
+   * concurrent appends from several replicas serialize).
    */
   appendVersion(input: {
     datasetId: string;
     parts: DatasetPart[];
     metadata?: Record<string, unknown>;
+    idempotency?: IdempotencyInput | undefined;
     /** False for score-update parts: they change records, not their number. */
     countRecords?: boolean;
-  }): Promise<{ dataset: Dataset; version: DatasetVersion }>;
-  /** Version 0 is the empty dataset and always exists after create. */
+  }): Promise<Dataset>;
+  /** The push an Idempotency-Key already appended to this dataset. */
+  findIdempotentPush(
+    datasetId: string,
+    key: string,
+  ): Promise<IdempotentHit | null>;
+  /** Version 0 is the empty dataset; null past the current version. */
   getVersion(
     datasetId: string,
     version: number,
   ): Promise<DatasetVersion | null>;
+  /**
+   * Stages batch `batch` of an import attempt once: false when (job,
+   * attempt, batch) already exists (a worker retry). `part` is null when
+   * every record of the batch was dropped.
+   */
+  stagePart(input: {
+    datasetId: string;
+    jobId: string;
+    attempt: number;
+    batch: number;
+    part: DatasetPart | null;
+    dropped: number;
+  }): Promise<boolean>;
+  /** An attempt's staged parts (batch order) and the records they dropped. */
+  listStaged(
+    jobId: string,
+    attempt: number,
+  ): Promise<{ parts: DatasetPart[]; dropped: number; count: number }>;
+  /**
+   * Makes an attempt's staged parts the dataset's next version and deletes
+   * the staged rows of every other attempt of the job, returning their keys
+   * so the caller can delete the objects.
+   */
+  commitStaged(input: {
+    datasetId: string;
+    jobId: string;
+    attempt: number;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ dataset: Dataset; orphanKeys: string[] }>;
+  /** Deletes every staged part of a job (it failed); returns their keys. */
+  discardStaged(jobId: string): Promise<string[]>;
 }
 
-// --- Import jobs -------------------------------------------------------------
+// --- Jobs (the one queue) -----------------------------------------------------
 
-export interface ImportJobRecord extends ImportJob {
-  dataset_id: string;
-  upload_key: string | null;
+export type JobKind = "train" | "import" | "eval";
+export type JobStatus = RunStatus | EvalStatus | ImportStatus;
+
+/** The queue columns every job has. */
+export interface JobFields<S extends string = JobStatus> {
+  id: string;
+  workspace_id: string;
+  kind: JobKind;
+  status: S;
+  /** Every claim bumps it: the fencing token, and part of billing keys. */
+  attempt: number;
+  /** Attempts that ended without a result since creation or the last resume. */
+  failed_attempts: number;
+  max_attempts: number;
   worker_id: string | null;
   lease_expires_at: string | null;
   lease_seconds: number;
-  failed_attempts: number;
+  /** Not claimable until this job finishes (a router run's labeling eval). */
+  waiting_on: string | null;
+  /** Tokens and cost the open attempt already billed, and when it last did. */
+  billed_through: number;
+  billed_cost: number;
+  billed_at: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
 }
 
-export type ImportJobPatch = Partial<
-  Pick<
-    ImportJobRecord,
-    | "status"
-    | "attempt"
-    | "imported_count"
-    | "dropped_count"
-    | "detected_scores"
-    | "drop_reasons"
-    | "dataset_version"
-    | "error"
-    | "worker_id"
-    | "lease_expires_at"
-    | "lease_seconds"
-    | "failed_attempts"
-    | "updated_at"
+export type JobRow = JobFields;
+
+export type JobPatch<S extends string = JobStatus> = Partial<
+  Omit<
+    JobFields<S>,
+    | "id"
+    | "workspace_id"
+    | "kind"
+    | "created_at"
+    | "billed_through"
+    | "billed_cost"
+    | "billed_at"
   >
 >;
 
-export interface JobExpectation<S extends string> {
+export interface JobExpectation<S extends string = JobStatus> {
   /** Only a lease that expired before this instant (the reaper's re-check). */
   leaseExpiredBefore?: string;
   status?: readonly S[];
@@ -147,223 +222,252 @@ export interface ClaimInput {
   workerId: string;
   leaseSeconds: number;
   now: Date;
+  kinds: readonly JobKind[];
+  /** Restrict train jobs to these recipes. */
+  recipes?: readonly RecipeKind[] | undefined;
   /** Restrict to one workspace (workspace-scoped worker keys). */
   workspaceId?: string | undefined;
 }
 
+export interface JobEvent {
+  seq: number;
+  attempt: number;
+  step: number;
+  payload: Record<string, unknown>;
+}
+
+export interface JobRepository {
+  getById(id: string): Promise<JobRow | null>;
+  /** Conditional update; null when the expectation does not hold. */
+  update(
+    id: string,
+    patch: JobPatch,
+    expect?: JobExpectation,
+  ): Promise<JobRow | null>;
+  /**
+   * Oldest claimable job of `kinds` → running, attempt + 1, lease set
+   * (FOR UPDATE SKIP LOCKED, one query for every kind).
+   */
+  claimNext(input: ClaimInput): Promise<JobRow | null>;
+  /** The job `workerId` holds a lease on, if any (a claim retried after a lost response). */
+  heldBy(workerId: string, kinds: readonly JobKind[]): Promise<JobRow | null>;
+  /** Jobs with an open attempt whose lease expired more than lease/3 ago. */
+  listExpiredLeases(now: Date, limit: number): Promise<JobRow[]>;
+  /**
+   * Advances the open attempt's billed mark from `from` to `through` (CAS on
+   * attempt and `from`): true when this caller may write that usage row.
+   */
+  advanceBilling(input: {
+    id: string;
+    attempt: number;
+    from: number;
+    through: number;
+    cost: number;
+    at: Date;
+  }): Promise<boolean>;
+  /** Queued jobs waiting on `jobId`. */
+  listWaitingOn(jobId: string): Promise<JobRow[]>;
+  findIdempotent(
+    workspaceId: string,
+    key: string,
+  ): Promise<IdempotentHit | null>;
+  /**
+   * Appends an event once per (job, attempt, type, step): a replay returns
+   * the stored event.
+   */
+  appendEvent(input: {
+    jobId: string;
+    attempt: number;
+    type: string;
+    step: number;
+    payload: Record<string, unknown>;
+  }): Promise<JobEvent>;
+  /** Events of `type` with seq > afterSeq, ascending. */
+  listEvents(
+    jobId: string,
+    type: string,
+    afterSeq: number,
+    limit: number,
+  ): Promise<JobEvent[]>;
+  /** Retention: deletes up to `limit` events created before `before`. */
+  deleteEventsBefore(before: Date, limit: number): Promise<number>;
+}
+
+/** Fields a job-backed create shares. */
+interface JobCreate {
+  workspaceId: string;
+  maxAttempts: number;
+  waitingOn?: string | null | undefined;
+  idempotency?: IdempotencyInput | undefined;
+}
+
+// --- Imports (a job and its payload) -------------------------------------------
+
+/** The fields an import keeps in its job's payload. */
+export interface ImportPayload {
+  dataset_id: string;
+  dataset: string;
+  source: Record<string, unknown>;
+  connector: ImportJob["connector"];
+  upload_key: string | null;
+  imported_count: number;
+  dropped_count: number;
+  detected_scores: string[];
+  drop_reasons: string[];
+  dataset_version: number | null;
+}
+
+export type ImportJobRecord = JobFields<ImportStatus> & ImportPayload;
+
+export type ImportJobPatch = JobPatch & Partial<ImportPayload>;
+
 export interface ImportJobRepository {
-  create(input: {
-    workspaceId: string;
-    datasetId: string;
-    datasetName: string;
-    source: Record<string, unknown>;
-    connector: ImportJob["connector"];
-    uploadKey: string | null;
-  }): Promise<ImportJobRecord>;
+  create(
+    input: JobCreate & {
+      datasetId: string;
+      datasetName: string;
+      source: Record<string, unknown>;
+      connector: ImportJob["connector"];
+      uploadKey: string | null;
+    },
+  ): Promise<ImportJobRecord>;
   get(workspaceId: string, id: string): Promise<ImportJobRecord | null>;
   getById(id: string): Promise<ImportJobRecord | null>;
+  /** The import of the uploaded file `sha256` into `datasetId`, if any. */
+  findByUpload(
+    datasetId: string,
+    sha256: string,
+  ): Promise<ImportJobRecord | null>;
   list(workspaceId: string, page: PageRequest): Promise<Page<ImportJobRecord>>;
-  /** Conditional update; returns null when the expectation does not hold. */
   update(
     id: string,
     patch: ImportJobPatch,
-    expect?: JobExpectation<ImportStatus>,
+    expect?: JobExpectation,
   ): Promise<ImportJobRecord | null>;
-  /** Oldest queued job → running, attempt + 1, lease set (SKIP LOCKED). */
-  claimNext(input: ClaimInput): Promise<ImportJobRecord | null>;
-  /** The job `workerId` holds a lease on, if any (a claim retried after a lost response). */
-  heldBy(workerId: string): Promise<ImportJobRecord | null>;
-  listExpiredLeases(now: Date, limit: number): Promise<ImportJobRecord[]>;
-  /**
-   * Records batch `batch` of an attempt once: false when (import, attempt,
-   * batch) already exists (a worker retry). `part` is null when every record
-   * of the batch was dropped.
-   */
-  addPart(input: {
-    importId: string;
-    attempt: number;
-    batch: number;
-    part: DatasetPart | null;
-    dropped: number;
-  }): Promise<boolean>;
-  /** An attempt's parts in batch order, and the records its batches dropped. */
-  listParts(
-    importId: string,
-    attempt: number,
-  ): Promise<{ parts: DatasetPart[]; dropped: number }>;
 }
 
-// --- Runs --------------------------------------------------------------------
+// --- Runs ------------------------------------------------------------------------
 
-export interface RunRecord {
-  id: string;
-  workspace_id: string;
+export interface RunDomain {
   name: string;
   dataset_id: string;
   dataset_name: string;
   dataset_version: number;
   recipe_kind: RecipeKind;
-  status: RunStatus;
   resolved_config: ResolvedRunConfig;
   max_cost_usd: number | null;
   price_per_million_tokens: number;
   total_steps: number;
   current_step: number;
-  /** Total attempts ever started (monotonic; used in billing keys). */
-  attempt: number;
-  max_attempts: number;
-  /**
-   * Attempts that ended without a result (lease expired or abandoned by a
-   * preempted worker) since creation or the last resume; at max_attempts the
-   * run fails.
-   */
-  failed_attempts: number;
   /** Tokens of closed (billed) attempts; their cost is derived from them. */
   billed_tokens: number;
   /** Latest tokens reported by the open attempt (0 when none is open). */
   attempt_tokens: number;
-  worker_id: string | null;
-  lease_expires_at: string | null;
-  lease_seconds: number;
   latest_metric: MetricPoint | null;
   eval_report: EvalReport | null;
   artifact_id: string | null;
-  /**
-   * The labeling eval this queued router run waits for; it is not claimable
-   * until the eval completes and this is set to null.
-   */
-  waiting_on: string | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-  finished_at: string | null;
 }
 
-export type RunPatch = Partial<
-  Omit<
-    RunRecord,
-    | "id"
-    | "workspace_id"
-    | "name"
-    | "dataset_id"
-    | "dataset_name"
-    | "dataset_version"
-    | "recipe_kind"
-    | "resolved_config"
-    | "price_per_million_tokens"
-    | "created_at"
-  >
->;
+export type RunRecord = JobFields<RunStatus> & RunDomain;
+
+export type RunPatch = JobPatch &
+  Partial<
+    Omit<
+      RunDomain,
+      | "name"
+      | "dataset_id"
+      | "dataset_name"
+      | "dataset_version"
+      | "recipe_kind"
+      | "resolved_config"
+      | "price_per_million_tokens"
+    >
+  >;
 
 export interface RunRepository {
-  create(input: {
-    workspaceId: string;
-    name: string;
-    datasetId: string;
-    datasetName: string;
-    datasetVersion: number;
-    recipeKind: RecipeKind;
-    resolvedConfig: ResolvedRunConfig;
-    maxCostUsd: number | null;
-    pricePerMillionTokens: number;
-    totalSteps: number;
-    maxAttempts: number;
-    /** The labeling eval this run waits on (not claimable until released). */
-    waitingOn?: string | null | undefined;
-  }): Promise<RunRecord>;
+  create(
+    input: JobCreate & {
+      name: string;
+      datasetId: string;
+      datasetName: string;
+      datasetVersion: number;
+      recipeKind: RecipeKind;
+      resolvedConfig: ResolvedRunConfig;
+      maxCostUsd: number | null;
+      pricePerMillionTokens: number;
+      totalSteps: number;
+    },
+  ): Promise<RunRecord>;
   get(workspaceId: string, id: string): Promise<RunRecord | null>;
   getById(id: string): Promise<RunRecord | null>;
   list(workspaceId: string, page: PageRequest): Promise<Page<RunRecord>>;
-  /** Queued runs waiting on the labeling eval `evalId`. */
-  listWaitingOn(evalId: string): Promise<RunRecord[]>;
   update(
     id: string,
     patch: RunPatch,
-    expect?: JobExpectation<RunStatus>,
+    expect?: JobExpectation,
   ): Promise<RunRecord | null>;
-  /**
-   * Oldest queued run (optionally restricted to `recipes`) → running with
-   * attempt + 1, `attempt_tokens = 0`, worker and lease set. SKIP LOCKED.
-   */
-  claimNext(
-    input: ClaimInput & { recipes?: readonly RecipeKind[] | undefined },
-  ): Promise<RunRecord | null>;
-  /** Runs with an open attempt (worker set) whose lease has expired. */
-  /** The run `workerId` holds a lease on, if any (a claim retried after a lost response). */
-  heldBy(workerId: string): Promise<RunRecord | null>;
-  listExpiredLeases(now: Date, limit: number): Promise<RunRecord[]>;
-  /** Queue depth for autoscaling: queued + running (open attempts). */
 }
 
-export interface MetricsRepository {
-  /** Idempotent on (run, attempt, step): a replay returns the stored point. */
-  append(
-    runId: string,
-    attempt: number,
-    point: MetricPointInput & { cost_usd: number },
-  ): Promise<MetricPoint>;
-  /** Points with seq > afterSeq, ascending by seq. */
-  list(runId: string, afterSeq: number, limit: number): Promise<MetricPoint[]>;
-}
-
-// --- Checkpoints ---------------------------------------------------------------
+// --- Artifacts: checkpoints and releases --------------------------------------
 
 export interface CheckpointRecord extends Checkpoint {
   storage_key: string;
 }
-
-export interface CheckpointRepository {
-  /**
-   * Inserts unless a checkpoint for (run_id, attempt, step) exists, in which
-   * case the existing row is returned with `created: false`.
-   */
-  insert(input: {
-    workspaceId: string;
-    runId: string;
-    attempt: number;
-    step: number;
-    evalScore: number | null;
-    format: ArtifactFormat | null;
-    storageKey: string;
-    sha256: string;
-    sizeBytes: number;
-    metadata: Record<string, unknown>;
-    expiresAt: string | null;
-  }): Promise<{ checkpoint: CheckpointRecord; created: boolean }>;
-  get(workspaceId: string, id: string): Promise<CheckpointRecord | null>;
-  /** Unexpired checkpoints, ordered by (step, attempt, id) ascending. */
-  listByRun(
-    workspaceId: string,
-    runId: string,
-    page: PageRequest,
-    now: Date,
-  ): Promise<Page<CheckpointRecord>>;
-  /** Unexpired checkpoint with the highest step (ties → highest attempt). */
-  latestForRun(runId: string, now: Date): Promise<CheckpointRecord | null>;
-  /** Unexpired checkpoints of a run, for best/final selection. */
-  listAllForRun(runId: string, now: Date): Promise<CheckpointRecord[]>;
-  /** Marks best/final (they never expire: `expires_at = null`). */
-  pinRetention(
-    runId: string,
-    input: { bestId: string | null; finalId: string | null },
-  ): Promise<void>;
-  listExpired(now: Date, limit: number): Promise<CheckpointRecord[]>;
-  delete(id: string): Promise<void>;
-}
-
-// --- Artifacts -------------------------------------------------------------------
 
 export interface ArtifactRecord extends Artifact {
   storage_key: string;
 }
 
 export interface ArtifactRepository {
+  /**
+   * Inserts a checkpoint unless one exists for (run, attempt, step); then the
+   * existing row is returned with `created: false`.
+   */
+  insertCheckpoint(input: {
+    workspaceId: string;
+    runId: string;
+    attempt: number;
+    step: number;
+    evalScore: number | null;
+    format: ArtifactFormat | null;
+    baseModel: string;
+    recipeKind: RecipeKind;
+    storageKey: string;
+    sha256: string;
+    sizeBytes: number;
+    metadata: Record<string, unknown>;
+    expiresAt: string | null;
+  }): Promise<{ checkpoint: CheckpointRecord; created: boolean }>;
+  getCheckpoint(
+    workspaceId: string,
+    id: string,
+  ): Promise<CheckpointRecord | null>;
+  /** Unexpired checkpoints, ordered by (step, attempt, id) ascending. */
+  listCheckpoints(
+    workspaceId: string,
+    runId: string,
+    page: PageRequest,
+    now: Date,
+  ): Promise<Page<CheckpointRecord>>;
+  /** Unexpired checkpoints of a run, ordered by (step, attempt). */
+  allCheckpoints(runId: string, now: Date): Promise<CheckpointRecord[]>;
+  /** Marks best/final (they never expire: `expires_at = null`). */
+  pinCheckpoints(
+    runId: string,
+    input: { bestId: string | null; finalId: string | null },
+  ): Promise<void>;
+  /**
+   * Deletes up to `limit` checkpoints past their expiry; returns the storage
+   * keys no remaining row references (the caller deletes those objects).
+   */
+  deleteExpiredCheckpoints(now: Date, limit: number): Promise<string[]>;
+
   /** Allocates `name@YYYY-MM-DD-n` (UTC day of `now`) atomically. */
-  create(input: {
+  createRelease(input: {
     workspaceId: string;
     name: string;
     runId: string | null;
-    checkpointId: string | null;
+    sourceId: string | null;
     baseModel: string;
     recipeKind: RecipeKind;
     format: ArtifactFormat;
@@ -373,7 +477,13 @@ export interface ArtifactRepository {
     manifest: Record<string, unknown>;
     evalReport: EvalReport | null;
   }): Promise<ArtifactRecord>;
-  /** `reference` is an artifact id or `name@latest`. */
+  /** The release promoted from checkpoint `sourceId` under `name`, if any. */
+  findPromoted(
+    workspaceId: string,
+    sourceId: string,
+    name: string,
+  ): Promise<ArtifactRecord | null>;
+  /** `reference` is a release id or `name@latest`. */
   get(workspaceId: string, reference: string): Promise<ArtifactRecord | null>;
   list(
     workspaceId: string,
@@ -382,114 +492,10 @@ export interface ArtifactRepository {
   ): Promise<Page<ArtifactRecord>>;
 }
 
-// --- Uploads -----------------------------------------------------------------------
-
-export type UploadPurpose = "checkpoint" | "artifact" | "dataset_import";
-
-export interface UploadRecord {
-  id: string;
-  workspace_id: string;
-  purpose: UploadPurpose;
-  job_id: string | null;
-  attempt: number | null;
-  storage_key: string;
-  sha256: string;
-  size_bytes: number;
-  status: "pending" | "uploaded" | "consumed";
-  consumed_by: string | null;
-  created_at: string;
-  expires_at: string;
-}
-
-export interface UploadRepository {
-  create(input: {
-    id: string;
-    workspaceId: string;
-    purpose: UploadPurpose;
-    jobId: string | null;
-    attempt: number | null;
-    storageKey: string;
-    sha256: string;
-    sizeBytes: number;
-    expiresAt: string;
-  }): Promise<UploadRecord>;
-  get(id: string): Promise<UploadRecord | null>;
-  /** pending → uploaded; null when not pending. */
-  markUploaded(id: string): Promise<UploadRecord | null>;
-  /** pending|uploaded → consumed; null when already consumed or missing. */
-  consume(id: string, consumedBy: string): Promise<UploadRecord | null>;
-  /** Unconsumed uploads past `expires_at`, for garbage collection. */
-  listExpired(now: Date, limit: number): Promise<UploadRecord[]>;
-  delete(id: string): Promise<void>;
-}
-
-// --- Deployments, inferences, feedback ------------------------------------------
-
-export interface DeploymentRepository {
-  get(workspaceId: string, name: string): Promise<Deployment | null>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<Deployment>>;
-  /** Sets previous_artifact_id to the old active artifact when it changes. */
-  upsert(input: {
-    workspaceId: string;
-    name: string;
-    modelId: string;
-    activeArtifactId: string;
-    fallbackModel: string | null;
-    exploreRate: number;
-  }): Promise<Deployment>;
-  /**
-   * Serializes deploys of one (workspace, name) for the rest of the current
-   * transaction (advisory transaction lock).
-   */
-  lock(workspaceId: string, name: string): Promise<void>;
-}
-
-export interface InferenceRecord {
-  id: string;
-  workspace_id: string;
-  deployment_name: string;
-  artifact_id: string;
-  model: string;
-  created_at: string;
-}
-
-export interface InferenceRepository {
-  create(input: Omit<InferenceRecord, "created_at">): Promise<InferenceRecord>;
-  getMany(
-    workspaceId: string,
-    ids: readonly string[],
-  ): Promise<InferenceRecord[]>;
-}
-
-export interface FeedbackInsert {
-  workspaceId: string;
-  inferenceId: string | null;
-  sessionId: string | null;
-  deploymentName: string | null;
-  idempotencyKey: string;
-  score: number | null;
-  expectedOutput: unknown;
-  metrics: Record<string, number>;
-}
-
-export interface FeedbackRepository {
-  /** Idempotent on (workspace, idempotency_key); preserves input order. */
-  insertMany(
-    events: readonly FeedbackInsert[],
-  ): Promise<Array<{ record: FeedbackRecord; deduplicated: boolean }>>;
-  stats(
-    workspaceId: string,
-    deploymentName: string,
-  ): Promise<{ count: number; average_score: number | null }>;
-}
-
 // --- Evals -----------------------------------------------------------------------
 
-export interface EvalRecord {
-  id: string;
-  workspace_id: string;
+export interface EvalDomain {
   name: string;
-  status: EvalStatus;
   models: string[];
   /** model ref → inference model name and price (resolved at create). */
   model_targets: Record<
@@ -501,6 +507,10 @@ export interface EvalRecord {
   dataset_name: string;
   dataset_version: number;
   rubric: EvalRubricItem[];
+  /** `score`: `dataset.score()` grades the records' own outputs (model `record`). */
+  mode: EvalMode;
+  /** The dataset version a completed scoring job wrote its scores to. */
+  scored_dataset_version: number | null;
   samples: number;
   temperature: number;
   max_tokens: number;
@@ -508,45 +518,28 @@ export interface EvalRecord {
   pass_threshold: number;
   judge_models: string[];
   local_scorers: string[];
-  /** `score`: `dataset.score()` grades the records' own outputs (model `record`). */
-  mode: EvalMode;
-  /** The dataset version a completed scoring job wrote its scores to. */
-  scored_dataset_version: number | null;
   total_outputs: number;
   generated: number;
   summary: EvalModelSummary[];
   total_cost_usd: number;
-  error: string | null;
-  attempt: number;
-  worker_id: string | null;
-  lease_expires_at: string | null;
-  lease_seconds: number;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
 }
 
-export type EvalPatch = Partial<
-  Pick<
-    EvalRecord,
-    | "status"
-    | "total_outputs"
-    | "generated"
-    | "summary"
-    | "total_cost_usd"
-    | "error"
-    | "attempt"
-    | "worker_id"
-    | "lease_expires_at"
-    | "lease_seconds"
-    | "updated_at"
-    | "completed_at"
-    | "scored_dataset_version"
-  >
->;
+export type EvalRecord = JobFields<EvalStatus> & EvalDomain;
 
-export interface EvalTaskRow {
-  eval_id: string;
+export type EvalPatch = JobPatch &
+  Partial<
+    Pick<
+      EvalDomain,
+      | "total_outputs"
+      | "generated"
+      | "summary"
+      | "total_cost_usd"
+      | "scored_dataset_version"
+    >
+  >;
+
+/** One eval task: a usable record of the pinned dataset version. */
+export interface EvalTask {
   task_index: number;
   task_id: string;
   record: DatasetRecord;
@@ -555,10 +548,12 @@ export interface EvalTaskRow {
 export interface EvalOutputRow {
   id: string;
   eval_id: string;
+  attempt: number;
   task_index: number;
   task_id: string;
   model: string;
   sample_index: number;
+  record: DatasetRecord;
   input: ChatMessage[];
   output: string | null;
   expected_output: unknown;
@@ -570,37 +565,30 @@ export interface EvalOutputRow {
   created_at: string;
 }
 
+/** Per-(task, model) result, aggregated from the outputs' combined scores. */
 export interface EvalResultRow {
-  eval_id: string;
   task_index: number;
   task_id: string;
   model: string;
   score: number;
   passed: boolean;
   sample_scores: number[];
-  judge_model: string | null;
+  record: DatasetRecord;
 }
 
 export interface EvalRepository {
   create(
-    input: Omit<
-      EvalRecord,
-      | "id"
-      | "status"
-      | "total_outputs"
-      | "generated"
-      | "summary"
-      | "total_cost_usd"
-      | "error"
-      | "attempt"
-      | "worker_id"
-      | "lease_expires_at"
-      | "lease_seconds"
-      | "created_at"
-      | "updated_at"
-      | "completed_at"
-      | "scored_dataset_version"
-    >,
+    input: JobCreate &
+      Omit<
+        EvalDomain,
+        | "total_outputs"
+        | "generated"
+        | "summary"
+        | "total_cost_usd"
+        | "scored_dataset_version"
+      > & {
+        totalOutputs: number;
+      },
   ): Promise<EvalRecord>;
   get(workspaceId: string, id: string): Promise<EvalRecord | null>;
   getById(id: string): Promise<EvalRecord | null>;
@@ -608,31 +596,26 @@ export interface EvalRepository {
   update(
     id: string,
     patch: EvalPatch,
-    expect?: JobExpectation<EvalStatus>,
+    expect?: JobExpectation,
   ): Promise<EvalRecord | null>;
-  claimNext(input: ClaimInput): Promise<EvalRecord | null>;
-  listExpiredLeases(now: Date, limit: number): Promise<EvalRecord[]>;
   /** Evals waiting for SDK-posted scores, least recently touched first. */
   listAwaitingScores(limit: number): Promise<EvalRecord[]>;
 
-  insertTasks(evalId: string, tasks: readonly EvalTaskRow[]): Promise<void>;
-  /** Tasks with task_index > afterIndex, ascending. */
-  listTasks(
-    evalId: string,
-    afterIndex: number,
-    limit: number,
-  ): Promise<EvalTaskRow[]>;
-
-  /** Insert or replace by (eval_id, model, task_index, sample_index). */
-  upsertOutput(output: EvalOutputRow): Promise<void>;
+  /** First write wins on (eval, model, task, sample): a replay is a no-op. */
+  insertOutput(output: EvalOutputRow): Promise<void>;
   /** Keys `${model}\u0000${task_index}\u0000${sample_index}` already generated. */
   listOutputKeys(evalId: string): Promise<Set<string>>;
-  /** Ordered by (task_index, model, sample_index); joins the task record. */
+  /** Ordered by (task_index, model, sample_index). */
   listOutputs(
     evalId: string,
     filter: { model?: string | undefined; missingScorer?: string | undefined },
     page: PageRequest,
-  ): Promise<Page<EvalOutputRow & { record: DatasetRecord }>>;
+  ): Promise<Page<EvalOutputRow>>;
+  /** Tokens and cost of the outputs an attempt generated. */
+  attemptUsage(
+    evalId: string,
+    attempt: number,
+  ): Promise<{ tokens: number; cost_usd: number }>;
   /** Merges `scorer: score` into outputs of this eval; returns accepted count. */
   setScores(
     evalId: string,
@@ -647,117 +630,49 @@ export interface EvalRepository {
     evalId: string,
     scorers: readonly string[],
   ): Promise<number>;
-
-  replaceResults(evalId: string, rows: readonly EvalResultRow[]): Promise<void>;
-  /** Ordered by (task_index, model). `maxScore` keeps rows with score < maxScore. */
+  /** Stores each output's combined rubric score (at completion). */
+  setCombinedScores(
+    evalId: string,
+    scores: ReadonlyArray<{ id: string; score: number }>,
+  ): Promise<void>;
+  /**
+   * Per-(task, model) results ordered by (task_index, model);
+   * `maxScore` keeps results scoring below it.
+   */
   listResults(
     evalId: string,
-    filter: { model?: string | undefined; maxScore?: number | undefined },
+    filter: {
+      model?: string | undefined;
+      maxScore?: number | undefined;
+      passThreshold: number;
+    },
     page: PageRequest,
-  ): Promise<Page<EvalResultRow & { record: DatasetRecord }>>;
+  ): Promise<Page<EvalResultRow>>;
 }
 
-// --- Billing outbox ----------------------------------------------------------------
+// --- Usage ledger ----------------------------------------------------------------
 
-/** What a usage record bills: a training run attempt or an eval. */
-export type UsageKind = "run" | "eval";
-
-export interface BillingOutboxEntry {
-  id: string;
-  idempotency_key: string;
-  workspace_id: string;
-  kind: UsageKind;
-  /** The run id (kind run) or eval id (kind eval). */
-  run_id: string;
-  attempt: number;
-  tokens: number;
-  cost_usd: number;
-  status: "pending" | "sent";
-  attempts: number;
-  last_error: string | null;
-  next_attempt_at: string;
-  created_at: string;
-  sent_at: string | null;
-}
-
-export interface BillingOutboxRepository {
-  /** Idempotent on idempotency_key; returns the stored entry. */
-  enqueue(input: {
+export interface UsageRepository {
+  /** Idempotent on idempotency_key; returns the stored row. */
+  record(input: {
     idempotencyKey: string;
     workspaceId: string;
-    kind: UsageKind;
-    runId: string;
+    kind: UsageRecord["kind"];
+    refId: string;
     attempt: number;
-    tokens: number;
+    tokensFrom: number;
+    tokensThrough: number;
     costUsd: number;
-  }): Promise<BillingOutboxEntry>;
-  /**
-   * Pending entries with next_attempt_at <= now; pushes their
-   * next_attempt_at to now + lockSeconds so concurrent drainers skip them.
-   */
-  claimDue(
-    now: Date,
+    priceVersion: string;
+  }): Promise<UsageRecord>;
+  list(workspaceId: string, page: PageRequest): Promise<Page<UsageRecord>>;
+  /** Every workspace's rows with seq > afterSeq created at or before `before`, ascending. */
+  listAfter(
+    afterSeq: number,
+    before: Date,
     limit: number,
-    lockSeconds: number,
-  ): Promise<BillingOutboxEntry[]>;
-  markSent(id: string): Promise<void>;
-  markFailed(id: string, error: string, nextAttemptAt: Date): Promise<void>;
-  listByRun(runId: string): Promise<BillingOutboxEntry[]>;
-}
-
-// --- Idempotency keys ---------------------------------------------------------------
-
-/** One `Idempotency-Key` namespace: a key is unique per caller, method and path. */
-export interface IdempotencyScope {
-  workspaceId: string;
-  principal: string;
-  method: string;
-  path: string;
-  key: string;
-}
-
-export interface StoredResponse {
-  status: number;
-  headers: Record<string, string>;
-  body: string;
-}
-
-export type IdempotencyClaim =
-  | { outcome: "claimed"; claimId: string }
-  | { outcome: "in_progress" }
-  | { outcome: "mismatch" }
-  | { outcome: "completed"; response: StoredResponse };
-
-export interface IdempotencyRepository {
-  /**
-   * Atomically claims `scope` for a request whose body hashes to
-   * `requestHash`. A row created before `expiredBefore`, or still in progress
-   * since before `abandonedBefore`, is taken over; any other existing row is
-   * reported (completed, in progress, or a different request body).
-   */
-  claim(
-    scope: IdempotencyScope,
-    requestHash: string,
-    at: { now: Date; expiredBefore: Date; abandonedBefore: Date },
-    options?: {
-      /**
-       * Inside a transaction: how long to wait for a concurrent transaction
-       * holding the same key before reporting it in progress (Postgres).
-       */
-      waitMs?: number;
-    },
-  ): Promise<IdempotencyClaim>;
-  /** Stores the response of the request holding `claimId`. */
-  complete(
-    scope: IdempotencyScope,
-    claimId: string,
-    response: StoredResponse,
-    now: Date,
-  ): Promise<void>;
-  /** Drops the claim so the same key can be retried (5xx, thrown errors). */
-  release(scope: IdempotencyScope, claimId: string): Promise<void>;
-  /** Deletes every row created before `before`; returns how many. */
-  deleteExpired(before: Date): Promise<number>;
+  ): Promise<Array<UsageRecord & { seq: number; workspace_id: string }>>;
+  listByRef(refId: string): Promise<UsageRecord[]>;
 }
 
 // --- Composition ----------------------------------------------------------------------
@@ -765,18 +680,12 @@ export interface IdempotencyRepository {
 export interface Repositories {
   apiKeys: ApiKeyRepository;
   datasets: DatasetRepository;
+  jobs: JobRepository;
   imports: ImportJobRepository;
   runs: RunRepository;
-  metrics: MetricsRepository;
-  checkpoints: CheckpointRepository;
   artifacts: ArtifactRepository;
-  uploads: UploadRepository;
-  deployments: DeploymentRepository;
-  inferences: InferenceRepository;
-  feedback: FeedbackRepository;
   evals: EvalRepository;
-  billing: BillingOutboxRepository;
-  idempotency: IdempotencyRepository;
+  usage: UsageRepository;
 }
 
 export interface Store extends Repositories {

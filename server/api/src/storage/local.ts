@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
 import {
-  copyFile,
   link,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -231,19 +231,37 @@ export class LocalObjectStore implements ObjectStore {
     }
   };
 
-  /** Copies into a temp file, then links it into place (atomic, no overwrite). */
-  copy = async (sourceKey: string, destinationKey: string): Promise<void> => {
-    const source = await this.resolveSafe(sourceKey, false);
-    const destination = await this.resolveSafe(destinationKey, true);
-    const tmp = this.tempPath(destination);
-    try {
-      await copyFile(source, tmp);
-    } catch (error) {
-      await rm(tmp, { force: true });
-      if (isErrno(error, "ENOENT")) throw new ObjectNotFoundError(sourceKey);
-      throw error;
-    }
-    await this.commit(tmp, destination, destinationKey);
+  listOlder = async (
+    prefix: string,
+    before: Date,
+    limit: number,
+  ): Promise<string[]> => {
+    const base = path.resolve(this.root, validateObjectKey(prefix));
+    const keys: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch (error) {
+        if (isErrno(error, "ENOENT")) return;
+        throw error;
+      }
+      for (const entry of entries) {
+        if (keys.length >= limit) return;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) await walk(full);
+        else if (
+          entry.isFile() &&
+          !entry.name.endsWith(".partial") &&
+          (await stat(full)).mtime < before
+        ) {
+          keys.push(path.relative(this.root, full).split(path.sep).join("/"));
+        }
+      }
+    };
+    await walk(base);
+
+    return keys;
   };
 
   delete = async (key: string): Promise<void> => {

@@ -1,44 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BillingAdapter } from "../src/adapters.js";
 import { costForTokens } from "../src/catalog.js";
-import { ADMIN_KEY, makeTestApp, type TestApp } from "./fixtures/app.js";
+import {
+  ADMIN_KEY,
+  makeTestApp,
+  WORKSPACE_A,
+  type TestApp,
+} from "./fixtures/app.js";
 import { evalReport } from "./fixtures/eval-report.js";
 import { createSftRun, FakeWorker, sha256Hex } from "./fixtures/worker.js";
 
-const recordingBilling = () => {
-  const calls: Array<{
-    runId: string;
-    attempt: number;
-    tokensProcessed: number;
-    costUsd: number;
-    idempotencyKey: string;
-  }> = [];
-  let failuresLeft = 0;
-  const adapter: BillingAdapter = {
-    checkCanStartRun: async () => ({ allowed: true }),
-    recordRunUsage: async (input) => {
-      if (failuresLeft > 0) {
-        failuresLeft -= 1;
-        throw new Error("billing temporarily down");
-      }
-      calls.push(input);
-    },
-    recordEvalUsage: async () => undefined,
-  };
-
-  return { adapter, calls, failNext: (n: number) => (failuresLeft = n) };
-};
-
 describe("run lifecycle and worker protocol", () => {
   let t: TestApp;
-  let billing: ReturnType<typeof recordingBilling>;
   let worker: FakeWorker;
 
   beforeEach(async () => {
-    billing = recordingBilling();
     t = await makeTestApp({
-      billing: billing.adapter,
       settings: {
         maxAttempts: 3,
         evalConcurrency: 2,
@@ -52,9 +29,42 @@ describe("run lifecycle and worker protocol", () => {
     await t.close();
   });
 
-  const settle = async () => {
-    await t.services.billing.idle();
-    await t.services.billing.drain();
+  /** The usage ledger summed per (run, attempt), in billing order. */
+  const billed = async () => {
+    const rows = (
+      await t.deps.store.usage.list(WORKSPACE_A, { limit: 1000 })
+    ).data.reverse();
+    const byAttempt = new Map<
+      string,
+      {
+        runId: string;
+        attempt: number;
+        tokensProcessed: number;
+        costUsd: number;
+        rows: number;
+      }
+    >();
+    for (const row of rows) {
+      const key = `run-usage:${row.ref_id}:${row.attempt}`;
+      const entry = byAttempt.get(key) ?? {
+        runId: row.ref_id,
+        attempt: row.attempt,
+        tokensProcessed: 0,
+        costUsd: 0,
+        rows: 0,
+      };
+      // Rows tile the attempt's tokens: each starts where the last ended.
+      expect(row.tokens_from).toBe(entry.tokensProcessed);
+      entry.tokensProcessed = row.tokens_through;
+      entry.costUsd = Number((entry.costUsd + row.cost_usd).toFixed(6));
+      entry.rows += 1;
+      byAttempt.set(key, entry);
+    }
+
+    return [...byAttempt.entries()].map(([idempotencyKey, e]) => ({
+      ...e,
+      idempotencyKey,
+    }));
   };
 
   it("trains, checkpoints and completes with server-side cost and an immutable artifact", async () => {
@@ -123,8 +133,7 @@ describe("run lifecycle and worker protocol", () => {
     );
     expect(await download.text()).toBe("artifact-bytes");
 
-    await settle();
-    expect(billing.calls).toEqual([
+    expect(await billed()).toEqual([
       expect.objectContaining({
         runId: run.id,
         attempt: 1,
@@ -177,7 +186,7 @@ describe("run lifecycle and worker protocol", () => {
     expect(retry.status).toBe(200);
     expect(retry.body.id).toBe(first.body.id);
     // The retry must not delete the checkpoint's own blob.
-    const resumed = await t.deps.store.checkpoints.latestForRun(
+    const [resumed] = await t.deps.store.artifacts.allCheckpoints(
       run.id,
       t.clock.now(),
     );
@@ -277,9 +286,8 @@ describe("run lifecycle and worker protocol", () => {
     });
     expect(retried.status).toBe(200);
 
-    await settle();
-    expect(billing.calls).toHaveLength(1);
-    expect(billing.calls[0]).toMatchObject({
+    expect(await billed()).toHaveLength(1);
+    expect((await billed())[0]).toMatchObject({
       attempt: 1,
       tokensProcessed: 300_000,
       costUsd: 0.3,
@@ -356,12 +364,11 @@ describe("run lifecycle and worker protocol", () => {
       "partial-2",
     );
 
-    await settle();
-    expect(billing.calls.map((c) => c.idempotencyKey)).toEqual([
+    expect((await billed()).map((c) => c.idempotencyKey)).toEqual([
       `run-usage:${run.id}:1`,
       `run-usage:${run.id}:2`,
     ]);
-    expect(billing.calls.map((c) => c.costUsd)).toEqual([
+    expect((await billed()).map((c) => c.costUsd)).toEqual([
       1.1,
       costForTokens(950_000, 1),
     ]);
@@ -381,7 +388,6 @@ describe("run lifecycle and worker protocol", () => {
         tokens_processed: 333_333,
       });
     }
-    await settle();
     const stored = await t.deps.store.runs.getById(run.id);
     expect(stored?.billed_tokens).toBe(999_999);
     expect(stored).not.toHaveProperty("billed_cost_usd");
@@ -392,7 +398,7 @@ describe("run lifecycle and worker protocol", () => {
       tokens_processed: 999_999,
       cost_usd: costForTokens(999_999, 1),
     });
-    expect(billing.calls.map((c) => c.tokensProcessed)).toEqual([
+    expect((await billed()).map((c) => c.tokensProcessed)).toEqual([
       333_333, 333_333, 333_333,
     ]);
   });
@@ -557,8 +563,7 @@ describe("run lifecycle and worker protocol", () => {
     expect(final.body.status).toBe("failed");
     expect(final.body.error).toMatch(/max_attempts=3/);
     expect(final.body.cost_usd).toBeCloseTo(0.3);
-    await settle();
-    expect(billing.calls.map((c) => c.attempt)).toEqual([1, 2, 3]);
+    expect((await billed()).map((c) => c.attempt)).toEqual([1, 2, 3]);
     expect(await worker.claim()).toBeNull();
 
     // A resumed run gets a fresh attempt budget.
@@ -571,7 +576,7 @@ describe("run lifecycle and worker protocol", () => {
     const job = await worker.claim();
     // 70 s with no heartbeat (lease 60 s): expired, but inside lease/3 grace.
     t.clock.advanceSeconds(70);
-    expect(await t.services.runs.expireLeases(t.clock.now())).toBe(0);
+    expect(await t.services.queue.expireLeases(t.clock.now())).toBe(0);
     expect((await worker.heartbeat(job!)).status).toBe(200);
     t.clock.advanceSeconds(30);
     await t.services.maintenance.tick();
@@ -585,7 +590,7 @@ describe("run lifecycle and worker protocol", () => {
     const run = await createSftRun(t);
     await worker.claim();
     t.clock.advanceSeconds(81);
-    const [stale] = await t.deps.store.runs.listExpiredLeases(t.clock.now(), 1);
+    const [stale] = await t.deps.store.jobs.listExpiredLeases(t.clock.now(), 1);
     await t.deps.store.runs.update(run.id, {
       lease_expires_at: new Date(
         t.clock.now().getTime() + 60_000,
@@ -593,7 +598,9 @@ describe("run lifecycle and worker protocol", () => {
     });
     // The guarded update re-checks expiry, so the renewed lease survives.
     expect(stale?.id).toBe(run.id);
-    expect(await t.services.runs.expireLeases(t.clock.now())).toBe(0);
+    // The reaper read `stale` before the renewal: its guarded close loses.
+    t.deps.store.jobs.listExpiredLeases = async () => (stale ? [stale] : []);
+    expect(await t.services.queue.expireLeases(t.clock.now())).toBe(0);
   });
 
   it("keeps a lease alive through heartbeats during long exports", async () => {
@@ -629,8 +636,7 @@ describe("run lifecycle and worker protocol", () => {
     expect(last.body.run).toMatchObject({ status: "failed", attempt: 3 });
     expect(String(last.body.run?.error)).toMatch(/max_attempts=3/);
     expect(await worker.claim()).toBeNull();
-    await settle();
-    expect(billing.calls.map((c) => c.attempt)).toEqual([1]);
+    expect((await billed()).map((c) => c.attempt)).toEqual([1]);
     const internal = await t.deps.store.runs.getById(run.id);
     expect(internal?.failed_attempts).toBe(3);
   });
@@ -700,26 +706,6 @@ describe("run lifecycle and worker protocol", () => {
     ).toHaveLength(1);
   });
 
-  it("retries billing from the outbox after an adapter failure", async () => {
-    await createSftRun(t);
-    billing.failNext(1);
-    const job = await worker.claim();
-    await worker.complete(
-      job!,
-      { status: "completed", tokens_processed: 10 },
-      "a",
-    );
-    await t.services.billing.idle();
-    expect(billing.calls).toHaveLength(0);
-
-    t.clock.advanceSeconds(120);
-    const report = await t.services.maintenance.tick();
-    expect(report.billingSent).toBe(1);
-    expect(billing.calls).toHaveLength(1);
-    await t.services.maintenance.tick();
-    expect(billing.calls).toHaveLength(1);
-  });
-
   it("requires an artifact upload for completed jobs and verifies uploads", async () => {
     await createSftRun(t);
     const job = await worker.claim();
@@ -762,27 +748,40 @@ describe("run lifecycle and worker protocol", () => {
       body: "good",
     });
     expect(ok.status).toBe(200);
+    // Content-addressed: a retried PUT of the same bytes is a no-op.
     const twice = await t.app.request(ticket.body.url, {
       method: "PUT",
       body: "good",
     });
-    expect(twice.status).toBe(409);
+    expect(twice.status).toBe(200);
 
-    const wrongPurpose = await worker.call(
+    // An upload id names a blob in this attempt's own prefix only.
+    const notAnId = await worker.call(
       `/v1/trainer-jobs/${job!.id}/checkpoints`,
-      { ...worker.ref(job!), step: 1, upload_id: ticket.body.upload_id },
+      { ...worker.ref(job!), step: 1, upload_id: "upl_legacy" },
     );
-    expect(wrongPurpose.status).toBe(422);
-    expect(wrongPurpose.body).toMatchObject({ code: "unknown_upload" });
+    expect(notAnId.status).toBe(422);
+    expect(notAnId.body).toMatchObject({ code: "unknown_upload" });
+    const otherBlob = await worker.call(
+      `/v1/trainer-jobs/${job!.id}/checkpoints`,
+      { ...worker.ref(job!), step: 1, upload_id: sha256Hex("never-sent") },
+    );
+    expect(otherBlob.status).toBe(409);
 
+    // Upload URLs expire; the received blob does not.
     t.clock.advanceSeconds(7 * 3600);
     await worker.heartbeat(job!);
-    const expired = await worker.call(`/v1/trainer-jobs/${job!.id}/complete`, {
+    const late = await t.app.request(ticket.body.url, {
+      method: "PUT",
+      body: "good",
+    });
+    expect(late.status).toBe(403);
+    const done = await worker.call(`/v1/trainer-jobs/${job!.id}/complete`, {
       ...worker.ref(job!),
       status: "completed",
       upload_id: ticket.body.upload_id,
     });
-    expect(expired.status).toBe(410);
+    expect(done.status).toBe(200);
   });
 
   it("streams metrics over SSE with Last-Event-ID resume and paginates JSON metrics", async () => {
@@ -887,17 +886,14 @@ describe("run lifecycle and worker protocol", () => {
 
   it("fails a claimed run whose pinned dataset version vanished", async () => {
     const run = await createSftRun(t);
-    const internal = await t.deps.store.runs.getById(run.id);
-    await t.deps.store.runs.update(run.id, { status: "queued" });
     // Point the run at a version that does not exist.
-    (internal as { dataset_version: number }).dataset_version = 99;
-    const original = t.deps.store.runs.claimNext;
-    t.deps.store.runs.claimNext = async (input) => {
-      const claimed = await original(input);
-      return claimed ? { ...claimed, dataset_version: 99 } : null;
+    const original = t.deps.store.runs.getById;
+    t.deps.store.runs.getById = async (id) => {
+      const found = await original(id);
+      return found ? { ...found, dataset_version: 99 } : null;
     };
     expect(await worker.claim()).toBeNull();
-    t.deps.store.runs.claimNext = original;
+    t.deps.store.runs.getById = original;
     const after = await t.json<{ status: string; error: string }>(
       `/v1/runs/${run.id}`,
     );
@@ -946,28 +942,24 @@ describe("run lifecycle and worker protocol", () => {
     expect(ds.status).toBe(403);
   });
 
-  it("an object-storage outage in one maintenance step does not stop the billing drain", async () => {
-    await createSftRun(t);
-    const job = await worker.claim();
-    billing.failNext(1); // the inline kick fails; the tick must retry it
-    await worker.complete(job!, { status: "abandoned", tokens_processed: 10 });
-    await t.services.billing.idle();
-    expect(billing.calls).toHaveLength(0);
-
+  it("an object-storage outage in one maintenance step does not stop the others", async () => {
+    const run = await createSftRun(t);
+    await worker.claim();
     const storageDown = async () => {
       throw new Error("S3 unavailable");
     };
     t.deps.storage.delete = storageDown;
     t.services.runs.collectExpiredCheckpoints = storageDown;
-    t.services.uploads.collectExpired = storageDown;
+    t.services.uploads.sweepStaging = storageDown;
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     t.clock.advanceSeconds(600);
     const report = await t.services.maintenance.tick();
     const logged = errors.mock.calls.map((c) => String(c[0])).join();
     errors.mockRestore();
-    expect(report).toMatchObject({ deletedCheckpoints: 0, billingSent: 1 });
-    expect(billing.calls).toHaveLength(1);
+    expect(report).toMatchObject({ deletedCheckpoints: 0, expiredJobs: 1 });
+    expect((await t.deps.store.runs.getById(run.id))?.status).toBe("queued");
     expect(logged).toContain("gc_checkpoints");
+    expect(logged).toContain("gc_staged_uploads");
   });
 
   it("runs maintenance on an interval until stopped", async () => {

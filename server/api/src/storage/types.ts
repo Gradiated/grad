@@ -44,9 +44,8 @@ export interface PresignedUpload {
 }
 
 /**
- * Immutable object storage. Every write targets a fresh key; no method ever
- * overwrites an existing object (writes to an existing key throw
- * ObjectExistsError).
+ * Immutable object storage. Server writes never overwrite an existing object
+ * (writes to an existing key throw ObjectExistsError).
  */
 export interface ObjectStore {
   readonly kind: "local" | "s3";
@@ -61,13 +60,16 @@ export interface ObjectStore {
   /** Throws ObjectNotFoundError. */
   getStream(key: string): Promise<ReadableStream<Uint8Array>>;
   head(key: string): Promise<ObjectHead | null>;
-  /** Server-side copy to a new key (never overwrites). */
-  copy(sourceKey: string, destinationKey: string): Promise<void>;
+  /** Up to `limit` keys under `prefix` last modified before `before`. */
+  listOlder(prefix: string, before: Date, limit: number): Promise<string[]>;
   /** Idempotent. */
   delete(key: string): Promise<void>;
   /**
-   * Direct-to-storage presigned PUT that enforces sha256 and no-overwrite, or
-   * null when the backend has no presigning (local FS: use the server proxy).
+   * Direct-to-storage presigned PUT whose Content-Length and
+   * x-amz-checksum-sha256 are signed, so the store rejects any other body.
+   * Keys are content-addressed (the sha256 is their last segment), so a
+   * re-upload writes identical bytes. Null when the backend has no presigning
+   * (local FS: use the server proxy, which verifies the bytes itself).
    */
   presignUpload(
     key: string,

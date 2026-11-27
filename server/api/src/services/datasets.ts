@@ -5,11 +5,13 @@ import type {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound } from "../errors.js";
+import { createOnce, type Created } from "../idempotency.js";
 import { newId } from "../ids.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
   DatasetPart,
   DatasetVersion,
+  IdempotencyInput,
   Page,
   PageRequest,
 } from "../store/types.js";
@@ -27,16 +29,21 @@ export interface DatasetService {
     workspaceId: string,
     name: string,
     metadata: Record<string, unknown>,
-  ): Promise<Dataset>;
+    idempotency?: IdempotencyInput,
+  ): Promise<Created<Dataset>>;
   get(workspaceId: string, name: string): Promise<Dataset>;
   list(workspaceId: string, page: PageRequest): Promise<Page<Dataset>>;
-  /** Creates the dataset if needed and appends records as a new version. */
+  /**
+   * Creates the dataset if needed and appends records as a new version; a
+   * retry with the same Idempotency-Key returns the dataset, appending nothing.
+   */
   push(
     workspaceId: string,
     name: string,
     records: readonly DatasetRecord[],
     metadata?: Record<string, unknown>,
-  ): Promise<Dataset>;
+    idempotency?: IdempotencyInput,
+  ): Promise<Created<Dataset>>;
   /** Pins `version` (default: current) of a dataset; throws 404 / 422. */
   resolve(
     workspaceId: string,
@@ -70,7 +77,7 @@ export interface DatasetService {
     data: DatasetRecord[];
     next_cursor: string | null;
   }>;
-  /** Writes a part for `datasetId` at a fresh immutable key. */
+  /** Writes records as a content-addressed part of `datasetId`. */
   writePart(
     workspaceId: string,
     datasetId: string,
@@ -78,12 +85,13 @@ export interface DatasetService {
   ): Promise<DatasetPart>;
 }
 
+/** Parts are content-addressed: `ws/<ws>/datasets/<dataset>/<sha256>.jsonl`. */
 export const datasetPartKey = (
   workspaceId: string,
   datasetId: string,
-  part: string = newId("part"),
+  sha256: string,
 ): string =>
-  `datasets/${encodeURIComponent(workspaceId)}/${datasetId}/parts/${part}.jsonl`;
+  `ws/${encodeURIComponent(workspaceId)}/datasets/${datasetId}/${sha256}.jsonl`;
 
 const stampIds = (records: readonly DatasetRecord[]): DatasetRecord[] =>
   records.map((record) =>
@@ -105,7 +113,11 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
     datasetId: string,
     records: readonly DatasetRecord[],
   ) =>
-    writeRecordsPart(storage, datasetPartKey(workspaceId, datasetId), records);
+    writeRecordsPart(
+      storage,
+      (sha) => datasetPartKey(workspaceId, datasetId, sha),
+      records,
+    );
 
   const readRecords = async (
     version: DatasetVersion,
@@ -131,34 +143,58 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
   };
 
   return {
-    create: async (workspaceId, name, metadata) => {
-      const created = await store.datasets.create({
-        workspaceId,
-        name,
-        metadata,
-      });
-      if (!created) {
-        throw conflict("dataset_exists", `Dataset '${name}' already exists.`);
-      }
-
-      return created;
-    },
+    create: (workspaceId, name, metadata, idempotency) =>
+      createOnce(
+        idempotency,
+        (key) => store.datasets.findIdempotent(workspaceId, key),
+        async (id) => {
+          const dataset = await store.datasets.getById(workspaceId, id);
+          if (!dataset) throw notFound("dataset", id);
+          return dataset;
+        },
+        async () => {
+          const created = await store.datasets.create({
+            workspaceId,
+            name,
+            metadata,
+            idempotency,
+          });
+          if (!created) {
+            throw conflict(
+              "dataset_exists",
+              `Dataset '${name}' already exists.`,
+            );
+          }
+          return created;
+        },
+      ),
     get,
     list: (workspaceId, page) => store.datasets.list(workspaceId, page),
-    push: async (workspaceId, name, records, metadata) => {
+    push: async (workspaceId, name, records, metadata, idempotency) => {
       const dataset = await store.datasets.getOrCreate({
         workspaceId,
         name,
         metadata: {},
       });
-      const part = await writePart(workspaceId, dataset.id, stampIds(records));
-      const { dataset: updated } = await store.datasets.appendVersion({
-        datasetId: dataset.id,
-        parts: [part],
-        ...(metadata ? { metadata } : {}),
-      });
 
-      return updated;
+      return createOnce(
+        idempotency,
+        (key) => store.datasets.findIdempotentPush(dataset.id, key),
+        () => get(workspaceId, name),
+        async () => {
+          const part = await writePart(
+            workspaceId,
+            dataset.id,
+            stampIds(records),
+          );
+          return store.datasets.appendVersion({
+            datasetId: dataset.id,
+            parts: [part],
+            ...(metadata ? { metadata } : {}),
+            idempotency,
+          });
+        },
+      );
     },
     resolve,
     readRecords,
@@ -197,7 +233,7 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
       if (records.length === 0) return { dataset: created, created: true };
 
       const part = await writePart(workspaceId, created.id, records);
-      const { dataset } = await store.datasets.appendVersion({
+      const dataset = await store.datasets.appendVersion({
         datasetId: created.id,
         parts: [part],
       });

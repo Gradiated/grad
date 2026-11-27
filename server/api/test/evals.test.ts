@@ -420,6 +420,8 @@ describe("aggregation", () => {
   ): EvalOutputRow => ({
     id: `o_${model}_${task}_${sample}`,
     eval_id: "eval_1",
+    attempt: 1,
+    record: { messages: [] },
     task_index: task,
     task_id: `t${task}`,
     model,
@@ -476,10 +478,9 @@ describe("aggregation", () => {
     expect(tuned?.errors).toBe(1);
     expect(tuned?.cost_per_1k_tasks_usd).toBeNull();
     expect(tuned?.vs_baseline?.delta).toBe(0.5);
-    expect(agg.results).toHaveLength(4);
-    expect(
-      agg.results.find((r) => r.model === "base" && r.task_index === 1)?.passed,
-    ).toBe(false);
+    expect(agg.outputScores).toHaveLength(8);
+    expect(agg.outputScores.find((o) => o.id === "o_tuned_1_1")?.score).toBe(0);
+    expect(agg.outputScores.find((o) => o.id === "o_base_0_1")?.score).toBe(1);
     expect(agg.totalCostUsd).toBeCloseTo(0.008, 6);
   });
 });

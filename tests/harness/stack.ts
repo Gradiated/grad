@@ -245,14 +245,12 @@ const main = async () => {
       Object.assign(env, {
         AUTH_MODE: "cloud",
         BILLING_MODE: "cloud",
-        DEPLOY_MODE: "cloud",
         CLOUD_INTERNAL_API_URL: cloud.url,
         CLOUD_SERVICE_TOKEN: cloud.serviceToken,
       });
     } else {
       Object.assign(env, {
         AUTH_MODE: args.auth,
-        DEPLOY_MODE: "disabled",
         ADMIN_API_KEY_HASH: createHash("sha256").update(API_KEY).digest("hex"),
       });
     }

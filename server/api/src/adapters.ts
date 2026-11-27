@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import type { ApiKeyScope, Artifact, ChatMessage, Scope } from "./contracts.js";
+import type { ApiKeyScope, Scope, UsageRecord } from "./contracts.js";
 import { PLATFORM_SCOPES } from "./contracts.js";
 import type { KeyLookupResult } from "./store/types.js";
 
@@ -23,72 +23,28 @@ export interface AuthAdapter {
   authenticate(bearerToken: string | undefined): Promise<AuthPrincipal | null>;
 }
 
+/** A usage ledger row as the Cloud exporter sends it. */
+export type ExportedUsage = UsageRecord & { seq: number; workspace_id: string };
+
 export interface BillingAdapter {
   checkCanStartRun(
     workspaceId: string,
     estimatedCostUsd: number,
   ): Promise<{ allowed: boolean; reason?: string }>;
-  /** Must be idempotent on `idempotencyKey`; throws to request a retry. */
-  recordRunUsage(input: {
-    workspaceId: string;
-    runId: string;
-    attempt: number;
-    tokensProcessed: number;
-    costUsd: number;
-    idempotencyKey: string;
-  }): Promise<void>;
-  /** An eval's model and judge usage; idempotent on `idempotencyKey`. */
-  recordEvalUsage(input: {
-    workspaceId: string;
-    evalId: string;
-    tokensProcessed: number;
-    costUsd: number;
-    idempotencyKey: string;
-  }): Promise<void>;
-}
-
-export interface DeployAdapter {
-  readonly mode: "disabled" | "cloud";
-  publishAndPromote(input: {
-    workspaceId: string;
-    name: string;
-    artifact: Artifact & { storage_key: string };
-    fallbackModel: string | null;
-    /** The caller's Idempotency-Key: the promote is keyed by this intent, not by its content. */
-    requestKey?: string | undefined;
-  }): Promise<{ modelId: string }>;
-}
-
-export interface RouteDecision {
-  model: string;
-  is_exploration: boolean;
-  confidence: number;
-  scores: Record<string, number>;
-}
-
-export interface ServingAdapter {
-  readonly mode: "disabled" | "cloud";
-  route(input: {
-    workspaceId: string;
-    inferenceId: string;
-    deploymentName: string;
-    modelId: string;
-    artifactId: string;
-    fallbackModel: string | null;
-    exploreRate: number;
-    messages: readonly ChatMessage[];
-    tools?: ReadonlyArray<Record<string, unknown>> | undefined;
-    sessionId?: string | undefined;
-  }): Promise<RouteDecision>;
-  embed(input: {
-    workspaceId: string;
-    deploymentName: string;
-    modelId: string;
-    inputs: readonly string[];
-  }): Promise<{
-    embeddings: number[][];
-    usage: { prompt_tokens: number; total_tokens: number };
-  }>;
+  /**
+   * Cloud only: false when the workspace is out of balance or over its limit,
+   * so running jobs are told to stop (insufficient_balance). Absent: never.
+   */
+  canContinue?(workspaceId: string): Promise<boolean>;
+  /**
+   * Cloud only: pushes ledger rows to Cloud billing, each keyed by its
+   * idempotency key (exactly once there). `cursor` is the highest seq Cloud
+   * has. Absent on self-hosted servers: the ledger stays local.
+   */
+  usageExport?: {
+    cursor(): Promise<number>;
+    push(row: ExportedUsage): Promise<void>;
+  };
 }
 
 export const hashApiKey = (rawKey: string): string =>
@@ -220,28 +176,11 @@ export const createLocalApiKeyAuth = (options: {
 
 export const createNoopBillingAdapter = (): BillingAdapter => ({
   checkCanStartRun: async () => ({ allowed: true }),
-  recordRunUsage: async () => undefined,
-  recordEvalUsage: async () => undefined,
 });
 
-const DEPLOY_HINT =
-  "Hosted serving is disabled on this self-hosted server (DEPLOY_MODE=disabled). Download the artifact with `grad artifacts download <id> --output ./adapter` and serve it with vLLM or SGLang (`vllm serve <base> --enable-lora --lora-modules name=./adapter`).";
+/** Why the serving paths answer 501 here: they belong to Gradiated Cloud. */
+export const DEPLOY_DISABLED_DETAIL =
+  "Deployments are served by Gradiated Cloud (api.gradiated.com), not by grad-server. Self-hosted: download the artifact with `grad artifacts download <id> --output ./adapter` and serve it with vLLM or SGLang (`vllm serve <base> --enable-lora --lora-modules name=./adapter`).";
 
-export const DEPLOY_DISABLED_DETAIL = DEPLOY_HINT;
-
-export const createDisabledDeployAdapter = (): DeployAdapter => ({
-  mode: "disabled",
-  publishAndPromote: async () => {
-    throw new Error(DEPLOY_HINT);
-  },
-});
-
-export const createDisabledServingAdapter = (): ServingAdapter => ({
-  mode: "disabled",
-  route: async () => {
-    throw new Error(DEPLOY_HINT);
-  },
-  embed: async () => {
-    throw new Error(DEPLOY_HINT);
-  },
-});
+export const INFERENCE_DISABLED_DETAIL =
+  "Routing, embeddings and feedback are served by Gradiated Cloud's inference gateway, not by grad-server. Self-hosted: serve the downloaded artifact with vLLM or SGLang, and record scores in your observability tool (`grad sources` syncs them into datasets).";

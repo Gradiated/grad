@@ -4,8 +4,6 @@ import { hashApiKey } from "../src/adapters.js";
 import {
   createCloudAuthAdapter,
   createCloudBillingAdapter,
-  createCloudDeployAdapter,
-  createCloudServingAdapter,
   validateCloudConfig,
   type CloudAdapterConfig,
 } from "../src/adapters-cloud.js";
@@ -305,236 +303,50 @@ describe("cloud adapters against the fake Cloud API", () => {
       );
     });
 
-    it("records usage idempotently per attempt key", async () => {
-      const billing = createCloudBillingAdapter(cfg);
-      const usage = (attempt: number, costUsd: number) => ({
-        workspaceId: "ws_a",
-        runId: "run_1",
+    it("exports ledger rows keyed by their idempotency key, with Cloud's cursor", async () => {
+      const exporter = createCloudBillingAdapter(cfg).usageExport;
+      expect(await exporter?.cursor()).toBe(0);
+      const row = (seq: number, attempt: number) => ({
+        seq,
+        id: `use_${seq}`,
+        workspace_id: "ws_a",
+        kind: "run" as const,
+        ref_id: "run_1",
         attempt,
-        tokensProcessed: 1000 * attempt,
-        costUsd,
-        idempotencyKey: `run-usage:run_1:${attempt}`,
+        tokens_from: 0,
+        tokens_through: 1000 * attempt,
+        tokens: 1000 * attempt,
+        cost_usd: attempt,
+        price_version: "p_1",
+        idempotency_key: `run-usage:run_1:${attempt}`,
+        created_at: "2026-11-27T00:00:00.000Z",
       });
 
-      await billing.recordRunUsage(usage(1, 5));
-      await billing.recordRunUsage(usage(1, 5));
-      await billing.recordRunUsage(usage(2, 9));
+      await exporter?.push(row(1, 1));
+      await exporter?.push(row(1, 1));
+      await exporter?.push(row(2, 2));
 
       expect(cloud.callsTo("/api/internal/v1/billing/usage")).toHaveLength(3);
-      expect(cloud.usage).toEqual([
-        {
-          idempotency_key: "run-usage:run_1:1",
-          workspace_id: "ws_a",
-          run_id: "run_1",
-          attempt: 1,
-          tokens_processed: 1000,
-          cost_usd: 5,
-        },
-        {
-          idempotency_key: "run-usage:run_1:2",
-          workspace_id: "ws_a",
-          run_id: "run_1",
-          attempt: 2,
-          tokens_processed: 2000,
-          cost_usd: 9,
-        },
+      expect(cloud.usage.map((u) => [u.idempotency_key, u.seq])).toEqual([
+        ["run-usage:run_1:1", 1],
+        ["run-usage:run_1:2", 2],
       ]);
-
-      await billing.recordEvalUsage({
-        workspaceId: "ws_a",
-        evalId: "eval_1",
-        tokensProcessed: 300,
-        costUsd: 0.25,
-        idempotencyKey: "eval-usage:eval_1",
-      });
-      expect(cloud.usage.at(-1)).toEqual({
-        idempotency_key: "eval-usage:eval_1",
+      expect(cloud.usage[0]).toMatchObject({
         workspace_id: "ws_a",
-        eval_id: "eval_1",
-        tokens_processed: 300,
-        cost_usd: 0.25,
+        kind: "run",
+        ref_id: "run_1",
+        attempt: 1,
+        tokens_processed: 1000,
+        cost_usd: 1,
+        price_version: "p_1",
       });
-    });
+      expect(await exporter?.cursor()).toBe(2);
 
-    it("throws when usage cannot be recorded so the outbox retries", async () => {
-      const billing = createCloudBillingAdapter(cfg);
       cloud.failNext(1, 503);
-      await expect(
-        billing.recordRunUsage({
-          workspaceId: "ws",
-          runId: "r",
-          attempt: 1,
-          tokensProcessed: 1,
-          costUsd: 1,
-          idempotencyKey: "run-usage:r:1",
-        }),
-      ).rejects.toThrow(/HTTP 503/);
-      expect(cloud.usage).toHaveLength(0);
-    });
-  });
-
-  describe("deploy", () => {
-    it("publishes then promotes with idempotency keys and returns model_id", async () => {
-      const deploy = createCloudDeployAdapter(cfg);
-      expect(deploy.mode).toBe("cloud");
-      const result = await deploy.publishAndPromote({
-        workspaceId: "ws_cloud",
-        name: "support",
-        artifact,
-        fallbackModel: "qwen/qwen3-32b",
-      });
-      expect(result).toEqual({ modelId: "ws_cloud/support" });
-
-      const [publish] = cloud.callsTo("/api/internal/v1/artifacts/publish");
-      expect(publish?.idempotency_key).toBe(
-        `art-publish:ws_cloud:${artifact.id}`,
-      );
-      expect(publish?.body).toMatchObject({
-        workspace_id: "ws_cloud",
-        artifact_id: artifact.id,
-        storage_key: artifact.storage_key,
-        sha256: artifact.sha256,
-        size_bytes: 42,
-        format: "router_bundle",
-        base_model: "qwen/qwen3-0.6b",
-      });
-      const [promote] = cloud.callsTo("/api/internal/v1/deployments/promote");
-      expect(promote?.idempotency_key).toBe(
-        `deploy-promote:ws_cloud:support:${artifact.id}`,
-      );
-      expect(promote?.body).toMatchObject({
-        deployment_name: "support",
-        fallback_model: "qwen/qwen3-32b",
-      });
-    });
-
-    it("fails instead of fabricating a model id", async () => {
-      const deploy = createCloudDeployAdapter(cfg);
-      const input = {
-        workspaceId: "ws_cloud",
-        name: "support",
-        artifact,
-        fallbackModel: null,
-      };
-
-      cloud.respondOnce("/api/internal/v1/deployments/promote", 200, {});
-      await expectApiError(
-        deploy.publishAndPromote(input),
-        502,
-        "cloud_upstream_error",
-      );
-
-      cloud.failNext(1, 500, "/api/internal/v1/artifacts/publish");
-      await expectApiError(
-        deploy.publishAndPromote(input),
-        502,
-        "cloud_upstream_error",
-      );
-
-      cloud.failNext(1, 500, "/api/internal/v1/deployments/promote");
-      await expectApiError(
-        deploy.publishAndPromote(input),
-        502,
-        "cloud_upstream_error",
-      );
-    });
-  });
-
-  describe("serving", () => {
-    const routeInput = {
-      workspaceId: "ws_cloud",
-      inferenceId: "inf_1",
-      deploymentName: "support",
-      modelId: "ws_cloud/support",
-      artifactId: artifact.id,
-      fallbackModel: "qwen/qwen3-32b",
-      exploreRate: 0,
-      messages: [{ role: "user" as const, content: "hi" }],
-    };
-
-    beforeEach(async () => {
-      await createCloudDeployAdapter(cfg).publishAndPromote({
-        workspaceId: "ws_cloud",
-        name: "support",
-        artifact,
-        fallbackModel: "qwen/qwen3-32b",
-      });
-    });
-
-    it("routes and forwards the inference id", async () => {
-      const serving = createCloudServingAdapter(cfg);
-      expect(serving.mode).toBe("cloud");
-      const decision = await serving.route({ ...routeInput, sessionId: "s1" });
-      expect(decision.model).toBe("qwen/qwen3-8b");
-      const [call] = cloud.callsTo("/api/internal/v1/serving/route");
-      expect(call?.body).toMatchObject({
-        inference_id: "inf_1",
-        deployment: "support",
-        session_id: "s1",
-        tools: null,
-      });
-    });
-
-    it("validates route responses and maps failures", async () => {
-      const serving = createCloudServingAdapter(cfg);
-      cloud.respondOnce("/api/internal/v1/serving/route", 200, { model: "" });
-      await expectApiError(
-        serving.route(routeInput),
-        502,
-        "cloud_upstream_error",
-      );
+      await expect(exporter?.push(row(3, 3))).rejects.toThrow(/HTTP 503/);
       cloud.failNext(1, 503);
-      await expectApiError(
-        serving.route(routeInput),
-        503,
-        "serving_unavailable",
-      );
-      cloud.respondOnce("/api/internal/v1/serving/route", 400, {
-        detail: "nope",
-      });
-      await expectApiError(
-        serving.route(routeInput),
-        502,
-        "cloud_upstream_error",
-      );
-      await expectApiError(
-        serving.route({ ...routeInput, deploymentName: "missing" }),
-        404,
-        "deployment_not_serving",
-      );
-      const dead = createCloudServingAdapter({
-        ...cfg,
-        internalApiBaseUrl: "http://127.0.0.1:1",
-      });
-      await expectApiError(dead.route(routeInput), 503, "serving_unavailable");
-    });
-
-    it("embeds in input order and checks the count", async () => {
-      const serving = createCloudServingAdapter(cfg);
-      const input = {
-        workspaceId: "ws_cloud",
-        deploymentName: "support",
-        modelId: "ws_cloud/support",
-        inputs: ["a", "bb"],
-      };
-      const result = await serving.embed(input);
-      expect(result.embeddings).toHaveLength(2);
-      expect(result.usage.total_tokens).toBe(2);
-
-      cloud.respondOnce("/api/internal/v1/serving/embeddings", 200, {
-        data: [
-          { index: 1, embedding: [2] },
-          { index: 0, embedding: [1] },
-        ],
-        usage: { prompt_tokens: 1, total_tokens: 1 },
-      });
-      expect((await serving.embed(input)).embeddings).toEqual([[1], [2]]);
-
-      cloud.respondOnce("/api/internal/v1/serving/embeddings", 200, {
-        data: [{ index: 0, embedding: [1] }],
-        usage: { prompt_tokens: 1, total_tokens: 1 },
-      });
-      await expectApiError(serving.embed(input), 502, "cloud_upstream_error");
+      await expect(exporter?.cursor()).rejects.toThrow(/HTTP 503/);
+      expect(cloud.usage).toHaveLength(2);
     });
   });
 });

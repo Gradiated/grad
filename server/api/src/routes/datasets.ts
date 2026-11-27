@@ -21,9 +21,11 @@ import {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { invalid } from "../errors.js";
+import { idempotencyOf, replayAware } from "../idempotency.js";
 import { renderMessages } from "../planner.js";
 import { recordConversation } from "../records.js";
 import type { Services } from "../services/index.js";
+import { stagingKey } from "../services/uploads.js";
 import {
   defaultErrors,
   IdParamSchema,
@@ -83,15 +85,14 @@ export const registerDatasetRoutes = (
     }),
     async (c) => {
       const input = c.req.valid("json");
-
-      return c.json(
-        await services.datasets.create(
-          workspaceOf(c, "datasets:write"),
-          input.name,
-          input.metadata ?? {},
-        ),
-        201,
+      const created = await services.datasets.create(
+        workspaceOf(c, "datasets:write"),
+        input.name,
+        input.metadata ?? {},
+        await idempotencyOf(c),
       );
+
+      return c.json(replayAware(c, created), 201);
     },
   );
 
@@ -137,16 +138,15 @@ export const registerDatasetRoutes = (
     }),
     async (c) => {
       const input = c.req.valid("json");
-
-      return c.json(
-        await services.datasets.push(
-          workspaceOf(c, "datasets:write"),
-          c.req.valid("param").name,
-          input.records,
-          input.metadata,
-        ),
-        200,
+      const pushed = await services.datasets.push(
+        workspaceOf(c, "datasets:write"),
+        c.req.valid("param").name,
+        input.records,
+        input.metadata,
+        await idempotencyOf(c),
       );
+
+      return c.json(replayAware(c, pushed), 200);
     },
   );
 
@@ -270,7 +270,7 @@ export const registerDatasetRoutes = (
       if (!model || model.family !== "llm") {
         throw invalid(
           "render_unsupported_model",
-          `Model '${input.model}' is not a chat model in the catalog; see GET /v1/models.`,
+          `Model '${input.model}' is not a chat model in the catalog; see GET /v1/base-models.`,
         );
       }
 
@@ -322,14 +322,10 @@ export const registerDatasetRoutes = (
     }),
     async (c) => {
       const input = c.req.valid("json");
-      const { ticket } = await services.uploads.createTicket({
-        workspaceId: workspaceOf(c, "datasets:write"),
-        purpose: input.purpose,
-        jobId: null,
-        attempt: null,
-        sha256: input.sha256,
-        sizeBytes: input.size_bytes,
-      });
+      const ticket = await services.uploads.ticket(
+        stagingKey(workspaceOf(c, "datasets:write"), input.sha256),
+        input.size_bytes,
+      );
 
       return c.json(ticket, 201);
     },
@@ -352,15 +348,16 @@ export const registerDatasetRoutes = (
         ...defaultErrors,
       },
     }),
-    async (c) =>
-      c.json(
-        await services.imports.create(
-          workspaceOf(c, "datasets:write"),
-          c.req.valid("param").name,
-          c.req.valid("json"),
-        ),
-        202,
-      ),
+    async (c) => {
+      const created = await services.imports.create(
+        workspaceOf(c, "datasets:write"),
+        c.req.valid("param").name,
+        c.req.valid("json"),
+        await idempotencyOf(c),
+      );
+
+      return c.json(replayAware(c, created), 202);
+    },
   );
 
   app.openapi(

@@ -1,6 +1,7 @@
 import type { BillingAdapter } from "../../src/adapters.js";
 import type { DatasetRecord } from "../../src/contracts.js";
 import { createOpenAICompatibleClient } from "../../src/services/evals/inference.js";
+import type { EvalService } from "../../src/services/evals/service.js";
 import type { ArtifactRecord } from "../../src/store/types.js";
 import { makeTestApp, WORKSPACE_A, type TestApp } from "./app.js";
 import { startFakeOpenAI, type FakeOpenAI } from "./fake-openai.js";
@@ -54,18 +55,21 @@ export const seedDataset = (
   name: string,
   records: DatasetRecord[],
   workspaceId = WORKSPACE_A,
-) => t.services.datasets.push(workspaceId, name, records);
+) =>
+  t.services.datasets
+    .push(workspaceId, name, records)
+    .then((pushed) => pushed.value);
 
 export const seedArtifact = (
   t: TestApp,
   name: string,
   options: { format?: ArtifactRecord["format"]; workspaceId?: string } = {},
 ) =>
-  t.deps.store.artifacts.create({
+  t.deps.store.artifacts.createRelease({
     workspaceId: options.workspaceId ?? WORKSPACE_A,
     name,
     runId: null,
-    checkpointId: null,
+    sourceId: null,
     baseModel: "test/tiny-qwen3",
     recipeKind: "sft",
     format: options.format ?? "peft_lora",
@@ -85,3 +89,9 @@ export const goldResponder = (request: {
 
   return { content: `gold ${n}` };
 };
+
+/** `evals.create` without an Idempotency-Key: the created eval. */
+export const createEval = async (
+  evals: EvalService,
+  ...args: Parameters<EvalService["create"]>
+) => (await evals.create(...args)).value;

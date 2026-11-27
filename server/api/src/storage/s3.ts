@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import {
-  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
@@ -78,7 +78,6 @@ const uploadHeaders = (
   sizeBytes: number,
 ): Record<string, string> => ({
   "content-length": String(sizeBytes),
-  "if-none-match": "*",
   "x-amz-checksum-sha256": hexToBase64(sha256),
 });
 
@@ -298,27 +297,32 @@ export class S3ObjectStore implements ObjectStore {
     }
   };
 
-  copy = async (sourceKey: string, destinationKey: string): Promise<void> => {
-    const source = validateObjectKey(sourceKey);
-    const destination = validateObjectKey(destinationKey);
-    if (await this.head(destination)) throw new ObjectExistsError(destination);
-
-    try {
-      await this.client.send(
-        new CopyObjectCommand({
+  listOlder = async (
+    prefix: string,
+    before: Date,
+    limit: number,
+  ): Promise<string[]> => {
+    const keys: string[] = [];
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({
           Bucket: this.bucket,
-          Key: destination,
-          CopySource: `${this.bucket}/${source.split("/").map(encodeURIComponent).join("/")}`,
-          IfNoneMatch: "*",
-          ChecksumAlgorithm: "SHA256",
+          Prefix: `${validateObjectKey(prefix)}/`,
+          ContinuationToken: token,
         }),
-        { abortSignal: this.signal() },
+        { abortSignal: this.signal(15_000) },
       );
-    } catch (error) {
-      if (isNotFound(error)) throw new ObjectNotFoundError(source);
-      if (isPreconditionFailed(error)) throw new ObjectExistsError(destination);
-      throw error;
-    }
+      for (const object of page.Contents ?? []) {
+        if (keys.length >= limit) return keys;
+        if (object.Key && object.LastModified && object.LastModified < before) {
+          keys.push(object.Key);
+        }
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+
+    return keys;
   };
 
   delete = async (key: string): Promise<void> => {
@@ -342,7 +346,6 @@ export class S3ObjectStore implements ObjectStore {
         Key: clean,
         ContentLength: input.sizeBytes,
         ChecksumSHA256: headers["x-amz-checksum-sha256"],
-        IfNoneMatch: "*",
       }),
       {
         expiresIn: input.expiresInSeconds,

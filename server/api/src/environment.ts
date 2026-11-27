@@ -29,7 +29,6 @@ const EnvironmentSchema = z.object({
   TRAINER_API_KEY_HASH: optionalString,
   TRAINER_API_KEY: optionalString,
   DEFAULT_WORKSPACE_ID: z.string().min(1).max(64).default("local"),
-  DEPLOY_MODE: z.enum(["disabled", "cloud"]).default("disabled"),
   BILLING_MODE: z.enum(["noop", "cloud"]).default("noop"),
   CLOUD_INTERNAL_API_URL: optionalString,
   CLOUD_SERVICE_TOKEN: optionalString,
@@ -44,6 +43,19 @@ const EnvironmentSchema = z.object({
   BLOB_SIGNING_SECRET: optionalString,
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
   MIGRATE_ON_BOOT: booleanFlag("true"),
+  /** Bill a running attempt every this many tokens... */
+  USAGE_FLUSH_TOKENS: z.coerce.number().int().min(1).default(1_000_000),
+  /** ...or every this many seconds, whichever comes first. */
+  USAGE_FLUSH_SECONDS: z.coerce.number().int().min(1).default(300),
+  /** Cloud: usage rows younger than this are not exported yet. */
+  USAGE_EXPORT_LAG_SECONDS: z.coerce.number().int().min(0).default(60),
+  /** Days job events (metrics) are kept. */
+  JOB_EVENT_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(3650)
+    .default(90),
   MAINTENANCE_INTERVAL_MS: z.coerce.number().int().min(100).default(15_000),
 });
 
@@ -94,13 +106,10 @@ export const parseServerEnvironment = (
     }
   }
 
-  const usesCloud =
-    env.AUTH_MODE === "cloud" ||
-    env.BILLING_MODE === "cloud" ||
-    env.DEPLOY_MODE === "cloud";
+  const usesCloud = env.AUTH_MODE === "cloud" || env.BILLING_MODE === "cloud";
   if (usesCloud && (!env.CLOUD_INTERNAL_API_URL || !env.CLOUD_SERVICE_TOKEN)) {
     throw new Error(
-      "CLOUD_INTERNAL_API_URL and CLOUD_SERVICE_TOKEN are required when AUTH_MODE, BILLING_MODE or DEPLOY_MODE is 'cloud'.",
+      "CLOUD_INTERNAL_API_URL and CLOUD_SERVICE_TOKEN are required when AUTH_MODE or BILLING_MODE is 'cloud'.",
     );
   }
 

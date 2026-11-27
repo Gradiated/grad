@@ -81,5 +81,5 @@ capabilities:
 
 {{/* KEDA: open (queued or leased) jobs of the given quoted, comma-separated kinds. */}}
 {{- define "grad.openJobsQuery" -}}
-SELECT (SELECT COUNT(*) FROM grad_runs WHERE 'train' IN ({{ . }}) AND ((status = 'queued' AND waiting_on IS NULL) OR worker_id IS NOT NULL)) + (SELECT COUNT(*) FROM grad_import_jobs WHERE 'import' IN ({{ . }}) AND (status = 'queued' OR worker_id IS NOT NULL))
+SELECT COUNT(*) FROM grad_jobs WHERE kind IN ({{ . }}) AND ((status = 'queued' AND waiting_on IS NULL) OR worker_id IS NOT NULL)
 {{- end -}}

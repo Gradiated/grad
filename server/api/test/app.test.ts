@@ -181,7 +181,7 @@ describe("grad-server HTTP API", () => {
         422,
         "validation_error",
       ],
-      [t.request("/v1/models", { token: null }), 401, "unauthorized"],
+      [t.request("/v1/base-models", { token: null }), 401, "unauthorized"],
       [t.request("/v1/runs/run_missing"), 404, "run_not_found"],
     ];
     for (const [pending, status, code] of cases) {
@@ -200,11 +200,11 @@ describe("grad-server HTTP API", () => {
       expect(body.type).toBe(`https://gradiated.com/problems/${code}`);
     }
 
-    const custom = await t.request("/v1/models", {
+    const custom = await t.request("/v1/base-models", {
       headers: { "x-request-id": "trace-123" },
     });
     expect(custom.headers.get("x-request-id")).toBe("trace-123");
-    const ignored = await t.request("/v1/models", {
+    const ignored = await t.request("/v1/base-models", {
       headers: { "x-request-id": "bad id!" },
     });
     expect(ignored.headers.get("x-request-id")).toMatch(/^req_/);
@@ -233,7 +233,7 @@ describe("grad-server HTTP API", () => {
       },
     };
     const outage = await makeTestApp({ auth: down });
-    const res = await outage.json("/v1/models");
+    const res = await outage.json("/v1/base-models");
     expect(res.status).toBe(503);
     expect(res.body).toMatchObject({ code: "auth_unavailable" });
     await outage.close();
@@ -300,7 +300,7 @@ describe("grad-server HTTP API", () => {
   it("serves the catalog including extra models", async () => {
     const res = await t.json<{
       data: Array<{ id: string; recipes: string[] }>;
-    }>("/v1/models");
+    }>("/v1/base-models");
     expect(res.body.data.map((m) => m.id)).toContain("test/tiny-qwen3");
     expect(
       res.body.data.find((m) => m.id === "baai/bge-small-en-v1.5")?.recipes,
@@ -314,8 +314,6 @@ describe("grad-server HTTP API", () => {
           allowed: false,
           reason: "No balance",
         }),
-        recordRunUsage: async () => undefined,
-        recordEvalUsage: async () => undefined,
       },
     });
     await denied.json("/v1/datasets/d/records", {
@@ -431,7 +429,7 @@ describe("grad-server HTTP API", () => {
       "/v1/artifacts",
       "/v1/imports",
       "/v1/evals",
-      "/v1/deployments",
+      "/v1/usage",
     ];
     for (const path of lists) {
       const res = await t.json<{ data: unknown[] }>(path, { token: other });

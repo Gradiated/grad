@@ -3,8 +3,6 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  createDisabledDeployAdapter,
-  createDisabledServingAdapter,
   createLocalApiKeyAuth,
   createNoopBillingAdapter,
   hashApiKey,
@@ -108,13 +106,11 @@ export const makeTestApp = async (
       lookup: store.apiKeys,
     }),
     billing: createNoopBillingAdapter(),
-    deploy: createDisabledDeployAdapter(),
-    serving: createDisabledServingAdapter(),
     catalog: createModelCatalog(TINY_MODELS_JSON),
     clock,
     inference: null,
     regex: createRegexEvaluator(),
-    settings: { maxAttempts: 3, evalConcurrency: 4 },
+    settings: { maxAttempts: 3, evalConcurrency: 4, usageExportLagSeconds: 0 },
     ...overrides,
   };
   const { app, services } = createGradApp(deps);

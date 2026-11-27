@@ -1,9 +1,4 @@
-import type {
-  AuthAdapter,
-  BillingAdapter,
-  DeployAdapter,
-  ServingAdapter,
-} from "./adapters.js";
+import type { AuthAdapter, BillingAdapter } from "./adapters.js";
 import type { ModelCatalog } from "./catalog.js";
 import type { Clock } from "./clock.js";
 import type {
@@ -20,8 +15,14 @@ export interface AppSettings {
   evalConcurrency: number;
   /** SSE metrics stream poll interval (default 1000 ms). */
   ssePollMs?: number;
-  /** How long a duplicate keyed POST waits for the first (default 5000 ms). */
-  idempotencyWaitMs?: number;
+  /** Bill an open attempt once this many tokens are unbilled (default 1M). */
+  usageFlushTokens?: number;
+  /** ... or once this long passed since its last usage row (default 300 s). */
+  usageFlushSeconds?: number;
+  /** Cloud usage export lag (default 60 s; tests use 0). */
+  usageExportLagSeconds?: number;
+  /** Job events (metrics) older than this are deleted (default 90 days). */
+  jobEventRetentionDays?: number;
 }
 
 export interface AppDependencies {
@@ -30,8 +31,6 @@ export interface AppDependencies {
   signer: BlobSigner;
   auth: AuthAdapter;
   billing: BillingAdapter;
-  deploy: DeployAdapter;
-  serving: ServingAdapter;
   catalog: ModelCatalog;
   clock: Clock;
   /** Null when INFERENCE_BASE_URL is not configured (evals → inference_unavailable). */

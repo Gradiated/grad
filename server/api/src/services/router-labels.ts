@@ -144,7 +144,7 @@ export const labelRecords = async (
 
 /** After a labeling eval finishes: start its router run, or cancel it. */
 export const settleLabelledRuns = async (
-  repos: Pick<Repositories, "runs">,
+  repos: Pick<Repositories, "jobs" | "runs">,
   evalRecord: Pick<EvalRecord, "id" | "status" | "error">,
   now: string,
 ): Promise<void> => {
@@ -156,7 +156,7 @@ export const settleLabelledRuns = async (
           finished_at: now,
           error: `Cancelled because its labeling eval '${evalRecord.id}' ended ${evalRecord.status}${evalRecord.error ? `: ${evalRecord.error}` : ""}.`,
         };
-  for (const run of await repos.runs.listWaitingOn(evalRecord.id)) {
+  for (const run of await repos.jobs.listWaitingOn(evalRecord.id)) {
     await repos.runs.update(
       run.id,
       { ...patch, waiting_on: null, updated_at: now },

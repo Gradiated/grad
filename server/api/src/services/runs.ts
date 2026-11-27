@@ -1,6 +1,6 @@
 import type { AuthPrincipal } from "../adapters.js";
 import { costForTokens } from "../catalog.js";
-import { addDays, addSeconds, leaseGraceCutoff } from "../clock.js";
+import { addDays } from "../clock.js";
 import {
   ArtifactFormatSchema,
   type Artifact,
@@ -14,18 +14,18 @@ import {
   type RecipeKind,
   type Run,
   type TrainerJob,
+  type UploadTicket,
 } from "../contracts.js";
 import type { z } from "@hono/zod-openapi";
 import type {
   CompleteJobRequestSchema,
-  HeartbeatRequestSchema,
   RegisterCheckpointRequestSchema,
   ReportProgressRequestSchema,
   WorkerUploadRequestSchema,
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
-import { ApiError, conflict, forbidden, invalid, notFound } from "../errors.js";
-import { newId } from "../ids.js";
+import { conflict, forbidden, invalid, notFound } from "../errors.js";
+import { createOnce, type Created } from "../idempotency.js";
 import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
@@ -33,13 +33,15 @@ import type {
   ArtifactRecord,
   CheckpointRecord,
   DatasetVersion,
+  IdempotencyInput,
+  JobExpectation,
+  JobRow,
   Page,
   PageRequest,
   Repositories,
   RunPatch,
   RunRecord,
 } from "../store/types.js";
-import type { BillingOutbox } from "./billing-outbox.js";
 import { streamVersionJsonl } from "./dataset-records.js";
 import type { DatasetService } from "./datasets.js";
 import type { EvalService } from "./evals/service.js";
@@ -50,15 +52,22 @@ import {
   settleLabelledRuns,
   toLabelingPlan,
 } from "./router-labels.js";
-import type { UploadService } from "./uploads.js";
+import {
+  fenceOf,
+  leaseLost,
+  RELEASE,
+  requeuePatch,
+  type JobKindHandler,
+  type JobQueue,
+  type StopReason,
+} from "./jobs.js";
+import { jobBlobKey, type UploadService } from "./uploads.js";
+import type { UsageService } from "./usage.js";
 
-type HeartbeatBody = z.infer<typeof HeartbeatRequestSchema>;
 type ProgressBody = z.infer<typeof ReportProgressRequestSchema>;
 type WorkerUploadBody = z.infer<typeof WorkerUploadRequestSchema>;
 type CheckpointBody = z.infer<typeof RegisterCheckpointRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
-
-export type StopReason = "cancelled" | "budget" | null;
 
 const EVAL_TERMINAL: readonly EvalStatus[] = [
   "completed",
@@ -126,28 +135,6 @@ export const toPublicRun = (run: RunRecord): Run => ({
   finished_at: run.finished_at,
 });
 
-/**
- * The one attempt rule: an attempt that ends without a result (lease expired,
- * or abandoned by a preempted worker) counts, and the run fails once
- * max_attempts of them have happened since creation or the last resume.
- */
-const requeuePatch = (run: RunRecord, what: string, now: string): RunPatch => {
-  const failedAttempts = run.failed_attempts + 1;
-
-  return failedAttempts >= run.max_attempts
-    ? {
-        status: "failed",
-        failed_attempts: failedAttempts,
-        finished_at: now,
-        error: `${what}; ${failedAttempts} attempt(s) ended without a result (max_attempts=${run.max_attempts}).`,
-      }
-    : {
-        status: "queued",
-        failed_attempts: failedAttempts,
-        error: `${what}; requeued.`,
-      };
-};
-
 export const toPublicArtifact = ({
   storage_key: _key,
   ...artifact
@@ -157,6 +144,10 @@ export const toPublicCheckpoint = ({
   storage_key: _key,
   ...checkpoint
 }: CheckpointRecord): Checkpoint => checkpoint;
+
+/** The error a run stopped for lack of workspace balance carries (resumable). */
+export const BALANCE_STOPPED =
+  "Stopped because the workspace ran out of balance (insufficient_balance); top up, then resume the run.";
 
 const stopReason = (run: RunRecord): StopReason => {
   if (run.status === "cancelled") return "cancelled";
@@ -174,7 +165,11 @@ export interface MetricsQuery {
 
 export interface RunLifecycle {
   plan(workspaceId: string, request: PlanRunRequest): Promise<PlanRunResponse>;
-  create(workspaceId: string, request: PlanRunRequest): Promise<Run>;
+  create(
+    workspaceId: string,
+    request: PlanRunRequest,
+    idempotency?: IdempotencyInput,
+  ): Promise<Created<Run>>;
   get(workspaceId: string, id: string): Promise<Run>;
   list(workspaceId: string, page: PageRequest): Promise<Page<Run>>;
   metrics(
@@ -201,24 +196,6 @@ export interface RunLifecycle {
   ): Promise<Artifact>;
 
   // Worker protocol (train jobs).
-  claim(
-    principal: AuthPrincipal,
-    input: {
-      workerId: string;
-      leaseSeconds: number;
-      recipes?: readonly RecipeKind[] | undefined;
-    },
-  ): Promise<TrainerJob | null>;
-  heartbeat(
-    principal: AuthPrincipal,
-    id: string,
-    body: HeartbeatBody,
-  ): Promise<{
-    status: string;
-    should_stop: boolean;
-    stop_reason: StopReason;
-    lease_expires_at: string;
-  }>;
   progress(
     principal: AuthPrincipal,
     id: string,
@@ -233,7 +210,7 @@ export interface RunLifecycle {
     principal: AuthPrincipal,
     id: string,
     body: WorkerUploadBody,
-  ): ReturnType<UploadService["createTicket"]>;
+  ): Promise<UploadTicket>;
   registerCheckpoint(
     principal: AuthPrincipal,
     id: string,
@@ -250,42 +227,31 @@ export interface RunLifecycle {
     attempt: number,
   ): Promise<ReadableStream<Uint8Array>>;
 
-  // Maintenance.
-  expireLeases(now: Date): Promise<number>;
+  /** The train kind's hooks in the job queue. */
+  handler: JobKindHandler;
+  /** Deletes expired checkpoints (and blobs no release shares). */
   collectExpiredCheckpoints(now: Date): Promise<number>;
 }
 
-/** Throws 404 when a worker may not see a job (workspace-scoped worker keys). */
-export const assertWorkerScope = (
-  principal: AuthPrincipal,
-  workspaceId: string,
-  id: string,
-): void => {
-  if (
-    principal.workerWorkspaceId !== null &&
-    principal.workerWorkspaceId !== workspaceId
-  ) {
-    throw notFound("trainer_job", id);
-  }
-};
-
-const leaseLost = (id: string): ApiError =>
-  conflict(
-    "lease_lost",
-    `This worker no longer holds the lease on job '${id}' (expired, reclaimed, or finished). Stop work on it.`,
-  );
+export const toMetricPoint = (event: {
+  seq: number;
+  attempt: number;
+  payload: Record<string, unknown>;
+}): MetricPoint =>
+  ({ ...event.payload, seq: event.seq, attempt: event.attempt }) as MetricPoint;
 
 export const createRunLifecycle = (
   deps: AppDependencies,
   collaborators: {
     datasets: DatasetService;
     uploads: UploadService;
-    billing: BillingOutbox;
+    usage: UsageService;
     evals: EvalService;
+    queue: () => JobQueue;
   },
 ): RunLifecycle => {
   const { store, storage, catalog, clock, settings } = deps;
-  const { datasets, uploads, billing, evals } = collaborators;
+  const { datasets, uploads, usage, evals } = collaborators;
 
   const loadRun = async (
     workspaceId: string,
@@ -297,20 +263,23 @@ export const createRunLifecycle = (
     return run;
   };
 
-  /** The run behind a worker request, if this worker holds `attempt`'s lease. */
+  const loadById = async (id: string): Promise<RunRecord> => {
+    const run = await store.runs.getById(id);
+    if (!run) throw notFound("trainer_job", id);
+
+    return run;
+  };
+
+  /** The run behind a worker write, if this worker holds `attempt`'s lease. */
   const loadLeased = async (
     principal: AuthPrincipal,
     id: string,
     workerId: string,
     attempt: number,
   ): Promise<RunRecord> => {
-    const run = await store.runs.getById(id);
-    if (!run) throw notFound("trainer_job", id);
-    assertWorkerScope(principal, run.workspace_id, id);
-    if (run.worker_id !== workerId || run.attempt !== attempt)
-      throw leaseLost(id);
+    await collaborators.queue().loadLeased(principal, id, workerId, attempt);
 
-    return run;
+    return loadById(id);
   };
 
   const planFor = async (workspaceId: string, request: PlanRunRequest) => {
@@ -370,7 +339,7 @@ export const createRunLifecycle = (
     run: RunRecord,
     now: Date,
   ): Promise<void> => {
-    const all = await tx.checkpoints.listAllForRun(run.id, now);
+    const all = await tx.artifacts.allCheckpoints(run.id, now);
     if (all.length === 0) return;
 
     const scored = all.filter((c) => c.eval_score !== null);
@@ -385,48 +354,41 @@ export const createRunLifecycle = (
         : acc,
     );
 
-    await tx.checkpoints.pinRetention(run.id, {
+    await tx.artifacts.pinCheckpoints(run.id, {
       bestId: best?.id ?? null,
       finalId: final.id,
     });
   };
 
-  /** Closes an open attempt: bills it and applies `patch`, atomically. */
+  /** The open attempt's usage when it has processed `tokens`. */
+  const attemptUsage = (run: RunRecord, tokens: number) => ({
+    tokens,
+    costUsd: costForTokens(tokens, run.price_per_million_tokens),
+  });
+
+  /** Closes an open attempt: bills the rest of it and applies `patch`, atomically. */
   const closeAttempt = async (
     tx: Repositories,
     run: RunRecord,
     tokens: number,
     patch: RunPatch,
-    leaseExpiredBefore?: string,
+    fence: JobExpectation = fenceOf(run),
   ): Promise<RunRecord> => {
     const now = clock.now();
-    const attemptCost = costForTokens(tokens, run.price_per_million_tokens);
-    const updated = await tx.runs.update(
+    // The fenced write locks the job row, so the progress reports that
+    // committed before it are visible to the reads below.
+    const closed = await tx.runs.update(
       run.id,
-      {
-        ...patch,
-        billed_tokens: run.billed_tokens + tokens,
-        attempt_tokens: 0,
-        worker_id: null,
-        lease_expires_at: null,
-        updated_at: now.toISOString(),
-      },
-      {
-        workerId: run.worker_id,
-        attempt: run.attempt,
-        status: ["running", "cancelled"],
-        ...(leaseExpiredBefore ? { leaseExpiredBefore } : {}),
-      },
+      { ...patch, ...RELEASE, updated_at: now.toISOString() },
+      fence,
     );
-    if (!updated) throw leaseLost(run.id);
-
-    await billing.enqueueUsage(tx, {
-      workspaceId: run.workspace_id,
-      runId: run.id,
-      attempt: run.attempt,
-      tokens,
-      costUsd: attemptCost,
-    });
+    if (!closed) throw leaseLost(run.id);
+    const used = Math.max(tokens, closed.attempt_tokens);
+    await usage.flush(tx, closed, attemptUsage(closed, used), true);
+    const updated = (await tx.runs.update(run.id, {
+      billed_tokens: closed.billed_tokens + used,
+      attempt_tokens: 0,
+    })) as RunRecord;
     if (TERMINAL.includes(updated.status)) {
       await pinCheckpoints(tx, updated, now);
     }
@@ -437,7 +399,9 @@ export const createRunLifecycle = (
   const buildJob = async (run: RunRecord): Promise<TrainerJob> => {
     const training = await trainingRecords(run);
 
-    const resume = await store.checkpoints.latestForRun(run.id, clock.now());
+    const resume = (await store.artifacts.allCheckpoints(run.id, clock.now()))
+      .sort((a, b) => b.step - a.step || b.attempt - a.attempt)
+      .at(0);
     const baseRef = run.resolved_config.base_artifact;
     const base = baseRef
       ? await store.artifacts.get(run.workspace_id, baseRef.id)
@@ -493,11 +457,49 @@ export const createRunLifecycle = (
     };
   };
 
-  const expireLeases = async (now: Date): Promise<number> => {
-    const expired = await store.runs.listExpiredLeases(now, 100);
-    let closed = 0;
+  const handler: JobKindHandler = {
+    onClaim: async (row, renewed) => {
+      const run = await loadById(row.id);
+      const now = clock.now().toISOString();
+      if (
+        !renewed &&
+        run.max_cost_usd !== null &&
+        billedCost(run) >= run.max_cost_usd
+      ) {
+        await store.transaction((tx) =>
+          closeAttempt(tx, run, 0, {
+            status: "stopped_budget",
+            finished_at: now,
+            error: null,
+          }),
+        );
+        return null;
+      }
+      try {
+        return await buildJob(run);
+      } catch (error) {
+        await store.transaction((tx) =>
+          closeAttempt(tx, run, 0, {
+            status: "failed",
+            finished_at: now,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return null;
+      }
+    },
+    stopReason: async (row) => {
+      const run = await loadById(row.id);
+      const reason = stopReason(run);
+      if (reason || run.status !== "running") return reason;
+      // Cloud: an exhausted workspace balance stops the run (resumable).
+      const allowed =
+        (await deps.billing.canContinue?.(run.workspace_id)) ?? true;
 
-    for (const run of expired) {
+      return allowed ? null : "insufficient_balance";
+    },
+    onLeaseLost: async (row: JobRow, fence, now) => {
+      const run = await loadById(row.id);
       const patch: RunPatch =
         run.status === "cancelled"
           ? { status: "cancelled", finished_at: now.toISOString() }
@@ -506,78 +508,84 @@ export const createRunLifecycle = (
               `Attempt ${run.attempt} lost its lease`,
               now.toISOString(),
             );
-
-      try {
-        await store.transaction((tx) =>
-          // Re-checks expiry: a heartbeat that landed after the SELECT wins.
-          closeAttempt(
-            tx,
-            run,
-            run.attempt_tokens,
-            patch,
-            leaseGraceCutoff(now, run.lease_seconds),
-          ),
-        );
-        closed += 1;
-      } catch (error) {
-        if (!(error instanceof ApiError)) throw error;
-      }
-    }
-    if (closed > 0) billing.kick();
-
-    return closed;
+      // Re-checks expiry: a heartbeat that landed after the SELECT wins.
+      await store.transaction((tx) =>
+        closeAttempt(tx, run, run.attempt_tokens, patch, {
+          ...fenceOf(run),
+          leaseExpiredBefore: fence.leaseExpiredBefore as string,
+        }),
+      );
+    },
   };
 
   return {
+    handler,
+
     plan: async (workspaceId, request) =>
       (await planFor(workspaceId, request)).plan,
 
-    create: async (workspaceId, request) => {
-      const { plan, dataset, labelRequest } = await planFor(
-        workspaceId,
-        request,
-      );
-      const check = await deps.billing.checkCanStartRun(
-        workspaceId,
-        plan.estimated_cost_usd,
-      );
-      if (!check.allowed) {
-        throw forbidden(
-          "billing_denied",
-          check.reason ?? "Insufficient balance to start this training run.",
-        );
-      }
+    create: (workspaceId, request, idempotency) =>
+      createOnce(
+        idempotency,
+        (key) => store.jobs.findIdempotent(workspaceId, key),
+        async (id) => toPublicRun(await loadRun(workspaceId, id)),
+        async () => {
+          const { plan, dataset, labelRequest } = await planFor(
+            workspaceId,
+            request,
+          );
+          const check = await deps.billing.checkCanStartRun(
+            workspaceId,
+            plan.estimated_cost_usd,
+          );
+          if (!check.allowed) {
+            throw forbidden(
+              "billing_denied",
+              check.reason ??
+                "Insufficient balance to start this training run.",
+            );
+          }
 
-      // Router rubric items: the labeling eval runs first, the run waits on it.
-      const labels = labelRequest
-        ? await evals.create(workspaceId, labelRequest)
-        : null;
-      const run = await store.runs.create({
-        workspaceId,
-        name: request.name,
-        datasetId: dataset.id,
-        datasetName: dataset.name,
-        datasetVersion: plan.dataset_version,
-        recipeKind: request.recipe.kind,
-        resolvedConfig: labels
-          ? { ...plan.resolved_config, label_eval_id: labels.id }
-          : plan.resolved_config,
-        maxCostUsd: request.max_cost_usd ?? null,
-        pricePerMillionTokens: plan.price_per_million_tokens,
-        totalSteps: plan.estimated_steps,
-        maxAttempts: settings.maxAttempts,
-        waitingOn: labels?.id ?? null,
-      });
-      if (!labels) return toPublicRun(run);
+          // Router rubric items: the labeling eval runs first, the run waits
+          // on it. Both commit together (or neither, on a key race).
+          const { run, labels } = await store.transaction(async () => {
+            const labels = labelRequest
+              ? await evals.createRecord(workspaceId, labelRequest)
+              : null;
+            const run = await store.runs.create({
+              workspaceId,
+              name: request.name,
+              datasetId: dataset.id,
+              datasetName: dataset.name,
+              datasetVersion: plan.dataset_version,
+              recipeKind: request.recipe.kind,
+              resolvedConfig: labels
+                ? { ...plan.resolved_config, label_eval_id: labels.id }
+                : plan.resolved_config,
+              maxCostUsd: request.max_cost_usd ?? null,
+              pricePerMillionTokens: plan.price_per_million_tokens,
+              totalSteps: plan.estimated_steps,
+              maxAttempts: settings.maxAttempts,
+              waitingOn: labels?.id ?? null,
+              idempotency,
+            });
+            return { run, labels };
+          });
+          if (!labels) return toPublicRun(run);
 
-      // The labeling eval may have finished before the run was inserted.
-      const labelEval = await store.evals.getById(labels.id);
-      if (labelEval && EVAL_TERMINAL.includes(labelEval.status)) {
-        await settleLabelledRuns(store, labelEval, clock.now().toISOString());
-      }
+          // The labeling eval may have finished before the run was inserted.
+          const labelEval = await store.evals.getById(labels.id);
+          if (labelEval && EVAL_TERMINAL.includes(labelEval.status)) {
+            await settleLabelledRuns(
+              store,
+              labelEval,
+              clock.now().toISOString(),
+            );
+          }
 
-      return toPublicRun((await store.runs.getById(run.id)) ?? run);
-    },
+          return toPublicRun((await store.runs.getById(run.id)) ?? run);
+        },
+      ),
 
     get: async (workspaceId, id) => toPublicRun(await loadRun(workspaceId, id)),
 
@@ -598,7 +606,9 @@ export const createRunLifecycle = (
         throw invalid("invalid_cursor", "The pagination cursor is malformed.");
       }
 
-      const rows = await store.metrics.list(run.id, afterSeq, query.limit + 1);
+      const rows = (
+        await store.jobs.listEvents(run.id, "metric", afterSeq, query.limit + 1)
+      ).map(toMetricPoint);
       const page = rows.slice(0, query.limit);
       const last = page[page.length - 1];
       const data =
@@ -666,10 +676,13 @@ export const createRunLifecycle = (
 
       const cap = maxCostUsd ?? run.max_cost_usd;
       const spent = billedCost(run);
+      const balanceStop = run.error === BALANCE_STOPPED;
       if (
         cap !== null &&
         (spent >= cap ||
-          (run.status === "stopped_budget" && maxCostUsd === undefined))
+          (run.status === "stopped_budget" &&
+            maxCostUsd === undefined &&
+            !balanceStop))
       ) {
         throw conflict(
           "budget_exhausted",
@@ -711,7 +724,7 @@ export const createRunLifecycle = (
 
     listCheckpoints: async (workspaceId, runId, page) => {
       await loadRun(workspaceId, runId);
-      const result = await store.checkpoints.listByRun(
+      const result = await store.artifacts.listCheckpoints(
         workspaceId,
         runId,
         page,
@@ -725,7 +738,10 @@ export const createRunLifecycle = (
     },
 
     promoteCheckpoint: async (workspaceId, checkpointId, name) => {
-      const checkpoint = await store.checkpoints.get(workspaceId, checkpointId);
+      const checkpoint = await store.artifacts.getCheckpoint(
+        workspaceId,
+        checkpointId,
+      );
       const now = clock.now();
       if (
         !checkpoint ||
@@ -742,119 +758,41 @@ export const createRunLifecycle = (
       }
 
       const run = await loadRun(workspaceId, checkpoint.run_id);
-      const key = `artifacts/${encodeURIComponent(workspaceId)}/${newId("art")}.grad.tar.gz`;
-      await storage.copy(checkpoint.storage_key, key);
-
-      try {
-        const artifact = await store.artifacts.create({
-          workspaceId,
-          name: name ?? run.name,
-          runId: run.id,
-          checkpointId: checkpoint.id,
-          baseModel: run.resolved_config.model,
-          recipeKind: run.recipe_kind,
-          format: checkpoint.format,
-          storageKey: key,
-          sha256: checkpoint.sha256,
-          sizeBytes: checkpoint.size_bytes,
-          manifest: {
-            ...checkpoint.metadata,
-            schema: "grad.artifact/1",
-            run_id: run.id,
-            promoted_from_checkpoint: checkpoint.id,
-            step: checkpoint.step,
-            attempt: checkpoint.attempt,
-            resolved_config: run.resolved_config,
-          },
-          evalReport: null,
-        });
-
-        return toPublicArtifact(artifact);
-      } catch (error) {
-        await storage.delete(key).catch(() => undefined);
-        throw error;
-      }
-    },
-
-    claim: async (principal, input) => {
-      const now = clock.now();
-      await expireLeases(now);
-
-      // A worker retrying a claim whose response was lost gets its job back.
-      const held = await store.runs.heldBy(input.workerId);
-      if (held) {
-        const renewed = await store.runs.update(
-          held.id,
-          {
-            lease_expires_at: addSeconds(now, input.leaseSeconds).toISOString(),
-            lease_seconds: input.leaseSeconds,
-          },
-          { workerId: held.worker_id, attempt: held.attempt },
-        );
-        if (renewed) return buildJob(renewed);
-      }
-
-      for (;;) {
-        const run = await store.runs.claimNext({
-          workerId: input.workerId,
-          leaseSeconds: input.leaseSeconds,
-          now,
-          recipes: input.recipes,
-          workspaceId: principal.workerWorkspaceId ?? undefined,
-        });
-        if (!run) return null;
-
-        if (run.max_cost_usd !== null && billedCost(run) >= run.max_cost_usd) {
-          await store.transaction((tx) =>
-            closeAttempt(tx, run, 0, {
-              status: "stopped_budget",
-              finished_at: now.toISOString(),
-              error: null,
-            }),
-          );
-          continue;
-        }
-
-        try {
-          return await buildJob(run);
-        } catch (error) {
-          await store.transaction((tx) =>
-            closeAttempt(tx, run, 0, {
-              status: "failed",
-              finished_at: now.toISOString(),
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          );
-        }
-      }
-    },
-
-    heartbeat: async (principal, id, body) => {
-      const run = await loadLeased(principal, id, body.worker_id, body.attempt);
-      const leaseSeconds = body.lease_seconds ?? run.lease_seconds;
-      const leaseExpiresAt = addSeconds(
-        clock.now(),
-        leaseSeconds,
-      ).toISOString();
-      const updated = await store.runs.update(
-        id,
-        { lease_expires_at: leaseExpiresAt, lease_seconds: leaseSeconds },
-        {
-          workerId: body.worker_id,
-          attempt: body.attempt,
-          status: ["running", "cancelled"],
-        },
+      const releaseName = name ?? run.name;
+      // Natural key (checkpoint, name): promoting twice returns one release.
+      const promoted = await store.artifacts.findPromoted(
+        workspaceId,
+        checkpoint.id,
+        releaseName,
       );
-      if (!updated) throw leaseLost(id);
+      if (promoted) return toPublicArtifact(promoted);
 
-      const reason = stopReason(updated);
+      // The release references the checkpoint's immutable blob (no copy);
+      // the expiry sweep keeps blobs a release shares.
+      const artifact = await store.artifacts.createRelease({
+        workspaceId,
+        name: releaseName,
+        runId: run.id,
+        sourceId: checkpoint.id,
+        baseModel: run.resolved_config.model,
+        recipeKind: run.recipe_kind,
+        format: checkpoint.format,
+        storageKey: checkpoint.storage_key,
+        sha256: checkpoint.sha256,
+        sizeBytes: checkpoint.size_bytes,
+        manifest: {
+          ...checkpoint.metadata,
+          schema: "grad.artifact/1",
+          run_id: run.id,
+          promoted_from_checkpoint: checkpoint.id,
+          step: checkpoint.step,
+          attempt: checkpoint.attempt,
+          resolved_config: run.resolved_config,
+        },
+        evalReport: null,
+      });
 
-      return {
-        status: updated.status,
-        should_stop: reason !== null,
-        stop_reason: reason,
-        lease_expires_at: leaseExpiresAt,
-      };
+      return toPublicArtifact(artifact);
     },
 
     progress: async (principal, id, body) => {
@@ -864,34 +802,48 @@ export const createRunLifecycle = (
       // One step's point is stored once per attempt (a retry returns it), and
       // only while this worker still holds the lease.
       const updated = await store.transaction(async (tx) => {
-        const point = await tx.metrics.append(run.id, run.attempt, {
-          ...body.metric,
-          tokens: run.billed_tokens + attemptTokens,
-          cost_usd: cost,
-        });
         const fenced = await tx.runs.update(
           id,
           {
             attempt_tokens: attemptTokens,
+            lease_expires_at: new Date(
+              clock.now().getTime() + run.lease_seconds * 1000,
+            ).toISOString(),
+          },
+          fenceOf(run),
+        );
+        if (!fenced) throw leaseLost(id);
+        const point = toMetricPoint(
+          await tx.jobs.appendEvent({
+            jobId: run.id,
+            attempt: run.attempt,
+            type: "metric",
+            step: body.metric.step,
+            payload: {
+              ...body.metric,
+              tokens: run.billed_tokens + attemptTokens,
+              cost_usd: cost,
+            },
+          }),
+        );
+
+        // Bill the attempt in increments (every N tokens or minutes).
+        await usage.flush(
+          tx,
+          fenced,
+          attemptUsage(fenced, attemptTokens),
+          false,
+        );
+
+        return (
+          (await tx.runs.update(id, {
             current_step: Math.max(run.current_step, point.step),
             latest_metric:
               point.step >= (run.latest_metric?.step ?? -1)
                 ? point
                 : run.latest_metric,
-            lease_expires_at: addSeconds(
-              clock.now(),
-              run.lease_seconds,
-            ).toISOString(),
-          },
-          {
-            workerId: body.worker_id,
-            attempt: body.attempt,
-            status: ["running", "cancelled"],
-          },
+          })) ?? fenced
         );
-        if (!fenced) throw leaseLost(id);
-
-        return fenced;
       });
 
       const reason = stopReason(updated);
@@ -907,71 +859,48 @@ export const createRunLifecycle = (
     createUpload: async (principal, id, body) => {
       const run = await loadLeased(principal, id, body.worker_id, body.attempt);
 
-      return uploads.createTicket({
-        workspaceId: run.workspace_id,
-        purpose: body.kind,
-        jobId: run.id,
-        attempt: run.attempt,
-        sha256: body.sha256,
-        sizeBytes: body.size_bytes,
-      });
+      return uploads.ticket(
+        jobBlobKey(run, run.attempt, body.sha256),
+        body.size_bytes,
+      );
     },
 
     registerCheckpoint: async (principal, id, body) => {
       const run = await loadLeased(principal, id, body.worker_id, body.attempt);
-      const upload = await uploads.load({
-        uploadId: body.upload_id,
+      const blob = await uploads.commit(body.upload_id, (sha) =>
+        jobBlobKey(run, run.attempt, sha),
+      );
+
+      const result = await store.artifacts.insertCheckpoint({
         workspaceId: run.workspace_id,
-        purpose: "checkpoint",
-        jobId: run.id,
+        runId: run.id,
         attempt: run.attempt,
+        step: body.step,
+        evalScore: body.eval_score ?? null,
+        format: body.format ?? null,
+        baseModel: run.resolved_config.model,
+        recipeKind: run.recipe_kind,
+        storageKey: blob.key,
+        sha256: blob.sha256,
+        sizeBytes: blob.sizeBytes,
+        metadata: body.metadata,
+        expiresAt: addDays(
+          clock.now(),
+          run.resolved_config.checkpoint_ttl_days,
+        ).toISOString(),
       });
-      await uploads.verify(upload);
-
-      const now = clock.now();
-      const consumedBy = `checkpoint:${run.id}:${run.attempt}:${body.step}`;
-      const result = await store.transaction(async (tx) => {
-        // A retried registration of the same upload is a no-op.
-        const consumed =
-          upload.consumed_by === consumedBy
-            ? upload
-            : await uploads.consume(tx, upload, consumedBy);
-        const inserted = await tx.checkpoints.insert({
-          workspaceId: run.workspace_id,
-          runId: run.id,
-          attempt: run.attempt,
-          step: body.step,
-          evalScore: body.eval_score ?? null,
-          format: body.format ?? null,
-          storageKey: consumed.storage_key,
-          sha256: consumed.sha256,
-          sizeBytes: consumed.size_bytes,
-          metadata: body.metadata,
-          expiresAt: addDays(
-            now,
-            run.resolved_config.checkpoint_ttl_days,
-          ).toISOString(),
-        });
-        if (
-          !inserted.created &&
-          inserted.checkpoint.sha256 !== consumed.sha256
-        ) {
-          throw conflict(
-            "checkpoint_conflict",
-            `Checkpoint for step ${body.step} of attempt ${run.attempt} already exists with different contents.`,
-          );
-        }
-
-        return inserted;
-      });
-
-      // A re-upload of an existing checkpoint is dropped; a retry of the same
-      // upload is that checkpoint.
-      if (
-        !result.created &&
-        result.checkpoint.storage_key !== upload.storage_key
-      ) {
-        await storage.delete(upload.storage_key).catch(() => undefined);
+      // A checkpoint bills the attempt's usage so far.
+      if (result.created) {
+        await store.transaction((tx) =>
+          usage.flush(tx, run, attemptUsage(run, run.attempt_tokens), true),
+        );
+      }
+      // A retried registration is that checkpoint; other bytes are a conflict.
+      if (!result.created && result.checkpoint.sha256 !== blob.sha256) {
+        throw conflict(
+          "checkpoint_conflict",
+          `Checkpoint for step ${body.step} of attempt ${run.attempt} already exists with different contents.`,
+        );
       }
 
       return {
@@ -981,21 +910,16 @@ export const createRunLifecycle = (
     },
 
     complete: async (principal, id, body) => {
-      const run = await store.runs.getById(id);
-      if (!run) throw notFound("trainer_job", id);
-      assertWorkerScope(principal, run.workspace_id, id);
+      await collaborators.queue().loadForWorker(principal, id);
+      const run = await loadById(id);
 
-      const consumedBy = `run:${run.id}:${body.attempt}`;
       if (run.worker_id !== body.worker_id || run.attempt !== body.attempt) {
-        // Idempotent retry of a completion that already committed.
-        const upload = body.upload_id
-          ? await store.uploads.get(body.upload_id)
-          : null;
-        const sameAttemptClosed =
-          run.attempt === body.attempt && run.worker_id === null;
+        // Idempotent retry of a completion that already committed: this
+        // attempt was closed with a result (not requeued by the reaper).
         if (
-          sameAttemptClosed &&
-          (!body.upload_id || upload?.consumed_by === consumedBy)
+          run.attempt === body.attempt &&
+          run.worker_id === null &&
+          TERMINAL.includes(run.status)
         ) {
           const artifact = run.artifact_id
             ? await store.artifacts.get(run.workspace_id, run.artifact_id)
@@ -1023,17 +947,12 @@ export const createRunLifecycle = (
         );
       }
 
-      const upload =
+      const blob =
         wantsArtifact && body.upload_id
-          ? await uploads.load({
-              uploadId: body.upload_id,
-              workspaceId: run.workspace_id,
-              purpose: "artifact",
-              jobId: run.id,
-              attempt: run.attempt,
-            })
+          ? await uploads.commit(body.upload_id, (sha) =>
+              jobBlobKey(run, run.attempt, sha),
+            )
           : null;
-      if (upload) await uploads.verify(upload);
 
       const tokens = Math.max(body.tokens_processed, run.attempt_tokens);
       const now = clock.now().toISOString();
@@ -1043,33 +962,31 @@ export const createRunLifecycle = (
       }
 
       const result = await store.transaction(async (tx) => {
-        let artifact: ArtifactRecord | null = null;
-        if (upload) {
-          const consumed = await uploads.consume(tx, upload, consumedBy);
-          artifact = await tx.artifacts.create({
-            workspaceId: run.workspace_id,
-            name: run.name,
-            runId: run.id,
-            checkpointId: null,
-            baseModel: run.resolved_config.model,
-            recipeKind: run.recipe_kind,
-            format,
-            storageKey: consumed.storage_key,
-            sha256: consumed.sha256,
-            sizeBytes: consumed.size_bytes,
-            manifest: {
-              ...body.manifest,
-              schema: "grad.artifact/1",
+        const artifact = blob
+          ? await tx.artifacts.createRelease({
+              workspaceId: run.workspace_id,
+              name: run.name,
+              runId: run.id,
+              sourceId: null,
+              baseModel: run.resolved_config.model,
+              recipeKind: run.recipe_kind,
               format,
-              run_id: run.id,
-              attempt: run.attempt,
-              dataset: run.dataset_name,
-              dataset_version: run.dataset_version,
-              resolved_config: run.resolved_config,
-            },
-            evalReport: body.eval_report ?? null,
-          });
-        }
+              storageKey: blob.key,
+              sha256: blob.sha256,
+              sizeBytes: blob.sizeBytes,
+              manifest: {
+                ...body.manifest,
+                schema: "grad.artifact/1",
+                format,
+                run_id: run.id,
+                attempt: run.attempt,
+                dataset: run.dataset_name,
+                dataset_version: run.dataset_version,
+                resolved_config: run.resolved_config,
+              },
+              evalReport: body.eval_report ?? null,
+            })
+          : null;
 
         const patch: RunPatch =
           run.status === "cancelled"
@@ -1087,7 +1004,11 @@ export const createRunLifecycle = (
                   error:
                     body.status === "failed"
                       ? (body.error ?? "The trainer reported a failure.")
-                      : null,
+                      : body.status === "stopped_budget" &&
+                          (run.max_cost_usd === null ||
+                            runCost(run, tokens) < run.max_cost_usd)
+                        ? BALANCE_STOPPED
+                        : null,
                   ...(artifact ? { artifact_id: artifact.id } : {}),
                   ...(body.eval_report !== undefined
                     ? { eval_report: body.eval_report }
@@ -1099,8 +1020,6 @@ export const createRunLifecycle = (
         return { run: updated, artifact };
       });
 
-      billing.kick();
-
       return {
         run: toPublicRun(result.run),
         artifact: result.artifact ? toPublicArtifact(result.artifact) : null,
@@ -1108,29 +1027,22 @@ export const createRunLifecycle = (
     },
 
     datasetStream: async (principal, id, attempt) => {
-      const run = await store.runs.getById(id);
-      if (!run) throw notFound("trainer_job", id);
-      assertWorkerScope(principal, run.workspace_id, id);
-      if (run.attempt !== attempt || run.worker_id === null)
+      const row = await collaborators.queue().loadForWorker(principal, id);
+      if (row.attempt !== attempt || row.worker_id === null)
         throw leaseLost(id);
 
-      const training = await trainingRecords(run);
+      const training = await trainingRecords(await loadById(id));
 
       return training.kind === "dataset"
         ? streamVersionJsonl(storage, training.version)
         : jsonlStream(training.records);
     },
 
-    expireLeases,
-
     collectExpiredCheckpoints: async (now) => {
-      const expired = await store.checkpoints.listExpired(now, 100);
-      for (const checkpoint of expired) {
-        await storage.delete(checkpoint.storage_key);
-        await store.checkpoints.delete(checkpoint.id);
-      }
+      const keys = await store.artifacts.deleteExpiredCheckpoints(now, 100);
+      for (const key of keys) await storage.delete(key);
 
-      return expired.length;
+      return keys.length;
     },
   };
 };

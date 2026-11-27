@@ -9,16 +9,18 @@ export const encodeRecordsJsonl = (records: readonly DatasetRecord[]): Buffer =>
   Buffer.from(records.map((r) => `${JSON.stringify(r)}\n`).join(""), "utf8");
 
 /**
- * Writes one immutable JSONL part. Rewriting an existing key with the same
- * bytes is a no-op, so a deterministic key makes a retried write safe.
+ * Writes one immutable JSONL part at `keyFor(sha256)`. Rewriting an existing
+ * key with the same bytes is a no-op, so a deterministic key makes a retried
+ * write safe.
  */
 export const writeRecordsPart = async (
   storage: ObjectStore,
-  key: string,
+  keyFor: (sha256: string) => string,
   records: readonly DatasetRecord[],
 ): Promise<DatasetPart> => {
   const bytes = encodeRecordsJsonl(records);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const key = keyFor(sha256);
   try {
     await storage.put(key, bytes);
   } catch (error) {
@@ -67,35 +69,6 @@ export const readVersionRecords = async (
   const out: DatasetRecord[] = [];
   for await (const record of iterateVersionRecords(storage, version)) {
     out.push(record);
-  }
-
-  return out;
-};
-
-/** Reads records [offset, offset + limit) without loading earlier parts. */
-export const readVersionSlice = async (
-  storage: ObjectStore,
-  version: Pick<DatasetVersion, "parts">,
-  offset: number,
-  limit: number,
-): Promise<DatasetRecord[]> => {
-  const out: DatasetRecord[] = [];
-  let position = 0;
-
-  for (const part of version.parts) {
-    const end = position + part.count;
-    if (end <= offset) {
-      position = end;
-      continue;
-    }
-
-    const records = parsePart(await storage.get(part.key), part);
-    const start = Math.max(0, offset - position);
-    for (let i = start; i < records.length && out.length < limit; i += 1) {
-      out.push(records[i] as DatasetRecord);
-    }
-    if (out.length >= limit) break;
-    position = end;
   }
 
   return out;

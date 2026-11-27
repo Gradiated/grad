@@ -1,25 +1,19 @@
 import type {
   ApiKey,
   Dataset,
-  Deployment,
   EvalReport,
-  FeedbackRecord,
   MetricPoint,
+  UsageRecord,
 } from "../../contracts.js";
 import type {
   ArtifactRecord,
-  BillingOutboxEntry,
   CheckpointRecord,
   DatasetPart,
-  DatasetVersion,
+  EvalDomain,
   EvalOutputRow,
-  EvalRecord,
-  EvalResultRow,
-  EvalTaskRow,
-  ImportJobRecord,
-  InferenceRecord,
-  RunRecord,
-  UploadRecord,
+  ImportPayload,
+  JobFields,
+  RunDomain,
 } from "../types.js";
 import type { Row } from "./db.js";
 
@@ -58,83 +52,92 @@ export const toDataset = (r: Row): Dataset => ({
   updated_at: iso(r.updated_at),
 });
 
-export const toDatasetVersion = (r: Row, parts: Row[]): DatasetVersion => ({
-  dataset_id: s(r.dataset_id),
-  version: n(r.version),
-  parts: parts.map(
-    (p): DatasetPart => ({
-      key: s(p.key),
-      count: n(p.count),
-      sha256: s(p.sha256),
-      bytes: n(p.bytes),
-    }),
-  ),
-  record_count: n(r.record_count),
-  created_at: iso(r.created_at),
+export const toPart = (r: Row): DatasetPart => ({
+  key: s(r.key),
+  count: n(r.count),
+  sha256: s(r.sha256),
+  bytes: n(r.bytes),
 });
 
-export const toImportJob = (r: Row): ImportJobRecord => ({
+export const toJob = <S extends string>(r: Row): JobFields<S> => ({
   id: s(r.id),
   workspace_id: s(r.workspace_id),
-  dataset_id: s(r.dataset_id),
-  dataset: s(r.dataset_name),
-  status: s(r.status) as ImportJobRecord["status"],
-  source: j(r.source, {}),
-  connector: s(r.connector) as ImportJobRecord["connector"],
+  kind: s(r.kind) as JobFields["kind"],
+  status: s(r.status) as S,
   attempt: n(r.attempt),
-  imported_count: n(r.imported_count),
-  dropped_count: n(r.dropped_count),
-  detected_scores: j(r.detected_scores, []),
-  drop_reasons: j(r.drop_reasons, []),
-  dataset_version: nn(r.dataset_version),
-  error: sn(r.error),
-  upload_key: sn(r.upload_key),
-  worker_id: sn(r.worker_id),
-  lease_expires_at: isoN(r.lease_expires_at),
-  lease_seconds: n(r.lease_seconds),
   failed_attempts: n(r.failed_attempts),
-  created_at: iso(r.created_at),
-  updated_at: iso(r.updated_at),
-});
-
-export const toRun = (r: Row): RunRecord => ({
-  id: s(r.id),
-  workspace_id: s(r.workspace_id),
-  name: s(r.name),
-  dataset_id: s(r.dataset_id),
-  dataset_name: s(r.dataset_name),
-  dataset_version: n(r.dataset_version),
-  recipe_kind: s(r.recipe_kind) as RunRecord["recipe_kind"],
-  status: s(r.status) as RunRecord["status"],
-  resolved_config: j(r.resolved_config, {} as RunRecord["resolved_config"]),
-  max_cost_usd: nn(r.max_cost_usd),
-  price_per_million_tokens: n(r.price_per_million_tokens),
-  total_steps: n(r.total_steps),
-  current_step: n(r.current_step),
-  attempt: n(r.attempt),
   max_attempts: n(r.max_attempts),
-  failed_attempts: n(r.failed_attempts),
-  billed_tokens: n(r.billed_tokens),
-  attempt_tokens: n(r.attempt_tokens),
   worker_id: sn(r.worker_id),
   lease_expires_at: isoN(r.lease_expires_at),
   lease_seconds: n(r.lease_seconds),
-  latest_metric: j<MetricPoint | null>(r.latest_metric, null),
-  eval_report: j<EvalReport | null>(r.eval_report, null),
-  artifact_id: sn(r.artifact_id),
   waiting_on: sn(r.waiting_on),
-  error: sn(r.error),
+  billed_through: n(r.billed_through),
+  billed_cost: n(r.billed_cost),
+  billed_at: isoN(r.billed_at),
+  error: sn(r.last_error),
   created_at: iso(r.created_at),
   updated_at: iso(r.updated_at),
   finished_at: isoN(r.finished_at),
 });
 
-export const toMetric = (r: Row): MetricPoint =>
-  ({
-    ...j<Record<string, unknown>>(r.point, {}),
-    seq: n(r.seq),
-    attempt: n(r.attempt),
-  }) as MetricPoint;
+export const toImportPayload = (r: Row): ImportPayload => {
+  const p = j<Record<string, unknown>>(r.payload, {});
+
+  return {
+    dataset_id: s(p.dataset_id),
+    dataset: s(p.dataset),
+    source: j(p.source, {}),
+    connector: s(p.connector) as ImportPayload["connector"],
+    upload_key: sn(p.upload_key),
+    imported_count: n(p.imported_count),
+    dropped_count: n(p.dropped_count),
+    detected_scores: j(p.detected_scores, []),
+    drop_reasons: j(p.drop_reasons, []),
+    dataset_version: nn(p.dataset_version),
+  };
+};
+
+export const toRunDomain = (r: Row): RunDomain => ({
+  name: s(r.name),
+  dataset_id: s(r.dataset_id),
+  dataset_name: s(r.dataset_name),
+  dataset_version: n(r.dataset_version),
+  recipe_kind: s(r.recipe_kind) as RunDomain["recipe_kind"],
+  resolved_config: j(r.resolved_config, {} as RunDomain["resolved_config"]),
+  max_cost_usd: nn(r.max_cost_usd),
+  price_per_million_tokens: n(r.price_per_million_tokens),
+  total_steps: n(r.total_steps),
+  current_step: n(r.current_step),
+  billed_tokens: n(r.billed_tokens),
+  attempt_tokens: n(r.attempt_tokens),
+  latest_metric: j<MetricPoint | null>(r.latest_metric, null),
+  eval_report: j<EvalReport | null>(r.eval_report, null),
+  artifact_id: sn(r.artifact_id),
+});
+
+export const toEvalDomain = (r: Row): EvalDomain => ({
+  name: s(r.name),
+  models: j(r.models, []),
+  model_targets: j(r.model_targets, {}),
+  baseline: sn(r.baseline),
+  dataset_id: s(r.dataset_id),
+  dataset_name: s(r.dataset_name),
+  dataset_version: n(r.dataset_version),
+  rubric: j(r.rubric, []),
+  mode: (sn(r.mode) ?? "eval") as EvalDomain["mode"],
+  scored_dataset_version: nn(r.scored_dataset_version),
+  samples: n(r.samples),
+  temperature: n(r.temperature),
+  max_tokens: n(r.max_tokens),
+  limit: nn(r.limit),
+  pass_threshold: n(r.pass_threshold),
+  judge_models: j(r.judge_models, []),
+  local_scorers: j(r.local_scorers, []),
+  total_outputs: n(r.total_outputs),
+  generated: n(r.generated),
+  summary: j(r.summary, []),
+  total_cost_usd: n(r.total_cost_usd),
+});
 
 export const toCheckpoint = (r: Row): CheckpointRecord => ({
   id: s(r.id),
@@ -147,7 +150,7 @@ export const toCheckpoint = (r: Row): CheckpointRecord => ({
   storage_key: s(r.storage_key),
   sha256: s(r.sha256),
   size_bytes: n(r.size_bytes),
-  metadata: j(r.metadata, {}),
+  metadata: j(r.manifest, {}),
   best: r.best === true,
   final: r.final === true,
   expires_at: isoN(r.expires_at),
@@ -160,7 +163,7 @@ export const toArtifact = (r: Row): ArtifactRecord => ({
   name: s(r.name),
   version: s(r.version),
   run_id: sn(r.run_id),
-  checkpoint_id: sn(r.checkpoint_id),
+  checkpoint_id: sn(r.source_id),
   base_model: s(r.base_model),
   recipe_kind: s(r.recipe_kind) as ArtifactRecord["recipe_kind"],
   format: s(r.format) as ArtifactRecord["format"],
@@ -172,106 +175,15 @@ export const toArtifact = (r: Row): ArtifactRecord => ({
   created_at: iso(r.created_at),
 });
 
-export const toUpload = (r: Row): UploadRecord => ({
-  id: s(r.id),
-  workspace_id: s(r.workspace_id),
-  purpose: s(r.purpose) as UploadRecord["purpose"],
-  job_id: sn(r.job_id),
-  attempt: nn(r.attempt),
-  storage_key: s(r.storage_key),
-  sha256: s(r.sha256),
-  size_bytes: n(r.size_bytes),
-  status: s(r.status) as UploadRecord["status"],
-  consumed_by: sn(r.consumed_by),
-  created_at: iso(r.created_at),
-  expires_at: iso(r.expires_at),
-});
-
-export const toDeployment = (r: Row): Deployment => ({
-  id: s(r.id),
-  workspace_id: s(r.workspace_id),
-  name: s(r.name),
-  model_id: s(r.model_id),
-  active_artifact_id: s(r.active_artifact_id),
-  previous_artifact_id: sn(r.previous_artifact_id),
-  fallback_model: sn(r.fallback_model),
-  explore_rate: n(r.explore_rate),
-  status: s(r.status) as Deployment["status"],
-  created_at: iso(r.created_at),
-  updated_at: iso(r.updated_at),
-});
-
-export const toInference = (r: Row): InferenceRecord => ({
-  id: s(r.id),
-  workspace_id: s(r.workspace_id),
-  deployment_name: s(r.deployment_name),
-  artifact_id: s(r.artifact_id),
-  model: s(r.model),
-  created_at: iso(r.created_at),
-});
-
-export const toFeedback = (r: Row): FeedbackRecord => ({
-  id: s(r.id),
-  workspace_id: s(r.workspace_id),
-  inference_id: sn(r.inference_id),
-  session_id: sn(r.session_id),
-  deployment_name: sn(r.deployment_name),
-  idempotency_key: s(r.idempotency_key),
-  score: nn(r.score),
-  expected_output: j<unknown>(r.expected_output, null),
-  metrics: j(r.metrics, {}),
-  created_at: iso(r.created_at),
-});
-
-export const toEval = (r: Row): EvalRecord => ({
-  id: s(r.id),
-  workspace_id: s(r.workspace_id),
-  name: s(r.name),
-  status: s(r.status) as EvalRecord["status"],
-  models: j(r.models, []),
-  model_targets: j(r.model_targets, {}),
-  baseline: sn(r.baseline),
-  dataset_id: s(r.dataset_id),
-  dataset_name: s(r.dataset_name),
-  dataset_version: n(r.dataset_version),
-  rubric: j(r.rubric, []),
-  samples: n(r.samples),
-  temperature: n(r.temperature),
-  max_tokens: n(r.max_tokens),
-  limit: nn(r.limit),
-  pass_threshold: n(r.pass_threshold),
-  judge_models: j(r.judge_models, []),
-  local_scorers: j(r.local_scorers, []),
-  mode: (sn(r.mode) ?? "eval") as EvalRecord["mode"],
-  scored_dataset_version: nn(r.scored_dataset_version),
-  total_outputs: n(r.total_outputs),
-  generated: n(r.generated),
-  summary: j(r.summary, []),
-  total_cost_usd: n(r.total_cost_usd),
-  error: sn(r.error),
-  attempt: n(r.attempt),
-  worker_id: sn(r.worker_id),
-  lease_expires_at: isoN(r.lease_expires_at),
-  lease_seconds: n(r.lease_seconds),
-  created_at: iso(r.created_at),
-  updated_at: iso(r.updated_at),
-  completed_at: isoN(r.completed_at),
-});
-
-export const toEvalTask = (r: Row): EvalTaskRow => ({
-  eval_id: s(r.eval_id),
-  task_index: n(r.task_index),
-  task_id: s(r.task_id),
-  record: j(r.record, {}),
-});
-
 export const toEvalOutput = (r: Row): EvalOutputRow => ({
   id: s(r.id),
   eval_id: s(r.eval_id),
+  attempt: n(r.attempt),
   task_index: n(r.task_index),
   task_id: s(r.task_id),
   model: s(r.model),
   sample_index: n(r.sample_index),
+  record: j(r.record, {}),
   input: j(r.input, []),
   output: sn(r.output),
   expected_output: j<unknown>(r.expected_output, null),
@@ -283,30 +195,16 @@ export const toEvalOutput = (r: Row): EvalOutputRow => ({
   created_at: iso(r.created_at),
 });
 
-export const toEvalResult = (r: Row): EvalResultRow => ({
-  eval_id: s(r.eval_id),
-  task_index: n(r.task_index),
-  task_id: s(r.task_id),
-  model: s(r.model),
-  score: n(r.score),
-  passed: r.passed === true,
-  sample_scores: j(r.sample_scores, []),
-  judge_model: sn(r.judge_model),
-});
-
-export const toBilling = (r: Row): BillingOutboxEntry => ({
-  id: s(r.id),
-  idempotency_key: s(r.idempotency_key),
-  workspace_id: s(r.workspace_id),
-  kind: s(r.kind) as BillingOutboxEntry["kind"],
-  run_id: s(r.run_id),
+export const toUsage = (r: Row): UsageRecord => ({
+  id: `use_${s(r.seq)}`,
+  kind: s(r.kind) as UsageRecord["kind"],
+  ref_id: s(r.ref_id),
   attempt: n(r.attempt),
+  tokens_from: n(r.tokens_from),
+  tokens_through: n(r.tokens_through),
   tokens: n(r.tokens),
   cost_usd: n(r.cost_usd),
-  status: s(r.status) as BillingOutboxEntry["status"],
-  attempts: n(r.attempts),
-  last_error: sn(r.last_error),
-  next_attempt_at: iso(r.next_attempt_at),
+  price_version: s(r.price_version),
+  idempotency_key: s(r.idempotency_key),
   created_at: iso(r.created_at),
-  sent_at: isoN(r.sent_at),
 });

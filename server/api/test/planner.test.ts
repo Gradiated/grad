@@ -194,7 +194,7 @@ describe("planRun", () => {
     expectCode(
       () => plan({ kind: "sft", model: "meta/llama-405b", lr: 1e-4 }, records),
       "unknown_model",
-      /GET \/v1\/models/,
+      /GET \/v1\/base-models/,
     );
     expectCode(
       () => plan({ kind: "sft", model: "meta/llama-405b" }, records),

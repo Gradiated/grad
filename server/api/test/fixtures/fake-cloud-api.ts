@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 /**
  * Test double for the Gradiated Cloud internal API used by the Cloud adapters
  * (src/adapters-cloud.ts). It is a real HTTP server so the adapters' network
- * code runs unmodified. Decisions and embeddings are deterministic fixtures.
+ * code runs unmodified: auth, the billing check and the usage ledger export.
  */
 
 export interface FakePrincipal {
@@ -14,12 +14,17 @@ export interface FakePrincipal {
   is_platform_admin?: boolean;
 }
 
-export type UsageEntry = {
+export interface UsageEntry {
   idempotency_key: string;
+  seq: number;
   workspace_id: string;
+  kind: "run" | "eval";
+  ref_id: string;
+  attempt: number;
   tokens_processed: number;
   cost_usd: number;
-} & ({ run_id: string; attempt: number } | { eval_id: string });
+  price_version: string;
+}
 
 export interface LoggedRequest {
   path: string;
@@ -38,8 +43,6 @@ export interface FakeCloudApi {
   usage: UsageEntry[];
   /** Every request received, in order. */
   requests: LoggedRequest[];
-  artifacts: Map<string, Record<string, unknown>>;
-  deployments: Map<string, { artifact_id: string; model_id: string }>;
   /** The next `count` requests to `path` (or any path) return HTTP `status`. */
   failNext(count: number, status?: number, path?: string): void;
   /** Delay every response by `ms`. */
@@ -49,8 +52,6 @@ export interface FakeCloudApi {
   callsTo(path: string): LoggedRequest[];
   close(): Promise<void>;
 }
-
-export const EMBEDDING_DIMENSIONS = 8;
 
 const readJson = async (
   req: IncomingMessage,
@@ -62,18 +63,6 @@ const readJson = async (
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 };
 
-const embed = (text: string): number[] => {
-  const vec = Array.from({ length: EMBEDDING_DIMENSIONS }, (_, i) =>
-    [...text].reduce(
-      (acc, ch, j) => acc + ((ch.charCodeAt(0) * (i + 1) + j) % 7),
-      1,
-    ),
-  );
-  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
-
-  return vec.map((v) => Number((v / norm).toFixed(6)));
-};
-
 export const startFakeCloudApi = async (
   options: { serviceToken?: string } = {},
 ): Promise<FakeCloudApi> => {
@@ -82,11 +71,6 @@ export const startFakeCloudApi = async (
   const balances = new Map<string, number>();
   const usage: UsageEntry[] = [];
   const requests: LoggedRequest[] = [];
-  const artifacts = new Map<string, Record<string, unknown>>();
-  const deployments = new Map<
-    string,
-    { artifact_id: string; model_id: string }
-  >();
   const failures: Array<{ remaining: number; status: number; path?: string }> =
     [];
   const canned = new Map<string, Array<{ status: number; body: unknown }>>();
@@ -118,70 +102,8 @@ export const startFakeCloudApi = async (
               },
             ];
       }
-      case "/api/internal/v1/artifacts/publish": {
-        artifacts.set(`${ws}:${String(body.artifact_id)}`, body);
-        return [200, { published: true }];
-      }
-      case "/api/internal/v1/deployments/promote": {
-        const artifactKey = `${ws}:${String(body.artifact_id)}`;
-        if (!artifacts.has(artifactKey)) {
-          return [404, { detail: "artifact not published" }];
-        }
-        const modelId = `${ws}/${String(body.deployment_name)}`;
-        deployments.set(`${ws}:${String(body.deployment_name)}`, {
-          artifact_id: String(body.artifact_id),
-          model_id: modelId,
-        });
-        return [200, { model_id: modelId }];
-      }
-      case "/api/internal/v1/serving/route": {
-        const dep = deployments.get(`${ws}:${String(body.deployment)}`);
-        if (!dep) return [404, { detail: "deployment not serving" }];
-        // The router recipe's manifest names its candidates and fallback model
-        // (server/trainer/grad_trainer/recipes/router.py `manifest()`).
-        const manifest = (artifacts.get(`${ws}:${dep.artifact_id}`)?.manifest ??
-          {}) as { candidates?: string[]; fallback_model?: string };
-        const candidates = manifest.candidates ?? [];
-        if (candidates.length < 2) {
-          return [422, { detail: "artifact is not a trained router" }];
-        }
-        const strong = manifest.fallback_model ?? candidates.at(-1) ?? "";
-        const cheap = candidates.find((m) => m !== strong) ?? strong;
-        const messages = (body.messages ?? []) as Array<{ content?: unknown }>;
-        const length = messages
-          .map((m) => (typeof m.content === "string" ? m.content : ""))
-          .join("").length;
-        const model = length > 200 ? strong : cheap;
-        return [
-          200,
-          {
-            model,
-            is_exploration: false,
-            confidence: 0.9,
-            scores: { [cheap]: length > 200 ? 0.3 : 0.9, [strong]: 0.95 },
-          },
-        ];
-      }
-      case "/api/internal/v1/serving/embeddings": {
-        if (!deployments.has(`${ws}:${String(body.deployment)}`)) {
-          return [404, { detail: "deployment not serving" }];
-        }
-        const inputs = (body.input ?? []) as string[];
-        const tokensUsed = inputs.reduce(
-          (s, t) => s + Math.ceil(t.length / 4),
-          0,
-        );
-        return [
-          200,
-          {
-            data: inputs.map((text, index) => ({
-              index,
-              embedding: embed(text),
-            })),
-            usage: { prompt_tokens: tokensUsed, total_tokens: tokensUsed },
-          },
-        ];
-      }
+      case "/api/internal/v1/billing/usage/cursor":
+        return [200, { seq: Math.max(0, ...usage.map((u) => u.seq)) }];
       default:
         return [404, { detail: `unknown internal route ${path}` }];
     }
@@ -226,21 +148,17 @@ export const startFakeCloudApi = async (
         if (!idempotencyKey)
           return send(400, { detail: "Idempotency-Key required" });
         if (!usage.some((u) => u.idempotency_key === idempotencyKey)) {
-          const common = {
+          usage.push({
             idempotency_key: idempotencyKey,
+            seq: Number(body.seq),
             workspace_id: String(body.workspace_id),
+            kind: body.kind === "eval" ? "eval" : "run",
+            ref_id: String(body.ref_id),
+            attempt: Number(body.attempt),
             tokens_processed: Number(body.tokens_processed),
             cost_usd: Number(body.cost_usd),
-          };
-          usage.push(
-            body.eval_id !== undefined
-              ? { ...common, eval_id: String(body.eval_id) }
-              : {
-                  ...common,
-                  run_id: String(body.run_id),
-                  attempt: Number(body.attempt),
-                },
-          );
+            price_version: String(body.price_version),
+          });
         }
         return send(200, { recorded: true });
       }
@@ -260,8 +178,6 @@ export const startFakeCloudApi = async (
     balances,
     usage,
     requests,
-    artifacts,
-    deployments,
     failNext: (count, status = 503, path) =>
       failures.push({ remaining: count, status, ...(path ? { path } : {}) }),
     setLatency: (ms) => {

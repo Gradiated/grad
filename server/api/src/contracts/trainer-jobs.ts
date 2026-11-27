@@ -135,7 +135,13 @@ export const HeartbeatResponseSchema = z
   .object({
     status: z.string(),
     should_stop: z.boolean(),
-    stop_reason: z.enum(["cancelled", "budget"]).nullable(),
+    stop_reason: z
+      .enum(["cancelled", "budget", "insufficient_balance"])
+      .nullable()
+      .openapi({
+        description:
+          "Why to stop: cancelled, the run's cap (budget), or the workspace ran out of balance (Cloud). Budget and balance stops complete as stopped_budget.",
+      }),
     lease_expires_at: IsoTimestampSchema,
   })
   .openapi("TrainerHeartbeatResponse");
@@ -151,7 +157,9 @@ export const ReportProgressResponseSchema = z
   .object({
     status: RunStatusSchema,
     should_stop: z.boolean(),
-    stop_reason: z.enum(["cancelled", "budget"]).nullable(),
+    stop_reason: z
+      .enum(["cancelled", "budget", "insufficient_balance"])
+      .nullable(),
     cost_usd: z.number().min(0),
   })
   .openapi("ReportTrainerProgressResponse");

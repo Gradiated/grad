@@ -13,8 +13,9 @@ import {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { notFound } from "../errors.js";
+import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
-import { toPublicRun } from "../services/runs.js";
+import { toMetricPoint, toPublicRun } from "../services/runs.js";
 import {
   defaultErrors,
   IdParamSchema,
@@ -82,14 +83,15 @@ export const registerRunRoutes = (
         ...defaultErrors,
       },
     }),
-    async (c) =>
-      c.json(
-        await services.runs.create(
-          workspaceOf(c, "runs:write"),
-          c.req.valid("json"),
-        ),
-        202,
-      ),
+    async (c) => {
+      const created = await services.runs.create(
+        workspaceOf(c, "runs:write"),
+        c.req.valid("json"),
+        await idempotencyOf(c),
+      );
+
+      return c.json(replayAware(c, created), 202);
+    },
   );
 
   app.openapi(
@@ -201,7 +203,9 @@ export const registerRunRoutes = (
       return streamSSE(c, async (stream) => {
         let sincePing = 0;
         while (!stream.aborted) {
-          const points = await deps.store.metrics.list(id, afterSeq, SSE_BATCH);
+          const points = (
+            await deps.store.jobs.listEvents(id, "metric", afterSeq, SSE_BATCH)
+          ).map(toMetricPoint);
           for (const point of points) {
             await stream.writeSSE({
               event: "metric",

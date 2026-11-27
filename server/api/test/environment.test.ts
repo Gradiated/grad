@@ -12,7 +12,7 @@ const ADMIN_HASH = hashApiKey("admin");
 const DB = { DATABASE_URL: "postgres://x" };
 
 describe("parseServerEnvironment", () => {
-  it("defaults to loopback, api_key auth and disabled deploy", () => {
+  it("defaults to loopback, api_key auth and noop billing", () => {
     const env = parseServerEnvironment({
       ...DB,
       ADMIN_API_KEY_HASH: ADMIN_HASH,
@@ -21,7 +21,6 @@ describe("parseServerEnvironment", () => {
       HOST: "127.0.0.1",
       PORT: 8787,
       AUTH_MODE: "api_key",
-      DEPLOY_MODE: "disabled",
       BILLING_MODE: "noop",
       MAX_ATTEMPTS: 10,
     });
@@ -39,9 +38,9 @@ describe("parseServerEnvironment", () => {
       parseServerEnvironment({
         ...DB,
         AUTH_MODE: "none",
-        DEPLOY_MODE: "local",
+        BILLING_MODE: "local",
       }),
-    ).toThrow(/DEPLOY_MODE/);
+    ).toThrow(/BILLING_MODE/);
     expect(() => parseServerEnvironment({ ...DB, AUTH_MODE: "cloud" })).toThrow(
       /CLOUD_INTERNAL_API_URL/,
     );
@@ -123,8 +122,8 @@ describe("buildDependencies", () => {
         }),
       );
       expect(deps.storage.kind).toBe("local");
-      expect(deps.deploy.mode).toBe("disabled");
-      expect(deps.serving.mode).toBe("disabled");
+      expect(deps.billing.usageExport).toBeUndefined();
+      expect(deps.settings.jobEventRetentionDays).toBe(90);
       expect(deps.inference).not.toBeNull();
       expect(deps.inference?.judge).not.toBe(deps.inference?.models);
       expect(deps.catalog.find("t/x")).toBeDefined();
@@ -157,7 +156,6 @@ describe("buildDependencies", () => {
           DATABASE_URL: postgresUrl(),
           AUTH_MODE: "cloud",
           BILLING_MODE: "cloud",
-          DEPLOY_MODE: "cloud",
           CLOUD_INTERNAL_API_URL: "http://127.0.0.1:9",
           CLOUD_SERVICE_TOKEN: "svc",
           S3_BUCKET: "b",
@@ -168,8 +166,7 @@ describe("buildDependencies", () => {
         }),
       );
       expect(cloud.storage.kind).toBe("s3");
-      expect(cloud.deploy.mode).toBe("cloud");
-      expect(cloud.serving.mode).toBe("cloud");
+      expect(cloud.billing.usageExport).toBeDefined();
       expect(cloud.inference).toBeNull();
       expect(await cloud.auth.authenticate("w")).toMatchObject({
         kind: "worker",

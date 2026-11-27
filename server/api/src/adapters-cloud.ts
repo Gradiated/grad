@@ -6,9 +6,6 @@ import {
   type AuthAdapter,
   type AuthPrincipal,
   type BillingAdapter,
-  type DeployAdapter,
-  type RouteDecision,
-  type ServingAdapter,
 } from "./adapters.js";
 import { systemClock, type Clock } from "./clock.js";
 import { WORKSPACE_SCOPES, type Scope } from "./contracts.js";
@@ -300,231 +297,51 @@ export const createCloudBillingAdapter = (
           : {}),
       };
     },
-    recordRunUsage: (input) =>
-      reportUsage(
-        {
-          workspace_id: input.workspaceId,
-          run_id: input.runId,
-          attempt: input.attempt,
-          tokens_processed: input.tokensProcessed,
-          cost_usd: input.costUsd,
-        },
-        input.idempotencyKey,
-      ),
-    recordEvalUsage: (input) =>
-      reportUsage(
-        {
-          workspace_id: input.workspaceId,
-          eval_id: input.evalId,
-          tokens_processed: input.tokensProcessed,
-          cost_usd: input.costUsd,
-        },
-        input.idempotencyKey,
-      ),
-  };
-};
-
-const toUpstreamError = (error: unknown, what: string): ApiError =>
-  error instanceof ApiError
-    ? error
-    : new ApiError(
-        502,
-        "cloud_upstream_error",
-        "Gradiated Cloud request failed",
-        `${what}: ${errorMessage(error)}`,
-      );
-
-export const createCloudDeployAdapter = (
-  cfg: CloudAdapterConfig,
-): DeployAdapter => {
-  const resolved = validateCloudConfig(cfg);
-
-  return {
-    mode: "cloud",
-    publishAndPromote: async ({
-      workspaceId,
-      name,
-      artifact,
-      fallbackModel,
-      requestKey,
-    }) => {
+    canContinue: async (workspaceId) => {
       try {
-        const publish = await postInternalJson(
+        const res = await postInternalJson(
           resolved,
-          "/api/internal/v1/artifacts/publish",
-          {
-            workspace_id: workspaceId,
-            artifact_id: artifact.id,
-            base_model: artifact.base_model,
-            recipe_kind: artifact.recipe_kind,
-            format: artifact.format,
-            storage_key: artifact.storage_key,
-            sha256: artifact.sha256,
-            size_bytes: artifact.size_bytes,
-            manifest: artifact.manifest,
-          },
-          `art-publish:${workspaceId}:${artifact.id}`,
+          "/api/internal/v1/billing/check",
+          { workspace_id: workspaceId, estimated_cost_usd: 0 },
         );
-        if (!isOk(publish.status)) {
-          throw new Error(
-            `artifact publish returned HTTP ${publish.status} ${detailOf(publish)}`.trim(),
-          );
-        }
-
-        const promote = await postInternalJson(
-          resolved,
-          "/api/internal/v1/deployments/promote",
-          {
-            workspace_id: workspaceId,
-            deployment_name: name,
-            artifact_id: artifact.id,
-            fallback_model: fallbackModel,
-          },
-          `deploy-promote:${workspaceId}:${name}:${requestKey ?? artifact.id}`,
-        );
-        if (!isOk(promote.status)) {
-          throw new Error(
-            `deployment promote returned HTTP ${promote.status} ${detailOf(promote)}`.trim(),
-          );
-        }
-
-        const modelId =
-          typeof promote.json.model_id === "string"
-            ? promote.json.model_id.trim()
-            : "";
-        if (!modelId) {
-          throw new Error("deployment promote response is missing model_id");
-        }
-
-        return { modelId };
-      } catch (error) {
-        throw toUpstreamError(error, "Deploy failed");
+        // A billing outage never stops running work.
+        return !isOk(res.status) || res.json.allowed !== false;
+      } catch {
+        return true;
       }
     },
-  };
-};
-
-const RouteDecisionSchema = z.object({
-  model: z.string().min(1),
-  is_exploration: z.boolean(),
-  confidence: z.number().min(0).max(1),
-  scores: z.record(z.string(), z.number()),
-});
-
-const EmbeddingsSchema = z.object({
-  data: z
-    .array(
-      z.object({
-        index: z.number().int().min(0),
-        embedding: z.array(z.number()),
-      }),
-    )
-    .min(1),
-  usage: z.object({
-    prompt_tokens: z.number().int().min(0),
-    total_tokens: z.number().int().min(0),
-  }),
-});
-
-const callServing = async <T>(
-  cfg: ResolvedConfig,
-  path: string,
-  body: Record<string, unknown>,
-  schema: z.ZodType<T>,
-): Promise<T> => {
-  let res: InternalResponse;
-  try {
-    res = await postInternalJson(cfg, path, body);
-  } catch (error) {
-    throw new ApiError(
-      503,
-      "serving_unavailable",
-      "Serving unavailable",
-      errorMessage(error),
-    );
-  }
-  if (res.status === 404) {
-    throw new ApiError(
-      404,
-      "deployment_not_serving",
-      "Deployment not serving",
-      detailOf(res) ||
-        "Gradiated Cloud has no serving endpoint for this deployment.",
-    );
-  }
-  if (!isOk(res.status)) {
-    throw new ApiError(
-      res.status >= 500 ? 503 : 502,
-      res.status >= 500 ? "serving_unavailable" : "cloud_upstream_error",
-      "Serving request failed",
-      `Gradiated Cloud serving returned HTTP ${res.status}${detailOf(res) ? `: ${detailOf(res)}` : ""}.`,
-    );
-  }
-
-  const parsed = schema.safeParse(res.json);
-  if (!parsed.success) {
-    throw new ApiError(
-      502,
-      "cloud_upstream_error",
-      "Malformed serving response",
-      `Gradiated Cloud returned a malformed response for ${path}.`,
-    );
-  }
-
-  return parsed.data;
-};
-
-export const createCloudServingAdapter = (
-  cfg: CloudAdapterConfig,
-): ServingAdapter => {
-  const resolved = validateCloudConfig(cfg);
-
-  return {
-    mode: "cloud",
-    route: async (input): Promise<RouteDecision> =>
-      callServing(
-        resolved,
-        "/api/internal/v1/serving/route",
-        {
-          workspace_id: input.workspaceId,
-          inference_id: input.inferenceId,
-          deployment: input.deploymentName,
-          model_id: input.modelId,
-          artifact_id: input.artifactId,
-          fallback_model: input.fallbackModel,
-          explore_rate: input.exploreRate,
-          messages: input.messages,
-          tools: input.tools ?? null,
-          session_id: input.sessionId ?? null,
-        },
-        RouteDecisionSchema,
-      ),
-    embed: async (input) => {
-      const result = await callServing(
-        resolved,
-        "/api/internal/v1/serving/embeddings",
-        {
-          workspace_id: input.workspaceId,
-          deployment: input.deploymentName,
-          model_id: input.modelId,
-          input: input.inputs,
-        },
-        EmbeddingsSchema,
-      );
-      if (result.data.length !== input.inputs.length) {
-        throw new ApiError(
-          502,
-          "cloud_upstream_error",
-          "Malformed serving response",
-          `Expected ${input.inputs.length} embeddings, received ${result.data.length}.`,
+    usageExport: {
+      cursor: async () => {
+        const res = await postInternalJson(
+          resolved,
+          "/api/internal/v1/billing/usage/cursor",
+          {},
         );
-      }
-      const ordered = [...result.data].sort((a, b) => a.index - b.index);
+        if (!isOk(res.status)) {
+          throw new Error(
+            `Cloud billing cursor failed (HTTP ${res.status}): ${detailOf(res)}`,
+          );
+        }
 
-      return {
-        embeddings: ordered.map((d) => d.embedding),
-        usage: result.usage,
-      };
+        return typeof res.json.seq === "number" ? res.json.seq : 0;
+      },
+      push: (row) =>
+        reportUsage(
+          {
+            seq: row.seq,
+            workspace_id: row.workspace_id,
+            kind: row.kind,
+            ref_id: row.ref_id,
+            attempt: row.attempt,
+            tokens_from: row.tokens_from,
+            tokens_through: row.tokens_through,
+            tokens_processed: row.tokens,
+            cost_usd: row.cost_usd,
+            price_version: row.price_version,
+            created_at: row.created_at,
+          },
+          row.idempotency_key,
+        ),
     },
   };
 };

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { stagingKey } from "../src/services/uploads.js";
 import { S3ObjectStore } from "../src/storage/s3.js";
-import { makeTestApp, type TestApp } from "./fixtures/app.js";
+import { makeTestApp, WORKSPACE_A, type TestApp } from "./fixtures/app.js";
 import { ManualClock } from "./fixtures/clock.js";
 import { s3Target } from "./fixtures/minio.js";
 import {
@@ -107,12 +108,8 @@ describe.skipIf(!target)("self-hosted stack (Postgres + S3)", () => {
       ).text(),
     ).toBe("ckpt-state");
 
-    await t.services.billing.idle();
-    const outbox = await t.deps.store.billing.listByRun(run.id);
-    expect(outbox.map((e) => [e.attempt, e.status])).toEqual([
-      [1, "sent"],
-      [2, "sent"],
-    ]);
+    const usage = await t.deps.store.usage.listByRef(run.id);
+    expect([...new Set(usage.map((u) => u.attempt))]).toEqual([1, 2]);
   });
 
   it("imports a presigned upload and refuses unverifiable uploads", async () => {
@@ -184,8 +181,11 @@ describe.skipIf(!target)("self-hosted stack (Postgres + S3)", () => {
         sha256: sha256Hex("abc"),
       },
     });
-    const record = await t.deps.store.uploads.get(small.body.upload_id);
-    await storage.put(record!.storage_key, Buffer.from("abcd"));
+    // Bytes that S3 never checksummed (a direct put) fail the commit check.
+    await storage.put(
+      stagingKey(WORKSPACE_A, small.body.upload_id),
+      Buffer.from("abcd"),
+    );
     const mismatch = await t.json("/v1/datasets/s3/imports", {
       body: { source: { kind: "upload", upload_id: small.body.upload_id } },
     });

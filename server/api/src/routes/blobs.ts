@@ -4,7 +4,7 @@ import type { OpenAPIHono } from "@hono/zod-openapi";
 import type { AppDependencies } from "../deps.js";
 import { ApiError, notFound } from "../errors.js";
 import type { Services } from "../services/index.js";
-import { BLOB_DOWNLOAD_PATH, BLOB_UPLOAD_PREFIX } from "../storage/signer.js";
+import { BLOB_DOWNLOAD_PATH, BLOB_UPLOAD_PATH } from "../storage/signer.js";
 import { ObjectNotFoundError } from "../storage/types.js";
 import type { AppEnv } from "./helpers.js";
 
@@ -21,23 +21,25 @@ export const registerBlobRoutes = (
   deps: AppDependencies,
   services: Services,
 ): void => {
-  app.put(`${BLOB_UPLOAD_PREFIX}:id`, async (c) => {
-    const id = c.req.param("id");
+  app.put(BLOB_UPLOAD_PATH, async (c) => {
     const body = c.req.raw.body
       ? (Readable.fromWeb(c.req.raw.body as never) as AsyncIterable<Uint8Array>)
       : emptyBody();
-    const upload = await services.uploads.receive(
-      id,
-      c.req.query("exp") ?? "",
-      c.req.query("sig") ?? "",
+    const blob = await services.uploads.receive(
+      {
+        key: c.req.query("key") ?? "",
+        size: c.req.query("size") ?? "",
+        exp: c.req.query("exp") ?? "",
+        sig: c.req.query("sig") ?? "",
+      },
       body,
     );
 
     return c.json(
       {
-        upload_id: upload.id,
-        sha256: upload.sha256,
-        size_bytes: upload.size_bytes,
+        upload_id: blob.sha256,
+        sha256: blob.sha256,
+        size_bytes: blob.sizeBytes,
       },
       200,
     );

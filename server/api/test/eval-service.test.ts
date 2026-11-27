@@ -16,6 +16,7 @@ import {
   seedArtifact,
   seedDataset,
   type EvalHarness,
+  createEval,
 } from "./fixtures/evals.js";
 import { judgeResponder } from "./fixtures/fake-openai.js";
 
@@ -45,7 +46,8 @@ describe("eval service", () => {
         ),
       ).rejects.toMatchObject({ status: 501, code: "inference_unavailable" });
       await expect(
-        t.services.evals.create(
+        createEval(
+          t.services.evals,
           WORKSPACE_A,
           request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
         ),
@@ -153,7 +155,8 @@ describe("eval service", () => {
     );
     expect(empty.warnings.join("\n")).toMatch(/nothing would be evaluated/);
     await expect(
-      t.services.evals.create(
+      createEval(
+        t.services.evals,
         WORKSPACE_A,
         request({ models: ["qwen/qwen3-8b"], dataset: "empty" }),
       ),
@@ -168,7 +171,8 @@ describe("eval service", () => {
     fake.setModel(artifact.id, goldResponder);
     fake.setModel("qwen/qwen3-8b", () => ({ content: "wrong" }));
 
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({
         name: "gold-check",
@@ -226,7 +230,7 @@ describe("eval service", () => {
       "hard-cases",
       failures.data.map((f) => f.record),
     );
-    expect(mined.record_count).toBe(6);
+    expect(mined.value.record_count).toBe(6);
 
     const none = await t.services.evals.listFailures(WORKSPACE_A, created.id, {
       limit: 50,
@@ -241,7 +245,8 @@ describe("eval service", () => {
     await seedDataset(t, "qa", qaRecords(3));
     fake.setModel("qwen/qwen3-32b", judgeResponder(0.8));
 
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({
         models: ["qwen/qwen3-8b"],
@@ -275,7 +280,8 @@ describe("eval service", () => {
     const { t } = h;
     await seedDataset(t, "qa", qaRecords(3));
     const evals = t.services.evals;
-    const created = await evals.create(
+    const created = await createEval(
+      evals,
       WORKSPACE_A,
       request({
         models: ["qwen/qwen3-8b"],
@@ -359,11 +365,13 @@ describe("eval service", () => {
     await seedDataset(t, "qa", qaRecords(2));
     const evals = t.services.evals;
     const rubric = [{ name: "fn", kind: "code" as const, runtime: "local" }];
-    const scored = await evals.create(
+    const scored = await createEval(
+      evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa", rubric }),
     );
-    const abandoned = await evals.create(
+    const abandoned = await createEval(
+      evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa", rubric }),
     );
@@ -398,7 +406,8 @@ describe("eval service", () => {
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(2));
     fake.setModel("qwen/qwen3-8b", () => ({ status: 500 }));
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
@@ -417,7 +426,8 @@ describe("eval service", () => {
         ? { status: 400 }
         : { content: "ok" },
     );
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
@@ -432,20 +442,23 @@ describe("eval service", () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(4));
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
     const store = t.deps.store;
-    const crashed = await store.evals.claimNext({
+    const crashed = await t.services.queue.claimRow({
       workerId: "dead-executor",
       leaseSeconds: 30,
-      now: t.clock.now(),
+      kinds: ["eval"],
     });
     expect(crashed?.id).toBe(created.id);
-    await store.evals.upsertOutput({
+    await store.evals.insertOutput({
       id: "evout_pre",
       eval_id: created.id,
+      attempt: 1,
+      record: { messages: [{ role: "user", content: "question 0" }] },
       task_index: 0,
       task_id: "q0",
       model: "qwen/qwen3-8b",
@@ -477,17 +490,18 @@ describe("eval service", () => {
     h = await makeEvalHarness({ maxAttempts: 1 });
     const { t } = h;
     await seedDataset(t, "qa", qaRecords(1));
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
-    await t.deps.store.evals.claimNext({
+    await t.services.queue.claimRow({
       workerId: "dead",
       leaseSeconds: 30,
-      now: t.clock.now(),
+      kinds: ["eval"],
     });
     t.clock.advanceSeconds(41);
-    expect(await t.services.evals.recoverExpired(t.clock.now())).toBe(1);
+    expect(await t.services.queue.expireLeases(t.clock.now())).toBe(1);
     const failed = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(failed.status).toBe("failed");
     expect(failed.error).toMatch(/max_attempts=1/);
@@ -497,7 +511,8 @@ describe("eval service", () => {
     h = await makeEvalHarness();
     const { t } = h;
     await seedDataset(t, "qa", qaRecords(1));
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
@@ -523,7 +538,8 @@ describe("eval service", () => {
     h = await makeEvalHarness();
     const { t } = h;
     await seedDataset(t, "qa", qaRecords(2));
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
@@ -544,7 +560,8 @@ describe("eval service", () => {
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(3));
     fake.setModel("qwen/qwen3-8b", () => ({ content: "slow", delayMs: 150 }));
-    const created = await t.services.evals.create(
+    const created = await createEval(
+      t.services.evals,
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );

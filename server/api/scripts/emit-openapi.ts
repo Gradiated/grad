@@ -5,8 +5,6 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 import {
-  createDisabledDeployAdapter,
-  createDisabledServingAdapter,
   createLocalNoneAuth,
   createNoopBillingAdapter,
 } from "../src/adapters.js";
@@ -32,8 +30,6 @@ const run = async () => {
     signer: createBlobSigner("openapi"),
     auth: createLocalNoneAuth(),
     billing: createNoopBillingAdapter(),
-    deploy: createDisabledDeployAdapter(),
-    serving: createDisabledServingAdapter(),
     catalog: createModelCatalog(),
     clock: systemClock,
     inference: null,

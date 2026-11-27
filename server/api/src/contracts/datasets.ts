@@ -164,7 +164,10 @@ export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
 
 export const UploadTicketSchema = z
   .object({
-    upload_id: z.string().min(1),
+    upload_id: z.string().min(1).openapi({
+      description:
+        "The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless.",
+    }),
     method: z.literal("PUT"),
     url: z.string().min(1).openapi({
       description:

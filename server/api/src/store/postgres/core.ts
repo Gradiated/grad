@@ -4,39 +4,32 @@ import { hashApiKey } from "../../adapters.js";
 import type { Clock } from "../../clock.js";
 import { newId } from "../../ids.js";
 import type {
-  DatasetPart,
-  DatasetVersion,
   ApiKeyRepository,
+  DatasetPart,
   DatasetRepository,
-  ImportJobRepository,
-  UploadRepository,
+  IdempotentHit,
 } from "../types.js";
-import {
-  expectClause,
-  jsonParam,
-  Params,
-  setClause,
-  type ColumnTypes,
-  type Db,
-} from "./db.js";
-import {
-  toApiKey,
-  toDataset,
-  toDatasetVersion,
-  toImportJob,
-  toUpload,
-} from "./mappers.js";
-import { addSecondsIso, first, listNewest, nowIso } from "./shared.js";
+import { Params, type Db } from "./db.js";
+import { toApiKey, toDataset, toPart } from "./mappers.js";
+import { first, listNewest, nowIso } from "./shared.js";
+
+const findHit = async (
+  db: Db,
+  sql: string,
+  params: unknown[],
+): Promise<IdempotentHit | null> =>
+  first(await db.query<{ id: string; request_hash: string }>(sql, params));
 
 export const createApiKeyRepository = (
   db: Db,
   clock: Clock,
 ): ApiKeyRepository => ({
-  create: async ({ workspaceId, name, scopes }) => {
+  create: async ({ workspaceId, name, scopes, idempotency }) => {
     const secret = `grad_${randomBytes(24).toString("hex")}`;
     const rows = await db.query(
-      `INSERT INTO grad_api_keys (id, workspace_id, name, prefix, key_hash, scopes, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz) RETURNING *`,
+      `INSERT INTO grad_api_keys
+         (id, workspace_id, name, prefix, key_hash, scopes, idempotency_key, request_hash, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::timestamptz) RETURNING *`,
       [
         newId("key"),
         workspaceId,
@@ -44,6 +37,8 @@ export const createApiKeyRepository = (
         secret.slice(0, 12),
         hashApiKey(secret),
         JSON.stringify(scopes),
+        idempotency?.key ?? null,
+        idempotency?.hash ?? null,
         nowIso(clock),
       ],
     );
@@ -62,12 +57,13 @@ export const createApiKeyRepository = (
     });
   },
   revoke: async (workspaceId, id) => {
-    const rows = await db.query(
-      `UPDATE grad_api_keys SET revoked_at = COALESCE(revoked_at, $3::timestamptz)
-       WHERE workspace_id = $1 AND id = $2 RETURNING *`,
-      [workspaceId, id, nowIso(clock)],
+    const row = first(
+      await db.query(
+        `UPDATE grad_api_keys SET revoked_at = COALESCE(revoked_at, $3::timestamptz)
+         WHERE workspace_id = $1 AND id = $2 RETURNING *`,
+        [workspaceId, id, nowIso(clock)],
+      ),
     );
-    const row = first(rows);
 
     return row ? toApiKey(row) : null;
   },
@@ -88,34 +84,89 @@ export const createApiKeyRepository = (
       scopes: key.scopes,
     };
   },
+  findIdempotent: (workspaceId, key) =>
+    findHit(
+      db,
+      "SELECT id, request_hash FROM grad_api_keys WHERE workspace_id = $1 AND idempotency_key = $2",
+      [workspaceId, key],
+    ),
 });
 
 export const createDatasetRepository = (
   db: Db,
   clock: Clock,
 ): DatasetRepository => {
-  const repo: DatasetRepository = {
-    create: ({ workspaceId, name, metadata }) =>
-      db.atomic(async () => {
-        const ts = nowIso(clock);
-        const row = first(
-          await db.query(
-            `INSERT INTO grad_datasets (id, workspace_id, name, version, record_count, metadata, created_at, updated_at)
-             VALUES ($1, $2, $3, 0, 0, $4::jsonb, $5::timestamptz, $5::timestamptz)
-             ON CONFLICT (workspace_id, name) DO NOTHING RETURNING *`,
-            [newId("ds"), workspaceId, name, JSON.stringify(metadata), ts],
-          ),
-        );
-        if (!row) return null;
-        const dataset = toDataset(row);
-        await db.query(
-          `INSERT INTO grad_dataset_versions (dataset_id, version, part_count, record_count, created_at)
-           VALUES ($1, 0, 0, 0, $2::timestamptz)`,
-          [dataset.id, ts],
-        );
+  /** Inserts committed parts as `version`. */
+  const insertParts = async (
+    datasetId: string,
+    version: number,
+    parts: readonly DatasetPart[],
+    idempotency: { key: string; hash: string } | undefined,
+  ) => {
+    for (const [i, part] of parts.entries()) {
+      await db.query(
+        `INSERT INTO grad_dataset_parts
+           (dataset_id, version, key, count, sha256, bytes, idempotency_key, request_hash, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)`,
+        [
+          datasetId,
+          version,
+          part.key,
+          part.count,
+          part.sha256,
+          part.bytes,
+          i === 0 ? (idempotency?.key ?? null) : null,
+          i === 0 ? (idempotency?.hash ?? null) : null,
+          nowIso(clock),
+        ],
+      );
+    }
+  };
 
-        return dataset;
-      }),
+  /** Bumps the version by one and the count by `added`; returns the row (locked). */
+  const bump = async (
+    datasetId: string,
+    added: number,
+    metadata: Record<string, unknown> | undefined,
+  ) => {
+    const row = first(
+      await db.query(
+        `UPDATE grad_datasets
+         SET version = version + 1, record_count = record_count + $2,
+             metadata = metadata || $3::jsonb, updated_at = $4::timestamptz
+         WHERE id = $1 RETURNING *`,
+        [datasetId, added, JSON.stringify(metadata ?? {}), nowIso(clock)],
+      ),
+    );
+    if (!row) throw new Error(`Dataset '${datasetId}' not found.`);
+
+    return toDataset(row);
+  };
+
+  const repo: DatasetRepository = {
+    create: async ({ workspaceId, name, metadata, idempotency }) => {
+      const ts = nowIso(clock);
+      const row = first(
+        await db.query(
+          `INSERT INTO grad_datasets
+             (id, workspace_id, name, version, record_count, metadata, idempotency_key, request_hash,
+              created_at, updated_at)
+           VALUES ($1, $2, $3, 0, 0, $4::jsonb, $5, $6, $7::timestamptz, $7::timestamptz)
+           ON CONFLICT (workspace_id, name) DO NOTHING RETURNING *`,
+          [
+            newId("ds"),
+            workspaceId,
+            name,
+            JSON.stringify(metadata),
+            idempotency?.key ?? null,
+            idempotency?.hash ?? null,
+            ts,
+          ],
+        ),
+      );
+
+      return row ? toDataset(row) : null;
+    },
     getOrCreate: async (input) => {
       const existing = await repo.get(input.workspaceId, input.name);
       if (existing) return existing;
@@ -157,289 +208,126 @@ export const createDatasetRepository = (
         map: toDataset,
       });
     },
-    appendVersion: ({ datasetId, parts, metadata, countRecords = true }) =>
+    findIdempotent: (workspaceId, key) =>
+      findHit(
+        db,
+        "SELECT id, request_hash FROM grad_datasets WHERE workspace_id = $1 AND idempotency_key = $2",
+        [workspaceId, key],
+      ),
+    appendVersion: ({
+      datasetId,
+      parts,
+      metadata,
+      idempotency,
+      countRecords = true,
+    }) =>
       db.atomic(async () => {
-        const added = countRecords
-          ? parts.reduce((sum, p) => sum + p.count, 0)
-          : 0;
-        const ts = nowIso(clock);
-        const row = first(
-          await db.query(
-            `UPDATE grad_datasets
-             SET version = version + 1, record_count = record_count + $2,
-                 metadata = metadata || $3::jsonb, updated_at = $4::timestamptz
-             WHERE id = $1 RETURNING *`,
-            [datasetId, added, JSON.stringify(metadata ?? {}), ts],
-          ),
-        );
-        if (!row) throw new Error(`Dataset '${datasetId}' not found.`);
-        const dataset = toDataset(row);
-        const previous = first(
-          await db.query(
-            "SELECT part_count FROM grad_dataset_versions WHERE dataset_id = $1 AND version = $2",
-            [datasetId, dataset.version - 1],
-          ),
-        );
-        const start = Number(previous?.part_count ?? 0);
-        for (const [i, part] of parts.entries()) {
-          await db.query(
-            `INSERT INTO grad_dataset_parts (dataset_id, seq, key, count, sha256, bytes)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [
-              datasetId,
-              start + i,
-              part.key,
-              part.count,
-              part.sha256,
-              part.bytes,
-            ],
-          );
-        }
+        const counted = countRecords
+          ? parts
+          : parts.map((p) => ({ ...p, count: 0 }));
+        const added = counted.reduce((sum, p) => sum + p.count, 0);
+        const dataset = await bump(datasetId, added, metadata);
+        await insertParts(datasetId, dataset.version, counted, idempotency);
+
+        return dataset;
+      }),
+    findIdempotentPush: (datasetId, key) =>
+      findHit(
+        db,
+        "SELECT dataset_id AS id, request_hash FROM grad_dataset_parts WHERE dataset_id = $1 AND idempotency_key = $2",
+        [datasetId, key],
+      ),
+    getVersion: async (datasetId, version) => {
+      const dataset = first(
+        await db.query("SELECT version FROM grad_datasets WHERE id = $1", [
+          datasetId,
+        ]),
+      );
+      if (!dataset || version < 0 || version > Number(dataset.version)) {
+        return null;
+      }
+      const parts = (
         await db.query(
-          `INSERT INTO grad_dataset_versions (dataset_id, version, part_count, record_count, created_at)
-           VALUES ($1, $2, $3, $4, $5::timestamptz)`,
+          `SELECT * FROM grad_dataset_parts
+           WHERE dataset_id = $1 AND version BETWEEN 1 AND $2 AND key IS NOT NULL
+           ORDER BY version, batch, id`,
+          [datasetId, version],
+        )
+      ).map(toPart);
+
+      return {
+        dataset_id: datasetId,
+        version,
+        parts,
+        record_count: parts.reduce((sum, p) => sum + p.count, 0),
+      };
+    },
+    stagePart: async ({ datasetId, jobId, attempt, batch, part, dropped }) =>
+      (
+        await db.query(
+          `INSERT INTO grad_dataset_parts
+             (dataset_id, job_id, attempt, batch, key, count, sha256, bytes, dropped, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz)
+           ON CONFLICT (job_id, attempt, batch) DO NOTHING RETURNING id`,
           [
             datasetId,
-            dataset.version,
-            start + parts.length,
-            dataset.record_count,
-            ts,
+            jobId,
+            attempt,
+            batch,
+            part?.key ?? null,
+            part?.count ?? 0,
+            part?.sha256 ?? null,
+            part?.bytes ?? 0,
+            dropped,
+            nowIso(clock),
           ],
-        );
-        const version = await repo.getVersion(datasetId, dataset.version);
-
-        return { dataset, version: version as DatasetVersion };
-      }),
-    getVersion: async (datasetId, version) => {
-      const row = first(
-        await db.query(
-          "SELECT * FROM grad_dataset_versions WHERE dataset_id = $1 AND version = $2",
-          [datasetId, version],
-        ),
-      );
-      if (!row) return null;
-      const parts = await db.query(
-        `SELECT key, count, sha256, bytes FROM grad_dataset_parts
-         WHERE dataset_id = $1 AND seq < $2 ORDER BY seq`,
-        [datasetId, row.part_count],
+        )
+      ).length > 0,
+    listStaged: async (jobId, attempt) => {
+      const rows = await db.query(
+        `SELECT * FROM grad_dataset_parts WHERE job_id = $1 AND attempt = $2 ORDER BY batch`,
+        [jobId, attempt],
       );
 
-      return toDatasetVersion(row, parts);
+      return {
+        parts: rows.filter((r) => r.key !== null).map(toPart),
+        dropped: rows.reduce((sum, r) => sum + Number(r.dropped), 0),
+        count: rows.reduce((sum, r) => sum + Number(r.count), 0),
+      };
     },
+    commitStaged: ({ datasetId, jobId, attempt, metadata }) =>
+      db.atomic(async () => {
+        const staged = await db.query(
+          `SELECT count FROM grad_dataset_parts
+           WHERE job_id = $1 AND attempt = $2 AND version IS NULL AND key IS NOT NULL`,
+          [jobId, attempt],
+        );
+        const added = staged.reduce((sum, r) => sum + Number(r.count), 0);
+        const dataset = await bump(datasetId, added, metadata);
+        await db.query(
+          `UPDATE grad_dataset_parts SET version = $3
+           WHERE job_id = $1 AND attempt = $2 AND version IS NULL`,
+          [jobId, attempt, dataset.version],
+        );
+        const orphans = await db.query<{ key: string | null }>(
+          `DELETE FROM grad_dataset_parts
+           WHERE job_id = $1 AND version IS NULL RETURNING key`,
+          [jobId],
+        );
+
+        return {
+          dataset,
+          orphanKeys: orphans.flatMap((r) => (r.key ? [r.key] : [])),
+        };
+      }),
+    discardStaged: async (jobId) =>
+      (
+        await db.query<{ key: string | null }>(
+          "DELETE FROM grad_dataset_parts WHERE job_id = $1 AND version IS NULL RETURNING key",
+          [jobId],
+        )
+      ).flatMap((r) => (r.key ? [r.key] : [])),
   };
 
   return repo;
 };
-
-const IMPORT_COLUMNS: ColumnTypes = {
-  json: new Set(["detected_scores", "drop_reasons", "source"]),
-  timestamps: new Set(["lease_expires_at", "updated_at"]),
-};
-
-export const createImportJobRepository = (
-  db: Db,
-  clock: Clock,
-): ImportJobRepository => ({
-  create: async (input) => {
-    const ts = nowIso(clock);
-    const rows = await db.query(
-      `INSERT INTO grad_import_jobs
-         (id, workspace_id, dataset_id, dataset_name, status, source, connector, upload_key, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'queued', $5::jsonb, $6, $7, $8::timestamptz, $8::timestamptz)
-       RETURNING *`,
-      [
-        newId("imp"),
-        input.workspaceId,
-        input.datasetId,
-        input.datasetName,
-        JSON.stringify(input.source),
-        input.connector,
-        input.uploadKey,
-        ts,
-      ],
-    );
-
-    return toImportJob(rows[0] ?? {});
-  },
-  get: async (workspaceId, id) => {
-    const row = first(
-      await db.query(
-        "SELECT * FROM grad_import_jobs WHERE workspace_id = $1 AND id = $2",
-        [workspaceId, id],
-      ),
-    );
-
-    return row ? toImportJob(row) : null;
-  },
-  getById: async (id) => {
-    const row = first(
-      await db.query("SELECT * FROM grad_import_jobs WHERE id = $1", [id]),
-    );
-
-    return row ? toImportJob(row) : null;
-  },
-  list: (workspaceId, page) => {
-    const params = new Params();
-
-    return listNewest(db, {
-      table: "grad_import_jobs",
-      where: `workspace_id = ${params.add(workspaceId)}`,
-      params,
-      page,
-      map: toImportJob,
-    });
-  },
-  update: async (id, patch, expect) => {
-    const params = new Params();
-    const sets = setClause(
-      { ...patch, updated_at: patch.updated_at ?? nowIso(clock) },
-      IMPORT_COLUMNS,
-      params,
-    );
-    const where = `id = ${params.add(id)}${expectClause(expect, params)}`;
-    const row = first(
-      await db.query(
-        `UPDATE grad_import_jobs SET ${sets.join(", ")} WHERE ${where} RETURNING *`,
-        params.values,
-      ),
-    );
-
-    return row ? toImportJob(row) : null;
-  },
-  claimNext: async ({ workerId, leaseSeconds, now, workspaceId }) => {
-    const row = first(
-      await db.query(
-        `UPDATE grad_import_jobs
-         SET status = 'running', attempt = attempt + 1, worker_id = $1,
-             lease_expires_at = $2::timestamptz, lease_seconds = $3,
-             updated_at = $4::timestamptz
-         WHERE id = (
-           SELECT id FROM grad_import_jobs
-           WHERE status = 'queued' AND ($5::text IS NULL OR workspace_id = $5)
-           ORDER BY created_at, id COLLATE "C"
-           LIMIT 1 FOR UPDATE SKIP LOCKED
-         )
-         RETURNING *`,
-        [
-          workerId,
-          addSecondsIso(now, leaseSeconds),
-          leaseSeconds,
-          now.toISOString(),
-          workspaceId ?? null,
-        ],
-      ),
-    );
-
-    return row ? toImportJob(row) : null;
-  },
-  heldBy: async (workerId) => {
-    const row = first(
-      await db.query(
-        `SELECT * FROM grad_import_jobs WHERE worker_id = $1 AND status IN ('running', 'cancelled')
-         ORDER BY updated_at DESC LIMIT 1`,
-        [workerId],
-      ),
-    );
-
-    return row ? toImportJob(row) : null;
-  },
-  listExpiredLeases: async (now, limit) =>
-    (
-      await db.query(
-        `SELECT * FROM grad_import_jobs
-         WHERE worker_id IS NOT NULL
-           AND lease_expires_at + make_interval(secs => lease_seconds / 3.0) < $1::timestamptz
-         ORDER BY lease_expires_at LIMIT $2`,
-        [now.toISOString(), limit],
-      )
-    ).map(toImportJob),
-  addPart: async ({ importId, attempt, batch, part, dropped }) =>
-    (
-      await db.query(
-        `INSERT INTO grad_import_parts (import_id, attempt, batch, part, dropped)
-         VALUES ($1, $2, $3, $4::jsonb, $5)
-         ON CONFLICT (import_id, attempt, batch) DO NOTHING RETURNING seq`,
-        [importId, attempt, batch, jsonParam(part), dropped],
-      )
-    ).length > 0,
-  listParts: async (importId, attempt) => {
-    const rows = await db.query(
-      `SELECT part, dropped FROM grad_import_parts WHERE import_id = $1 AND attempt = $2
-       ORDER BY batch, seq`,
-      [importId, attempt],
-    );
-
-    return {
-      parts: rows.flatMap((r) => (r.part ? [r.part as DatasetPart] : [])),
-      dropped: rows.reduce((sum, r) => sum + Number(r.dropped), 0),
-    };
-  },
-});
-
-export const createUploadRepository = (
-  db: Db,
-  clock: Clock,
-): UploadRepository => ({
-  create: async (input) => {
-    const rows = await db.query(
-      `INSERT INTO grad_uploads
-         (id, workspace_id, purpose, job_id, attempt, storage_key, sha256, size_bytes, status, created_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9::timestamptz, $10::timestamptz)
-       RETURNING *`,
-      [
-        input.id,
-        input.workspaceId,
-        input.purpose,
-        input.jobId,
-        input.attempt,
-        input.storageKey,
-        input.sha256,
-        input.sizeBytes,
-        nowIso(clock),
-        input.expiresAt,
-      ],
-    );
-
-    return toUpload(rows[0] ?? {});
-  },
-  get: async (id) => {
-    const row = first(
-      await db.query("SELECT * FROM grad_uploads WHERE id = $1", [id]),
-    );
-
-    return row ? toUpload(row) : null;
-  },
-  markUploaded: async (id) => {
-    const row = first(
-      await db.query(
-        "UPDATE grad_uploads SET status = 'uploaded' WHERE id = $1 AND status = 'pending' RETURNING *",
-        [id],
-      ),
-    );
-
-    return row ? toUpload(row) : null;
-  },
-  consume: async (id, consumedBy) => {
-    const row = first(
-      await db.query(
-        `UPDATE grad_uploads SET status = 'consumed', consumed_by = $2
-         WHERE id = $1 AND status <> 'consumed' RETURNING *`,
-        [id, consumedBy],
-      ),
-    );
-
-    return row ? toUpload(row) : null;
-  },
-  listExpired: async (now, limit) =>
-    (
-      await db.query(
-        `SELECT * FROM grad_uploads
-         WHERE status <> 'consumed' AND expires_at < $1::timestamptz
-         ORDER BY expires_at LIMIT $2`,
-        [now.toISOString(), limit],
-      )
-    ).map(toUpload),
-  delete: async (id) => {
-    await db.query("DELETE FROM grad_uploads WHERE id = $1", [id]);
-  },
-});

@@ -6,13 +6,20 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
  * the API base URL. Replicas sharing a filesystem must share the secret.
  */
 export interface BlobSigner {
-  uploadPath(uploadId: string, expiresAt: Date): string;
-  verifyUpload(uploadId: string, exp: string, sig: string, now: Date): boolean;
+  /** A PUT of exactly `sizeBytes` to `key` (its last segment is the sha256). */
+  uploadPath(key: string, sizeBytes: number, expiresAt: Date): string;
+  verifyUpload(
+    key: string,
+    sizeBytes: string,
+    exp: string,
+    sig: string,
+    now: Date,
+  ): boolean;
   downloadPath(key: string, expiresAt: Date): string;
   verifyDownload(key: string, exp: string, sig: string, now: Date): boolean;
 }
 
-export const BLOB_UPLOAD_PREFIX = "/blobs/uploads/";
+export const BLOB_UPLOAD_PATH = "/blobs/uploads";
 export const BLOB_DOWNLOAD_PATH = "/blobs/objects";
 
 export const createBlobSigner = (secret?: string): BlobSigner => {
@@ -38,13 +45,15 @@ export const createBlobSigner = (secret?: string): BlobSigner => {
   };
 
   return {
-    uploadPath: (uploadId, expiresAt) => {
+    uploadPath: (objectKey, sizeBytes, expiresAt) => {
       const exp = String(expiresAt.getTime());
+      const subject = `${objectKey}\n${sizeBytes}`;
 
-      return `${BLOB_UPLOAD_PREFIX}${encodeURIComponent(uploadId)}?exp=${exp}&sig=${sign("put", uploadId, exp)}`;
+      return `${BLOB_UPLOAD_PATH}?key=${encodeURIComponent(objectKey)}&size=${sizeBytes}&exp=${exp}&sig=${sign("put", subject, exp)}`;
     },
-    verifyUpload: (uploadId, exp, sig, now) =>
-      verify("put", uploadId, exp, sig, now),
+    verifyUpload: (objectKey, sizeBytes, exp, sig, now) =>
+      /^\d{1,13}$/.test(sizeBytes) &&
+      verify("put", `${objectKey}\n${sizeBytes}`, exp, sig, now),
     downloadPath: (objectKey, expiresAt) => {
       const exp = String(expiresAt.getTime());
 

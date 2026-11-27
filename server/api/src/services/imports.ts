@@ -4,7 +4,6 @@ import type { z } from "@hono/zod-openapi";
 
 import type { AuthPrincipal } from "../adapters.js";
 import { benchmarkMetadata, benchmarkSource } from "../benchmarks.js";
-import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import {
   DatasetRecordSchema,
   type CreateImportRequestSchema,
@@ -14,63 +13,63 @@ import {
 } from "../contracts.js";
 import type {
   CompleteJobRequestSchema,
-  HeartbeatRequestSchema,
   PostImportRecordsRequestSchema,
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
-import { ApiError, conflict, notFound } from "../errors.js";
-import { newId } from "../ids.js";
+import { notFound } from "../errors.js";
+import { createOnce, type Created } from "../idempotency.js";
 import type {
+  IdempotencyInput,
   ImportJobPatch,
   ImportJobRecord,
+  JobRow,
   Page,
   PageRequest,
 } from "../store/types.js";
 import { writeRecordsPart } from "./dataset-records.js";
-import type { DatasetService } from "./datasets.js";
-import { assertWorkerScope } from "./runs.js";
-import type { UploadService } from "./uploads.js";
+import {
+  fenceOf,
+  leaseLost,
+  RELEASE,
+  requeuePatch,
+  type JobKindHandler,
+  type JobQueue,
+} from "./jobs.js";
+import { jobBlobKey, stagingKey, type UploadService } from "./uploads.js";
 
 type CreateImportBody = z.infer<typeof CreateImportRequestSchema>;
-type HeartbeatBody = z.infer<typeof HeartbeatRequestSchema>;
 type RecordsBody = z.infer<typeof PostImportRecordsRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
 
 const MAX_DROP_REASONS = 101;
 
-export const toPublicImport = ({
-  dataset_id: _d,
-  upload_key: _u,
-  worker_id: _w,
-  lease_expires_at: _l,
-  lease_seconds: _s,
-  failed_attempts: _f,
-  ...job
-}: ImportJobRecord): ImportJob => job;
+export const toPublicImport = (job: ImportJobRecord): ImportJob => ({
+  id: job.id,
+  workspace_id: job.workspace_id,
+  dataset: job.dataset,
+  status: job.status,
+  source: job.source,
+  connector: job.connector,
+  attempt: job.attempt,
+  imported_count: job.imported_count,
+  dropped_count: job.dropped_count,
+  detected_scores: job.detected_scores,
+  drop_reasons: job.drop_reasons,
+  dataset_version: job.dataset_version,
+  error: job.error,
+  created_at: job.created_at,
+  updated_at: job.updated_at,
+});
 
 export interface ImportService {
   create(
     workspaceId: string,
     datasetName: string,
     body: CreateImportBody,
-  ): Promise<ImportJob>;
+    idempotency?: IdempotencyInput,
+  ): Promise<Created<ImportJob>>;
   get(workspaceId: string, id: string): Promise<ImportJob>;
   list(workspaceId: string, page: PageRequest): Promise<Page<ImportJob>>;
-
-  claim(
-    principal: AuthPrincipal,
-    input: { workerId: string; leaseSeconds: number },
-  ): Promise<TrainerJob | null>;
-  heartbeat(
-    principal: AuthPrincipal,
-    id: string,
-    body: HeartbeatBody,
-  ): Promise<{
-    status: string;
-    should_stop: boolean;
-    stop_reason: null;
-    lease_expires_at: string;
-  }>;
   postRecords(
     principal: AuthPrincipal,
     id: string,
@@ -85,14 +84,9 @@ export interface ImportService {
     id: string,
     body: CompleteBody,
   ): Promise<ImportJob>;
-  expireLeases(now: Date): Promise<number>;
+  /** The import kind's hooks in the job queue. */
+  handler: JobKindHandler;
 }
-
-const leaseLost = (id: string): ApiError =>
-  conflict(
-    "lease_lost",
-    `This worker no longer holds the lease on job '${id}' (expired, reclaimed, or finished). Stop work on it.`,
-  );
 
 /** The id of record `index` of batch `seq`: the same on every retry of the batch. */
 const batchRecordId = (
@@ -102,106 +96,170 @@ const batchRecordId = (
 ): string =>
   `rec_${createHash("sha256").update(`${job.id}:${job.attempt}:${seq}:${index}`).digest("hex").slice(0, 16)}`;
 
-/** Same attempt rule as runs: lease expiries and abandons count toward maxAttempts. */
-const requeuePatch = (
-  job: ImportJobRecord,
-  maxAttempts: number,
-  what: string,
-): ImportJobPatch => {
-  const failedAttempts = job.failed_attempts + 1;
-
-  return failedAttempts >= maxAttempts
-    ? {
-        status: "failed",
-        failed_attempts: failedAttempts,
-        error: `Attempt ${job.attempt} ${what}; ${failedAttempts} attempt(s) ended without a result (max_attempts=${maxAttempts}).`,
-      }
-    : { status: "queued", failed_attempts: failedAttempts };
-};
-
 export const createImportService = (
   deps: AppDependencies,
-  collaborators: { datasets: DatasetService; uploads: UploadService },
+  collaborators: { uploads: UploadService; queue: () => JobQueue },
 ): ImportService => {
   const { store, storage, clock, settings } = deps;
   const { uploads } = collaborators;
 
-  const loadLeased = async (
-    principal: AuthPrincipal,
-    id: string,
-    workerId: string,
-    attempt: number,
-  ): Promise<ImportJobRecord> => {
+  const load = async (id: string): Promise<ImportJobRecord> => {
     const job = await store.imports.getById(id);
     if (!job) throw notFound("trainer_job", id);
-    assertWorkerScope(principal, job.workspace_id, id);
-    if (job.worker_id !== workerId || job.attempt !== attempt)
-      throw leaseLost(id);
 
     return job;
   };
 
-  const release = (patch: ImportJobPatch): ImportJobPatch => ({
-    ...patch,
-    worker_id: null,
-    lease_expires_at: null,
-    updated_at: clock.now().toISOString(),
-  });
+  const deleteObjects = async (keys: readonly string[]): Promise<void> => {
+    for (const key of keys) await storage.delete(key).catch(() => undefined);
+  };
+
+  /** Closes the attempt; a terminal failure drops the staged parts. */
+  const close = async (
+    job: Pick<JobRow, "id" | "worker_id" | "attempt">,
+    patch: ImportJobPatch,
+    extra: { leaseExpiredBefore?: string } = {},
+  ): Promise<ImportJobRecord> => {
+    const updated = await store.imports.update(
+      job.id,
+      { ...RELEASE, ...patch },
+      { ...fenceOf(job, ["running"]), ...extra },
+    );
+    if (!updated) throw leaseLost(job.id);
+    if (updated.status === "failed") {
+      await deleteObjects(await store.datasets.discardStaged(job.id));
+    }
+
+    return updated;
+  };
+
+  const handler: JobKindHandler = {
+    onClaim: async (row, renewed) => {
+      // Counters describe the current attempt; its parts are staged afresh.
+      const job = renewed
+        ? await load(row.id)
+        : await store.imports.update(
+            row.id,
+            {
+              imported_count: 0,
+              dropped_count: 0,
+              detected_scores: [],
+              drop_reasons: [],
+            },
+            fenceOf(row, ["running"]),
+          );
+      if (!job) return null;
+      const source =
+        job.upload_key !== null
+          ? {
+              ...job.source,
+              download_url: await uploads.downloadUrl(job.upload_key),
+            }
+          : job.source;
+
+      return {
+        id: job.id,
+        kind: "import",
+        attempt: job.attempt,
+        lease_seconds: job.lease_seconds,
+        lease_expires_at: job.lease_expires_at as string,
+        run: null,
+        import: {
+          id: job.id,
+          workspace_id: job.workspace_id,
+          dataset: job.dataset,
+          source,
+          connector: job.connector,
+        },
+        price_per_million_tokens: null,
+        max_cost_usd: null,
+        dataset: null,
+        resume: null,
+        base: null,
+      } satisfies TrainerJob;
+    },
+    onLeaseLost: async (job, fence, now) => {
+      await close(
+        job,
+        requeuePatch(
+          job,
+          `Attempt ${job.attempt} lost its lease`,
+          now.toISOString(),
+        ),
+        { leaseExpiredBefore: fence.leaseExpiredBefore as string },
+      );
+    },
+  };
 
   return {
-    create: async (workspaceId, datasetName, body) => {
-      const dataset = await store.datasets.getOrCreate({
-        workspaceId,
-        name: datasetName,
-        metadata: {},
-      });
+    handler,
 
-      if (body.source.kind === "hf" || body.source.kind === "benchmark") {
-        const job = await store.imports.create({
-          workspaceId,
-          datasetId: dataset.id,
-          datasetName: dataset.name,
-          source:
-            body.source.kind === "hf"
-              ? { ...body.source }
-              : benchmarkSource(body.source.benchmark, body.source.limit),
-          connector: body.connector,
-          uploadKey: null,
-        });
+    create: async (workspaceId, datasetName, body, idempotency) =>
+      createOnce(
+        idempotency,
+        (key) => store.jobs.findIdempotent(workspaceId, key),
+        async (id) => {
+          const job = await store.imports.get(workspaceId, id);
+          if (!job) throw notFound("import", id);
+          return toPublicImport(job);
+        },
+        async () => {
+          const dataset = await store.datasets.getOrCreate({
+            workspaceId,
+            name: datasetName,
+            metadata: {},
+          });
+          const common = {
+            workspaceId,
+            maxAttempts: settings.maxAttempts,
+            datasetId: dataset.id,
+            datasetName: dataset.name,
+            connector: body.connector,
+            idempotency,
+          };
+          if (body.source.kind === "hf" || body.source.kind === "benchmark") {
+            return toPublicImport(
+              await store.imports.create({
+                ...common,
+                source:
+                  body.source.kind === "hf"
+                    ? { ...body.source }
+                    : benchmarkSource(body.source.benchmark, body.source.limit),
+                uploadKey: null,
+              }),
+            );
+          }
 
-        return toPublicImport(job);
-      }
+          const blob = await uploads.commit(body.source.upload_id, (sha) =>
+            stagingKey(workspaceId, sha),
+          );
+          // A file is imported into a dataset once: a retry gets that import.
+          const imported = () =>
+            store.imports.findByUpload(dataset.id, blob.sha256);
+          const existing = await imported();
+          if (existing) return toPublicImport(existing);
 
-      const upload = await uploads.load({
-        uploadId: body.source.upload_id,
-        workspaceId,
-        purpose: "dataset_import",
-        jobId: null,
-        attempt: null,
-      });
-      await uploads.verify(upload);
-      const format = body.source.format;
-      const job = await store.transaction(async (tx) => {
-        await uploads.consume(tx, upload, `import:${dataset.id}`);
-
-        return tx.imports.create({
-          workspaceId,
-          datasetId: dataset.id,
-          datasetName: dataset.name,
-          source: {
-            kind: "upload",
-            upload_id: upload.id,
-            format,
-            size_bytes: upload.size_bytes,
-            sha256: upload.sha256,
-          },
-          connector: body.connector,
-          uploadKey: upload.storage_key,
-        });
-      });
-
-      return toPublicImport(job);
-    },
+          return toPublicImport(
+            await store.imports
+              .create({
+                ...common,
+                source: {
+                  kind: "upload",
+                  upload_id: blob.sha256,
+                  format: body.source.format,
+                  size_bytes: blob.sizeBytes,
+                  sha256: blob.sha256,
+                },
+                uploadKey: blob.key,
+              })
+              .catch(async (error: unknown) => {
+                const raced = await imported();
+                if (!raced) throw error;
+                return raced;
+              }),
+          );
+        },
+      ),
 
     get: async (workspaceId, id) => {
       const job = await store.imports.get(workspaceId, id);
@@ -219,101 +277,11 @@ export const createImportService = (
       };
     },
 
-    claim: async (principal, input) => {
-      const now = clock.now();
-      // A worker retrying a claim whose response was lost gets its job back.
-      const held = await store.imports.heldBy(input.workerId);
-      const renewed =
-        held &&
-        (await store.imports.update(
-          held.id,
-          {
-            lease_expires_at: addSeconds(now, input.leaseSeconds).toISOString(),
-            lease_seconds: input.leaseSeconds,
-          },
-          { workerId: held.worker_id, attempt: held.attempt },
-        ));
-      const job =
-        renewed ||
-        (await store.imports.claimNext({
-          workerId: input.workerId,
-          leaseSeconds: input.leaseSeconds,
-          now,
-          workspaceId: principal.workerWorkspaceId ?? undefined,
-        }));
-      if (!job) return null;
-
-      const reset = renewed
-        ? null
-        : await store.imports.update(
-            job.id,
-            {
-              imported_count: 0,
-              dropped_count: 0,
-              detected_scores: [],
-              drop_reasons: [],
-            },
-            { workerId: job.worker_id, attempt: job.attempt },
-          );
-      const claimed = reset ?? job;
-      const source =
-        claimed.upload_key !== null
-          ? {
-              ...claimed.source,
-              download_url: await uploads.downloadUrl(claimed.upload_key),
-            }
-          : claimed.source;
-
-      return {
-        id: claimed.id,
-        kind: "import",
-        attempt: claimed.attempt,
-        lease_seconds: claimed.lease_seconds,
-        lease_expires_at: claimed.lease_expires_at as string,
-        run: null,
-        import: {
-          id: claimed.id,
-          workspace_id: claimed.workspace_id,
-          dataset: claimed.dataset,
-          source,
-          connector: claimed.connector,
-        },
-        price_per_million_tokens: null,
-        max_cost_usd: null,
-        dataset: null,
-        resume: null,
-        base: null,
-      };
-    },
-
-    heartbeat: async (principal, id, body) => {
-      const job = await loadLeased(principal, id, body.worker_id, body.attempt);
-      const leaseSeconds = body.lease_seconds ?? job.lease_seconds;
-      const leaseExpiresAt = addSeconds(
-        clock.now(),
-        leaseSeconds,
-      ).toISOString();
-      const updated = await store.imports.update(
-        id,
-        { lease_expires_at: leaseExpiresAt, lease_seconds: leaseSeconds },
-        {
-          workerId: body.worker_id,
-          attempt: body.attempt,
-          status: ["running"],
-        },
-      );
-      if (!updated) throw leaseLost(id);
-
-      return {
-        status: updated.status,
-        should_stop: false,
-        stop_reason: null,
-        lease_expires_at: leaseExpiresAt,
-      };
-    },
-
     postRecords: async (principal, id, body) => {
-      const job = await loadLeased(principal, id, body.worker_id, body.attempt);
+      await collaborators
+        .queue()
+        .loadLeased(principal, id, body.worker_id, body.attempt);
+      const job = await load(id);
       const accepted: DatasetRecord[] = [];
       const errors: Array<{ index: number; error: string }> = [];
       const scores = new Set(job.detected_scores);
@@ -345,12 +313,15 @@ export const createImportService = (
         accepted.length > 0
           ? await writeRecordsPart(
               storage,
-              `imports/${encodeURIComponent(job.workspace_id)}/${job.id}/${job.attempt}/${body.seq}.jsonl`,
+              () =>
+                `${jobBlobKey(job, job.attempt, "records")}/${body.seq}.jsonl`,
               accepted,
             )
           : null;
-      const added = await store.imports.addPart({
-        importId: job.id,
+      // Staged once per (job, attempt, batch): a worker retry adds nothing.
+      const added = await store.datasets.stagePart({
+        datasetId: job.dataset_id,
+        jobId: job.id,
         attempt: job.attempt,
         batch: body.seq,
         part,
@@ -360,7 +331,7 @@ export const createImportService = (
       const updated = await store.imports.update(
         id,
         {
-          // Progress only: completion recounts from the parts.
+          // Progress only: completion recounts from the staged parts.
           ...(added
             ? {
                 imported_count: job.imported_count + accepted.length,
@@ -368,9 +339,8 @@ export const createImportService = (
               }
             : {}),
           detected_scores: [...scores].sort(),
-          lease_expires_at: addSeconds(
-            clock.now(),
-            job.lease_seconds,
+          lease_expires_at: new Date(
+            clock.now().getTime() + job.lease_seconds * 1000,
           ).toISOString(),
         },
         {
@@ -385,10 +355,10 @@ export const createImportService = (
     },
 
     complete: async (principal, id, body) => {
-      const job = await store.imports.getById(id);
-      if (!job) throw notFound("trainer_job", id);
-      assertWorkerScope(principal, job.workspace_id, id);
+      const row = await collaborators.queue().loadForWorker(principal, id);
+      const job = await load(row.id);
       if (job.worker_id !== body.worker_id || job.attempt !== body.attempt) {
+        // Idempotent retry of a completion that already committed.
         if (
           job.attempt === body.attempt &&
           job.worker_id === null &&
@@ -399,53 +369,50 @@ export const createImportService = (
         throw leaseLost(id);
       }
 
+      const now = clock.now().toISOString();
+      if (body.status !== "completed") {
+        return toPublicImport(
+          await close(
+            job,
+            body.status === "abandoned"
+              ? requeuePatch(
+                  job,
+                  `Attempt ${job.attempt} was abandoned by its worker`,
+                  now,
+                )
+              : {
+                  status: "failed",
+                  finished_at: now,
+                  error:
+                    body.error ??
+                    `The import worker reported '${body.status}'.`,
+                },
+          ),
+        );
+      }
+
       const summary = body.import_summary ?? {
         dropped_count: 0,
         detected_scores: [],
         drop_reasons: [],
       };
-      const expect = {
-        workerId: body.worker_id,
-        attempt: body.attempt,
-        status: ["running" as const],
-      };
-
-      if (body.status !== "completed") {
-        const patch: ImportJobPatch =
-          body.status === "abandoned"
-            ? requeuePatch(
-                job,
-                settings.maxAttempts,
-                "was abandoned by its worker",
-              )
-            : {
-                status: "failed",
-                error:
-                  body.error ?? `The import worker reported '${body.status}'.`,
-              };
-        const updated = await store.imports.update(id, release(patch), expect);
-        if (!updated) throw leaseLost(id);
-
-        return toPublicImport(updated);
-      }
-
-      const { parts, dropped } = await store.imports.listParts(
-        job.id,
-        job.attempt,
-      );
-      const completed = await store.transaction(async (tx) => {
+      const staged = await store.datasets.listStaged(job.id, job.attempt);
+      const { completed, orphans } = await store.transaction(async (tx) => {
         const benchmark = benchmarkMetadata(job.source);
-        const { version } = await tx.datasets.appendVersion({
+        const { dataset, orphanKeys } = await tx.datasets.commitStaged({
           datasetId: job.dataset_id,
-          parts,
+          jobId: job.id,
+          attempt: job.attempt,
           ...(benchmark ? { metadata: benchmark } : {}),
         });
         const updated = await tx.imports.update(
           id,
-          release({
+          {
+            ...RELEASE,
             status: "completed",
-            imported_count: parts.reduce((sum, p) => sum + p.count, 0),
-            dropped_count: dropped + summary.dropped_count,
+            finished_at: now,
+            imported_count: staged.count,
+            dropped_count: staged.dropped + summary.dropped_count,
             detected_scores: [
               ...new Set([...job.detected_scores, ...summary.detected_scores]),
             ].sort(),
@@ -453,33 +420,19 @@ export const createImportService = (
               0,
               MAX_DROP_REASONS,
             ),
-            dataset_version: version.version,
+            dataset_version: dataset.version,
             error: null,
-          }),
-          expect,
+          },
+          fenceOf(job, ["running"]),
         );
         if (!updated) throw leaseLost(id);
 
-        return updated;
+        return { completed: updated, orphans: orphanKeys };
       });
+      // Parts staged by earlier attempts are never visible: drop them.
+      await deleteObjects(orphans);
 
       return toPublicImport(completed);
-    },
-
-    expireLeases: async (now) => {
-      const expired = await store.imports.listExpiredLeases(now, 100);
-      let closed = 0;
-      for (const job of expired) {
-        const patch = requeuePatch(job, settings.maxAttempts, "lost its lease");
-        const updated = await store.imports.update(job.id, release(patch), {
-          workerId: job.worker_id,
-          attempt: job.attempt,
-          leaseExpiredBefore: leaseGraceCutoff(now, job.lease_seconds),
-        });
-        if (updated) closed += 1;
-      }
-
-      return closed;
     },
   };
 };

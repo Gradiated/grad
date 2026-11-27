@@ -54,7 +54,8 @@ export const registerCheckpointRoutes = (
       method: "post",
       path: "/v1/checkpoints/{id}/promote",
       operationId: "promoteCheckpoint",
-      summary: "Copy an exportable checkpoint into a new immutable artifact",
+      summary:
+        "Release an exportable checkpoint as a named, versioned artifact (promoting it again under the same name returns that release)",
       tags,
       request: {
         params: IdParamSchema,

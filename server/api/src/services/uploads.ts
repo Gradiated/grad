@@ -3,57 +3,65 @@ import { createHash } from "node:crypto";
 import { addSeconds } from "../clock.js";
 import type { UploadTicket } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
-import { ApiError, conflict, invalid, notFound } from "../errors.js";
-import { newId } from "../ids.js";
+import { ApiError, conflict, invalid } from "../errors.js";
 import { ObjectExistsError, ObjectIntegrityError } from "../storage/types.js";
-import type {
-  Repositories,
-  UploadPurpose,
-  UploadRecord,
-} from "../store/types.js";
 
-export const UPLOAD_TTL_SECONDS = 6 * 3600;
+/**
+ * Uploads keep no rows. Keys are content-addressed and scoped:
+ * - worker blobs: `ws/<ws>/jobs/<job>/<attempt>/<sha256>`;
+ * - user files for imports: `uploads/<ws>/<sha256>` (the staging prefix).
+ * A presigned PUT binds Content-Length and x-amz-checksum-sha256, so S3
+ * rejects any other body; local-FS mode streams through the server, which
+ * verifies the bytes. Committing an upload derives the key from the caller's
+ * own scope (so it can only name its own prefix) and HEADs the object.
+ * Staged user files are swept after STAGING_TTL_SECONDS.
+ */
+
+export const UPLOAD_URL_TTL_SECONDS = 6 * 3600;
 export const DOWNLOAD_URL_TTL_SECONDS = 3600;
+/** User uploads expire this long after upload (the import must be claimed by then). */
+export const STAGING_TTL_SECONDS = 7 * 86_400;
+export const STAGING_PREFIX = "uploads";
+
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+const ws = (workspaceId: string): string => encodeURIComponent(workspaceId);
+
+export const jobBlobKey = (
+  job: { workspace_id: string; id: string },
+  attempt: number,
+  sha256: string,
+): string => `ws/${ws(job.workspace_id)}/jobs/${job.id}/${attempt}/${sha256}`;
+
+export const stagingKey = (workspaceId: string, sha256: string): string =>
+  `${STAGING_PREFIX}/${ws(workspaceId)}/${sha256}`;
+
+export interface VerifiedBlob {
+  key: string;
+  sha256: string;
+  sizeBytes: number;
+}
 
 export interface UploadService {
-  createTicket(input: {
-    workspaceId: string;
-    purpose: UploadPurpose;
-    jobId: string | null;
-    attempt: number | null;
-    sha256: string;
-    sizeBytes: number;
-  }): Promise<{ upload: UploadRecord; ticket: UploadTicket }>;
+  /** A PUT ticket for `key`, whose last segment is the sha256. */
+  ticket(key: string, sizeBytes: number): Promise<UploadTicket>;
   /** Server-proxied PUT for stores without presigning (local FS). */
   receive(
-    uploadId: string,
-    exp: string,
-    sig: string,
+    query: { key: string; size: string; exp: string; sig: string },
     body: AsyncIterable<Uint8Array>,
-  ): Promise<UploadRecord>;
+  ): Promise<VerifiedBlob>;
   /**
-   * Checks that the object behind an upload exists with the declared size and
-   * sha256. Call before `consume` (outside any DB transaction).
+   * The uploaded object at `key` (an `upload_id` resolved in the caller's
+   * scope): it must exist, and on S3 its stored checksum must match.
    */
-  verify(upload: UploadRecord): Promise<void>;
-  /** Loads an upload owned by (workspace, purpose, job, attempt) or throws. */
-  load(input: {
-    uploadId: string;
-    workspaceId: string;
-    purpose: UploadPurpose;
-    jobId: string | null;
-    attempt: number | null;
-  }): Promise<UploadRecord>;
-  /** Marks the upload consumed (single use) inside `tx`; throws 409 if already used. */
-  consume(
-    tx: Repositories,
-    upload: UploadRecord,
-    consumedBy: string,
-  ): Promise<UploadRecord>;
+  commit(
+    uploadId: string,
+    keyFor: (sha256: string) => string,
+  ): Promise<VerifiedBlob>;
   /** Presigned URL (S3) or a signed server path (local FS). */
   downloadUrl(key: string, expiresInSeconds?: number): Promise<string>;
-  /** Deletes unconsumed uploads past their expiry. */
-  collectExpired(now: Date): Promise<number>;
+  /** Deletes staged user uploads older than STAGING_TTL_SECONDS. */
+  sweepStaging(now: Date): Promise<number>;
 }
 
 const sha256OfStream = async (
@@ -70,84 +78,38 @@ const sha256OfStream = async (
   return hash.digest("hex");
 };
 
+const notReceived = (uploadId: string): ApiError =>
+  conflict(
+    "upload_incomplete",
+    `Upload '${uploadId}' has not been received yet; PUT the file to its upload URL first.`,
+  );
+
 export const createUploadService = (deps: AppDependencies): UploadService => {
-  const { store, storage, signer, clock } = deps;
-
-  const verify = async (upload: UploadRecord): Promise<void> => {
-    if (storage.kind === "local") {
-      if (upload.status === "pending") {
-        throw conflict(
-          "upload_incomplete",
-          `Upload '${upload.id}' has not been received yet; PUT the file to its upload URL first.`,
-        );
-      }
-      return;
-    }
-
-    const head = await storage.head(upload.storage_key);
-    if (!head) {
-      throw conflict(
-        "upload_incomplete",
-        `Upload '${upload.id}' has not been received yet; PUT the file to its upload URL first.`,
-      );
-    }
-    if (head.sizeBytes !== upload.size_bytes) {
-      throw invalid(
-        "upload_integrity_error",
-        `Upload '${upload.id}' is ${head.sizeBytes} bytes but ${upload.size_bytes} were declared.`,
-      );
-    }
-
-    const sha =
-      head.sha256 ??
-      (await sha256OfStream(await storage.getStream(upload.storage_key)));
-    if (sha !== upload.sha256) {
-      throw invalid(
-        "upload_integrity_error",
-        `Upload '${upload.id}' sha256 does not match the declared digest.`,
-      );
-    }
-  };
+  const { storage, signer, clock } = deps;
 
   return {
-    createTicket: async (input) => {
-      const id = newId("upl");
-      const expiresAt = addSeconds(clock.now(), UPLOAD_TTL_SECONDS);
-      const storageKey = `uploads/${encodeURIComponent(input.workspaceId)}/${id}`;
-      const upload = await store.uploads.create({
-        id,
-        workspaceId: input.workspaceId,
-        purpose: input.purpose,
-        jobId: input.jobId,
-        attempt: input.attempt,
-        storageKey,
-        sha256: input.sha256,
-        sizeBytes: input.sizeBytes,
-        expiresAt: expiresAt.toISOString(),
-      });
-
-      const presigned = await storage.presignUpload(storageKey, {
-        sha256: input.sha256,
-        sizeBytes: input.sizeBytes,
-        expiresInSeconds: UPLOAD_TTL_SECONDS,
+    ticket: async (key, sizeBytes) => {
+      const sha256 = key.slice(key.lastIndexOf("/") + 1);
+      const expiresAt = addSeconds(clock.now(), UPLOAD_URL_TTL_SECONDS);
+      const presigned = await storage.presignUpload(key, {
+        sha256,
+        sizeBytes,
+        expiresInSeconds: UPLOAD_URL_TTL_SECONDS,
       });
 
       return {
-        upload,
-        ticket: {
-          upload_id: id,
-          method: "PUT",
-          url: presigned?.url ?? signer.uploadPath(id, expiresAt),
-          headers: presigned?.headers ?? {
-            "Content-Type": "application/octet-stream",
-          },
-          expires_at: expiresAt.toISOString(),
+        upload_id: sha256,
+        method: "PUT",
+        url: presigned?.url ?? signer.uploadPath(key, sizeBytes, expiresAt),
+        headers: presigned?.headers ?? {
+          "Content-Type": "application/octet-stream",
         },
+        expires_at: expiresAt.toISOString(),
       };
     },
 
-    receive: async (uploadId, exp, sig, body) => {
-      if (!signer.verifyUpload(uploadId, exp, sig, clock.now())) {
+    receive: async ({ key, size, exp, sig }, body) => {
+      if (!signer.verifyUpload(key, size, exp, sig, clock.now())) {
         throw new ApiError(
           403,
           "invalid_upload_signature",
@@ -155,93 +117,66 @@ export const createUploadService = (deps: AppDependencies): UploadService => {
           "The upload URL signature is invalid or expired; request a new upload ticket.",
         );
       }
-
-      const upload = await store.uploads.get(uploadId);
-      if (!upload) throw notFound("upload", uploadId);
-      if (upload.status !== "pending") {
-        throw conflict(
-          "upload_already_received",
-          `Upload '${uploadId}' was already received.`,
-        );
-      }
-
+      const sha256 = key.slice(key.lastIndexOf("/") + 1);
+      const sizeBytes = Number(size);
+      const blob = { key, sha256, sizeBytes };
       try {
-        await storage.putStream(upload.storage_key, body, {
-          maxBytes: upload.size_bytes,
-          expectedSha256: upload.sha256,
-          expectedSizeBytes: upload.size_bytes,
+        await storage.putStream(key, body, {
+          maxBytes: sizeBytes,
+          expectedSha256: sha256,
+          expectedSizeBytes: sizeBytes,
         });
       } catch (error) {
         if (error instanceof ObjectIntegrityError) {
           throw invalid("upload_integrity_error", error.message);
         }
-        if (error instanceof ObjectExistsError) {
-          throw conflict(
-            "upload_already_received",
-            `Upload '${uploadId}' was already received.`,
-          );
-        }
+        // Content-addressed: the same bytes were already received.
+        if (error instanceof ObjectExistsError) return blob;
         throw error;
       }
 
-      return (await store.uploads.markUploaded(uploadId)) ?? upload;
+      return blob;
     },
 
-    verify,
-
-    load: async ({ uploadId, workspaceId, purpose, jobId, attempt }) => {
-      const upload = await store.uploads.get(uploadId);
-      if (
-        !upload ||
-        upload.workspace_id !== workspaceId ||
-        upload.purpose !== purpose ||
-        upload.job_id !== jobId ||
-        upload.attempt !== attempt
-      ) {
+    commit: async (uploadId, keyFor) => {
+      if (!SHA256_RE.test(uploadId)) {
         throw invalid(
           "unknown_upload",
-          `Upload '${uploadId}' does not exist or was not issued for this ${purpose}.`,
+          `Upload '${uploadId}' is not an upload id (the file's sha256).`,
         );
       }
-      if (
-        Date.parse(upload.expires_at) < clock.now().getTime() &&
-        upload.status !== "consumed"
-      ) {
-        throw new ApiError(
-          410,
-          "upload_expired",
-          "Upload expired",
-          `Upload '${uploadId}' expired.`,
-        );
+      const key = keyFor(uploadId);
+      const head = await storage.head(key);
+      if (!head) throw notReceived(uploadId);
+      // Local FS verified the bytes on receive; S3 verified the signed
+      // checksum on PUT, which HEAD reports back (else hash it here).
+      if (storage.kind === "s3") {
+        const sha =
+          head.sha256 ?? (await sha256OfStream(await storage.getStream(key)));
+        if (sha !== uploadId) {
+          throw invalid(
+            "upload_integrity_error",
+            `Upload '${uploadId}' does not match its sha256.`,
+          );
+        }
       }
 
-      return upload;
-    },
-
-    consume: async (tx, upload, consumedBy) => {
-      const consumed = await tx.uploads.consume(upload.id, consumedBy);
-      if (!consumed) {
-        throw conflict(
-          "upload_already_used",
-          `Upload '${upload.id}' was already used.`,
-        );
-      }
-
-      return consumed;
+      return { key, sha256: uploadId, sizeBytes: head.sizeBytes };
     },
 
     downloadUrl: async (key, expiresInSeconds = DOWNLOAD_URL_TTL_SECONDS) =>
       (await storage.presignDownload(key, expiresInSeconds)) ??
       signer.downloadPath(key, addSeconds(clock.now(), expiresInSeconds)),
 
-    collectExpired: async (now) => {
-      const expired = await store.uploads.listExpired(now, 100);
-      for (const upload of expired) {
-        await storage.delete(upload.storage_key);
-        await store.uploads.delete(upload.id);
-      }
+    sweepStaging: async (now) => {
+      const keys = await storage.listOlder(
+        STAGING_PREFIX,
+        addSeconds(now, -STAGING_TTL_SECONDS),
+        500,
+      );
+      for (const key of keys) await storage.delete(key);
 
-      return expired.length;
+      return keys.length;
     },
   };
 };

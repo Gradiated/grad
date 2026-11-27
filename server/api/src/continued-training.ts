@@ -70,7 +70,7 @@ export const resolveContinuation = (
   if (!artifact) {
     throw invalid(
       "unknown_model",
-      `Artifact '${recipe.model}' was not found in this workspace; pass an artifact id ('name@version' or 'name@latest') or a base model id from GET /v1/models.`,
+      `Artifact '${recipe.model}' was not found in this workspace; pass an artifact id ('name@version' or 'name@latest') or a base model id from GET /v1/base-models.`,
     );
   }
   if (!CONTINUABLE_RECIPES.includes(recipe.kind)) {

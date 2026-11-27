@@ -3,27 +3,13 @@ import { Pool } from "pg";
 import type { Clock } from "../../clock.js";
 import { migrate } from "../migrate.js";
 import type { Repositories, Store } from "../types.js";
-import {
-  createApiKeyRepository,
-  createDatasetRepository,
-  createImportJobRepository,
-  createUploadRepository,
-} from "./core.js";
+import { createArtifactRepository } from "./artifacts.js";
+import { createApiKeyRepository, createDatasetRepository } from "./core.js";
 import { createDb } from "./db.js";
 import { createEvalRepository } from "./evals.js";
-import { createIdempotencyRepository } from "./idempotency.js";
-import {
-  createArtifactRepository,
-  createBillingOutboxRepository,
-  createCheckpointRepository,
-  createMetricsRepository,
-  createRunRepository,
-} from "./runs.js";
-import {
-  createDeploymentRepository,
-  createFeedbackRepository,
-  createInferenceRepository,
-} from "./serving.js";
+import { createJobRepository } from "./jobs.js";
+import { createImportJobRepository, createRunRepository } from "./runs.js";
+import { createUsageRepository } from "./usage.js";
 
 export interface PostgresStoreOptions {
   connectionString: string;
@@ -80,18 +66,12 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
   const repos: Repositories = {
     apiKeys: createApiKeyRepository(db, clock),
     datasets: createDatasetRepository(db, clock),
+    jobs: createJobRepository(db, clock),
     imports: createImportJobRepository(db, clock),
     runs: createRunRepository(db, clock),
-    metrics: createMetricsRepository(db),
-    checkpoints: createCheckpointRepository(db, clock),
     artifacts: createArtifactRepository(db, clock),
-    uploads: createUploadRepository(db, clock),
-    deployments: createDeploymentRepository(db, clock),
-    inferences: createInferenceRepository(db, clock),
-    feedback: createFeedbackRepository(db, clock),
     evals: createEvalRepository(db, clock),
-    billing: createBillingOutboxRepository(db, clock),
-    idempotency: createIdempotencyRepository(db),
+    usage: createUsageRepository(db, clock),
   };
 
   return {

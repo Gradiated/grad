@@ -7,11 +7,10 @@ components:
     IdempotencyKey:
       type: string
       pattern: ^[\x21-\x7e]{1,255}$
-      description: "Up to 255 visible ASCII characters (SDKs send a UUIDv4 and reuse it across retries). A retry with the same
-        key and body replays the stored response with `Idempotent-Replayed: true`; the same key with a different body is
-        rejected with 422 `idempotency_key_reused`; a retry while the first request is still running gets 409
-        `idempotency_in_progress` with Retry-After. The key is stored in the same transaction as the request's writes;
-        responses are kept for 24 hours, and 5xx and 429 responses are not stored."
+      description: "Up to 255 visible ASCII characters (SDKs send a UUIDv4 and reuse it across retries). A create retried with
+        the same key and body returns what the first request created, with `Idempotent-Replayed: true`; the same key
+        with a different body is rejected with 422 `idempotency_key_reused`. The key is stored on the created resource,
+        in the same transaction."
       example: 5f0c8d1e-3b8a-4c39-9a4e-2f1f0b6f4a21
     TrainableModel:
       type: object
@@ -908,6 +907,7 @@ components:
         upload_id:
           type: string
           minLength: 1
+          description: "The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless."
         method:
           type: string
           enum:
@@ -1632,9 +1632,6 @@ components:
         context_text:
           type: string
           maxLength: 4000000
-        context_uri:
-          type: string
-          maxLength: 2048
         num_tokens:
           type: integer
           minimum: 16
@@ -2793,7 +2790,10 @@ components:
           enum:
             - cancelled
             - budget
+            - insufficient_balance
             - null
+          description: "Why to stop: cancelled, the run's cap (budget), or the workspace ran out of balance (Cloud). Budget and
+            balance stops complete as stopped_budget."
         lease_expires_at:
           type: string
           format: date-time
@@ -2834,6 +2834,7 @@ components:
           enum:
             - cancelled
             - budget
+            - insufficient_balance
             - null
         cost_usd:
           type: number
@@ -3440,6 +3441,58 @@ components:
             type: number
       required:
         - idempotency_key
+    UsageRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum:
+            - run
+            - eval
+        ref_id:
+          type: string
+          minLength: 1
+          description: The run or eval this usage belongs to.
+        attempt:
+          type: integer
+          minimum: 1
+        tokens_from:
+          type: integer
+          minimum: 0
+          description: The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).
+        tokens_through:
+          type: integer
+          minimum: 0
+        tokens:
+          type: integer
+          minimum: 0
+        cost_usd:
+          type: number
+          minimum: 0
+        price_version:
+          type: string
+          minLength: 1
+        idempotency_key:
+          type: string
+          minLength: 1
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - kind
+        - ref_id
+        - attempt
+        - tokens_from
+        - tokens_through
+        - tokens
+        - cost_usd
+        - price_version
+        - idempotency_key
+        - created_at
     PlanEvalResponse:
       type: object
       properties:
@@ -3693,17 +3746,16 @@ components:
       schema:
         $ref: "#/components/schemas/IdempotencyKey"
       required: false
-      description: "Up to 255 visible ASCII characters (SDKs send a UUIDv4 and reuse it across retries). A retry with the same
-        key and body replays the stored response with `Idempotent-Replayed: true`; the same key with a different body is
-        rejected with 422 `idempotency_key_reused`; a retry while the first request is still running gets 409
-        `idempotency_in_progress` with Retry-After. The key is stored in the same transaction as the request's writes;
-        responses are kept for 24 hours, and 5xx and 429 responses are not stored."
+      description: "Up to 255 visible ASCII characters (SDKs send a UUIDv4 and reuse it across retries). A create retried with
+        the same key and body returns what the first request created, with `Idempotent-Replayed: true`; the same key
+        with a different body is rejected with 422 `idempotency_key_reused`. The key is stored on the created resource,
+        in the same transaction."
       name: Idempotency-Key
       in: header
 paths:
-  /v1/models:
+  /v1/base-models:
     get:
-      operationId: listModels
+      operationId: listBaseModels
       summary: List trainable base models (the server catalog and price source)
       tags:
         - Models
@@ -5580,7 +5632,8 @@ paths:
   /v1/checkpoints/{id}/promote:
     post:
       operationId: promoteCheckpoint
-      summary: Copy an exportable checkpoint into a new immutable artifact
+      summary: Release an exportable checkpoint as a named, versioned artifact (promoting it again under the same name returns
+        that release)
       tags: *a3
       parameters:
         - schema:
@@ -6491,9 +6544,11 @@ paths:
   /v1/deployments:
     post:
       operationId: deployArtifact
-      summary: Deploy or update an artifact under a stable model name
       tags:
         - Deployments
+      summary: Deploy or update an artifact under a stable model name
+      description: Deploy or update an artifact under a stable model name. Served by Gradiated Cloud (api.gradiated.com);
+        grad-server answers 501.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -6565,9 +6620,10 @@ paths:
                 $ref: "#/components/schemas/Problem"
     get:
       operationId: listDeployments
-      summary: List deployments
       tags:
         - Deployments
+      summary: List deployments
+      description: List deployments. Served by Gradiated Cloud (api.gradiated.com); grad-server answers 501.
       parameters:
         - schema:
             type: integer
@@ -6648,6 +6704,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "503":
           description: Dependency unavailable.
           content:
@@ -6657,9 +6719,11 @@ paths:
   /v1/deployments/{name}:
     get:
       operationId: getDeployment
-      summary: Get deployment status and feedback summary
       tags:
         - Deployments
+      summary: Get deployment status and feedback summary
+      description: Get deployment status and feedback summary. Served by Gradiated Cloud (api.gradiated.com); grad-server
+        answers 501.
       parameters:
         - schema:
             type: string
@@ -6718,6 +6782,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "503":
           description: Dependency unavailable.
           content:
@@ -6727,9 +6797,11 @@ paths:
   /v1/deployments/{name}/rollback:
     post:
       operationId: rollbackDeployment
-      summary: Roll a deployment back to its previous artifact
       tags:
         - Deployments
+      summary: Roll a deployment back to its previous artifact
+      description: Roll a deployment back to its previous artifact. Served by Gradiated Cloud (api.gradiated.com); grad-server
+        answers 501.
       parameters:
         - schema:
             type: string
@@ -6804,9 +6876,11 @@ paths:
   /v1/route:
     post:
       operationId: routeRequest
-      summary: Ask a deployed model router which model to call
       tags:
         - Serving
+      summary: Ask a deployed model router which model to call
+      description: Ask a deployed model router which model to call. Served by Gradiated Cloud (api.gradiated.com); grad-server
+        answers 501.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -6879,9 +6953,11 @@ paths:
   /v1/embeddings:
     post:
       operationId: createEmbeddings
-      summary: Generate embeddings from a deployed embedding artifact
       tags:
         - Serving
+      summary: Generate embeddings from a deployed embedding artifact
+      description: Generate embeddings from a deployed embedding artifact. Served by Gradiated Cloud (api.gradiated.com);
+        grad-server answers 501.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -6954,9 +7030,11 @@ paths:
   /v1/feedback:
     post:
       operationId: recordFeedback
-      summary: Record deduplicated outcome scores and gold corrections
       tags:
         - Feedback
+      summary: Record deduplicated outcome scores and gold corrections
+      description: Record deduplicated outcome scores and gold corrections. Served by Gradiated Cloud (api.gradiated.com);
+        grad-server answers 501.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -6972,6 +7050,104 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecordFeedbackResponse"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/usage:
+    get:
+      operationId: listUsage
+      summary: "List billed usage, newest first: one record per run or eval attempt"
+      tags:
+        - Usage
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
+          required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+      responses:
+        "200":
+          description: Usage records.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UsageRecord"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+                required:
+                  - data
+                  - next_cursor
         "400":
           description: Malformed request.
           content:

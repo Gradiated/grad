@@ -250,7 +250,7 @@ const resolveModel = (
     throw invalid(
       "unknown_model",
       requested
-        ? `Model '${requested}' is not in the trainable catalog; see GET /v1/models (self-hosted servers can register models with GRAD_EXTRA_MODELS_JSON).`
+        ? `Model '${requested}' is not in the trainable catalog; see GET /v1/base-models (self-hosted servers can register models with GRAD_EXTRA_MODELS_JSON).`
         : `No default model is configured for recipe '${kind}'; pass recipe.model.`,
     );
   }
@@ -397,18 +397,14 @@ export const planRun = (
   ) {
     throw invalid(
       "unknown_model",
-      `Teacher '${recipe.teacher}' is not a ${model.family} model in the trainable catalog; see GET /v1/models.`,
+      `Teacher '${recipe.teacher}' is not a ${model.family} model in the trainable catalog; see GET /v1/base-models.`,
     );
   }
 
-  if (
-    recipe.kind === "cartridge" &&
-    !recipe.context_text &&
-    !recipe.context_uri
-  ) {
+  if (recipe.kind === "cartridge" && !recipe.context_text) {
     throw invalid(
       "cartridge_context_required",
-      "Cartridge recipes need the document to compress: pass recipe.context_text or recipe.context_uri.",
+      "Cartridge recipes need the document to compress: pass recipe.context_text (Context.from_file reads a local file).",
     );
   }
 

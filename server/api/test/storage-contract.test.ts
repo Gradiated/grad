@@ -208,28 +208,21 @@ const describeObjectStoreContract = (
       expect(await store.head(uniqueKey("missing.bin"))).toBeNull();
     });
 
-    it("copies to a new key without overwriting", async () => {
+    it("lists keys under a prefix older than a cutoff", async () => {
       if (!live()) return;
-      const source = uniqueKey("source.bin");
-      const destination = uniqueKey("dest.bin");
-      await store.put(source, Buffer.from("copy me"));
-      await store.copy(source, destination);
+      const prefix = uniqueKey("sweep");
+      await store.put(`${prefix}/a/one.bin`, Buffer.from("1"));
+      await store.put(`${prefix}/two.bin`, Buffer.from("2"));
+      await store.put(uniqueKey("elsewhere.bin"), Buffer.from("3"));
+      const future = new Date(Date.now() + 60_000);
 
-      expect(Buffer.from(await store.get(destination)).toString()).toBe(
-        "copy me",
-      );
-
-      const other = uniqueKey("other.bin");
-      await store.put(other, Buffer.from("other"));
-      await expect(store.copy(other, destination)).rejects.toBeInstanceOf(
-        ObjectExistsError,
-      );
-      expect(Buffer.from(await store.get(destination)).toString()).toBe(
-        "copy me",
-      );
-      await expect(
-        store.copy(uniqueKey("nope.bin"), uniqueKey("dest2.bin")),
-      ).rejects.toBeInstanceOf(ObjectNotFoundError);
+      expect((await store.listOlder(prefix, future, 10)).sort()).toEqual([
+        `${prefix}/a/one.bin`,
+        `${prefix}/two.bin`,
+      ]);
+      expect(await store.listOlder(prefix, future, 1)).toHaveLength(1);
+      expect(await store.listOlder(prefix, new Date(0), 10)).toEqual([]);
+      expect(await store.listOlder(uniqueKey("empty"), future, 10)).toEqual([]);
     });
 
     it("deletes idempotently", async () => {
@@ -412,7 +405,7 @@ describe("S3ObjectStore presigned URLs (MinIO)", () => {
   const put = (url: string, headers: Record<string, string>, body: Buffer) =>
     fetch(url, { method: "PUT", headers, body: new Uint8Array(body) });
 
-  it("accepts a correct upload and enforces checksum and no-overwrite", async () => {
+  it("binds Content-Length and x-amz-checksum-sha256: only the declared bytes are accepted", async () => {
     if (!store) {
       console.warn("[storage-contract] S3 presign: MinIO unavailable, skipped");
       return;
@@ -427,7 +420,6 @@ describe("S3ObjectStore presigned URLs (MinIO)", () => {
 
     expect(ticket.headers).toEqual({
       "content-length": String(data.byteLength),
-      "if-none-match": "*",
       "x-amz-checksum-sha256": Buffer.from(sha(data), "hex").toString("base64"),
     });
 
@@ -441,13 +433,19 @@ describe("S3ObjectStore presigned URLs (MinIO)", () => {
     delete withoutChecksum["x-amz-checksum-sha256"];
     expect((await put(ticket.url, withoutChecksum, data)).ok).toBe(false);
 
+    // Another length (with the length header the client computes) is refused.
+    const { "content-length": _length, ...noLength } = ticket.headers;
+    expect((await put(ticket.url, noLength, data.subarray(1))).ok).toBe(false);
+    expect(await store.head(key)).toBeNull();
+
     const good = await put(ticket.url, ticket.headers, data);
     expect(good.status).toBe(200);
     expect((await store.head(key))?.sha256).toBe(sha(data));
 
-    const overwrite = await put(ticket.url, ticket.headers, data);
-    expect(overwrite.ok).toBe(false);
-    expect([409, 412]).toContain(overwrite.status);
+    // Keys are content-addressed: a retried upload rewrites identical bytes.
+    const retry = await put(ticket.url, ticket.headers, data);
+    expect(retry.status).toBe(200);
+    expect((await store.head(key))?.sha256).toBe(sha(data));
 
     const download = await store.presignDownload(key, 300);
     const res = await fetch(download);

@@ -36,7 +36,6 @@ services:
       TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
       # Encrypts workspace secrets (32 random bytes, base64); `grad local up` generates it.
       GRAD_SECRETS_KEY: "${GRAD_SECRETS_KEY:-}"
-      DEPLOY_MODE: "${GRAD_DEPLOY_MODE:-disabled}"
       INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-}"
       INFERENCE_API_KEY: "${GRAD_INFERENCE_API_KEY:-}"
       JUDGE_BASE_URL: "${GRAD_JUDGE_BASE_URL:-}"

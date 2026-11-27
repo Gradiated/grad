@@ -1,6 +1,4 @@
 import {
-  createDisabledDeployAdapter,
-  createDisabledServingAdapter,
   createLocalApiKeyAuth,
   createLocalNoneAuth,
   createNoopBillingAdapter,
@@ -9,8 +7,6 @@ import {
 import {
   createCloudAuthAdapter,
   createCloudBillingAdapter,
-  createCloudDeployAdapter,
-  createCloudServingAdapter,
   type CloudAdapterConfig,
 } from "./adapters-cloud.js";
 import { createModelCatalog } from "./catalog.js";
@@ -116,14 +112,6 @@ export const buildDependencies = async (
       env.BILLING_MODE === "cloud"
         ? createCloudBillingAdapter(cloud())
         : createNoopBillingAdapter(),
-    deploy:
-      env.DEPLOY_MODE === "cloud"
-        ? createCloudDeployAdapter(cloud())
-        : createDisabledDeployAdapter(),
-    serving:
-      env.DEPLOY_MODE === "cloud"
-        ? createCloudServingAdapter(cloud())
-        : createDisabledServingAdapter(),
     catalog: createModelCatalog(env.GRAD_EXTRA_MODELS_JSON),
     clock,
     inference: buildInference(env),
@@ -131,6 +119,10 @@ export const buildDependencies = async (
     settings: {
       maxAttempts: env.MAX_ATTEMPTS,
       evalConcurrency: env.EVAL_CONCURRENCY,
+      jobEventRetentionDays: env.JOB_EVENT_RETENTION_DAYS,
+      usageFlushTokens: env.USAGE_FLUSH_TOKENS,
+      usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
+      usageExportLagSeconds: env.USAGE_EXPORT_LAG_SECONDS,
     },
   };
 };

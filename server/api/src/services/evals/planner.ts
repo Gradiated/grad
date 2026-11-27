@@ -18,7 +18,7 @@ import {
   recordPromptAndReference,
   recordPromptAndResponse,
 } from "../../records.js";
-import type { EvalRecord, EvalTaskRow } from "../../store/types.js";
+import type { EvalRecord, EvalTask } from "../../store/types.js";
 import type { DatasetService, ResolvedDatasetVersion } from "../datasets.js";
 
 export type ModelTargets = EvalRecord["model_targets"];
@@ -27,7 +27,7 @@ export interface ResolvedEvalPlan {
   response: PlanEvalResponse;
   dataset: ResolvedDatasetVersion;
   targets: ModelTargets;
-  tasks: Array<Omit<EvalTaskRow, "eval_id">>;
+  tasks: EvalTask[];
   /** The request's rubric, or the dataset's own (benchmarks), or non_empty. */
   rubric: EvalRubricItem[];
   judgeModels: string[];
@@ -98,7 +98,7 @@ export const resolveModelTargets = async (
 };
 
 interface BuiltTasks {
-  tasks: Array<Omit<EvalTaskRow, "eval_id">>;
+  tasks: EvalTask[];
   skipped: number;
   alreadyScored: number;
   promptTokens: number;
@@ -125,7 +125,8 @@ const scoreTask = (
   };
 };
 
-const buildTasks = (
+/** An eval's tasks: the usable records of its pinned dataset version, in order. */
+export const buildTasks = (
   records: readonly DatasetRecord[],
   limit: number | undefined,
   score: readonly string[] | null,

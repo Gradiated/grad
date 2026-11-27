@@ -15,7 +15,6 @@ const RECIPE_FIELDS = {
   pricing: ["router"],
   fallback: ["router"],
   context_text: ["cartridge", "distill"],
-  context_uri: ["cartridge", "distill"],
   num_tokens: ["cartridge"],
   max_new_tokens: ["cartridge"],
   slot_token: ["cartridge"],
@@ -89,13 +88,6 @@ const assertFieldsApply = (recipe: RecipeSpec): void => {
       own.length > 0
         ? `Recipe '${recipe.kind}' trains with loss kind ${own.join(" or ")}, not '${recipe.loss.kind}'.`
         : `Recipe '${recipe.kind}' chooses its loss itself (per question type for decision models); remove recipe.loss.`,
-    );
-  }
-
-  if (recipe.context_uri !== undefined) {
-    throw invalid(
-      "context_uri_unsupported",
-      "This server does not fetch cartridge contexts from URIs; pass the document as recipe.context_text (Context.from_file reads a local file).",
     );
   }
 };

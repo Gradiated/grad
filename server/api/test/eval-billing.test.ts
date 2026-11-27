@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { BillingAdapter } from "../src/adapters.js";
 import { PlanEvalRequestSchema } from "../src/contracts.js";
 import { WORKSPACE_A } from "./fixtures/app.js";
 import {
@@ -8,6 +7,7 @@ import {
   qaRecords,
   seedDataset,
   type EvalHarness,
+  createEval,
 } from "./fixtures/evals.js";
 
 /** Every call reports 100k prompt tokens: $0.04 on qwen/qwen3-8b ($0.40/M). */
@@ -15,19 +15,6 @@ const EXPENSIVE = () => ({
   content: "answer",
   usage: { prompt_tokens: 100_000, completion_tokens: 0 },
 });
-
-const recordingBilling = () => {
-  const evals: Array<Parameters<BillingAdapter["recordEvalUsage"]>[0]> = [];
-  const adapter: BillingAdapter = {
-    checkCanStartRun: async () => ({ allowed: true }),
-    recordRunUsage: async () => undefined,
-    recordEvalUsage: async (input) => {
-      evals.push(input);
-    },
-  };
-
-  return { adapter, evals };
-};
 
 const request = (raw: Record<string, unknown>) =>
   PlanEvalRequestSchema.parse({
@@ -45,8 +32,7 @@ describe("eval billing", () => {
   });
 
   it("plans an estimate and bills a finished eval once for what ran", async () => {
-    const billing = recordingBilling();
-    h = await makeEvalHarness({ billing: billing.adapter });
+    h = await makeEvalHarness();
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(3));
     fake.setModel("qwen/qwen3-8b", EXPENSIVE);
@@ -55,34 +41,41 @@ describe("eval billing", () => {
     const plan = await evals.plan(WORKSPACE_A, request({}));
     expect(plan.estimated_cost_usd).toBeGreaterThan(0);
 
-    const created = await evals.create(WORKSPACE_A, request({}));
+    const created = await createEval(evals, WORKSPACE_A, request({}));
     await evals.drain();
     const done = await evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("completed");
     expect(done.total_cost_usd).toBeCloseTo(0.12, 6);
 
-    await t.services.billing.idle();
-    await t.services.billing.drain();
-    expect(billing.evals).toEqual([
-      {
-        workspaceId: WORKSPACE_A,
-        evalId: created.id,
-        tokensProcessed: 300_000,
-        costUsd: 0.12,
-        idempotencyKey: `eval-usage:${created.id}`,
-      },
+    // The attempt closed under the flush threshold: one ledger row.
+    expect(await t.deps.store.usage.listByRef(created.id)).toEqual([
+      expect.objectContaining({
+        kind: "eval",
+        ref_id: created.id,
+        attempt: 1,
+        tokens: 300_000,
+        cost_usd: 0.12,
+        idempotency_key: `eval-usage:${created.id}:1:300000`,
+        tokens_from: 0,
+        tokens_through: 300_000,
+        price_version: t.deps.catalog.priceVersion,
+      }),
     ]);
+    const listed = await t.json<{ data: Array<{ ref_id: string }> }>(
+      "/v1/usage",
+    );
+    expect(listed.body.data.map((u) => u.ref_id)).toEqual([created.id]);
   });
 
   it("bills after local scores and skips failed and cancelled evals that ran nothing", async () => {
-    const billing = recordingBilling();
-    h = await makeEvalHarness({ billing: billing.adapter });
+    h = await makeEvalHarness();
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(1));
     fake.setModel("qwen/qwen3-8b", EXPENSIVE);
     const evals = t.services.evals;
 
-    const local = await evals.create(
+    const local = await createEval(
+      evals,
       WORKSPACE_A,
       request({ rubric: [{ name: "fn", kind: "code", runtime: "local" }] }),
     );
@@ -103,17 +96,20 @@ describe("eval billing", () => {
     ]);
     expect(posted.status).toBe("completed");
 
-    const cancelled = await evals.create(WORKSPACE_A, request({}));
+    const cancelled = await createEval(evals, WORKSPACE_A, request({}));
     await evals.cancel(WORKSPACE_A, cancelled.id);
 
     fake.failNext(100, 400);
-    const failed = await evals.create(WORKSPACE_A, request({}));
+    const failed = await createEval(evals, WORKSPACE_A, request({}));
     await evals.drain();
     expect((await evals.get(WORKSPACE_A, failed.id)).status).toBe("failed");
 
-    await t.services.billing.idle();
-    await t.services.billing.drain();
     // Nothing ran for the cancelled and failed evals, so only the scored one bills.
-    expect(billing.evals.map((e) => e.evalId)).toEqual([local.id]);
+    const store = t.deps.store;
+    expect(
+      (await store.usage.listByRef(local.id)).map((u) => u.attempt),
+    ).toEqual([1]);
+    expect(await store.usage.listByRef(cancelled.id)).toEqual([]);
+    expect(await store.usage.listByRef(failed.id)).toEqual([]);
   });
 });
