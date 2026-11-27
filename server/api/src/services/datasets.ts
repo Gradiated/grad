@@ -99,16 +99,27 @@ export const datasetPartKey = (
   `ws/${encodeURIComponent(workspaceId)}/datasets/${datasetId}/${sha256}.jsonl.gz`;
 
 /**
- * A record without an id gets one from its content, so pushing the same
- * records again writes a byte-identical part (and changes nothing).
+ * Ids for the records of one push that have none: a hash of the whole batch
+ * and the record's position in it. The same batch pushed again gets the same
+ * ids, so its part is byte-identical and the push is a no-op; identical
+ * records within a batch, or in different batches, stay distinct records.
  */
-export const contentRecordId = (record: DatasetRecord): string =>
-  `rec_${createHash("sha256").update(canonicalJson(record)).digest("hex").slice(0, 16)}`;
+export const pushRecordIds = (
+  records: readonly DatasetRecord[],
+): DatasetRecord[] => {
+  const batch = createHash("sha256")
+    .update(canonicalJson(records))
+    .digest("hex");
 
-const stampIds = (records: readonly DatasetRecord[]): DatasetRecord[] =>
-  records.map((record) =>
-    record.id ? record : { ...record, id: contentRecordId(record) },
+  return records.map((record, i) =>
+    record.id
+      ? record
+      : {
+          ...record,
+          id: `rec_${createHash("sha256").update(`${batch}:${i}`).digest("hex").slice(0, 16)}`,
+        },
   );
+};
 
 export const createDatasetService = (deps: AppDependencies): DatasetService => {
   const { store, storage } = deps;
@@ -198,7 +209,7 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
           const part = await writePart(
             workspaceId,
             dataset.id,
-            stampIds(records),
+            pushRecordIds(records),
           );
           // Re-pushing records the dataset already holds is a no-op: the
           // current version is returned and no new one is created.

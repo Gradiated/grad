@@ -176,7 +176,7 @@ describe("datasets, uploads and imports", () => {
     expect(res.status).toBe(500);
   });
 
-  it("gives records without ids content ids, so a re-push changes nothing", async () => {
+  it("gives records without ids batch-derived ids, so a re-push changes nothing", async () => {
     const first = await t.json("/v1/datasets/repush/records", {
       body: { records: sftRecords(4) },
     });
@@ -191,6 +191,30 @@ describe("datasets, uploads and imports", () => {
     const ids = listed.body.data.map((r) => r.id);
     expect(ids).toHaveLength(4);
     expect(ids.every((id) => /^rec_[0-9a-f]{16}$/.test(id))).toBe(true);
+    // Identical records within one push stay distinct records; the same push
+    // sent again is still a no-op.
+    const twin = sftRecords(1)[0]!;
+    const triple = { records: [twin, twin, twin] };
+    const three = await t.json("/v1/datasets/triples/records", {
+      body: triple,
+    });
+    expect(three.body).toMatchObject({ version: 1, record_count: 3 });
+    const repeat = await t.json("/v1/datasets/triples/records", {
+      body: triple,
+    });
+    expect(repeat.body).toMatchObject({ version: 1, record_count: 3 });
+    const tripled = await t.json<{ data: Array<{ id: string }> }>(
+      "/v1/datasets/triples/records",
+    );
+    expect(new Set(tripled.body.data.map((r) => r.id)).size).toBe(3);
+    // A client batching one push (2 + 1 records) keeps all three, too.
+    await t.json("/v1/datasets/batched/records", {
+      body: { records: [twin, twin] },
+    });
+    const last = await t.json("/v1/datasets/batched/records", {
+      body: { records: [twin] },
+    });
+    expect(last.body).toMatchObject({ version: 2, record_count: 3 });
   });
 
   it("keeps every concurrent append (no in-process locks)", async () => {
