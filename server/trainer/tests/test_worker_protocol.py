@@ -430,6 +430,38 @@ class WorkerProtocolTests(unittest.TestCase):
             all(r.headers.get("authorization") == f"Bearer {KEY}" for r in srv.requests)
         )
 
+    def test_storage_errors_never_quote_presigned_credentials(self) -> None:
+        # r8 P2-20: a failed presigned download posted its full URL and the S3 error XML.
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Storage(BaseHTTPRequestHandler):
+            def log_message(self, *_args: Any) -> None:
+                return
+
+            def do_GET(self) -> None:
+                body = b"<Error><AWSAccessKeyId>AKIAEXAMPLE</AWSAccessKeyId></Error>"
+                self.send_response(403)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Storage)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/bucket/blob?X-Amz-Credential=ASIA1&X-Amz-Security-Token=TOKEN1&X-Amz-Signature=SIG1"
+        client = ProtocolClient("http://grad-api.invalid:8787", KEY)
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ServerError) as ctx:
+            client.download(url, Path(tmp) / "x", attempts=1)
+        message = str(ctx.exception)
+        self.assertIn("HTTP 403", message)
+        self.assertIn("/bucket/blob", message)
+        for leaked in ("ASIA1", "TOKEN1", "SIG1", "X-Amz", "AKIAEXAMPLE", "<Error>"):
+            self.assertNotIn(leaked, message)
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(Exception) as ctx:
+            client.download("http://127.0.0.1:9/x?X-Amz-Signature=SIG2", Path(tmp) / "x", attempts=1)
+        self.assertNotIn("SIG2", str(ctx.exception))
+
     def test_import_upload_job_posts_batches_and_summary(self) -> None:
         srv = self.server(
             jobs=[

@@ -162,12 +162,16 @@ class ProtocolClient:
             if self.traceparent:
                 hdrs["traceparent"] = self.traceparent
         req = urllib.request.Request(full, data=data, headers=hdrs, method=method)
+        # Errors reach the tenant (run and import errors): never quote a query string
+        # (presigned credentials and signatures) or a storage response body.
+        shown = urllib.parse.urlparse(full)._replace(query="", fragment="").geturl()
         try:
             return self._opener.open(req, timeout=self.timeout_s)
         except urllib.error.HTTPError as exc:
-            raise _parse_problem(exc.code, exc.read(), full) from None
+            body = exc.read() if self._same_origin(full) else b""
+            raise _parse_problem(exc.code, body, shown) from None
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-            raise ServerUnreachable(f"{full}: {getattr(exc, 'reason', exc)}") from exc
+            raise ServerUnreachable(f"{shown}: {getattr(exc, 'reason', exc)}") from exc
 
     def post_json(
         self, path: str, payload: dict[str, Any], *, attempts: int = 1

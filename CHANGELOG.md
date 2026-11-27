@@ -16,6 +16,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - Recipe `loggers=` (W&B, MLflow) go through the source egress guard: https only, no private
   or metadata addresses unless `GRAD_SOURCES_EGRESS_ALLOW` lists them, every redirect hop
   re-checked and the tracker key never sent to another origin.
+- The egress guard judges the IPv4 address inside NAT64 (`64:ff9b::/96`) and
+  IPv4-compatible IPv6 addresses, so `64:ff9b::a9fe:a9fe` can't reach a metadata endpoint.
+- Worker errors shown on runs and imports no longer quote presigned URL query strings or
+  object-storage response bodies.
 
 ### Changed
 
