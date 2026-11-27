@@ -157,9 +157,11 @@ export const createDatasetRepository = (
         map: toDataset,
       });
     },
-    appendVersion: ({ datasetId, parts, metadata }) =>
+    appendVersion: ({ datasetId, parts, metadata, countRecords = true }) =>
       db.atomic(async () => {
-        const added = parts.reduce((sum, p) => sum + p.count, 0);
+        const added = countRecords
+          ? parts.reduce((sum, p) => sum + p.count, 0)
+          : 0;
         const ts = nowIso(clock);
         const row = first(
           await db.query(

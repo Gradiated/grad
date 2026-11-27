@@ -1,4 +1,8 @@
-import type { Dataset, DatasetRecord } from "../contracts.js";
+import type {
+  Dataset,
+  DatasetRecord,
+  FilterDatasetRequest,
+} from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound } from "../errors.js";
 import { newId } from "../ids.js";
@@ -9,11 +13,9 @@ import type {
   Page,
   PageRequest,
 } from "../store/types.js";
-import {
-  readVersionRecords,
-  readVersionSlice,
-  writeRecordsPart,
-} from "./dataset-records.js";
+import { canonicalJson, compileFilter, viewName } from "./dataset-filter.js";
+import { readVersionRecords, writeRecordsPart } from "./dataset-records.js";
+import { mergeRecords } from "./record-merge.js";
 
 export interface ResolvedDatasetVersion {
   dataset: Dataset;
@@ -41,7 +43,18 @@ export interface DatasetService {
     name: string,
     version?: number,
   ): Promise<ResolvedDatasetVersion>;
+  /** A version's records with later parts (score updates) merged in by id. */
   readRecords(version: DatasetVersion): Promise<DatasetRecord[]>;
+  /**
+   * A filtered view: a dataset holding the source version's matching records.
+   * Its default name hashes the filter, so the same filter returns the same
+   * view (`created: false`) without writing anything.
+   */
+  filter(
+    workspaceId: string,
+    name: string,
+    request: FilterDatasetRequest,
+  ): Promise<{ dataset: Dataset; created: boolean }>;
   listRecords(
     workspaceId: string,
     name: string,
@@ -68,8 +81,9 @@ export interface DatasetService {
 export const datasetPartKey = (
   workspaceId: string,
   datasetId: string,
+  part: string = newId("part"),
 ): string =>
-  `datasets/${encodeURIComponent(workspaceId)}/${datasetId}/parts/${newId("part")}.jsonl`;
+  `datasets/${encodeURIComponent(workspaceId)}/${datasetId}/parts/${part}.jsonl`;
 
 const stampIds = (records: readonly DatasetRecord[]): DatasetRecord[] =>
   records.map((record) =>
@@ -92,6 +106,11 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
     records: readonly DatasetRecord[],
   ) =>
     writeRecordsPart(storage, datasetPartKey(workspaceId, datasetId), records);
+
+  const readRecords = async (
+    version: DatasetVersion,
+  ): Promise<DatasetRecord[]> =>
+    mergeRecords(await readVersionRecords(storage, version));
 
   const resolve = async (
     workspaceId: string,
@@ -142,7 +161,49 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
       return updated;
     },
     resolve,
-    readRecords: (version) => readVersionRecords(storage, version),
+    readRecords,
+    filter: async (workspaceId, name, request) => {
+      const { version: wanted, name: given, ...filter } = request;
+      const source = await resolve(workspaceId, name, wanted);
+      const target =
+        given ?? viewName(source.dataset, source.version.version, filter);
+      const existing = await store.datasets.get(workspaceId, target);
+      const view = {
+        source: source.dataset.name,
+        version: source.version.version,
+        filter,
+      };
+      if (existing) {
+        if (canonicalJson(existing.metadata.view) === canonicalJson(view)) {
+          return { dataset: existing, created: false };
+        }
+        throw conflict(
+          "dataset_exists",
+          `Dataset '${target}' already exists and is not this view; pick another name.`,
+        );
+      }
+
+      const matches = compileFilter(filter);
+      const records = (await readRecords(source.version)).filter(matches);
+      const created = await store.datasets.create({
+        workspaceId,
+        name: target,
+        metadata: { view },
+      });
+      if (!created) {
+        // A concurrent identical filter won the race.
+        return { dataset: await get(workspaceId, target), created: false };
+      }
+      if (records.length === 0) return { dataset: created, created: true };
+
+      const part = await writePart(workspaceId, created.id, records);
+      const { dataset } = await store.datasets.appendVersion({
+        datasetId: created.id,
+        parts: [part],
+      });
+
+      return { dataset, created: true };
+    },
     listRecords: async (workspaceId, name, input) => {
       const { dataset, version } = await resolve(
         workspaceId,
@@ -155,21 +216,17 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
         throw invalid("invalid_cursor", "The pagination cursor is malformed.");
       }
 
-      const data = await readVersionSlice(
-        storage,
-        version,
-        offset,
-        input.limit,
-      );
+      const records = await readRecords(version);
+      const data = records.slice(offset, offset + input.limit);
       const nextOffset = offset + data.length;
 
       return {
         dataset: dataset.name,
         version: version.version,
-        total: version.record_count,
+        total: records.length,
         data,
         next_cursor:
-          nextOffset < version.record_count ? encodeCursor([nextOffset]) : null,
+          nextOffset < records.length ? encodeCursor([nextOffset]) : null,
       };
     },
     writePart,

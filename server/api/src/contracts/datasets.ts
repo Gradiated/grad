@@ -274,3 +274,61 @@ export const ImportJobSchema = z
   .openapi("ImportJob");
 
 export type ImportJob = z.infer<typeof ImportJobSchema>;
+
+// --- Filtered views ---------------------------------------------------------
+
+export const MAX_FILTER_IDS = 200_000;
+
+const TimeBoundSchema = z.union([IsoTimestampSchema, z.iso.date()]);
+
+export const DatasetFilterSchema = z
+  .object({
+    scores: z
+      .record(
+        z.string().min(1).max(128),
+        z.union([z.string().min(1).max(64), z.number()]),
+      )
+      .optional()
+      .openapi({
+        description:
+          'Conditions on stored scores, `{name: "<op><number>"}` with op one of >=, <=, >, <, ==, != (a bare number means ==). A record without the score does not match.',
+        example: { resolved: ">=0.8" },
+      }),
+    metadata: z
+      .record(
+        z.string().min(1).max(128),
+        z.union([z.string(), z.number(), z.boolean()]),
+      )
+      .optional()
+      .openapi({ description: "Exact matches on `metadata` fields." }),
+    created_after: TimeBoundSchema.optional().openapi({
+      description:
+        "Records whose `timestamp` is at or after this time (a timestamp with offset, or a UTC date `YYYY-MM-DD`).",
+    }),
+    created_before: TimeBoundSchema.optional().openapi({
+      description: "Records whose `timestamp` is before this time.",
+    }),
+    ids: z
+      .array(z.string().min(1).max(160))
+      .max(MAX_FILTER_IDS)
+      .optional()
+      .openapi({
+        description:
+          "Keep only these record ids (what the SDKs send for a filter function they ran locally).",
+      }),
+  })
+  .openapi("DatasetFilter");
+
+export type DatasetFilter = z.infer<typeof DatasetFilterSchema>;
+
+export const FilterDatasetRequestSchema = DatasetFilterSchema.extend({
+  version: z.number().int().min(1).optional().openapi({
+    description: "Source version to filter (default: the current version).",
+  }),
+  name: SlugSchema.optional().openapi({
+    description:
+      "Name of the view. Default: `<dataset>-f-<hash of source, version and filter>`, so the same filter returns the same view.",
+  }),
+}).openapi("FilterDatasetRequest");
+
+export type FilterDatasetRequest = z.infer<typeof FilterDatasetRequestSchema>;

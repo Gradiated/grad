@@ -55,8 +55,24 @@ const readBody = async (req: IncomingMessage): Promise<string> => {
   return Buffer.concat(chunks).toString("utf8");
 };
 
-/** Real HTTP OpenAI-compatible fake (`POST /v1/chat/completions`) on 127.0.0.1. */
-export const startFakeOpenAI = async (): Promise<FakeOpenAI> => {
+const isJudgePrompt = (request: FakeChatRequest): boolean => {
+  const system = request.messages[0];
+
+  return (
+    system?.role === "system" &&
+    typeof system.content === "string" &&
+    system.content.startsWith("You are an evaluation judge")
+  );
+};
+
+/**
+ * Real HTTP OpenAI-compatible fake (`POST /v1/chat/completions`) on 127.0.0.1.
+ * `judgeScore` answers every judge prompt (of any model without its own
+ * responder) with that score, as the harness stack does for docs snippets.
+ */
+export const startFakeOpenAI = async (
+  options: { judgeScore?: number } = {},
+): Promise<FakeOpenAI> => {
   const requests: FakeChatRequest[] = [];
   const responders = new Map<string, FakeResponder>();
   let failures: { count: number; status: number } = { count: 0, status: 503 };
@@ -82,9 +98,11 @@ export const startFakeOpenAI = async (): Promise<FakeOpenAI> => {
         return;
       }
 
-      const reply = (responders.get(request.model) ?? defaultResponder)(
-        request,
-      );
+      const fallback =
+        options.judgeScore !== undefined && isJudgePrompt(request)
+          ? judgeResponder(options.judgeScore)
+          : defaultResponder;
+      const reply = (responders.get(request.model) ?? fallback)(request);
       if (reply.delayMs) {
         await new Promise((resolve) => setTimeout(resolve, reply.delayMs));
       }

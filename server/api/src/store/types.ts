@@ -8,6 +8,7 @@ import type {
   Dataset,
   DatasetRecord,
   Deployment,
+  EvalMode,
   EvalModelSummary,
   EvalReport,
   EvalRubricItem,
@@ -94,6 +95,8 @@ export interface DatasetRepository {
     datasetId: string;
     parts: DatasetPart[];
     metadata?: Record<string, unknown>;
+    /** False for score-update parts: they change records, not their number. */
+    countRecords?: boolean;
   }): Promise<{ dataset: Dataset; version: DatasetVersion }>;
   /** Version 0 is the empty dataset and always exists after create. */
   getVersion(
@@ -505,6 +508,10 @@ export interface EvalRecord {
   pass_threshold: number;
   judge_models: string[];
   local_scorers: string[];
+  /** `score`: `dataset.score()` grades the records' own outputs (model `record`). */
+  mode: EvalMode;
+  /** The dataset version a completed scoring job wrote its scores to. */
+  scored_dataset_version: number | null;
   total_outputs: number;
   generated: number;
   summary: EvalModelSummary[];
@@ -534,6 +541,7 @@ export type EvalPatch = Partial<
     | "lease_seconds"
     | "updated_at"
     | "completed_at"
+    | "scored_dataset_version"
   >
 >;
 
@@ -591,6 +599,7 @@ export interface EvalRepository {
       | "created_at"
       | "updated_at"
       | "completed_at"
+      | "scored_dataset_version"
     >,
   ): Promise<EvalRecord>;
   get(workspaceId: string, id: string): Promise<EvalRecord | null>;

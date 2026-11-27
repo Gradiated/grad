@@ -227,6 +227,11 @@ export interface EmbedResponse {
   };
 }
 
+/** `eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model `record`) and writes the scores to the dataset's next version. */
+export type EvalMode = "eval" | "score";
+
+export const EvalModeValues = ["eval", "score"] as const;
+
 export interface EvalModelSummary {
   model: string;
   overall: number;
@@ -369,6 +374,7 @@ export interface EvalRun {
   workspaceId: string;
   name: string;
   status: EvalStatus;
+  mode: EvalMode;
   models: Array<string>;
   baseline: string | null;
   taskSource: {
@@ -390,6 +396,8 @@ export interface EvalRun {
   };
   summary: Array<EvalModelSummary>;
   totalCostUsd: number;
+  /** Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed. */
+  scoredDatasetVersion: number | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -431,6 +439,23 @@ export interface FeedbackRecord {
   expectedOutput?: unknown | undefined;
   metrics: Record<string, number>;
   createdAt: string;
+}
+
+export interface FilterDatasetRequest {
+  /** Conditions on stored scores, `{name: "<op><number>"}` with op one of >=, <=, >, <, ==, != (a bare number means ==). A record without the score does not match. */
+  scores?: Record<string, string | number> | undefined;
+  /** Exact matches on `metadata` fields. */
+  metadata?: Record<string, string | number | boolean> | undefined;
+  /** Records whose `timestamp` is at or after this time (a timestamp with offset, or a UTC date `YYYY-MM-DD`). */
+  createdAfter?: string | string | undefined;
+  /** Records whose `timestamp` is before this time. */
+  createdBefore?: string | string | undefined;
+  /** Keep only these record ids (what the SDKs send for a filter function they ran locally). */
+  ids?: Array<string> | undefined;
+  /** Source version to filter (default: the current version). */
+  version?: number | undefined;
+  /** Name of the view. Default: `<dataset>-f-<hash of source, version and filter>`, so the same filter returns the same view. */
+  name?: string | undefined;
 }
 
 export interface HfColumnMapping {
@@ -830,6 +855,15 @@ export interface Run {
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopped_budget";
 
 export const RunStatusValues = ["queued", "running", "completed", "failed", "cancelled", "stopped_budget"] as const;
+
+export interface ScoreDatasetRequest {
+  rubric: Array<EvalRubricItem>;
+  /** Dataset version to score (default: the current version). */
+  version?: number | undefined;
+  /** Name of the scoring job (default `<dataset>-score`). */
+  name?: string | undefined;
+  limit?: number | undefined;
+}
 
 export interface SplitSpec {
   strategy?: "by_session" | "by_group" | "random" | undefined;

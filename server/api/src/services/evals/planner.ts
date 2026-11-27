@@ -2,14 +2,19 @@ import {
   BINARY_RUBRIC_KINDS,
   messageText,
   NON_DEPLOYABLE_FORMATS,
+  RECORD_MODEL,
   type DatasetRecord,
+  type EvalMode,
   type EvalRubricItem,
   type PlanEvalRequest,
   type PlanEvalResponse,
 } from "../../contracts.js";
 import type { AppDependencies } from "../../deps.js";
 import { ApiError, invalid, unavailable } from "../../errors.js";
-import { recordPromptAndReference } from "../../records.js";
+import {
+  recordPromptAndReference,
+  recordPromptAndResponse,
+} from "../../records.js";
 import type { EvalRecord, EvalTaskRow } from "../../store/types.js";
 import type { DatasetService, ResolvedDatasetVersion } from "../datasets.js";
 
@@ -90,23 +95,63 @@ export const resolveModelTargets = async (
 interface BuiltTasks {
   tasks: Array<Omit<EvalTaskRow, "eval_id">>;
   skipped: number;
+  alreadyScored: number;
   promptTokens: number;
   referenceTokens: number;
 }
 
+/**
+ * A scoring job's task: a record with an id (scores merge by id) and its own
+ * answer, missing at least one of the rubric's scores (scored rows are skipped).
+ */
+const scoreTask = (
+  record: DatasetRecord,
+  names: readonly string[],
+): { prompt: string; reference: string } | "skip" | "scored" => {
+  const parts = recordPromptAndResponse(record);
+  if (!record.id || !parts || parts.response === null) return "skip";
+  if (names.every((name) => record.scores?.[name] !== undefined)) {
+    return "scored";
+  }
+
+  return {
+    prompt: parts.prompt.map(messageText).join("\n"),
+    reference: parts.response,
+  };
+};
+
 const buildTasks = (
   records: readonly DatasetRecord[],
   limit: number | undefined,
+  score: readonly string[] | null,
 ): BuiltTasks => {
   const built: BuiltTasks = {
     tasks: [],
     skipped: 0,
+    alreadyScored: 0,
     promptTokens: 0,
     referenceTokens: 0,
   };
 
   for (const record of records) {
     if (limit !== undefined && built.tasks.length >= limit) break;
+    if (score) {
+      const task = scoreTask(record, score);
+      if (task === "skip") built.skipped += 1;
+      if (task === "scored") built.alreadyScored += 1;
+      if (typeof task === "string") continue;
+
+      const index = built.tasks.length;
+      built.promptTokens += estimateTokens(task.prompt);
+      built.referenceTokens += estimateTokens(task.reference);
+      built.tasks.push({
+        task_index: index,
+        task_id: record.id as string,
+        record,
+      });
+      continue;
+    }
+
     const pr = recordPromptAndReference(record);
     if (!pr || pr.prompt.length === 0) {
       built.skipped += 1;
@@ -130,14 +175,28 @@ const buildTasks = (
 export const INFERENCE_UNAVAILABLE_DETAIL =
   "Evals need model outputs: set INFERENCE_BASE_URL (an OpenAI-compatible vLLM/SGLang endpoint serving your base models and LoRA artifacts by name, or the Gradiated gateway) and optionally JUDGE_BASE_URL.";
 
+export const JUDGE_UNAVAILABLE_DETAIL =
+  "Judges need a model endpoint: set JUDGE_BASE_URL (or INFERENCE_BASE_URL) to an OpenAI-compatible endpoint serving the judge models. Regex, validator and code scorers need no endpoint.";
+
+/**
+ * Plans an eval. `mode: "score"` (`dataset.score()`) grades the records' own
+ * answers under the model name `record`, so it calls no model and only needs
+ * an endpoint for judges.
+ */
 export const planEvalRequest = async (
   deps: AppDependencies,
   datasets: DatasetService,
   workspaceId: string,
   request: PlanEvalRequest,
+  mode: EvalMode = "eval",
 ): Promise<ResolvedEvalPlan> => {
-  if (deps.inference === null) {
+  const scoring = mode === "score";
+  const judgeItems = request.rubric.filter((r) => r.kind === "judge");
+  if (deps.inference === null && !scoring) {
     throw unavailable("inference_unavailable", INFERENCE_UNAVAILABLE_DETAIL);
+  }
+  if (deps.inference === null && judgeItems.length > 0) {
+    throw unavailable("inference_unavailable", JUDGE_UNAVAILABLE_DETAIL);
   }
 
   const datasetName = request.dataset;
@@ -146,17 +205,23 @@ export const planEvalRequest = async (
     throw invalid("duplicate_scorer", "Rubric item names must be unique.");
   }
 
-  const targets = await resolveModelTargets(deps, workspaceId, request.models);
+  const targets: ModelTargets = scoring
+    ? {
+        [RECORD_MODEL]: {
+          inference_model: RECORD_MODEL,
+          price_per_million_tokens: 0,
+        },
+      }
+    : await resolveModelTargets(deps, workspaceId, request.models);
   const dataset = await datasets.resolve(
     workspaceId,
     datasetName,
     request.dataset_version,
   );
   const records = await datasets.readRecords(dataset.version);
-  const built = buildTasks(records, request.limit);
+  const built = buildTasks(records, request.limit, scoring ? names : null);
   const { tasks } = built;
 
-  const judgeItems = request.rubric.filter((r) => r.kind === "judge");
   const judgeModels = [...new Set(judgeItems.map((r) => r.model ?? ""))];
   const localScorers = request.rubric
     .filter((r) => r.kind === "code")
@@ -166,8 +231,9 @@ export const planEvalRequest = async (
     request.pass_threshold,
   );
 
-  const modelCalls = tasks.length * request.models.length * request.samples;
-  const judgeCalls = modelCalls * judgeItems.length;
+  const outputs = tasks.length * request.models.length * request.samples;
+  const modelCalls = scoring ? 0 : outputs;
+  const judgeCalls = outputs * judgeItems.length;
   const perCallTokens =
     tasks.length > 0
       ? (built.promptTokens + built.referenceTokens) / tasks.length
@@ -181,22 +247,29 @@ export const planEvalRequest = async (
   }
   for (const item of judgeItems) {
     const price = deps.catalog.priceFor(item.model ?? "") ?? 0;
-    cost += ((modelCalls * (perCallTokens + 400)) / 1_000_000) * price;
+    cost += ((outputs * (perCallTokens + 400)) / 1_000_000) * price;
   }
   const estimatedCost = Number(cost.toFixed(6));
 
   const warnings: string[] = [];
   if (built.skipped > 0) {
     warnings.push(
-      `${built.skipped} record(s) have no usable prompt (a user turn) and are skipped.`,
+      scoring
+        ? `${built.skipped} record(s) have no id, prompt or answer to score and are skipped.`
+        : `${built.skipped} record(s) have no usable prompt (a user turn) and are skipped.`,
     );
   }
-  if (tasks.length === 0) {
+  if (built.alreadyScored > 0) {
+    warnings.push(
+      `${built.alreadyScored} record(s) already have every score (${names.join(", ")}) and are skipped.`,
+    );
+  }
+  if (tasks.length === 0 && !scoring) {
     warnings.push(
       "The dataset has no records with a usable prompt; nothing would be evaluated.",
     );
   }
-  if (request.samples === 1) {
+  if (request.samples === 1 && !scoring) {
     warnings.push(
       "samples=1 is fine for a quick check; use samples>=3 for decisions you will act on.",
     );

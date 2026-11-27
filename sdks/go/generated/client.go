@@ -222,6 +222,25 @@ func (c *Client) DownloadArtifact(ctx context.Context, id string, opts ...Reques
 	return c.T.DoStream(ctx, spec, opts...)
 }
 
+// FilterDataset calls POST /v1/datasets/{name}/filter.
+//
+// Save a filtered view of a dataset version.
+func (c *Client) FilterDataset(ctx context.Context, name string, body *FilterDatasetRequest, opts ...RequestOption) (*Dataset, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "FilterDataset: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/filter", Body: body, Idempotent: true}
+	var out Dataset
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // GetArtifact calls GET /v1/artifacts/{id}.
 //
 // Get an artifact by id or name@latest.
@@ -848,6 +867,25 @@ func (c *Client) RouteRequest(ctx context.Context, body *RouteRequest, opts ...R
 	}
 	spec := RequestSpec{Method: "POST", Path: "/v1/route", Body: body, Idempotent: true}
 	var out RouteResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ScoreDataset calls POST /v1/datasets/{name}/score.
+//
+// Score a dataset's records with a rubric (async; the scores become the next version).
+func (c *Client) ScoreDataset(ctx context.Context, name string, body *ScoreDatasetRequest, opts ...RequestOption) (*EvalRun, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "ScoreDataset: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/score", Body: body, Idempotent: true}
+	var out EvalRun
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}

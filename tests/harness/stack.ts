@@ -1,6 +1,6 @@
 /**
  * Boots a complete local grad stack for SDK, CLI and cross-language E2E tests:
- * a fake OpenAI-compatible inference/judge server, optionally a fake Gradiated
+ * a fake OpenAI-compatible inference/judge server (judges score 0.9), optionally a fake Gradiated
  * Cloud API, the real grad-server, and optionally a real trainer worker.
  *
  * Prints one JSON line to stdout once everything is ready, then runs until
@@ -164,7 +164,7 @@ const main = async () => {
   const scratch = mkdtempSync(
     join(process.env.TMPDIR ?? tmpdir(), "grad-stack-"),
   );
-  const inference = await startFakeOpenAI();
+  const inference = await startFakeOpenAI({ judgeScore: 0.9 });
   const cloud = args.cloud
     ? await startFakeCloudApi({ serviceToken: "svc_e2e_token" })
     : undefined;

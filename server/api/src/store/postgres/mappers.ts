@@ -242,6 +242,8 @@ export const toEval = (r: Row): EvalRecord => ({
   pass_threshold: n(r.pass_threshold),
   judge_models: j(r.judge_models, []),
   local_scorers: j(r.local_scorers, []),
+  mode: (sn(r.mode) ?? "eval") as EvalRecord["mode"],
+  scored_dataset_version: nn(r.scored_dataset_version),
   total_outputs: n(r.total_outputs),
   generated: n(r.generated),
   summary: j(r.summary, []),

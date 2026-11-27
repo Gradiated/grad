@@ -126,6 +126,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         pass_threshold: 0.5,
         judge_models: [],
         local_scorers: ["local_fn"],
+        mode: "eval",
       });
     };
 

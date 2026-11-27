@@ -30,9 +30,9 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => ({
       `INSERT INTO grad_evals
          (id, workspace_id, name, status, models, model_targets, baseline, dataset_id,
           dataset_name, dataset_version, rubric, samples, temperature, max_tokens, "limit",
-          pass_threshold, judge_models, local_scorers, created_at, updated_at)
+          pass_threshold, judge_models, local_scorers, mode, created_at, updated_at)
        VALUES ($1, $2, $3, 'queued', $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11,
-               $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18::timestamptz, $18::timestamptz)
+               $12, $13, $14, $15, $16::jsonb, $17::jsonb, $19, $18::timestamptz, $18::timestamptz)
        RETURNING *`,
       [
         newId("eval"),
@@ -53,6 +53,7 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => ({
         JSON.stringify(input.judge_models),
         JSON.stringify(input.local_scorers),
         ts,
+        input.mode,
       ],
     );
 

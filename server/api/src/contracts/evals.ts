@@ -175,12 +175,22 @@ export const EVAL_STATUSES = [
 export const EvalStatusSchema = z.enum(EVAL_STATUSES).openapi("EvalStatus");
 export type EvalStatus = z.infer<typeof EvalStatusSchema>;
 
+export const EvalModeSchema = z.enum(["eval", "score"]).openapi("EvalMode", {
+  description:
+    "`eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model `record`) and writes the scores to the dataset's next version.",
+});
+export type EvalMode = z.infer<typeof EvalModeSchema>;
+
+/** The model name of a scoring job's outputs: the record's own answer. */
+export const RECORD_MODEL = "record";
+
 export const EvalRunSchema = z
   .object({
     id: z.string().min(1),
     workspace_id: z.string().min(1),
     name: SlugSchema,
     status: EvalStatusSchema,
+    mode: EvalModeSchema,
     models: z.array(z.string()),
     baseline: z.string().nullable(),
     task_source: z.object({
@@ -202,12 +212,32 @@ export const EvalRunSchema = z
     }),
     summary: z.array(EvalModelSummarySchema),
     total_cost_usd: z.number().min(0),
+    scored_dataset_version: z.number().int().min(1).nullable().openapi({
+      description:
+        "Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.",
+    }),
     error: z.string().nullable(),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
     completed_at: IsoTimestampSchema.nullable(),
   })
   .openapi("EvalRun");
+
+export const ScoreDatasetRequestSchema = z
+  .object({
+    rubric: z.array(EvalRubricItemSchema).min(1).max(32),
+    version: z.number().int().min(1).optional().openapi({
+      description: "Dataset version to score (default: the current version).",
+    }),
+    name: SlugSchema.optional().openapi({
+      description: "Name of the scoring job (default `<dataset>-score`).",
+    }),
+    limit: z.number().int().min(1).max(100_000).optional(),
+  })
+  .strict()
+  .openapi("ScoreDatasetRequest");
+
+export type ScoreDatasetRequest = z.infer<typeof ScoreDatasetRequestSchema>;
 
 export type EvalRun = z.infer<typeof EvalRunSchema>;
 

@@ -17,6 +17,8 @@ export interface ScoringInput {
 export interface ScoringResult {
   scores: Record<string, number>;
   errors: string[];
+  /** Items that produced no real score (their entry in `scores` is 0). */
+  failed: string[];
   judgeTokens: Record<string, number>;
 }
 
@@ -113,7 +115,12 @@ export const scoreOutput = async (
   input: ScoringInput,
   ctx: ScoringContext,
 ): Promise<ScoringResult> => {
-  const result: ScoringResult = { scores: {}, errors: [], judgeTokens: {} };
+  const result: ScoringResult = {
+    scores: {},
+    errors: [],
+    failed: [],
+    judgeTokens: {},
+  };
 
   for (const item of rubric) {
     if (item.kind === "code") continue;
@@ -135,6 +142,7 @@ export const scoreOutput = async (
     }
 
     result.scores[item.name] = 0;
+    result.failed.push(item.name);
     if (!ctx.judge || !item.model) {
       result.errors.push(`judge '${item.name}': no judge endpoint configured`);
       continue;
@@ -158,6 +166,7 @@ export const scoreOutput = async (
         );
       } else {
         result.scores[item.name] = score;
+        result.failed.pop();
       }
     } catch (error) {
       result.errors.push(`judge '${item.name}': ${errorMessage(error)}`);

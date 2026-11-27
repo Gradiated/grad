@@ -1,13 +1,16 @@
 import { hostname } from "node:os";
 
 import { addSeconds, leaseGraceCutoff } from "../../clock.js";
-import type {
-  EvalOutput,
-  EvalRun,
-  EvalStatus,
-  EvalTaskOutcome,
-  PlanEvalRequest,
-  PlanEvalResponse,
+import {
+  RECORD_MODEL,
+  type EvalMode,
+  type EvalOutput,
+  type EvalRun,
+  type EvalStatus,
+  type EvalTaskOutcome,
+  type PlanEvalRequest,
+  type PlanEvalResponse,
+  type ScoreDatasetRequest,
 } from "../../contracts.js";
 import type { AppDependencies } from "../../deps.js";
 import {
@@ -18,7 +21,10 @@ import {
   notFound,
 } from "../../errors.js";
 import { newId } from "../../ids.js";
-import { recordPromptAndReference } from "../../records.js";
+import {
+  recordPromptAndReference,
+  recordPromptAndResponse,
+} from "../../records.js";
 import type {
   EvalOutputRow,
   EvalRecord,
@@ -28,7 +34,9 @@ import type {
   PageRequest,
 } from "../../store/types.js";
 import type { BillingOutbox } from "../billing-outbox.js";
-import type { DatasetService } from "../datasets.js";
+import { datasetPartKey, type DatasetService } from "../datasets.js";
+import { writeRecordsPart } from "../dataset-records.js";
+import { scoreUpdate } from "../record-merge.js";
 import { settleLabelledRuns } from "../router-labels.js";
 import { aggregateEval } from "./aggregate.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./planner.js";
@@ -40,6 +48,15 @@ export interface EvalService {
     request: PlanEvalRequest,
   ): Promise<PlanEvalResponse>;
   create(workspaceId: string, request: PlanEvalRequest): Promise<EvalRun>;
+  /**
+   * `dataset.score()`: a scoring job (mode `score`) over the records' own
+   * answers; on completion their scores are the dataset's next version.
+   */
+  scoreDataset(
+    workspaceId: string,
+    dataset: string,
+    request: ScoreDatasetRequest,
+  ): Promise<EvalRun>;
   get(workspaceId: string, id: string): Promise<EvalRun>;
   list(workspaceId: string, page: PageRequest): Promise<Page<EvalRun>>;
   listOutputs(
@@ -193,6 +210,7 @@ export const createEvalService = (
     workspace_id: record.workspace_id,
     name: record.name,
     status: record.status,
+    mode: record.mode,
     models: record.models,
     baseline: record.baseline,
     task_source: {
@@ -214,6 +232,7 @@ export const createEvalService = (
     },
     summary: record.summary,
     total_cost_usd: record.total_cost_usd,
+    scored_dataset_version: record.scored_dataset_version,
     error: record.error,
     created_at: record.created_at,
     updated_at: record.updated_at,
@@ -259,6 +278,31 @@ export const createEvalService = (
     if (kick) billing.kick();
   };
 
+  /**
+   * A scoring job's score-update part (one record per scored task, without
+   * scores that failed), at a key unique to the job so a retried finalize
+   * rewrites the same bytes. Null when nothing was scored.
+   */
+  const writeScorePart = async (
+    record: EvalRecord,
+    outputs: readonly EvalOutputRow[],
+  ) => {
+    const updates = outputs
+      .filter((o) => o.output !== null && Object.keys(o.scores).length > 0)
+      .map((o) => scoreUpdate(o.task_id, o.scores));
+    if (updates.length === 0) return null;
+
+    return writeRecordsPart(
+      deps.storage,
+      datasetPartKey(
+        record.workspace_id,
+        record.dataset_id,
+        `score-${record.id}`,
+      ),
+      updates,
+    );
+  };
+
   /** Aggregates outputs and marks the eval completed; CAS on `expect`. */
   const finalize = async (
     record: EvalRecord,
@@ -266,10 +310,24 @@ export const createEvalService = (
   ): Promise<EvalRecord | null> => {
     const outputs = await allOutputs(record.id);
     const aggregation = aggregateEval(record, outputs);
-    // Results, status and the billing row commit together, or not at all.
+    const scorePart =
+      record.mode === "score" ? await writeScorePart(record, outputs) : null;
+    // Results, status, scores and the billing row commit together, or not at all.
     const finalized = await store
       .transaction(async () => {
         await store.evals.replaceResults(record.id, aggregation.results);
+        const scoredVersion =
+          record.mode !== "score"
+            ? null
+            : scorePart
+              ? (
+                  await store.datasets.appendVersion({
+                    datasetId: record.dataset_id,
+                    parts: [scorePart],
+                    countRecords: false,
+                  })
+                ).dataset.version
+              : record.dataset_version;
         const done = await store.evals.update(
           record.id,
           {
@@ -280,6 +338,7 @@ export const createEvalService = (
             worker_id: null,
             lease_expires_at: null,
             completed_at: clock.now().toISOString(),
+            scored_dataset_version: scoredVersion,
           },
           expect,
         );
@@ -297,12 +356,73 @@ export const createEvalService = (
     return finalized;
   };
 
+  /** A scoring job's output: the record's own answer, scored by the rubric. */
+  const scoreOne = async (
+    record: EvalRecord,
+    task: EvalTaskRow,
+  ): Promise<EvalOutputRow> => {
+    const parts = recordPromptAndResponse(task.record);
+    const base: EvalOutputRow = {
+      id: newId("evout"),
+      eval_id: record.id,
+      task_index: task.task_index,
+      task_id: task.task_id,
+      model: RECORD_MODEL,
+      sample_index: 0,
+      input: parts?.prompt ?? [],
+      output: parts?.response ?? null,
+      expected_output: task.record.expected_output ?? null,
+      scores: {},
+      error: null,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 0,
+      created_at: clock.now().toISOString(),
+    };
+    if (!parts || parts.response === null) {
+      return { ...base, error: "record has no answer to score" };
+    }
+
+    const scored = await scoreOutput(
+      record.rubric,
+      {
+        prompt: parts.prompt,
+        output: parts.response,
+        reference: parts.expected,
+      },
+      { regex: deps.regex, judge: deps.inference?.judge ?? null },
+    );
+    let cost = 0;
+    let tokens = 0;
+    for (const [judge, judgeTokens] of Object.entries(scored.judgeTokens)) {
+      tokens += judgeTokens;
+      cost += (judgeTokens / 1_000_000) * (deps.catalog.priceFor(judge) ?? 0);
+    }
+    const scores = Object.fromEntries(
+      Object.entries(scored.scores).filter(
+        ([name]) => !scored.failed.includes(name),
+      ),
+    );
+
+    return {
+      ...base,
+      scores,
+      error:
+        scored.errors.length > 0
+          ? scored.errors.join("; ").slice(0, 2000)
+          : null,
+      prompt_tokens: tokens,
+      cost_usd: Number(cost.toFixed(8)),
+    };
+  };
+
   const generateOne = async (
     record: EvalRecord,
     task: EvalTaskRow,
     model: string,
     sampleIndex: number,
   ): Promise<EvalOutputRow> => {
+    if (record.mode === "score") return scoreOne(record, task);
     const pr = recordPromptAndReference(task.record);
     const target = record.model_targets[model];
     const base: EvalOutputRow = {
@@ -456,7 +576,11 @@ export const createEvalService = (
       const firstGenerationError = outputs.find(
         (o) => o.output === null,
       )?.error;
-      if (outputs.length > 0 && outputs.every((o) => o.output === null)) {
+      if (
+        job.mode === "eval" &&
+        outputs.length > 0 &&
+        outputs.every((o) => o.output === null)
+      ) {
         throw new Error(
           `Every model call failed; first error: ${firstGenerationError ?? "unknown"}`,
         );
@@ -582,46 +706,77 @@ export const createEvalService = (
     };
   };
 
+  const createEval = async (
+    workspaceId: string,
+    request: PlanEvalRequest,
+    mode: EvalMode,
+  ): Promise<EvalRun> => {
+    const plan = await planEvalRequest(
+      deps,
+      datasets,
+      workspaceId,
+      request,
+      mode,
+    );
+    if (mode === "eval") assertNonEmptyPlan(plan);
+
+    const record = await store.transaction(async (tx) => {
+      const created = await tx.evals.create({
+        workspace_id: workspaceId,
+        name: request.name,
+        models: request.models,
+        model_targets: plan.targets,
+        baseline: request.baseline ?? null,
+        dataset_id: plan.dataset.dataset.id,
+        dataset_name: plan.dataset.dataset.name,
+        dataset_version: plan.dataset.version.version,
+        rubric: request.rubric,
+        samples: request.samples,
+        temperature: request.temperature,
+        max_tokens: request.max_tokens,
+        limit: request.limit ?? null,
+        pass_threshold: plan.passThreshold,
+        judge_models: plan.judgeModels,
+        local_scorers: plan.localScorers,
+        mode,
+      });
+      await tx.evals.insertTasks(
+        created.id,
+        plan.tasks.map((task) => ({ ...task, eval_id: created.id })),
+      );
+
+      return (await tx.evals.update(created.id, {
+        total_outputs:
+          plan.tasks.length * request.models.length * request.samples,
+      })) as EvalRecord;
+    });
+
+    return toPublic(record);
+  };
+
   return {
     plan: async (workspaceId, request) =>
       (await planEvalRequest(deps, datasets, workspaceId, request)).response,
 
-    create: async (workspaceId, request) => {
-      const plan = await planEvalRequest(deps, datasets, workspaceId, request);
-      assertNonEmptyPlan(plan);
+    create: (workspaceId, request) => createEval(workspaceId, request, "eval"),
 
-      const record = await store.transaction(async (tx) => {
-        const created = await tx.evals.create({
-          workspace_id: workspaceId,
-          name: request.name,
-          models: request.models,
-          model_targets: plan.targets,
-          baseline: request.baseline ?? null,
-          dataset_id: plan.dataset.dataset.id,
-          dataset_name: plan.dataset.dataset.name,
-          dataset_version: plan.dataset.version.version,
+    scoreDataset: (workspaceId, dataset, request) =>
+      createEval(
+        workspaceId,
+        {
+          name: request.name ?? `${dataset.slice(0, 58)}-score`,
+          models: [RECORD_MODEL],
+          dataset,
+          dataset_version: request.version,
           rubric: request.rubric,
-          samples: request.samples,
-          temperature: request.temperature,
-          max_tokens: request.max_tokens,
-          limit: request.limit ?? null,
-          pass_threshold: plan.passThreshold,
-          judge_models: plan.judgeModels,
-          local_scorers: plan.localScorers,
-        });
-        await tx.evals.insertTasks(
-          created.id,
-          plan.tasks.map((task) => ({ ...task, eval_id: created.id })),
-        );
-
-        return (await tx.evals.update(created.id, {
-          total_outputs:
-            plan.tasks.length * request.models.length * request.samples,
-        })) as EvalRecord;
-      });
-
-      return toPublic(record);
-    },
+          samples: 1,
+          temperature: 0,
+          max_tokens: 1,
+          limit: request.limit,
+          pass_threshold: null,
+        },
+        "score",
+      ),
 
     get: async (workspaceId, id) => toPublic(await load(workspaceId, id)),
 

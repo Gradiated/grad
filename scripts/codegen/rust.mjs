@@ -23,6 +23,7 @@ export const RUST_MODELS = [
   "EvalRun",
   "EvalTaskOutcome",
   "FeedbackEventInput",
+  "FilterDatasetRequest",
   "ImportJob",
   "MetricsPage",
   "PlanEvalRequest",
@@ -37,6 +38,7 @@ export const RUST_MODELS = [
   "RouteRequest",
   "RouteResponse",
   "Run",
+  "ScoreDatasetRequest",
   "TrainableModel",
   "UploadTicket",
 ];

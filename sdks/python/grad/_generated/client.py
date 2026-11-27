@@ -204,6 +204,17 @@ Dataset = TypedDict(
     },
 )
 
+DatasetFilter = TypedDict(
+    "DatasetFilter",
+    {
+        "scores": "NotRequired[dict[str, str | float]]",
+        "metadata": "NotRequired[dict[str, str | float | bool]]",
+        "created_after": "NotRequired[str]",
+        "created_before": "NotRequired[str]",
+        "ids": "NotRequired[list[str]]",
+    },
+)
+
 DatasetRecord = TypedDict(
     "DatasetRecord",
     {
@@ -314,6 +325,8 @@ EmbedResponse = TypedDict(
     },
 )
 
+EvalMode: TypeAlias = "Literal['eval', 'score']"
+
 EvalModelSummary = TypedDict(
     "EvalModelSummary",
     {
@@ -419,6 +432,7 @@ EvalRun = TypedDict(
         "workspace_id": "str",
         "name": "str",
         "status": "EvalStatus",
+        "mode": "EvalMode",
         "models": "list[str]",
         "baseline": "str | None",
         "task_source": "dict[str, Any]",
@@ -432,6 +446,7 @@ EvalRun = TypedDict(
         "progress": "dict[str, Any]",
         "summary": "list[EvalModelSummary]",
         "total_cost_usd": "float",
+        "scored_dataset_version": "int | None",
         "error": "str | None",
         "created_at": "str",
         "updated_at": "str",
@@ -482,6 +497,8 @@ FeedbackRecord = TypedDict(
         "created_at": "str",
     },
 )
+
+FilterDatasetRequest: TypeAlias = "DatasetFilter"
 
 HfColumnMapping = TypedDict(
     "HfColumnMapping",
@@ -937,6 +954,16 @@ Run = TypedDict(
 
 RunStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed', 'cancelled', 'stopped_budget']"
 
+ScoreDatasetRequest = TypedDict(
+    "ScoreDatasetRequest",
+    {
+        "rubric": "list[EvalRubricItem]",
+        "version": "NotRequired[int]",
+        "name": "NotRequired[str]",
+        "limit": "NotRequired[int]",
+    },
+)
+
 SplitSpec = TypedDict(
     "SplitSpec",
     {
@@ -1152,6 +1179,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "CreateUploadRequest": frozenset({"filename", "purpose", "sha256", "size_bytes"}),
     "CreatedApiKey": frozenset({"key", "secret"}),
     "Dataset": frozenset({"created_at", "id", "metadata", "name", "record_count", "updated_at", "version", "workspace_id"}),
+    "DatasetFilter": frozenset({"created_after", "created_before", "ids", "metadata", "scores"}),
     "DatasetRecord": frozenset({"chosen", "completion", "expected_output", "group_id", "id", "input", "messages", "metadata", "metrics", "negatives", "output", "positive", "prompt", "query", "questions", "rejected", "role", "schema", "scores", "session_id", "source", "state", "timestamp", "tools"}),
     "DatasetRecordsPage": frozenset({"data", "dataset", "next_cursor", "total", "version"}),
     "DecisionHeadReport": frozenset({"accuracy", "brier", "confusion_matrix", "ece", "examples", "macro_f1", "mae", "per_option", "temperature", "type"}),
@@ -1164,7 +1192,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
     "EvalReport": frozenset({"base_kl", "baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_points", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "pointwise_brier", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "rollout", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_points", "train_records", "trained_token_fraction", "truncated", "warnings"}),
     "EvalRubricItem": frozenset({"flags", "kind", "model", "name", "pattern", "prompt", "runtime", "validator", "weight"}),
-    "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "models", "name", "pass_threshold", "progress", "rubric", "samples", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
+    "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "mode", "models", "name", "pass_threshold", "progress", "rubric", "samples", "scored_dataset_version", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
     "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),
     "FeedbackEventInput": frozenset({"deployment_name", "expected_output", "idempotency_key", "inference_id", "metrics", "score", "session_id"}),
     "FeedbackRecord": frozenset({"created_at", "deployment_name", "expected_output", "id", "idempotency_key", "inference_id", "metrics", "score", "session_id", "workspace_id"}),
@@ -1200,6 +1228,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
     "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
+    "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),
@@ -1215,6 +1244,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
 SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "deployments:write", "feedback:write", "env:serve",),
     "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference", None,),
+    "EvalMode": ("eval", "score",),
     "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
     "ImportStatus": ("queued", "running", "completed", "failed",),
     "JobKind": ("train", "import",),
@@ -1235,6 +1265,7 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "create_upload": ("POST", "/v1/uploads"),
     "deploy_artifact": ("POST", "/v1/deployments"),
     "download_artifact": ("GET", "/v1/artifacts/{id}/download"),
+    "filter_dataset": ("POST", "/v1/datasets/{name}/filter"),
     "get_artifact": ("GET", "/v1/artifacts/{id}"),
     "get_dataset": ("GET", "/v1/datasets/{name}"),
     "get_deployment": ("GET", "/v1/deployments/{name}"),
@@ -1266,6 +1297,7 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "revoke_api_key": ("DELETE", "/v1/keys/{id}"),
     "rollback_deployment": ("POST", "/v1/deployments/{name}/rollback"),
     "route_request": ("POST", "/v1/route"),
+    "score_dataset": ("POST", "/v1/datasets/{name}/score"),
 }
 """Public operationId (snake_case) -> (HTTP method, path template)."""
 
@@ -1334,6 +1366,10 @@ class GeneratedApiClient:
     def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:
         """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 (streams `application/octet-stream`; read or close the response)."""
         return self._t.stream("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}/download", accept="application/octet-stream", timeout=timeout)
+
+    def filter_dataset(self, name: str, body: FilterDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
+        """Save a filtered view of a dataset version."""
+        return cast("Dataset", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/filter", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def get_artifact(self, id: str, *, timeout: float | None = None) -> Artifact:
         """Get an artifact by id or name@latest."""
@@ -1462,3 +1498,7 @@ class GeneratedApiClient:
     def route_request(self, body: RouteRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RouteResponse:
         """Ask a deployed model router which model to call."""
         return cast("RouteResponse", self._t.request("POST", "/v1/route", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
+    def score_dataset(self, name: str, body: ScoreDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
+        """Score a dataset's records with a rubric (async; the scores become the next version)."""
+        return cast("EvalRun", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/score", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))

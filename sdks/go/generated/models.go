@@ -444,6 +444,15 @@ type EmbedResponseUsage struct {
 	TotalTokens  int `json:"total_tokens"`
 }
 
+// EvalMode `eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model `record`) and writes the scores to the dataset's next version.
+type EvalMode string
+
+// Values of EvalMode.
+const (
+	EvalModeEval  EvalMode = "eval"
+	EvalModeScore EvalMode = "score"
+)
+
 // EvalModelSummary is generated from the OpenAPI schema.
 type EvalModelSummary struct {
 	Model             string                      `json:"model"`
@@ -737,6 +746,7 @@ type EvalRun struct {
 	WorkspaceID   string             `json:"workspace_id"`
 	Name          string             `json:"name"`
 	Status        EvalStatus         `json:"status"`
+	Mode          EvalMode           `json:"mode"`
 	Models        []string           `json:"models"`
 	Baseline      *string            `json:"baseline"`
 	TaskSource    EvalRunTaskSource  `json:"task_source"`
@@ -750,10 +760,12 @@ type EvalRun struct {
 	Progress      EvalRunProgress    `json:"progress"`
 	Summary       []EvalModelSummary `json:"summary"`
 	TotalCostUSD  float64            `json:"total_cost_usd"`
-	Error         *string            `json:"error"`
-	CreatedAt     string             `json:"created_at"`
-	UpdatedAt     string             `json:"updated_at"`
-	CompletedAt   *string            `json:"completed_at"`
+	// ScoredDatasetVersion Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.
+	ScoredDatasetVersion *int    `json:"scored_dataset_version"`
+	Error                *string `json:"error"`
+	CreatedAt            string  `json:"created_at"`
+	UpdatedAt            string  `json:"updated_at"`
+	CompletedAt          *string `json:"completed_at"`
 }
 
 // EvalRunProgress is generated from the OpenAPI schema.
@@ -825,6 +837,24 @@ type FeedbackRecord struct {
 	ExpectedOutput any                `json:"expected_output,omitempty"`
 	Metrics        map[string]float64 `json:"metrics"`
 	CreatedAt      string             `json:"created_at"`
+}
+
+// FilterDatasetRequest is generated from the OpenAPI schema.
+type FilterDatasetRequest struct {
+	// Scores Conditions on stored scores, `{name: "<op><number>"}` with op one of >=, <=, >, <, ==, != (a bare number means ==). A record without the score does not match.
+	Scores map[string]any `json:"scores,omitempty"`
+	// Metadata Exact matches on `metadata` fields.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// CreatedAfter Records whose `timestamp` is at or after this time (a timestamp with offset, or a UTC date `YYYY-MM-DD`).
+	CreatedAfter any `json:"created_after,omitempty"`
+	// CreatedBefore Records whose `timestamp` is before this time.
+	CreatedBefore any `json:"created_before,omitempty"`
+	// IDs Keep only these record ids (what the SDKs send for a filter function they ran locally).
+	IDs []string `json:"ids,omitempty"`
+	// Version Source version to filter (default: the current version).
+	Version *int `json:"version,omitempty"`
+	// Name Name of the view. Default: `<dataset>-f-<hash of source, version and filter>`, so the same filter returns the same view.
+	Name *string `json:"name,omitempty"`
 }
 
 // HFColumnMapping is generated from the OpenAPI schema.
@@ -1769,6 +1799,16 @@ const (
 	RunStatusCancelled     RunStatus = "cancelled"
 	RunStatusStoppedBudget RunStatus = "stopped_budget"
 )
+
+// ScoreDatasetRequest is generated from the OpenAPI schema.
+type ScoreDatasetRequest struct {
+	Rubric []EvalRubricItem `json:"rubric"`
+	// Version Dataset version to score (default: the current version).
+	Version *int `json:"version,omitempty"`
+	// Name Name of the scoring job (default `<dataset>-score`).
+	Name  *string `json:"name,omitempty"`
+	Limit *int    `json:"limit,omitempty"`
+}
 
 // SplitSpec is generated from the OpenAPI schema.
 type SplitSpec struct {

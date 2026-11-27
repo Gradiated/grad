@@ -461,6 +461,350 @@ components:
         - total
         - data
         - next_cursor
+    EvalRun:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        status:
+          $ref: "#/components/schemas/EvalStatus"
+        mode:
+          $ref: "#/components/schemas/EvalMode"
+        models:
+          type: array
+          items:
+            type: string
+        baseline:
+          type:
+            - string
+            - "null"
+        task_source:
+          type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - dataset
+            dataset:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+            version:
+              type: integer
+              minimum: 0
+          required:
+            - kind
+            - dataset
+            - version
+        rubric:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalRubricItem"
+        samples:
+          type: integer
+          minimum: 1
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        max_tokens:
+          type: integer
+          minimum: 1
+        pass_threshold:
+          type: number
+          minimum: 0
+          maximum: 1
+        judge_models:
+          type: array
+          items:
+            type: string
+        local_scorers:
+          type: array
+          items:
+            type: string
+        progress:
+          type: object
+          properties:
+            total_outputs:
+              type: integer
+              minimum: 0
+            generated:
+              type: integer
+              minimum: 0
+            pending_local_scores:
+              type: integer
+              minimum: 0
+          required:
+            - total_outputs
+            - generated
+            - pending_local_scores
+        summary:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalModelSummary"
+        total_cost_usd:
+          type: number
+          minimum: 0
+        scored_dataset_version:
+          type:
+            - integer
+            - "null"
+          minimum: 1
+          description: "Scoring jobs: the dataset version holding the new scores (the source version when every record was already
+            scored); null until completed."
+        error:
+          type:
+            - string
+            - "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - name
+        - status
+        - mode
+        - models
+        - baseline
+        - task_source
+        - rubric
+        - samples
+        - temperature
+        - max_tokens
+        - pass_threshold
+        - judge_models
+        - local_scorers
+        - progress
+        - summary
+        - total_cost_usd
+        - scored_dataset_version
+        - error
+        - created_at
+        - updated_at
+        - completed_at
+    EvalStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - awaiting_scores
+        - completed
+        - failed
+        - cancelled
+    EvalMode:
+      type: string
+      enum:
+        - eval
+        - score
+      description: "`eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model
+        `record`) and writes the scores to the dataset's next version."
+    EvalRubricItem:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[A-Za-z0-9_.:-]+$
+        kind:
+          type: string
+          enum:
+            - regex
+            - validator
+            - code
+            - judge
+        weight:
+          type: number
+          exclusiveMinimum: 0
+          default: 1
+        pattern:
+          type: string
+          maxLength: 256
+        flags:
+          type: string
+          maxLength: 4
+          pattern: ^[imsu]*$
+        validator:
+          type: string
+          enum:
+            - json
+            - non_empty
+            - exact_match
+        model:
+          type: string
+          minLength: 1
+          maxLength: 160
+        prompt:
+          type: string
+          maxLength: 8000
+        runtime:
+          type: string
+          enum:
+            - local
+          description: Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK
+            posts their scores.
+      required:
+        - name
+        - kind
+    EvalModelSummary:
+      type: object
+      properties:
+        model:
+          type: string
+        overall:
+          type: number
+        ci_low:
+          type: number
+        ci_high:
+          type: number
+        pass_at_k:
+          type: object
+          additionalProperties:
+            type: number
+        vs_baseline:
+          type:
+            - object
+            - "null"
+          properties:
+            delta:
+              type: number
+            ci_low:
+              type: number
+            ci_high:
+              type: number
+          required:
+            - delta
+            - ci_low
+            - ci_high
+        tasks:
+          type: integer
+          minimum: 0
+        errors:
+          type: integer
+          minimum: 0
+        tokens_per_task:
+          type: number
+        cost_per_1k_tasks_usd:
+          type:
+            - number
+            - "null"
+      required:
+        - model
+        - overall
+        - ci_low
+        - ci_high
+        - pass_at_k
+        - vs_baseline
+        - tasks
+        - errors
+        - tokens_per_task
+        - cost_per_1k_tasks_usd
+    ScoreDatasetRequest:
+      type: object
+      properties:
+        rubric:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalRubricItem"
+          minItems: 1
+          maxItems: 32
+        version:
+          type: integer
+          minimum: 1
+          description: "Dataset version to score (default: the current version)."
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Name of the scoring job (default `<dataset>-score`).
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100000
+      required:
+        - rubric
+      additionalProperties: false
+    FilterDatasetRequest:
+      allOf:
+        - $ref: "#/components/schemas/DatasetFilter"
+        - type: object
+          properties:
+            version:
+              type: integer
+              minimum: 1
+              description: "Source version to filter (default: the current version)."
+            name:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+              description: "Name of the view. Default: `<dataset>-f-<hash of source, version and filter>`, so the same filter returns
+                the same view."
+    DatasetFilter:
+      type: object
+      properties:
+        scores:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: string
+                minLength: 1
+                maxLength: 64
+              - type: number
+          description: 'Conditions on stored scores, `{name: "<op><number>"}` with op one of >=, <=, >, <, ==, != (a bare number
+            means ==). A record without the score does not match.'
+          example:
+            resolved: ">=0.8"
+        metadata:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: string
+              - type: number
+              - type: boolean
+          description: Exact matches on `metadata` fields.
+        created_after:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: string
+              format: date
+          description: Records whose `timestamp` is at or after this time (a timestamp with offset, or a UTC date `YYYY-MM-DD`).
+        created_before:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: string
+              format: date
+          description: Records whose `timestamp` is before this time.
+        ids:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 160
+          maxItems: 200000
+          description: Keep only these record ids (what the SDKs send for a filter function they ran locally).
     RenderDatasetResponse:
       type: object
       properties:
@@ -1481,54 +1825,6 @@ components:
       required:
         - kind
       additionalProperties: false
-    EvalRubricItem:
-      type: object
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 80
-          pattern: ^[A-Za-z0-9_.:-]+$
-        kind:
-          type: string
-          enum:
-            - regex
-            - validator
-            - code
-            - judge
-        weight:
-          type: number
-          exclusiveMinimum: 0
-          default: 1
-        pattern:
-          type: string
-          maxLength: 256
-        flags:
-          type: string
-          maxLength: 4
-          pattern: ^[imsu]*$
-        validator:
-          type: string
-          enum:
-            - json
-            - non_empty
-            - exact_match
-        model:
-          type: string
-          minLength: 1
-          maxLength: 160
-        prompt:
-          type: string
-          maxLength: 8000
-        runtime:
-          type: string
-          enum:
-            - local
-          description: Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK
-            posts their scores.
-      required:
-        - name
-        - kind
     SplitSpec:
       type: object
       properties:
@@ -3239,197 +3535,6 @@ components:
         - models
         - dataset
       additionalProperties: false
-    EvalRun:
-      type: object
-      properties:
-        id:
-          type: string
-          minLength: 1
-        workspace_id:
-          type: string
-          minLength: 1
-        name:
-          type: string
-          minLength: 1
-          maxLength: 64
-          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
-        status:
-          $ref: "#/components/schemas/EvalStatus"
-        models:
-          type: array
-          items:
-            type: string
-        baseline:
-          type:
-            - string
-            - "null"
-        task_source:
-          type: object
-          properties:
-            kind:
-              type: string
-              enum:
-                - dataset
-            dataset:
-              type: string
-              minLength: 1
-              maxLength: 64
-              pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
-            version:
-              type: integer
-              minimum: 0
-          required:
-            - kind
-            - dataset
-            - version
-        rubric:
-          type: array
-          items:
-            $ref: "#/components/schemas/EvalRubricItem"
-        samples:
-          type: integer
-          minimum: 1
-        temperature:
-          type: number
-          minimum: 0
-          maximum: 2
-        max_tokens:
-          type: integer
-          minimum: 1
-        pass_threshold:
-          type: number
-          minimum: 0
-          maximum: 1
-        judge_models:
-          type: array
-          items:
-            type: string
-        local_scorers:
-          type: array
-          items:
-            type: string
-        progress:
-          type: object
-          properties:
-            total_outputs:
-              type: integer
-              minimum: 0
-            generated:
-              type: integer
-              minimum: 0
-            pending_local_scores:
-              type: integer
-              minimum: 0
-          required:
-            - total_outputs
-            - generated
-            - pending_local_scores
-        summary:
-          type: array
-          items:
-            $ref: "#/components/schemas/EvalModelSummary"
-        total_cost_usd:
-          type: number
-          minimum: 0
-        error:
-          type:
-            - string
-            - "null"
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-        completed_at:
-          type:
-            - string
-            - "null"
-          format: date-time
-      required:
-        - id
-        - workspace_id
-        - name
-        - status
-        - models
-        - baseline
-        - task_source
-        - rubric
-        - samples
-        - temperature
-        - max_tokens
-        - pass_threshold
-        - judge_models
-        - local_scorers
-        - progress
-        - summary
-        - total_cost_usd
-        - error
-        - created_at
-        - updated_at
-        - completed_at
-    EvalStatus:
-      type: string
-      enum:
-        - queued
-        - running
-        - awaiting_scores
-        - completed
-        - failed
-        - cancelled
-    EvalModelSummary:
-      type: object
-      properties:
-        model:
-          type: string
-        overall:
-          type: number
-        ci_low:
-          type: number
-        ci_high:
-          type: number
-        pass_at_k:
-          type: object
-          additionalProperties:
-            type: number
-        vs_baseline:
-          type:
-            - object
-            - "null"
-          properties:
-            delta:
-              type: number
-            ci_low:
-              type: number
-            ci_high:
-              type: number
-          required:
-            - delta
-            - ci_low
-            - ci_high
-        tasks:
-          type: integer
-          minimum: 0
-        errors:
-          type: integer
-          minimum: 0
-        tokens_per_task:
-          type: number
-        cost_per_1k_tasks_usd:
-          type:
-            - number
-            - "null"
-      required:
-        - model
-        - overall
-        - ci_low
-        - ci_high
-        - pass_at_k
-        - vs_baseline
-        - tasks
-        - errors
-        - tokens_per_task
-        - cost_per_1k_tasks_usd
     EvalOutput:
       type: object
       properties:
@@ -4221,6 +4326,171 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DatasetRecordsPage"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets/{name}/score:
+    post:
+      operationId: scoreDataset
+      summary: Score a dataset's records with a rubric (async; the scores become the next version)
+      description: "Runs the rubric (judges, validators, regexes, code scorers) on each record's own answer, skipping records
+        that already have every score. It is an eval with `mode: \"score\"`: poll it at /v1/evals/{id}, and it is billed
+        like one. On completion the scores are appended as a score-update part, so the dataset's next version
+        (`scored_dataset_version`) carries them in `record.scores`."
+      tags: *a1
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScoreDatasetRequest"
+      responses:
+        "202":
+          description: Queued scoring job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvalRun"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets/{name}/filter:
+    post:
+      operationId: filterDataset
+      summary: Save a filtered view of a dataset version
+      description: Keeps the records whose stored scores, metadata, timestamp or id match, and saves them as a dataset named
+        `<dataset>-f-<hash>` (or `name`). The same filter on the same version returns the same view (200) without
+        recomputing; a new threshold is a new view (201). Filtering calls no model and costs nothing.
+      tags: *a1
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FilterDatasetRequest"
+      responses:
+        "200":
+          description: The existing view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dataset"
+        "201":
+          description: Created view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dataset"
         "400":
           description: Malformed request.
           content:

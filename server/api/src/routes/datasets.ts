@@ -6,6 +6,8 @@ import {
   CreateUploadRequestSchema,
   DatasetRecordsPageSchema,
   DatasetSchema,
+  EvalRunSchema,
+  FilterDatasetRequestSchema,
   ImportJobSchema,
   pageLimitSchema,
   pageOf,
@@ -13,6 +15,7 @@ import {
   PushDatasetRequestSchema,
   RenderDatasetRequestSchema,
   RenderDatasetResponseSchema,
+  ScoreDatasetRequestSchema,
   SlugSchema,
   UploadTicketSchema,
 } from "../contracts.js";
@@ -176,6 +179,70 @@ export const registerDatasetRoutes = (
         ),
         200,
       ),
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/datasets/{name}/score",
+      operationId: "scoreDataset",
+      summary:
+        "Score a dataset's records with a rubric (async; the scores become the next version)",
+      description:
+        "Runs the rubric (judges, validators, regexes, code scorers) on each record's own answer, skipping records that already have every score. It is an eval with `mode: \"score\"`: poll it at /v1/evals/{id}, and it is billed like one. On completion the scores are appended as a score-update part, so the dataset's next version (`scored_dataset_version`) carries them in `record.scores`.",
+      tags,
+      request: {
+        params: NameParamSchema,
+        ...jsonBody(ScoreDatasetRequestSchema),
+      },
+      responses: {
+        202: jsonResponse(EvalRunSchema, "Queued scoring job."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      // A scoring job writes a dataset version and is a billed eval.
+      workspaceOf(c, "runs:write");
+
+      return c.json(
+        await services.evals.scoreDataset(
+          workspaceOf(c, "datasets:write"),
+          c.req.valid("param").name,
+          c.req.valid("json"),
+        ),
+        202,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/datasets/{name}/filter",
+      operationId: "filterDataset",
+      summary: "Save a filtered view of a dataset version",
+      description:
+        "Keeps the records whose stored scores, metadata, timestamp or id match, and saves them as a dataset named `<dataset>-f-<hash>` (or `name`). The same filter on the same version returns the same view (200) without recomputing; a new threshold is a new view (201). Filtering calls no model and costs nothing.",
+      tags,
+      request: {
+        params: NameParamSchema,
+        ...jsonBody(FilterDatasetRequestSchema),
+      },
+      responses: {
+        200: jsonResponse(DatasetSchema, "The existing view."),
+        201: jsonResponse(DatasetSchema, "Created view."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const { dataset, created } = await services.datasets.filter(
+        workspaceOf(c, "datasets:write"),
+        c.req.valid("param").name,
+        c.req.valid("json"),
+      );
+
+      return created ? c.json(dataset, 201) : c.json(dataset, 200);
+    },
   );
 
   app.openapi(

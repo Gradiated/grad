@@ -70,11 +70,18 @@ export const recordConversation = (record: DatasetRecord): ChatMessage[] => {
   return [];
 };
 
-/** Prompt (everything before the final assistant turn) and the reference answer. */
-export const recordPromptAndReference = (
+/**
+ * Prompt (everything before the final assistant turn), the record's own
+ * answer (that turn, or `completion`) and its gold `expected_output`.
+ */
+export const recordPromptAndResponse = (
   record: DatasetRecord,
-): { prompt: ChatMessage[]; reference: string | null } | null => {
-  const explicit = expectedText(record.expected_output);
+): {
+  prompt: ChatMessage[];
+  response: string | null;
+  expected: string | null;
+} | null => {
+  const expected = expectedText(record.expected_output);
 
   if (record.input?.messages && record.input.messages.length > 0) {
     const turns = record.output?.turns ?? [];
@@ -82,7 +89,8 @@ export const recordPromptAndReference = (
 
     return {
       prompt: record.input.messages,
-      reference: explicit ?? (last ? messageText(last) : null),
+      response: last ? messageText(last) : null,
+      expected,
     };
   }
 
@@ -96,7 +104,8 @@ export const recordPromptAndReference = (
 
     return {
       prompt: asMessages(record.prompt, "user"),
-      reference: explicit ?? completion,
+      response: completion,
+      expected,
     };
   }
 
@@ -117,8 +126,20 @@ export const recordPromptAndReference = (
 
   return {
     prompt,
-    reference: explicit ?? (target ? messageText(target) : null),
+    response: target ? messageText(target) : null,
+    expected,
   };
+};
+
+/** Prompt (everything before the final assistant turn) and the reference answer. */
+export const recordPromptAndReference = (
+  record: DatasetRecord,
+): { prompt: ChatMessage[]; reference: string | null } | null => {
+  const parts = recordPromptAndResponse(record);
+
+  return parts
+    ? { prompt: parts.prompt, reference: parts.expected ?? parts.response }
+    : null;
 };
 
 const isPreferencePair = (r: DatasetRecord): boolean =>

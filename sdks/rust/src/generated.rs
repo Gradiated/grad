@@ -466,6 +466,14 @@ pub struct EmbedResponseUsage {
     pub total_tokens: i64,
 }
 
+string_enum! {
+    /// `eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model `record`) and writes the scores to the dataset's next version.
+    EvalMode {
+        Eval => "eval",
+        Score => "score",
+    }
+}
+
 /// Generated from the OpenAPI schema `EvalModelSummary`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -720,6 +728,7 @@ pub struct EvalRun {
     pub workspace_id: String,
     pub name: String,
     pub status: EvalStatus,
+    pub mode: EvalMode,
     pub models: Vec<String>,
     pub baseline: Option<String>,
     pub task_source: EvalRunTaskSource,
@@ -733,6 +742,8 @@ pub struct EvalRun {
     pub progress: EvalRunProgress,
     pub summary: Vec<EvalModelSummary>,
     pub total_cost_usd: f64,
+    /// Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.
+    pub scored_dataset_version: Option<i64>,
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -823,6 +834,33 @@ pub struct FeedbackRecord {
     pub expected_output: Option<Value>,
     pub metrics: BTreeMap<String, f64>,
     pub created_at: String,
+}
+
+/// Generated from the OpenAPI schema `FilterDatasetRequest`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilterDatasetRequest {
+    /// Conditions on stored scores, `{name: "<op><number>"}` with op one of >=, <=, >, <, ==, != (a bare number means ==). A record without the score does not match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scores: Option<BTreeMap<String, Value>>,
+    /// Exact matches on `metadata` fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<BTreeMap<String, Value>>,
+    /// Records whose `timestamp` is at or after this time (a timestamp with offset, or a UTC date `YYYY-MM-DD`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<Value>,
+    /// Records whose `timestamp` is before this time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_before: Option<Value>,
+    /// Keep only these record ids (what the SDKs send for a filter function they ran locally).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    /// Source version to filter (default: the current version).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+    /// Name of the view. Default: `<dataset>-f-<hash of source, version and filter>`, so the same filter returns the same view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Generated from the OpenAPI schema `HfColumnMapping`.
@@ -1618,6 +1656,21 @@ string_enum! {
         Cancelled => "cancelled",
         StoppedBudget => "stopped_budget",
     }
+}
+
+/// Generated from the OpenAPI schema `ScoreDatasetRequest`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScoreDatasetRequest {
+    pub rubric: Vec<EvalRubricItem>,
+    /// Dataset version to score (default: the current version).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+    /// Name of the scoring job (default `<dataset>-score`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
 }
 
 /// Generated from the OpenAPI schema `SplitSpec`.
