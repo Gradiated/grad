@@ -149,12 +149,18 @@ jobs:
       - name: Install toolchain via mise
         uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          install_args: node pnpm python
+          install_args: node pnpm python go rust
 
-      - name: Install server/api dependencies for YAML parser
-        run: pnpm -C server/api install --frozen-lockfile
+      - name: Install server/api (YAML parser) and TypeScript SDK (tsc) dependencies
+        run: |
+          pnpm -C server/api install --frozen-lockfile
+          pnpm -C sdks/typescript install --frozen-lockfile
 
+      # The fixture-spec tests compile the generated TypeScript (tsc), Go (go vet/build)
+      # and Rust (cargo check); fail instead of skipping when a toolchain is missing.
       - name: Run codegen unit tests and drift check
+        env:
+          GRAD_CODEGEN_REQUIRE_TOOLCHAINS: "1"
         run: |
           node --test scripts/generate-sdks.test.mjs
           node scripts/generate-sdks.mjs --check
@@ -175,14 +181,25 @@ jobs:
       - name: Test Python SDK
         run: PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests -v
 
-      - name: Install, check, and build TypeScript SDK
+      - name: Install server/api dependencies (live tests start tests/harness/stack.ts)
+        run: pnpm -C server/api install --frozen-lockfile
+
+      - name: Type-check, unit test with coverage (>= 90% lines), and build the TypeScript SDK
         run: |
           pnpm -C sdks/typescript install --frozen-lockfile
           pnpm -C sdks/typescript check
           pnpm -C sdks/typescript build
 
-      - name: Test Go SDK
-        run: cd sdks/go && go test ./...
+      - name: TypeScript SDK live tests (self-hosted and cloud, reference worker)
+        run: pnpm -C sdks/typescript test:live
+
+      - name: Vet and test the Go SDK (unit + live), coverage >= 85%
+        working-directory: sdks/go
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test -count=1 -coverprofile=cover.out .
+          go tool cover -func=cover.out | awk '/^total:/ { sub("%", "", $3); print "Go SDK coverage: " $3 "%"; if ($3 + 0 < 85) exit 1 }'
 
       - name: Test Rust SDK
         run: cargo test --package grad-sdk
