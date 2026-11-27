@@ -1,0 +1,98 @@
+{{- range $name, $w := .Values.workers }}
+{{- if $w.enabled }}
+{{- $d := $.Values.workerDefaults }}
+{{- $image := mergeOverwrite (deepCopy $d.image) ($w.image | default dict) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "grad.fullname" $ }}-worker-{{ $name }}
+  labels:
+    {{- include "grad.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    grad.gradiated.com/worker: {{ $name }}
+spec:
+  {{- if not $.Values.keda.enabled }}
+  replicas: {{ $w.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: worker
+      grad.gradiated.com/worker: {{ $name }}
+  template:
+    metadata:
+      labels:
+        {{- include "grad.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: worker
+        grad.gradiated.com/worker: {{ $name }}
+    spec:
+      serviceAccountName: {{ include "grad.workerServiceAccount" $ }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $w.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- include "grad.podSecurity" (list 10001) | nindent 8 }}
+      {{- with $w.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $w.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: grad-trainer
+          image: "{{ $image.repository }}:{{ $image.tag }}"
+          imagePullPolicy: {{ $image.pullPolicy }}
+          env:
+            - name: GRAD_SERVER_URL
+              value: "http://{{ include "grad.fullname" $ }}-api:{{ $.Values.api.service.port }}"
+            - {name: GRAD_WORKER_KINDS, value: {{ join "," $w.kinds | quote }}}
+            - {name: GRAD_POLL_INTERVAL_S, value: {{ $d.pollIntervalSeconds | quote }}}
+            - {name: GRAD_LEASE_SECONDS, value: {{ $d.leaseSeconds | quote }}}
+            # Pod name: unique per replica, readable in leases and logs.
+            - name: GRAD_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with $.Values.models.mirror }}
+            - {name: GRAD_MODELS_MIRROR, value: {{ . | quote }}}
+            {{- end }}
+            - name: TRAINER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secret.name }}
+                  key: {{ $w.apiKeySecretKey | default $d.apiKeySecretKey }}
+            {{- range $k, $v := $w.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          securityContext:
+            {{- include "grad.containerSecurity" $ | nindent 12 }}
+          resources:
+            requests:
+              {{- toYaml $w.resources.requests | nindent 14 }}
+              {{- if gt (int $w.gpuCount) 0 }}
+              nvidia.com/gpu: {{ $w.gpuCount }}
+              {{- end }}
+            limits:
+              {{- toYaml $w.resources.limits | nindent 14 }}
+              {{- if gt (int $w.gpuCount) 0 }}
+              nvidia.com/gpu: {{ $w.gpuCount }}
+              {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: hf-cache
+              mountPath: /home/grad/.cache
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: hf-cache
+          emptyDir: {}
+{{- end }}
+{{- end }}

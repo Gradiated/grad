@@ -208,10 +208,10 @@ jobs:
       - name: grad local up compose file is valid
         run: docker compose -f cli/assets/docker-compose.yml config --quiet
 
-  compose-smoke:
-    name: grad local up --build (compose stack smoke test)
+  stack-smoke:
+    name: grad local up --build and Helm on kind (smoke tests)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -232,11 +232,23 @@ jobs:
       # Builds the images from source, runs the CLI and Python SDK quickstart
       # (CPU torch trainer, tiny models, fake inference), restarts the stack to
       # check persistence, then tears it down with its volumes.
-      - name: Boot the stack and run the quickstart
+      - name: grad local up --build, quickstart, restart, down --volumes
         env:
           GRAD_BIN: ${{ github.workspace }}/target/debug/grad
           GRAD_SMOKE_PYTHON: /tmp/smoke-venv/bin/python
         run: tests/compose/smoke.sh
+
+      - name: Install pinned kind, kubectl, helm and kubeconform
+        run: scripts/install-k8s-tools "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Reuses the images the compose test built: install, a run across API pod
+      # kills, NetworkPolicy egress, upgrade and uninstall.
+      - name: Helm chart on kind
+        timeout-minutes: 10
+        env:
+          GRAD_SERVER_IMAGE: grad-smoke-grad-server
+          GRAD_TRAINER_IMAGE: grad-smoke-grad-trainer
+        run: tests/helm/smoke.sh
 
   packaging:
     name: Docker Compose & Helm Packaging
@@ -245,30 +257,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install helm via mise
-        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
-        with:
-          install_args: helm
+      - name: Install pinned kind, kubectl, helm and kubeconform
+        run: scripts/install-k8s-tools "$RUNNER_TEMP/bin" && echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Validate Docker Compose configuration
-        run: docker compose -f server/docker-compose.yml config --quiet
-
-      - name: Lint and template Helm chart (default and air-gapped/KEDA profiles)
         run: |
-          helm lint server/helm/grad --strict
-          helm template grad server/helm/grad > /dev/null
-          helm template grad server/helm/grad \
-            --set keda.enabled=true \
-            --set ingress.enabled=true \
-            --set storage.s3Bucket=airgap-artifacts \
-            --set models.mirrorUri=s3://airgap/models \
-            --set judge.baseUrl=https://vllm.internal/v1 > /dev/null
-          helm template grad server/helm/grad \
-            --set api.authMode=cloud \
-            --set api.billingMode=cloud \
-            --set api.deployMode=cloud \
-            --set cloud.internalApiUrl=https://api.gradiated.com \
-            --set cloud.existingSecret=grad-cloud > /dev/null
+          docker compose -f server/docker-compose.yml config --quiet
+          docker compose -f server/docker-compose.yml -f tests/compose/smoke.yml config --quiet
+
+      - name: Lint, template and kubeconform the Helm chart (default, kind, air-gapped/KEDA, Cloud)
+        run: |
+          chart=server/helm/grad
+          helm lint "$chart" --strict --set storage.s3Bucket=lint
+          helm lint "$chart" --strict -f "$chart/ci/kind-values.yaml"
+          if helm template grad "$chart" > /dev/null 2>&1; then
+            echo "the chart must refuse to render without storage.s3Bucket"; exit 1
+          fi
+          {
+            helm template grad "$chart" --set storage.s3Bucket=artifacts
+            echo ---
+            helm template grad "$chart" -f "$chart/ci/kind-values.yaml"
+            echo ---
+            helm template grad "$chart" \
+              --set storage.s3Bucket=airgap-artifacts \
+              --set keda.enabled=true \
+              --set ingress.enabled=true \
+              --set networkPolicy.enabled=true \
+              --set migrations.enabled=false \
+              --set models.mirror=s3://airgap/models \
+              --set evals.inferenceBaseUrl=https://vllm.internal/v1 \
+              --set evals.judgeBaseUrl=https://judge.internal/v1
+            echo ---
+            helm template grad "$chart" \
+              --set storage.s3Bucket=cloud-artifacts \
+              --set api.authMode=cloud \
+              --set api.billingMode=cloud \
+              --set cloud.internalApiUrl=https://api.gradiated.com \
+              --set workers.train.enabled=false
+          } > "$RUNNER_TEMP/rendered.yaml"
+          # KEDA's CRDs have no schema in the default catalog.
+          kubeconform -strict -summary -kubernetes-version 1.37.0 \
+            -skip ScaledObject,TriggerAuthentication "$RUNNER_TEMP/rendered.yaml"
 
   versions:
     name: One version across the repo

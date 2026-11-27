@@ -1,3 +1,21 @@
+# Gradiated grad chart: grad-server (API) plus pull-based trainer workers.
+# Required: secret.name with a `database-url` key, and storage.s3Bucket.
+
+nameOverride: ""
+
+# One Secret, created outside the chart (kubectl, External Secrets, sealed-secrets).
+# Pods read only the keys they need, and every key except database-url is optional:
+#   database-url          Postgres URL (API, migrations Job, KEDA)
+#   admin-api-key-hash    sha256 hex of the bootstrap admin key (AUTH_MODE=api_key)
+#   trainer-api-key       the worker key (workers send it; the API hashes it)
+#   secrets-key           GRAD_SECRETS_KEY, 32 random bytes in base64 (workspace secrets)
+#   inference-api-key     key for evals.inferenceBaseUrl
+#   judge-api-key         key for evals.judgeBaseUrl
+#   cloud-service-token   AUTH/BILLING/DEPLOY_MODE=cloud
+#   aws-access-key-id / aws-secret-access-key   static S3 keys (MinIO); omit them with Pod Identity or IRSA
+secret:
+  name: grad
+
 api:
   replicaCount: 2
   image:
@@ -11,6 +29,12 @@ api:
   deployMode: disabled
   billingMode: noop
   defaultWorkspaceId: default
+  # Extra environment, e.g. GRAD_EXTRA_MODELS_JSON, MAX_ATTEMPTS, EVAL_CONCURRENCY.
+  env: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
   resources:
     requests:
       cpu: 250m
@@ -18,60 +42,146 @@ api:
     limits:
       cpu: "1"
       memory: 1Gi
+  # Keeps one replica up through node drains when replicaCount > 1.
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
 
-trainer:
-  replicaCount: 1
-  image:
-    repository: ghcr.io/gradiated/grad-trainer
-    tag: "0.2.0-gpu"
-    pullPolicy: IfNotPresent
-  gpuCount: 1
-  pollIntervalSeconds: "1.0"
-  terminationGracePeriodSeconds: 300
-  nodeSelector: {}
-  tolerations: []
+# The API's ServiceAccount: bind an AWS role to it for S3 (EKS Pod Identity needs
+# no annotation; IRSA or GKE Workload Identity use annotations).
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Migrations run once per install/upgrade in a Helm hook Job; the API replicas
+# then start with MIGRATE_ON_BOOT=false and refuse an unmigrated database.
+# enabled=false makes every API replica migrate at boot (under an advisory lock).
+migrations:
+  enabled: true
+  backoffLimit: 3
   resources:
     requests:
-      cpu: "2"
-      memory: 8Gi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      cpu: "8"
-      memory: 32Gi
+      cpu: 500m
+      memory: 256Mi
 
-database:
-  existingSecret: grad-postgres
-  secretKey: database-url
-
+# Object storage is required: workers and SDKs move weights and datasets through
+# presigned URLs, and replicas must share it.
 storage:
   s3Bucket: ""
   s3Region: us-east-1
+  # S3-compatible endpoint (MinIO, R2, ...); path-style addressing is used when set.
   s3Endpoint: ""
 
-auth:
-  existingSecret: grad-auth
-  adminKeyHashKey: admin-api-key-hash
-  trainerApiKeyKey: trainer-api-key
+# Evals call an OpenAI-compatible endpoint (your vLLM/SGLang with the LoRA modules
+# named by artifact ref). Unset: POST /v1/evals returns 501 inference_unavailable.
+# Keys come from the inference-api-key / judge-api-key secret keys.
+evals:
+  inferenceBaseUrl: ""
+  # Judge endpoint for Judge rubric items; defaults to the inference endpoint.
+  judgeBaseUrl: ""
 
 cloud:
   internalApiUrl: ""
-  existingSecret: ""
-  serviceTokenKey: service-token
 
 models:
-  # Set to an internal S3/OCI mirror URI for air-gapped VPC deployments
-  mirrorUri: ""
+  # Weights mirror for air-gapped installs: a directory or s3://bucket/prefix
+  # holding <mirror>/<model id>/ (GRAD_MODELS_MIRROR on the workers).
+  mirror: ""
 
-judge:
-  # Optional OpenAI-compatible base URL for private/air-gapped LLM judges
-  baseUrl: ""
+# Workers pull jobs from the API and claim only their `kinds`. GPU `train`
+# workers never receive workspace secrets; imports and source syncs (which carry
+# provider keys and HF tokens) run on the CPU `import` workers.
+workerDefaults:
+  image:
+    repository: ghcr.io/gradiated/grad-trainer
+    pullPolicy: IfNotPresent
+  # Secret key holding this worker's API key.
+  apiKeySecretKey: trainer-api-key
+  pollIntervalSeconds: "1.0"
+  leaseSeconds: 180
 
+workers:
+  train:
+    enabled: true
+    kinds: [train]
+    replicaCount: 1
+    image:
+      tag: "0.2.0-gpu"
+    gpuCount: 1
+    # On SIGTERM a worker releases its attempt, which is billed, requeued and
+    # resumed from the latest checkpoint.
+    terminationGracePeriodSeconds: 300
+    env: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    resources:
+      requests:
+        cpu: "2"
+        memory: 8Gi
+      limits:
+        cpu: "8"
+        memory: 32Gi
+  import:
+    enabled: true
+    kinds: [import]
+    replicaCount: 1
+    image:
+      tag: "0.2.0"
+    gpuCount: 0
+    terminationGracePeriodSeconds: 60
+    env: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+# Workers' ServiceAccount (no API token mounted). Annotate it only when
+# GRAD_MODELS_MIRROR is an s3:// prefix the workers must read.
+workerServiceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# KEDA scales each worker Deployment on its open jobs (queued plus running), so a
+# scale-down never strands a running job. Needs KEDA installed in the cluster.
 keda:
   enabled: false
-  minReplicaCount: 0
-  maxReplicaCount: 8
   pollingInterval: 15
   cooldownPeriod: 300
-  targetQueuedRuns: "1"
+  # Open jobs per replica.
+  targetOpenJobs: "1"
+  workers:
+    train: {minReplicaCount: 0, maxReplicaCount: 8}
+    import: {minReplicaCount: 1, maxReplicaCount: 4}
+
+# NetworkPolicies (needs a CNI that enforces them). Off by default.
+networkPolicy:
+  enabled: false
+  # Extra peers allowed to reach the API (ingress controller, gateway, other
+  # namespaces). Workers of this release are always allowed.
+  apiIngressFrom: []
+  #  - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+  # Egress allowlist for worker pods besides DNS and the API: by default HTTPS to
+  # public addresses only (S3, the Hugging Face Hub, observability providers),
+  # never private ranges, CGNAT or link-local (cloud metadata).
+  workerEgress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - {protocol: TCP, port: 443}
 
 ingress:
   enabled: false

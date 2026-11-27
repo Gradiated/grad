@@ -1,8 +1,13 @@
-Gradiated training platform deployed!
+grad is installed.
 
-API Service:
-  http://{{ include "grad.fullname" . }}-api.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.api.service.port }}
+API (in-cluster): http://{{ include "grad.fullname" . }}-api.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.api.service.port }}
+Workers:{{ range $name, $w := .Values.workers }}{{ if $w.enabled }} {{ $name }} (kinds: {{ join "," $w.kinds }}){{ end }}{{ end }}
 
-Verify readiness:
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "grad.fullname" . }}-api 8080:{{ .Values.api.service.port }}
-  curl http://127.0.0.1:8080/health/ready
+Check readiness:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "grad.fullname" . }}-api
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "grad.fullname" . }}-api 8787:{{ .Values.api.service.port }}
+  curl http://127.0.0.1:8787/health/ready
+{{- if not .Values.evals.inferenceBaseUrl }}
+
+Evals are off: set evals.inferenceBaseUrl to an OpenAI-compatible endpoint.
+{{- end }}

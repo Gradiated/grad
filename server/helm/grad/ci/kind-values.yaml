@@ -1,0 +1,37 @@
+# Test values for tests/helm/smoke.sh: locally built images, in-cluster
+# Postgres and MinIO fixtures, the reference trainer backend, small requests.
+api:
+  replicaCount: 2
+  image: {repository: grad-server, tag: dev, pullPolicy: Never}
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+storage:
+  s3Bucket: grad-kind
+  s3Endpoint: http://minio:9000
+workerDefaults:
+  image: {repository: grad-trainer, pullPolicy: Never}
+  leaseSeconds: 30
+workers:
+  train:
+    image: {tag: dev}
+    gpuCount: 0
+    terminationGracePeriodSeconds: 30
+    env:
+      GRAD_TRAINER_BACKEND: reference
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: "1", memory: 768Mi}
+  import:
+    image: {tag: dev}
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: "1", memory: 768Mi}
+networkPolicy:
+  enabled: true
+  workerEgress:
+    # The in-cluster MinIO fixture (presigned dataset and artifact URLs).
+    - to:
+        - podSelector: {matchLabels: {app: minio}}
+      ports:
+        - {protocol: TCP, port: 9000}

@@ -2,34 +2,42 @@
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
 metadata:
-  name: {{ include "grad.fullname" . }}-postgres-trigger-auth
+  name: {{ include "grad.fullname" . }}-postgres
   labels:
     {{- include "grad.labels" . | nindent 4 }}
 spec:
   secretTargetRef:
     - parameter: connection
-      name: {{ .Values.database.existingSecret }}
-      key: {{ .Values.database.secretKey }}
+      name: {{ .Values.secret.name }}
+      key: database-url
+{{- range $name, $w := .Values.workers }}
+{{- if $w.enabled }}
+{{- $scale := index $.Values.keda.workers $name | default dict }}
+{{- $kinds := list }}
+{{- range $w.kinds }}{{ $kinds = append $kinds (printf "'%s'" .) }}{{ end }}
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: {{ include "grad.fullname" . }}-trainer-scaler
+  name: {{ include "grad.fullname" $ }}-worker-{{ $name }}
   labels:
-    {{- include "grad.labels" . | nindent 4 }}
+    {{- include "grad.labels" $ | nindent 4 }}
 spec:
   scaleTargetRef:
-    name: {{ include "grad.fullname" . }}-trainer
-  pollingInterval: {{ .Values.keda.pollingInterval }}
-  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
-  minReplicaCount: {{ .Values.keda.minReplicaCount }}
-  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+    name: {{ include "grad.fullname" $ }}-worker-{{ $name }}
+  pollingInterval: {{ $.Values.keda.pollingInterval }}
+  cooldownPeriod: {{ $.Values.keda.cooldownPeriod }}
+  minReplicaCount: {{ $scale.minReplicaCount | default 0 }}
+  maxReplicaCount: {{ $scale.maxReplicaCount | default 4 }}
   triggers:
     - type: postgresql
       metadata:
-        # Queued plus running (open-lease) jobs, so a scale-down never strands a running job.
-        query: "SELECT (SELECT COUNT(*) FROM grad_runs WHERE (status = 'queued' AND waiting_on IS NULL) OR worker_id IS NOT NULL) + (SELECT COUNT(*) FROM grad_import_jobs WHERE status = 'queued' OR worker_id IS NOT NULL)"
-        targetQueryValue: {{ .Values.keda.targetQueuedRuns | quote }}
+        # Open jobs of this worker's kinds: queued (claimable) plus running (leased),
+        # so a scale-down never strands a running job.
+        query: {{ include "grad.openJobsQuery" (join ", " $kinds) | quote }}
+        targetQueryValue: {{ $.Values.keda.targetOpenJobs | quote }}
       authenticationRef:
-        name: {{ include "grad.fullname" . }}-postgres-trigger-auth
+        name: {{ include "grad.fullname" $ }}-postgres
+{{- end }}
+{{- end }}
 {{- end }}

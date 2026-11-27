@@ -1,3 +1,4 @@
+{{- include "grad.validate" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,19 +14,30 @@ spec:
       app.kubernetes.io/component: api
   template:
     metadata:
+      {{- with .Values.api.podAnnotations }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       labels:
         {{- include "grad.labels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
+      serviceAccountName: {{ include "grad.apiServiceAccount" . }}
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
-        seccompProfile:
-          type: RuntimeDefault
+        {{- include "grad.podSecurity" (list 1000) | nindent 8 }}
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: grad-server
           image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
@@ -33,60 +45,66 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.api.service.port }}
-          envFrom:
-            - configMapRef:
-                name: {{ include "grad.fullname" . }}-config
           env:
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.existingSecret }}
-                  key: {{ .Values.database.secretKey }}
-            - name: ADMIN_API_KEY_HASH
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret }}
-                  key: {{ .Values.auth.adminKeyHashKey }}
-                  optional: true
-            - name: TRAINER_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret }}
-                  key: {{ .Values.auth.trainerApiKeyKey }}
-                  optional: true
-            {{- if .Values.cloud.existingSecret }}
-            - name: CLOUD_SERVICE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.cloud.existingSecret }}
-                  key: {{ .Values.cloud.serviceTokenKey }}
+            - {name: HOST, value: "0.0.0.0"}
+            - {name: PORT, value: {{ .Values.api.service.port | quote }}}
+            - {name: AUTH_MODE, value: {{ .Values.api.authMode | quote }}}
+            - {name: DEPLOY_MODE, value: {{ .Values.api.deployMode | quote }}}
+            - {name: BILLING_MODE, value: {{ .Values.api.billingMode | quote }}}
+            - {name: DEFAULT_WORKSPACE_ID, value: {{ .Values.api.defaultWorkspaceId | quote }}}
+            - {name: MIGRATE_ON_BOOT, value: {{ ternary "false" "true" .Values.migrations.enabled | quote }}}
+            - {name: S3_BUCKET, value: {{ .Values.storage.s3Bucket | quote }}}
+            - {name: S3_REGION, value: {{ .Values.storage.s3Region | quote }}}
+            {{- with .Values.storage.s3Endpoint }}
+            - {name: S3_ENDPOINT, value: {{ . | quote }}}
             {{- end }}
+            {{- with .Values.evals.inferenceBaseUrl }}
+            - {name: INFERENCE_BASE_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.evals.judgeBaseUrl }}
+            - {name: JUDGE_BASE_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- with .Values.cloud.internalApiUrl }}
+            - {name: CLOUD_INTERNAL_API_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- include "grad.secretEnv" (list . "DATABASE_URL" "database-url" false) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "ADMIN_API_KEY_HASH" "admin-api-key-hash" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "TRAINER_API_KEY" "trainer-api-key" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "GRAD_SECRETS_KEY" "secrets-key" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "INFERENCE_API_KEY" "inference-api-key" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "JUDGE_API_KEY" "judge-api-key" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "CLOUD_SERVICE_TOKEN" "cloud-service-token" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "AWS_ACCESS_KEY_ID" "aws-access-key-id" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "AWS_SECRET_ACCESS_KEY" "aws-secret-access-key" true) | nindent 12 }}
+            {{- range $k, $v := .Values.api.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /health/live
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 15
+            timeoutSeconds: 3
           readinessProbe:
             httpGet:
               path: /health/ready
               port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "grad.containerSecurity" . | nindent 12 }}
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            - name: storage
-              mountPath: /var/lib/grad
       volumes:
         - name: tmp
-          emptyDir: {}
-        - name: storage
           emptyDir: {}

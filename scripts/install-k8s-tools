@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Install pinned, checksum-verified kind, kubectl, helm and kubeconform
+# (linux-amd64) into DIR (default ./bin). Used by CI and the Helm smoke test.
+#
+#   scripts/install-k8s-tools [DIR]
+set -euo pipefail
+
+DIR=${1:-bin}
+mkdir -p "$DIR"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+KIND=v0.33.0     KIND_SHA=aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+KUBECTL=v1.37.0  KUBECTL_SHA=6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
+HELM=v4.2.4      HELM_SHA=c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3
+KUBECONFORM=v0.8.0 KUBECONFORM_SHA=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+
+fetch() { # url sha256 output
+  curl -fsSL --retry 3 -o "$3" "$1"
+  echo "$2  $3" | sha256sum -c --quiet -
+}
+
+fetch "https://github.com/kubernetes-sigs/kind/releases/download/$KIND/kind-linux-amd64" "$KIND_SHA" "$TMP/kind"
+fetch "https://dl.k8s.io/release/$KUBECTL/bin/linux/amd64/kubectl" "$KUBECTL_SHA" "$TMP/kubectl"
+fetch "https://get.helm.sh/helm-$HELM-linux-amd64.tar.gz" "$HELM_SHA" "$TMP/helm.tgz"
+fetch "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM/kubeconform-linux-amd64.tar.gz" "$KUBECONFORM_SHA" "$TMP/kubeconform.tgz"
+tar -xzf "$TMP/helm.tgz" -C "$TMP" linux-amd64/helm
+tar -xzf "$TMP/kubeconform.tgz" -C "$TMP" kubeconform
+install -m 0755 "$TMP/kind" "$TMP/kubectl" "$TMP/linux-amd64/helm" "$TMP/kubeconform" "$DIR/"
+"$DIR/kind" version && "$DIR/helm" version --short && "$DIR/kubeconform" -v
