@@ -277,8 +277,9 @@ func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 			for _, m := range page.Data {
 				w.onMetric(m)
 			}
-			if page.NextCursor != nil {
-				cursor = page.NextCursor
+			// tail_cursor follows points written later; next_cursor ends at the last page.
+			if page.TailCursor != "" {
+				cursor = &page.TailCursor
 			}
 			if len(page.Data) > 0 && IsTerminal(r.Status) {
 				return string(r.Status), false, nil // drain remaining points first

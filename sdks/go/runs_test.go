@@ -33,9 +33,9 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 		"POST /v1/runs":      jsonBody(202, wire(t, "run-queued.json")),
 		"GET /v1/runs/" + id: sequence(jsonValue(200, runFixture(t, "queued")), jsonValue(200, runFixture(t, "running")), problem(503, "unavailable"), jsonValue(200, run)),
 		"GET /v1/runs/" + id + "/metrics": sequence(
-			jsonValue(200, map[string]any{"run_id": id, "status": "running", "data": wireMap(t, "metrics-page.json")["data"].([]any)[:2], "next_cursor": "c2"}),
-			jsonValue(200, map[string]any{"run_id": id, "status": "running", "data": wireMap(t, "metrics-page.json")["data"].([]any)[2:], "next_cursor": "c6"}),
-			jsonValue(200, map[string]any{"run_id": id, "status": "completed", "data": []any{}, "next_cursor": "c6"}),
+			jsonValue(200, map[string]any{"run_id": id, "status": "running", "data": wireMap(t, "metrics-page.json")["data"].([]any)[:2], "next_cursor": nil, "tail_cursor": "c2"}),
+			jsonValue(200, map[string]any{"run_id": id, "status": "running", "data": wireMap(t, "metrics-page.json")["data"].([]any)[2:], "next_cursor": nil, "tail_cursor": "c6"}),
+			jsonValue(200, map[string]any{"run_id": id, "status": "completed", "data": []any{}, "next_cursor": nil, "tail_cursor": "c6"}),
 		),
 		"GET /v1/artifacts/" + artifact["id"].(string): jsonValue(200, artifact),
 		"POST /v1/deployments":                         jsonBody(200, wire(t, "deployment.json")),
@@ -79,7 +79,7 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 		t.Fatalf("statuses %v steps %v", statuses, steps)
 	}
 	if q := f.requests(); !strings.Contains(fmt.Sprint(q), "cursor=c2") {
-		t.Fatalf("metrics cursor was not passed back")
+		t.Fatalf("tail_cursor was not passed back")
 	}
 	sleeps := clk.Sleeps()
 	want := []time.Duration{500 * time.Millisecond, 750 * time.Millisecond, 1125 * time.Millisecond}
