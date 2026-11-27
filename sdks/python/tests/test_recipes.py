@@ -43,9 +43,10 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(SFTRecipe().to_spec(), {"kind": "sft"})
         spec = SFTRecipe(model="qwen/qwen3-8b", lr=1e-4, lr_scale=2.0, batch_size=64, epochs=2, schedule="cosine", warmup=0.1, train_on="all_assistant", thinking="off", preserve_thinking=True, reduction="per_token", select="last", checkpoint_ttl_days=7).to_spec()
         self.assert_contract(spec)
-        self.assertEqual(spec["thinking"], False)
+        self.assertEqual(spec["thinking"], "off")
         self.assertEqual(spec["lr"], 1e-4)
-        self.assertEqual(SFTRecipe(thinking="on").to_spec()["thinking"], True)
+        self.assertEqual(SFTRecipe(thinking="on").to_spec()["thinking"], "on")
+        self.assertEqual(SFTRecipe(thinking=True).to_spec()["thinking"], "on")  # the server takes only auto/on/off
         self.assertEqual(SFTRecipe(thinking="auto").to_spec()["thinking"], "auto")
 
     def test_sft_merge_on_export_and_adapter(self) -> None:
@@ -188,7 +189,7 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             SFTRecipe(evals=[{"name": "ifeval"}])  # type: ignore[call-arg]
         self.assertEqual(SFTRecipe(eval_every="auto").to_spec(), {"kind": "sft"})
-        with self.assertRaises(grad.NotAvailableInV0Error):
+        with self.assertRaises(ValueError):
             SFTRecipe(thinking="high")
         with self.assertRaises(ValueError):
             SFTRecipe(thinking="maybe")  # type: ignore[arg-type]

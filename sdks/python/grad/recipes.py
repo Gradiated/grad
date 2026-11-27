@@ -59,18 +59,11 @@ def _dict_of(value: Any, what: str) -> dict[str, Any]:
 
 
 def _thinking(value: Any) -> Any:
-    if value is None or value == "auto" or isinstance(value, bool):
+    """The wire value: ``"auto"``, ``"on"`` or ``"off"`` (``True``/``False`` map to on/off)."""
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if value is None or value in ("auto", "on", "off"):
         return value
-    if value == "on":
-        return True
-    if value == "off":
-        return False
-    if value in ("low", "medium", "high"):
-        raise NotAvailableInV0Error(
-            f"thinking={value!r}",
-            "thinking effort levels are not supported by the v0 trainer.",
-            alternative='Use "auto", "on" or "off".',
-        )
     raise ValueError(f'thinking must be "auto", "on", "off" or a bool, got {value!r}.')
 
 

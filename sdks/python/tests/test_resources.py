@@ -238,7 +238,7 @@ class DatasetTests(unittest.TestCase):
         records = list(ds.records(limit=1))
         self.assertEqual(len(records), 2)
         preview = ds.render(model="test/tiny-qwen3", train_on="last", thinking="off", preserve_thinking=False, limit=1)
-        self.assertEqual(sender.sent[-1].json, {"model": "test/tiny-qwen3", "train_on": "last", "thinking": False, "preserve_thinking": False, "limit": 1})
+        self.assertEqual(sender.sent[-1].json, {"model": "test/tiny-qwen3", "train_on": "last", "thinking": "off", "preserve_thinking": False, "limit": 1})
         text = str(preview)
         self.assertIn("[[", text)
         self.assertIn("tokens trained", text)

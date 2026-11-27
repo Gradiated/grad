@@ -1,0 +1,426 @@
+{
+  "description": "Every SDK and the CLI replay this file. 'requests': what each SDK must send for the same logical call (method, path, Idempotency-Key when the caller passes one, JSON body). 'responses': bodies whose typed fields every SDK asserts ('expect' lists them).",
+  "requests": [
+    {
+      "case": "plan_sft_every_param",
+      "method": "POST",
+      "path": "/v1/runs/plan",
+      "idempotency_key": null,
+      "body": {
+        "dataset": "support",
+        "name": "sft-params",
+        "recipe": {
+          "kind": "sft",
+          "model": "test/tiny-qwen3",
+          "adapter": {
+            "kind": "lora",
+            "rank": 16,
+            "alpha": 16,
+            "merge_on_export": true
+          },
+          "optimizer": {
+            "kind": "adamw",
+            "betas": [
+              0.8,
+              0.9
+            ],
+            "weight_decay": 0.1,
+            "grad_clip": 0.5
+          },
+          "eval_every": 2,
+          "lr": 0.0002,
+          "lr_scale": 0.5,
+          "batch_size": 4,
+          "epochs": 2,
+          "schedule": "cosine",
+          "warmup": 0.05,
+          "train_on": "all_assistant",
+          "thinking": "off",
+          "preserve_thinking": true,
+          "reduction": "per_token",
+          "select": "last",
+          "checkpoint_ttl_days": 7
+        },
+        "split": {
+          "strategy": "by_session",
+          "eval_fraction": 0.2,
+          "seed": 7
+        },
+        "max_cost_usd": 5
+      }
+    },
+    {
+      "case": "create_dpo_from_artifact",
+      "method": "POST",
+      "path": "/v1/runs",
+      "idempotency_key": "parity-run-key",
+      "body": {
+        "dataset": "prefs",
+        "name": "dpo-continued",
+        "recipe": {
+          "kind": "dpo",
+          "model": "support-sft@2026-11-27-1",
+          "beta": 0.3
+        }
+      }
+    },
+    {
+      "case": "plan_router_judge_rubric",
+      "method": "POST",
+      "path": "/v1/runs/plan",
+      "idempotency_key": null,
+      "body": {
+        "dataset": "support-logs",
+        "name": "router-params",
+        "recipe": {
+          "kind": "router",
+          "model": "test/tiny-qwen3",
+          "models": [
+            "cheap/m",
+            "strong/m"
+          ],
+          "max_quality_drop": 0.05,
+          "rubric": [
+            {
+              "name": "quality",
+              "kind": "judge",
+              "model": "judge/m",
+              "weight": 1.0,
+              "prompt": "Is the answer correct?"
+            }
+          ],
+          "pricing": {
+            "cheap/m": 0.001,
+            "strong/m": 0.01
+          },
+          "fallback": "strong/m"
+        }
+      }
+    },
+    {
+      "case": "plan_cartridge",
+      "method": "POST",
+      "path": "/v1/runs/plan",
+      "idempotency_key": null,
+      "body": {
+        "dataset": "docs",
+        "name": "cartridge-params",
+        "recipe": {
+          "kind": "cartridge",
+          "model": "test/tiny-qwen3",
+          "context_text": "The capital of Testland is Tinytown.",
+          "num_tokens": 16,
+          "teacher": "test/tiny-qwen3-teacher",
+          "loss": {
+            "kind": "top_k_kl_distill",
+            "top_k": 7
+          },
+          "max_new_tokens": 5
+        }
+      }
+    },
+    {
+      "case": "plan_embedding",
+      "method": "POST",
+      "path": "/v1/runs/plan",
+      "idempotency_key": null,
+      "body": {
+        "dataset": "pairs",
+        "name": "embedding-params",
+        "recipe": {
+          "kind": "embedding",
+          "model": "test/tiny-bert",
+          "temp": 0.1,
+          "pool": {
+            "kind": "cls"
+          }
+        }
+      }
+    },
+    {
+      "case": "plan_decision",
+      "method": "POST",
+      "path": "/v1/runs/plan",
+      "idempotency_key": null,
+      "body": {
+        "dataset": "decisions",
+        "name": "decision",
+        "recipe": {
+          "kind": "decision"
+        }
+      }
+    },
+    {
+      "case": "create_eval",
+      "method": "POST",
+      "path": "/v1/evals",
+      "idempotency_key": "parity-eval-key",
+      "body": {
+        "models": [
+          "test/tiny-qwen3",
+          "support-sft@2026-11-27-1"
+        ],
+        "name": "parity-eval",
+        "dataset": "support",
+        "dataset_version": 1,
+        "samples": 3,
+        "temperature": 0.7,
+        "max_tokens": 256,
+        "limit": 10,
+        "pass_threshold": 0.5,
+        "baseline": "test/tiny-qwen3",
+        "rubric": [
+          {
+            "name": "quality",
+            "kind": "judge",
+            "model": "judge/m",
+            "weight": 1.0,
+            "prompt": "Is the answer correct?"
+          },
+          {
+            "name": "non_empty",
+            "kind": "validator",
+            "validator": "non_empty",
+            "weight": 1.0
+          }
+        ]
+      }
+    },
+    {
+      "case": "deploy",
+      "method": "POST",
+      "path": "/v1/deployments",
+      "idempotency_key": "parity-deploy-key",
+      "body": {
+        "artifact": "support-sft@2026-11-27-1",
+        "name": "support",
+        "fallback": "test/tiny-qwen3",
+        "explore_rate": 0.1
+      }
+    }
+  ],
+  "responses": {
+    "run": {
+      "id": "run_015437ae0c01e09a573e4811",
+      "workspace_id": "ws_e2e",
+      "name": "support-router",
+      "dataset_id": "ds_39e0cb449713e11e8850cd9e",
+      "dataset_name": "support-prod",
+      "dataset_version": 2,
+      "recipe_kind": "router",
+      "status": "completed",
+      "resolved_config": {
+        "rule_version": "auto@2",
+        "dataset": "support-prod",
+        "dataset_version": 2,
+        "name": "support-sft",
+        "recipe_kind": "sft",
+        "model": "test/tiny-qwen3",
+        "template_revision": "qwen3@3",
+        "adapter": {
+          "kind": "lora",
+          "rank": 32,
+          "alpha": 32,
+          "merge_on_export": false
+        },
+        "lr": 8.84e-05,
+        "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+        "batch_size": 1,
+        "epochs": 1,
+        "schedule": "linear",
+        "warmup": 0.03,
+        "train_on": "last",
+        "thinking": "auto",
+        "preserve_thinking": false,
+        "reduction": "per_example",
+        "select": "best",
+        "checkpoint_every_steps": 1,
+        "checkpoint_ttl_days": 30,
+        "split": {
+          "strategy": "by_session",
+          "eval_fraction": 0.1,
+          "seed": 42,
+          "train_records": 6,
+          "eval_records": 0
+        },
+        "recipe_params": {}
+      },
+      "max_cost_usd": 5,
+      "price_per_million_tokens": 1,
+      "tokens_processed": 84,
+      "cost_usd": 8.4e-05,
+      "current_step": 6,
+      "total_steps": 6,
+      "attempt": 1,
+      "max_attempts": 3,
+      "latest_metric": {
+        "step": 6,
+        "loss": 0.6927526450092352,
+        "grad_norm": 0.706827747382463,
+        "lr": 1.4733333333333328e-05,
+        "tokens_per_sec": 290373.14727675915,
+        "tokens": 84,
+        "cost_usd": 8.4e-05,
+        "timestamp": "2026-11-27T04:35:21.351005Z",
+        "epoch": 0,
+        "seq": 6,
+        "attempt": 1,
+        "eval_loss": 0.41,
+        "eval_metrics": {
+          "routed_quality": 0.93,
+          "offload_rate": 0.62
+        }
+      },
+      "eval_report": {
+        "metric_name": "eval_loss",
+        "selected_step": 6,
+        "best_step": 6,
+        "final_step": 6,
+        "train_records": 20,
+        "eval_records": 4,
+        "warnings": [],
+        "candidates": [
+          "cheap/m",
+          "strong/m"
+        ],
+        "fallback_model": "strong/m",
+        "fallback_quality": 0.95,
+        "ece": 0.04,
+        "pareto_summary": {
+          "target_max_drop": 0.05,
+          "routed_quality": 0.93,
+          "quality_drop": 0.02,
+          "quality_drop_ci95": [
+            0.01,
+            0.03
+          ],
+          "offload_rate": 0.62,
+          "cost_savings_pct": 55.8,
+          "ece": 0.04,
+          "threshold": 0.5,
+          "temperature": 1.2
+        },
+        "eval_loss": 0.41
+      },
+      "artifact_id": "support-sft@2026-11-27-1",
+      "error": null,
+      "created_at": "2026-11-27T04:35:21.117Z",
+      "updated_at": "2026-11-27T04:35:21.365Z",
+      "finished_at": "2026-11-27T04:35:21.365Z"
+    },
+    "eval": {
+      "id": "eval_a2839abdbaf9592de1f9cc28",
+      "workspace_id": "ws_e2e",
+      "name": "support-eval",
+      "status": "completed",
+      "models": [
+        "test/tiny-qwen3",
+        "qwen/qwen3-8b"
+      ],
+      "baseline": "qwen/qwen3-8b",
+      "task_source": {
+        "kind": "dataset",
+        "dataset": "support-eval",
+        "version": 1
+      },
+      "rubric": [
+        {
+          "name": "non_empty",
+          "kind": "validator",
+          "weight": 1,
+          "validator": "non_empty"
+        },
+        {
+          "name": "mentions_menu",
+          "kind": "code",
+          "weight": 1,
+          "runtime": "local"
+        }
+      ],
+      "samples": 1,
+      "temperature": 0.7,
+      "max_tokens": 1024,
+      "pass_threshold": 0.5,
+      "judge_models": [],
+      "local_scorers": [
+        "mentions_menu"
+      ],
+      "progress": {
+        "total_outputs": 6,
+        "generated": 6,
+        "pending_local_scores": 0
+      },
+      "summary": [
+        {
+          "model": "test/tiny-qwen3",
+          "overall": 1,
+          "ci_low": 1,
+          "ci_high": 1,
+          "pass_at_k": {
+            "pass@1": 1
+          },
+          "vs_baseline": {
+            "delta": 0.5,
+            "ci_low": 0.5,
+            "ci_high": 0.5
+          },
+          "tasks": 3,
+          "errors": 0,
+          "tokens_per_task": 17,
+          "cost_per_1k_tasks_usd": 0.017
+        },
+        {
+          "model": "qwen/qwen3-8b",
+          "overall": 0.5,
+          "ci_low": 0.5,
+          "ci_high": 0.5,
+          "pass_at_k": {
+            "pass@1": 1
+          },
+          "vs_baseline": null,
+          "tasks": 3,
+          "errors": 0,
+          "tokens_per_task": 17,
+          "cost_per_1k_tasks_usd": 0.0068
+        }
+      ],
+      "total_cost_usd": 7.1e-05,
+      "error": null,
+      "created_at": "2026-11-27T04:35:21.543Z",
+      "updated_at": "2026-11-27T04:35:21.958Z",
+      "completed_at": "2026-11-27T04:35:21.958Z"
+    },
+    "eval_plan": {
+      "task_source_kind": "dataset",
+      "dataset_version": 1,
+      "estimated_tasks": 3,
+      "estimated_model_calls": 6,
+      "estimated_judge_calls": 0,
+      "estimated_cost_usd": 0.0123,
+      "judge_models": [],
+      "local_scorers": [
+        "mentions_menu"
+      ],
+      "pass_threshold": 0.5,
+      "warnings": [
+        "samples=1 is fine for a quick check; use samples>=3 for decisions you will act on.",
+        "Code scorers (mentions_menu) run in your SDK process: the eval waits in 'awaiting_scores' until their scores are posted."
+      ]
+    }
+  },
+  "expect": {
+    "run.eval_report.metric_name": "eval_loss",
+    "run.eval_report.selected_step": 6,
+    "run.eval_report.fallback_model": "strong/m",
+    "run.eval_report.pareto_summary.quality_drop": 0.02,
+    "run.eval_report.pareto_summary.quality_drop_ci95": [
+      0.01,
+      0.03
+    ],
+    "run.latest_metric.eval_metrics.routed_quality": 0.93,
+    "eval.total_cost_usd": 7.1e-05,
+    "eval.summary[0].cost_per_1k_tasks_usd": 0.017,
+    "eval_plan.estimated_cost_usd": 0.0123,
+    "run.eval_report.eval_loss": 0.41
+  }
+}

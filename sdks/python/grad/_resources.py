@@ -57,6 +57,7 @@ from ._models import (
 )
 from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX
 from ._transport import SSEDecoder, iter_sse, quote_path_param
+from .recipes import _thinking
 from .rubrics import model_ref
 
 if TYPE_CHECKING:
@@ -292,7 +293,7 @@ class Datasets(_Resource):
         if train_on is not None:
             body["train_on"] = train_on
         if thinking is not None:
-            body["thinking"] = {"on": True, "off": False}.get(thinking, thinking) if isinstance(thinking, str) else thinking
+            body["thinking"] = _thinking(thinking)
         if preserve_thinking is not None:
             body["preserve_thinking"] = preserve_thinking
         if limit is not None:
