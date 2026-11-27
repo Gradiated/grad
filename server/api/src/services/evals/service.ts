@@ -78,7 +78,8 @@ export interface EvalService {
     workspaceId: string,
     dataset: string,
     request: ScoreDatasetRequest,
-  ): Promise<EvalRun>;
+    idempotency?: IdempotencyInput,
+  ): Promise<Created<EvalRun>>;
   /** Plans and inserts an eval (joins the caller's transaction). */
   createRecord(
     workspaceId: string,
@@ -958,25 +959,31 @@ export const createEvalService = (
 
     evaluateCheckpoint,
 
-    scoreDataset: async (workspaceId, dataset, request) =>
-      toPublic(
-        await createRecord(
-          workspaceId,
-          {
-            name: request.name ?? `${dataset.slice(0, 58)}-score`,
-            models: [RECORD_MODEL],
-            dataset,
-            dataset_version: request.version,
-            rubric: request.rubric,
-            samples: 1,
-            temperature: 0,
-            max_tokens: 1,
-            limit: request.limit,
-            pass_threshold: null,
-          } as PlanEvalRequest,
-          undefined,
-          "score",
-        ),
+    scoreDataset: (workspaceId, dataset, request, idempotency) =>
+      createOnce(
+        idempotency,
+        (key) => store.jobs.findIdempotent(workspaceId, key),
+        async (id) => toPublic(await load(workspaceId, id)),
+        async () =>
+          toPublic(
+            await createRecord(
+              workspaceId,
+              {
+                name: request.name ?? `${dataset.slice(0, 58)}-score`,
+                models: [RECORD_MODEL],
+                dataset,
+                dataset_version: request.version,
+                rubric: request.rubric,
+                samples: 1,
+                temperature: 0,
+                max_tokens: 1,
+                limit: request.limit,
+                pass_threshold: null,
+              } as PlanEvalRequest,
+              idempotency,
+              "score",
+            ),
+          ),
       ),
 
     handler,

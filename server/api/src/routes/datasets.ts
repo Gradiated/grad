@@ -205,14 +205,14 @@ export const registerDatasetRoutes = (
       // A scoring job writes a dataset version and is a billed eval.
       workspaceOf(c, "runs:write");
 
-      return c.json(
-        await services.evals.scoreDataset(
-          workspaceOf(c, "datasets:write"),
-          c.req.valid("param").name,
-          c.req.valid("json"),
-        ),
-        202,
+      const created = await services.evals.scoreDataset(
+        workspaceOf(c, "datasets:write"),
+        c.req.valid("param").name,
+        c.req.valid("json"),
+        await idempotencyOf(c),
       );
+
+      return c.json(replayAware(c, created), 202);
     },
   );
 

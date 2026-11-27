@@ -290,6 +290,33 @@ describe("POST /v1/datasets/{name}/score", () => {
     expect(h.fake.requests).toHaveLength(3);
   });
 
+  it("returns the first scoring job for a retried Idempotency-Key (r8 A5)", async () => {
+    h = await makeEvalHarness();
+    await seedDataset(h.t, "logs", qaRecords(2));
+    h.fake.setModel(
+      "qwen/qwen3-32b",
+      judgeResponder(() => 0.9),
+    );
+    const send = () =>
+      h.t.json<Json>("/v1/datasets/logs/score", {
+        body: { rubric: [JUDGE] },
+        headers: { "Idempotency-Key": "score-1" },
+      });
+    const first = await send();
+    const retry = await send();
+    expect([first.status, retry.status]).toEqual([202, 202]);
+    expect(retry.body.id).toBe(first.body.id);
+    expect(retry.headers.get("Idempotent-Replayed")).toBe("true");
+    await h.t.services.evals.drain();
+    expect(h.fake.requests).toHaveLength(2);
+    expect((await h.t.json<Json>("/v1/datasets/logs")).body.version).toBe(2);
+    const reused = await h.t.json<Json>("/v1/datasets/logs/score", {
+      body: { rubric: [JUDGE], name: "other" },
+      headers: { "Idempotency-Key": "score-1" },
+    });
+    expect(reused.status).toBe(422);
+  });
+
   it("keeps a failed judge's score out of the dataset", async () => {
     h = await makeEvalHarness();
     await seedDataset(h.t, "logs", qaRecords(1));
