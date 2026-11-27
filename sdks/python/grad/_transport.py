@@ -1,10 +1,13 @@
 """Request policy shared by every grad-sdk call: auth, retries, redirects and error mapping.
 
 * Retries (``max_retries``, default 2) use exponential backoff with jitter and honour
-  ``Retry-After``. GET/HEAD/PUT/DELETE are retried on 408/429/500/502/503/504 and on
-  connection failures. POST is retried only on 429 and when the connection failed
-  before the request was sent, because the API has no idempotency keys yet and a
-  replayed ``POST /v1/runs`` would start (and bill) a second run.
+  ``Retry-After``. GET/HEAD/PUT/DELETE, and every request that carries an
+  ``Idempotency-Key``, are retried on 408/429/500/502/503/504 and on connection
+  failures. The generated client sends a fresh UUIDv4 key with every POST the server
+  accepts one for and reuses it across retries, so the server replays the first
+  response instead of starting (and billing) a second run. A keyed request that gets
+  409 with ``Retry-After`` (the first attempt still running) is retried too. Other
+  POSTs are retried only on 429 and when the connection failed before sending.
 * Redirects: same-origin redirects of GET/HEAD are followed (at most 5). Anything
   else, in particular a redirect to another origin or a scheme downgrade, raises
   :class:`grad.UnexpectedRedirectError` and the credentials are never sent there.
@@ -90,6 +93,15 @@ def encode_query(query: Mapping[str, Any] | None) -> str:
     return urllib.parse.urlencode(pairs)
 
 
+def new_idempotency_key() -> str:
+    """A UUIDv4 for the ``Idempotency-Key`` header (one per logical call)."""
+    return str(uuid.uuid4())
+
+
+def _keyed(headers: Mapping[str, str]) -> bool:
+    return any(name.lower() == "idempotency-key" for name in headers)
+
+
 def quote_path_param(value: Any, name: str) -> str:
     """Percent-encode one path segment; reject empty, ``.`` and ``..`` values."""
     text = str(value)
@@ -147,17 +159,22 @@ class _Base:
             out.update(extra)
         return out
 
-    def should_retry_status(self, method: str, status: int, attempt: int) -> bool:
-        if attempt >= self.retry.max_retries or status not in RETRY_STATUSES:
+    def should_retry_status(self, method: str, status: int, attempt: int, *, keyed: bool, retry_after: float | None) -> bool:
+        if attempt >= self.retry.max_retries:
             return False
-        return method in IDEMPOTENT_METHODS or status == 429
+        if status == 409:
+            # The first attempt with this Idempotency-Key is still running server-side.
+            return keyed and retry_after is not None
+        if status not in RETRY_STATUSES:
+            return False
+        return keyed or method in IDEMPOTENT_METHODS or status == 429
 
-    def should_retry_failure(self, method: str, failure: TransportFailure, attempt: int, *, replayable: bool) -> bool:
+    def should_retry_failure(self, method: str, failure: TransportFailure, attempt: int, *, replayable: bool, keyed: bool) -> bool:
         if attempt >= self.retry.max_retries or not replayable:
             return False
         if failure.phase == "connect":
             return True
-        if method in IDEMPOTENT_METHODS:
+        if keyed or method in IDEMPOTENT_METHODS:
             return True
         # A pooled keep-alive connection the server had already closed fails while we are
         # still writing: the request never reached the application, so it is safe to resend.
@@ -259,6 +276,7 @@ class SyncTransport(_Base):
         attempt = 0
         hops = 0
         current = url
+        keyed = _keyed(headers)
         start_pos = body.tell() if body is not None and not isinstance(body, bytes) and body.seekable() else None
         while True:
             if start_pos is not None and body is not None and not isinstance(body, bytes):
@@ -267,7 +285,7 @@ class SyncTransport(_Base):
             try:
                 resp = self.sender.send(Request(method, current, headers, body, body_length), timeout=timeout)
             except TransportFailure as failure:
-                if self.should_retry_failure(method, failure, attempt, replayable=replayable):
+                if self.should_retry_failure(method, failure, attempt, replayable=replayable, keyed=keyed):
                     self.clock.sleep(self.backoff(attempt, None))
                     attempt += 1
                     continue
@@ -287,8 +305,9 @@ class SyncTransport(_Base):
                 data = resp.read()
             except TransportFailure:
                 data = b""
-            if replayable and self.should_retry_status(method, status, attempt):
-                self.clock.sleep(self.backoff(attempt, parse_retry_after(resp.headers.get("retry-after"))))
+            retry_after = parse_retry_after(resp.headers.get("retry-after"))
+            if replayable and self.should_retry_status(method, status, attempt, keyed=keyed, retry_after=retry_after):
+                self.clock.sleep(self.backoff(attempt, retry_after))
                 attempt += 1
                 continue
             raise self.api_error(method, current, status, resp.headers, data)
@@ -395,6 +414,7 @@ class AsyncTransport(_Base):
         attempt = 0
         hops = 0
         current = url
+        keyed = _keyed(headers)
         start_pos = body.tell() if body is not None and not isinstance(body, bytes) and body.seekable() else None
         while True:
             if start_pos is not None and body is not None and not isinstance(body, bytes):
@@ -403,7 +423,7 @@ class AsyncTransport(_Base):
             try:
                 resp = await self.sender.send(Request(method, current, headers, body, body_length), timeout=timeout)
             except TransportFailure as failure:
-                if self.should_retry_failure(method, failure, attempt, replayable=replayable):
+                if self.should_retry_failure(method, failure, attempt, replayable=replayable, keyed=keyed):
                     await self.clock.async_sleep(self.backoff(attempt, None))
                     attempt += 1
                     continue
@@ -423,8 +443,9 @@ class AsyncTransport(_Base):
                 data = await resp.read()
             except TransportFailure:
                 data = b""
-            if replayable and self.should_retry_status(method, status, attempt):
-                await self.clock.async_sleep(self.backoff(attempt, parse_retry_after(resp.headers.get("retry-after"))))
+            retry_after = parse_retry_after(resp.headers.get("retry-after"))
+            if replayable and self.should_retry_status(method, status, attempt, keyed=keyed, retry_after=retry_after):
+                await self.clock.async_sleep(self.backoff(attempt, retry_after))
                 attempt += 1
                 continue
             raise self.api_error(method, current, status, resp.headers, data)

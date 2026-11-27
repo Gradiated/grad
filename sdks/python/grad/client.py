@@ -9,7 +9,7 @@ from typing import Any
 from . import _async_resources as ar
 from . import _resources as r
 from ._config import ResolvedConfig, resolve_config
-from ._generated.client import AsyncGeneratedApiClient, GeneratedApiClient
+from ._generated.client import AsyncGeneratedApiClient, AsyncGeneratedInternalApiClient, GeneratedApiClient, GeneratedInternalApiClient
 from ._helpers import check_slug
 from ._http import AsyncSender, SyncSender
 from ._models import AsyncDeployment, AsyncRouteDecision, Deployment, RouteDecision
@@ -95,6 +95,7 @@ class Grad(_ClientBase):
         )
         self.wire = GeneratedApiClient(self._transport)
         """Low-level generated client: one method per API operation (an escape hatch)."""
+        self._internal = GeneratedInternalApiClient(self._transport)
         self.models = r.Models(self)
         self.datasets = r.Datasets(self)
         self.imports = r.Imports(self)
@@ -179,6 +180,7 @@ class AsyncGrad(_ClientBase):
         )
         self.wire = AsyncGeneratedApiClient(self._transport)
         """Low-level generated client: one coroutine per API operation (an escape hatch)."""
+        self._internal = AsyncGeneratedInternalApiClient(self._transport)
         self.models = ar.AsyncModels(self)
         self.datasets = ar.AsyncDatasets(self)
         self.imports = ar.AsyncImports(self)

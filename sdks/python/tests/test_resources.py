@@ -338,6 +338,39 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run.latest_metric.step, 1)  # type: ignore[union-attr]
         self.assertTrue(run.succeeded)
 
+    def test_eval_report_and_metric_points_are_typed(self) -> None:
+        report = {
+            "metric_name": "eval_loss",
+            "selected_step": 3,
+            "best_step": 3,
+            "final_step": 4,
+            "train_records": 90,
+            "eval_records": 10,
+            "warnings": [],
+            "eval_loss": 0.41,
+            "candidates": ["a", "b"],
+            "fallback_model": "b",
+            "pareto_summary": {"target_max_drop": 0.02, "quality_drop": 0.008, "quality_drop_ci95": [-0.004, 0.019], "temperature": 1.3},
+            "heads": {"intent": {"type": "choice", "accuracy": 0.9}},
+            "future_field": 1,
+        }
+        metric = {"seq": 1, "attempt": 1, "step": 4, "loss": 0.5, "tokens": 1, "cost_usd": 0.0, "timestamp": "now", "eval_metrics": {"eval_loss": 0.41}}
+        body = {**RUN_C, "eval_report": report, "latest_metric": metric}
+        client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}": json_reply(body)})
+        run = client.runs.get(RUN_ID)
+        ev = run.eval_report
+        assert isinstance(ev, grad.EvalReport)
+        self.assertEqual((ev.selected_step, ev.eval_loss, ev.metric, ev.candidates), (3, 0.41, 0.41, ["a", "b"]))
+        assert isinstance(ev.pareto_summary, grad.RouterParetoSummary)
+        self.assertEqual(ev.pareto_summary.quality_drop_ci95, [-0.004, 0.019])
+        self.assertIsNone(ev.pareto_summary.offload_rate)
+        self.assertEqual(ev.heads.intent.accuracy, 0.9)  # type: ignore[union-attr]
+        self.assertEqual((ev["future_field"], ev.future_field), (1, 1))
+        self.assertIsNone(ev.preference_accuracy)
+        self.assertIn("pareto_summary=RouterParetoSummary(quality_drop=0.008", repr(ev))
+        self.assertEqual(run.latest_metric.eval_metrics, {"eval_loss": 0.41})  # type: ignore[union-attr]
+        self.assertIsNone(grad.EvalReport.from_api({"metric_name": "x"}).metric)
+
     def test_wait_backoff_caps_at_five_seconds(self) -> None:
         client, _, clock = make_client({f"GET /v1/runs/{RUN_ID}": [*[json_reply(RUN_Q)] * 12, json_reply(RUN_C)]})
         client.runs.wait(RUN_ID)
@@ -381,7 +414,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run.status, "completed")
         self.assertEqual(sender.sent[0].header("Accept"), "text/event-stream")
         self.assertGreater(seen[0].loss or 0, 0)
-        self.assertEqual(seen[0].eval_metrics, {})
+        self.assertIsNone(seen[0].eval_metrics)
         self.assertEqual(seen[0].epoch, 0)  # raw fallback for fields newer than the SDK
 
     def test_sse_reconnects_with_last_event_id_and_dedupes(self) -> None:

@@ -194,32 +194,62 @@ class RetryTests(unittest.TestCase):
                 client.runs.get("x")
             self.assertEqual(len(sender.sent), 1, status)
 
-    def test_post_not_retried_on_5xx_or_after_send(self) -> None:
+    def test_keyed_post_retried_on_5xx_and_after_send_with_one_key(self) -> None:
         run = grad_fixture("python-run-queued.json")
-        client, sender, _ = make_client({"POST /v1/runs": [problem(503, "busy"), json_reply(run, 202)]})
-        with self.assertRaises(grad.ServerError):
-            client.runs.create("support", name="a", recipe={"kind": "sft"})
-        self.assertEqual(len(sender.sent), 1)
-        client, sender, _ = make_client({"POST /v1/runs": [reset("receive"), json_reply(run, 202)]})
-        with self.assertRaises(grad.APIConnectionError):
-            client.runs.create("support", name="a", recipe={"kind": "sft"})
-        self.assertEqual(len(sender.sent), 1, "a POST that may have been processed is never replayed")
-
-    def test_post_retried_on_429_and_connect_failure(self) -> None:
-        run = grad_fixture("python-run-queued.json")
-        client, sender, _ = make_client({"POST /v1/runs": [problem(429, "slow"), refused(), json_reply(run, 202)]})
+        client, sender, _ = make_client({"POST /v1/runs": [problem(503, "busy"), reset("receive"), json_reply(run, 202)]})
         created = client.runs.create("support", name="a", recipe={"kind": "sft"})
         self.assertEqual(created.id, run["id"])  # type: ignore[index]
+        keys = {s.header("Idempotency-Key") for s in sender.sent}
         self.assertEqual(len(sender.sent), 3)
+        self.assertEqual(len(keys), 1, "every retry reuses the logical call's key")
+        self.assertRegex(keys.pop() or "", r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+        client, sender, _ = make_client({"POST /v1/runs": [json_reply(run, 202), json_reply(run, 202)]})
+        client.wire.create_run({"dataset": "d", "name": "n", "recipe": {"kind": "sft"}})
+        client.wire.create_run({"dataset": "d", "name": "n", "recipe": {"kind": "sft"}}, idempotency_key="mine")
+        first, second = (s.header("Idempotency-Key") for s in sender.sent)
+        self.assertNotEqual(first, "mine")
+        self.assertEqual(second, "mine")
 
-    def test_post_retried_when_stale_keepalive_fails_on_send(self) -> None:
+    def test_keyed_post_retries_409_in_progress_only_with_retry_after(self) -> None:
         run = grad_fixture("python-run-queued.json")
-        client, sender, _ = make_client({"POST /v1/runs": [reset("send", reused=True), json_reply(run, 202)]})
+        busy = problem(409, "idempotency_in_progress", **{"retry-after": "1"})
+        client, sender, clock = make_client({"POST /v1/runs": [busy, json_reply(run, 202, **{"idempotent-replayed": "true"})]})
         client.runs.create("support", name="a", recipe={"kind": "sft"})
         self.assertEqual(len(sender.sent), 2)
-        client, sender, _ = make_client({"POST /v1/runs": [reset("send", reused=False), json_reply(run, 202)]})
-        with self.assertRaises(grad.APIConnectionError):
+        self.assertEqual(clock.sleeps, [1.0])
+        client, sender, _ = make_client({"POST /v1/runs": [problem(409, "run_exists"), json_reply(run, 202)]})
+        with self.assertRaises(grad.ConflictError):
             client.runs.create("support", name="a", recipe={"kind": "sft"})
+        self.assertEqual(len(sender.sent), 1)
+        client, sender, _ = make_client({"GET /v1/runs/x": [busy, json_reply(run)]})
+        with self.assertRaises(grad.ConflictError):
+            client.runs.get("x")
+        self.assertEqual(len(sender.sent), 1, "only keyed requests treat 409 as in progress")
+
+    def test_unkeyed_post_not_retried_on_5xx_or_after_send(self) -> None:
+        task = {"env_name": "e", "task": {}, "model_id": "m"}
+        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [problem(503, "busy"), json_reply({"id": "t"}, 202)]})
+        with self.assertRaises(grad.ServerError):
+            client._internal.dispatch_env_task(task)
+        self.assertEqual(len(sender.sent), 1)
+        self.assertIsNone(sender.sent[0].header("Idempotency-Key"))
+        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [reset("receive"), json_reply({"id": "t"}, 202)]})
+        with self.assertRaises(grad.APIConnectionError):
+            client._internal.dispatch_env_task(task)
+        self.assertEqual(len(sender.sent), 1, "an unkeyed POST that may have been processed is never replayed")
+
+    def test_unkeyed_post_retried_on_429_connect_failure_and_stale_keepalive(self) -> None:
+        task = {"env_name": "e", "task": {}, "model_id": "m"}
+        ok = json_reply({"id": "t"}, 202)
+        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [problem(429, "slow"), refused(), ok]})
+        self.assertEqual(client._internal.dispatch_env_task(task), {"id": "t"})
+        self.assertEqual(len(sender.sent), 3)
+        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [reset("send", reused=True), ok]})
+        client._internal.dispatch_env_task(task)
+        self.assertEqual(len(sender.sent), 2)
+        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [reset("send", reused=False), ok]})
+        with self.assertRaises(grad.APIConnectionError):
+            client._internal.dispatch_env_task(task)
 
     def test_connection_errors_and_timeouts(self) -> None:
         client, sender, _ = make_client({"GET /v1/models": refused()})
@@ -322,6 +352,11 @@ class AsyncTransportTests(unittest.TestCase):
             client, sender, _ = make_async_client({"POST /v1/runs": reset("receive")})
             with self.assertRaises(grad.APIConnectionError):
                 await client.wire.create_run({"dataset": "d", "name": "n", "recipe": {"kind": "sft"}})
+            self.assertEqual(len(sender.sent), 3)
+            self.assertEqual(len({s.header("Idempotency-Key") for s in sender.sent}), 1)
+            client, sender, _ = make_async_client({"POST /v1/env-workers/tasks": reset("receive")})
+            with self.assertRaises(grad.APIConnectionError):
+                await client._internal.dispatch_env_task({"env_name": "e", "task": {}, "model_id": "m"})
             self.assertEqual(len(sender.sent), 1)
             client, sender, _ = make_async_client({"GET /v1/runs/x": problem(404, "run_not_found")})
             with self.assertRaises(grad.NotFoundError):

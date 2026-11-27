@@ -71,6 +71,7 @@ from ._models import (
     EvalModelSummary,
     EvalOutput,
     EvalPlan,
+    EvalReport,
     EvalResult,
     FeedbackRecord,
     FeedbackResult,
@@ -81,6 +82,7 @@ from ._models import (
     Plan,
     RenderPreview,
     RouteDecision,
+    RouterParetoSummary,
     Run,
 )
 from ._version import __version__
@@ -157,6 +159,7 @@ __all__ = [
     "EvalModelSummary",
     "EvalOutput",
     "EvalPlan",
+    "EvalReport",
     "EvalResult",
     "FeatureUnavailableError",
     "FeedbackRecord",

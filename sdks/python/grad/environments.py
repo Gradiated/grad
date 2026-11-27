@@ -437,7 +437,7 @@ class _Worker:
         self.name = name
         self.policy = policy
         self.client = client
-        self.wire = client.wire
+        self.internal = client._internal
         self.worker_id = worker_id
         self.concurrency = concurrency
         self.wait_ms = wait_ms
@@ -456,7 +456,7 @@ class _Worker:
     # -- registration -------------------------------------------------------------------
 
     def register(self) -> None:
-        self.wire.register_env_worker({"name": self.name, "worker_id": self.worker_id, "concurrency": self.concurrency})
+        self.internal.register_env_worker({"name": self.name, "worker_id": self.worker_id, "concurrency": self.concurrency})
 
     def heartbeat_loop(self) -> None:
         while not self.stop.wait(self.heartbeat_s):
@@ -526,7 +526,7 @@ class _Worker:
         delay = 0.5
         for attempt in range(6):
             try:
-                self.wire.complete_env_task(task_id, dict(payload))
+                self.internal.complete_env_task(task_id, dict(payload))
                 return True
             except (ConflictError, NotFoundError) as exc:
                 log.warning("env task %s result not accepted (%s); it probably timed out server-side", task_id, exc.code)
@@ -587,7 +587,7 @@ class _Worker:
                     continue
                 started = self.clock.monotonic()
                 try:
-                    resp = self.wire.claim_env_task(
+                    resp = self.internal.claim_env_task(
                         self.name,
                         {"worker_id": self.worker_id, "wait_ms": self.wait_ms},
                         timeout=self.wait_ms / 1000 + 30,

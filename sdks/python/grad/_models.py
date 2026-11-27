@@ -50,6 +50,7 @@ __all__ = [
     "EvalModelSummary",
     "EvalOutput",
     "EvalPlan",
+    "EvalReport",
     "EvalResult",
     "FeedbackRecord",
     "FeedbackResult",
@@ -60,6 +61,7 @@ __all__ = [
     "Plan",
     "RenderPreview",
     "RouteDecision",
+    "RouterParetoSummary",
     "Run",
 ]
 
@@ -606,7 +608,8 @@ class MetricPoint(APIObject):
     seq: int | None = None
     attempt: int | None = None
     eval_loss: float | None = None
-    eval_metric: float | None = None
+    eval_metrics: dict[str, float | None] | None = None
+    """Held-out metrics of an eval step by name (including the selection metric); ``None`` between evals."""
     grad_norm: float | None = None
     lr: float | None = None
     tokens_per_sec: float | None = None
@@ -614,12 +617,73 @@ class MetricPoint(APIObject):
     cost_usd: float = 0.0
     timestamp: str | None = None
 
-    _repr_fields = ("step", "loss", "eval_loss", "cost_usd")
+    _repr_fields = ("step", "loss", "eval_metrics", "cost_usd")
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class RouterParetoSummary(APIObject):
+    """Router quality vs. cost on the held-out report fold, against the fallback model."""
+
+    target_max_drop: float = 0.0
+    routed_quality: float | None = None
+    quality_drop: float | None = None
+    quality_drop_ci95: list[float] | None = None
+    offload_rate: float | None = None
+    cost_savings_pct: float | None = None
+    ece: float | None = None
+    threshold: float | None = None
+    temperature: float = 1.0
+
+    _repr_fields = ("quality_drop", "quality_drop_ci95", "offload_rate", "cost_savings_pct", "ece")
+
+
+def _pareto(value: Any, client: Any) -> Any:
+    return RouterParetoSummary.from_api(value, client) if isinstance(value, Mapping) else value
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class EvalReport(APIObject):
+    """A run's held-out ``eval_report``: the shared core plus the fields its recipe writes.
+
+    Fields a recipe does not write stay ``None``; every key the server sent is in ``.raw``.
+    """
+
+    metric_name: str = ""
+    selected_step: int = 0
+    best_step: int | None = None
+    final_step: int = 0
+    train_records: int = 0
+    eval_records: int = 0
+    warnings: list[str] = field(default_factory=list)
+    eval_loss: float | None = None
+    eval_token_accuracy: float | None = None
+    preference_accuracy: float | None = None
+    reward_margin: float | None = None
+    eval_kl: float | None = None
+    kl_reduction: float | None = None
+    recall_at_1: float | None = None
+    recall_at_5: float | None = None
+    recall_at_10: float | None = None
+    mrr: float | None = None
+    ece: float | None = None
+    candidates: list[str] | None = None
+    fallback_model: str | None = None
+    fallback_quality: float | None = None
+    pareto_summary: RouterParetoSummary | None = None
+    heads: AttrDict | None = None
+
+    _repr_fields = ("metric_name", "selected_step", "eval_loss", "preference_accuracy", "eval_kl", "recall_at_10", "pareto_summary")
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"pareto_summary": _pareto, "heads": _attrdict}
 
     @property
-    def eval_metrics(self) -> dict[str, float]:
-        """The held-out metrics reported at this step (``eval_*`` fields that are set)."""
-        return {k: v for k, v in self.raw.items() if k.startswith("eval_") and v is not None}
+    def metric(self) -> float | None:
+        """The value of the selection metric (``metric_name``)."""
+        value = self.raw.get(self.metric_name)
+        return float(value) if isinstance(value, (int, float)) else None
+
+
+def _eval_report(value: Any, client: Any) -> Any:
+    return EvalReport.from_api(value, client) if isinstance(value, Mapping) else value
 
 
 def _metric(value: Any, client: Any) -> Any:
@@ -646,7 +710,7 @@ class _RunData(APIObject):
     attempt: int = 0
     max_attempts: int | None = None
     latest_metric: MetricPoint | None = None
-    eval_report: AttrDict | None = None
+    eval_report: EvalReport | None = None
     artifact_id: str | None = None
     error: str | None = None
     created_at: str | None = None
@@ -656,7 +720,7 @@ class _RunData(APIObject):
     _repr_fields = ("id", "name", "status", "current_step", "total_steps")
     _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {
         "resolved_config": _attrdict,
-        "eval_report": _attrdict,
+        "eval_report": _eval_report,
         "latest_metric": _metric,
     }
 
@@ -870,11 +934,11 @@ class _ArtifactData(APIObject):
     sha256: str | None = None
     size_bytes: int = 0
     manifest: AttrDict = field(default_factory=AttrDict)
-    eval_report: AttrDict | None = None
+    eval_report: EvalReport | None = None
     created_at: str | None = None
 
     _repr_fields = ("id", "format", "base_model", "size_bytes")
-    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"manifest": _attrdict, "eval_report": _attrdict}
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"manifest": _attrdict, "eval_report": _eval_report}
 
     @property
     def ref(self) -> str:

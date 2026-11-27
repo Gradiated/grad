@@ -55,6 +55,7 @@ from ._models import (
     TERMINAL_IMPORT_STATUSES,
     TERMINAL_RUN_STATUSES,
 )
+from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX
 from ._transport import SSEDecoder, iter_sse, quote_path_param
 from .rubrics import model_ref
 from .specs import Unavailable
@@ -491,7 +492,7 @@ class Runs(_Resource):
                     if last_seq is None or (point.seq or 0) > last_seq:
                         last_seq = point.seq
                         yield "metric", point
-                cursor = page.get("next_cursor") or cursor
+                cursor = page.get("tail_cursor") or cursor
                 if data:
                     backoff.reset()
                 elif page.get("status") in TERMINAL_RUN_STATUSES:
@@ -843,7 +844,7 @@ class Evals(_Resource):
         for name, scorer in scorers.items():
             previous: set[str] = set()
             while True:
-                outputs = self._wire.list_eval_outputs(eval_id, missing_scorer=name, limit=200).get("data") or []
+                outputs = self._wire.list_eval_outputs(eval_id, missing_scorer=name, limit=LIST_EVAL_OUTPUTS_LIMIT_MAX).get("data") or []
                 if not outputs:
                     break
                 ids = {o["id"] for o in outputs}
@@ -935,11 +936,11 @@ class Environments(_Resource):
             body["system_prompt"] = system_prompt
         if timeout_s is not None:
             body["timeout_s"] = timeout_s
-        return dict(self._wire.dispatch_env_task(body))
+        return dict(self._client._internal.dispatch_env_task(body))
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         """A dispatched task with its status and result."""
-        return dict(self._wire.get_env_task(task_id))
+        return dict(self._client._internal.get_env_task(task_id))
 
     def serve(self, env: Any, *, name: str, policy: Any, **kwargs: Any) -> int:
         """Run an outbound worker for ``env`` (see :func:`grad.serve_environment`)."""

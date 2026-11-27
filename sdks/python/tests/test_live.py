@@ -19,6 +19,7 @@ import os
 import re
 import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
@@ -195,6 +196,21 @@ class SelfHostedLiveTests(_LiveCase):
         client.keys.revoke(created.key.id)
         with self.assertRaises(grad.AuthenticationError):
             scoped.datasets.list().to_list()
+
+    def test_post_retry_replays_after_a_dropped_response(self) -> None:
+        # The fault proxy lets the server commit the first POST, then answers 503; the
+        # retry carries the same Idempotency-Key, so the server replays the 201 instead
+        # of failing with dataset_exists.
+        fault_url = str(self.stack.info["fault_url"])
+        with Grad(base_url=fault_url) as flaky:
+            created = flaky.datasets.create("idempotent-create")
+        self.assertEqual(created.name, "idempotent-create")
+        with urllib.request.urlopen(f"{fault_url}/__fault/stats") as resp:
+            stats = json.loads(resp.read())
+        self.assertGreaterEqual(stats["dropped"], 1)
+        self.assertGreaterEqual(stats["replayed"], 1)
+        with self.assertRaises(grad.ConflictError):
+            Grad().datasets.create("idempotent-create")  # a new logical call gets a new key
 
     def test_async_parity(self) -> None:
         async def main() -> None:
