@@ -87,6 +87,9 @@ pub async fn login(ctx: &Ctx, args: LoginArgs) -> CliResult {
                 let mut err = CliError::from(e);
                 err.exit = EXIT_AUTH;
                 err.message = format!("{} rejected the API key: {}", base_url, err.message);
+                if let Some((text, _)) = err.human.as_mut() {
+                    *text = format!("{} rejected the API key: {}", base_url, text);
+                }
                 return Err(err.hint("Check the key, or create a new one; nothing was saved."));
             }
             Err(e) => {

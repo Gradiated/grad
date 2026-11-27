@@ -9,7 +9,7 @@ use grad_sdk::{
 
 use super::{page, Ctx};
 use crate::cli::{ArtifactsCmd, ImportWaitArgs};
-use crate::output::{opt, thousands, when, CliError, CliResult, Out};
+use crate::output::{bytes, opt, thousands, when, CliError, CliResult, Out};
 
 /// `run run_…`, `upload by key_…` or `import hf://owner/name@<commit>`.
 fn provenance(a: &Artifact) -> String {
@@ -26,17 +26,27 @@ fn provenance(a: &Artifact) -> String {
 }
 
 fn print_artifact(out: &Out, a: &Artifact) {
-    out.kv(&[
-        ("artifact", a.reference()),
-        ("id", a.id.clone()),
+    let mut rows = vec![("artifact", a.reference())];
+    if a.id != a.reference() {
+        rows.push(("id", a.id.clone()));
+    }
+    rows.extend([
         ("format", opt(&a.format)),
         ("base model", a.base_model.clone()),
         ("recipe", a.recipe_kind.to_string()),
         ("source", provenance(a)),
-        ("size", format!("{} bytes", thousands(a.size_bytes))),
+        (
+            "size",
+            format!(
+                "{} ({} bytes)",
+                bytes(a.size_bytes),
+                thousands(a.size_bytes)
+            ),
+        ),
         ("sha256", a.sha256.clone()),
         ("created", when(&a.created_at)),
     ]);
+    out.kv(&rows);
 }
 
 pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
@@ -46,16 +56,15 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
         ArtifactsCmd::List { name, page: p } => {
             let res = c.artifacts().list(name.as_deref(), &page(&p)).await?;
             out.table(
-                &["artifact", "id", "format", "base model", "size", "created"],
+                &["artifact", "format", "base model", "size", "created"],
                 res.data
                     .iter()
                     .map(|a| {
                         vec![
                             a.reference(),
-                            a.id.clone(),
                             opt(&a.format),
                             a.base_model.clone(),
-                            thousands(a.size_bytes),
+                            bytes(a.size_bytes),
                             when(&a.created_at),
                         ]
                     })
@@ -103,12 +112,13 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
             let res = c.artifacts().download(&reference, &opts).await?;
             if let Some(dir) = &res.directory {
                 out.line(format!(
-                    "✓ Verified {} ({} bytes, sha256 {}) and extracted {} files to {}",
+                    "✓ Verified {} ({} bytes, sha256 {}) and extracted it to {} ({} file{} checked against its manifest)",
                     reference,
                     thousands(res.size_bytes as i64),
                     &res.sha256[..12],
+                    dir.display(),
                     res.files.len(),
-                    dir.display()
+                    if res.files.len() == 1 { "" } else { "s" }
                 ));
                 let fmt = res
                     .manifest

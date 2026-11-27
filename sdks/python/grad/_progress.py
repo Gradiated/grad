@@ -107,6 +107,8 @@ class Progress:
         self.attempt = 1
         self.status: str | None = None
         self.notes: list[str] = []
+        self.shown: set[str] = set()
+        """Warnings already shown elsewhere (runs.create issues the plan's as Python warnings)."""
         self._rate_start: tuple[int, float] | None = None
         self._rate_last: tuple[int, float] | None = None
 
@@ -168,7 +170,8 @@ class Progress:
             else:
                 self.note(f"⚠ {event.message}")
         elif isinstance(event, WarningEvent):
-            self.note(f"⚠ {event.message}")
+            if event.message not in self.shown:
+                self.note(f"⚠ {event.message}")
         elif isinstance(event, CompletedEvent):
             self.status = event.status
             if event.run is not None:
@@ -199,10 +202,11 @@ class Progress:
             if self.queue_message:
                 return f"{self.queue_message}{tail}"
             if self.autoscaling and not self.workers_online:
-                return f"Starting a GPU worker (autoscaling){tail}"
-            if self.phase == "waiting_for_compute" or self.workers_online is not None:
+                return f"Starting a worker (autoscaling){tail}"
+            # An idle worker claims within a poll; the server says waiting_for_compute after ~30 s.
+            if self.phase == "waiting_for_compute":
                 n = self.workers_online or 0
-                return f"Waiting for a GPU ({n} worker{'s' if n != 1 else ''} online){tail}"
+                return f"Waiting for a worker ({f'{n} online, all busy' if n else 'none online'}){tail}"
             return f"Queued{tail}"
         label = PHASE_LABELS.get(self.phase, self.phase)
         if self.phase == "starting" and self.gpu:

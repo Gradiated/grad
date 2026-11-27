@@ -26,6 +26,9 @@ pub struct CliError {
     pub hint: Option<String>,
     /// Extra machine-readable context (e.g. the failed run).
     pub data: Option<Value>,
+    /// For an API error, what a person reads first (the server's detail) and the
+    /// request it came from; `message` keeps the full text for JSON and logs.
+    pub human: Option<(String, String)>,
 }
 
 impl CliError {
@@ -38,6 +41,7 @@ impl CliError {
             request_id: None,
             hint: None,
             data: None,
+            human: None,
         }
     }
 
@@ -107,14 +111,34 @@ impl From<SdkError> for CliError {
             SdkError::Validation(b) => b.errors.clone().map(|e| json!({ "errors": e })),
             _ => None,
         };
+        let message = e.to_string();
+        let human = e.api().map(|b| {
+            let head = format!("{} {}: {} {}", b.method, b.url, b.status, b.code);
+            let mut text = message.strip_prefix(&head).unwrap_or(&message);
+            text = text.strip_prefix(": ").unwrap_or(text);
+            let mut context = format!("{} {} from {} {}", b.status, b.code, b.method, b.url);
+            if let Some(id) = &b.request_id {
+                text = text
+                    .strip_suffix(&format!(" (request_id {})", id))
+                    .unwrap_or(text);
+                context.push_str(&format!(", request_id {}", id));
+            }
+            let text = if text.is_empty() {
+                b.code.as_str()
+            } else {
+                text
+            };
+            (text.to_string(), context)
+        });
         CliError {
             exit,
             code: e.code(),
             status: Some(e.status()).filter(|s| *s != 0),
             request_id: e.request_id().map(str::to_string),
-            message: e.to_string(),
+            message,
             hint,
             data,
+            human,
         }
     }
 }
@@ -246,7 +270,13 @@ pub fn print_error(e: &CliError, json_mode: bool) {
         );
         return;
     }
-    eprintln!("error: {}", e.message);
+    match &e.human {
+        Some((text, context)) => {
+            eprintln!("error: {}", text);
+            eprintln!("  ({})", context);
+        }
+        None => eprintln!("error: {}", e.message),
+    }
     if let Some(h) = &e.hint {
         eprintln!("hint: {}", h);
     }
@@ -263,6 +293,22 @@ pub fn thousands(n: i64) -> String {
         out.push(c);
     }
     out
+}
+
+/// 125_754 -> "123 KB" (binary units, as `ls -h` and `du -h` print them).
+pub fn bytes(n: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n.max(0) as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 || v >= 100.0 {
+        format!("{:.0} {}", v, UNITS[i])
+    } else {
+        format!("{:.1} {}", v, UNITS[i])
+    }
 }
 
 /// Comma-joined display values (enum lists such as scopes or adapters).
@@ -345,6 +391,9 @@ mod tests {
         assert_eq!(thousands(4820), "4,820");
         assert_eq!(thousands(1234567), "1,234,567");
         assert_eq!(thousands(12), "12");
+        assert_eq!(bytes(440), "440 B");
+        assert_eq!(bytes(125_754), "123 KB");
+        assert_eq!(bytes(4_277_107), "4.1 MB");
         assert_eq!(compact(1_100_000), "1.1M");
         assert_eq!(compact(950), "950");
         assert_eq!(compact(12_300), "12.3k");

@@ -880,9 +880,15 @@ impl Model {
         } else {
             l.message.as_ref()
         };
-        message
-            .cloned()
-            .unwrap_or_else(|| waiting_label(l.workers_online, l.autoscaling))
+        message.cloned().unwrap_or_else(|| {
+            // Until the server's ~30 s waiting_for_compute check, an idle worker may be
+            // about to claim the run: "0 online" would only alarm.
+            if l.phase == Phase::Queued && l.autoscaling != Some(true) {
+                "Queued".into()
+            } else {
+                waiting_label(l.workers_online, l.autoscaling)
+            }
+        })
     }
 
     fn phase(&self) -> PhaseView {
@@ -919,7 +925,7 @@ impl Model {
                 Phase::Other => v("other", "Working", Tone::Plain),
             },
             // Servers without phases: the status and the stream tell enough.
-            None if r.status == RunStatus::Queued => v("queued", "Waiting for a GPU", Tone::Plain),
+            None if r.status == RunStatus::Queued => v("queued", "Queued", Tone::Plain),
             None if !self.attempt_points() => v("starting", "Starting", Tone::Plain),
             None => v("training", "Training", Tone::Plain),
         };
@@ -956,17 +962,13 @@ fn attempt_of(r: &Run) -> String {
     }
 }
 
-/// "Waiting for a GPU (0 workers online)".
+/// "Waiting for a worker (0 online)".
 fn waiting_label(workers: Option<i64>, autoscaling: Option<bool>) -> String {
     match workers {
-        None => "Waiting for a GPU".into(),
-        Some(0) if autoscaling == Some(true) => "Waiting for a GPU (a worker is starting)".into(),
-        Some(n) => format!(
-            "Waiting for a GPU ({} worker{} online{})",
-            n,
-            if n == 1 { "" } else { "s" },
-            if n > 0 { ", all busy" } else { "" }
-        ),
+        None => "Waiting for a worker".into(),
+        Some(0) if autoscaling == Some(true) => "Waiting for a worker (one is starting)".into(),
+        Some(0) => "Waiting for a worker (none online)".into(),
+        Some(n) => format!("Waiting for a worker ({} online, all busy)", n),
     }
 }
 

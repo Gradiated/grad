@@ -211,7 +211,7 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(lines[2], "Queued behind 1 run — 2m 10s  $0.00/$1.00")
         self.assertEqual(lines[4], "Starting on NVIDIA H100 80GB HBM3 — 2m 10s  $0.00/$1.00")
         self.assertEqual(lines[8], "Training  2/5 [█████       ] 40%  loss 0.3333  ETA 3s  $0.00/$1.00")
-        self.assertEqual(lines[13], "Waiting for a GPU (0 workers online) — 2m 10s  attempt 2  2/5 [█████       ] 40%  loss 0.3333  $0.00/$1.00")
+        self.assertEqual(lines[13], "Queued — 2m 10s  attempt 2  2/5 [█████       ] 40%  loss 0.3333  $0.00/$1.00")
         self.assertEqual(lines[19], "Training  attempt 2  3/5 [███████     ] 60%  loss 0.25  $0.00/$1.00")
         self.assertEqual(lines[-1], "✓ Completed  3/5 [███████     ] 60%  loss 0.25  $0.00/$1.00")
         renderer.close()
@@ -238,13 +238,22 @@ class ProgressTests(unittest.TestCase):
         renderer = _progress.TerminalProgress(io.StringIO(), width=40, now=lambda: clock[0])
         waiting = {**EVENTS[2], "message": None}
         renderer.event(run_event_from_api({**waiting, "autoscaling": True}))  # type: ignore[arg-type]
-        self.assertEqual(renderer.line(), "Starting a GPU worker (autoscaling) — 1h 01m")
+        self.assertEqual(renderer.line(), "Starting a worker (autoscaling) — 1h 01m")
         renderer.event(run_event_from_api({**waiting, "workers_online": 1}))  # type: ignore[arg-type]
-        self.assertEqual(renderer.line(), "Waiting for a GPU (1 worker online) — 1h 01m")
+        self.assertEqual(renderer.line(), "Waiting for a worker (1 online, all busy) — 1h 01m")
         renderer.event(run_event_from_api({**EVENTS[0], "workers_online": None, "message": None}))  # type: ignore[arg-type]
         self.assertEqual(renderer.headline(), "Queued — 1h 02m")
         drawn = renderer.stream.getvalue().split("\r\x1b[K")[1:]  # type: ignore[attr-defined]
         self.assertEqual(max(len(d) for d in drawn), 40, "lines are cut to the terminal width")
+
+    def test_a_warning_runs_create_issued_is_not_noted_again(self) -> None:
+        renderer = _progress.TerminalProgress(io.StringIO(), width=100, now=lambda: 0.0)
+        warning = next(e for e in EVENTS if e["type"] == "warning")
+        renderer.shown.add(warning["message"])
+        renderer.event(run_event_from_api(warning))  # type: ignore[arg-type]
+        self.assertEqual(renderer.notes, [])
+        renderer.event(run_event_from_api({**warning, "message": "something new"}))  # type: ignore[arg-type]
+        self.assertEqual(renderer.notes, ["⚠ something new"])
 
     def test_notebook_display_updates_in_place_with_a_sparkline(self) -> None:
         shown: list[Any] = []

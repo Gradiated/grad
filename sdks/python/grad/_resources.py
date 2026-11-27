@@ -638,6 +638,10 @@ class Imports(_Resource):
             self._sleep(backoff.next(), deadline)
 
 
+# Plan warnings that runs.create already issued as Python warnings, by run id.
+_WARNED: dict[str, frozenset[str]] = {}
+
+
 class Runs(_Resource):
     """``client.runs``: plan, launch, watch and manage training runs."""
 
@@ -678,6 +682,8 @@ class Runs(_Resource):
         run = Run.from_api(self._wire.create_run(body, idempotency_key=idempotency_key), self._client)
         for message in run.warnings:
             warnings.warn(message, stacklevel=2)
+        # wait()'s progress line doesn't print these a second time.
+        _WARNED[run.id] = frozenset(run.warnings)
         return run
 
     def get(self, run_id: str) -> Run:
@@ -988,6 +994,8 @@ class Runs(_Resource):
                     on_status(current)
 
         reporter = _progress.create(progress)
+        if reporter is not None:
+            reporter.shown.update(_WARNED.pop(run_id, ()))
         if on_event is not None or on_metric is not None or reporter is not None:
             try:
                 if reporter is not None or on_status is not None:

@@ -283,7 +283,7 @@ fn queue_position_and_reasons() {
     // Next in line: who is online again.
     capped.queue_message = None;
     m.apply_run(capped);
-    assert_eq!(label(&m), "Waiting for a GPU (0 workers online)");
+    assert_eq!(label(&m), "Queued");
 }
 
 #[test]
@@ -294,14 +294,14 @@ fn waiting_for_a_gpu() {
     m.apply_run(queued.clone());
     assert_eq!(
         label(&m),
-        "Waiting for a GPU (0 workers online)",
+        "Queued",
         "the run's own phase and queue details, before any event"
     );
     let mut bare = Model::new(no_phase(&queued), 0);
     bare.apply_run(no_phase(&queued));
-    assert_eq!(label(&bare), "Waiting for a GPU", "servers without phases");
+    assert_eq!(label(&bare), "Queued", "servers without phases");
     feed(&mut m, &fx, events(&fx).remove(0));
-    assert_eq!(label(&m), "Waiting for a GPU (0 workers online)");
+    assert_eq!(label(&m), "Queued");
     // As the server reports it when no worker claims the run within 45 s.
     let waiting = json!({"type": "phase", "seq": 2, "phase": "waiting_for_compute",
         "step": 0, "workers_online": 0, "autoscaling": false, "gpu": null});
@@ -311,15 +311,15 @@ fn waiting_for_a_gpu() {
     snapshot("waiting", &b);
     let t = text(&b);
     assert!(
-        t.contains("Waiting for a GPU (0 workers online)  for 2m10s"),
+        t.contains("Waiting for a worker (none online)  for 2m10s"),
         "one clock across queued and waiting_for_compute:\n{}",
         t
     );
     // The empty chart says why there's no step yet, never just "soon".
-    assert!(t.contains("Waiting for a GPU (0 workers online)…"), "{}", t);
+    assert!(t.contains("Waiting for a worker (none online)…"), "{}", t);
     assert_eq!(
         log_texts(&m),
-        ["Run created", "Waiting for a GPU (0 workers online)"],
+        ["Run created", "Waiting for a worker (none online)"],
         "logged once, not per poll"
     );
 
@@ -327,11 +327,11 @@ fn waiting_for_a_gpu() {
     let busy = json!({"type": "phase", "seq": 3, "phase": "waiting_for_compute",
         "step": 0, "workers_online": 2, "autoscaling": false, "gpu": null});
     feed(&mut m, &fx, event(&fx, 140, 1, busy));
-    assert_eq!(label(&m), "Waiting for a GPU (2 workers online, all busy)");
+    assert_eq!(label(&m), "Waiting for a worker (2 online, all busy)");
     let scaling = json!({"type": "phase", "seq": 4, "phase": "waiting_for_compute",
         "step": 0, "workers_online": 0, "autoscaling": true, "gpu": null});
     feed(&mut m, &fx, event(&fx, 150, 1, scaling));
-    assert_eq!(label(&m), "Waiting for a GPU (a worker is starting)");
+    assert_eq!(label(&m), "Waiting for a worker (one is starting)");
     assert_eq!(m.log.len(), 2);
 }
 
@@ -723,7 +723,7 @@ fn stream_bookkeeping() {
 
     // A server without phases: a queued run whose first metric arrives trains.
     let mut q = Model::new(no_phase(&run_from(&fx["queued"])), 0);
-    assert_eq!(label(&q), "Waiting for a GPU");
+    assert_eq!(label(&q), "Queued");
     q.apply_run(Run {
         status: RunStatus::Running,
         ..no_phase(&run_from(&fx["queued"]))
@@ -1240,7 +1240,7 @@ fn the_empty_chart_says_what_the_run_is_doing() {
     feed(&mut m, &fx, event(&fx, 45, 1, busy));
     assert_eq!(
         empty_chart_message(&m),
-        "Waiting for a GPU (2 workers online, all busy)…"
+        "Waiting for a worker (2 online, all busy)…"
     );
     feed(
         &mut m,

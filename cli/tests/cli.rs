@@ -814,8 +814,15 @@ fn api_errors_map_to_exit_codes_and_json_envelopes() {
     snapshot("error_not_found", &normalize(&env, &srv.url, &sb.dir));
     let r = run(sb.grad(u), &["artifacts", "inspect", "missing@latest"]);
     expect(&r, 4);
-    assert!(r.stderr.starts_with("error: GET "), "{}", r.stderr);
-    assert!(r.stderr.contains("req_mock"));
+    // The server's words first; the status, code, request and request id under them.
+    assert!(
+        r.stderr.starts_with(
+            "error: Artifact 'missing@latest' not found.\n  (404 artifact_not_found from GET "
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("request_id req_mock"));
     // Runs resolve by id, then by name.
     let r = run(sb.grad(u), &["--json", "runs", "inspect", "missing"]);
     expect(&r, 4);
@@ -1119,7 +1126,7 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
     for needle in [
         "✓ Dataset support-prod: 4,820 records",
         "✓ Split: 4,097 train / 723 eval (by session)",
-        "Waiting for a GPU (0 workers online)",
+        "Waiting for a worker (none online)",
         "▸ Starting on NVIDIA H100 80GB HBM3 (80 GB)",
         "▸ Training",
         "⚠ attempt 1 interrupted at step 1: the GPU was reclaimed; resuming from step 1 on a new worker",
@@ -1172,7 +1179,7 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
         ],
     );
     expect(&r, 0);
-    assert!(r.stdout.contains("grad runs logs run_1 --follow"));
+    assert!(r.stdout.contains("Follow it: grad runs watch run_1"));
 }
 
 fn failing_server(status: &'static str) -> MockServer {
@@ -1285,7 +1292,7 @@ fn runs_commands() {
     expect(&r, 0);
     for needle in [
         "SEQ  ATTEMPT  TYPE  DETAIL",
-        "queued: Waiting for a GPU (2 workers online, all busy)",
+        "1  1  phase  queued",
         "starting on NVIDIA L4 (22 GB)",
         "training at step 0",
         "step 2 loss 0.5 eval 0.4",

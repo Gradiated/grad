@@ -296,7 +296,7 @@ pub async fn train(ctx: &Ctx, a: TrainArgs) -> CliResult {
             "✓ Started run {} ({} on {}, {} steps)",
             run.id, run.recipe_kind, run.resolved_config.model, run.total_steps
         ));
-        out.line(format!("  Follow it: grad runs logs {} --follow", run.id));
+        out.line(format!("  Follow it: grad runs watch {}", run.id));
         return out.done(&run);
     }
     let finished = follow_run(ctx, &c, &run, Duration::from_secs(a.timeout)).await?;
@@ -324,21 +324,21 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// "Waiting for a GPU (0 workers online)" or, with scale-from-zero, "Starting a GPU worker (autoscaling)".
+/// "Queued", "Waiting for a worker (none online)" or, with scale-from-zero, "Starting a worker (autoscaling)".
 pub(crate) fn waiting_line(p: &PhaseEvent, waited: Option<i64>) -> String {
     // The server's reason (queue position, a workspace cap, a GPU nobody has) first.
     let what = if let Some(message) = &p.message {
         message.clone()
     } else if p.autoscaling == Some(true) && p.workers_online.unwrap_or(0) == 0 {
-        "Starting a GPU worker (autoscaling)…".to_string()
+        "Starting a worker (autoscaling)…".to_string()
+    } else if matches!(p.phase, RunPhase::Queued) {
+        // An idle worker claims within a poll; the server says waiting_for_compute after ~30 s.
+        "Queued".to_string()
     } else {
-        let n = p.workers_online.unwrap_or(0);
-        format!(
-            "Waiting for a GPU ({} worker{} online{})",
-            n,
-            if n == 1 { "" } else { "s" },
-            if n > 0 { ", all busy" } else { "" }
-        )
+        match p.workers_online.unwrap_or(0) {
+            0 => "Waiting for a worker (none online)".to_string(),
+            n => format!("Waiting for a worker ({} online, all busy)", n),
+        }
     };
     match waited {
         Some(s) => format!("  {} — {}", what, fmt_wait(s)),
@@ -559,7 +559,7 @@ async fn follow_lines(
 ) -> Result<Run, SdkError> {
     let out = &ctx.out;
     on_interrupt(format!(
-        "stopped following; run {} keeps going on the server (`grad runs logs {} --follow` to watch, `grad runs cancel {}` to stop)",
+        "stopped following; run {} keeps going on the server (`grad runs watch {}` to follow it, `grad runs cancel {}` to stop)",
         run.id, run.id, run.id
     ));
     let split = &run.resolved_config.split;
@@ -698,55 +698,118 @@ async fn report_finished(ctx: &Ctx, c: &Client, run: &Run) -> Option<Artifact> {
     artifact
 }
 
+/// Bookkeeping keys the report's "selected" line sums up.
+const SELECTION_KEYS: [&str; 5] = [
+    "metric_name",
+    "metric_mode",
+    "selected_step",
+    "best_step",
+    "final_step",
+];
+
+fn report_value(v: &Value) -> Option<String> {
+    match v {
+        Value::Number(n) if n.is_i64() || n.is_u64() => {
+            Some(thousands(n.as_f64().unwrap_or(0.0) as i64))
+        }
+        Value::Number(n) => Some(num(n.as_f64().unwrap_or(0.0))),
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(b) => Some(if *b { "yes" } else { "no" }.to_string()),
+        _ => None,
+    }
+}
+
 fn print_report(out: &Out, report: &EvalReport) {
     let Ok(Value::Object(m)) = serde_json::to_value(report) else {
         return;
     };
+    let label = |k: &str| k.replace('_', " ");
     let mut scalars: Vec<(String, String)> = Vec::new();
+    let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     for (k, v) in &m {
         match v {
-            Value::Number(n) => {
-                let f = n.as_f64().unwrap_or(0.0);
-                let shown = if n.is_i64() || n.is_u64() {
-                    thousands(f as i64)
-                } else {
-                    num(f)
-                };
-                scalars.push((k.replace('_', " "), shown));
-            }
-            Value::String(s) => scalars.push((k.replace('_', " "), s.clone())),
-            Value::Bool(b) => scalars.push((k.replace('_', " "), b.to_string())),
             Value::Array(a) if k == "warnings" => warnings.extend(a.iter().map(|w| {
                 w.as_str()
                     .map(str::to_string)
                     .unwrap_or_else(|| w.to_string())
             })),
             Value::Object(inner) => {
-                for (ik, iv) in inner {
-                    if let Some(f) = iv.as_f64() {
-                        scalars.push((
-                            format!("{} {}", k.replace('_', " "), ik.replace('_', " ")),
-                            num(f),
-                        ));
-                    }
+                let rows: Vec<_> = inner
+                    .iter()
+                    .filter_map(|(ik, iv)| Some((label(ik), report_value(iv)?)))
+                    .collect();
+                if !rows.is_empty() {
+                    groups.push((label(k), rows));
                 }
             }
-            _ => {}
+            _ if SELECTION_KEYS.contains(&k.as_str()) => {}
+            _ => {
+                if let Some(shown) = report_value(v) {
+                    scalars.push((label(k), shown));
+                }
+            }
         }
     }
-    if scalars.is_empty() && warnings.is_empty() {
+    // "step 4 (best eval_loss, lower is better; final step 4)"
+    let metric = m
+        .get("metric_name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty());
+    let selected = metric
+        .and(m.get("selected_step"))
+        .and_then(report_value)
+        .map(|step| {
+            let better = match m.get("metric_mode").and_then(Value::as_str) {
+                Some("min") => ", lower is better",
+                Some("max") => ", higher is better",
+                _ => "",
+            };
+            let fin = m.get("final_step").and_then(report_value);
+            let mut why = metric
+                .map(|n| format!("best {}{}", n, better))
+                .unwrap_or_default();
+            if let Some(f) = fin.filter(|f| *f != step) {
+                why = if why.is_empty() {
+                    format!("final step {}", f)
+                } else {
+                    format!("{}; final step {}", why, f)
+                };
+            }
+            if why.is_empty() {
+                format!("step {}", step)
+            } else {
+                format!("step {} ({})", step, why)
+            }
+        });
+    if selected.is_some() {
+        scalars.insert(0, ("selected".to_string(), selected.unwrap_or_default()));
+    }
+    if scalars.is_empty() && groups.is_empty() && warnings.is_empty() {
         return;
     }
-    out.line("");
-    out.line("  Eval report:");
+    // Values line up: group rows are indented two more than the top-level ones.
     let w = scalars
         .iter()
         .map(|(k, _)| k.chars().count())
+        .chain(
+            groups
+                .iter()
+                .flat_map(|(_, rows)| rows.iter().map(|(k, _)| k.chars().count() + 2)),
+        )
         .max()
         .unwrap_or(0);
+    let gw = w.saturating_sub(2);
+    out.line("");
+    out.line("  Eval report:");
     for (k, v) in &scalars {
-        out.line(format!("    {:<w$} : {}", k, v, w = w));
+        out.line(format!("    {:<w$}  {}", k, v, w = w));
+    }
+    for (name, rows) in &groups {
+        out.line(format!("    {}:", name));
+        for (k, v) in rows {
+            out.line(format!("      {:<w$}  {}", k, v, w = gw));
+        }
     }
     for warning in &warnings {
         out.line(format!("    ! {}", warning));
@@ -801,6 +864,7 @@ const EVENT_HEADERS: [&str; 4] = ["seq", "attempt", "type", "detail"];
 fn event_row(ev: &RunEvent) -> Vec<String> {
     let detail = match ev {
         RunEvent::Phase(p) => match p.phase {
+            RunPhase::Queued if p.message.is_none() => "queued".to_string(),
             RunPhase::Queued | RunPhase::WaitingForCompute => {
                 format!(
                     "{}: {}",
@@ -1182,18 +1246,18 @@ mod tests {
         };
         assert_eq!(
             waiting_line(&p, Some(130)),
-            "  Waiting for a GPU (0 workers online) — 2m 10s"
+            "  Waiting for a worker (none online) — 2m 10s"
         );
         p.workers_online = Some(1);
         assert_eq!(
             waiting_line(&p, None),
-            "  Waiting for a GPU (1 worker online, all busy)"
+            "  Waiting for a worker (1 online, all busy)"
         );
         p.workers_online = Some(0);
         p.autoscaling = Some(true);
         assert_eq!(
             waiting_line(&p, Some(5)),
-            "  Starting a GPU worker (autoscaling)… — 5s"
+            "  Starting a worker (autoscaling)… — 5s"
         );
         // The server's reason wins: queue position, a workspace cap, a GPU nobody has.
         p.message = Some("Queued: workspace concurrency limit (8 running)".into());
