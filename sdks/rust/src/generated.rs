@@ -1116,86 +1116,6 @@ pub mod models {
         }
     }
 
-    /// Generated from the OpenAPI schema `BenchmarkSpec`.
-    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-    pub struct BenchmarkSpec {
-        pub name: BenchmarkSpecName,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub limit: Option<i64>,
-    }
-
-    /// Allowed values of `BenchmarkSpecName` (unknown values from newer servers are kept in `Other`).
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub enum BenchmarkSpecName {
-        /// `"ifeval"`
-        Ifeval,
-        /// `"gsm8k"`
-        Gsm8k,
-        /// `"mmlu-pro"`
-        MmluPro,
-        /// `"gpqa-diamond"`
-        GpqaDiamond,
-        /// `"humaneval"`
-        Humaneval,
-        /// `"livecodebench"`
-        Livecodebench,
-        /// A value this SDK version does not know.
-        Other(String),
-    }
-
-    impl Default for BenchmarkSpecName {
-        fn default() -> Self {
-            Self::Ifeval
-        }
-    }
-
-    impl BenchmarkSpecName {
-        pub fn as_str(&self) -> &str {
-            match self {
-                Self::Ifeval => "ifeval",
-                Self::Gsm8k => "gsm8k",
-                Self::MmluPro => "mmlu-pro",
-                Self::GpqaDiamond => "gpqa-diamond",
-                Self::Humaneval => "humaneval",
-                Self::Livecodebench => "livecodebench",
-                Self::Other(s) => s.as_str(),
-            }
-        }
-    }
-
-    impl From<&str> for BenchmarkSpecName {
-        fn from(s: &str) -> Self {
-            match s {
-                "ifeval" => Self::Ifeval,
-                "gsm8k" => Self::Gsm8k,
-                "mmlu-pro" => Self::MmluPro,
-                "gpqa-diamond" => Self::GpqaDiamond,
-                "humaneval" => Self::Humaneval,
-                "livecodebench" => Self::Livecodebench,
-                other => Self::Other(other.to_string()),
-            }
-        }
-    }
-
-    impl std::fmt::Display for BenchmarkSpecName {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.as_str())
-        }
-    }
-
-    impl Serialize for BenchmarkSpecName {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_str(self.as_str())
-        }
-    }
-
-    impl<'de> Deserialize<'de> for BenchmarkSpecName {
-        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let s = String::deserialize(deserializer)?;
-            Ok(Self::from(s.as_str()))
-        }
-    }
-
     /// Generated from the OpenAPI schema `ChatMessage`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct ChatMessage {
@@ -3318,16 +3238,9 @@ pub mod models {
         pub models: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub baseline: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub dataset: Option<String>,
+        pub dataset: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub dataset_version: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub env_name: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub tasks: Option<Vec<BTreeMap<String, Value>>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub benchmarks: Option<Vec<BenchmarkSpec>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub rubric: Option<Vec<EvalRubricItem>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

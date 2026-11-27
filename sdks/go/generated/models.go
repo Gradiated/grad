@@ -100,25 +100,6 @@ const (
 	BaseArtifactFormatPeftLora BaseArtifactFormat = "peft_lora"
 )
 
-// BenchmarkSpec is generated from the OpenAPI schema.
-type BenchmarkSpec struct {
-	Name  BenchmarkSpecName `json:"name"`
-	Limit *int              `json:"limit,omitempty"`
-}
-
-// BenchmarkSpecName is an enumeration of allowed values.
-type BenchmarkSpecName string
-
-// Values of BenchmarkSpecName.
-const (
-	BenchmarkSpecNameIfeval        BenchmarkSpecName = "ifeval"
-	BenchmarkSpecNameGsm8k         BenchmarkSpecName = "gsm8k"
-	BenchmarkSpecNameMmluPro       BenchmarkSpecName = "mmlu-pro"
-	BenchmarkSpecNameGpqaDiamond   BenchmarkSpecName = "gpqa-diamond"
-	BenchmarkSpecNameHumaneval     BenchmarkSpecName = "humaneval"
-	BenchmarkSpecNameLivecodebench BenchmarkSpecName = "livecodebench"
-)
-
 // ChatMessage is generated from the OpenAPI schema.
 type ChatMessage struct {
 	Role       ChatMessageRole  `json:"role"`
@@ -1216,11 +1197,8 @@ type PlanEvalRequest struct {
 	Name           *string          `json:"name,omitempty"`
 	Models         []string         `json:"models"`
 	Baseline       *string          `json:"baseline,omitempty"`
-	Dataset        *string          `json:"dataset,omitempty"`
+	Dataset        string           `json:"dataset"`
 	DatasetVersion *int             `json:"dataset_version,omitempty"`
-	EnvName        *string          `json:"env_name,omitempty"`
-	Tasks          []map[string]any `json:"tasks,omitempty"`
-	Benchmarks     []BenchmarkSpec  `json:"benchmarks,omitempty"`
 	Rubric         []EvalRubricItem `json:"rubric,omitempty"`
 	Samples        *int             `json:"samples,omitempty"`
 	Temperature    *float64         `json:"temperature,omitempty"`

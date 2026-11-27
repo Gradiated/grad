@@ -136,6 +136,17 @@ describe("continued training from an artifact", () => {
     expect(router.body).toMatchObject({
       code: "continued_training_unsupported",
     });
+
+    // Chained runs were cut: depends_on is an unknown key, never silently dropped.
+    const chained = await t.json("/v1/runs/plan", {
+      body: {
+        dataset: "prefs",
+        name: "c",
+        recipe: { kind: "dpo" },
+        depends_on: "run_1",
+      },
+    });
+    expect(chained.status).toBe(422);
   });
 
   describe("resolveContinuation", () => {

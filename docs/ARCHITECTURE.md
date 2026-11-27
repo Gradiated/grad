@@ -22,4 +22,4 @@
 - **6 v0 Recipes:** `sft`, `dpo`, `router`, `decision`, `cartridge`, `embedding` (forward-compatible typed contracts retained for Wave 2 `distill`, `reward`, `grpo`).
 - **Parameter-Efficient LLMs Only:** `LoRA`, `PrefixKV`, `FrozenHead` (no `adapters.Full()` for LLMs; `EmbeddingRecipe` trains the 33M `baai/bge-small-en-v1.5` encoder internally).
 - **Single-Command Deploy:** `deploy()` / `grad deploy` with 1-command rollback (`previous_artifact_id`).
-- **Local/CI Environments First:** Users serve local environments outbound via `grad env serve` with zero inbound ports.
+- **Environments are post-v0:** `grad env serve` (outbound environment workers) and environment evals return in Wave 2, rebuilt on the Postgres job queue.

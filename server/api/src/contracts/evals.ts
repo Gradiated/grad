@@ -8,20 +8,6 @@ import {
 } from "./common.js";
 import { DatasetRecordSchema } from "./datasets.js";
 
-export const BenchmarkSpecSchema = z
-  .object({
-    name: z.enum([
-      "ifeval",
-      "gsm8k",
-      "mmlu-pro",
-      "gpqa-diamond",
-      "humaneval",
-      "livecodebench",
-    ]),
-    limit: z.number().int().min(1).max(10_000).default(200),
-  })
-  .openapi("BenchmarkSpec");
-
 export const VALIDATOR_NAMES = ["json", "non_empty", "exact_match"] as const;
 
 export const BINARY_RUBRIC_KINDS = ["regex", "validator"] as const;
@@ -95,11 +81,8 @@ export const PlanEvalRequestSchema = z
     name: SlugSchema.default("eval-run"),
     models: z.array(z.string().min(1).max(200)).min(1).max(16),
     baseline: z.string().min(1).max(200).optional(),
-    dataset: SlugSchema.optional(),
+    dataset: SlugSchema,
     dataset_version: z.number().int().min(1).optional(),
-    env_name: SlugSchema.optional(),
-    tasks: z.array(z.record(z.string(), z.unknown())).optional(),
-    benchmarks: z.array(BenchmarkSpecSchema).min(1).optional(),
     rubric: z
       .array(EvalRubricItemSchema)
       .min(1)
@@ -125,6 +108,7 @@ export const PlanEvalRequestSchema = z
         "Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget).",
     }),
   })
+  .strict()
   .openapi("PlanEvalRequest");
 
 export type PlanEvalRequest = z.infer<typeof PlanEvalRequestSchema>;

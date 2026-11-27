@@ -57,11 +57,6 @@ export interface BaseArtifact {
   sha256: string;
 }
 
-export interface BenchmarkSpec {
-  name: "ifeval" | "gsm8k" | "mmlu-pro" | "gpqa-diamond" | "humaneval" | "livecodebench";
-  limit?: number | undefined;
-}
-
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: (string | Array<Record<string, unknown>>) | null | undefined;
@@ -531,11 +526,8 @@ export interface PlanEvalRequest {
   name?: string | undefined;
   models: Array<string>;
   baseline?: string | undefined;
-  dataset?: string | undefined;
+  dataset: string;
   datasetVersion?: number | undefined;
-  envName?: string | undefined;
-  tasks?: Array<Record<string, unknown>> | undefined;
-  benchmarks?: Array<BenchmarkSpec> | undefined;
   rubric?: Array<EvalRubricItem> | undefined;
   samples?: number | undefined;
   temperature?: number | undefined;

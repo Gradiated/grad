@@ -452,39 +452,4 @@ describe("grad-server HTTP API", () => {
     expect(res.status).toBe(404);
     await scoped.close();
   });
-
-  it("serves outbound env workers with a bounded queue", async () => {
-    const register = await t.json("/v1/env-workers/register", {
-      body: { name: "sandbox", worker_id: "w1" },
-    });
-    expect(register.status).toBe(200);
-    const dispatched = await t.json<{ id: string; active_workers: number }>(
-      "/v1/env-workers/tasks",
-      {
-        body: { env_name: "sandbox", task: { prompt: "x" }, model_id: "m" },
-      },
-    );
-    expect(dispatched.status).toBe(202);
-    expect(dispatched.body.active_workers).toBe(1);
-    const claim = await t.json<{ task: { id: string } | null }>(
-      "/v1/env-workers/sandbox/claim",
-      { body: { worker_id: "w1", wait_ms: 0 } },
-    );
-    expect(claim.body.task?.id).toBe(dispatched.body.id);
-    const complete = await t.json(
-      `/v1/env-workers/tasks/${dispatched.body.id}/complete`,
-      { body: { worker_id: "w1", score: 1, scores: { ok: 1 } } },
-    );
-    expect(complete.status).toBe(200);
-    const wrong = await t.json(
-      `/v1/env-workers/tasks/${dispatched.body.id}/complete`,
-      { body: { worker_id: "w2", scores: {} } },
-    );
-    expect(wrong.status).toBe(404);
-    const task = await t.json(`/v1/env-workers/tasks/${dispatched.body.id}`);
-    expect(task.body).toMatchObject({ status: "completed" });
-    expect((await t.json("/v1/env-workers/tasks/envtask_missing")).status).toBe(
-      404,
-    );
-  });
 });

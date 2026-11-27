@@ -58,7 +58,7 @@ const fixture = async () => generateFromSpec(await parseSpecFile(fixturePath), {
 
 test("every public operation in spec/openapi.yaml is generated for TypeScript, Go and Rust", async () => {
   const { ir, files } = await generateAllTargets(specPath);
-  assert.ok(ir.operations.length >= 56, `expected >= 56 operations, got ${ir.operations.length}`);
+  assert.ok(ir.operations.length >= 50, `expected >= 50 operations, got ${ir.operations.length}`);
   const ts = files["sdks/typescript/src/generated/client.ts"];
   const go = files["sdks/go/generated/client.go"];
   const rs = files["sdks/rust/src/generated.rs"];
@@ -84,21 +84,17 @@ test("every public operation in spec/openapi.yaml is generated for TypeScript, G
   assert.ok(rs.includes("pub async fn list_run_metrics_stream("));
 });
 
-test("every public operation is generated for Python, typed and natively async; env-worker ops go to the internal client", async () => {
+test("every public operation is generated for Python, typed and natively async; internal ops are left out", async () => {
   const { ir, files } = await generateAllTargets(specPath);
   const py = files["sdks/python/grad/_generated/client.py"];
-  const [publicPart, internalPart] = py.split("class GeneratedInternalApiClient:");
-  assert.ok(internalPart, "Python internal client missing");
   for (const op of ir.operations) {
     const name = toSnake(op.id);
-    const where = !op.internal ? publicPart : op.tags.includes("Environments") ? internalPart : null;
-    if (where === null) {
-      assert.ok(!py.includes(`def ${name}(`), `Python must not generate trainer op ${op.id}`);
+    if (op.internal) {
+      assert.ok(!py.includes(`def ${name}(`), `Python must not generate internal op ${op.id}`);
       continue;
     }
-    assert.ok(where.includes(`    def ${name}(`), `Python sync missing ${op.id}`);
-    assert.ok(where.includes(`    async def ${name}(`), `Python async missing ${op.id}`);
-    if (op.internal) assert.ok(!publicPart.includes(`def ${name}(`), `${op.id} leaked into the public client`);
+    assert.ok(py.includes(`    def ${name}(`), `Python sync missing ${op.id}`);
+    assert.ok(py.includes(`    async def ${name}(`), `Python async missing ${op.id}`);
   }
   assert.ok(py.includes('def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:'));
   assert.ok(py.includes('headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}'));
@@ -126,8 +122,8 @@ test("x-internal operations and the schemas only they use are left out of the pu
 
   const spec = await generateAllTargets(specPath);
   const internal = spec.ir.operations.filter((o) => o.internal).map((o) => o.id).sort();
-  assert.deepEqual(internal.filter((id) => !/TrainerJob|Trainer|ImportRecords|EnvTask|EnvWorker/.test(id)), []);
-  assert.ok(internal.length >= 14, `trainer-job and env-worker ops are x-internal (${internal.length})`);
+  assert.deepEqual(internal.filter((id) => !/TrainerJob|Trainer|ImportRecords/.test(id)), []);
+  assert.ok(internal.length >= 8, `trainer-job ops are x-internal (${internal.length})`);
   assert.ok(!spec.files["sdks/typescript/src/generated/models.ts"].includes("export interface ClaimJobRequest"));
 });
 

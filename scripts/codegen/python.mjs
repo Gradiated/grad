@@ -217,9 +217,8 @@ const pyClient = (name, doc, ops, spec, { isAsync, inlineTypes }) => {
   return `class ${name}:\n    """${doc}"""\n\n    def __init__(self, transport: ${transport}) -> None:\n        self._t = transport\n\n${methods.join("\n\n")}`;
 };
 
-export const generatePython = (spec, allOps, { internalTags = [] } = {}) => {
+export const generatePython = (spec, allOps) => {
   const ops = allOps.filter((op) => !op.internal);
-  const internalOps = allOps.filter((op) => op.internal && op.tags.some((t) => internalTags.includes(t)));
   const schemas = spec.components?.schemas ?? {};
   const names = Object.keys(schemas).sort();
   const blocks = [];
@@ -250,15 +249,7 @@ export const generatePython = (spec, allOps, { internalTags = [] } = {}) => {
       inlineTypes: asyncInline,
     }),
   ];
-  if (internalOps.length > 0) {
-    const doc = "the SDK's own worker protocols (x-internal operations); not a public API and may change without notice.";
-    clients.push(
-      pyClient("GeneratedInternalApiClient", `Blocking client for ${doc}`, internalOps, spec, { isAsync: false, inlineTypes: syncInline }),
-      pyClient("AsyncGeneratedInternalApiClient", `asyncio client for ${doc}`, internalOps, spec, { isAsync: true, inlineTypes: asyncInline }),
-    );
-  }
   const exported = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"];
-  if (internalOps.length > 0) exported.push("AsyncGeneratedInternalApiClient", "GeneratedInternalApiClient");
   const maxima = pyMaxima(spec, ops);
   exported.push(...maxima.map((line) => line.split(" ")[0]));
   exported.sort();

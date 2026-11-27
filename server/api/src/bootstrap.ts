@@ -16,7 +16,6 @@ import {
 import { createModelCatalog } from "./catalog.js";
 import { systemClock } from "./clock.js";
 import type { AppDependencies } from "./deps.js";
-import { EnvWorkerHub } from "./env-hub.js";
 import type { ServerEnvironment } from "./environment.js";
 import { createOpenAICompatibleClient } from "./services/evals/inference.js";
 import { createRegexEvaluator } from "./services/evals/regex.js";
@@ -120,7 +119,6 @@ export const buildDependencies = async (
         : createDisabledServingAdapter(),
     catalog: createModelCatalog(env.GRAD_EXTRA_MODELS_JSON),
     clock,
-    envHub: new EnvWorkerHub(),
     inference: buildInference(env),
     regex: createRegexEvaluator(),
     settings: {

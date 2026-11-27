@@ -219,10 +219,19 @@ describe("evals HTTP API without inference", () => {
           "application/problem+json",
         );
       }
+      // Wave 2 sources (benchmarks, environments) are unknown keys, not ignored.
       const benchmarks = await t.json<Json>("/v1/evals/plan", {
-        body: { models: ["qwen/qwen3-8b"], benchmarks: [{ name: "gsm8k" }] },
+        body: {
+          models: ["qwen/qwen3-8b"],
+          dataset: "qa",
+          benchmarks: [{ name: "gsm8k" }],
+        },
       });
-      expect(benchmarks.status).toBe(501);
+      expect(benchmarks.status).toBe(422);
+      const noDataset = await t.json<Json>("/v1/evals/plan", {
+        body: { models: ["qwen/qwen3-8b"] },
+      });
+      expect(noDataset.status).toBe(422);
     } finally {
       await t.close();
     }

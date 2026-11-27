@@ -13,7 +13,6 @@ import {
 import { buildOpenApiDocument, createApp } from "../src/app.js";
 import { createModelCatalog } from "../src/catalog.js";
 import { systemClock } from "../src/clock.js";
-import { EnvWorkerHub } from "../src/env-hub.js";
 import { createRegexEvaluator } from "../src/services/evals/regex.js";
 import { LocalObjectStore } from "../src/storage/local.js";
 import { createBlobSigner } from "../src/storage/signer.js";
@@ -37,7 +36,6 @@ const run = async () => {
     serving: createDisabledServingAdapter(),
     catalog: createModelCatalog(),
     clock: systemClock,
-    envHub: new EnvWorkerHub(),
     inference: null,
     regex,
     settings: { allowWave2Recipes: false, maxAttempts: 3, evalConcurrency: 1 },

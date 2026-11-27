@@ -41,29 +41,6 @@ export const resolvePassThreshold = (
     : 0.5;
 };
 
-const assertSource = (request: PlanEvalRequest): string => {
-  if (request.env_name !== undefined || request.tasks !== undefined) {
-    throw unavailable(
-      "env_evals_unavailable",
-      "Environment evals (env_name/tasks) arrive with environments in Wave 2; evaluate on a dataset instead.",
-    );
-  }
-  if (request.benchmarks !== undefined) {
-    throw unavailable(
-      "benchmarks_unavailable",
-      "Built-in benchmarks are not bundled in v0; import the benchmark as a dataset (datasets.from_hf) and evaluate on it.",
-    );
-  }
-  if (request.dataset === undefined) {
-    throw invalid(
-      "eval_source_required",
-      "Eval requires a 'dataset' task source.",
-    );
-  }
-
-  return request.dataset;
-};
-
 /** Resolves catalog ids and workspace artifact refs to inference model names and prices. */
 export const resolveModelTargets = async (
   deps: Pick<AppDependencies, "catalog" | "store">,
@@ -163,7 +140,7 @@ export const planEvalRequest = async (
     throw unavailable("inference_unavailable", INFERENCE_UNAVAILABLE_DETAIL);
   }
 
-  const datasetName = assertSource(request);
+  const datasetName = request.dataset;
   const names = request.rubric.map((r) => r.name);
   if (new Set(names).size !== names.length) {
     throw invalid("duplicate_scorer", "Rubric item names must be unique.");

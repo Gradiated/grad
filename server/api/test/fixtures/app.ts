@@ -12,7 +12,6 @@ import {
 import { createGradApp } from "../../src/app.js";
 import { createModelCatalog } from "../../src/catalog.js";
 import type { AppDependencies } from "../../src/deps.js";
-import { EnvWorkerHub } from "../../src/env-hub.js";
 import { createRegexEvaluator } from "../../src/services/evals/regex.js";
 import { LocalObjectStore } from "../../src/storage/local.js";
 import { createBlobSigner } from "../../src/storage/signer.js";
@@ -95,7 +94,6 @@ export const makeTestApp = async (
     serving: createDisabledServingAdapter(),
     catalog: createModelCatalog(TINY_MODELS_JSON),
     clock,
-    envHub: new EnvWorkerHub(),
     inference: null,
     regex: createRegexEvaluator(),
     settings: { allowWave2Recipes: false, maxAttempts: 3, evalConcurrency: 4 },

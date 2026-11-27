@@ -192,6 +192,7 @@ export const PlanRunRequestSchema = z
     split: SplitSpecSchema.optional(),
     max_cost_usd: z.number().positive().optional(),
   })
+  .strict()
   .openapi("PlanRunRequest");
 
 export type PlanRunRequest = z.infer<typeof PlanRunRequestSchema>;

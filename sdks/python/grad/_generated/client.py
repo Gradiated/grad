@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .._http import AsyncResponse, Response
     from .._transport import AsyncTransport, SyncTransport
 
-__all__ = ["AsyncGeneratedApiClient", "AsyncGeneratedInternalApiClient", "GeneratedApiClient", "GeneratedInternalApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -66,14 +66,6 @@ BaseArtifact = TypedDict(
         "recipe_kind": "RecipeKind",
         "format": "Literal['peft_lora']",
         "sha256": "str",
-    },
-)
-
-BenchmarkSpec = TypedDict(
-    "BenchmarkSpec",
-    {
-        "name": "Literal['ifeval', 'gsm8k', 'mmlu-pro', 'gpqa-diamond', 'humaneval', 'livecodebench']",
-        "limit": "NotRequired[int]",
     },
 )
 
@@ -318,37 +310,6 @@ EmbedResponse = TypedDict(
         "model": "str",
         "data": "list[dict[str, Any]]",
         "usage": "dict[str, Any]",
-    },
-)
-
-EnvTaskDispatch = TypedDict(
-    "EnvTaskDispatch",
-    {
-        "env_name": "str",
-        "task": "dict[str, Any]",
-        "model_id": "str",
-        "system_prompt": "NotRequired[str]",
-        "timeout_s": "NotRequired[int]",
-    },
-)
-
-EnvTaskResult = TypedDict(
-    "EnvTaskResult",
-    {
-        "worker_id": "str",
-        "score": "NotRequired[float | None]",
-        "scores": "NotRequired[dict[str, float]]",
-        "trajectory": "NotRequired[dict[str, Any]]",
-        "error": "NotRequired[str]",
-    },
-)
-
-EnvWorkerRegister = TypedDict(
-    "EnvWorkerRegister",
-    {
-        "name": "str",
-        "worker_id": "str",
-        "concurrency": "NotRequired[int]",
     },
 )
 
@@ -623,11 +584,8 @@ PlanEvalRequest = TypedDict(
         "name": "NotRequired[str]",
         "models": "list[str]",
         "baseline": "NotRequired[str]",
-        "dataset": "NotRequired[str]",
+        "dataset": "str",
         "dataset_version": "NotRequired[int]",
-        "env_name": "NotRequired[str]",
-        "tasks": "NotRequired[list[dict[str, Any]]]",
-        "benchmarks": "NotRequired[list[BenchmarkSpec]]",
         "rubric": "NotRequired[list[EvalRubricItem]]",
         "samples": "NotRequired[int]",
         "temperature": "NotRequired[float]",
@@ -1181,38 +1139,10 @@ ListRunsResponse = TypedDict(
     },
 )
 
-ClaimEnvTaskResponse = TypedDict(
-    "ClaimEnvTaskResponse",
-    {
-        "task": "dict[str, Any] | None",
-    },
-)
-
-DispatchEnvTaskResponse = TypedDict(
-    "DispatchEnvTaskResponse",
-    {
-        "id": "str",
-        "env_name": "str",
-        "status": "str",
-        "active_workers": "int",
-    },
-)
-
-RegisterEnvWorkerResponse = TypedDict(
-    "RegisterEnvWorkerResponse",
-    {
-        "name": "str",
-        "worker_id": "str",
-        "concurrency": "int",
-        "last_heartbeat_at": "str",
-    },
-)
-
 SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ApiKey": frozenset({"created_at", "id", "name", "prefix", "revoked_at", "scopes", "workspace_id"}),
     "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
     "BaseArtifact": frozenset({"format", "id", "recipe_kind", "sha256"}),
-    "BenchmarkSpec": frozenset({"limit", "name"}),
     "ChatMessage": frozenset({"content", "name", "role", "tool_call_id", "tool_calls", "train"}),
     "Checkpoint": frozenset({"attempt", "best", "created_at", "eval_score", "expires_at", "final", "format", "id", "metadata", "run_id", "sha256", "size_bytes", "step", "workspace_id"}),
     "ClaimJobRequest": frozenset({"kinds", "lease_seconds", "recipes", "worker_id"}),
@@ -1233,9 +1163,6 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "DeploymentStatus": frozenset({"average_score", "deployment", "feedback_count"}),
     "EmbedRequest": frozenset({"input", "model"}),
     "EmbedResponse": frozenset({"data", "model", "usage"}),
-    "EnvTaskDispatch": frozenset({"env_name", "model_id", "system_prompt", "task", "timeout_s"}),
-    "EnvTaskResult": frozenset({"error", "score", "scores", "trajectory", "worker_id"}),
-    "EnvWorkerRegister": frozenset({"concurrency", "name", "worker_id"}),
     "EvalModelSummary": frozenset({"ci_high", "ci_low", "cost_per_1k_tasks_usd", "errors", "model", "overall", "pass_at_k", "tasks", "tokens_per_task", "vs_baseline"}),
     "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
     "EvalReport": frozenset({"baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_records", "trained_token_fraction", "truncated", "warnings"}),
@@ -1250,7 +1177,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "MetricPointInput": frozenset({"cost_usd", "eval_loss", "eval_metrics", "grad_norm", "loss", "lr", "step", "timestamp", "tokens", "tokens_per_sec"}),
     "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
     "OptimizerSpec": frozenset({"betas", "grad_clip", "kind", "weight_decay"}),
-    "PlanEvalRequest": frozenset({"baseline", "benchmarks", "dataset", "dataset_version", "env_name", "limit", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "tasks", "temperature"}),
+    "PlanEvalRequest": frozenset({"baseline", "dataset", "dataset_version", "limit", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
     "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
     "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "labeling", "price_per_million_tokens", "resolved_config", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
@@ -1718,57 +1645,3 @@ class AsyncGeneratedApiClient:
     async def route_request(self, body: RouteRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RouteResponse:
         """Ask a deployed model router which model to call."""
         return cast("RouteResponse", await self._t.request("POST", "/v1/route", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-
-class GeneratedInternalApiClient:
-    """Blocking client for the SDK's own worker protocols (x-internal operations); not a public API and may change without notice."""
-
-    def __init__(self, transport: SyncTransport) -> None:
-        self._t = transport
-
-    def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
-        """Long-poll for the next task assigned to a `grad env serve` worker."""
-        return cast("ClaimEnvTaskResponse", self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
-
-    def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
-        """Submit scored trajectory output for an environment task."""
-        return cast("dict[str, Any]", self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
-
-    def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
-        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
-        return cast("DispatchEnvTaskResponse", self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
-
-    def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
-        """Inspect an environment task and its result."""
-        return cast("dict[str, Any]", self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
-        """Register or heartbeat an outbound `grad env serve` worker."""
-        return cast("RegisterEnvWorkerResponse", self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))
-
-
-class AsyncGeneratedInternalApiClient:
-    """asyncio client for the SDK's own worker protocols (x-internal operations); not a public API and may change without notice."""
-
-    def __init__(self, transport: AsyncTransport) -> None:
-        self._t = transport
-
-    async def claim_env_task(self, name: str, body: Mapping[str, Any], *, timeout: float | None = None) -> ClaimEnvTaskResponse:
-        """Long-poll for the next task assigned to a `grad env serve` worker."""
-        return cast("ClaimEnvTaskResponse", await self._t.request("POST", f"/v1/env-workers/{quote_path_param(name, 'name')}/claim", json_body=body, timeout=timeout))
-
-    async def complete_env_task(self, id: str, body: EnvTaskResult | Mapping[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
-        """Submit scored trajectory output for an environment task."""
-        return cast("dict[str, Any]", await self._t.request("POST", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}/complete", json_body=body, timeout=timeout))
-
-    async def dispatch_env_task(self, body: EnvTaskDispatch | Mapping[str, Any], *, timeout: float | None = None) -> DispatchEnvTaskResponse:
-        """Dispatch an evaluation or rollout task to a connected `grad env serve` worker."""
-        return cast("DispatchEnvTaskResponse", await self._t.request("POST", "/v1/env-workers/tasks", json_body=body, timeout=timeout))
-
-    async def get_env_task(self, id: str, *, timeout: float | None = None) -> dict[str, Any]:
-        """Inspect an environment task and its result."""
-        return cast("dict[str, Any]", await self._t.request("GET", f"/v1/env-workers/tasks/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    async def register_env_worker(self, body: EnvWorkerRegister | Mapping[str, Any], *, timeout: float | None = None) -> RegisterEnvWorkerResponse:
-        """Register or heartbeat an outbound `grad env serve` worker."""
-        return cast("RegisterEnvWorkerResponse", await self._t.request("POST", "/v1/env-workers/register", json_body=body, timeout=timeout))

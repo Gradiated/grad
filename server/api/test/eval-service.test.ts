@@ -51,28 +51,13 @@ describe("eval service", () => {
     }
   });
 
-  it("rejects unsupported sources, unknown models and unservable artifacts", async () => {
+  it("rejects unknown models and unservable artifacts", async () => {
     h = await makeEvalHarness();
     const { t } = h;
     await seedDataset(t, "qa", qaRecords(2));
     await seedArtifact(t, "ref-art", { format: "reference" });
     const evals = t.services.evals;
 
-    await expect(
-      evals.plan(
-        WORKSPACE_A,
-        request({ models: ["qwen/qwen3-8b"], env_name: "env", tasks: [{}] }),
-      ),
-    ).rejects.toMatchObject({ status: 501, code: "env_evals_unavailable" });
-    await expect(
-      evals.plan(
-        WORKSPACE_A,
-        request({ models: ["qwen/qwen3-8b"], benchmarks: [{ name: "gsm8k" }] }),
-      ),
-    ).rejects.toMatchObject({ status: 501, code: "benchmarks_unavailable" });
-    await expect(
-      evals.plan(WORKSPACE_A, request({ models: ["qwen/qwen3-8b"] })),
-    ).rejects.toMatchObject({ status: 422, code: "eval_source_required" });
     await expect(
       evals.plan(
         WORKSPACE_A,

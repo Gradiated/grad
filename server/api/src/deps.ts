@@ -6,7 +6,6 @@ import type {
 } from "./adapters.js";
 import type { ModelCatalog } from "./catalog.js";
 import type { Clock } from "./clock.js";
-import type { EnvWorkerHub } from "./env-hub.js";
 import type {
   InferenceClients,
   RegexEvaluator,
@@ -36,7 +35,6 @@ export interface AppDependencies {
   serving: ServingAdapter;
   catalog: ModelCatalog;
   clock: Clock;
-  envHub: EnvWorkerHub;
   /** Null when INFERENCE_BASE_URL is not configured (evals → inference_unavailable). */
   inference: InferenceClients | null;
   regex: RegexEvaluator;

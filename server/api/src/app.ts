@@ -12,7 +12,6 @@ import { registerBlobRoutes } from "./routes/blobs.js";
 import { registerCheckpointRoutes } from "./routes/checkpoints.js";
 import { registerDatasetRoutes } from "./routes/datasets.js";
 import { registerDeploymentRoutes } from "./routes/deployments.js";
-import { registerEnvWorkerRoutes } from "./routes/env-workers.js";
 import { registerEvalRoutes } from "./routes/evals.js";
 import { problemBody, requireScope, type AppEnv } from "./routes/helpers.js";
 import { registerModelsAndKeysRoutes } from "./routes/keys.js";
@@ -219,7 +218,6 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   registerArtifactRoutes(app, deps, services);
   registerDeploymentRoutes(app, deps, services);
   registerEvalRoutes(app, deps, services);
-  registerEnvWorkerRoutes(app, deps);
 
   app.doc31("/openapi.json", {
     openapi: "3.1.0",
