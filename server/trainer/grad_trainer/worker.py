@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,6 +38,8 @@ from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
+from .errors import GPUOutOfMemoryError
+from .gpu import ALLOC_CONF, release_gpu_memory
 from .loggers import Loggers
 from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
 from .records import merge_records
@@ -52,6 +55,11 @@ _CHUNK = 1024 * 1024
 
 def _log(message: str) -> None:
     print(f"[grad-trainer] {message}", file=sys.stderr, flush=True)
+
+
+def _log_traceback(what: str) -> None:
+    """Log the exception being handled, with its traceback (call inside ``except``)."""
+    _log(f"{what}:\n{traceback.format_exc().rstrip()}")
 
 
 # --- transport -------------------------------------------------------------------
@@ -572,7 +580,7 @@ class TrainerWorker:
         except Exception as exc:
             # Never silently drop a job (it would sit leased until expiry):
             # hand it back so another attempt runs it now.
-            _log(f"job {state.job_id} attempt {state.attempt} crashed ({exc}); abandoning it")
+            _log_traceback(f"job {state.job_id} attempt {state.attempt} crashed ({exc}); abandoning it")
             try:
                 return self._complete(
                     state,
@@ -592,6 +600,8 @@ class TrainerWorker:
             self.client.traceparent = None
             self._current = None
             shutil.rmtree(job_dir, ignore_errors=True)
+            # The runner, its model and outputs are out of scope now: give the GPU back.
+            release_gpu_memory()
             if state.auth_error is not None:
                 raise state.auth_error
 
@@ -791,11 +801,12 @@ class TrainerWorker:
             checkpoint_dir: Path,
             metadata: dict[str, Any],
         ) -> None:
+            # The training loop calls this from its checkpoint thread, one checkpoint at a
+            # time and in order, while training continues.
             if state.stop_reason == "lease_lost" or state.handed_back:
                 return
             bundle = job_dir / f"checkpoint-{step}.grad.tar.gz"
             started = time.monotonic()
-            self.telemetry.set_phase("checkpointing")
             try:
                 inner = dict(metadata.get("manifest") or {})
                 fmt = metadata.get("artifact_format") or inner.get("format")
@@ -804,7 +815,6 @@ class TrainerWorker:
                     bundle,
                     manifest={**inner, "kind": "checkpoint", "step": step, "format": fmt},
                 )
-                self.telemetry.set_phase("uploading")
                 upload_started = time.monotonic()
                 upload_id = self._upload(
                     state, "checkpoint", bundle, info.sha256, info.size_bytes
@@ -831,57 +841,75 @@ class TrainerWorker:
                 _log(f"checkpoint step {step} failed: {exc}")
             finally:
                 bundle.unlink(missing_ok=True)
-                self.telemetry.set_phase("training")
                 if state.checkpoint_started is not None:
                     state.checkpoint_seconds = time.monotonic() - state.checkpoint_started
-            if state.emergency:
+            # The emergency checkpoint is the last one taken (an earlier one may still be
+            # uploading when the notice lands): hand the run back once it is in.
+            if state.emergency and step >= state.step:
                 raise _HandBack()
 
         def on_phase(phase: str, step: int) -> None:
             state.step = step
             self._phase(state, phase, step)
 
+
+        config = dict(run.get("resolved_config") or {})
+        callbacks = RunCallbacks(on_step=on_step, on_checkpoint=on_checkpoint, on_phase=on_phase)
+        budget = Budget(job.get("max_cost_usd"), float(job.get("price_per_million_tokens") or 0.0))
         work = job_dir / "work"
-        work.mkdir()
         self.telemetry.set_phase("loading_model")
-        try:
-            output = runner.run(
-                dict(run.get("resolved_config") or {}),
-                records,
-                budget=Budget(
-                    job.get("max_cost_usd"),
-                    float(job.get("price_per_million_tokens") or 0.0),
-                ),
-                callbacks=RunCallbacks(
-                    on_step=on_step, on_checkpoint=on_checkpoint, on_phase=on_phase
-                ),
-                resume=resume,
-                workdir=work,
-                base=base,
-            )
-        except (LeaseLost, WorkerAuthError):
-            raise
-        except _HandBack:
-            return self._complete(
-                state,
-                {"status": "abandoned", "reason": "compute_reclaimed", "tokens_processed": state.max_tokens},
-            )
-        except Exception as exc:
-            if state.lease_lost or state.handed_back:
-                raise LeaseLost() from exc
-            if _interruption(exc) == "oom":
-                # Another worker (maybe with more memory) retries it; counts toward max_attempts.
-                self._note(state, "warning", f"The GPU ran out of memory at step {state.step}; retrying the run")
-                return self._complete(
-                    state, {"status": "abandoned", "reason": "oom", "tokens_processed": state.max_tokens}
+        failure: str | None = None
+        retried = False
+        while True:
+            shutil.rmtree(work, ignore_errors=True)
+            work.mkdir()
+            retry_tokens: int | None = None
+            try:
+                output = runner.run(
+                    config, records, budget=budget, callbacks=callbacks, resume=resume, workdir=work, base=base
                 )
+                break
+            except (LeaseLost, WorkerAuthError):
+                raise
+            except _HandBack:
+                return self._complete(
+                    state,
+                    {"status": "abandoned", "reason": "compute_reclaimed", "tokens_processed": state.max_tokens},
+                )
+            except GPUOutOfMemoryError as exc:
+                # Every v0 worker has the same GPU, so another attempt at the same settings
+                # would run out too: retry here once at half the micro-batch, else fail.
+                _log_traceback(f"job {state.job_id} ran out of GPU memory")
+                if state.lease_lost or state.handed_back:
+                    raise LeaseLost() from exc
+                if not retried and exc.micro_batch_tokens and exc.micro_batch_tokens >= 2048 and not state.stop.is_set():
+                    retry_tokens = exc.micro_batch_tokens // 2
+                else:
+                    failure = str(exc) + (" (already retried with micro_batch_tokens halved)" if retried else "")
+            except Exception as exc:
+                _log_traceback(f"job {state.job_id} failed")
+                if state.lease_lost or state.handed_back:
+                    raise LeaseLost() from exc
+                if _interruption(exc) == "oom":
+                    # Out of memory outside a recipe's step (no micro-batch to halve): another
+                    # attempt retries it; counts toward max_attempts.
+                    self._note(state, "warning", f"The GPU ran out of memory at step {state.step}; retrying the run")
+                    return self._complete(
+                        state, {"status": "abandoned", "reason": "oom", "tokens_processed": state.max_tokens}
+                    )
+                failure = str(exc) or type(exc).__name__
+            if retry_tokens is None:
+                break
+            # The failed attempt's model and activations are unreachable now; free them first.
+            release_gpu_memory()
+            self._note(state, "warning", f"The GPU ran out of memory at step {state.step}; retrying with micro_batch_tokens={retry_tokens}")
+            _log(f"retrying job {state.job_id} once with micro_batch_tokens={retry_tokens}")
+            config = {**config, "micro_batch_tokens": retry_tokens}
+            retried = True
+        if failure is not None:
             return self._complete(
                 state,
-                {
-                    "status": "failed",
-                    "error": str(exc)[:4000] or type(exc).__name__,
-                    "tokens_processed": state.max_tokens,
-                },
+                {"status": "failed", "error": failure[:4000], "tokens_processed": state.max_tokens},
             )
 
         if state.lease_lost:
@@ -1165,6 +1193,8 @@ def _gpu_from_env(raw: str | None) -> dict[str, Any] | None | bool:
 
 
 def main() -> None:
+    # Before torch loads: grow the CUDA cache in place instead of fragmenting it (r6: 45 -> 71 GiB).
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", ALLOC_CONF)
     worker = worker_from_env(os.environ)
     _log(f"worker '{worker.worker_id}' ({','.join(worker.kinds)}) polling {worker.client.base_url}")
     sys.exit(worker.serve_forever())

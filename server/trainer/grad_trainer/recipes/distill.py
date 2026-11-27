@@ -103,7 +103,7 @@ class OnPolicyDistillTask(TorchTask):
                 "use rollout=OffPolicy() to train on its answers instead."
             )
         self.teacher_repo = teacher_resolved.repo
-        base_lm = tc.load_causal_lm(self.resolved, self.device)
+        base_lm = self.load_lm(self.resolved)
         self.max_len = tc.model_max_len(base_lm, spec)
         if teacher_resolved.model_id == self.resolved.model_id:
             self.teacher = tc.load_causal_lm(self.resolved, self.device)
@@ -224,7 +224,7 @@ class OnPolicyDistillTask(TorchTask):
 
     def _chunks(self, indices: list[int], items: list[dict[str, Any]]) -> list[list[int]]:
         lengths = [max(len(it["student"]), len(it["teacher"])) + self.max_new_tokens for it in items]
-        return tc.chunk_by_tokens(indices, lengths, self.spec.micro_batch_tokens)
+        return tc.chunk_by_tokens(indices, lengths, self.micro_batch_tokens)
 
     # -- held-out answers ---------------------------------------------------------------------
     def planned_prep_tokens(self) -> int:
@@ -290,8 +290,8 @@ class OnPolicyDistillTask(TorchTask):
             return None
         return EvalResult(score=self._held_out_kl(), metrics={})
 
-    def export(self, directory: Path) -> None:
-        tc.export_peft_adapter(self.model, directory, self.resolved)
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
+        tc.export_peft_adapter(self.model, directory, self.resolved, state_dict=params)
 
     def export_final(self, directory: Path) -> None:
         if self.merge:

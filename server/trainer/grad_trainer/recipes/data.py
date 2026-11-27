@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Sequence
 
@@ -197,3 +198,19 @@ def extract_pairs(records: list[dict[str, Any]]) -> tuple[list[Pair], int]:
             continue
         valid.append((prompt, chosen, rejected, rid))
     return valid, dropped
+
+
+def prompt_key(rec: dict[str, Any]) -> str:
+    """A router record's prompt group: its ``group_id``, else a hash of its prompt messages.
+
+    ``routerGroupKey`` in server/api/src/planner.ts computes the same key.
+    """
+    if rec.get("group_id") is not None:
+        return str(rec["group_id"])
+    canonical = json.dumps(prompt_messages(rec), sort_keys=True, ensure_ascii=False)
+    return "prompt:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+
+
+def with_prompt_groups(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Give every record a ``group_id`` (its prompt key), so a split keeps prompt groups whole."""
+    return [rec if rec.get("group_id") is not None else {**rec, "group_id": prompt_key(rec)} for rec in records]

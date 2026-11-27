@@ -25,6 +25,10 @@ DEFAULT_LR: dict[str, float] = {
     "reward": 1e-4,
 }
 DEFAULT_BATCH_SIZE = 128
+# Checkpoint at least this often (wall clock), besides every checkpoint_every_steps steps, so
+# a preemption loses a few minutes at most. Checkpoints are cheap: training pauses only for an
+# in-memory snapshot, and the upload runs in the background.
+DEFAULT_CHECKPOINT_MINUTES = 5.0
 DEFAULT_EVAL_FRACTION: dict[str, float] = {"router": 0.15, "decision": 0.15}
 DEFAULT_MODEL: dict[str, str] = {
     "router": "qwen/qwen3-0.6b",
@@ -65,6 +69,7 @@ class TrainSpec:
     warmup: float
     select: str
     checkpoint_every: int | None
+    checkpoint_every_minutes: float | None
     eval_every: int | None
     seed: int
     split: SplitSpec
@@ -74,7 +79,7 @@ class TrainSpec:
     preserve_thinking: bool
     reduction: str
     max_seq_len: int | None
-    micro_batch_tokens: int
+    micro_batch_tokens: int | None  # None: by base model size (torch_common.default_micro_batch_tokens)
     adapter: dict[str, Any]
     params: dict[str, Any]
     template_revision: str | None
@@ -121,6 +126,13 @@ def _optional_int(config: Mapping[str, Any], key: str) -> int | None:
     if value is None or value == "auto":
         return None
     return _int(value, key)
+
+
+def _optional_num(config: Mapping[str, Any], key: str, default: float | None) -> float | None:
+    value = config.get(key, default)
+    if value is None or value == 0:
+        return None
+    return _num(value, key, minimum=0)
 
 
 def _optimizer(raw: Any) -> OptimizerSpec:
@@ -212,7 +224,8 @@ def parse_train_spec(kind: str, config: Mapping[str, Any]) -> TrainSpec:
             config.get("reduction", "per_example"), "reduction", ("per_example", "per_token")
         ),
         max_seq_len=None if max_seq_len is None else _int(max_seq_len, "max_seq_len", minimum=8),
-        micro_batch_tokens=_int(config.get("micro_batch_tokens", 16384), "micro_batch_tokens", minimum=8),
+        micro_batch_tokens=_optional_int(config, "micro_batch_tokens"),
+        checkpoint_every_minutes=_optional_num(config, "checkpoint_every_minutes", DEFAULT_CHECKPOINT_MINUTES),
         adapter=adapter,
         params=params,
         template_revision=config.get("template_revision"),

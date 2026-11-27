@@ -29,6 +29,8 @@ class TorchTask:
         self.device = tc.pick_device()
         self.params: dict[str, torch.nn.Parameter] = {}
         self.optimizer: torch.optim.Optimizer | None = None
+        # Tokens per forward/backward chunk; load_lm sizes it to the trained model.
+        self.micro_batch_tokens = spec.micro_batch_tokens or 16384
 
     # -- model setup ----------------------------------------------------------------------
     def resolve(self, model_id: str, family: str) -> ResolvedModel:
@@ -38,6 +40,13 @@ class TorchTask:
                 f"Model '{model_id}' is a {resolved.family} model; the {self.kind} recipe needs a {family} model."
             )
         return resolved
+
+    def load_lm(self, resolved: ResolvedModel, *, packed: bool = False) -> Any:
+        """Load the causal LM this task trains, and size micro-batches for it."""
+        model = tc.load_causal_lm(resolved, self.device, packed=packed)
+        if self.spec.micro_batch_tokens is None:
+            self.micro_batch_tokens = tc.default_micro_batch_tokens(model)
+        return model
 
     def init_optimizer(self, module: torch.nn.Module) -> None:
         self.params = tc.trainable_named(module)
@@ -107,6 +116,25 @@ class TorchTask:
     def load_state(self, directory: Path) -> None:
         assert self.optimizer is not None
         tc.load_optimizer_state(self.optimizer, directory)
+
+    def snapshot(self) -> dict[str, Any]:
+        """In-memory copy of what training changes: trainable weights, optimizer state, RNG.
+
+        This is all a checkpoint pauses training for; ``write_snapshot`` writes the files later,
+        on the loop's checkpoint thread.
+        """
+        assert self.optimizer is not None
+        return {
+            "params": {n: p.detach().to("cpu", copy=True) for n, p in self.params.items()},
+            "optimizer": tc.to_cpu(self.optimizer.state_dict()),
+            "rng": tc.rng_state(),
+        }
+
+    def write_snapshot(self, snapshot: dict[str, Any], directory: Path, weights_dir: Path, state_dir: Path) -> None:
+        """The checkpoint files from ``snapshot``: the artifact export, weights and optimizer state."""
+        self.export(directory, params=snapshot["params"])
+        tc.save_named(snapshot["params"], weights_dir)
+        tc.save_state_dict(snapshot["optimizer"], snapshot["rng"], state_dir)
 
     def base_manifest(self, resolved: ResolvedModel) -> dict[str, Any]:
         return {

@@ -22,7 +22,6 @@ savings, ECE).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -40,16 +39,9 @@ from ..splits import two_folds
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .classifier import PooledLMTask
-from .data import prompt_messages, record_id
+from .data import prompt_key, prompt_messages, record_id, with_prompt_groups
 
 NEVER = math.inf
-
-
-def prompt_key(rec: dict[str, Any]) -> str:
-    if rec.get("group_id") is not None:
-        return str(rec["group_id"])
-    canonical = json.dumps(prompt_messages(rec), sort_keys=True, ensure_ascii=False)
-    return "prompt:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
 
 
 def _rubric(params: dict[str, Any]) -> str | None:
@@ -278,7 +270,7 @@ class RouterTask(PooledLMTask):
     def accumulate(self, indices: list[int]) -> dict[str, float]:
         lengths = [len(it["ids"]) for it in self.train]
         total = 0.0
-        for chunk in chunk_by_tokens(indices, lengths, self.spec.micro_batch_tokens):
+        for chunk in chunk_by_tokens(indices, lengths, self.micro_batch_tokens):
             loss, _ = self._batch_loss([self.train[i] for i in chunk], len(indices), grad=True)
             loss.backward()
             total += float(loss.detach())
@@ -386,8 +378,8 @@ class RouterTask(PooledLMTask):
             "head_file": self.head_file,
         }
 
-    def export(self, directory: Path) -> None:
-        self.export_backbone(directory)
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
+        self.export_backbone(directory, params)
         (directory / "router_config.json").write_text(json.dumps(self.router_config(), indent=2, sort_keys=True))
 
     def manifest(self) -> dict[str, Any]:
@@ -402,7 +394,7 @@ class RouterRunner(RecipeRunner):
 
     def prepare_records(self, spec: TrainSpec, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # Responses to the same prompt from different models must land on the same side.
-        return [rec if rec.get("group_id") is not None else {**rec, "group_id": prompt_key(rec)} for rec in records]
+        return with_prompt_groups(records)
 
     def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
         return RouterTask(spec, train, held_out, workdir)

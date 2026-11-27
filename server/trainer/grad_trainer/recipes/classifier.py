@@ -28,7 +28,7 @@ class PooledLMTask(TorchTask):
         self.resolved = self.resolve(spec.model, "causal_lm")
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
-        self.base = tc.load_causal_lm(self.resolved, self.device)
+        self.base = self.load_lm(self.resolved)
         self.max_len = tc.model_max_len(self.base, spec)
         self.hidden_size = int(self.base.config.hidden_size)
         self.pad_id = int(self.tokenizer.pad_token_id)
@@ -59,11 +59,14 @@ class PooledLMTask(TorchTask):
     def head_tensors(self) -> dict[str, torch.Tensor]:
         return {n: p.detach().cpu().contiguous() for n, p in self.heads.state_dict().items()}
 
-    def export_backbone(self, directory: Path) -> None:
+    def export_backbone(self, directory: Path, params: dict[str, Any] | None = None) -> None:
+        """Adapter and heads; ``params`` (a snapshot named like ``self.params``) instead of live weights."""
         directory.mkdir(parents=True, exist_ok=True)
+        part = lambda prefix: None if params is None else {k[len(prefix):]: v for k, v in params.items() if k.startswith(prefix)}  # noqa: E731
         if self.adapter_kind == "lora":
-            tc.export_peft_adapter(self.model, directory, self.resolved)
-        save_file(self.head_tensors(), str(directory / self.head_file), metadata={"format": self.artifact_format})
+            tc.export_peft_adapter(self.model, directory, self.resolved, state_dict=part("backbone."))
+        heads = self.head_tensors() if params is None else {**self.head_tensors(), **(part("heads.") or {})}
+        save_file({n: t.contiguous() for n, t in heads.items()}, str(directory / self.head_file), metadata={"format": self.artifact_format})
 
     def backbone_manifest(self) -> dict[str, Any]:
         adapter: dict[str, Any] = {"kind": self.adapter_kind}

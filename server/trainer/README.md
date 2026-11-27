@@ -75,11 +75,30 @@ never downloads and fails with `model_unavailable` instead. `gradiated/linden-1`
 not public and must be provided this way.
 
 Other settings: `GRAD_TRAINER_DEVICE` (default `cuda` when available), `GRAD_TORCH_THREADS`.
-v0 trains on one device. Measured peak memory at the defaults (LoRA rank 32, batch 128,
-micro-batches of 16,384 tokens, gradient checkpointing on), H100 80 GB: Qwen3-0.6B 24 GB, 4B 34 GB,
-8B 45 GB (up to 72 GB reserved over a full run), 14B 61 GB. Qwen3-32B does not fit an 80 GB GPU at
-the defaults; it fits, with about 2 GB to spare, only with 4,096-token micro-batches
-(trainer config `micro_batch_tokens`, which the v0 API does not expose).
+v0 trains on one device.
+
+### GPU memory and throughput
+
+Measured on one H100 80 GB at the SFT defaults (LoRA rank 32, batch 128, gradient
+checkpointing, chunked cross-entropy, varlen packing, `micro_batch_tokens` by model size,
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`). Peak is torch's reserved memory; the
+catalog's `min_gpu_memory_gb` adds headroom, and `runs.plan` refuses a run that needs more
+than one 80 GB GPU. Tokens/s is the median SFT step rate; `server/api/src/gpu-profile.ts`
+holds the same numbers for `estimated_duration_s`.
+
+| Base | Peak reserved | `min_gpu_memory_gb` | SFT tokens/s | Load to first step |
+| --- | --- | --- | --- | --- |
+| Qwen3-0.6B | 4.7 GiB | 8 | 19,700 | 13 s |
+| Qwen3-1.7B | 9.1 GiB | 12 | 13,700 | 17 s |
+| Qwen3-4B | 16.7 GiB | 20 | 7,500 | 28 s |
+| Qwen3-8B | 28.5 GiB (29.2 GiB on nvidia-smi over a full run) | 36 | 5,500 | 37 s |
+| Qwen3-14B | 45.5 GiB (46.7 GiB over a full run) | 56 | 3,600 | 55 s |
+| Qwen3-32B | 76.6 GiB | not trainable in v0 | 1,600 | 117 s |
+
+Qwen3-32B leaves under 4 GB of an 80 GB GPU free even with 4,096-token micro-batches, so it is
+an eval and judge model only. A held-out eval costs about 20 s at 8B (285 records), against
+under 2 s of training pause for a checkpoint, which is why evals default to every 25% of the
+run while checkpoints are taken every 10% of steps or 5 minutes.
 
 `GRAD_TRAINER_BACKEND=reference` selects a stdlib-only **test double** that runs the same loop
 over a hashed bag-of-words model. Its artifacts are `format: reference`, `deployable: false`.

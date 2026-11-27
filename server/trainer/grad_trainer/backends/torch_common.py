@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import os
 import random
@@ -12,6 +13,7 @@ from typing import Any, Iterable, Sequence
 
 import torch
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from safetensors.torch import load_file, save_file
 
 from ..config import TrainSpec
@@ -73,14 +75,101 @@ def load_tokenizer(resolved: ResolvedModel) -> Any:
     return tok
 
 
-def load_causal_lm(resolved: ResolvedModel, device: torch.device) -> Any:
+def load_causal_lm(resolved: ResolvedModel, device: torch.device, *, packed: bool = False) -> Any:
+    """Load a causal LM. ``packed`` models take varlen packed batches on CUDA (see collate_packed)."""
     from transformers import AutoModelForCausalLM
 
     model = AutoModelForCausalLM.from_pretrained(
-        str(resolved.path), dtype=pick_dtype(device), attn_implementation="sdpa"
+        str(resolved.path),
+        dtype=pick_dtype(device),
+        attn_implementation=VARLEN_ATTENTION if packed and use_varlen(device) else "sdpa",
     )
     model.config.use_cache = False
     return model.to(device)
+
+
+def parameter_count(model: torch.nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters())
+
+
+def default_micro_batch_tokens(model: torch.nn.Module) -> int:
+    """Tokens per forward/backward chunk at the defaults, by base model size (measured on 80 GB)."""
+    billions = parameter_count(model) / 1e9
+    if billions <= 16:
+        return 16384
+    if billions <= 24:
+        return 8192
+    return 4096
+
+
+# -- varlen attention -----------------------------------------------------------------------
+
+VARLEN_ATTENTION = "grad_varlen"
+
+
+def use_varlen(device: torch.device) -> bool:
+    """Packed batches use varlen flash attention on CUDA; CPU keeps the dense block mask."""
+    if os.environ.get("GRAD_TRAINER_VARLEN", "").strip() == "0" or device.type != "cuda":
+        return False
+    try:
+        from torch.nn.attention.varlen import varlen_attn  # noqa: F401
+    except ImportError:  # pragma: no cover - older torch
+        return False
+    return True
+
+
+def varlen_attention(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    dropout: float = 0.0,
+    scaling: float | None = None,
+    cu_seq_lens_q: torch.Tensor | None = None,
+    max_length_q: int | None = None,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, None]:
+    """transformers attention for one packed row ``[1, H, T, D]`` cut at ``cu_seq_lens_q``.
+
+    Causal within each example, nothing across examples, and no ``T x T`` mask. CUDA runs
+    torch's varlen flash attention; elsewhere each example runs SDPA on its own (tests).
+    """
+    from transformers.integrations.sdpa_attention import sdpa_attention_forward
+
+    if cu_seq_lens_q is None:
+        return sdpa_attention_forward(module, query, key, value, attention_mask, dropout=dropout, scaling=scaling, **kwargs)
+    q, k, v = (t[0].transpose(0, 1) for t in (query, key, value))  # [T, H, D]
+    if q.is_cuda:
+        from torch.nn.attention.varlen import varlen_attn
+
+        cu = cu_seq_lens_q.to(device=q.device, dtype=torch.int32)
+        out = varlen_attn(
+            q.contiguous(), k.contiguous(), v.contiguous(), cu, cu, int(max_length_q or q.shape[0]),
+            int(max_length_q or q.shape[0]), scale=scaling, window_size=(-1, 0), enable_gqa=True,
+        )
+    else:
+        bounds = [int(b) for b in cu_seq_lens_q.tolist()]
+        out = torch.cat(
+            [
+                F.scaled_dot_product_attention(
+                    q[a:b].transpose(0, 1), k[a:b].transpose(0, 1), v[a:b].transpose(0, 1),
+                    is_causal=True, scale=scaling, enable_gqa=True,
+                ).transpose(0, 1)
+                for a, b in zip(bounds[:-1], bounds[1:])
+            ]
+        )
+    return out.unsqueeze(0), None
+
+
+def _register_varlen_attention() -> None:
+    from transformers import AttentionInterface
+
+    # No mask function is registered for it, so transformers builds no attention mask.
+    AttentionInterface.register(VARLEN_ATTENTION, varlen_attention)
+
+
+_register_varlen_attention()
 
 
 def model_max_len(model: Any, spec: TrainSpec, cap: int = 8192) -> int:
@@ -101,7 +190,10 @@ def lora_settings(adapter: dict[str, Any]) -> dict[str, Any]:
 
 
 def _enable_gradient_checkpointing(model: Any) -> None:
-    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    if hasattr(model, "activation_checkpointing_enable"):
+        model.activation_checkpointing_enable(activation_checkpointing_kwargs={"use_reentrant": False})
+    else:  # pragma: no cover - transformers before the rename
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
     # from_pretrained returns the model in eval mode, and transformers only checkpoints layers
     # while `module.training` is True; without this, checkpointing is silently a no-op.
@@ -232,9 +324,24 @@ def set_rng_state(state: dict[str, Any]) -> None:
         torch.cuda.set_rng_state_all(state["cuda"])
 
 
-def save_optimizer_state(optimizer: torch.optim.Optimizer, directory: Path, extra: dict[str, Any] | None = None) -> None:
+def to_cpu(value: Any) -> Any:
+    """A copy of nested optimizer state with every tensor on the CPU."""
+    if isinstance(value, torch.Tensor):
+        return value.detach().to("cpu", copy=True)
+    if isinstance(value, dict):
+        return {k: to_cpu(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(to_cpu(v) for v in value)
+    return value
+
+
+def save_state_dict(optimizer_state: dict[str, Any], rng: dict[str, Any], directory: Path, extra: dict[str, Any] | None = None) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    torch.save({"optimizer": optimizer.state_dict(), "rng": rng_state(), "extra": extra or {}}, directory / "state.pt")
+    torch.save({"optimizer": optimizer_state, "rng": rng, "extra": extra or {}}, directory / "state.pt")
+
+
+def save_optimizer_state(optimizer: torch.optim.Optimizer, directory: Path, extra: dict[str, Any] | None = None) -> None:
+    save_state_dict(optimizer.state_dict(), rng_state(), directory, extra)
 
 
 def load_optimizer_state(optimizer: torch.optim.Optimizer, directory: Path) -> dict[str, Any]:
@@ -244,10 +351,16 @@ def load_optimizer_state(optimizer: torch.optim.Optimizer, directory: Path) -> d
     return state.get("extra", {})
 
 
-def export_peft_adapter(model: Any, directory: Path, resolved: ResolvedModel) -> dict[str, Any]:
-    """Save a PEFT LoRA adapter whose config points at the HF base model (for PEFT and vLLM)."""
+def export_peft_adapter(
+    model: Any, directory: Path, resolved: ResolvedModel, state_dict: dict[str, torch.Tensor] | None = None
+) -> dict[str, Any]:
+    """Save a PEFT LoRA adapter whose config points at the HF base model (for PEFT and vLLM).
+
+    ``state_dict`` (names as in ``model.named_parameters()``) saves a snapshot instead of the
+    live weights.
+    """
     directory.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(str(directory), safe_serialization=True)
+    model.save_pretrained(str(directory), safe_serialization=True, **({} if state_dict is None else {"state_dict": state_dict}))
     (directory / "README.md").unlink(missing_ok=True)
     config_path = directory / "adapter_config.json"
     config = json.loads(config_path.read_text())
@@ -282,11 +395,13 @@ def export_merged(model: Any, tokenizer: Any, directory: Path, resolved: Resolve
 @dataclass(frozen=True)
 class PackedBatch:
     input_ids: torch.Tensor  # [R, L]
-    attention_mask: torch.Tensor  # [R, 1, L, L] bool, block-diagonal causal
+    attention_mask: torch.Tensor | None  # [R, 1, L, L] bool, block-diagonal causal; None when varlen
     position_ids: torch.Tensor  # [R, L]
     segment_ids: torch.Tensor  # [R, L], -1 for padding
     trained: torch.Tensor  # [R, L] bool
     tokens: int  # non-padding tokens
+    cu_seqlens: torch.Tensor | None = None  # varlen: [N+1] example boundaries in the single row
+    max_seqlen: int = 0
 
 
 def pack_rows(lengths: Sequence[int], max_len: int) -> list[list[int]]:
@@ -330,8 +445,15 @@ def collate_packed(
     pad_id: int,
     device: torch.device,
     segment_offset: dict[int, int] | None = None,
+    varlen: bool = False,
 ) -> PackedBatch:
-    """Build tensors for packed rows. Each example only attends to itself (no leakage)."""
+    """Build tensors for packed rows. Each example only attends to itself (no leakage).
+
+    ``varlen`` concatenates the rows into one unpadded row with example boundaries
+    (``cu_seqlens``) for varlen attention, instead of a dense block-diagonal mask.
+    """
+    if varlen:
+        rows = [[i for row in rows for i in row]]
     width = max(sum(len(examples[i][0]) for i in row) for row in rows)
     n = len(rows)
     ids = torch.full((n, width), pad_id, dtype=torch.long)
@@ -350,6 +472,18 @@ def collate_packed(
             trained[r, cursor : cursor + length] = torch.tensor(mask, dtype=torch.bool)
             cursor += length
             tokens += length
+    if varlen:
+        lengths = [len(examples[i][0]) for i in rows[0]]
+        return PackedBatch(
+            input_ids=ids.to(device),
+            attention_mask=None,
+            position_ids=pos.to(device),
+            segment_ids=seg.to(device),
+            trained=trained.to(device),
+            tokens=tokens,
+            cu_seqlens=torch.tensor([0, *itertools.accumulate(lengths)], dtype=torch.int32, device=device),
+            max_seqlen=max(lengths),
+        )
     causal = torch.tril(torch.ones((width, width), dtype=torch.bool))
     same = (seg[:, :, None] == seg[:, None, :]) & (seg[:, :, None] >= 0)
     eye = torch.eye(width, dtype=torch.bool)[None]
@@ -364,25 +498,63 @@ def collate_packed(
     )
 
 
+CE_CHUNK_POSITIONS = 1024
+
+
+def _chunk_cross_entropy(lm_head: Any, h: torch.Tensor, targets: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    logits = lm_head(h).float()
+    return F.cross_entropy(logits, targets, reduction="none"), logits.argmax(-1) == targets
+
+
+def chunked_cross_entropy(
+    lm_head: Any, h: torch.Tensor, targets: torch.Tensor, chunk: int = CE_CHUNK_POSITIONS
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-position CE of ``lm_head(h)`` and whether the argmax is right, ``chunk`` rows at a time.
+
+    Full-vocabulary fp32 logits exist for one chunk at a time: under autograd each chunk is
+    checkpointed, so the backward pass recomputes its logits instead of keeping them.
+    """
+    losses: list[torch.Tensor] = []
+    correct: list[torch.Tensor] = []
+    for start in range(0, h.shape[0], chunk):
+        part, want = h[start : start + chunk], targets[start : start + chunk]
+        if torch.is_grad_enabled() and part.requires_grad:
+            loss, right = torch.utils.checkpoint.checkpoint(_chunk_cross_entropy, lm_head, part, want, use_reentrant=False)
+        else:
+            loss, right = _chunk_cross_entropy(lm_head, part, want)
+        losses.append(loss)
+        correct.append(right)
+    if not losses:
+        return h.new_zeros(0, dtype=torch.float32), torch.zeros(0, dtype=torch.bool, device=h.device)
+    return torch.cat(losses), torch.cat(correct)
+
+
 def packed_token_losses(lm: Any, batch: PackedBatch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Next-token CE at trained positions. Returns (losses [N], segment ids [N], correct [N]).
 
-    The LM head runs only on positions whose next token is trained, which keeps memory low
-    for large vocabularies.
+    The LM head runs only on positions whose next token is trained, in chunks
+    (``chunked_cross_entropy``), which keeps memory low for large vocabularies.
     """
+    varlen: dict[str, Any] = {}
+    if batch.cu_seqlens is not None:
+        varlen = {
+            "cu_seq_lens_q": batch.cu_seqlens,
+            "cu_seq_lens_k": batch.cu_seqlens,
+            "max_length_q": batch.max_seqlen,
+            "max_length_k": batch.max_seqlen,
+        }
     hidden = lm.model(
         input_ids=batch.input_ids,
         attention_mask=batch.attention_mask,
         position_ids=batch.position_ids,
+        **varlen,
     ).last_hidden_state
     seg = batch.segment_ids
     target_mask = batch.trained[:, 1:] & (seg[:, 1:] == seg[:, :-1])
     h = hidden[:, :-1][target_mask]
     targets = batch.input_ids[:, 1:][target_mask]
-    logits = lm.lm_head(h).float()
-    losses = F.cross_entropy(logits, targets, reduction="none")
-    correct = (logits.argmax(-1) == targets).float()
-    return losses, seg[:, 1:][target_mask], correct
+    losses, correct = chunked_cross_entropy(lm.lm_head, h, targets)
+    return losses, seg[:, 1:][target_mask], correct.float()
 
 
 def padded_batch(

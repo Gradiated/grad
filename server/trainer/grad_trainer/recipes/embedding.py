@@ -118,7 +118,7 @@ class EmbeddingTask(TorchTask):
 
     def encode(self, sequences: list[list[int]], *, grad: bool) -> torch.Tensor:
         outs = []
-        for chunk in tc.chunk_by_tokens(range(len(sequences)), [len(s) for s in sequences], self.spec.micro_batch_tokens):
+        for chunk in tc.chunk_by_tokens(range(len(sequences)), [len(s) for s in sequences], self.micro_batch_tokens):
             ids, mask = tc.padded_batch([sequences[i] for i in chunk], self.pad_id, self.device)
             with torch.set_grad_enabled(grad), tc.autocast(self.device):
                 hidden = self.model(input_ids=ids, attention_mask=mask).last_hidden_state.float()
@@ -183,9 +183,10 @@ class EmbeddingTask(TorchTask):
         metrics = self._retrieval()
         return EvalResult(score=metrics.pop("recall_at_10"), metrics=metrics)
 
-    def export(self, directory: Path) -> None:
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        self.model.save_pretrained(str(directory), safe_serialization=True)
+        state = None if params is None else {**self.model.state_dict(), **params}
+        self.model.save_pretrained(str(directory), safe_serialization=True, **({} if state is None else {"state_dict": state}))
         self.tokenizer.save_pretrained(str(directory))
         dim = int(self.model.config.hidden_size)
         (directory / "grad_embedding.json").write_text(

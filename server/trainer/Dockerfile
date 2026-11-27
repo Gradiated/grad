@@ -25,6 +25,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     HF_HOME=/home/grad/.cache/huggingface \
     HF_HUB_DISABLE_PROGRESS_BARS=1
 RUN apt-get update \

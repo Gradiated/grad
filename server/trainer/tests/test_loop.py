@@ -17,7 +17,7 @@ from grad_trainer.config import parse_train_spec
 from grad_trainer.errors import BackendUnavailableError, RecipeDataError, ResumeMismatchError
 from grad_trainer.recipes import backend_name, get_recipe_runner
 from grad_trainer.runner_types import Budget, ResumeState
-from grad_trainer.trainer import EvalResult, TrainingLoop, default_checkpoint_every, epoch_order
+from grad_trainer.trainer import EvalResult, TrainingLoop, default_checkpoint_every, default_eval_every, epoch_order
 
 
 class FakeTask:
@@ -86,18 +86,20 @@ def loop(task, workdir, *, budget=None, recorder=None, resume=None, **config):
 
 class LoopTests(TempDirCase):
     def test_best_selection_restores_weights_but_never_the_meter(self) -> None:
-        task = FakeTask(scores=[3.0, 1.0, 2.0, 1.0, 5.0, 4.0, 6.0, 7.0])
+        task = FakeTask(scores=[3.0, 1.0, 2.0, 4.0])  # evals at steps 2, 4, 6, 8
         rec = Recorder(self.tmpdir())
-        result = loop(task, self.tmpdir(), recorder=rec, eval_every_steps=1, checkpoint_every_steps=3).run()
+        result = loop(task, self.tmpdir(), recorder=rec, eval_every_steps=2, checkpoint_every_steps=3).run()
         self.assertEqual((result.status, result.step, result.best_step, result.selected_step), ("completed", 8, 4, 4))
         self.assertEqual(task.loaded, [4])  # best weights reloaded; ties go to the later step
         self.assertEqual(result.tokens_total, rec.metrics[-1]["tokens"])
         self.assertEqual(result.tokens_total, 2 * sum(10 + i for i in range(8)))  # 2 epochs, every item twice
         tokens = [m["tokens"] for m in rec.metrics]
         self.assertEqual(tokens, sorted(tokens))
-        self.assertEqual([c[0] for c in rec.checkpoints], [3, 6, 8])
-        self.assertEqual(rec.checkpoints[0][1], 2.0)
-        self.assertEqual(rec.metrics[0]["eval_metrics"], {"eval_loss": 3.0, "extra": 1})
+        # Every eval step is a checkpoint too, so the best one can be promoted.
+        self.assertEqual([c[0] for c in rec.checkpoints], [2, 3, 4, 6, 8])
+        self.assertEqual([c[1] for c in rec.checkpoints], [3.0, None, 1.0, 2.0, 4.0])
+        self.assertNotIn("eval_metrics", rec.metrics[0])
+        self.assertEqual(rec.metrics[1]["eval_metrics"], {"eval_loss": 3.0, "extra": 1})
         meta = rec.checkpoints[-1][3]
         self.assertEqual((meta["manifest"]["format"], meta["manifest"]["checkpoint_step"], meta["metric_mode"]), ("fake", 8, "min"))
         self.assertTrue((rec.checkpoints[-1][2] / "trainer_state" / "best" / "w.json").is_file())
@@ -111,8 +113,72 @@ class LoopTests(TempDirCase):
         self.assertEqual(a.seen, b.seen)
         self.assertEqual(sorted(i for batch in a.seen[:4] for i in batch), list(range(8)))
         self.assertNotEqual(epoch_order(8, 42, 0), epoch_order(8, 42, 1))
+        # Every 10% of steps, at least every 20 steps (and every 5 minutes, see below).
         self.assertEqual(default_checkpoint_every(1000), 20)
+        self.assertEqual(default_checkpoint_every(100), 10)
         self.assertEqual(default_checkpoint_every(5), 1)
+        # Evals are dearer than checkpoints: every 25% of the run, at most every 20 steps.
+        self.assertEqual(default_eval_every(1000), 250)
+        self.assertEqual(default_eval_every(100), 25)
+        self.assertEqual(default_eval_every(22), 20)
+        self.assertEqual(default_eval_every(5), 5)
+
+    def test_checkpoints_hand_over_in_the_background_one_at_a_time_in_order(self) -> None:
+        import threading
+
+        release = threading.Event()
+        seen: list[tuple[int, int, bool]] = []
+        active = []
+
+        class Slow(Recorder):
+            def on_checkpoint(self, step, score, directory, metadata):  # type: ignore[no-untyped-def]
+                active.append(step)
+                seen.append((step, len(rec.metrics), len(active) == 1))
+                if step == 1:
+                    release.wait(5)  # training keeps stepping while checkpoint 1 is uploading
+                super().on_checkpoint(step, score, directory, metadata)
+                active.remove(step)
+
+            def on_step(self, metric):  # type: ignore[no-untyped-def]
+                if metric["step"] == 2:
+                    release.set()
+                return super().on_step(metric)
+
+        rec = Slow(self.tmpdir())
+        workdir = self.tmpdir()
+        result = loop(FakeTask(), workdir, recorder=rec, checkpoint_every_steps=1).run()
+        self.assertEqual(result.status, "completed")
+        self.assertEqual([c[0] for c in rec.checkpoints], list(range(1, 9)))
+        self.assertTrue(all(alone for *_, alone in seen))  # never two in flight
+        self.assertGreaterEqual(seen[1][1], 2)  # step 2 ran before checkpoint 2 was handed over
+        # The checkpoint directory holds the state as of its step, and is deleted afterwards.
+        self.assertEqual((rec.checkpoints[0][2] / "weights.txt").read_text(), "1")
+        self.assertEqual(list((workdir / "checkpoints").iterdir()), [])
+
+    def test_a_failed_hand_over_surfaces_on_the_training_thread(self) -> None:
+        class LeaseLost(Exception):
+            pass
+
+        class Failing(Recorder):
+            def on_checkpoint(self, step, score, directory, metadata):  # type: ignore[no-untyped-def]
+                raise LeaseLost(step)
+
+        rec = Failing(self.tmpdir())
+        with self.assertRaises(LeaseLost):
+            loop(FakeTask(), self.tmpdir(), recorder=rec, checkpoint_every_steps=2).run()
+
+    def test_checkpoints_also_every_n_minutes_of_wall_clock(self) -> None:
+        clock = iter(float(t) for t in range(0, 10_000, 100))  # 100 s per monotonic() call
+        rec = Recorder(self.tmpdir())
+        with mock.patch("grad_trainer.trainer.time.monotonic", lambda: next(clock)):
+            loop(FakeTask(), self.tmpdir(), recorder=rec, checkpoint_every_steps=50, checkpoint_every_minutes=5).run()
+        steps = [c[0] for c in rec.checkpoints]
+        self.assertEqual(steps[-1], 8)
+        self.assertGreater(len(steps), 1)  # time-based ones besides the final checkpoint
+        rec = Recorder(self.tmpdir())
+        with mock.patch("grad_trainer.trainer.time.monotonic", lambda: next(clock)):
+            loop(FakeTask(), self.tmpdir(), recorder=rec, checkpoint_every_steps=50, checkpoint_every_minutes=0).run()
+        self.assertEqual([c[0] for c in rec.checkpoints], [8])  # 0 turns the clock off
 
     def test_budget_stops_before_the_step_that_would_exceed_it(self) -> None:
         rec = Recorder(self.tmpdir())

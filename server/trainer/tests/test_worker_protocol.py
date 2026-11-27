@@ -434,6 +434,33 @@ class WorkerProtocolTests(unittest.TestCase):
         warning = [e for e in srv.bodies("events") if e["type"] == "warning"]
         self.assertIn("ran out of memory", warning[0]["message"])
 
+    def test_out_of_memory_retries_once_with_half_the_micro_batch(self) -> None:
+        srv = self.server(jobs=[train_job()])
+        runner = StubRunner(oom_runs=1, checkpoint_at=None)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            result = self.worker(srv, runner).run_once()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual([c["config"].get("micro_batch_tokens") for c in runner.calls], [None, 8192])
+        self.assertIn("Traceback", err.getvalue())  # the OOM is logged with its traceback
+        self.assertIn("retrying job run_1 once with micro_batch_tokens=8192", err.getvalue())
+
+    def test_out_of_memory_twice_fails_naming_model_and_gpu(self) -> None:
+        srv = self.server(jobs=[train_job()])
+        runner = StubRunner(oom_runs=2, checkpoint_at=None)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.worker(srv, runner).run_once()
+        self.assertEqual(len(runner.calls), 2)
+        error = srv.bodies("complete")[0]["error"]
+        self.assertEqual(srv.bodies("complete")[0]["status"], "failed")
+        for text in ("qwen/qwen3-8b", "micro_batch_tokens=8192", "FakeGPU (80.0 GiB)", "already retried", "min_gpu_memory_gb"):
+            self.assertIn(text, error)
+
+    def test_gpu_memory_is_released_after_every_job(self) -> None:
+        srv = self.server(jobs=[train_job()])
+        with mock.patch("grad_trainer.worker.release_gpu_memory") as release:
+            self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
+        release.assert_called_once_with()
+
     def test_unknown_recipe_completes_failed(self) -> None:
         srv = self.server(jobs=[train_job()])
         worker = self.worker(srv)

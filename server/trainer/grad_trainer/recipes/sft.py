@@ -2,7 +2,8 @@
 
 Examples in an optimizer batch are packed into rows of up to ``max_seq_len`` tokens. Each
 example gets its own position ids and a block-diagonal causal mask, so no token attends
-across examples. ``reduction="per_example"`` averages the loss within each example and then
+across examples. On CUDA a micro-batch is one unpadded row cut at example boundaries for varlen
+flash attention (no dense mask); on CPU it is padded rows with a dense block-diagonal mask. ``reduction="per_example"`` averages the loss within each example and then
 over the batch; ``"per_token"`` averages over every trained token in the batch. Both are
 normalized over the whole optimizer batch, so micro-batching (gradient accumulation) gives
 the same gradient as one big batch.
@@ -42,8 +43,9 @@ class SFTTask(TorchTask):
         self.resolved = self.resolve(spec.model, "causal_lm")
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
-        base_lm = tc.load_causal_lm(self.resolved, self.device)
+        base_lm = self.load_lm(self.resolved, packed=True)
         self.max_len = tc.model_max_len(base_lm, spec)
+        self.varlen = base_lm.config._attn_implementation == tc.VARLEN_ATTENTION
         self.stats = {"skipped_no_messages": 0, "skipped_no_trained_tokens": 0, "truncated": 0}
         self.train_examples = self._encode(train)
         self.eval_examples = self._encode(held_out)
@@ -87,8 +89,8 @@ class SFTTask(TorchTask):
         loss_sum = 0.0
         correct_sum = 0.0
         rows = tc.pack_rows(lengths, self.max_len)
-        for group in tc.group_rows(rows, lengths, self.spec.micro_batch_tokens):
-            batch = tc.collate_packed(group, examples, self.pad_id, self.device)
+        for group in tc.group_rows(rows, lengths, self.micro_batch_tokens):
+            batch = tc.collate_packed(group, examples, self.pad_id, self.device, varlen=self.varlen)
             with torch.set_grad_enabled(grad):
                 losses, seg, correct = tc.packed_token_losses(self.lm, batch)
                 if self.spec.reduction == "per_example":
@@ -127,8 +129,8 @@ class SFTTask(TorchTask):
             metrics={"eval_token_accuracy": acc_weighted / max(total, 1)},
         )
 
-    def export(self, directory: Path) -> None:
-        tc.export_peft_adapter(self.model, directory, self.resolved)
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
+        tc.export_peft_adapter(self.model, directory, self.resolved, state_dict=params)
 
     def export_final(self, directory: Path) -> None:
         if self.merge:

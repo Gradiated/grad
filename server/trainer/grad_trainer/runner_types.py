@@ -35,7 +35,9 @@ class RunCallbacks:
     ``"checkpoint"`` to stop at once with a checkpoint of the current step and no eval
     (an emergency checkpoint before the worker's compute goes away).
     ``on_checkpoint(step, eval_score, checkpoint_dir, metadata)``: called after a
-    checkpoint directory is complete. The directory is only valid during the call.
+    checkpoint directory is complete. The loop calls it from a background thread, one
+    checkpoint at a time and in order, while training continues, and deletes the directory
+    after the call. An exception it raises surfaces on the training thread.
     ``on_phase(phase, step)``: the loop entered ``training``, ``evaluating`` or
     ``checkpointing`` at ``step``.
     """

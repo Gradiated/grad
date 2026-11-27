@@ -27,6 +27,7 @@ from grad_trainer.metrics import (
     softmax,
 )
 from grad_trainer.models import is_offline, resolve_model
+from grad_trainer.recipes.data import with_prompt_groups
 from grad_trainer.splits import split_records, two_folds
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -38,9 +39,15 @@ class SplitParityTests(unittest.TestCase):
         cases = json.loads((FIXTURES / "split_parity_records.json").read_text())
         out = []
         for case in cases:
-            train, held = split_records(case["records"], **case["options"])
-            ids = {id(r): i for i, r in enumerate(case["records"])}
-            out.append({"train": [ids[id(r)] for r in train], "eval": [ids[id(r)] for r in held]})
+            records, options = case["records"], dict(case["options"])
+            if case.get("kind") == "router":  # as RouterRunner: whole prompt groups, by_session -> by_group
+                records = with_prompt_groups(records)
+                if options["strategy"] == "by_session":
+                    options["strategy"] = "by_group"
+            train, held = split_records(records, **options)
+            ids = {r["id"] if case.get("kind") else id(r): i for i, r in enumerate(case["records"])}
+            key = (lambda r: r["id"]) if case.get("kind") else id
+            out.append({"train": [ids[key(r)] for r in train], "eval": [ids[key(r)] for r in held]})
         return out
 
     def test_matches_golden_from_planner_ts(self) -> None:
@@ -315,3 +322,49 @@ class ModelResolutionTests(TempDirCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GPUMemoryTests(unittest.TestCase):
+    """grad_trainer.gpu with a fake torch module (the real one may be CPU-only or absent)."""
+
+    def fake_torch(self) -> types.SimpleNamespace:
+        class OutOfMemoryError(RuntimeError):
+            pass
+
+        props = types.SimpleNamespace(name="FakeGPU 80GB", total_memory=80 * 1024**3)
+        cuda = mock.Mock()
+        cuda.is_available.return_value = True
+        cuda.is_initialized.return_value = True
+        cuda.current_device.return_value = 0
+        cuda.get_device_properties.return_value = props
+        cuda.max_memory_allocated.return_value = 78.5 * 1024**3
+        return types.SimpleNamespace(OutOfMemoryError=OutOfMemoryError, cuda=cuda)
+
+    def test_out_of_memory_classification_release_and_description(self) -> None:
+        from grad_trainer import gpu
+
+        torch = self.fake_torch()
+        with mock.patch.dict(sys.modules, {"torch": torch}):
+            self.assertTrue(gpu.is_out_of_memory(torch.OutOfMemoryError("CUDA out of memory. Tried to allocate")))
+            self.assertTrue(gpu.is_out_of_memory(RuntimeError("CUDA error: CUBLAS_STATUS_ALLOC_FAILED")))
+            self.assertFalse(gpu.is_out_of_memory(ValueError("out of memory")))
+            self.assertFalse(gpu.is_out_of_memory(RuntimeError("shape mismatch")))
+            self.assertEqual(gpu.describe_gpu(), "FakeGPU 80GB (80.0 GiB, peak 78.5 GiB allocated)")
+            gpu.release_gpu_memory()
+            torch.cuda.empty_cache.assert_called_once_with()
+            torch.cuda.is_initialized.return_value = False  # never initialise CUDA just to free it
+            gpu.release_gpu_memory()
+            torch.cuda.empty_cache.assert_called_once_with()
+            self.assertEqual(gpu.describe_gpu(), "CPU")
+        with mock.patch.dict(sys.modules, {"torch": None}):
+            gpu.release_gpu_memory()  # no torch loaded: only gc
+            self.assertEqual(gpu.describe_gpu(), "CPU")
+
+    def test_worker_sets_the_allocator_config_before_torch_loads(self) -> None:
+        from grad_trainer import worker
+
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(worker, "worker_from_env") as make:
+            make.return_value.serve_forever.return_value = 0
+            with self.assertRaises(SystemExit):
+                worker.main()
+            self.assertEqual(os.environ["PYTORCH_CUDA_ALLOC_CONF"], "expandable_segments:True")

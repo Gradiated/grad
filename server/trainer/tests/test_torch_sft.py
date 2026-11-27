@@ -31,6 +31,7 @@ CONFIG = {
     "lr": 5e-3,
     "warmup": 0.0,
     "checkpoint_every_steps": 3,
+    "eval_every_steps": 3,
     "adapter": {"kind": "lora", "rank": 4, "alpha": 8},
     "split": {"eval_fraction": 0.2, "seed": 1},
 }
@@ -237,5 +238,124 @@ class GradientCheckpointingTests(TorchCase):
         model = apply_lora(load_base(), {"kind": "lora", "rank": 4, "alpha": 8}, gradient_checkpointing=True)
         self.assertTrue(model.training)
         base = model.get_base_model()
-        self.assertTrue(base.is_gradient_checkpointing)
+        self.assertTrue(base.is_activation_checkpointing)
         self.assertTrue(all(m.training for m in base.modules() if hasattr(m, "gradient_checkpointing")))
+
+
+class MemoryTests(TorchCase):
+    """r6 GPU run: chunked CE, varlen packing, micro-batch sizing and OOM classification."""
+
+    def test_chunked_cross_entropy_matches_full_logits_with_gradients(self) -> None:
+        import torch
+        import torch.nn.functional as F
+
+        from grad_trainer.backends import torch_common as tc
+
+        torch.manual_seed(0)
+        head = torch.nn.Linear(8, 50, bias=False)
+        h = torch.randn(11, 8, requires_grad=True)
+        targets = torch.randint(0, 50, (11,))
+        full = F.cross_entropy(head(h).float(), targets, reduction="none")
+        full.sum().backward()
+        want_h, want_w = h.grad.clone(), head.weight.grad.clone()
+        h.grad, head.weight.grad = None, None
+        losses, correct = tc.chunked_cross_entropy(head, h, targets, chunk=3)
+        losses.sum().backward()
+        self.assertTrue(torch.allclose(losses, full, atol=1e-6))
+        self.assertTrue(torch.allclose(h.grad, want_h, atol=1e-6))
+        self.assertTrue(torch.allclose(head.weight.grad, want_w, atol=1e-6))
+        self.assertEqual(correct.tolist(), (head(h).argmax(-1) == targets).tolist())
+        empty, right = tc.chunked_cross_entropy(head, h[:0], targets[:0])
+        self.assertEqual((empty.shape, right.shape), ((0,), (0,)))
+
+    def test_varlen_packing_matches_the_dense_block_mask(self) -> None:
+        import torch
+        from transformers import AutoModelForCausalLM
+
+        from fixtures.tiny_models import ensure_tiny_models
+        from grad_trainer.backends import torch_common as tc
+
+        path = str(ensure_tiny_models()[QWEN_ID])
+        dense = AutoModelForCausalLM.from_pretrained(path, dtype=torch.float32, attn_implementation="sdpa")
+        varlen = AutoModelForCausalLM.from_pretrained(path, dtype=torch.float32, attn_implementation=tc.VARLEN_ATTENTION)
+        examples = [((5, 9, 12, 40, 7), (False, False, True, True, True)), ((8, 3, 3, 21), (False, True, True, True)), ((4, 6, 8), (False, True, True))]
+        rows = [[0, 1], [2]]
+        a = tc.collate_packed(rows, examples, 0, torch.device("cpu"))
+        b = tc.collate_packed(rows, examples, 0, torch.device("cpu"), varlen=True)
+        self.assertIsNone(b.attention_mask)
+        self.assertEqual((b.input_ids.shape, b.cu_seqlens.tolist(), b.max_seqlen, b.tokens), ((1, 12), [0, 5, 9, 12], 5, a.tokens))
+        la, sa, _ = tc.packed_token_losses(dense, a)
+        lb, sb, _ = tc.packed_token_losses(varlen, b)
+        la.sum().backward()
+        lb.sum().backward()
+        self.assertEqual(sa.tolist(), sb.tolist())
+        self.assertTrue(torch.allclose(la, lb, atol=1e-5))
+        ga = dense.model.layers[0].self_attn.q_proj.weight.grad
+        gb = varlen.model.layers[0].self_attn.q_proj.weight.grad
+        self.assertTrue(torch.allclose(ga, gb, atol=1e-5))
+        # Unpacked calls (no cu_seqlens) fall back to SDPA.
+        with torch.no_grad():
+            ids = torch.tensor([[5, 9, 12, 40]])
+            self.assertTrue(torch.allclose(dense(ids).logits, varlen(ids).logits, atol=1e-5))
+        self.assertFalse(tc.use_varlen(torch.device("cpu")))  # CPU tests keep the dense path
+
+    def test_default_micro_batch_tokens_scale_with_model_size(self) -> None:
+        from unittest import mock
+
+        from grad_trainer.backends import torch_common as tc
+
+        for params, expected in ((0.6e9, 16384), (8.2e9, 16384), (14.8e9, 16384), (20e9, 8192), (32.8e9, 4096)):
+            with mock.patch.object(tc, "parameter_count", return_value=int(params)):
+                self.assertEqual(tc.default_micro_batch_tokens(None), expected, params)
+
+    def test_out_of_memory_raises_a_typed_error_with_model_and_micro_batch(self) -> None:
+        from unittest import mock
+
+        import torch
+
+        from grad_trainer.backends import torch_common as tc
+        from grad_trainer.errors import GPUOutOfMemoryError
+
+        def oom(*_args, **_kwargs):
+            raise torch.OutOfMemoryError("CUDA out of memory. Tried to allocate 9.27 GiB")
+
+        with mock.patch.object(tc, "packed_token_losses", oom):
+            with self.assertRaises(GPUOutOfMemoryError) as caught:
+                run_recipe("sft", {**CONFIG, "epochs": 1}, RECORDS, self.tmpdir())
+        err = caught.exception
+        self.assertEqual((err.model, err.micro_batch_tokens, err.gpu, err.code), (QWEN_ID, 16384, "CPU", "gpu_out_of_memory"))
+        self.assertIn(f"Out of GPU memory training {QWEN_ID} with micro_batch_tokens=16384", str(err))
+        with mock.patch.object(tc, "packed_token_losses", oom):
+            with self.assertRaises(GPUOutOfMemoryError) as caught:
+                run_recipe("sft", {**CONFIG, "epochs": 1, "micro_batch_tokens": 4096}, RECORDS, self.tmpdir())
+        self.assertEqual(caught.exception.micro_batch_tokens, 4096)
+
+
+class SnapshotCheckpointTests(TorchCase):
+    def test_a_snapshot_writes_the_same_checkpoint_as_the_live_weights_and_stays_frozen(self) -> None:
+        import torch
+        from safetensors.torch import load_file
+
+        from grad_trainer.config import parse_train_spec
+        from grad_trainer.recipes.sft import SFTTask
+
+        spec = parse_train_spec("sft", {**CONFIG, "max_seq_len": 64})
+        task = SFTTask(spec, RECORDS[:8], [], self.tmpdir())
+        task.train_step(list(range(4)), 1e-2)
+        snap = task.snapshot()
+        live = self.tmpdir()
+        task.export(live)
+        task.save_weights(live / "weights")
+        task.save_state(live / "state")
+        task.train_step(list(range(4, 8)), 1e-2)  # training moves on before the snapshot is written
+        written = self.tmpdir()
+        task.write_snapshot(snap, written, written / "weights", written / "state")
+        for rel in ("adapter_model.safetensors", "weights/weights.safetensors"):
+            a, b = load_file(str(live / rel)), load_file(str(written / rel))
+            self.assertEqual(set(a), set(b))
+            for key in a:
+                self.assertTrue(torch.equal(a[key], b[key]), (rel, key))
+        self.assertEqual((written / "adapter_config.json").read_text(), (live / "adapter_config.json").read_text())
+        a = torch.load(live / "state" / "state.pt", weights_only=True)["optimizer"]["state"]
+        b = torch.load(written / "state" / "state.pt", weights_only=True)["optimizer"]["state"]
+        self.assertTrue(all(torch.equal(a[k]["exp_avg"], b[k]["exp_avg"]) for k in a))

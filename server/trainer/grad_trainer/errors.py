@@ -71,3 +71,19 @@ class PaginationLoopError(SourceAPIChangedError):
     """The provider returned a cursor it already returned, or too many pages."""
 
     code = "source_pagination_loop"
+
+
+class GPUOutOfMemoryError(TrainerError, RuntimeError):
+    """Training ran out of GPU memory. Carries what the worker needs to retry smaller."""
+
+    code = "gpu_out_of_memory"
+
+    def __init__(self, model: str, micro_batch_tokens: int | None, gpu: str) -> None:
+        self.model = model
+        self.micro_batch_tokens = micro_batch_tokens
+        self.gpu = gpu
+        at = f" with micro_batch_tokens={micro_batch_tokens}" if micro_batch_tokens else ""
+        super().__init__(
+            f"Out of GPU memory training {model}{at} on {gpu}. Train a smaller base model "
+            "(see min_gpu_memory_gb in GET /v1/models) or run the trainer on a GPU with more memory."
+        )

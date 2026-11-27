@@ -69,7 +69,7 @@ class CartridgeTask(TorchTask):
         self.resolved = self.resolve(spec.model, "causal_lm")
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
-        self.base = tc.load_causal_lm(self.resolved, self.device)
+        self.base = self.load_lm(self.resolved)
         self.base.requires_grad_(False)
         self.teacher_id = str(params.get("teacher") or spec.model).strip().lower()
         self.teacher = self.base
@@ -223,7 +223,7 @@ class CartridgeTask(TorchTask):
     def accumulate(self, indices: list[int]) -> dict[str, float]:
         lengths = [len(it["student"]) + len(it["response"]) for it in self.train]
         total = 0.0
-        for chunk in tc.chunk_by_tokens(indices, lengths, self.spec.micro_batch_tokens):
+        for chunk in tc.chunk_by_tokens(indices, lengths, self.micro_batch_tokens):
             loss = self._kl_batch([self.train[i] for i in chunk], "student", grad=True).sum() / len(indices)
             loss.backward()
             total += float(loss.detach())
@@ -234,9 +234,10 @@ class CartridgeTask(TorchTask):
             return None
         return EvalResult(score=self._mean_kl(self.held_out, "student"), metrics={})
 
-    def export(self, directory: Path) -> None:
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        values = self.cartridge.detach().to("cpu", torch.bfloat16).contiguous()
+        source = self.cartridge if params is None else params["cartridge"]
+        values = source.detach().to("cpu", torch.bfloat16).contiguous()
         if not bool(torch.isfinite(values.float()).all()):
             raise RecipeDataError("Cartridge training diverged (non-finite embeddings); lower lr.")
         save_file(

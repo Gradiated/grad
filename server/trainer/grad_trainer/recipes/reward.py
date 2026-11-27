@@ -131,7 +131,7 @@ class RewardTask(PooledLMTask):
 
     def _chunks(self, indices: list[int], items: list[dict[str, Any]]) -> list[list[int]]:
         lengths = [max(len(s) for s in self._sequences(it)) for it in items]
-        return chunk_by_tokens(indices, lengths, max(1, self.spec.micro_batch_tokens // 2))
+        return chunk_by_tokens(indices, lengths, max(1, self.micro_batch_tokens // 2))
 
     def num_train_items(self) -> int:
         return len(self.train)
@@ -195,8 +195,8 @@ class RewardTask(PooledLMTask):
             "score_name": self.score_name,
         }
 
-    def export(self, directory: Path) -> None:
-        self.export_backbone(directory)
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
+        self.export_backbone(directory, params)
         (directory / "reward_config.json").write_text(json.dumps(self.reward_config(), indent=2, sort_keys=True))
 
     def manifest(self) -> dict[str, Any]:

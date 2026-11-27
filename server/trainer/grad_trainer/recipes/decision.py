@@ -191,7 +191,7 @@ class DecisionTask(PooledLMTask):
     def accumulate(self, indices: list[int]) -> dict[str, float]:
         lengths = [len(it["ids"]) for it in self.train]
         total = 0.0
-        for chunk in chunk_by_tokens(indices, lengths, self.spec.micro_batch_tokens):
+        for chunk in chunk_by_tokens(indices, lengths, self.micro_batch_tokens):
             loss = self._loss([self.train[i] for i in chunk], len(indices), grad=True)
             loss.backward()
             total += float(loss.detach())
@@ -318,8 +318,8 @@ class DecisionTask(PooledLMTask):
             "head_file": self.head_file,
         }
 
-    def export(self, directory: Path) -> None:
-        self.export_backbone(directory)
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
+        self.export_backbone(directory, params)
         (directory / "decision_config.json").write_text(json.dumps(self.decision_config(), indent=2, sort_keys=True))
 
     def manifest(self) -> dict[str, Any]:

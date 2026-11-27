@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..config import TrainSpec, parse_train_spec
-from ..errors import RecipeConfigError
+from ..errors import GPUOutOfMemoryError, RecipeConfigError
+from ..gpu import describe_gpu, is_out_of_memory
 from ..runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks, RunOutput
 from ..splits import split_records
 from ..trainer import TrainingLoop, TrainingTask
@@ -49,7 +50,28 @@ class RecipeRunner:
         workdir: Path,
         base: BaseArtifact | None = None,
     ) -> RunOutput:
+        """Train and export. Running out of GPU memory raises ``GPUOutOfMemoryError``."""
+        self._model = str(config.get("model") or "")
+        self._micro_batch_tokens: int | None = None
+        try:
+            return self._run(config, records, budget, callbacks, resume, Path(workdir), base)
+        except Exception as exc:
+            if not is_out_of_memory(exc):
+                raise
+            raise GPUOutOfMemoryError(self._model, self._micro_batch_tokens, describe_gpu()) from exc
+
+    def _run(
+        self,
+        config: dict[str, Any],
+        records: Sequence[dict[str, Any]],
+        budget: Budget,
+        callbacks: RunCallbacks | None,
+        resume: ResumeState | None,
+        workdir: Path,
+        base: BaseArtifact | None,
+    ) -> RunOutput:
         spec = parse_train_spec(self.kind, config)
+        self._model = spec.model
         if (base is not None) != (spec.base_artifact_id is not None):
             raise RecipeConfigError(
                 "The run config's base_artifact and the starting adapter the worker loaded don't match."
@@ -60,7 +82,6 @@ class RecipeRunner:
             raise RecipeConfigError(
                 f"Worker loaded artifact '{base.artifact_id}', but the run starts from '{spec.base_artifact_id}'."
             )
-        workdir = Path(workdir)
         workdir.mkdir(parents=True, exist_ok=True)
         train, held_out = split_records(
             self.prepare_records(spec, list(records)),
@@ -69,6 +90,7 @@ class RecipeRunner:
             seed=spec.split.seed,
         )
         task = self.build_task(spec, train, held_out, workdir, base)
+        self._micro_batch_tokens = getattr(task, "micro_batch_tokens", spec.micro_batch_tokens)
 
         common = {
             "recipe_kind": self.kind,

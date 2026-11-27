@@ -14,10 +14,15 @@ must behave the same for every recipe:
   Metric ``tokens``/``cost_usd`` are this attempt's, so a resumed run never re-reports the tokens
   restored from its checkpoint. The meter is never rolled back: ``select="best"`` restores
   weights only.
+- Checkpoints are written every ``checkpoint_every`` steps, at the end, and whenever
+  ``checkpoint_every_minutes`` of wall clock have passed since the last one. Training pauses
+  only for an in-memory snapshot; a background thread writes, hands over (``on_checkpoint``,
+  which bundles and uploads) and deletes each checkpoint, one at a time and in order.
 - Checkpoints hold the exported artifact files plus ``trainer_state/`` (loop state, task state
   with optimizer and RNG, current weights, best weights), so a checkpoint is both promotable
   and resumable.
-- Evaluation runs every ``eval_every`` steps (default: the checkpoint interval) and at the end.
+- Evaluation runs every ``eval_every`` steps (default: every 25% of the run, at most every 20
+  steps) and at the end, and each eval step is also a checkpoint, so the best one is promotable.
   With no held-out data, eval metrics are null, ``select`` falls back to ``"last"`` and a
   warning is recorded.
 """
@@ -26,8 +31,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import queue
 import random
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -102,8 +110,16 @@ def cost_usd(tokens: int, budget: Budget) -> float:
 
 
 def default_checkpoint_every(total_steps: int) -> int:
-    # Docs: every 10% of steps, and at least every 20 steps.
+    # Docs (and planner.ts): every 10% of steps, and at least every 20 steps; the trainer also
+    # checkpoints every checkpoint_every_minutes (5) of wall clock, whichever comes first.
     return max(1, min(20, int(total_steps * 0.1)))
+
+
+def default_eval_every(total_steps: int) -> int:
+    # Docs (and planner.ts): every 25% of the run, at most every 20 steps. Not the checkpoint
+    # interval: an eval costs far more than a checkpoint (on an H100 at 8B, about 20 s per eval
+    # against under 2 s per snapshot), so evaluating at every checkpoint slowed a run by 25%.
+    return max(1, min(total_steps, max(20, math.ceil(total_steps * 0.25))))
 
 
 def epoch_order(n: int, seed: int, epoch: int) -> list[int]:
@@ -144,7 +160,7 @@ class TrainingLoop:
         self.batches_per_epoch = max(1, math.ceil(self.n_items / spec.batch_size))
         self.total_steps = self.batches_per_epoch * spec.epochs
         self.checkpoint_every = spec.checkpoint_every or default_checkpoint_every(self.total_steps)
-        self.eval_every = spec.eval_every or self.checkpoint_every
+        self.eval_every = spec.eval_every or default_eval_every(self.total_steps)
         self.best_dir = workdir / "best"
         self.step = 0
         self.tokens_total = 0
@@ -153,6 +169,11 @@ class TrainingLoop:
         self.last_eval: dict[str, Any] | None = None
         self.last_eval_step: int | None = None
         self.last_checkpoint_step: int | None = None
+        self.last_checkpoint_time = time.monotonic()
+        self._checkpoint_seq = 0
+        self._writer: threading.Thread | None = None
+        self._writer_queue: queue.Queue[Any] = queue.Queue(maxsize=1)
+        self._writer_error: BaseException | None = None
         self._order_cache: tuple[int, list[int]] | None = None
 
     # -- data ---------------------------------------------------------------------------
@@ -212,41 +233,100 @@ class TrainingLoop:
             self.callbacks.on_phase(phase, self.step)
 
     def _write_checkpoint(self) -> None:
+        """Snapshot the run state now; write, hand over (``on_checkpoint``) and delete it in the background.
+
+        The training thread pauses only for ``task.snapshot()`` (an in-memory copy of the
+        trainable weights and optimizer state) and a hard-linked copy of ``best/``. A task
+        without ``snapshot`` is written to disk here and only handed over in the background.
+        """
         self._phase("checkpointing")
-        directory = self.workdir / "checkpoints" / f"step-{self.step:06d}"
+        self._writer_check()
+        self._checkpoint_seq += 1
+        directory = self.workdir / "checkpoints" / f"step-{self.step:06d}-{self._checkpoint_seq}"
         shutil.rmtree(directory, ignore_errors=True)
         directory.mkdir(parents=True)
-        self.task.export(directory)
         state_dir = directory / STATE_DIR
-        state_dir.mkdir()
-        self.task.save_weights(state_dir / "weights")
-        self.task.save_state(state_dir / "task")
+        snapshot_fn = getattr(self.task, "snapshot", None)
+        snapshot = snapshot_fn() if snapshot_fn is not None else None
+        if snapshot is None:
+            self.task.export(directory)
+            state_dir.mkdir()
+            self.task.save_weights(state_dir / "weights")
+            self.task.save_state(state_dir / "task")
+        else:
+            state_dir.mkdir()
         if self.best_dir.is_dir():
-            shutil.copytree(self.best_dir, state_dir / "best")
+            # Hard links: a later eval replaces best/ with new files, these keep the old ones.
+            shutil.copytree(self.best_dir, state_dir / "best", copy_function=os.link)
         (state_dir / LOOP_STATE_FILE).write_text(json.dumps(self._loop_state(), sort_keys=True))
 
-        eval_score = self.last_eval_score if self.last_eval_step == self.step else None
+        step = self.step
+        eval_score = self.last_eval_score if self.last_eval_step == step else None
         metadata = {
             **self.checkpoint_metadata,
-            "step": self.step,
+            "step": step,
             "tokens_total": self.tokens_total,
             "metric_name": self.task.metric_name,
             "metric_mode": self.task.metric_mode,
-            "eval_metrics": self.last_eval if self.last_eval_step == self.step else None,
+            "eval_metrics": self.last_eval if self.last_eval_step == step else None,
             "manifest": {
                 **self.checkpoint_metadata.get("manifest", {}),
                 "format": self.task.artifact_format,
-                "checkpoint_step": self.step,
+                "checkpoint_step": step,
                 **self.task.manifest(),
             },
         }
-        if self.callbacks.on_checkpoint:
-            self.callbacks.on_checkpoint(self.step, eval_score, directory, metadata)
-        self.last_checkpoint_step = self.step
-        # Only the newest checkpoint is kept on local disk; uploaded copies live on the server.
-        for old in (self.workdir / "checkpoints").iterdir():
-            if old != directory:
-                shutil.rmtree(old, ignore_errors=True)
+
+        def finish() -> None:
+            try:
+                if snapshot is not None:
+                    self.task.write_snapshot(snapshot, directory, state_dir / "weights", state_dir / "task")  # type: ignore[attr-defined]
+                if self.callbacks.on_checkpoint:
+                    self.callbacks.on_checkpoint(step, eval_score, directory, metadata)
+            finally:
+                shutil.rmtree(directory, ignore_errors=True)
+
+        self._writer_submit(finish)
+        self.last_checkpoint_step = step
+        self.last_checkpoint_time = time.monotonic()
+
+    # -- background checkpoint writer ----------------------------------------------------
+    # One thread, one checkpoint at a time, in order: never two uploads in flight. A second
+    # checkpoint waits (the queue holds one), and an error (lease lost, auth) surfaces on the
+    # training thread at the next checkpoint or when the loop ends.
+    def _writer_loop(self) -> None:
+        while (job := self._writer_queue.get()) is not None:
+            try:
+                if self._writer_error is None:
+                    job()
+            except BaseException as exc:  # re-raised on the training thread
+                self._writer_error = exc
+
+    def _writer_check(self) -> None:
+        if self._writer_error is not None:
+            error, self._writer_error = self._writer_error, None
+            raise error
+
+    def _writer_submit(self, job: Any) -> None:
+        if self._writer is None:
+            self._writer = threading.Thread(target=self._writer_loop, name="checkpoint-writer", daemon=True)
+            self._writer.start()
+        self._writer_queue.put(job)
+
+    def _writer_drain(self) -> None:
+        if self._writer is not None:
+            self._writer_queue.put(None)
+            self._writer.join()
+            self._writer = None
+
+    def _checkpoint_due(self) -> bool:
+        minutes = self.spec.checkpoint_every_minutes
+        return (
+            self.step % self.checkpoint_every == 0
+            or self.step == self.total_steps
+            or self.last_eval_step == self.step
+            or (minutes is not None and time.monotonic() - self.last_checkpoint_time >= minutes * 60)
+        )
 
     @property
     def last_eval_score(self) -> float | None:
@@ -269,6 +349,14 @@ class TrainingLoop:
 
     # -- main ---------------------------------------------------------------------------
     def run(self) -> LoopResult:
+        try:
+            result = self._run()
+        finally:
+            self._writer_drain()  # every checkpoint is handed over before the run returns
+        self._writer_check()
+        return result
+
+    def _run(self) -> LoopResult:
         warnings: list[str] = []
         if self.resume is not None:
             self._restore(self.resume)
@@ -344,7 +432,7 @@ class TrainingLoop:
             if stop:
                 status = "cancelled"
                 break
-            if self.step % self.checkpoint_every == 0 or self.step == self.total_steps:
+            if self._checkpoint_due():
                 self._write_checkpoint()
                 if self.step < self.total_steps:
                     self._phase("training")

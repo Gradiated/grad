@@ -87,7 +87,7 @@ class DPOTask(TorchTask):
         self.resolved = self.resolve(spec.model, "causal_lm")
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
-        base_lm = tc.load_causal_lm(self.resolved, self.device)
+        base_lm = self.load_lm(self.resolved)
         self.max_len = tc.model_max_len(base_lm, spec)
         self.truncated = 0
         train_pairs, dropped_train = extract_pairs(train)
@@ -147,14 +147,14 @@ class DPOTask(TorchTask):
             trained[i, : len(t)] = torch.tensor(t, dtype=torch.bool)
         hidden = self.lm.model(input_ids=ids, attention_mask=mask).last_hidden_state
         target = trained[:, 1:]
-        logits = self.lm.lm_head(hidden[:, :-1][target]).float()
-        token_logp = torch.log_softmax(logits, -1).gather(1, ids[:, 1:][target][:, None])[:, 0]
+        losses, _ = tc.chunked_cross_entropy(self.lm.lm_head, hidden[:, :-1][target], ids[:, 1:][target])
+        token_logp = -losses
         rows = torch.arange(ids.shape[0], device=self.device)[:, None].expand_as(target)[target]
         return torch.zeros(ids.shape[0], device=self.device).index_add(0, rows, token_logp)
 
     def _score_reference(self, split: str, pairs: list[Any]) -> None:
         lengths = [max(len(c[0]), len(r[0])) for c, r in pairs]
-        for chunk in tc.chunk_by_tokens(range(len(pairs)), lengths, max(1, self.spec.micro_batch_tokens // 2)):
+        for chunk in tc.chunk_by_tokens(range(len(pairs)), lengths, max(1, self.micro_batch_tokens // 2)):
             self._reference(split, chunk, pairs, adapter=True)
 
     def _reference(
@@ -178,7 +178,7 @@ class DPOTask(TorchTask):
         lengths = [max(len(pairs[i][0][0]), len(pairs[i][1][0])) for i in range(len(pairs))]
         n = len(indices)
         totals = {"loss": 0.0, "margin": 0.0, "accuracy": 0.0, "chosen_reward": 0.0, "rejected_reward": 0.0}
-        for chunk in tc.chunk_by_tokens(indices, lengths, max(1, self.spec.micro_batch_tokens // 2)):
+        for chunk in tc.chunk_by_tokens(indices, lengths, max(1, self.micro_batch_tokens // 2)):
             ref_c, ref_r = self._reference(split, chunk, pairs)
             with torch.set_grad_enabled(grad):
                 logps = self._sequence_logps([s for i in chunk for s in pairs[i]])
@@ -213,8 +213,8 @@ class DPOTask(TorchTask):
             metrics={"eval_loss": t["loss"], "eval_reward_margin": t["margin"]},
         )
 
-    def export(self, directory: Path) -> None:
-        tc.export_peft_adapter(self.model, directory, self.resolved)
+    def export(self, directory: Path, params: dict[str, Any] | None = None) -> None:
+        tc.export_peft_adapter(self.model, directory, self.resolved, state_dict=params)
 
     def manifest(self) -> dict[str, Any]:
         return {

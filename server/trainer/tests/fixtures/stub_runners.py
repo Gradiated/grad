@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from grad_trainer.errors import GPUOutOfMemoryError
 from grad_trainer.runner_types import ImportSummary, RunOutput
 
 #: The stable manifest fields of a peft_lora bundle (docs/ARTIFACT_FORMATS.md).
@@ -45,15 +46,21 @@ class StubRunner:
         self,
         *,
         steps: int = 3,
-        checkpoint_at: int | str | None = 2,
+        checkpoint_at: int | tuple[int, ...] | str | None = 2,
         raise_at: int | None = None,
+        oom_runs: int = 0,
         step_sleep: float = 0.0,
         status: str = "completed",
         manifest: dict[str, Any] | None = None,
     ) -> None:
         self.steps = steps
-        self.checkpoint_at = checkpoint_at
+        self.checkpoint_at = checkpoint_at  # "on_stop": checkpoint the step a stop lands on
+        if isinstance(checkpoint_at, int):
+            self.checkpoint_steps: tuple[int, ...] = (checkpoint_at,)
+        else:
+            self.checkpoint_steps = () if checkpoint_at is None or isinstance(checkpoint_at, str) else tuple(checkpoint_at)
         self.raise_at = raise_at
+        self.oom_runs = oom_runs  # the first N calls run out of GPU memory at step 1
         self.step_sleep = step_sleep
         self.status = status
         self.manifest = manifest if manifest is not None else {**STUB_MANIFEST, "kind": "final"}
@@ -74,6 +81,8 @@ class StubRunner:
                 "base_files": sorted(p.name for p in base.directory.iterdir()) if base else None,
             }
         )
+        if len(self.calls) <= self.oom_runs:
+            raise GPUOutOfMemoryError("qwen/qwen3-8b", int(config.get("micro_batch_tokens") or 16384), "FakeGPU (80.0 GiB)")
         start = resume.step + 1 if resume else 1
         tokens = 0
         status = self.status
@@ -98,7 +107,7 @@ class StubRunner:
             if stop:
                 status = "cancelled"
                 break
-            if self.checkpoint_at == step:
+            if step in self.checkpoint_steps:
                 ckpt = Path(workdir) / f"ckpt-{step}"
                 write_lora(ckpt)
                 callbacks.on_checkpoint(
