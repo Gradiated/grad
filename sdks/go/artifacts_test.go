@@ -1,0 +1,333 @@
+package grad_test
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	grad "github.com/Gradiated/grad/sdks/go"
+)
+
+func bundleRoute(payload []byte, sha string) route {
+	return func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if sha != "" {
+			w.Header().Set("X-Artifact-Sha256", sha)
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="support-sft-2026-11-27-1.grad.tar.gz"`)
+		_, _ = w.Write(payload)
+	}
+}
+
+func noTemps(t *testing.T, dir string) {
+	t.Helper()
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".grad-download-") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestArtifactDownloadVerifiesChecksum(t *testing.T) {
+	ctx := context.Background()
+	payload := []byte(strings.Repeat("adapter-bytes-", 5000))
+	sum := sha256.Sum256(payload)
+	good := hex.EncodeToString(sum[:])
+	f := newFake(t, map[string]route{
+		"GET /v1/artifacts/good/download":     bundleRoute(payload, strings.ToUpper(good)),
+		"GET /v1/artifacts/missing/download":  bundleRoute(payload, ""),
+		"GET /v1/artifacts/nonhex/download":   bundleRoute(payload, strings.Repeat("z", 64)),
+		"GET /v1/artifacts/mismatch/download": bundleRoute(payload, strings.Repeat("a", 64)),
+	})
+	c, _ := f.client()
+
+	dir := t.TempDir()
+	d, err := c.Artifacts.Download(ctx, "good", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Path != filepath.Join(dir, "support-sft-2026-11-27-1.grad.tar.gz") || d.SHA256 != good || d.SizeBytes != int64(len(payload)) {
+		t.Fatalf("download %+v", d)
+	}
+	if raw, _ := os.ReadFile(d.Path); string(raw) != string(payload) {
+		t.Fatal("content differs")
+	}
+	if info, _ := os.Stat(d.Path); info.Mode().Perm() != 0o644 {
+		t.Fatalf("mode %v", info.Mode())
+	}
+	file := filepath.Join(dir, "nested", "out.tgz")
+	if d, err := c.Artifacts.Download(ctx, "good", file); err != nil || d.Path != file {
+		t.Fatalf("file dest %v %v", d, err)
+	}
+	if d, err := c.Artifacts.Download(ctx, "good", filepath.Join(dir, "newdir")+"/"); err != nil || filepath.Base(d.Path) != "support-sft-2026-11-27-1.grad.tar.gz" {
+		t.Fatalf("new dir dest %v %v", d, err)
+	}
+
+	for _, ref := range []string{"missing", "nonhex", "mismatch"} {
+		out := t.TempDir()
+		_, err := c.Artifacts.Download(ctx, ref, filepath.Join(out, "a.tgz"))
+		var cm *grad.ChecksumMismatchError
+		if !errors.As(err, &cm) || !errors.Is(err, grad.ErrChecksumMismatch) {
+			t.Fatalf("%s: %T %v", ref, err, err)
+		}
+		var base *grad.GradError
+		if !errors.As(err, &base) {
+			t.Fatalf("%s: not a GradError", ref)
+		}
+		if _, statErr := os.Stat(filepath.Join(out, "a.tgz")); !os.IsNotExist(statErr) {
+			t.Fatalf("%s: destination written", ref)
+		}
+		noTemps(t, out)
+	}
+	if _, err := c.Artifacts.Download(ctx, "mismatch", filepath.Join(dir, "unchecked.tgz"), grad.SkipChecksum()); err != nil {
+		t.Fatalf("skip checksum: %v", err)
+	}
+	if _, err := c.Artifacts.Download(ctx, "absent", dir); !grad.IsNotFound(err) {
+		t.Fatalf("404: %v", err)
+	}
+	noTemps(t, dir)
+
+	stream, err := c.Artifacts.Open(ctx, "good")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(stream.Body)
+	stream.Body.Close()
+	if err != nil || len(raw) != len(payload) || stream.SHA256 != good || stream.FileName == "" {
+		t.Fatalf("open %v %d", err, len(raw))
+	}
+	bad, err := c.Artifacts.Open(ctx, "mismatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.ReadAll(bad.Body)
+	bad.Body.Close()
+	if !errors.Is(err, grad.ErrChecksumMismatch) {
+		t.Fatalf("open mismatch: %v", err)
+	}
+	if _, err := c.Artifacts.Open(ctx, "missing"); !errors.Is(err, grad.ErrChecksumMismatch) {
+		t.Fatalf("open missing header: %v", err)
+	}
+}
+
+func TestArtifactsGetListAndHelpers(t *testing.T) {
+	ctx := context.Background()
+	art := wireMap(t, "artifact.json")
+	id := art["id"].(string)
+	payload := []byte("bundle")
+	sum := sha256.Sum256(payload)
+	f := newFake(t, map[string]route{
+		"GET /v1/artifacts/" + id:                jsonValue(200, art),
+		"GET /v1/artifacts":                      jsonBody(200, wire(t, "artifacts-page.json")),
+		"GET /v1/artifacts/" + id + "/download":  bundleRoute(payload, hex.EncodeToString(sum[:])),
+		"POST /v1/deployments":                   jsonBody(200, wire(t, "deployment.json")),
+		"POST /v1/embeddings":                    jsonBody(200, wire(t, "embeddings.json")),
+		"GET /v1/runs/" + art["run_id"].(string): jsonBody(200, wire(t, "run-completed.json")),
+	})
+	c, _ := f.client()
+	a, err := c.Artifacts.Get(ctx, id)
+	if err != nil || a.Ref() != art["name"].(string)+"@"+art["version"].(string) {
+		t.Fatalf("get %v %v", a, err)
+	}
+	list, err := grad.Collect(c.Artifacts.List(ctx, "support-sft"))
+	if err != nil || len(list) == 0 {
+		t.Fatalf("list %v", err)
+	}
+	if q := f.last("GET", "/v1/artifacts").Query; q != "name=support-sft" {
+		t.Fatalf("list query %s", q)
+	}
+	if _, err := a.Download(ctx, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Deploy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if body := f.last("POST", "/v1/deployments").JSON(t); len(body) != 1 || body["artifact"] != id {
+		t.Fatalf("deploy body %v", body)
+	}
+	emb, err := a.Embed(ctx, "rotate api keys")
+	if err != nil || len(emb.Data) != 2 {
+		t.Fatalf("embed %v", err)
+	}
+	if body := f.last("POST", "/v1/embeddings").JSON(t); body["model"] != art["name"] || body["input"] != "rotate api keys" {
+		t.Fatalf("embed body %v", body)
+	}
+	if _, err := c.Embeddings.Create(ctx, "docs-embedder", "a", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if body := f.last("POST", "/v1/embeddings").JSON(t); len(body["input"].([]any)) != 2 {
+		t.Fatalf("batch embed body %v", body)
+	}
+	run, err := c.Runs.Get(ctx, art["run_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.Download(ctx, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeploymentsRouteFeedbackKeysModels(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t, map[string]route{
+		"GET /v1/deployments/support-router":           jsonBody(200, wire(t, "deployment-status.json")),
+		"GET /v1/deployments":                          jsonBody(200, wire(t, "deployments-page.json")),
+		"POST /v1/deployments/support-router/rollback": jsonBody(200, wire(t, "deployment.json")),
+		"POST /v1/route":                               jsonBody(200, wire(t, "route.json")),
+		"POST /v1/feedback":                            jsonBody(200, wire(t, "feedback-response.json")),
+		"POST /v1/keys":                                jsonBody(201, wire(t, "api-key-created.json")),
+		"GET /v1/keys":                                 jsonBody(200, wire(t, "api-keys-page.json")),
+		"DELETE /v1/keys/key_1":                        jsonValue(200, wireMap(t, "api-key-created.json")["key"]),
+		"GET /v1/models":                               jsonBody(200, wire(t, "models.json")),
+	})
+	c, _ := f.client()
+	st, err := c.Deployments.Get(ctx, "support-router")
+	if err != nil || st.FeedbackCount != 2 || st.Deployment.FallbackModel == nil {
+		t.Fatalf("get %+v %v", st, err)
+	}
+	if deps, err := grad.Collect(c.Deployments.List(ctx)); err != nil || len(deps) != 1 {
+		t.Fatalf("list %v", err)
+	}
+	if _, err := c.Deployments.Rollback(ctx, "support-router"); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := []grad.Message{{Role: "user", Content: "Where is invoice #9941?"}}
+	decision, err := c.Route(ctx, "support-router", grad.RouteInput{Messages: messages, Tools: []map[string]any{{"type": "function"}}, SessionID: "s1"})
+	if err != nil || decision.Model != "qwen/qwen3-8b" || decision.InferenceID == "" {
+		t.Fatalf("route %+v %v", decision, err)
+	}
+	if body := f.last("POST", "/v1/route").JSON(t); body["deployment"] != "support-router" || body["session_id"] != "s1" || len(body["tools"].([]any)) != 1 {
+		t.Fatalf("route body %v", body)
+	}
+	if err := decision.RecordFeedback(ctx, grad.Feedback{Score: 0, Metrics: map[string]float64{"latency_ms": 412}}); err != nil {
+		t.Fatal(err)
+	}
+	ev := f.last("POST", "/v1/feedback").JSON(t)["events"].([]any)[0].(map[string]any)
+	if ev["inference_id"] != decision.InferenceID || ev["deployment_name"] != "support-router" || ev["idempotency_key"] != decision.InferenceID || ev["score"] != 0.0 {
+		t.Fatalf("feedback event %v", ev)
+	}
+	if err := c.Feedback.Record(ctx, grad.Feedback{SessionID: "s9", OmitScore: true, ExpectedOutput: map[string]any{"content": "fixed"}}); err != nil {
+		t.Fatal(err)
+	}
+	ev = f.last("POST", "/v1/feedback").JSON(t)["events"].([]any)[0].(map[string]any)
+	if _, has := ev["score"]; has || !strings.HasPrefix(ev["idempotency_key"].(string), "fb_") || ev["expected_output"].(map[string]any)["content"] != "fixed" {
+		t.Fatalf("feedback without score %v", ev)
+	}
+	resp, err := c.Feedback.RecordMany(ctx, grad.Feedback{InferenceID: "a", IdempotencyKey: "k1", Score: 1}, grad.Feedback{InferenceID: "b", Score: 0.5})
+	if err != nil || resp.Accepted != 1 {
+		t.Fatalf("many %v", err)
+	}
+	if evs := f.last("POST", "/v1/feedback").JSON(t)["events"].([]any); len(evs) != 2 || evs[0].(map[string]any)["idempotency_key"] != "k1" {
+		t.Fatalf("many body %v", evs)
+	}
+
+	key, err := c.Keys.Create(ctx, "ci", "runs:read", "datasets:write")
+	if err != nil || key.Secret == "" {
+		t.Fatalf("key %v", err)
+	}
+	if body := f.last("POST", "/v1/keys").JSON(t); len(body["scopes"].([]any)) != 2 {
+		t.Fatalf("key body %v", body)
+	}
+	if keys, err := grad.Collect(c.Keys.List(ctx)); err != nil || len(keys) == 0 {
+		t.Fatalf("keys %v", err)
+	}
+	if _, err := c.Keys.Revoke(ctx, "key_1"); err != nil {
+		t.Fatal(err)
+	}
+	models, err := c.Models.List(ctx)
+	if err != nil || len(models) < 2 {
+		t.Fatalf("models %v", err)
+	}
+}
+
+func TestEverythingSurfacesConfigErrors(t *testing.T) {
+	ctx := context.Background()
+	c := grad.NewClient(grad.WithBaseURL("not a url"), grad.WithEnv(noEnv))
+	var gerr *grad.GradError
+	check := func(name string, err error) {
+		t.Helper()
+		if !errors.As(err, &gerr) || gerr.Code != "invalid_base_url" {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	_, err := c.Datasets.Create(ctx, "d")
+	check("create", err)
+	_, err = c.Datasets.Get(ctx, "d")
+	check("get", err)
+	_, err = c.Datasets.Push(ctx, "d", []grad.Trajectory{{}})
+	check("push", err)
+	_, err = c.Datasets.Render(ctx, "d", grad.RenderOptions{})
+	check("render", err)
+	_, err = c.Runs.Plan(ctx, grad.RunParams{})
+	check("plan", err)
+	_, err = c.Runs.Create(ctx, grad.RunParams{}).Wait(ctx)
+	check("create run", err)
+	_, err = c.Runs.Get(ctx, "r")
+	check("get run", err)
+	_, err = c.Runs.Cancel(ctx, "r")
+	check("cancel", err)
+	_, err = c.Runs.Resume(ctx, "r", 0)
+	check("resume", err)
+	_, err = c.Runs.Checkpoints(ctx, "r")
+	check("checkpoints", err)
+	_, err = c.Checkpoints.Promote(ctx, "c", "")
+	check("promote", err)
+	_, err = c.Artifacts.Get(ctx, "a")
+	check("artifact", err)
+	_, err = c.Artifacts.Download(ctx, "a", t.TempDir())
+	check("download", err)
+	_, err = c.Artifacts.Open(ctx, "a")
+	check("open", err)
+	_, err = c.Deployments.Create(ctx, "a")
+	check("deploy", err)
+	_, err = c.Deployments.Get(ctx, "a")
+	check("deployment", err)
+	_, err = c.Deployments.Rollback(ctx, "a")
+	check("rollback", err)
+	_, err = c.Route(ctx, "a", grad.RouteInput{})
+	check("route", err)
+	check("feedback", c.Feedback.Record(ctx, grad.Feedback{}))
+	_, err = c.Embeddings.Create(ctx, "m", "x")
+	check("embed", err)
+	_, err = c.Models.List(ctx)
+	check("models", err)
+	_, err = c.Keys.Create(ctx, "k")
+	check("key", err)
+	_, err = c.Keys.Revoke(ctx, "k")
+	check("revoke", err)
+	_, err = c.Imports.Get(ctx, "i")
+	check("import", err)
+	_, err = c.Evals.Plan(ctx, grad.EvalParams{})
+	check("eval plan", err)
+	_, err = c.Evals.Create(ctx, grad.EvalParams{}).Wait(ctx)
+	check("eval create", err)
+	_, err = c.Evals.Get(ctx, "e")
+	check("eval get", err)
+	_, err = c.Evals.Cancel(ctx, "e")
+	check("eval cancel", err)
+	_, err = c.Evals.Failures(ctx, "e", grad.FailureOptions{})
+	check("failures", err)
+	for name, seq := range map[string]func() error{
+		"datasets":    func() error { _, err := grad.Collect(c.Datasets.List(ctx)); return err },
+		"records":     func() error { _, err := grad.Collect(c.Datasets.Records(ctx, "d")); return err },
+		"imports":     func() error { _, err := grad.Collect(c.Imports.List(ctx)); return err },
+		"runs":        func() error { _, err := grad.Collect(c.Runs.List(ctx)); return err },
+		"metrics":     func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", false)); return err },
+		"follow":      func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", true)); return err },
+		"artifacts":   func() error { _, err := grad.Collect(c.Artifacts.List(ctx, "")); return err },
+		"deployments": func() error { _, err := grad.Collect(c.Deployments.List(ctx)); return err },
+		"evals":       func() error { _, err := grad.Collect(c.Evals.List(ctx)); return err },
+		"keys":        func() error { _, err := grad.Collect(c.Keys.List(ctx)); return err },
+	} {
+		check(name, seq())
+	}
+}
