@@ -1,33 +1,9 @@
 import type { Context } from "hono";
 import { z } from "@hono/zod-openapi";
 
-import {
-  hasScope,
-  type AuthAdapter,
-  type AuthPrincipal,
-  type BillingAdapter,
-  type DeployAdapter,
-} from "../adapters.js";
-import {
-  DatasetRecordSchema,
-  ProblemSchema,
-  type ApiKeyScope,
-  type ArtifactFormat,
-  type DatasetRecord,
-} from "../contracts.js";
-import type { EnvWorkerHub } from "../env-hub.js";
-import type { ObjectStore } from "../storage.js";
-import type { TrainingStore } from "../store.js";
-
-export interface AppDependencies {
-  store: TrainingStore;
-  storage: ObjectStore;
-  auth: AuthAdapter;
-  billing: BillingAdapter;
-  deploy: DeployAdapter;
-  envHub: EnvWorkerHub;
-  allowWave2Recipes?: boolean;
-}
+import { hasScope, type AuthPrincipal } from "../adapters.js";
+import { ProblemSchema, type Scope } from "../contracts.js";
+import { ApiError, type ProblemStatus } from "../errors.js";
 
 export type AppEnv = {
   Variables: {
@@ -48,18 +24,42 @@ export const jsonResponse = <T extends z.ZodType>(
   content: { "application/json": { schema } },
 });
 
+const problem = (description: string) => ({
+  description,
+  content: problemContent,
+});
+
 export const defaultErrors = {
-  400: { description: "Bad request.", content: problemContent },
-  401: { description: "Authentication required.", content: problemContent },
-  403: { description: "Insufficient scope.", content: problemContent },
-  404: { description: "Resource not found.", content: problemContent },
-  409: { description: "Conflict.", content: problemContent },
-  422: { description: "Validation failed.", content: problemContent },
+  400: problem("Malformed request."),
+  401: problem("Authentication required."),
+  403: problem("Insufficient scope."),
+  404: problem("Resource not found."),
+  409: problem("Conflict."),
+  422: problem("Validation failed."),
+  500: problem("Internal error."),
+  503: problem("Dependency unavailable."),
 };
 
-export const respondProblem = <
-  S extends 400 | 401 | 403 | 404 | 409 | 413 | 422 | 501 | 503,
->(
+export const notImplementedError = {
+  501: problem("Capability not configured on this server."),
+};
+
+export const problemBody = (
+  status: number,
+  code: string,
+  title: string,
+  detail: string,
+  requestId: string,
+) => ({
+  type: `https://gradiated.com/problems/${code}`,
+  title,
+  status,
+  detail,
+  code,
+  request_id: requestId,
+});
+
+export const respondProblem = <S extends ProblemStatus>(
   c: Context<AppEnv>,
   status: S,
   code: string,
@@ -67,23 +67,25 @@ export const respondProblem = <
   detail: string,
 ) =>
   c.json(
-    {
-      type: `https://gradiated.com/problems/${code}`,
-      title,
+    problemBody(
       status,
-      detail,
       code,
-      request_id: c.get("requestId") ?? "req_unknown",
-    },
+      title,
+      detail,
+      c.get("requestId") ?? "req_unknown",
+    ),
     status,
     { "Content-Type": "application/problem+json" },
   );
 
-export const requireScope = (c: Context<AppEnv>, scope: ApiKeyScope) => {
+/** Throws 403 unless the authenticated principal holds `scope`. */
+export const requireScope = (
+  c: Context<AppEnv>,
+  scope: Scope,
+): AuthPrincipal => {
   const principal = c.get("principal");
   if (!hasScope(principal, scope)) {
-    return respondProblem(
-      c,
+    throw new ApiError(
       403,
       "forbidden",
       "Insufficient scope",
@@ -91,44 +93,11 @@ export const requireScope = (c: Context<AppEnv>, scope: ApiKeyScope) => {
     );
   }
 
-  return null;
+  return principal;
 };
 
-export const readDatasetRecords = async (
-  storage: ObjectStore,
-  storageKey: string,
-): Promise<DatasetRecord[]> => {
-  const bytes = await storage.get(storageKey);
-  const text = Buffer.from(bytes).toString("utf8").trim();
-  if (!text) return [];
+/** Workspace id of a workspace-scoped caller (after a scope check). */
+export const workspaceOf = (c: Context<AppEnv>, scope: Scope): string =>
+  requireScope(c, scope).workspaceId;
 
-  return text
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => DatasetRecordSchema.parse(JSON.parse(line)));
-};
-
-export const writeDatasetRecords = async (
-  storage: ObjectStore,
-  storageKey: string,
-  records: readonly DatasetRecord[],
-): Promise<void> => {
-  const jsonl = `${records.map((r) => JSON.stringify(r)).join("\n")}\n`;
-
-  await storage.put(storageKey, Buffer.from(jsonl, "utf8"));
-};
-
-export const defaultFormatForRecipe = (recipeKind: string): ArtifactFormat => {
-  switch (recipeKind) {
-    case "cartridge":
-      return "cartridge";
-    case "embedding":
-      return "encoder_safetensors";
-    case "router":
-      return "router_bundle";
-    case "decision":
-      return "decision_bundle";
-    default:
-      return "peft_lora";
-  }
-};
+export const IdParamSchema = z.object({ id: z.string().min(1).max(200) });

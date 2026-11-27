@@ -1,106 +1,53 @@
 import { serve } from "@hono/node-server";
 
-import {
-  createDisabledDeployAdapter,
-  createLocalApiKeyAuth,
-  createLocalDeployAdapter,
-  createLocalNoneAuth,
-  createNoopBillingAdapter,
-} from "./adapters.js";
-import {
-  createCloudAuthAdapter,
-  createCloudBillingAdapter,
-  createCloudDeployAdapter,
-} from "./adapters-cloud.js";
-import { createApp } from "./app.js";
+import { createGradApp } from "./app.js";
+import { buildDependencies, log } from "./bootstrap.js";
 import { parseServerEnvironment } from "./environment.js";
-import { EnvWorkerHub } from "./env-hub.js";
-import { LocalObjectStore, S3ObjectStore } from "./storage.js";
-import {
-  InMemoryTrainingStore,
-  PostgresTrainingStore,
-  type TrainingStore,
-} from "./store.js";
 
 const main = async () => {
   const env = parseServerEnvironment();
+  for (const warning of env.warnings) log("warn", warning);
 
-  const store: TrainingStore = env.DATABASE_URL
-    ? new PostgresTrainingStore(env.DATABASE_URL)
-    : new InMemoryTrainingStore();
+  const deps = await buildDependencies(env);
+  const { app, services } = createGradApp(deps);
 
-  if (store.migrate) {
-    await store.migrate();
-  }
-
-  const storage = env.S3_BUCKET
-    ? new S3ObjectStore(env.S3_BUCKET, env.S3_REGION, env.S3_ENDPOINT)
-    : new LocalObjectStore(env.STORAGE_DIR);
-
-  const cloudConfig = () => {
-    const internalApiBaseUrl = env.CLOUD_INTERNAL_API_URL?.trim();
-    const serviceToken = env.CLOUD_SERVICE_TOKEN?.trim();
-    if (!internalApiBaseUrl || !serviceToken) {
-      throw new Error(
-        "CLOUD_INTERNAL_API_URL and CLOUD_SERVICE_TOKEN are required when using cloud adapters.",
-      );
-    }
-    return {
-      internalApiBaseUrl,
-      serviceToken,
-    };
-  };
-
-  const auth =
-    env.AUTH_MODE === "cloud"
-      ? createCloudAuthAdapter(cloudConfig())
-      : env.AUTH_MODE === "api_key"
-        ? createLocalApiKeyAuth({
-            ...(env.ADMIN_API_KEY_HASH
-              ? { adminKeyHash: env.ADMIN_API_KEY_HASH }
-              : {}),
-            workspaceId: env.DEFAULT_WORKSPACE_ID,
-            lookup: store,
-          })
-        : createLocalNoneAuth(env.DEFAULT_WORKSPACE_ID);
-
-  const billing =
-    env.BILLING_MODE === "cloud"
-      ? createCloudBillingAdapter(cloudConfig())
-      : createNoopBillingAdapter();
-
-  const deploy =
-    env.DEPLOY_MODE === "cloud"
-      ? createCloudDeployAdapter(cloudConfig())
-      : env.DEPLOY_MODE === "local"
-        ? createLocalDeployAdapter()
-        : createDisabledDeployAdapter();
-
-  const app = createApp({
-    store,
-    storage,
-    auth,
-    billing,
-    deploy,
-    envHub: new EnvWorkerHub(),
-    allowWave2Recipes: env.ALLOW_WAVE2_RECIPES,
-  });
+  services.maintenance.start(env.MAINTENANCE_INTERVAL_MS);
+  if (env.EVAL_EXECUTOR && deps.inference) services.evals.start(1000);
 
   const server = serve({
     fetch: app.fetch,
     hostname: env.HOST,
     port: env.PORT,
   });
+  log("info", "grad-server listening", {
+    url: `http://${env.HOST}:${env.PORT}`,
+    auth_mode: env.AUTH_MODE,
+    deploy_mode: env.DEPLOY_MODE,
+    store: env.DATABASE_URL ? "postgres" : "memory",
+    storage: deps.storage.kind,
+    inference: deps.inference ? "configured" : "unavailable",
+  });
 
-  console.log(`grad-server listening on http://${env.HOST}:${env.PORT}`);
-
-  const shutdown = async () => {
+  let stopping = false;
+  const shutdown = async (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    log("info", "grad-server shutting down", { signal });
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await store.close?.();
+    await services.maintenance.stop();
+    await services.evals.stop();
+    await deps.regex.close();
+    await deps.store.close();
+    process.exit(0);
   };
 
-  process.once("SIGTERM", () => void shutdown());
-  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 };
 
-void main();
+main().catch((error: unknown) => {
+  log("error", "grad-server failed to start", {
+    error: error instanceof Error ? error.message : String(error),
+  });
+  process.exit(1);
+});

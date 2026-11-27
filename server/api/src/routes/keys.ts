@@ -1,17 +1,21 @@
-import { createRoute, type OpenAPIHono, z } from "@hono/zod-openapi";
+import { createRoute, type OpenAPIHono } from "@hono/zod-openapi";
+import { z } from "@hono/zod-openapi";
 
 import {
   ApiKeySchema,
   CreateApiKeyRequestSchema,
+  CreatedApiKeySchema,
+  pageOf,
+  PageQuerySchema,
   TrainableModelSchema,
 } from "../contracts.js";
-import { TRAINABLE_MODELS } from "../planner.js";
+import type { AppDependencies } from "../deps.js";
+import { notFound } from "../errors.js";
 import {
   defaultErrors,
+  IdParamSchema,
   jsonResponse,
-  requireScope,
-  respondProblem,
-  type AppDependencies,
+  workspaceOf,
   type AppEnv,
 } from "./helpers.js";
 
@@ -19,127 +23,107 @@ export const registerModelsAndKeysRoutes = (
   app: OpenAPIHono<AppEnv>,
   deps: AppDependencies,
 ): void => {
-  const listModelsRoute = createRoute({
-    method: "get",
-    path: "/v1/models",
-    operationId: "listModels",
-    summary: "List trainable base models",
-    tags: ["Models"],
-    responses: {
-      200: jsonResponse(
-        z.object({ data: z.array(TrainableModelSchema) }),
-        "Trainable catalog models.",
-      ),
-      ...defaultErrors,
-    },
-  });
-
-  app.openapi(listModelsRoute, (c) =>
-    c.json({ data: [...TRAINABLE_MODELS] }, 200),
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/models",
+      operationId: "listModels",
+      summary:
+        "List trainable base models (the server catalog and price source)",
+      tags: ["Models"],
+      responses: {
+        200: jsonResponse(
+          z.object({ data: z.array(TrainableModelSchema) }),
+          "Trainable catalog models.",
+        ),
+        ...defaultErrors,
+      },
+    }),
+    (c) => c.json({ data: [...deps.catalog.list()] }, 200),
   );
 
-  const createKeyRoute = createRoute({
-    method: "post",
-    path: "/v1/keys",
-    operationId: "createApiKey",
-    summary: "Create a scoped API key",
-    tags: ["Keys"],
-    request: {
-      body: {
-        required: true,
-        content: { "application/json": { schema: CreateApiKeyRequestSchema } },
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/keys",
+      operationId: "createApiKey",
+      summary:
+        "Create a scoped workspace API key (trainer worker keys are platform config, not keys)",
+      tags: ["Keys"],
+      request: {
+        body: {
+          required: true,
+          content: {
+            "application/json": { schema: CreateApiKeyRequestSchema },
+          },
+        },
       },
+      responses: {
+        201: jsonResponse(
+          CreatedApiKeySchema,
+          "Created API key (secret returned once).",
+        ),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const workspaceId = workspaceOf(c, "admin");
+      const input = c.req.valid("json");
+      const created = await deps.store.apiKeys.create({
+        workspaceId,
+        name: input.name,
+        scopes: [...new Set(input.scopes)],
+      });
+
+      return c.json(created, 201);
     },
-    responses: {
-      201: jsonResponse(
-        z.object({ key: ApiKeySchema, secret: z.string() }),
-        "Created API key (secret returned once).",
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/keys",
+      operationId: "listApiKeys",
+      summary: "List workspace API keys",
+      tags: ["Keys"],
+      request: { query: PageQuerySchema },
+      responses: {
+        200: jsonResponse(pageOf(ApiKeySchema), "Workspace keys."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) =>
+      c.json(
+        await deps.store.apiKeys.list(
+          workspaceOf(c, "admin"),
+          c.req.valid("query"),
+        ),
+        200,
       ),
-      ...defaultErrors,
-    },
-  });
+  );
 
-  app.openapi(createKeyRoute, async (c) => {
-    const denied = requireScope(c, "admin");
-    if (denied) return denied;
-
-    const body = c.req.valid("json");
-    const principal = c.get("principal");
-    if (body.scopes.includes("trainer:worker") && !principal.isPlatformAdmin) {
-      return respondProblem(
-        c,
-        403,
-        "forbidden_scope",
-        "Platform scope restricted",
-        "Only platform administrators may mint keys with the 'trainer:worker' scope.",
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/v1/keys/{id}",
+      operationId: "revokeApiKey",
+      summary: "Revoke a workspace API key",
+      tags: ["Keys"],
+      request: { params: IdParamSchema },
+      responses: {
+        200: jsonResponse(ApiKeySchema, "Revoked API key."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      const revoked = await deps.store.apiKeys.revoke(
+        workspaceOf(c, "admin"),
+        id,
       );
-    }
+      if (!revoked) throw notFound("key", id);
 
-    const created = await deps.store.createApiKey({
-      workspaceId: principal.workspaceId,
-      name: body.name,
-      scopes: body.scopes,
-    });
-
-    return c.json(created, 201);
-  });
-
-  const listKeysRoute = createRoute({
-    method: "get",
-    path: "/v1/keys",
-    operationId: "listApiKeys",
-    summary: "List scoped API keys",
-    tags: ["Keys"],
-    responses: {
-      200: jsonResponse(
-        z.object({ data: z.array(ApiKeySchema) }),
-        "Workspace keys.",
-      ),
-      ...defaultErrors,
+      return c.json(revoked, 200);
     },
-  });
-
-  app.openapi(listKeysRoute, async (c) => {
-    const denied = requireScope(c, "admin");
-    if (denied) return denied;
-
-    const data = await deps.store.listApiKeys(c.get("principal").workspaceId);
-
-    return c.json({ data }, 200);
-  });
-
-  const revokeKeyRoute = createRoute({
-    method: "delete",
-    path: "/v1/keys/{id}",
-    operationId: "revokeApiKey",
-    summary: "Revoke a scoped API key",
-    tags: ["Keys"],
-    request: { params: z.object({ id: z.string().min(1) }) },
-    responses: {
-      200: jsonResponse(ApiKeySchema, "Revoked API key."),
-      ...defaultErrors,
-    },
-  });
-
-  app.openapi(revokeKeyRoute, async (c) => {
-    const denied = requireScope(c, "admin");
-    if (denied) return denied;
-
-    const { id } = c.req.valid("param");
-    const revoked = await deps.store.revokeApiKey(
-      c.get("principal").workspaceId,
-      id,
-    );
-    if (!revoked) {
-      return respondProblem(
-        c,
-        404,
-        "key_not_found",
-        "Key not found",
-        `API key '${id}' was not found.`,
-      );
-    }
-
-    return c.json(revoked, 200);
-  });
+  );
 };

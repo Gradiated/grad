@@ -17,7 +17,8 @@
     "format:check": "prettier --check src test scripts",
     "openapi:check": "node --import tsx scripts/emit-openapi.ts --check",
     "openapi:generate": "node --import tsx scripts/emit-openapi.ts",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1135.0",
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@types/node": "20.17.50",
     "@types/pg": "8.15.6",
+    "@vitest/coverage-v8": "4.1.11",
     "prettier": "3.6.2",
     "tsx": "4.23.12",
     "typescript": "5.9.3",

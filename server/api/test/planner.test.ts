@@ -1,264 +1,440 @@
 import { describe, expect, it } from "vitest";
 
+import { createModelCatalog } from "../src/catalog.js";
 import {
   PlanRunRequestSchema,
-  type ChatMessage,
   type DatasetRecord,
+  type PlanRunRequest,
 } from "../src/contracts.js";
+import { ApiError } from "../src/errors.js";
 import { planRun, renderMessages, splitRecords } from "../src/planner.js";
+import {
+  assessRecipeUsability,
+  recordConversation,
+  recordPromptAndReference,
+} from "../src/records.js";
+import { TINY_MODELS_JSON } from "./fixtures/app.js";
 
-const makeChatRecords = (count: number): DatasetRecord[] =>
-  Array.from({ length: count }, (_, idx) => ({
-    id: `rec_${idx + 1}`,
-    session_id: `sess_${idx % 20}`,
-    messages: [
-      { role: "system", content: "You are helpful." },
-      { role: "user", content: `Question ${idx}` },
-      { role: "assistant", content: `Answer ${idx}` },
-    ],
-  }));
+const catalog = createModelCatalog(TINY_MODELS_JSON);
+
+const chat = (i: number, session = `s${i}`): DatasetRecord => ({
+  id: `r${i}`,
+  session_id: session,
+  messages: [
+    { role: "user", content: `question ${i}` },
+    { role: "assistant", content: `answer ${i}` },
+  ],
+});
+
+const request = (
+  recipe: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+): PlanRunRequest =>
+  PlanRunRequestSchema.parse({ dataset: "ds", name: "run", recipe, ...extra });
+
+const plan = (
+  recipe: Record<string, unknown>,
+  records: DatasetRecord[],
+  extra: Record<string, unknown> = {},
+  allowWave2 = false,
+) =>
+  planRun(request(recipe, extra), records, {
+    catalog,
+    datasetVersion: 3,
+    allowWave2,
+  });
+
+const expectCode = (fn: () => unknown, code: string, message?: RegExp) => {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe(code);
+    if (message) expect((error as ApiError).detail).toMatch(message);
+    return;
+  }
+  throw new Error(`expected ApiError ${code}`);
+};
 
 describe("splitRecords", () => {
-  it("never leaks records from the same session across train and eval", () => {
-    const records: DatasetRecord[] = [];
-    for (let s = 0; s < 30; s += 1) {
-      for (let turn = 0; turn < 4; turn += 1) {
-        records.push({
-          id: `s${s}_t${turn}`,
-          session_id: `session_${s}`,
-          messages: [
-            { role: "user", content: `hi ${turn}` },
-            { role: "assistant", content: `ok ${turn}` },
-          ],
-        });
-      }
-    }
-
+  it("keeps sessions on one side and treats empty ids like missing ones", () => {
+    const records = Array.from({ length: 200 }, (_, i) =>
+      chat(i, `sess-${i % 20}`),
+    );
     const { train, eval: evalSet } = splitRecords(records, {
       strategy: "by_session",
       eval_fraction: 0.2,
-      seed: 42,
+      seed: 7,
     });
-
     const trainSessions = new Set(train.map((r) => r.session_id));
-    const evalSessions = new Set(evalSet.map((r) => r.session_id));
+    expect(evalSet.every((r) => !trainSessions.has(r.session_id))).toBe(true);
 
-    expect(train.length).toBeGreaterThan(0);
-    expect(evalSet.length).toBeGreaterThan(0);
-    for (const s of evalSessions) {
-      expect(trainSessions.has(s)).toBe(false);
-    }
+    const blank = splitRecords([{ id: "", session_id: "", messages: [] }], {
+      strategy: "by_group",
+      eval_fraction: 0.5,
+      seed: 1,
+    });
+    expect(blank.train).toHaveLength(1);
+    const random = splitRecords(records, {
+      strategy: "random",
+      eval_fraction: 0,
+      seed: 1,
+    });
+    expect(random.eval).toHaveLength(0);
   });
 });
 
 describe("renderMessages", () => {
-  const multiTurn: ChatMessage[] = [
-    { role: "user", content: "First question" },
-    { role: "assistant", content: "<think>step 1</think>First answer" },
-    { role: "user", content: "Second question" },
-    { role: "assistant", content: "<think>step 2</think>Second answer" },
+  const opts = {
+    templateRevision: "qwen3@3",
+    train_on: "last" as const,
+    thinking: "auto" as const,
+    preserve_thinking: false,
+  };
+  const messages = [
+    { role: "user" as const, content: "hi" },
+    { role: "assistant" as const, content: "<think>old</think>first" },
+    { role: "user" as const, content: "again" },
+    { role: "assistant" as const, content: "<think>new</think>second" },
   ];
 
-  it("trains only the last assistant turn by default and strips prior thinking", () => {
-    const rendered = renderMessages("r1", multiTurn, {
-      model: "qwen/qwen3-8b",
-      train_on: "last",
-      thinking: "auto",
-      preserve_thinking: false,
-    });
-
-    expect(rendered.template_revision).toBe("qwen3@3");
-    const trainedSpans = rendered.spans.filter((s) => s.trained);
-    expect(trainedSpans).toHaveLength(1);
-    expect(trainedSpans[0]?.text).toContain("Second answer");
-    expect(
-      rendered.spans.some(
-        (s) =>
-          !s.trained &&
-          s.text.includes("First answer") &&
-          !s.text.includes("<think>"),
-      ),
-    ).toBe(true);
+  it("trains only the last assistant turn and strips earlier thinking", () => {
+    const r = renderMessages("r", messages, opts);
+    expect(r.spans.filter((s) => s.trained)).toHaveLength(1);
+    expect(r.spans[3]?.text).not.toContain("<think>");
+    expect(r.template_revision).toBe("qwen3@3");
   });
 
-  it("supports train_on='all_assistant' and preserve_thinking=true", () => {
-    const rendered = renderMessages("r2", multiTurn, {
-      model: "qwen/qwen3-8b",
+  it("supports all_assistant, preserve_thinking, per-message overrides and thinking checks", () => {
+    const all = renderMessages("r", messages, {
+      ...opts,
       train_on: "all_assistant",
-      thinking: "on",
       preserve_thinking: true,
     });
-
-    const trainedSpans = rendered.spans.filter((s) => s.trained);
-    expect(trainedSpans).toHaveLength(2);
-    expect(trainedSpans[0]?.text).toContain("<think>step 1</think>");
-  });
-
-  it("throws when thinking='off' encounters a <think> block in a trained turn", () => {
-    expect(() =>
-      renderMessages("r3", multiTurn, {
-        model: "qwen/qwen3-8b",
-        train_on: "last",
-        thinking: "off",
-        preserve_thinking: false,
-      }),
-    ).toThrow(/thinking='off'/);
-  });
-
-  it("throws when thinking='on' encounters a trained turn without <think>", () => {
-    expect(() =>
-      renderMessages(
-        "r4",
-        [
-          { role: "user", content: "hi" },
-          { role: "assistant", content: "plain answer" },
-        ],
-        {
-          model: "qwen/qwen3-8b",
-          train_on: "last",
-          thinking: "on",
-          preserve_thinking: false,
-        },
-      ),
-    ).toThrow(/thinking='on'/);
-  });
-
-  it("honors per-message train overrides", () => {
-    const rendered = renderMessages(
-      "r5",
+    expect(all.spans.filter((s) => s.trained)).toHaveLength(2);
+    expect(all.spans[3]?.text).toContain("<think>");
+    const override = renderMessages(
+      "r",
       [
-        { role: "user", content: "u1" },
-        { role: "assistant", content: "a1", train: true },
-        { role: "user", content: "u2" },
-        { role: "assistant", content: "a2", train: false },
+        { role: "user", content: "x", train: true },
+        { role: "assistant", content: "y", train: false },
       ],
-      {
-        model: "qwen/qwen3-8b",
-        train_on: "last",
-        thinking: "off",
-        preserve_thinking: false,
-      },
+      opts,
     );
-
-    const trained = rendered.spans.filter((s) => s.trained);
-    expect(trained).toHaveLength(1);
-    expect(trained[0]?.text).toContain("a1");
+    expect(override.spans[1]?.trained).toBe(true);
+    expect(override.spans[3]?.trained).toBe(false);
+    expect(() =>
+      renderMessages("r", messages, { ...opts, thinking: "off" }),
+    ).toThrow(ApiError);
+    expect(() =>
+      renderMessages("r", [{ role: "assistant", content: "x" }], {
+        ...opts,
+        thinking: "on",
+      }),
+    ).toThrow(/thinking='on'/);
+    expect(renderMessages("r", [], opts).trained_fraction).toBe(0);
   });
 });
 
 describe("planRun", () => {
-  it("resolves all 6 v0 recipes with calibrated defaults", () => {
-    const records = makeChatRecords(150);
+  const records = Array.from({ length: 40 }, (_, i) => chat(i));
 
-    const sft = planRun(
-      PlanRunRequestSchema.parse({
-        dataset: "support",
-        name: "support-sft",
-        recipe: { kind: "sft", batch_size: 32 },
-      }),
-      records,
-    );
-    expect(sft.resolved_config.model).toBe("qwen/qwen3-8b");
-    expect(sft.resolved_config.adapter).toEqual({
-      kind: "lora",
-      rank: 32,
-      alpha: 32,
-      merge_on_export: false,
+  it("resolves defaults for every v0 recipe with the catalog's defaults", () => {
+    const sft = plan({ kind: "sft" }, records);
+    expect(sft.resolved_config).toMatchObject({
+      model: "qwen/qwen3-8b",
+      adapter: { kind: "lora", rank: 32 },
+      dataset_version: 3,
     });
-    // sqrt(32 / 128) = 0.5 * 5e-4 = 2.5e-4
-    expect(sft.resolved_config.lr).toBeCloseTo(2.5e-4, 6);
+    expect(sft.price_per_million_tokens).toBe(0.4);
+    expect(sft.resolved_config.lr_source).toMatch(/calibrated/);
 
-    const router = planRun(
-      PlanRunRequestSchema.parse({
-        dataset: "support",
-        name: "support-router",
-        recipe: {
-          kind: "router",
-          models: ["qwen/qwen3-8b", "qwen/qwen3-32b"],
-          max_quality_drop: 0.02,
-        },
-      }),
-      records,
+    const router = plan(
+      { kind: "router" },
+      records.map((r) => ({
+        ...r,
+        scores: { "qwen/qwen3-8b": 0.4, "qwen/qwen3-32b": 0.9 },
+      })),
     );
     expect(router.resolved_config.model).toBe("qwen/qwen3-0.6b");
-    expect(router.resolved_config.split.eval_fraction).toBe(0.15);
+    expect(router.resolved_config.recipe_params.models).toEqual([
+      "qwen/qwen3-32b",
+      "qwen/qwen3-8b",
+    ]);
 
-    const decision = planRun(
-      PlanRunRequestSchema.parse({
-        dataset: "support",
-        name: "support-decision",
-        recipe: { kind: "decision" },
-      }),
-      records,
+    const decision = plan(
+      { kind: "decision" },
+      records.map((r) => ({
+        ...r,
+        state: { a: 1 },
+        expected_output: { label: "yes" },
+      })),
     );
     expect(decision.resolved_config.model).toBe("gradiated/linden-1");
 
-    const cartridge = planRun(
-      PlanRunRequestSchema.parse({
-        dataset: "support",
-        name: "support-cartridge",
-        recipe: {
-          kind: "cartridge",
-          num_tokens: 128,
-          context_text: "handbook",
-        },
-      }),
-      records,
+    const embedding = plan(
+      { kind: "embedding" },
+      records.map((_, i) => ({ query: `q${i}`, positive: `p${i}` })),
     );
-    expect(cartridge.resolved_config.adapter).toEqual({
-      kind: "prefix_kv",
-      num_tokens: 128,
-    });
-
-    const embedding = planRun(
-      PlanRunRequestSchema.parse({
-        dataset: "support",
-        name: "support-embed",
-        recipe: { kind: "embedding" },
-      }),
-      [{ id: "e1", query: "reset password", positive: "go to settings" }],
-    );
-    expect(embedding.resolved_config.model).toBe("baai/bge-small-en-v1.5");
     expect(embedding.resolved_config.adapter).toEqual({ kind: "encoder_full" });
 
-    const dpo = planRun(
-      PlanRunRequestSchema.parse({
-        dataset: "support",
-        name: "support-dpo",
-        recipe: { kind: "dpo", beta: 0.1 },
+    const cartridge = plan({ kind: "cartridge", context_text: "doc" }, records);
+    expect(cartridge.resolved_config.adapter).toEqual({
+      kind: "prefix_kv",
+      num_tokens: 256,
+    });
+    expect(cartridge.resolved_config.recipe_params.context_text).toBe("doc");
+
+    const dpo = plan(
+      { kind: "dpo", beta: 0.2 },
+      records.map((_, i) => ({ prompt: `p${i}`, chosen: "a", rejected: "b" })),
+    );
+    expect(dpo.resolved_config.split.strategy).toBe("by_group");
+    expect(dpo.resolved_config.recipe_params.beta).toBe(0.2);
+  });
+
+  it("rejects unknown models even with an explicit lr (no misleading lr hint)", () => {
+    expectCode(
+      () => plan({ kind: "sft", model: "meta/llama-405b", lr: 1e-4 }, records),
+      "unknown_model",
+      /GET \/v1\/models/,
+    );
+    expectCode(
+      () => plan({ kind: "sft", model: "meta/llama-405b" }, records),
+      "unknown_model",
+      /^(?!.*explicit lr)/,
+    );
+  });
+
+  it("rejects recipes and adapters a model does not support", () => {
+    expectCode(
+      () => plan({ kind: "embedding", model: "qwen/qwen3-32b" }, records),
+      "recipe_not_supported_for_model",
+      /baai\/bge-small-en-v1.5/,
+    );
+    expectCode(
+      () =>
+        plan(
+          {
+            kind: "sft",
+            model: "qwen/qwen3-0.6b",
+            adapter: { kind: "frozen_head" },
+          },
+          records,
+        ),
+      "adapter_not_supported",
+    );
+    expectCode(
+      () => plan({ kind: "sft", model: "sql-helper@latest" }, records),
+      "continued_training_unsupported",
+    );
+  });
+
+  it("rejects records a recipe cannot train and explains the expected shape", () => {
+    expectCode(
+      () => plan({ kind: "sft" }, [{ metadata: { foo: "bar" } }]),
+      "no_usable_records",
+      /assistant/,
+    );
+    expectCode(
+      () => plan({ kind: "embedding" }, records),
+      "no_usable_records",
+      /query/,
+    );
+    expectCode(
+      () => plan({ kind: "router" }, records),
+      "no_usable_records",
+      /per-model scores/,
+    );
+    expectCode(
+      () => plan({ kind: "decision" }, [{ metadata: {} }]),
+      "no_usable_records",
+    );
+    expectCode(() => plan({ kind: "sft" }, []), "empty_dataset");
+    const partial = plan({ kind: "sft" }, [...records, { query: "x" }]);
+    expect(partial.usable_records).toBe(40);
+    expect(partial.warnings.join(" ")).toMatch(
+      /1 of 41 records cannot be used/,
+    );
+  });
+
+  it("accepts the documented DPO trajectory-group format and flags one-sided groups", () => {
+    const group = (g: string, role: "chosen" | "rejected"): DatasetRecord => ({
+      schema: "grad.trajectory/1",
+      group_id: g,
+      role,
+      input: { messages: [{ role: "user", content: "q" }] },
+      output: { turns: [{ role: "assistant", content: role }] },
+    });
+    const result = plan({ kind: "dpo" }, [
+      group("a", "chosen"),
+      group("a", "rejected"),
+      group("b", "chosen"),
+    ]);
+    expect(result.usable_records).toBe(1);
+    expect(result.warnings.join(" ")).toMatch(
+      /only a chosen or only a rejected/,
+    );
+    expectCode(
+      () => plan({ kind: "dpo" }, [group("b", "chosen")]),
+      "no_usable_records",
+      /group_id/,
+    );
+  });
+
+  it("needs two router candidates and cartridge context", () => {
+    const oneModel = records.map((r) => ({
+      ...r,
+      scores: { "qwen/qwen3-8b": 0.4 },
+    }));
+    expectCode(
+      () => plan({ kind: "router" }, oneModel),
+      "router_candidates_required",
+    );
+    expect(
+      plan({ kind: "router", models: ["a/b", "c/d"] }, oneModel).resolved_config
+        .recipe_params.models,
+    ).toEqual(["a/b", "c/d"]);
+    expectCode(
+      () => plan({ kind: "cartridge" }, records),
+      "cartridge_context_required",
+    );
+  });
+
+  it("gates Wave 2 recipes", () => {
+    expectCode(() => plan({ kind: "grpo" }, records), "recipe_deferred");
+    expect(
+      plan({ kind: "grpo" }, records, {}, true).resolved_config.batch_size,
+    ).toBe(32);
+  });
+
+  it("scales lr, warns on few steps, empty eval split and budget, and supports explicit lr", () => {
+    const scaled = plan({ kind: "sft", batch_size: 512, lr_scale: 2 }, records);
+    expect(scaled.resolved_config.lr).toBeCloseTo(5e-4 * 2 * 2, 8);
+    expect(scaled.warnings.join(" ")).toMatch(/below the 100/);
+    const explicit = plan({ kind: "sft", lr: 1e-4 }, records);
+    expect(explicit.resolved_config.lr_source).toBe("explicit");
+    const noEval = plan({ kind: "sft" }, records, {
+      split: { eval_fraction: 0 },
+    });
+    expect(noEval.warnings.join(" ")).toMatch(/eval split is empty/);
+    const budget = plan({ kind: "sft" }, records, { max_cost_usd: 0.0000001 });
+    expect(budget.warnings.join(" ")).toMatch(/stopped_budget/);
+    const long = plan({ kind: "sft", model: "test/tiny-qwen3" }, [
+      {
+        messages: [
+          { role: "user", content: "x".repeat(20_000) },
+          { role: "assistant", content: "y" },
+        ],
+      },
+    ]);
+    expect(long.warnings.join(" ")).toMatch(/truncated/);
+  });
+});
+
+describe("catalog", () => {
+  it("extends and overrides via GRAD_EXTRA_MODELS_JSON and validates it", () => {
+    expect(catalog.find("TEST/Tiny-Qwen3")?.price_per_million_tokens_usd).toBe(
+      1,
+    );
+    expect(catalog.priceFor("qwen/qwen3-8b")).toBe(0.4);
+    expect(catalog.priceFor("nope")).toBeUndefined();
+    expect(createModelCatalog().find("test/tiny-qwen3")).toBeUndefined();
+    expect(() => createModelCatalog("{nope")).toThrow(/not valid JSON/);
+    expect(() => createModelCatalog('[{"id": "x"}]')).toThrow(/is invalid/);
+    const override = createModelCatalog(
+      '[{"id":"qwen/qwen3-8b","family":"llm","adapters":["lora"],"price_per_million_tokens_usd":9,"calibrated_lrs":{"sft":1e-4}}]',
+    );
+    expect(override.find("qwen/qwen3-8b")).toMatchObject({
+      price_per_million_tokens_usd: 9,
+      recipes: ["sft"],
+    });
+  });
+});
+
+describe("record helpers", () => {
+  it("extracts conversations and prompts from every documented shape", () => {
+    expect(recordConversation({ prompt: "p", completion: "c" })).toHaveLength(
+      2,
+    );
+    expect(
+      recordConversation({
+        prompt: [{ role: "user", content: "p" }],
+        expected_output: { content: "e" },
       }),
-      [{ id: "p1", prompt: "hi", chosen: "hello!", rejected: "go away" }],
-    );
-    expect(dpo.resolved_config.recipe_params.beta).toBe(0.1);
+    ).toHaveLength(2);
+    expect(recordConversation({ prompt: "p" })).toHaveLength(1);
+    expect(
+      recordConversation({
+        input: { messages: [{ role: "user", content: "u" }] },
+        expected_output: "e",
+      }),
+    ).toHaveLength(2);
+    expect(
+      recordConversation({
+        input: { messages: [{ role: "user", content: "u" }] },
+      }),
+    ).toHaveLength(1);
+    expect(recordConversation({ query: "q" })).toEqual([]);
+
+    expect(
+      recordPromptAndReference({
+        input: { messages: [{ role: "user", content: "u" }] },
+        output: { turns: [{ role: "assistant", content: "a" }] },
+      }),
+    ).toEqual({ prompt: [{ role: "user", content: "u" }], reference: "a" });
+    expect(
+      recordPromptAndReference({
+        prompt: "p",
+        completion: [{ role: "assistant", content: "c" }],
+      })?.reference,
+    ).toBe("c");
+    expect(
+      recordPromptAndReference({ prompt: "p", expected_output: { label: "L" } })
+        ?.reference,
+    ).toBe("L");
+    expect(recordPromptAndReference({ prompt: "p" })?.reference).toBeNull();
+    expect(recordPromptAndReference(chat(1))).toEqual({
+      prompt: [{ role: "user", content: "question 1" }],
+      reference: "answer 1",
+    });
+    expect(
+      recordPromptAndReference({
+        messages: [{ role: "assistant", content: "x" }],
+      }),
+    ).toBeNull();
+    expect(
+      recordPromptAndReference({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "multi" }] },
+        ],
+      })?.reference,
+    ).toBeNull();
   });
 
-  it("blocks Wave 2 recipes unless allowWave2 is enabled", () => {
-    const req = PlanRunRequestSchema.parse({
-      dataset: "support",
-      name: "wave2-grpo",
-      recipe: { kind: "grpo", env_name: "code-env", group_size: 4 },
-    });
-    const records = makeChatRecords(10);
-
-    expect(() => planRun(req, records)).toThrow(/deferred past v0/);
-
-    const allowed = planRun(req, records, { allowWave2: true });
-    expect(allowed.resolved_config.recipe_kind).toBe("grpo");
-    expect(allowed.resolved_config.batch_size).toBe(32);
-  });
-
-  it("warns when steps < 100 or estimated cost exceeds max_cost_usd", () => {
-    const req = PlanRunRequestSchema.parse({
-      dataset: "support",
-      name: "small-sft",
-      recipe: { kind: "sft", epochs: 1 },
-      max_cost_usd: 0.00001,
-    });
-    const plan = planRun(req, makeChatRecords(40));
-
-    expect(plan.warnings.some((w) => w.includes("below the 100"))).toBe(true);
-    expect(plan.warnings.some((w) => w.includes("exceeds max_cost_usd"))).toBe(
-      true,
-    );
+  it("counts usable records per recipe", () => {
+    expect(assessRecipeUsability("cartridge", [{}]).usable).toBe(1);
+    expect(
+      assessRecipeUsability("sft", [
+        {
+          messages: [
+            { role: "assistant", content: "", tool_calls: [{ id: "t" }] },
+          ],
+        },
+      ]).usable,
+    ).toBe(1);
+    expect(
+      assessRecipeUsability("embedding", [{ prompt: "q", positive: "p" }])
+        .usable,
+    ).toBe(1);
+    expect(
+      assessRecipeUsability("decision", [
+        { input: { features: {} }, scores: { ok: 1 } },
+      ]).usable,
+    ).toBe(1);
+    expect(
+      assessRecipeUsability("router", [{ query: "q", scores: { "a/b": 1 } }])
+        .discoveredModels,
+    ).toEqual(["a/b"]);
   });
 });

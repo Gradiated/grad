@@ -1,0 +1,361 @@
+import { createRoute, type OpenAPIHono, z } from "@hono/zod-openapi";
+
+import {
+  CheckpointSchema,
+  ClaimJobRequestSchema,
+  ClaimJobResponseSchema,
+  CompleteJobRequestSchema,
+  CompleteJobResponseSchema,
+  HeartbeatRequestSchema,
+  HeartbeatResponseSchema,
+  PostImportRecordsRequestSchema,
+  PostImportRecordsResponseSchema,
+  QueueStatsSchema,
+  RegisterCheckpointRequestSchema,
+  ReportProgressRequestSchema,
+  ReportProgressResponseSchema,
+  TRAINER_PROTOCOL_VERSION,
+  UploadTicketSchema,
+  WorkerUploadRequestSchema,
+} from "../contracts.js";
+import type { AppDependencies } from "../deps.js";
+import { conflict, notFound } from "../errors.js";
+import type { Services } from "../services/index.js";
+import {
+  defaultErrors,
+  IdParamSchema,
+  jsonResponse,
+  requireScope,
+  type AppEnv,
+} from "./helpers.js";
+
+const isImportJob = (id: string): boolean => id.startsWith("imp_");
+
+const body = <T extends z.ZodType>(schema: T) => ({
+  body: { required: true, content: { "application/json": { schema } } },
+});
+
+export const registerTrainerJobRoutes = (
+  app: OpenAPIHono<AppEnv>,
+  _deps: AppDependencies,
+  services: Services,
+): void => {
+  const tags = ["TrainerJobs"];
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/claim",
+      operationId: "claimTrainerJob",
+      summary: "Claim the next queued train or import job (trainer:worker)",
+      tags,
+      request: body(ClaimJobRequestSchema),
+      responses: {
+        200: jsonResponse(
+          ClaimJobResponseSchema,
+          "Claimed job, or null when idle.",
+        ),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const input = c.req.valid("json");
+      const claimInput = {
+        workerId: input.worker_id,
+        leaseSeconds: input.lease_seconds,
+      };
+
+      let job = null;
+      if (input.kinds.includes("import")) {
+        job = await services.imports.claim(principal, claimInput);
+      }
+      if (!job && input.kinds.includes("train")) {
+        job = await services.runs.claim(principal, {
+          ...claimInput,
+          recipes: input.recipes,
+        });
+      }
+
+      return c.json(
+        {
+          protocol: TRAINER_PROTOCOL_VERSION as typeof TRAINER_PROTOCOL_VERSION,
+          job,
+        },
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/trainer-jobs/queue",
+      operationId: "getTrainerQueueStats",
+      summary:
+        "Queue depth for autoscaling: queued plus running jobs (trainer:worker)",
+      tags,
+      responses: {
+        200: jsonResponse(QueueStatsSchema, "Queue depth."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      requireScope(c, "trainer:worker");
+      const [train, imports] = await Promise.all([
+        _deps.store.runs.countActive(),
+        _deps.store.imports.countActive(),
+      ]);
+      const queued = train.queued + imports.queued;
+      const running = train.running + imports.running;
+
+      return c.json(
+        {
+          queued,
+          running,
+          total: queued + running,
+          by_kind: { train, import: imports },
+        },
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/{id}/heartbeat",
+      operationId: "heartbeatTrainerJob",
+      summary: "Renew the job lease; reports whether the worker should stop",
+      tags,
+      request: { params: IdParamSchema, ...body(HeartbeatRequestSchema) },
+      responses: {
+        200: jsonResponse(HeartbeatResponseSchema, "Lease renewed."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      const input = c.req.valid("json");
+      const result = isImportJob(id)
+        ? await services.imports.heartbeat(principal, id, input)
+        : await services.runs.heartbeat(principal, id, input);
+
+      return c.json(result, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/{id}/progress",
+      operationId: "reportTrainerProgress",
+      summary: "Report one training step's metrics",
+      tags,
+      request: { params: IdParamSchema, ...body(ReportProgressRequestSchema) },
+      responses: {
+        200: jsonResponse(
+          ReportProgressResponseSchema,
+          "Stop flag and server-side cost.",
+        ),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      if (isImportJob(id))
+        throw conflict("wrong_job_kind", "Import jobs do not report progress.");
+
+      return c.json(
+        await services.runs.progress(principal, id, c.req.valid("json")),
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/{id}/uploads",
+      operationId: "createTrainerUpload",
+      summary: "Get an upload URL for a checkpoint or artifact bundle",
+      tags,
+      request: { params: IdParamSchema, ...body(WorkerUploadRequestSchema) },
+      responses: {
+        201: jsonResponse(UploadTicketSchema, "Upload ticket."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      if (isImportJob(id))
+        throw conflict("wrong_job_kind", "Import jobs do not upload bundles.");
+      const { ticket } = await services.runs.createUpload(
+        principal,
+        id,
+        c.req.valid("json"),
+      );
+
+      return c.json(ticket, 201);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/{id}/checkpoints",
+      operationId: "registerTrainerCheckpoint",
+      summary: "Register an uploaded checkpoint bundle",
+      tags,
+      request: {
+        params: IdParamSchema,
+        ...body(RegisterCheckpointRequestSchema),
+      },
+      responses: {
+        200: jsonResponse(CheckpointSchema, "Existing identical checkpoint."),
+        201: jsonResponse(CheckpointSchema, "Registered checkpoint."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      if (isImportJob(id))
+        throw conflict("wrong_job_kind", "Import jobs have no checkpoints.");
+      const { checkpoint, created } = await services.runs.registerCheckpoint(
+        principal,
+        id,
+        c.req.valid("json"),
+      );
+
+      return created ? c.json(checkpoint, 201) : c.json(checkpoint, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/{id}/records",
+      operationId: "postImportRecords",
+      summary: "Append a batch of parsed records to an import job",
+      tags,
+      request: {
+        params: IdParamSchema,
+        ...body(PostImportRecordsRequestSchema),
+      },
+      responses: {
+        200: jsonResponse(
+          PostImportRecordsResponseSchema,
+          "Accepted and rejected counts.",
+        ),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      if (!isImportJob(id))
+        throw conflict("wrong_job_kind", "Only import jobs accept records.");
+
+      return c.json(
+        await services.imports.postRecords(principal, id, c.req.valid("json")),
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/trainer-jobs/{id}/complete",
+      operationId: "completeTrainerJob",
+      summary:
+        "Finish a job attempt: publish its artifact, bill it, release the lease",
+      tags,
+      request: { params: IdParamSchema, ...body(CompleteJobRequestSchema) },
+      responses: {
+        200: jsonResponse(CompleteJobResponseSchema, "Final job state."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      const input = c.req.valid("json");
+
+      if (isImportJob(id)) {
+        const job = await services.imports.complete(principal, id, input);
+
+        return c.json(
+          {
+            job_id: id,
+            kind: "import" as const,
+            status: job.status,
+            run: null,
+            artifact: null,
+            import: job,
+          },
+          200,
+        );
+      }
+
+      const { run, artifact } = await services.runs.complete(
+        principal,
+        id,
+        input,
+      );
+
+      return c.json(
+        {
+          job_id: id,
+          kind: "train" as const,
+          status: run.status,
+          run,
+          artifact,
+          import: null,
+        },
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/trainer-jobs/{id}/dataset",
+      operationId: "downloadTrainerDataset",
+      summary:
+        "Stream the pinned dataset version of a claimed train job as JSONL",
+      tags,
+      request: {
+        params: IdParamSchema,
+        query: z.object({ attempt: z.coerce.number().int().min(1) }),
+      },
+      responses: {
+        200: {
+          description: "Dataset records (JSON Lines).",
+          content: { "application/x-ndjson": { schema: z.string() } },
+        },
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      if (isImportJob(id)) throw notFound("trainer_job", id);
+      const stream = await services.runs.datasetStream(
+        principal,
+        id,
+        c.req.valid("query").attempt,
+      );
+
+      return new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      }) as never;
+    },
+  );
+};

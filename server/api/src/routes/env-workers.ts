@@ -11,9 +11,9 @@ import {
   jsonResponse,
   requireScope,
   respondProblem,
-  type AppDependencies,
   type AppEnv,
 } from "./helpers.js";
+import type { AppDependencies } from "../deps.js";
 
 export const registerEnvWorkerRoutes = (
   app: OpenAPIHono<AppEnv>,
@@ -46,8 +46,7 @@ export const registerEnvWorkerRoutes = (
   });
 
   app.openapi(registerEnvWorkerRoute, (c) => {
-    const denied = requireScope(c, "env:serve");
-    if (denied) return denied;
+    requireScope(c, "env:serve");
 
     const body = c.req.valid("json");
     const worker = deps.envHub.register(
@@ -88,8 +87,7 @@ export const registerEnvWorkerRoutes = (
   });
 
   app.openapi(dispatchEnvTaskRoute, (c) => {
-    const denied = requireScope(c, "runs:write");
-    if (denied) return denied;
+    requireScope(c, "runs:write");
 
     const body = c.req.valid("json");
     const workspaceId = c.get("principal").workspaceId;
@@ -150,8 +148,7 @@ export const registerEnvWorkerRoutes = (
   });
 
   app.openapi(claimEnvTaskRoute, async (c) => {
-    const denied = requireScope(c, "env:serve");
-    if (denied) return denied;
+    requireScope(c, "env:serve");
 
     const { name } = c.req.valid("param");
     const body = c.req.valid("json");
@@ -160,6 +157,7 @@ export const registerEnvWorkerRoutes = (
       name,
       body.worker_id,
       body.wait_ms,
+      c.req.raw.signal,
     );
 
     return c.json(
@@ -191,8 +189,7 @@ export const registerEnvWorkerRoutes = (
   });
 
   app.openapi(completeEnvTaskRoute, (c) => {
-    const denied = requireScope(c, "env:serve");
-    if (denied) return denied;
+    requireScope(c, "env:serve");
 
     const { id } = c.req.valid("param");
     const body = c.req.valid("json");
@@ -228,8 +225,7 @@ export const registerEnvWorkerRoutes = (
   });
 
   app.openapi(getEnvTaskRoute, (c) => {
-    const denied = requireScope(c, "runs:read");
-    if (denied) return denied;
+    requireScope(c, "runs:read");
 
     const { id } = c.req.valid("param");
     const task = deps.envHub.getTask(c.get("principal").workspaceId, id);

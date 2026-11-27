@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { ApiError } from "./errors.js";
+
 export interface RegisteredEnvWorker {
   workspace_id: string;
   name: string;
@@ -40,6 +42,7 @@ export class EnvWorkerHub {
   constructor(
     private readonly workerStaleMs = 60_000,
     private readonly maxStoredTasks = 2000,
+    private readonly maxQueuedPerWorkspace = 1000,
   ) {}
 
   private workerKey = (workspaceId: string, name: string, workerId: string) =>
@@ -126,6 +129,21 @@ export class EnvWorkerHub {
     systemPrompt?: string;
     timeoutS: number;
   }): EnvTask => {
+    let queued = 0;
+    for (const task of this.tasks.values()) {
+      if (task.workspace_id === input.workspaceId && task.status === "queued") {
+        queued += 1;
+      }
+    }
+    if (queued >= this.maxQueuedPerWorkspace) {
+      throw new ApiError(
+        429,
+        "env_queue_full",
+        "Too many queued environment tasks",
+        `This workspace already has ${queued} queued environment tasks; wait for workers to drain them.`,
+      );
+    }
+
     const record: EnvTask = {
       id: `envtask_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
       workspace_id: input.workspaceId,
@@ -162,6 +180,7 @@ export class EnvWorkerHub {
     envName: string,
     workerId: string,
     waitMs = 0,
+    signal?: AbortSignal,
   ): Promise<EnvTask | null> => {
     this.expireTimedOutTasks();
     const worker = this.workers.get(
@@ -189,11 +208,14 @@ export class EnvWorkerHub {
         },
       };
 
-      const timer = setTimeout(() => {
+      const drop = () => {
+        clearTimeout(timer);
         const index = list.indexOf(entry);
         if (index >= 0) list.splice(index, 1);
         resolve(null);
-      }, waitMs);
+      };
+      const timer = setTimeout(drop, waitMs);
+      signal?.addEventListener("abort", drop, { once: true });
 
       list.push(entry);
     });

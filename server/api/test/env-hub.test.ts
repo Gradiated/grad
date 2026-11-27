@@ -58,4 +58,46 @@ describe("EnvWorkerHub", () => {
     expect(claimed?.id).toBe(dispatched.id);
     expect(claimed?.worker_id).toBe("wrk_poll");
   });
+
+  it("caps queued tasks per workspace with 429", () => {
+    const hub = new EnvWorkerHub(60_000, 2000, 2);
+    const dispatch = () =>
+      hub.dispatch({
+        workspaceId: "ws",
+        envName: "e",
+        task: {},
+        modelId: "m",
+        timeoutS: 5,
+      });
+    dispatch();
+    dispatch();
+    expect(dispatch).toThrow(/queued environment tasks/);
+    expect(() =>
+      hub.dispatch({
+        workspaceId: "other",
+        envName: "e",
+        task: {},
+        modelId: "m",
+        timeoutS: 5,
+      }),
+    ).not.toThrow();
+  });
+
+  it("drops a long-poll waiter when the client aborts so the task goes to a live worker", async () => {
+    const hub = new EnvWorkerHub();
+    const abort = new AbortController();
+    const dead = hub.claim("ws", "e", "dead", 10_000, abort.signal);
+    abort.abort();
+    expect(await dead).toBeNull();
+    const live = hub.claim("ws", "e", "live", 10_000);
+    const task = hub.dispatch({
+      workspaceId: "ws",
+      envName: "e",
+      task: {},
+      modelId: "m",
+      timeoutS: 5,
+    });
+    expect((await live)?.id).toBe(task.id);
+    expect(hub.getTask("ws", task.id)?.worker_id).toBe("live");
+  });
 });

@@ -1,34 +1,52 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 import {
-  createLocalDeployAdapter,
+  createDisabledDeployAdapter,
+  createDisabledServingAdapter,
   createLocalNoneAuth,
   createNoopBillingAdapter,
 } from "../src/adapters.js";
 import { buildOpenApiDocument, createApp } from "../src/app.js";
+import { createModelCatalog } from "../src/catalog.js";
+import { systemClock } from "../src/clock.js";
 import { EnvWorkerHub } from "../src/env-hub.js";
-import { LocalObjectStore } from "../src/storage.js";
-import { InMemoryTrainingStore } from "../src/store.js";
+import { createRegexEvaluator } from "../src/services/evals/regex.js";
+import { LocalObjectStore } from "../src/storage/local.js";
+import { createBlobSigner } from "../src/storage/signer.js";
+import { createMemoryStore } from "../src/store/memory.js";
 
 const run = async () => {
   const check = process.argv.includes("--check");
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const outPath = path.resolve(scriptDir, "../../../spec/openapi.yaml");
+  const regex = createRegexEvaluator();
 
   const app = createApp({
-    store: new InMemoryTrainingStore(),
-    storage: new LocalObjectStore("/tmp/grad-openapi-unused"),
+    store: createMemoryStore(systemClock),
+    storage: new LocalObjectStore(
+      path.join(os.tmpdir(), "grad-openapi-unused"),
+    ),
+    signer: createBlobSigner("openapi"),
     auth: createLocalNoneAuth(),
     billing: createNoopBillingAdapter(),
-    deploy: createLocalDeployAdapter(),
+    deploy: createDisabledDeployAdapter(),
+    serving: createDisabledServingAdapter(),
+    catalog: createModelCatalog(),
+    clock: systemClock,
     envHub: new EnvWorkerHub(),
+    inference: null,
+    regex,
+    settings: { allowWave2Recipes: false, maxAttempts: 3, evalConcurrency: 1 },
   });
 
-  const document = buildOpenApiDocument(app);
-  const rendered = YAML.stringify(document, { lineWidth: 120 });
+  const rendered = YAML.stringify(buildOpenApiDocument(app), {
+    lineWidth: 120,
+  });
+  await regex.close();
 
   if (check) {
     const existing = await readFile(outPath, "utf8").catch(() => "");

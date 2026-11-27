@@ -1,34 +1,77 @@
 import { randomUUID } from "node:crypto";
 import { OpenAPIHono } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { HTTPException } from "hono/http-exception";
 
-import { registerArtifactAndServingRoutes } from "./routes/artifacts.js";
+import type { AppDependencies } from "./deps.js";
+import { ApiError } from "./errors.js";
+import { registerArtifactRoutes } from "./routes/artifacts.js";
+import { registerBlobRoutes } from "./routes/blobs.js";
+import { registerCheckpointRoutes } from "./routes/checkpoints.js";
 import { registerDatasetRoutes } from "./routes/datasets.js";
+import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerEnvWorkerRoutes } from "./routes/env-workers.js";
 import { registerEvalRoutes } from "./routes/evals.js";
-import {
-  respondProblem,
-  type AppDependencies,
-  type AppEnv,
-} from "./routes/helpers.js";
+import { problemBody, requireScope, type AppEnv } from "./routes/helpers.js";
 import { registerModelsAndKeysRoutes } from "./routes/keys.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
+import { createServices, type Services } from "./services/index.js";
 
-export type { AppDependencies } from "./routes/helpers.js";
+export type { AppDependencies } from "./deps.js";
+
+export const API_TITLE = "Gradiated Training & Serving API";
+export const API_VERSION = "0.2.0";
+
+const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;
 
 const parseBearer = (header: string | undefined): string | undefined =>
   header?.match(/^Bearer\s+(\S+)$/i)?.[1];
 
-export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> => {
+const problemResponse = (
+  c: Context<AppEnv>,
+  status: number,
+  code: string,
+  title: string,
+  detail: string,
+): Response =>
+  new Response(
+    JSON.stringify(
+      problemBody(
+        status,
+        code,
+        title,
+        detail,
+        c.get("requestId") ?? "req_unknown",
+      ),
+    ),
+    {
+      status,
+      headers: {
+        "Content-Type": "application/problem+json",
+        "x-request-id": c.get("requestId") ?? "req_unknown",
+      },
+    },
+  );
+
+export interface GradApp {
+  app: OpenAPIHono<AppEnv>;
+  services: Services;
+}
+
+export const createGradApp = (deps: AppDependencies): GradApp => {
+  const services = createServices(deps);
   const app = new OpenAPIHono<AppEnv>({
-    defaultHook: (result, c) => {
+    defaultHook: (result) => {
       if (!result.success) {
-        return respondProblem(
-          c,
+        throw new ApiError(
           422,
           "validation_error",
           "Validation failed",
           result.error.issues
+            .slice(0, 20)
             .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
             .join("; "),
         );
@@ -38,7 +81,61 @@ export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> => {
     },
   });
 
-  const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+  app.onError((error, c) => {
+    if (error instanceof ApiError) {
+      return problemResponse(
+        c,
+        error.status,
+        error.code,
+        error.title,
+        error.detail,
+      );
+    }
+
+    if (error instanceof HTTPException) {
+      const status = error.status;
+      const malformed = status === 400;
+
+      return problemResponse(
+        c,
+        status,
+        malformed ? "malformed_request" : `http_${status}`,
+        malformed ? "Malformed request" : "Request failed",
+        error.message || "The request could not be processed.",
+      );
+    }
+
+    console.error(
+      JSON.stringify({
+        level: "error",
+        msg: "unhandled error",
+        request_id: c.get("requestId"),
+        path: c.req.path,
+        error:
+          error instanceof Error
+            ? (error.stack ?? error.message)
+            : String(error),
+      }),
+    );
+
+    return problemResponse(
+      c,
+      500,
+      "internal_error",
+      "Internal server error",
+      "An unexpected error occurred. Quote the request_id when reporting it.",
+    );
+  });
+
+  app.notFound((c) =>
+    problemResponse(
+      c,
+      404,
+      "route_not_found",
+      "Route not found",
+      `No route matches ${c.req.method} ${c.req.path}.`,
+    ),
+  );
 
   app.use("*", async (c, next) => {
     const incoming = c.req.header("x-request-id");
@@ -54,14 +151,14 @@ export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> => {
   app.use(
     "/v1/*",
     bodyLimit({
-      maxSize: 35 * 1024 * 1024,
+      maxSize: MAX_JSON_BODY_BYTES,
       onError: (c) =>
-        respondProblem(
+        problemResponse(
           c,
           413,
           "payload_too_large",
           "Request payload too large",
-          "Request body exceeds the 35 MiB limit.",
+          `Request bodies are limited to ${MAX_JSON_BODY_BYTES / (1024 * 1024)} MiB; upload large files with an upload ticket.`,
         ),
     }),
   );
@@ -69,9 +166,8 @@ export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> => {
   app.get("/health/live", (c) => c.json({ status: "ok" }, 200));
 
   app.get("/health/ready", async (c) => {
-    const ok = await deps.store.ping();
-    if (!ok) {
-      return respondProblem(
+    if (!(await deps.store.ping())) {
+      return problemResponse(
         c,
         503,
         "store_unavailable",
@@ -83,16 +179,19 @@ export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> => {
     return c.json({ status: "ready" }, 200);
   });
 
+  registerBlobRoutes(app, deps, services);
+
   app.use("/v1/*", async (c, next) => {
-    const token = parseBearer(c.req.header("authorization"));
-    const principal = await deps.auth.authenticate(token);
+    const principal = await deps.auth.authenticate(
+      parseBearer(c.req.header("authorization")),
+    );
     if (!principal) {
-      return respondProblem(
+      return problemResponse(
         c,
         401,
         "unauthorized",
         "Authentication required",
-        "Provide a valid Bearer API key.",
+        "Provide a valid API key as 'Authorization: Bearer <key>' (SDKs read GRADIATED_API_KEY).",
       );
     }
 
@@ -100,23 +199,33 @@ export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> => {
     await next();
   });
 
+  // Worker routes check the platform scope before body validation so tenants
+  // learn nothing about the protocol from validation errors.
+  app.use("/v1/trainer-jobs/*", async (c, next) => {
+    requireScope(c, "trainer:worker");
+    await next();
+  });
+
   registerModelsAndKeysRoutes(app, deps);
-  registerDatasetRoutes(app, deps);
-  registerRunRoutes(app, deps);
-  registerArtifactAndServingRoutes(app, deps);
-  registerEvalRoutes(app, deps);
+  registerDatasetRoutes(app, deps, services);
+  registerRunRoutes(app, deps, services);
+  registerCheckpointRoutes(app, deps, services);
+  registerTrainerJobRoutes(app, deps, services);
+  registerArtifactRoutes(app, deps, services);
+  registerDeploymentRoutes(app, deps, services);
+  registerEvalRoutes(app, deps, services);
   registerEnvWorkerRoutes(app, deps);
 
   app.doc31("/openapi.json", {
     openapi: "3.1.0",
-    info: {
-      title: "Gradiated Training & Serving API",
-      version: "0.1.0",
-    },
+    info: { title: API_TITLE, version: API_VERSION },
   });
 
-  return app;
+  return { app, services };
 };
+
+export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> =>
+  createGradApp(deps).app;
 
 export const buildOpenApiDocument = (
   app: OpenAPIHono<AppEnv>,
@@ -128,10 +237,7 @@ export const buildOpenApiDocument = (
 } =>
   app.getOpenAPI31Document({
     openapi: "3.1.0",
-    info: {
-      title: "Gradiated Training & Serving API",
-      version: "0.1.0",
-    },
+    info: { title: API_TITLE, version: API_VERSION },
   }) as {
     openapi: string;
     info: { title: string; version: string };
