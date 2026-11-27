@@ -202,10 +202,10 @@ class GeneratedApiClient:
         _query = None
         return self._request_bytes("GET", f"/v1/artifacts/{urllib.parse.quote(id, safe='')}/download", body=None, query=_query)
 
-    def download_trainer_dataset(self, id: str, *, attempt: Any = None) -> dict[str, Any]:
+    def download_trainer_dataset(self, id: str, *, attempt: Any = None) -> tuple[bytes, dict[str, str]]:
         """Stream the pinned dataset version of a claimed train job as JSONL"""
         _query = {"attempt": attempt}
-        return self._request_json("GET", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/dataset", body=None, query=_query)
+        return self._request_bytes("GET", f"/v1/trainer-jobs/{urllib.parse.quote(id, safe='')}/dataset", body=None, query=_query)
 
     def get_artifact(self, id: str) -> dict[str, Any]:
         """Get an artifact by id or name@latest"""
@@ -462,7 +462,7 @@ class AsyncGeneratedApiClient:
     async def download_artifact(self, *args: Any, **kwargs: Any) -> tuple[bytes, dict[str, str]]:
         return await asyncio.to_thread(self._sync.download_artifact, *args, **kwargs)
 
-    async def download_trainer_dataset(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def download_trainer_dataset(self, *args: Any, **kwargs: Any) -> tuple[bytes, dict[str, str]]:
         return await asyncio.to_thread(self._sync.download_trainer_dataset, *args, **kwargs)
 
     async def get_artifact(self, *args: Any, **kwargs: Any) -> dict[str, Any]:

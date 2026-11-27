@@ -2,12 +2,27 @@
 
 pub mod generated;
 
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::time::Duration;
 
-pub use generated::{ApiError, GeneratedClient};
+pub use generated::{ApiError, ErrorKind, GeneratedClient};
+
+/// Converts a typed generated response into the JSON value this facade returns.
+fn value<T: Serialize>(result: Result<T, ApiError>) -> Result<Value, ApiError> {
+    result.and_then(|v| {
+        serde_json::to_value(v)
+            .map_err(|e| ApiError::local(ErrorKind::Decode, "decode_error", e.to_string()))
+    })
+}
+
+/// Parses a JSON request body into the generated request type.
+fn typed<T: DeserializeOwned>(body: Value) -> Result<T, ApiError> {
+    serde_json::from_value(body)
+        .map_err(|e| ApiError::local(ErrorKind::InvalidRequest, "invalid_request", e.to_string()))
+}
 
 #[derive(Clone)]
 pub struct GradClient {
@@ -88,20 +103,20 @@ impl GradClient {
     }
 
     pub async fn list_models(&self) -> Result<Value, ApiError> {
-        self.wire.list_models().await
+        value(self.wire.list_models().await)
     }
 
     pub async fn list_datasets(&self) -> Result<Value, ApiError> {
-        self.wire.list_datasets(&[]).await
+        value(self.wire.list_datasets(None).await)
     }
 
     pub async fn push_dataset(&self, name: &str, records: Vec<Value>) -> Result<Value, ApiError> {
         let body = json!({ "records": records });
-        self.wire.push_dataset_records(name, &body).await
+        value(self.wire.push_dataset_records(name, &typed(body)?).await)
     }
 
     pub async fn render_dataset(&self, name: &str, body: &Value) -> Result<Value, ApiError> {
-        self.wire.render_dataset(name, body).await
+        value(self.wire.render_dataset(name, &typed(body.clone())?).await)
     }
 
     pub async fn plan_run(
@@ -115,7 +130,7 @@ impl GradClient {
         if let Some(cap) = max_cost_usd {
             body["max_cost_usd"] = json!(cap);
         }
-        self.wire.plan_run(&body).await
+        value(self.wire.plan_run(&typed(body)?).await)
     }
 
     pub async fn create_run(
@@ -129,25 +144,27 @@ impl GradClient {
         if let Some(cap) = max_cost_usd {
             body["max_cost_usd"] = json!(cap);
         }
-        self.wire.create_run(&body).await
+        value(self.wire.create_run(&typed(body)?).await)
     }
 
     pub async fn list_runs(&self) -> Result<Value, ApiError> {
-        self.wire.list_runs(&[]).await
+        value(self.wire.list_runs(None).await)
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Value, ApiError> {
-        self.wire.get_run(id).await
+        value(self.wire.get_run(id).await)
     }
 
     pub async fn list_run_metrics(&self, id: &str, after_step: i64) -> Result<Value, ApiError> {
-        self.wire
-            .list_run_metrics(id, &[("after_step", after_step.to_string())])
-            .await
+        let params = generated::ListRunMetricsParams {
+            after_step: Some(after_step),
+            ..Default::default()
+        };
+        value(self.wire.list_run_metrics(id, Some(&params)).await)
     }
 
     pub async fn cancel_run(&self, id: &str) -> Result<Value, ApiError> {
-        self.wire.cancel_run(id).await
+        value(self.wire.cancel_run(id).await)
     }
 
     pub async fn resume_run(&self, id: &str, max_cost_usd: Option<f64>) -> Result<Value, ApiError> {
@@ -155,7 +172,7 @@ impl GradClient {
             Some(cap) => json!({ "max_cost_usd": cap }),
             None => json!({}),
         };
-        self.wire.resume_run(id, Some(&body)).await
+        value(self.wire.resume_run(id, Some(&typed(body)?)).await)
     }
 
     pub async fn wait_run(
@@ -173,54 +190,52 @@ impl GradClient {
                 return Ok(run);
             }
             if std::time::Instant::now() >= deadline {
-                return Err(ApiError {
-                    status: 0,
-                    code: "timeout".to_string(),
-                    title: "Wait timeout".to_string(),
-                    detail: format!("Timed out waiting for run '{}'.", id),
-                    request_id: String::new(),
-                });
+                return Err(ApiError::local(
+                    ErrorKind::Timeout,
+                    "timeout",
+                    format!("Timed out waiting for run '{}'.", id),
+                ));
             }
             tokio::time::sleep(interval).await;
         }
     }
 
     pub async fn list_artifacts(&self, name: Option<&str>) -> Result<Value, ApiError> {
-        let query: Vec<(&str, String)> = match name {
-            Some(n) => vec![("name", n.to_string())],
-            None => vec![],
+        let params = generated::ListArtifactsParams {
+            name: name.map(|n| n.to_string()),
+            ..Default::default()
         };
-        self.wire.list_artifacts(&query).await
+        value(self.wire.list_artifacts(Some(&params)).await)
     }
 
     pub async fn get_artifact(&self, reference: &str) -> Result<Value, ApiError> {
-        self.wire.get_artifact(reference).await
+        value(self.wire.get_artifact(reference).await)
     }
 
     pub async fn download_artifact(&self, reference: &str) -> Result<Vec<u8>, ApiError> {
-        let (bytes, expected_sha) = self.wire.download_artifact(reference).await?;
+        let response = self.wire.download_artifact(reference).await?;
+        let expected_sha = response.header("x-artifact-sha256").map(|s| s.to_string());
+        let bytes = response.bytes().await?;
         let expected = expected_sha
             .map(|s| s.trim().to_ascii_lowercase())
             .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
-            .ok_or_else(|| ApiError {
-                status: 0,
-                code: "missing_checksum".to_string(),
-                title: "Missing checksum".to_string(),
-                detail: "Artifact download missing valid X-Artifact-Sha256 header.".to_string(),
-                request_id: String::new(),
+            .ok_or_else(|| {
+                ApiError::local(
+                    ErrorKind::Decode,
+                    "missing_checksum",
+                    "Artifact download missing valid X-Artifact-Sha256 header.",
+                )
             })?;
 
         let mut hasher = Sha256::new();
         hasher.update(&bytes);
         let actual = hex::encode(hasher.finalize());
         if actual != expected {
-            return Err(ApiError {
-                status: 0,
-                code: "checksum_mismatch".to_string(),
-                title: "Artifact checksum mismatch".to_string(),
-                detail: format!("expected {}, got {}", expected, actual),
-                request_id: String::new(),
-            });
+            return Err(ApiError::local(
+                ErrorKind::Decode,
+                "checksum_mismatch",
+                format!("expected {}, got {}", expected, actual),
+            ));
         }
         Ok(bytes)
     }
@@ -239,15 +254,15 @@ impl GradClient {
         if let Some(fb) = fallback {
             body["fallback"] = json!(fb);
         }
-        self.wire.deploy_artifact(&body).await
+        value(self.wire.deploy_artifact(&typed(body)?).await)
     }
 
     pub async fn list_deployments(&self) -> Result<Value, ApiError> {
-        self.wire.list_deployments(&[]).await
+        value(self.wire.list_deployments(None).await)
     }
 
     pub async fn get_deployment(&self, name: &str) -> Result<Value, ApiError> {
-        self.wire.get_deployment(name).await
+        value(self.wire.get_deployment(name).await)
     }
 
     pub async fn route(
@@ -260,25 +275,25 @@ impl GradClient {
         if let Some(sid) = session_id {
             body["session_id"] = json!(sid);
         }
-        self.wire.route_request(&body).await
+        value(self.wire.route_request(&typed(body)?).await)
     }
 
     pub async fn embed(&self, model: &str, input: Vec<String>) -> Result<Value, ApiError> {
         let body = json!({ "model": model, "input": input });
-        self.wire.create_embeddings(&body).await
+        value(self.wire.create_embeddings(&typed(body)?).await)
     }
 
     pub async fn record_feedback(&self, events: Vec<Value>) -> Result<Value, ApiError> {
         let body = json!({ "events": events });
-        self.wire.record_feedback(&body).await
+        value(self.wire.record_feedback(&typed(body)?).await)
     }
 
     pub async fn plan_eval(&self, body: &Value) -> Result<Value, ApiError> {
-        self.wire.plan_eval(body).await
+        value(self.wire.plan_eval(&typed(body.clone())?).await)
     }
 
     pub async fn create_eval(&self, body: &Value) -> Result<Value, ApiError> {
-        self.wire.create_eval(body).await
+        value(self.wire.create_eval(&typed(body.clone())?).await)
     }
 
     pub async fn list_eval_failures(
@@ -287,24 +302,25 @@ impl GradClient {
         model: Option<&str>,
         threshold: f64,
     ) -> Result<Value, ApiError> {
-        let mut query = vec![("threshold", threshold.to_string())];
-        if let Some(m) = model {
-            query.push(("model", m.to_string()));
-        }
-        self.wire.list_eval_failures(eval_id, &query).await
+        let params = generated::ListEvalFailuresParams {
+            threshold: Some(threshold),
+            model: model.map(|m| m.to_string()),
+            ..Default::default()
+        };
+        value(self.wire.list_eval_failures(eval_id, Some(&params)).await)
     }
 
     pub async fn create_api_key(&self, name: &str, scopes: Vec<String>) -> Result<Value, ApiError> {
         let body = json!({ "name": name, "scopes": scopes });
-        self.wire.create_api_key(&body).await
+        value(self.wire.create_api_key(&typed(body)?).await)
     }
 
     pub async fn list_api_keys(&self) -> Result<Value, ApiError> {
-        self.wire.list_api_keys(&[]).await
+        value(self.wire.list_api_keys(None).await)
     }
 
     pub async fn revoke_api_key(&self, id: &str) -> Result<Value, ApiError> {
-        self.wire.revoke_api_key(id).await
+        value(self.wire.revoke_api_key(id).await)
     }
 }
 

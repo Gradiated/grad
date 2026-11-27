@@ -1,1255 +1,898 @@
 // AUTO-GENERATED from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.
 /* eslint-disable */
+import {
+  convertKeys,
+  encodePathParam,
+  type CodecTable,
+  type RawResponse,
+  type RequestOptions,
+  type ServerSentEvent,
+  type SSEOptions,
+  type StreamOptions,
+  type Transport,
+} from "./transport.js";
+import type {
+  AdapterSpec,
+  ApiKey,
+  ApiKeyScope,
+  Artifact,
+  ArtifactFormat,
+  BenchmarkSpec,
+  ChatMessage,
+  Checkpoint,
+  ClaimJobRequest,
+  ClaimJobResponse,
+  CompleteTrainerJobRequest,
+  CompleteTrainerJobResponse,
+  CreateApiKeyRequest,
+  CreateDatasetRequest,
+  CreateImportRequest,
+  CreateUploadRequest,
+  CreatedApiKey,
+  Dataset,
+  DatasetRecord,
+  DatasetRecordsPage,
+  DeployArtifactRequest,
+  Deployment,
+  DeploymentStatus,
+  EmbedRequest,
+  EmbedResponse,
+  EnvTaskDispatch,
+  EnvTaskResult,
+  EnvWorkerRegister,
+  EvalModelSummary,
+  EvalOutput,
+  EvalRubricItem,
+  EvalRun,
+  EvalStatus,
+  EvalTaskOutcome,
+  FeedbackEventInput,
+  FeedbackRecord,
+  HfColumnMapping,
+  ImportJob,
+  ImportSource,
+  ImportStatus,
+  JobKind,
+  MetricPoint,
+  MetricPointInput,
+  MetricsPage,
+  PlanEvalRequest,
+  PlanEvalResponse,
+  PlanRunRequest,
+  PlanRunResponse,
+  PostEvalScoresRequest,
+  PostEvalScoresResponse,
+  PostImportRecordsRequest,
+  PostImportRecordsResponse,
+  Problem,
+  PromoteCheckpointRequest,
+  PushDatasetRequest,
+  RecipeKind,
+  RecipeSpec,
+  RecordFeedbackRequest,
+  RecordFeedbackResponse,
+  RegisterTrainerCheckpointRequest,
+  RenderDatasetRequest,
+  RenderDatasetResponse,
+  ReportTrainerProgressRequest,
+  ReportTrainerProgressResponse,
+  ResolvedRunConfig,
+  ResumeRunRequest,
+  RouteRequest,
+  RouteResponse,
+  Run,
+  RunStatus,
+  SplitSpec,
+  TrainableModel,
+  TrainerHeartbeatRequest,
+  TrainerHeartbeatResponse,
+  TrainerJob,
+  TrainerQueueStats,
+  TrainerUploadRequest,
+  TrajectoryInput,
+  TrajectoryOutput,
+  UploadTicket,
+} from "./models.js";
 
-export type AdapterSpec = {
-  kind: "lora";
-  rank?: number;
-  alpha?: number;
-  merge_on_export?: boolean;
-} | {
-  kind: "prefix_kv";
-  num_tokens?: number;
-} | {
-  kind: "frozen_head";
+/** Which wire keys are renamed to camelCase, per schema (user-keyed maps are left verbatim). */
+export const CODEC: CodecTable = {
+  "AdapterSpec": { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } },
+  "ApiKey": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["revokedAt", "revoked_at", 0]] },
+  "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["evalReport", "eval_report", 0], ["createdAt", "created_at", 0]] },
+  "ChatMessage": { o: [["toolCalls", "tool_calls", 0], ["toolCallId", "tool_call_id", 0]] },
+  "Checkpoint": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["evalScore", "eval_score", 0], ["sizeBytes", "size_bytes", 0], ["expiresAt", "expires_at", 0], ["createdAt", "created_at", 0]] },
+  "ClaimJobRequest": { o: [["workerId", "worker_id", 0], ["leaseSeconds", "lease_seconds", 0]] },
+  "ClaimJobResponse": { o: [["job", "job", "TrainerJob"]] },
+  "CompleteTrainerJobRequest": { o: [["workerId", "worker_id", 0], ["uploadId", "upload_id", 0], ["evalReport", "eval_report", 0], ["tokensProcessed", "tokens_processed", 0], ["importSummary", "import_summary", { o: [["droppedCount", "dropped_count", 0], ["detectedScores", "detected_scores", 0], ["dropReasons", "drop_reasons", 0]] }]] },
+  "CompleteTrainerJobResponse": { o: [["jobId", "job_id", 0], ["run", "run", "Run"], ["artifact", "artifact", "Artifact"], ["import", "import", "ImportJob"]] },
+  "CreateImportRequest": { o: [["source", "source", "ImportSource"]] },
+  "CreateUploadRequest": { o: [["sizeBytes", "size_bytes", 0]] },
+  "CreatedApiKey": { o: [["key", "key", "ApiKey"]] },
+  "Dataset": { o: [["workspaceId", "workspace_id", 0], ["recordCount", "record_count", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "DatasetRecord": { o: [["sessionId", "session_id", 0], ["groupId", "group_id", 0], ["messages", "messages", { a: "ChatMessage" }], ["input", "input", "TrajectoryInput"], ["output", "output", "TrajectoryOutput"], ["prompt", "prompt", { u: { a: { a: "ChatMessage" } } }], ["completion", "completion", { u: { a: { a: "ChatMessage" } } }], ["chosen", "chosen", { u: { a: { a: "ChatMessage" } } }], ["rejected", "rejected", { u: { a: { a: "ChatMessage" } } }], ["expectedOutput", "expected_output", 0]] },
+  "DatasetRecordsPage": { o: [["data", "data", { a: "DatasetRecord" }], ["nextCursor", "next_cursor", 0]] },
+  "DeployArtifactRequest": { o: [["exploreRate", "explore_rate", 0]] },
+  "Deployment": { o: [["workspaceId", "workspace_id", 0], ["modelId", "model_id", 0], ["activeArtifactId", "active_artifact_id", 0], ["previousArtifactId", "previous_artifact_id", 0], ["fallbackModel", "fallback_model", 0], ["exploreRate", "explore_rate", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "DeploymentStatus": { o: [["deployment", "deployment", "Deployment"], ["feedbackCount", "feedback_count", 0], ["averageScore", "average_score", 0]] },
+  "EmbedResponse": { o: [["usage", "usage", { o: [["promptTokens", "prompt_tokens", 0], ["totalTokens", "total_tokens", 0]] }]] },
+  "EnvTaskDispatch": { o: [["envName", "env_name", 0], ["modelId", "model_id", 0], ["systemPrompt", "system_prompt", 0], ["timeoutS", "timeout_s", 0]] },
+  "EnvTaskResult": { o: [["workerId", "worker_id", 0]] },
+  "EnvWorkerRegister": { o: [["workerId", "worker_id", 0]] },
+  "EvalModelSummary": { o: [["ciLow", "ci_low", 0], ["ciHigh", "ci_high", 0], ["passAtK", "pass_at_k", 0], ["vsBaseline", "vs_baseline", { o: [["ciLow", "ci_low", 0], ["ciHigh", "ci_high", 0]] }], ["tokensPerTask", "tokens_per_task", 0], ["costPer1kTasksUsd", "cost_per_1k_tasks_usd", 0]] },
+  "EvalOutput": { o: [["evalId", "eval_id", 0], ["taskId", "task_id", 0], ["sampleIndex", "sample_index", 0], ["input", "input", { a: "ChatMessage" }], ["expectedOutput", "expected_output", 0], ["record", "record", "DatasetRecord"], ["usage", "usage", { o: [["promptTokens", "prompt_tokens", 0], ["completionTokens", "completion_tokens", 0]] }]] },
+  "EvalRun": { o: [["workspaceId", "workspace_id", 0], ["taskSource", "task_source", 0], ["maxTokens", "max_tokens", 0], ["passThreshold", "pass_threshold", 0], ["judgeModels", "judge_models", 0], ["localScorers", "local_scorers", 0], ["progress", "progress", { o: [["totalOutputs", "total_outputs", 0], ["pendingLocalScores", "pending_local_scores", 0]] }], ["summary", "summary", { a: "EvalModelSummary" }], ["totalCostUsd", "total_cost_usd", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["completedAt", "completed_at", 0]] },
+  "EvalTaskOutcome": { o: [["taskId", "task_id", 0], ["sampleScores", "sample_scores", 0], ["judgeModel", "judge_model", 0], ["record", "record", "DatasetRecord"]] },
+  "FeedbackEventInput": { o: [["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0]] },
+  "FeedbackRecord": { o: [["workspaceId", "workspace_id", 0], ["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0], ["createdAt", "created_at", 0]] },
+  "ImportJob": { o: [["workspaceId", "workspace_id", 0], ["importedCount", "imported_count", 0], ["droppedCount", "dropped_count", 0], ["detectedScores", "detected_scores", 0], ["dropReasons", "drop_reasons", 0], ["datasetVersion", "dataset_version", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "ImportSource": { u: { o: { o: [["uploadId", "upload_id", 0]] } } },
+  "MetricPoint": { o: [["evalLoss", "eval_loss", 0], ["evalMetric", "eval_metric", 0], ["gradNorm", "grad_norm", 0], ["tokensPerSec", "tokens_per_sec", 0], ["costUsd", "cost_usd", 0]] },
+  "MetricPointInput": { o: [["evalLoss", "eval_loss", 0], ["evalMetric", "eval_metric", 0], ["gradNorm", "grad_norm", 0], ["tokensPerSec", "tokens_per_sec", 0], ["costUsd", "cost_usd", 0]] },
+  "MetricsPage": { o: [["runId", "run_id", 0], ["data", "data", { a: "MetricPoint" }], ["nextCursor", "next_cursor", 0]] },
+  "PlanEvalRequest": { o: [["datasetVersion", "dataset_version", 0], ["envName", "env_name", 0], ["maxTokens", "max_tokens", 0], ["passThreshold", "pass_threshold", 0], ["maxCostUsd", "max_cost_usd", 0]] },
+  "PlanEvalResponse": { o: [["taskSourceKind", "task_source_kind", 0], ["datasetVersion", "dataset_version", 0], ["estimatedTasks", "estimated_tasks", 0], ["estimatedModelCalls", "estimated_model_calls", 0], ["estimatedJudgeCalls", "estimated_judge_calls", 0], ["estimatedCostUsd", "estimated_cost_usd", 0], ["judgeModels", "judge_models", 0], ["localScorers", "local_scorers", 0], ["passThreshold", "pass_threshold", 0]] },
+  "PlanRunRequest": { o: [["recipe", "recipe", "RecipeSpec"], ["split", "split", "SplitSpec"], ["maxCostUsd", "max_cost_usd", 0]] },
+  "PlanRunResponse": { o: [["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["datasetVersion", "dataset_version", 0], ["usableRecords", "usable_records", 0], ["totalRecords", "total_records", 0], ["estimatedSteps", "estimated_steps", 0], ["estimatedTokens", "estimated_tokens", 0], ["estimatedCostUsd", "estimated_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["trainedTokenFraction", "trained_token_fraction", 0]] },
+  "PostEvalScoresRequest": { o: [["scores", "scores", { a: { o: [["outputId", "output_id", 0]] } }]] },
+  "PostEvalScoresResponse": { o: [["pendingLocalScores", "pending_local_scores", 0]] },
+  "PostImportRecordsRequest": { o: [["workerId", "worker_id", 0]] },
+  "Problem": { o: [["requestId", "request_id", 0]] },
+  "PushDatasetRequest": { o: [["records", "records", { a: "DatasetRecord" }]] },
+  "RecipeSpec": { o: [["adapter", "adapter", "AdapterSpec"], ["lrScale", "lr_scale", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["maxQualityDrop", "max_quality_drop", 0], ["contextText", "context_text", 0], ["contextUri", "context_uri", 0], ["numTokens", "num_tokens", 0], ["envName", "env_name", 0], ["groupSize", "group_size", 0]] },
+  "RecordFeedbackRequest": { o: [["events", "events", { a: "FeedbackEventInput" }]] },
+  "RecordFeedbackResponse": { o: [["records", "records", { a: "FeedbackRecord" }]] },
+  "RegisterTrainerCheckpointRequest": { o: [["workerId", "worker_id", 0], ["evalScore", "eval_score", 0], ["uploadId", "upload_id", 0]] },
+  "RenderDatasetRequest": { o: [["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0]] },
+  "RenderDatasetResponse": { o: [["templateRevision", "template_revision", 0], ["tokenCounts", "token_counts", 0], ["examples", "examples", { a: { o: [["recordId", "record_id", 0], ["templateRevision", "template_revision", 0], ["totalTokens", "total_tokens", 0], ["trainedTokens", "trained_tokens", 0], ["trainedFraction", "trained_fraction", 0]] } }]] },
+  "ReportTrainerProgressRequest": { o: [["workerId", "worker_id", 0], ["metric", "metric", "MetricPointInput"]] },
+  "ReportTrainerProgressResponse": { o: [["shouldStop", "should_stop", 0], ["stopReason", "stop_reason", 0], ["costUsd", "cost_usd", 0]] },
+  "ResolvedRunConfig": { o: [["ruleVersion", "rule_version", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["templateRevision", "template_revision", 0], ["adapter", "adapter", { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } }], ["lrSource", "lr_source", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointEverySteps", "checkpoint_every_steps", 0], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["split", "split", { o: [["evalFraction", "eval_fraction", 0], ["trainRecords", "train_records", 0], ["evalRecords", "eval_records", 0]] }], ["recipeParams", "recipe_params", 0]] },
+  "ResumeRunRequest": { o: [["maxCostUsd", "max_cost_usd", 0]] },
+  "RouteRequest": { o: [["messages", "messages", { a: "ChatMessage" }], ["sessionId", "session_id", 0]] },
+  "RouteResponse": { o: [["inferenceId", "inference_id", 0], ["artifactId", "artifact_id", 0], ["isExploration", "is_exploration", 0]] },
+  "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", 0], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
+  "SplitSpec": { o: [["evalFraction", "eval_fraction", 0]] },
+  "TrainableModel": { o: [["hfRepo", "hf_repo", 0], ["defaultFor", "default_for", 0], ["pricePerMillionTokensUsd", "price_per_million_tokens_usd", 0], ["maxContextTokens", "max_context_tokens", 0], ["templateRevision", "template_revision", 0], ["calibratedLrs", "calibrated_lrs", 0]] },
+  "TrainerHeartbeatRequest": { o: [["workerId", "worker_id", 0], ["leaseSeconds", "lease_seconds", 0]] },
+  "TrainerHeartbeatResponse": { o: [["shouldStop", "should_stop", 0], ["stopReason", "stop_reason", 0], ["leaseExpiresAt", "lease_expires_at", 0]] },
+  "TrainerJob": { o: [["leaseSeconds", "lease_seconds", 0], ["leaseExpiresAt", "lease_expires_at", 0], ["run", "run", { o: [["workspaceId", "workspace_id", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["totalSteps", "total_steps", 0]] }], ["import", "import", { o: [["workspaceId", "workspace_id", 0]] }], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["maxCostUsd", "max_cost_usd", 0], ["dataset", "dataset", { o: [["recordCount", "record_count", 0], ["downloadUrl", "download_url", 0]] }], ["resume", "resume", { o: [["checkpointId", "checkpoint_id", 0], ["downloadUrl", "download_url", 0]] }]] },
+  "TrainerQueueStats": { o: [["byKind", "by_kind", 0]] },
+  "TrainerUploadRequest": { o: [["workerId", "worker_id", 0], ["sizeBytes", "size_bytes", 0]] },
+  "TrajectoryInput": { o: [["messages", "messages", { a: "ChatMessage" }]] },
+  "TrajectoryOutput": { o: [["turns", "turns", { a: "ChatMessage" }]] },
+  "UploadTicket": { o: [["uploadId", "upload_id", 0], ["expiresAt", "expires_at", 0]] },
 };
 
-export type ApiKey = {
+export type ClaimEnvTaskRequest = {
+  workerId: string;
+  waitMs?: number | undefined;
+};
+
+export type ClaimEnvTaskResponse = {
+  task: Record<string, unknown> | null;
+};
+
+export type CompleteEnvTaskResponse = Record<string, unknown>;
+
+export type DispatchEnvTaskResponse = {
   id: string;
-  workspace_id: string;
-  name: string;
-  prefix: string;
-  scopes: Array<ApiKeyScope>;
-  created_at: string;
-  revoked_at: string | null;
-};
-
-export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:read" | "runs:write" | "artifacts:read" | "artifacts:write" | "deployments:write" | "feedback:write" | "env:serve";
-
-export type Artifact = {
-  id: string;
-  workspace_id: string;
-  name: string;
-  version: string;
-  run_id: string | null;
-  checkpoint_id: string | null;
-  base_model: string;
-  recipe_kind: RecipeKind;
-  format: ArtifactFormat;
-  sha256: string;
-  size_bytes: number;
-  manifest: Record<string, unknown>;
-  eval_report: Record<string, unknown> | null;
-  created_at: string;
-};
-
-export type ArtifactFormat = "peft_lora" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference" | null;
-
-export type BenchmarkSpec = {
-  name: "ifeval" | "gsm8k" | "mmlu-pro" | "gpqa-diamond" | "humaneval" | "livecodebench";
-  limit?: number;
-};
-
-export type ChatMessage = {
-  role: "system" | "user" | "assistant" | "tool";
-  content?: string | Array<Record<string, unknown>> | null;
-  tool_calls?: Array<Record<string, unknown>>;
-  tool_call_id?: string;
-  name?: string;
-  train?: boolean;
-};
-
-export type Checkpoint = {
-  id: string;
-  workspace_id: string;
-  run_id: string;
-  attempt: number;
-  step: number;
-  eval_score: number | null;
-  format: ArtifactFormat;
-  sha256: string;
-  size_bytes: number;
-  metadata: Record<string, unknown>;
-  best: boolean;
-  final: boolean;
-  expires_at: string | null;
-  created_at: string;
-};
-
-export type ClaimJobRequest = {
-  worker_id: string;
-  lease_seconds?: number;
-  kinds?: Array<JobKind>;
-  recipes?: Array<RecipeKind>;
-};
-
-export type ClaimJobResponse = {
-  protocol: "grad.trainer-protocol/1";
-  job: TrainerJob;
-};
-
-export type CompleteTrainerJobRequest = {
-  worker_id: string;
-  attempt: number;
-  status: "completed" | "stopped_budget" | "failed" | "cancelled" | "abandoned";
-  upload_id?: string;
-  format?: ArtifactFormat;
-  manifest?: Record<string, unknown>;
-  eval_report?: Record<string, unknown> | null;
-  tokens_processed?: number;
-  error?: string;
-  import_summary?: {
-  dropped_count?: number;
-  detected_scores?: Array<string>;
-  drop_reasons?: Array<string>;
-};
-};
-
-export type CompleteTrainerJobResponse = {
-  job_id: string;
-  kind: JobKind;
+  envName: string;
   status: string;
-  run: Run & Record<string, unknown> | null;
-  artifact: Artifact & Record<string, unknown> | null;
-  import: ImportJob & Record<string, unknown> | null;
+  activeWorkers: number;
 };
 
-export type CreateApiKeyRequest = {
-  name: string;
-  scopes: Array<ApiKeyScope>;
-};
-
-export type CreateDatasetRequest = {
-  name: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type CreateImportRequest = {
-  source: ImportSource;
-  connector?: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
-};
-
-export type CreateUploadRequest = {
-  purpose: "dataset_import";
-  filename: string;
-  size_bytes: number;
-  sha256: string;
-};
-
-export type CreatedApiKey = {
-  key: ApiKey;
-  secret: string;
-};
-
-export type Dataset = {
-  id: string;
-  workspace_id: string;
-  name: string;
-  version: number;
-  record_count: number;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-};
-
-export type DatasetRecord = {
-  schema?: "grad.trajectory/1";
-  id?: string;
-  session_id?: string | null;
-  group_id?: string | null;
-  role?: "chosen" | "rejected" | "anchor" | "positive" | "negative" | "desirable" | "undesirable" | "rollout" | null;
-  source?: string | null;
-  timestamp?: string | null;
-  messages?: Array<ChatMessage>;
-  tools?: Array<Record<string, unknown>>;
-  input?: TrajectoryInput;
-  output?: TrajectoryOutput;
-  prompt?: string | Array<ChatMessage>;
-  completion?: string | Array<ChatMessage>;
-  chosen?: string | Array<ChatMessage>;
-  rejected?: string | Array<ChatMessage>;
-  query?: string;
-  positive?: string;
-  negatives?: Array<string>;
-  state?: unknown;
-  questions?: Record<string, unknown>;
-  expected_output?: unknown;
-  scores?: Record<string, number>;
-  metrics?: Record<string, number>;
-  metadata?: Record<string, unknown>;
-};
-
-export type DatasetRecordsPage = {
-  dataset: string;
-  version: number;
-  total: number;
-  data: Array<DatasetRecord>;
-  next_cursor: string | null;
-};
-
-export type DeployArtifactRequest = {
-  artifact: string;
-  name?: string;
-  fallback?: string;
-  explore_rate?: number;
-};
-
-export type Deployment = {
-  id: string;
-  workspace_id: string;
-  name: string;
-  model_id: string;
-  active_artifact_id: string;
-  previous_artifact_id: string | null;
-  fallback_model: string | null;
-  explore_rate: number;
-  status: "active" | "disabled";
-  created_at: string;
-  updated_at: string;
-};
-
-export type DeploymentStatus = {
-  deployment: Deployment;
-  feedback_count: number;
-  average_score: number | null;
-};
-
-export type EmbedRequest = {
-  model: string;
-  input: string | Array<string>;
-};
-
-export type EmbedResponse = {
-  model: string;
-  data: Array<{
-  index: number;
-  embedding: Array<number>;
-}>;
-  usage: {
-  prompt_tokens: number;
-  total_tokens: number;
-};
-};
-
-export type EnvTaskDispatch = {
-  env_name: string;
-  task: Record<string, unknown>;
-  model_id: string;
-  system_prompt?: string;
-  timeout_s?: number;
-};
-
-export type EnvTaskResult = {
-  worker_id: string;
-  score?: number | null;
-  scores?: Record<string, number>;
-  trajectory?: Record<string, unknown>;
-  error?: string;
-};
-
-export type EnvWorkerRegister = {
-  name: string;
-  worker_id: string;
-  concurrency?: number;
-};
-
-export type EvalModelSummary = {
-  model: string;
-  overall: number;
-  ci_low: number;
-  ci_high: number;
-  pass_at_k: Record<string, number>;
-  vs_baseline: {
-  delta: number;
-  ci_low: number;
-  ci_high: number;
-} | null;
-  tasks: number;
-  errors: number;
-  tokens_per_task: number;
-  cost_per_1k_tasks_usd: number | null;
-};
-
-export type EvalOutput = {
-  id: string;
-  eval_id: string;
-  task_id: string;
-  model: string;
-  sample_index: number;
-  input: Array<ChatMessage>;
-  output: string | null;
-  expected_output?: unknown;
-  record: DatasetRecord;
-  scores: Record<string, number>;
-  error: string | null;
-  usage: {
-  prompt_tokens: number;
-  completion_tokens: number;
-};
-};
-
-export type EvalRubricItem = {
-  name: string;
-  kind: "regex" | "validator" | "code" | "judge";
-  weight?: number;
-  pattern?: string;
-  flags?: string;
-  validator?: "json" | "non_empty" | "exact_match";
-  model?: string;
-  prompt?: string;
-  runtime?: "local";
-};
-
-export type EvalRun = {
-  id: string;
-  workspace_id: string;
-  name: string;
-  status: EvalStatus;
-  models: Array<string>;
-  baseline: string | null;
-  task_source: {
-  kind: "dataset";
-  dataset: string;
-  version: number;
-};
-  rubric: Array<EvalRubricItem>;
-  samples: number;
-  temperature: number;
-  max_tokens: number;
-  pass_threshold: number;
-  judge_models: Array<string>;
-  local_scorers: Array<string>;
-  progress: {
-  total_outputs: number;
-  generated: number;
-  pending_local_scores: number;
-};
-  summary: Array<EvalModelSummary>;
-  total_cost_usd: number;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-};
-
-export type EvalStatus = "queued" | "running" | "awaiting_scores" | "completed" | "failed" | "cancelled";
-
-export type EvalTaskOutcome = {
-  task_id: string;
-  model: string;
-  score: number;
-  passed: boolean;
-  sample_scores: Array<number>;
-  judge_model: string | null;
-  record: DatasetRecord;
-};
-
-export type FeedbackEventInput = {
-  inference_id?: string;
-  session_id?: string;
-  deployment_name?: string;
-  idempotency_key: string;
-  score?: number;
-  expected_output?: unknown;
-  metrics?: Record<string, number>;
-};
-
-export type FeedbackRecord = {
-  id: string;
-  workspace_id: string;
-  inference_id: string | null;
-  session_id: string | null;
-  deployment_name: string | null;
-  idempotency_key: string;
-  score: number | null;
-  expected_output?: unknown;
-  metrics: Record<string, number>;
-  created_at: string;
-};
-
-export type HfColumnMapping = {
-  messages?: string;
-  prompt?: string;
-  completion?: string;
-  chosen?: string;
-  rejected?: string;
-  answer?: string;
-  query?: string;
-  positive?: string;
-};
-
-export type ImportJob = {
-  id: string;
-  workspace_id: string;
-  dataset: string;
-  status: ImportStatus;
-  source: Record<string, unknown>;
-  connector: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
+export interface DownloadTrainerDatasetParams {
   attempt: number;
-  imported_count: number;
-  dropped_count: number;
-  detected_scores: Array<string>;
-  drop_reasons: Array<string>;
-  dataset_version: number | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type ImportSource = {
-  kind: "upload";
-  upload_id: string;
-  format?: "auto" | "jsonl" | "json" | "parquet";
-} | {
-  kind: "hf";
-  repo: string;
-  split?: string;
-  config?: string;
-  revision?: string;
-  columns?: HfColumnMapping;
-  limit?: number;
-};
-
-export type ImportStatus = "queued" | "running" | "completed" | "failed";
-
-export type JobKind = "train" | "import";
-
-export type MetricPoint = {
-  seq: number;
-  attempt: number;
-  step: number;
-  loss: number;
-  eval_loss?: number | null;
-  eval_metric?: number | null;
-  grad_norm?: number | null;
-  lr?: number | null;
-  tokens_per_sec?: number | null;
-  tokens: number;
-  cost_usd: number;
-  timestamp: string;
-} | null;
-
-export type MetricPointInput = {
-  step: number;
-  loss: number;
-  eval_loss?: number | null;
-  eval_metric?: number | null;
-  grad_norm?: number | null;
-  lr?: number | null;
-  tokens_per_sec?: number | null;
-  tokens: number;
-  cost_usd?: number;
-  timestamp: string;
-};
-
-export type MetricsPage = {
-  run_id: string;
-  status: RunStatus;
-  data: Array<MetricPoint>;
-  next_cursor: string | null;
-};
-
-export type PlanEvalRequest = {
-  name?: string;
-  models: Array<string>;
-  baseline?: string;
-  dataset?: string;
-  dataset_version?: number;
-  env_name?: string;
-  tasks?: Array<Record<string, unknown>>;
-  benchmarks?: Array<BenchmarkSpec>;
-  rubric?: Array<EvalRubricItem>;
-  samples?: number;
-  temperature?: number;
-  max_tokens?: number;
-  limit?: number;
-  pass_threshold?: number | null;
-  max_cost_usd?: number;
-};
-
-export type PlanEvalResponse = {
-  task_source_kind: "dataset";
-  dataset_version: number;
-  estimated_tasks: number;
-  estimated_model_calls: number;
-  estimated_judge_calls: number;
-  estimated_cost_usd: number;
-  judge_models: Array<string>;
-  local_scorers: Array<string>;
-  pass_threshold: number;
-  warnings: Array<string>;
-};
-
-export type PlanRunRequest = {
-  dataset: string;
-  name: string;
-  recipe: RecipeSpec;
-  split?: SplitSpec;
-  max_cost_usd?: number;
-};
-
-export type PlanRunResponse = {
-  resolved_config: ResolvedRunConfig;
-  dataset_version: number;
-  usable_records: number;
-  total_records: number;
-  estimated_steps: number;
-  estimated_tokens: number;
-  estimated_cost_usd: number;
-  price_per_million_tokens: number;
-  trained_token_fraction: number;
-  warnings: Array<string>;
-};
-
-export type PostEvalScoresRequest = {
-  scores: Array<{
-  output_id: string;
-  scorer: string;
-  score: number;
-}>;
-};
-
-export type PostEvalScoresResponse = {
-  accepted: number;
-  status: EvalStatus;
-  pending_local_scores: number;
-};
-
-export type PostImportRecordsRequest = {
-  worker_id: string;
-  attempt: number;
-  records: Array<unknown>;
-};
-
-export type PostImportRecordsResponse = {
-  accepted: number;
-  rejected: number;
-  errors: Array<{
-  index: number;
-  error: string;
-}>;
-};
-
-export type Problem = {
-  type: string;
-  title: string;
-  status: number;
-  detail: string;
-  code: string;
-  request_id: string;
-};
-
-export type PromoteCheckpointRequest = {
-  name?: string;
-};
-
-export type PushDatasetRequest = {
-  records: Array<DatasetRecord>;
-  metadata?: Record<string, unknown>;
-};
-
-export type RecipeKind = "sft" | "dpo" | "router" | "decision" | "cartridge" | "embedding" | "distill" | "reward" | "grpo";
-
-export type RecipeSpec = {
-  kind: RecipeKind;
-  model?: string;
-  adapter?: AdapterSpec;
-  lr?: "auto" | number;
-  lr_scale?: number;
-  batch_size?: number;
-  epochs?: number;
-  schedule?: "linear" | "cosine" | "constant";
-  warmup?: number;
-  train_on?: "last" | "all_assistant";
-  thinking?: "auto" | "on" | "off";
-  preserve_thinking?: boolean;
-  reduction?: "per_example" | "per_token";
-  select?: "best" | "last";
-  checkpoint_ttl_days?: number;
-  beta?: number;
-  models?: Array<string>;
-  max_quality_drop?: number;
-  context_text?: string;
-  context_uri?: string;
-  num_tokens?: number;
-  temp?: number;
-  teacher?: string;
-  env_name?: string;
-  group_size?: number;
-};
-
-export type RecordFeedbackRequest = {
-  events: Array<FeedbackEventInput>;
-};
-
-export type RecordFeedbackResponse = {
-  accepted: number;
-  deduplicated: number;
-  records: Array<FeedbackRecord>;
-};
-
-export type RegisterTrainerCheckpointRequest = {
-  worker_id: string;
-  attempt: number;
-  step: number;
-  eval_score?: number | null;
-  upload_id: string;
-  format?: ArtifactFormat;
-  metadata?: Record<string, unknown>;
-};
-
-export type RenderDatasetRequest = {
-  model?: string;
-  train_on?: "last" | "all_assistant";
-  thinking?: "auto" | "on" | "off";
-  preserve_thinking?: boolean;
-  limit?: number;
-};
-
-export type RenderDatasetResponse = {
-  dataset: string;
-  model: string;
-  template_revision: string;
-  token_counts: "estimated";
-  examples: Array<{
-  record_id: string;
-  template_revision: string;
-  total_tokens: number;
-  trained_tokens: number;
-  trained_fraction: number;
-  spans: Array<{
-  text: string;
-  trained: boolean;
-  tokens: number;
-}>;
-}>;
-};
-
-export type ReportTrainerProgressRequest = {
-  worker_id: string;
-  attempt: number;
-  metric: MetricPointInput;
-};
-
-export type ReportTrainerProgressResponse = {
-  status: RunStatus;
-  should_stop: boolean;
-  stop_reason: "cancelled" | "budget" | null;
-  cost_usd: number;
-};
-
-export type ResolvedRunConfig = {
-  rule_version: string;
-  dataset: string;
-  dataset_version: number;
-  name: string;
-  recipe_kind: RecipeKind;
-  model: string;
-  template_revision: string;
-  adapter: {
-  kind: "lora";
-  rank?: number;
-  alpha?: number;
-  merge_on_export?: boolean;
-} | {
-  kind: "prefix_kv";
-  num_tokens?: number;
-} | {
-  kind: "frozen_head";
-} | {
-  kind: "encoder_full";
-};
-  lr: number;
-  lr_source: string;
-  batch_size: number;
-  epochs: number;
-  schedule: "linear" | "cosine" | "constant";
-  warmup: number;
-  train_on: "last" | "all_assistant";
-  thinking: "auto" | "on" | "off";
-  preserve_thinking: boolean;
-  reduction: "per_example" | "per_token";
-  select: "best" | "last";
-  checkpoint_every_steps: number;
-  checkpoint_ttl_days: number;
-  split: {
-  strategy: "by_session" | "by_group" | "random";
-  eval_fraction: number;
-  seed: number;
-  train_records: number;
-  eval_records: number;
-};
-  recipe_params: Record<string, unknown>;
-};
-
-export type ResumeRunRequest = {
-  max_cost_usd?: number;
-};
-
-export type RouteRequest = {
-  deployment: string;
-  messages: Array<ChatMessage>;
-  tools?: Array<Record<string, unknown>>;
-  session_id?: string;
-};
-
-export type RouteResponse = {
-  inference_id: string;
-  deployment: string;
-  artifact_id: string;
-  model: string;
-  is_exploration: boolean;
-  confidence: number;
-  scores: Record<string, number>;
-};
-
-export type Run = {
-  id: string;
-  workspace_id: string;
-  name: string;
-  dataset_id: string;
-  dataset_name: string;
-  dataset_version: number;
-  recipe_kind: RecipeKind;
-  status: RunStatus;
-  resolved_config: ResolvedRunConfig;
-  max_cost_usd: number | null;
-  price_per_million_tokens: number;
-  tokens_processed: number;
-  cost_usd: number;
-  current_step: number;
-  total_steps: number;
-  attempt: number;
-  max_attempts: number;
-  latest_metric: MetricPoint;
-  eval_report: Record<string, unknown> | null;
-  artifact_id: string | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-  finished_at: string | null;
-};
-
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopped_budget";
-
-export type SplitSpec = {
-  strategy?: "by_session" | "by_group" | "random";
-  eval_fraction?: number;
-  seed?: number;
-};
-
-export type TrainableModel = {
-  id: string;
-  hf_repo: string | null;
-  family: "llm" | "encoder";
-  adapters: Array<"lora" | "prefix_kv" | "frozen_head" | "encoder_full">;
-  recipes: Array<RecipeKind>;
-  default_for: Array<RecipeKind>;
-  price_per_million_tokens_usd: number;
-  max_context_tokens: number;
-  template_revision: string;
-  calibrated_lrs: Record<string, number>;
-};
-
-export type TrainerHeartbeatRequest = {
-  worker_id: string;
-  attempt: number;
-  lease_seconds?: number;
-};
-
-export type TrainerHeartbeatResponse = {
-  status: string;
-  should_stop: boolean;
-  stop_reason: "cancelled" | "budget" | null;
-  lease_expires_at: string;
-};
-
-export type TrainerJob = {
-  id: string;
-  kind: JobKind;
-  attempt: number;
-  lease_seconds: number;
-  lease_expires_at: string;
-  run: {
-  id: string;
-  workspace_id: string;
-  name: string;
-  recipe_kind: RecipeKind;
-  resolved_config: ResolvedRunConfig;
-  total_steps: number;
-} | null;
-  import: {
-  id: string;
-  workspace_id: string;
-  dataset: string;
-  source: Record<string, unknown>;
-  connector: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
-} | null;
-  price_per_million_tokens: number | null;
-  max_cost_usd: number | null;
-  dataset: {
-  version: number;
-  record_count: number;
-  download_url: string;
-} | null;
-  resume: {
-  checkpoint_id: string;
-  step: number;
-  download_url: string;
-} | null;
-} | null;
-
-export type TrainerQueueStats = {
-  queued: number;
-  running: number;
-  total: number;
-  by_kind: {
-  train: {
-  queued: number;
-  running: number;
-};
-  import: {
-  queued: number;
-  running: number;
-};
-};
-};
-
-export type TrainerUploadRequest = {
-  worker_id: string;
-  attempt: number;
-  kind: "checkpoint" | "artifact";
-  sha256: string;
-  size_bytes: number;
-};
-
-export type TrajectoryInput = {
-  messages?: Array<ChatMessage>;
-  tools?: Array<Record<string, unknown>>;
-  media?: Array<Record<string, unknown>>;
-  features?: Record<string, unknown>;
-  payload?: unknown;
-};
-
-export type TrajectoryOutput = {
-  turns?: Array<ChatMessage>;
-  payload?: unknown;
-} | null;
-
-export type UploadTicket = {
-  upload_id: string;
-  method: "PUT";
-  url: string;
-  headers: Record<string, string>;
-  expires_at: string;
-};
-
-export class GradApiError extends Error {
-  readonly status: number;
-  readonly code: string;
-  readonly title: string;
-  readonly detail: string;
-  readonly requestId: string;
-
-  constructor(problem: {
-    status: number;
-    code?: string;
-    title?: string;
-    detail?: string;
-    request_id?: string;
-  }) {
-    super(`[${problem.status}] ${problem.code ?? "api_error"}: ${problem.detail ?? problem.title ?? "Request failed"}`);
-    this.name = "GradApiError";
-    this.status = problem.status;
-    this.code = problem.code ?? "api_error";
-    this.title = problem.title ?? "API Error";
-    this.detail = problem.detail ?? "";
-    this.requestId = problem.request_id ?? "";
-  }
 }
 
-export interface GeneratedClientOptions {
-  baseUrl: string;
-  apiKey?: string;
-  timeoutMs?: number;
-  fetchImpl?: typeof fetch;
+export type GetEnvTaskResponse = Record<string, unknown>;
+
+export interface ListApiKeysParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
 }
 
-export class GeneratedApiClient {
-  private readonly baseUrl: string;
-  private readonly apiKey: string | undefined;
-  private readonly timeoutMs: number;
-  private readonly fetchImpl: typeof fetch;
+export type ListApiKeysResponse = {
+  data: Array<ApiKey>;
+  nextCursor: string | null;
+};
 
-  constructor(options: GeneratedClientOptions) {
-    const parsed = new URL(options.baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error(`Unsupported baseUrl protocol: ${parsed.protocol}`);
-    }
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
-    this.apiKey = options.apiKey;
-    this.timeoutMs = options.timeoutMs ?? 30_000;
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+export interface ListArtifactsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  name?: string | undefined;
+}
+
+export type ListArtifactsResponse = {
+  data: Array<Artifact>;
+  nextCursor: string | null;
+};
+
+export interface ListDatasetRecordsParams {
+  version?: number | undefined;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export interface ListDatasetsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListDatasetsResponse = {
+  data: Array<Dataset>;
+  nextCursor: string | null;
+};
+
+export interface ListDeploymentsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListDeploymentsResponse = {
+  data: Array<Deployment>;
+  nextCursor: string | null;
+};
+
+export interface ListEvalFailuresParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  model?: string | undefined;
+  threshold?: number | undefined;
+}
+
+export type ListEvalFailuresResponse = {
+  evalId: string;
+  data: Array<EvalTaskOutcome>;
+  nextCursor: string | null;
+};
+
+export interface ListEvalOutputsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  model?: string | undefined;
+  missingScorer?: string | undefined;
+}
+
+export type ListEvalOutputsResponse = {
+  data: Array<EvalOutput>;
+  nextCursor: string | null;
+};
+
+export interface ListEvalResultsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  model?: string | undefined;
+}
+
+export type ListEvalResultsResponse = {
+  data: Array<EvalTaskOutcome>;
+  nextCursor: string | null;
+};
+
+export interface ListEvalsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListEvalsResponse = {
+  data: Array<EvalRun>;
+  nextCursor: string | null;
+};
+
+export interface ListImportsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListImportsResponse = {
+  data: Array<ImportJob>;
+  nextCursor: string | null;
+};
+
+export type ListModelsResponse = {
+  data: Array<TrainableModel>;
+};
+
+export interface ListRunCheckpointsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListRunCheckpointsResponse = {
+  data: Array<Checkpoint>;
+  nextCursor: string | null;
+};
+
+export interface ListRunMetricsParams {
+  cursor?: string | undefined;
+  afterStep?: number | undefined;
+  limit?: number | undefined;
+}
+
+export interface ListRunsParams {
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListRunsResponse = {
+  data: Array<Run>;
+  nextCursor: string | null;
+};
+
+export type RegisterEnvWorkerResponse = {
+  name: string;
+  workerId: string;
+  concurrency: number;
+  lastHeartbeatAt: string;
+};
+
+/** Low-level client: one typed method per OpenAPI operation. */
+export class ApiClient {
+  constructor(readonly transport: Transport) {}
+
+  /**
+   * Cancel a queued, running or awaiting_scores evaluation
+   *
+   * `POST /v1/evals/{id}/cancel`
+   */
+  async cancelEval(id: string, options?: RequestOptions): Promise<EvalRun> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals/${encodePathParam(id, "id")}/cancel` }, options);
+    return convertKeys(CODEC, "EvalRun", data, "decode") as EvalRun;
   }
 
-  private buildUrl(
-    routePath: string,
-    query?: Record<string, string | number | boolean | undefined>,
-  ): string {
-    const url = new URL(`${this.baseUrl}${routePath}`);
-    if (query) {
-      for (const [k, v] of Object.entries(query)) {
-        if (v !== undefined) url.searchParams.set(k, String(v));
-      }
-    }
-    return url.toString();
+  /**
+   * Cancel a training run (a running attempt is stopped and billed)
+   *
+   * `POST /v1/runs/{id}/cancel`
+   */
+  async cancelRun(id: string, options?: RequestOptions): Promise<Run> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs/${encodePathParam(id, "id")}/cancel` }, options);
+    return convertKeys(CODEC, "Run", data, "decode") as Run;
   }
 
-  private async send(
-    routePath: string,
-    options: {
-      method: string;
-      body?: Record<string, unknown> | undefined;
-      query?: Record<string, string | number | boolean | undefined> | undefined;
-    },
-  ): Promise<Response> {
-    const headers: Record<string, string> = {};
-    if (this.apiKey) headers["Authorization"] = `Bearer ${this.apiKey}`;
-    if (options.body !== undefined) headers["Content-Type"] = "application/json";
-
-    const response = await this.fetchImpl(this.buildUrl(routePath, options.query), {
-      method: options.method,
-      headers,
-      signal: AbortSignal.timeout(this.timeoutMs),
-      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      let problem: Record<string, unknown> = { status: response.status, detail: text };
-      try {
-        problem = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        // Non-JSON proxy/gateway error body; keep raw text fallback.
-      }
-      throw new GradApiError({
-        status: Number(problem.status ?? response.status),
-        ...(typeof problem.code === "string" ? { code: problem.code } : {}),
-        ...(typeof problem.title === "string" ? { title: problem.title } : {}),
-        ...(typeof problem.detail === "string" ? { detail: problem.detail } : {}),
-        ...(typeof problem.request_id === "string"
-          ? { request_id: problem.request_id }
-          : {}),
-      });
-    }
-
-    return response;
+  /**
+   * Long-poll for the next task assigned to a `grad env serve` worker
+   *
+   * `POST /v1/env-workers/{name}/claim`
+   */
+  async claimEnvTask(name: string, body: ClaimEnvTaskRequest, options?: RequestOptions): Promise<ClaimEnvTaskResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/${encodePathParam(name, "name")}/claim`, json: convertKeys(CODEC, { o: [["workerId", "worker_id", 0], ["waitMs", "wait_ms", 0]] }, body, "encode") }, options);
+    return data as ClaimEnvTaskResponse;
   }
 
-  protected async requestJson(
-    routePath: string,
-    options: {
-      method: string;
-      body?: Record<string, unknown> | undefined;
-      query?: Record<string, string | number | boolean | undefined> | undefined;
-    },
-  ): Promise<Record<string, unknown>> {
-    const response = await this.send(routePath, options);
-    if (response.status === 204 || response.status === 205) return {};
-    const text = await response.text();
-    if (!text.trim()) return {};
-    return JSON.parse(text) as Record<string, unknown>;
+  /**
+   * Claim the next queued train or import job (trainer:worker)
+   *
+   * `POST /v1/trainer-jobs/claim`
+   */
+  async claimTrainerJob(body: ClaimJobRequest, options?: RequestOptions): Promise<ClaimJobResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/claim`, json: convertKeys(CODEC, "ClaimJobRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "ClaimJobResponse", data, "decode") as ClaimJobResponse;
   }
 
-  protected async requestBytes(
-    routePath: string,
-    options: {
-      method: string;
-      body?: Record<string, unknown> | undefined;
-      query?: Record<string, string | number | boolean | undefined> | undefined;
-    },
-  ): Promise<{ bytes: Uint8Array; headers: Headers }> {
-    const response = await this.send(routePath, options);
-    const buf = new Uint8Array(await response.arrayBuffer());
-    return { bytes: buf, headers: response.headers };
+  /**
+   * Submit scored trajectory output for an environment task
+   *
+   * `POST /v1/env-workers/tasks/{id}/complete`
+   */
+  async completeEnvTask(id: string, body: EnvTaskResult, options?: RequestOptions): Promise<CompleteEnvTaskResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/tasks/${encodePathParam(id, "id")}/complete`, json: convertKeys(CODEC, "EnvTaskResult", body, "encode") }, options);
+    return data as CompleteEnvTaskResponse;
   }
 
-  /** Cancel a queued, running or awaiting_scores evaluation */
-  cancelEval(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  /**
+   * Finish a job attempt: publish its artifact, bill it, release the lease
+   *
+   * `POST /v1/trainer-jobs/{id}/complete`
+   */
+  async completeTrainerJob(id: string, body: CompleteTrainerJobRequest, options?: RequestOptions): Promise<CompleteTrainerJobResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/complete`, json: convertKeys(CODEC, "CompleteTrainerJobRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "CompleteTrainerJobResponse", data, "decode") as CompleteTrainerJobResponse;
   }
 
-  /** Cancel a training run (a running attempt is stopped and billed) */
-  cancelRun(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  /**
+   * Create a scoped workspace API key (trainer worker keys are platform config, not keys)
+   *
+   * `POST /v1/keys`
+   */
+  async createApiKey(body: CreateApiKeyRequest, options?: RequestOptions): Promise<CreatedApiKey> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/keys`, json: body }, options);
+    return convertKeys(CODEC, "CreatedApiKey", data, "decode") as CreatedApiKey;
   }
 
-  /** Long-poll for the next task assigned to a `grad env serve` worker */
-  claimEnvTask(name: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/env-workers/${encodeURIComponent(name)}/claim`, { method: "POST", body });
+  /**
+   * Create an empty dataset
+   *
+   * `POST /v1/datasets`
+   */
+  async createDataset(body: CreateDatasetRequest, options?: RequestOptions): Promise<Dataset> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets`, json: body }, options);
+    return convertKeys(CODEC, "Dataset", data, "decode") as Dataset;
   }
 
-  /** Claim the next queued train or import job (trainer:worker) */
-  claimTrainerJob(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/claim`, { method: "POST", body });
+  /**
+   * Import an uploaded file or a Hugging Face dataset into a dataset (async job)
+   *
+   * `POST /v1/datasets/{name}/imports`
+   */
+  async createDatasetImport(name: string, body: CreateImportRequest, options?: RequestOptions): Promise<ImportJob> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/imports`, json: convertKeys(CODEC, "CreateImportRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "ImportJob", data, "decode") as ImportJob;
   }
 
-  /** Submit scored trajectory output for an environment task */
-  completeEnvTask(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/env-workers/tasks/${encodeURIComponent(id)}/complete`, { method: "POST", body });
+  /**
+   * Generate embeddings from a deployed embedding artifact
+   *
+   * `POST /v1/embeddings`
+   */
+  async createEmbeddings(body: EmbedRequest, options?: RequestOptions): Promise<EmbedResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/embeddings`, json: body }, options);
+    return convertKeys(CODEC, "EmbedResponse", data, "decode") as EmbedResponse;
   }
 
-  /** Finish a job attempt: publish its artifact, bill it, release the lease */
-  completeTrainerJob(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/complete`, { method: "POST", body });
+  /**
+   * Queue an evaluation across models on a pinned dataset version (executed by the server)
+   *
+   * `POST /v1/evals`
+   */
+  async createEval(body: PlanEvalRequest, options?: RequestOptions): Promise<EvalRun> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals`, json: convertKeys(CODEC, "PlanEvalRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "EvalRun", data, "decode") as EvalRun;
   }
 
-  /** Create a scoped workspace API key (trainer worker keys are platform config, not keys) */
-  createApiKey(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/keys`, { method: "POST", body });
+  /**
+   * Create and enqueue a training run (pins the dataset version)
+   *
+   * `POST /v1/runs`
+   */
+  async createRun(body: PlanRunRequest, options?: RequestOptions): Promise<Run> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs`, json: convertKeys(CODEC, "PlanRunRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "Run", data, "decode") as Run;
   }
 
-  /** Create an empty dataset */
-  createDataset(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets`, { method: "POST", body });
+  /**
+   * Get an upload URL for a checkpoint or artifact bundle
+   *
+   * `POST /v1/trainer-jobs/{id}/uploads`
+   */
+  async createTrainerUpload(id: string, body: TrainerUploadRequest, options?: RequestOptions): Promise<UploadTicket> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/uploads`, json: convertKeys(CODEC, "TrainerUploadRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "UploadTicket", data, "decode") as UploadTicket;
   }
 
-  /** Import an uploaded file or a Hugging Face dataset into a dataset (async job) */
-  createDatasetImport(name: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/imports`, { method: "POST", body });
+  /**
+   * Get an upload URL for a file to import (PUT the bytes, then create an import)
+   *
+   * `POST /v1/uploads`
+   */
+  async createUpload(body: CreateUploadRequest, options?: RequestOptions): Promise<UploadTicket> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/uploads`, json: convertKeys(CODEC, "CreateUploadRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "UploadTicket", data, "decode") as UploadTicket;
   }
 
-  /** Generate embeddings from a deployed embedding artifact */
-  createEmbeddings(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/embeddings`, { method: "POST", body });
+  /**
+   * Deploy or update an artifact under a stable model name
+   *
+   * `POST /v1/deployments`
+   */
+  async deployArtifact(body: DeployArtifactRequest, options?: RequestOptions): Promise<Deployment> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/deployments`, json: convertKeys(CODEC, "DeployArtifactRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "Deployment", data, "decode") as Deployment;
   }
 
-  /** Queue an evaluation across models on a pinned dataset version (executed by the server) */
-  createEval(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals`, { method: "POST", body });
+  /**
+   * Dispatch an evaluation or rollout task to a connected `grad env serve` worker
+   *
+   * `POST /v1/env-workers/tasks`
+   */
+  async dispatchEnvTask(body: EnvTaskDispatch, options?: RequestOptions): Promise<DispatchEnvTaskResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/tasks`, json: convertKeys(CODEC, "EnvTaskDispatch", body, "encode") }, options);
+    return convertKeys(CODEC, { o: [["envName", "env_name", 0], ["activeWorkers", "active_workers", 0]] }, data, "decode") as DispatchEnvTaskResponse;
   }
 
-  /** Create and enqueue a training run (pins the dataset version) */
-  createRun(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs`, { method: "POST", body });
+  /**
+   * Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256
+   *
+   * `GET /v1/artifacts/{id}/download`
+   */
+  downloadArtifact(id: string, options?: StreamOptions): Promise<RawResponse> {
+    return this.transport.raw({ method: "GET", path: `/v1/artifacts/${encodePathParam(id, "id")}/download`, accept: "application/octet-stream" }, options);
   }
 
-  /** Get an upload URL for a checkpoint or artifact bundle */
-  createTrainerUpload(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/uploads`, { method: "POST", body });
+  /**
+   * Stream the pinned dataset version of a claimed train job as JSONL
+   *
+   * `GET /v1/trainer-jobs/{id}/dataset`
+   */
+  downloadTrainerDataset(id: string, params: DownloadTrainerDatasetParams, options?: StreamOptions): Promise<RawResponse> {
+    return this.transport.raw({ method: "GET", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/dataset`, query: [["attempt", params.attempt]], accept: "application/x-ndjson" }, options);
   }
 
-  /** Get an upload URL for a file to import (PUT the bytes, then create an import) */
-  createUpload(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/uploads`, { method: "POST", body });
+  /**
+   * Get an artifact by id or name@latest
+   *
+   * `GET /v1/artifacts/{id}`
+   */
+  async getArtifact(id: string, options?: RequestOptions): Promise<Artifact> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/artifacts/${encodePathParam(id, "id")}` }, options);
+    return convertKeys(CODEC, "Artifact", data, "decode") as Artifact;
   }
 
-  /** Deploy or update an artifact under a stable model name */
-  deployArtifact(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/deployments`, { method: "POST", body });
+  /**
+   * Get a dataset by name
+   *
+   * `GET /v1/datasets/{name}`
+   */
+  async getDataset(name: string, options?: RequestOptions): Promise<Dataset> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/datasets/${encodePathParam(name, "name")}` }, options);
+    return convertKeys(CODEC, "Dataset", data, "decode") as Dataset;
   }
 
-  /** Dispatch an evaluation or rollout task to a connected `grad env serve` worker */
-  dispatchEnvTask(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/env-workers/tasks`, { method: "POST", body });
+  /**
+   * Get deployment status and feedback summary
+   *
+   * `GET /v1/deployments/{name}`
+   */
+  async getDeployment(name: string, options?: RequestOptions): Promise<DeploymentStatus> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/deployments/${encodePathParam(name, "name")}` }, options);
+    return convertKeys(CODEC, "DeploymentStatus", data, "decode") as DeploymentStatus;
   }
 
-  /** Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 */
-  downloadArtifact(id: string): Promise<{ bytes: Uint8Array; headers: Headers }> {
-    return this.requestBytes(`/v1/artifacts/${encodeURIComponent(id)}/download`, { method: "GET" });
+  /**
+   * Inspect an environment task and its result
+   *
+   * `GET /v1/env-workers/tasks/{id}`
+   */
+  async getEnvTask(id: string, options?: RequestOptions): Promise<GetEnvTaskResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/env-workers/tasks/${encodePathParam(id, "id")}` }, options);
+    return data as GetEnvTaskResponse;
   }
 
-  /** Stream the pinned dataset version of a claimed train job as JSONL */
-  downloadTrainerDataset(id: string, query?: { attempt?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/dataset`, { method: "GET", query });
+  /**
+   * Get an evaluation run by ID
+   *
+   * `GET /v1/evals/{id}`
+   */
+  async getEval(id: string, options?: RequestOptions): Promise<EvalRun> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/evals/${encodePathParam(id, "id")}` }, options);
+    return convertKeys(CODEC, "EvalRun", data, "decode") as EvalRun;
   }
 
-  /** Get an artifact by id or name@latest */
-  getArtifact(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/artifacts/${encodeURIComponent(id)}`, { method: "GET" });
+  /**
+   * Get a dataset import job
+   *
+   * `GET /v1/imports/{id}`
+   */
+  async getImport(id: string, options?: RequestOptions): Promise<ImportJob> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/imports/${encodePathParam(id, "id")}` }, options);
+    return convertKeys(CODEC, "ImportJob", data, "decode") as ImportJob;
   }
 
-  /** Get a dataset by name */
-  getDataset(name: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}`, { method: "GET" });
+  /**
+   * Get a training run
+   *
+   * `GET /v1/runs/{id}`
+   */
+  async getRun(id: string, options?: RequestOptions): Promise<Run> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}` }, options);
+    return convertKeys(CODEC, "Run", data, "decode") as Run;
   }
 
-  /** Get deployment status and feedback summary */
-  getDeployment(name: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/deployments/${encodeURIComponent(name)}`, { method: "GET" });
+  /**
+   * Queue depth for autoscaling: queued plus running jobs (trainer:worker)
+   *
+   * `GET /v1/trainer-jobs/queue`
+   */
+  async getTrainerQueueStats(options?: RequestOptions): Promise<TrainerQueueStats> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/trainer-jobs/queue` }, options);
+    return convertKeys(CODEC, "TrainerQueueStats", data, "decode") as TrainerQueueStats;
   }
 
-  /** Inspect an environment task and its result */
-  getEnvTask(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/env-workers/tasks/${encodeURIComponent(id)}`, { method: "GET" });
+  /**
+   * Renew the job lease; reports whether the worker should stop
+   *
+   * `POST /v1/trainer-jobs/{id}/heartbeat`
+   */
+  async heartbeatTrainerJob(id: string, body: TrainerHeartbeatRequest, options?: RequestOptions): Promise<TrainerHeartbeatResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/heartbeat`, json: convertKeys(CODEC, "TrainerHeartbeatRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "TrainerHeartbeatResponse", data, "decode") as TrainerHeartbeatResponse;
   }
 
-  /** Get an evaluation run by ID */
-  getEval(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}`, { method: "GET" });
+  /**
+   * List workspace API keys
+   *
+   * `GET /v1/keys`
+   */
+  async listApiKeys(params?: ListApiKeysParams, options?: RequestOptions): Promise<ListApiKeysResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/keys`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "ApiKey" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListApiKeysResponse;
   }
 
-  /** Get a dataset import job */
-  getImport(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/imports/${encodeURIComponent(id)}`, { method: "GET" });
+  /**
+   * List immutable artifacts (newest first)
+   *
+   * `GET /v1/artifacts`
+   */
+  async listArtifacts(params?: ListArtifactsParams, options?: RequestOptions): Promise<ListArtifactsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/artifacts`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["name", params?.name]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "Artifact" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListArtifactsResponse;
   }
 
-  /** Get a training run */
-  getRun(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs/${encodeURIComponent(id)}`, { method: "GET" });
+  /**
+   * Read records of a dataset version
+   *
+   * `GET /v1/datasets/{name}/records`
+   */
+  async listDatasetRecords(name: string, params?: ListDatasetRecordsParams, options?: RequestOptions): Promise<DatasetRecordsPage> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/datasets/${encodePathParam(name, "name")}/records`, query: [["version", params?.version], ["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, "DatasetRecordsPage", data, "decode") as DatasetRecordsPage;
   }
 
-  /** Queue depth for autoscaling: queued plus running jobs (trainer:worker) */
-  getTrainerQueueStats(): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/queue`, { method: "GET" });
+  /**
+   * List datasets (newest first)
+   *
+   * `GET /v1/datasets`
+   */
+  async listDatasets(params?: ListDatasetsParams, options?: RequestOptions): Promise<ListDatasetsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/datasets`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "Dataset" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListDatasetsResponse;
   }
 
-  /** Renew the job lease; reports whether the worker should stop */
-  heartbeatTrainerJob(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/heartbeat`, { method: "POST", body });
+  /**
+   * List deployments
+   *
+   * `GET /v1/deployments`
+   */
+  async listDeployments(params?: ListDeploymentsParams, options?: RequestOptions): Promise<ListDeploymentsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/deployments`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "Deployment" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListDeploymentsResponse;
   }
 
-  /** List workspace API keys */
-  listApiKeys(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/keys`, { method: "GET", query });
+  /**
+   * List failing task records from an evaluation run for mining
+   *
+   * `GET /v1/evals/{id}/failures`
+   */
+  async listEvalFailures(id: string, params?: ListEvalFailuresParams, options?: RequestOptions): Promise<ListEvalFailuresResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/evals/${encodePathParam(id, "id")}/failures`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["model", params?.model], ["threshold", params?.threshold]] }, options);
+    return convertKeys(CODEC, { o: [["evalId", "eval_id", 0], ["data", "data", { a: "EvalTaskOutcome" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListEvalFailuresResponse;
   }
 
-  /** List immutable artifacts (newest first) */
-  listArtifacts(query?: { limit?: string | number | boolean; cursor?: string | number | boolean; name?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/artifacts`, { method: "GET", query });
+  /**
+   * Page through generated model outputs (filter by model or by a code scorer that still needs a score)
+   *
+   * `GET /v1/evals/{id}/outputs`
+   */
+  async listEvalOutputs(id: string, params?: ListEvalOutputsParams, options?: RequestOptions): Promise<ListEvalOutputsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/evals/${encodePathParam(id, "id")}/outputs`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["model", params?.model], ["missing_scorer", params?.missingScorer]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "EvalOutput" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListEvalOutputsResponse;
   }
 
-  /** Read records of a dataset version */
-  listDatasetRecords(name: string, query?: { version?: string | number | boolean; limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/records`, { method: "GET", query });
+  /**
+   * Per-task, per-model results of a completed evaluation
+   *
+   * `GET /v1/evals/{id}/results`
+   */
+  async listEvalResults(id: string, params?: ListEvalResultsParams, options?: RequestOptions): Promise<ListEvalResultsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/evals/${encodePathParam(id, "id")}/results`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["model", params?.model]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "EvalTaskOutcome" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListEvalResultsResponse;
   }
 
-  /** List datasets (newest first) */
-  listDatasets(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets`, { method: "GET", query });
+  /**
+   * List evaluation runs
+   *
+   * `GET /v1/evals`
+   */
+  async listEvals(params?: ListEvalsParams, options?: RequestOptions): Promise<ListEvalsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/evals`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "EvalRun" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListEvalsResponse;
   }
 
-  /** List deployments */
-  listDeployments(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/deployments`, { method: "GET", query });
+  /**
+   * List dataset import jobs (newest first)
+   *
+   * `GET /v1/imports`
+   */
+  async listImports(params?: ListImportsParams, options?: RequestOptions): Promise<ListImportsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/imports`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "ImportJob" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListImportsResponse;
   }
 
-  /** List failing task records from an evaluation run for mining */
-  listEvalFailures(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean; model?: string | number | boolean; threshold?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/failures`, { method: "GET", query });
+  /**
+   * List trainable base models (the server catalog and price source)
+   *
+   * `GET /v1/models`
+   */
+  async listModels(options?: RequestOptions): Promise<ListModelsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/models` }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "TrainableModel" }]] }, data, "decode") as ListModelsResponse;
   }
 
-  /** Page through generated model outputs (filter by model or by a code scorer that still needs a score) */
-  listEvalOutputs(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean; model?: string | number | boolean; missing_scorer?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/outputs`, { method: "GET", query });
+  /**
+   * List unexpired checkpoints of a run (best and final never expire)
+   *
+   * `GET /v1/runs/{id}/checkpoints`
+   */
+  async listRunCheckpoints(id: string, params?: ListRunCheckpointsParams, options?: RequestOptions): Promise<ListRunCheckpointsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/checkpoints`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "Checkpoint" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListRunCheckpointsResponse;
   }
 
-  /** Per-task, per-model results of a completed evaluation */
-  listEvalResults(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean; model?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/results`, { method: "GET", query });
+  /**
+   * Training step metrics as JSON pages, or a live SSE stream
+   *
+   * `GET /v1/runs/{id}/metrics`
+   */
+  async listRunMetrics(id: string, params?: ListRunMetricsParams, options?: RequestOptions): Promise<MetricsPage> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/metrics`, query: [["cursor", params?.cursor], ["after_step", params?.afterStep], ["limit", params?.limit]] }, options);
+    return convertKeys(CODEC, "MetricsPage", data, "decode") as MetricsPage;
   }
 
-  /** List evaluation runs */
-  listEvals(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals`, { method: "GET", query });
+  /**
+   * Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events; one connection, resume with `lastEventId`)
+   */
+  listRunMetricsStream(id: string, params?: ListRunMetricsParams, options?: SSEOptions): AsyncGenerator<ServerSentEvent, void, undefined> {
+    return this.transport.sse({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/metrics`, query: [["cursor", params?.cursor], ["after_step", params?.afterStep], ["limit", params?.limit]] }, options);
   }
 
-  /** List dataset import jobs (newest first) */
-  listImports(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/imports`, { method: "GET", query });
+  /**
+   * List training runs (newest first)
+   *
+   * `GET /v1/runs`
+   */
+  async listRuns(params?: ListRunsParams, options?: RequestOptions): Promise<ListRunsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "Run" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListRunsResponse;
   }
 
-  /** List trainable base models (the server catalog and price source) */
-  listModels(): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/models`, { method: "GET" });
+  /**
+   * Estimate tasks, model/judge calls, and cost before running an eval
+   *
+   * `POST /v1/evals/plan`
+   */
+  async planEval(body: PlanEvalRequest, options?: RequestOptions): Promise<PlanEvalResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals/plan`, json: convertKeys(CODEC, "PlanEvalRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "PlanEvalResponse", data, "decode") as PlanEvalResponse;
   }
 
-  /** List unexpired checkpoints of a run (best and final never expire) */
-  listRunCheckpoints(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/checkpoints`, { method: "GET", query });
+  /**
+   * Dry-run a training recipe at zero cost
+   *
+   * `POST /v1/runs/plan`
+   */
+  async planRun(body: PlanRunRequest, options?: RequestOptions): Promise<PlanRunResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs/plan`, json: convertKeys(CODEC, "PlanRunRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "PlanRunResponse", data, "decode") as PlanRunResponse;
   }
 
-  /** Training step metrics as JSON pages, or a live SSE stream */
-  listRunMetrics(id: string, query?: { cursor?: string | number | boolean; after_step?: string | number | boolean; limit?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/metrics`, { method: "GET", query });
+  /**
+   * Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing
+   *
+   * `POST /v1/evals/{id}/scores`
+   */
+  async postEvalScores(id: string, body: PostEvalScoresRequest, options?: RequestOptions): Promise<PostEvalScoresResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/evals/${encodePathParam(id, "id")}/scores`, json: convertKeys(CODEC, "PostEvalScoresRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "PostEvalScoresResponse", data, "decode") as PostEvalScoresResponse;
   }
 
-  /** List training runs (newest first) */
-  listRuns(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs`, { method: "GET", query });
+  /**
+   * Append a batch of parsed records to an import job
+   *
+   * `POST /v1/trainer-jobs/{id}/records`
+   */
+  async postImportRecords(id: string, body: PostImportRecordsRequest, options?: RequestOptions): Promise<PostImportRecordsResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/records`, json: convertKeys(CODEC, "PostImportRecordsRequest", body, "encode") }, options);
+    return data as PostImportRecordsResponse;
   }
 
-  /** Estimate tasks, model/judge calls, and cost before running an eval */
-  planEval(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals/plan`, { method: "POST", body });
+  /**
+   * Copy an exportable checkpoint into a new immutable artifact
+   *
+   * `POST /v1/checkpoints/{id}/promote`
+   */
+  async promoteCheckpoint(id: string, body?: PromoteCheckpointRequest, options?: RequestOptions): Promise<Artifact> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/checkpoints/${encodePathParam(id, "id")}/promote`, json: body }, options);
+    return convertKeys(CODEC, "Artifact", data, "decode") as Artifact;
   }
 
-  /** Dry-run a training recipe at zero cost */
-  planRun(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs/plan`, { method: "POST", body });
+  /**
+   * Append records as a new dataset version (creates the dataset if needed)
+   *
+   * `POST /v1/datasets/{name}/records`
+   */
+  async pushDatasetRecords(name: string, body: PushDatasetRequest, options?: RequestOptions): Promise<Dataset> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/records`, json: convertKeys(CODEC, "PushDatasetRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "Dataset", data, "decode") as Dataset;
   }
 
-  /** Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing */
-  postEvalScores(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/scores`, { method: "POST", body });
+  /**
+   * Record deduplicated outcome scores and gold corrections
+   *
+   * `POST /v1/feedback`
+   */
+  async recordFeedback(body: RecordFeedbackRequest, options?: RequestOptions): Promise<RecordFeedbackResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/feedback`, json: convertKeys(CODEC, "RecordFeedbackRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "RecordFeedbackResponse", data, "decode") as RecordFeedbackResponse;
   }
 
-  /** Append a batch of parsed records to an import job */
-  postImportRecords(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/records`, { method: "POST", body });
+  /**
+   * Register or heartbeat an outbound `grad env serve` worker
+   *
+   * `POST /v1/env-workers/register`
+   */
+  async registerEnvWorker(body: EnvWorkerRegister, options?: RequestOptions): Promise<RegisterEnvWorkerResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/env-workers/register`, json: convertKeys(CODEC, "EnvWorkerRegister", body, "encode") }, options);
+    return convertKeys(CODEC, { o: [["workerId", "worker_id", 0], ["lastHeartbeatAt", "last_heartbeat_at", 0]] }, data, "decode") as RegisterEnvWorkerResponse;
   }
 
-  /** Copy an exportable checkpoint into a new immutable artifact */
-  promoteCheckpoint(id: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/checkpoints/${encodeURIComponent(id)}/promote`, { method: "POST", body });
+  /**
+   * Register an uploaded checkpoint bundle
+   *
+   * `POST /v1/trainer-jobs/{id}/checkpoints`
+   */
+  async registerTrainerCheckpoint(id: string, body: RegisterTrainerCheckpointRequest, options?: RequestOptions): Promise<Checkpoint> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/checkpoints`, json: convertKeys(CODEC, "RegisterTrainerCheckpointRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "Checkpoint", data, "decode") as Checkpoint;
   }
 
-  /** Append records as a new dataset version (creates the dataset if needed) */
-  pushDatasetRecords(name: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/records`, { method: "POST", body });
+  /**
+   * Preview chat-template rendering and loss masks (estimated token counts)
+   *
+   * `POST /v1/datasets/{name}/render`
+   */
+  async renderDataset(name: string, body: RenderDatasetRequest, options?: RequestOptions): Promise<RenderDatasetResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/render`, json: convertKeys(CODEC, "RenderDatasetRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "RenderDatasetResponse", data, "decode") as RenderDatasetResponse;
   }
 
-  /** Record deduplicated outcome scores and gold corrections */
-  recordFeedback(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/feedback`, { method: "POST", body });
+  /**
+   * Report one training step's metrics
+   *
+   * `POST /v1/trainer-jobs/{id}/progress`
+   */
+  async reportTrainerProgress(id: string, body: ReportTrainerProgressRequest, options?: RequestOptions): Promise<ReportTrainerProgressResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/trainer-jobs/${encodePathParam(id, "id")}/progress`, json: convertKeys(CODEC, "ReportTrainerProgressRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "ReportTrainerProgressResponse", data, "decode") as ReportTrainerProgressResponse;
   }
 
-  /** Register or heartbeat an outbound `grad env serve` worker */
-  registerEnvWorker(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/env-workers/register`, { method: "POST", body });
+  /**
+   * Resume a stopped, failed or cancelled run from its latest checkpoint
+   *
+   * `POST /v1/runs/{id}/resume`
+   */
+  async resumeRun(id: string, body?: ResumeRunRequest, options?: RequestOptions): Promise<Run> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/runs/${encodePathParam(id, "id")}/resume`, json: convertKeys(CODEC, "ResumeRunRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "Run", data, "decode") as Run;
   }
 
-  /** Register an uploaded checkpoint bundle */
-  registerTrainerCheckpoint(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/checkpoints`, { method: "POST", body });
+  /**
+   * Revoke a workspace API key
+   *
+   * `DELETE /v1/keys/{id}`
+   */
+  async revokeApiKey(id: string, options?: RequestOptions): Promise<ApiKey> {
+    const data = await this.transport.json({ method: "DELETE", path: `/v1/keys/${encodePathParam(id, "id")}` }, options);
+    return convertKeys(CODEC, "ApiKey", data, "decode") as ApiKey;
   }
 
-  /** Preview chat-template rendering and loss masks (estimated token counts) */
-  renderDataset(name: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/render`, { method: "POST", body });
+  /**
+   * Roll a deployment back to its previous artifact
+   *
+   * `POST /v1/deployments/{name}/rollback`
+   */
+  async rollbackDeployment(name: string, options?: RequestOptions): Promise<Deployment> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/deployments/${encodePathParam(name, "name")}/rollback` }, options);
+    return convertKeys(CODEC, "Deployment", data, "decode") as Deployment;
   }
 
-  /** Report one training step's metrics */
-  reportTrainerProgress(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/progress`, { method: "POST", body });
-  }
-
-  /** Resume a stopped, failed or cancelled run from its latest checkpoint */
-  resumeRun(id: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/resume`, { method: "POST", body });
-  }
-
-  /** Revoke a workspace API key */
-  revokeApiKey(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/keys/${encodeURIComponent(id)}`, { method: "DELETE" });
-  }
-
-  /** Roll a deployment back to its previous artifact */
-  rollbackDeployment(name: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/deployments/${encodeURIComponent(name)}/rollback`, { method: "POST" });
-  }
-
-  /** Ask a deployed model router which model to call */
-  routeRequest(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/route`, { method: "POST", body });
+  /**
+   * Ask a deployed model router which model to call
+   *
+   * `POST /v1/route`
+   */
+  async routeRequest(body: RouteRequest, options?: RequestOptions): Promise<RouteResponse> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/route`, json: convertKeys(CODEC, "RouteRequest", body, "encode") }, options);
+    return convertKeys(CODEC, "RouteResponse", data, "decode") as RouteResponse;
   }
 }

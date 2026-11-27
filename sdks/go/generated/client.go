@@ -3,402 +3,1053 @@
 package generated
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"net/url"
-	"strings"
-	"time"
 )
 
-// APIError represents an RFC 7807 problem+json response from grad-server.
-type APIError struct {
-	Status    int    `json:"status"`
-	Code      string `json:"code"`
-	Title     string `json:"title"`
-	Detail    string `json:"detail"`
-	RequestID string `json:"request_id"`
-}
-
-func (e *APIError) Error() string {
-	return fmt.Sprintf("[%d] %s: %s", e.Status, e.Code, e.Detail)
-}
-
-// Client is the generated low-level wire client for grad-server.
+// Client is the generated low-level client: one typed method per OpenAPI operation.
 type Client struct {
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	T *Transport
 }
 
-// NewClient creates a generated wire client with a 30s default timeout.
-func NewClient(baseURL, apiKey string, httpClient *http.Client) *Client {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
-	}
-	return &Client{
-		BaseURL:    strings.TrimRight(baseURL, "/"),
-		APIKey:     apiKey,
-		HTTPClient: httpClient,
-	}
-}
+// NewClient wraps a Transport.
+func NewClient(t *Transport) *Client { return &Client{T: t} }
 
-func (c *Client) send(ctx context.Context, method, routePath string, body any, query map[string]string) ([]byte, http.Header, int, error) {
-	fullURL := c.BaseURL + routePath
-	if len(query) > 0 {
-		vals := url.Values{}
-		for k, v := range query {
-			if v != "" {
-				vals.Set(k, v)
-			}
-		}
-		if encoded := vals.Encode(); encoded != "" {
-			fullURL += "?" + encoded
-		}
-	}
-
-	var reader io.Reader
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return nil, nil, 0, err
-		}
-		reader = bytes.NewReader(raw)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, fullURL, reader)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	payload, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, resp.StatusCode, err
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		apiErr := &APIError{Status: resp.StatusCode, Code: "api_error", Detail: string(payload)}
-		_ = json.Unmarshal(payload, apiErr)
-		if apiErr.Status == 0 {
-			apiErr.Status = resp.StatusCode
-		}
-		return nil, resp.Header, resp.StatusCode, apiErr
-	}
-
-	return payload, resp.Header, resp.StatusCode, nil
-}
-
-func (c *Client) doJSON(ctx context.Context, method, routePath string, body any, query map[string]string) (map[string]any, error) {
-	payload, _, status, err := c.send(ctx, method, routePath, body, query)
+// CancelEval calls POST /v1/evals/{id}/cancel.
+//
+// Cancel a queued, running or awaiting_scores evaluation.
+func (c *Client) CancelEval(ctx context.Context, id string, opts ...RequestOption) (*EvalRun, error) {
+	p0, err := EscapePathParam("id", id)
 	if err != nil {
 		return nil, err
 	}
-	if status == http.StatusNoContent || status == http.StatusResetContent || len(bytes.TrimSpace(payload)) == 0 {
-		return map[string]any{}, nil
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals/" + p0 + "/cancel"}
+	var out EvalRun
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
 	}
+	return &out, nil
+}
+
+// CancelRun calls POST /v1/runs/{id}/cancel.
+//
+// Cancel a training run (a running attempt is stopped and billed).
+func (c *Client) CancelRun(ctx context.Context, id string, opts ...RequestOption) (*Run, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs/" + p0 + "/cancel"}
+	var out Run
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ClaimEnvTask calls POST /v1/env-workers/{name}/claim.
+//
+// Long-poll for the next task assigned to a `grad env serve` worker.
+func (c *Client) ClaimEnvTask(ctx context.Context, name string, body *ClaimEnvTaskRequest, opts ...RequestOption) (*ClaimEnvTaskResponse, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "ClaimEnvTask: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/" + p0 + "/claim", Body: body}
+	var out ClaimEnvTaskResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ClaimTrainerJob calls POST /v1/trainer-jobs/claim.
+//
+// Claim the next queued train or import job (trainer:worker).
+func (c *Client) ClaimTrainerJob(ctx context.Context, body *ClaimJobRequest, opts ...RequestOption) (*ClaimJobResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "ClaimTrainerJob: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/claim", Body: body}
+	var out ClaimJobResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CompleteEnvTask calls POST /v1/env-workers/tasks/{id}/complete.
+//
+// Submit scored trajectory output for an environment task.
+func (c *Client) CompleteEnvTask(ctx context.Context, id string, body *EnvTaskResult, opts ...RequestOption) (map[string]any, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CompleteEnvTask: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/tasks/" + p0 + "/complete", Body: body}
 	var out map[string]any
-	if err := json.Unmarshal(payload, &out); err != nil {
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *Client) doBytes(ctx context.Context, method, routePath string, body any, query map[string]string) ([]byte, http.Header, error) {
-	payload, headers, _, err := c.send(ctx, method, routePath, body, query)
-	return payload, headers, err
+// CompleteTrainerJob calls POST /v1/trainer-jobs/{id}/complete.
+//
+// Finish a job attempt: publish its artifact, bill it, release the lease.
+func (c *Client) CompleteTrainerJob(ctx context.Context, id string, body *CompleteTrainerJobRequest, opts ...RequestOption) (*CompleteTrainerJobResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CompleteTrainerJob: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/complete", Body: body}
+	var out CompleteTrainerJobResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CancelEval: Cancel a queued, running or awaiting_scores evaluation
-func (c *Client) CancelEval(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/evals/%s/cancel", url.PathEscape(id)), nil, nil)
+// CreateAPIKey calls POST /v1/keys.
+//
+// Create a scoped workspace API key (trainer worker keys are platform config, not keys).
+func (c *Client) CreateAPIKey(ctx context.Context, body *CreateAPIKeyRequest, opts ...RequestOption) (*CreatedAPIKey, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateAPIKey: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/keys", Body: body}
+	var out CreatedAPIKey
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CancelRun: Cancel a training run (a running attempt is stopped and billed)
-func (c *Client) CancelRun(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/runs/%s/cancel", url.PathEscape(id)), nil, nil)
+// CreateDataset calls POST /v1/datasets.
+//
+// Create an empty dataset.
+func (c *Client) CreateDataset(ctx context.Context, body *CreateDatasetRequest, opts ...RequestOption) (*Dataset, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateDataset: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets", Body: body}
+	var out Dataset
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ClaimEnvTask: Long-poll for the next task assigned to a `grad env serve` worker
-func (c *Client) ClaimEnvTask(ctx context.Context, name string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/env-workers/%s/claim", url.PathEscape(name)), body, nil)
+// CreateDatasetImport calls POST /v1/datasets/{name}/imports.
+//
+// Import an uploaded file or a Hugging Face dataset into a dataset (async job).
+func (c *Client) CreateDatasetImport(ctx context.Context, name string, body *CreateImportRequest, opts ...RequestOption) (*ImportJob, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateDatasetImport: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/imports", Body: body}
+	var out ImportJob
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ClaimTrainerJob: Claim the next queued train or import job (trainer:worker)
-func (c *Client) ClaimTrainerJob(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/trainer-jobs/claim", body, nil)
+// CreateEmbeddings calls POST /v1/embeddings.
+//
+// Generate embeddings from a deployed embedding artifact.
+func (c *Client) CreateEmbeddings(ctx context.Context, body *EmbedRequest, opts ...RequestOption) (*EmbedResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateEmbeddings: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/embeddings", Body: body}
+	var out EmbedResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CompleteEnvTask: Submit scored trajectory output for an environment task
-func (c *Client) CompleteEnvTask(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/env-workers/tasks/%s/complete", url.PathEscape(id)), body, nil)
+// CreateEval calls POST /v1/evals.
+//
+// Queue an evaluation across models on a pinned dataset version (executed by the server).
+func (c *Client) CreateEval(ctx context.Context, body *PlanEvalRequest, opts ...RequestOption) (*EvalRun, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateEval: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals", Body: body}
+	var out EvalRun
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CompleteTrainerJob: Finish a job attempt: publish its artifact, bill it, release the lease
-func (c *Client) CompleteTrainerJob(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/complete", url.PathEscape(id)), body, nil)
+// CreateRun calls POST /v1/runs.
+//
+// Create and enqueue a training run (pins the dataset version).
+func (c *Client) CreateRun(ctx context.Context, body *PlanRunRequest, opts ...RequestOption) (*Run, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateRun: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs", Body: body}
+	var out Run
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CreateApiKey: Create a scoped workspace API key (trainer worker keys are platform config, not keys)
-func (c *Client) CreateApiKey(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/keys", body, nil)
+// CreateTrainerUpload calls POST /v1/trainer-jobs/{id}/uploads.
+//
+// Get an upload URL for a checkpoint or artifact bundle.
+func (c *Client) CreateTrainerUpload(ctx context.Context, id string, body *TrainerUploadRequest, opts ...RequestOption) (*UploadTicket, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateTrainerUpload: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/uploads", Body: body}
+	var out UploadTicket
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CreateDataset: Create an empty dataset
-func (c *Client) CreateDataset(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/datasets", body, nil)
+// CreateUpload calls POST /v1/uploads.
+//
+// Get an upload URL for a file to import (PUT the bytes, then create an import).
+func (c *Client) CreateUpload(ctx context.Context, body *CreateUploadRequest, opts ...RequestOption) (*UploadTicket, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateUpload: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/uploads", Body: body}
+	var out UploadTicket
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CreateDatasetImport: Import an uploaded file or a Hugging Face dataset into a dataset (async job)
-func (c *Client) CreateDatasetImport(ctx context.Context, name string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/datasets/%s/imports", url.PathEscape(name)), body, nil)
+// DeployArtifact calls POST /v1/deployments.
+//
+// Deploy or update an artifact under a stable model name.
+func (c *Client) DeployArtifact(ctx context.Context, body *DeployArtifactRequest, opts ...RequestOption) (*Deployment, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "DeployArtifact: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/deployments", Body: body}
+	var out Deployment
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CreateEmbeddings: Generate embeddings from a deployed embedding artifact
-func (c *Client) CreateEmbeddings(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/embeddings", body, nil)
+// DispatchEnvTask calls POST /v1/env-workers/tasks.
+//
+// Dispatch an evaluation or rollout task to a connected `grad env serve` worker.
+func (c *Client) DispatchEnvTask(ctx context.Context, body *EnvTaskDispatch, opts ...RequestOption) (*DispatchEnvTaskResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "DispatchEnvTask: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/tasks", Body: body}
+	var out DispatchEnvTaskResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CreateEval: Queue an evaluation across models on a pinned dataset version (executed by the server)
-func (c *Client) CreateEval(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/evals", body, nil)
+// DownloadArtifact calls GET /v1/artifacts/{id}/download.
+//
+// Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256.
+func (c *Client) DownloadArtifact(ctx context.Context, id string, opts ...RequestOption) (*StreamResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/artifacts/" + p0 + "/download", Accept: "application/octet-stream"}
+	return c.T.DoStream(ctx, spec, opts...)
 }
 
-// CreateRun: Create and enqueue a training run (pins the dataset version)
-func (c *Client) CreateRun(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/runs", body, nil)
+// DownloadTrainerDataset calls GET /v1/trainer-jobs/{id}/dataset.
+//
+// Stream the pinned dataset version of a claimed train job as JSONL.
+func (c *Client) DownloadTrainerDataset(ctx context.Context, id string, params DownloadTrainerDatasetParams, opts ...RequestOption) (*StreamResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	q.Add("attempt", FormatScalar(params.Attempt))
+	spec := RequestSpec{Method: "GET", Path: "/v1/trainer-jobs/" + p0 + "/dataset", Query: q, Accept: "application/x-ndjson"}
+	return c.T.DoStream(ctx, spec, opts...)
 }
 
-// CreateTrainerUpload: Get an upload URL for a checkpoint or artifact bundle
-func (c *Client) CreateTrainerUpload(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/uploads", url.PathEscape(id)), body, nil)
+// GetArtifact calls GET /v1/artifacts/{id}.
+//
+// Get an artifact by id or name@latest.
+func (c *Client) GetArtifact(ctx context.Context, id string, opts ...RequestOption) (*Artifact, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/artifacts/" + p0}
+	var out Artifact
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// CreateUpload: Get an upload URL for a file to import (PUT the bytes, then create an import)
-func (c *Client) CreateUpload(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/uploads", body, nil)
+// GetDataset calls GET /v1/datasets/{name}.
+//
+// Get a dataset by name.
+func (c *Client) GetDataset(ctx context.Context, name string, opts ...RequestOption) (*Dataset, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/datasets/" + p0}
+	var out Dataset
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// DeployArtifact: Deploy or update an artifact under a stable model name
-func (c *Client) DeployArtifact(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/deployments", body, nil)
+// GetDeployment calls GET /v1/deployments/{name}.
+//
+// Get deployment status and feedback summary.
+func (c *Client) GetDeployment(ctx context.Context, name string, opts ...RequestOption) (*DeploymentStatus, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/deployments/" + p0}
+	var out DeploymentStatus
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// DispatchEnvTask: Dispatch an evaluation or rollout task to a connected `grad env serve` worker
-func (c *Client) DispatchEnvTask(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/env-workers/tasks", body, nil)
+// GetEnvTask calls GET /v1/env-workers/tasks/{id}.
+//
+// Inspect an environment task and its result.
+func (c *Client) GetEnvTask(ctx context.Context, id string, opts ...RequestOption) (map[string]any, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/env-workers/tasks/" + p0}
+	var out map[string]any
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
-// DownloadArtifact: Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256
-func (c *Client) DownloadArtifact(ctx context.Context, id string) ([]byte, http.Header, error) {
-	return c.doBytes(ctx, "GET", fmt.Sprintf("/v1/artifacts/%s/download", url.PathEscape(id)), nil, nil)
+// GetEval calls GET /v1/evals/{id}.
+//
+// Get an evaluation run by ID.
+func (c *Client) GetEval(ctx context.Context, id string, opts ...RequestOption) (*EvalRun, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/evals/" + p0}
+	var out EvalRun
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// DownloadTrainerDataset: Stream the pinned dataset version of a claimed train job as JSONL
-func (c *Client) DownloadTrainerDataset(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/trainer-jobs/%s/dataset", url.PathEscape(id)), nil, query)
+// GetImport calls GET /v1/imports/{id}.
+//
+// Get a dataset import job.
+func (c *Client) GetImport(ctx context.Context, id string, opts ...RequestOption) (*ImportJob, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/imports/" + p0}
+	var out ImportJob
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetArtifact: Get an artifact by id or name@latest
-func (c *Client) GetArtifact(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/artifacts/%s", url.PathEscape(id)), nil, nil)
+// GetRun calls GET /v1/runs/{id}.
+//
+// Get a training run.
+func (c *Client) GetRun(ctx context.Context, id string, opts ...RequestOption) (*Run, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0}
+	var out Run
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetDataset: Get a dataset by name
-func (c *Client) GetDataset(ctx context.Context, name string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/datasets/%s", url.PathEscape(name)), nil, nil)
+// GetTrainerQueueStats calls GET /v1/trainer-jobs/queue.
+//
+// Queue depth for autoscaling: queued plus running jobs (trainer:worker).
+func (c *Client) GetTrainerQueueStats(ctx context.Context, opts ...RequestOption) (*TrainerQueueStats, error) {
+	spec := RequestSpec{Method: "GET", Path: "/v1/trainer-jobs/queue"}
+	var out TrainerQueueStats
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetDeployment: Get deployment status and feedback summary
-func (c *Client) GetDeployment(ctx context.Context, name string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/deployments/%s", url.PathEscape(name)), nil, nil)
+// HeartbeatTrainerJob calls POST /v1/trainer-jobs/{id}/heartbeat.
+//
+// Renew the job lease; reports whether the worker should stop.
+func (c *Client) HeartbeatTrainerJob(ctx context.Context, id string, body *TrainerHeartbeatRequest, opts ...RequestOption) (*TrainerHeartbeatResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "HeartbeatTrainerJob: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/heartbeat", Body: body}
+	var out TrainerHeartbeatResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetEnvTask: Inspect an environment task and its result
-func (c *Client) GetEnvTask(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/env-workers/tasks/%s", url.PathEscape(id)), nil, nil)
+// ListAPIKeys calls GET /v1/keys.
+//
+// List workspace API keys.
+func (c *Client) ListAPIKeys(ctx context.Context, params *ListAPIKeysParams, opts ...RequestOption) (*ListAPIKeysResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/keys", Query: q}
+	var out ListAPIKeysResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetEval: Get an evaluation run by ID
-func (c *Client) GetEval(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s", url.PathEscape(id)), nil, nil)
+// ListArtifacts calls GET /v1/artifacts.
+//
+// List immutable artifacts (newest first).
+func (c *Client) ListArtifacts(ctx context.Context, params *ListArtifactsParams, opts ...RequestOption) (*ListArtifactsResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Name != nil {
+			q.Add("name", FormatScalar(*params.Name))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/artifacts", Query: q}
+	var out ListArtifactsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetImport: Get a dataset import job
-func (c *Client) GetImport(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/imports/%s", url.PathEscape(id)), nil, nil)
+// ListDatasetRecords calls GET /v1/datasets/{name}/records.
+//
+// Read records of a dataset version.
+func (c *Client) ListDatasetRecords(ctx context.Context, name string, params *ListDatasetRecordsParams, opts ...RequestOption) (*DatasetRecordsPage, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Version != nil {
+			q.Add("version", FormatScalar(*params.Version))
+		}
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/datasets/" + p0 + "/records", Query: q}
+	var out DatasetRecordsPage
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetRun: Get a training run
-func (c *Client) GetRun(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/runs/%s", url.PathEscape(id)), nil, nil)
+// ListDatasets calls GET /v1/datasets.
+//
+// List datasets (newest first).
+func (c *Client) ListDatasets(ctx context.Context, params *ListDatasetsParams, opts ...RequestOption) (*ListDatasetsResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/datasets", Query: q}
+	var out ListDatasetsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// GetTrainerQueueStats: Queue depth for autoscaling: queued plus running jobs (trainer:worker)
-func (c *Client) GetTrainerQueueStats(ctx context.Context) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/trainer-jobs/queue", nil, nil)
+// ListDeployments calls GET /v1/deployments.
+//
+// List deployments.
+func (c *Client) ListDeployments(ctx context.Context, params *ListDeploymentsParams, opts ...RequestOption) (*ListDeploymentsResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/deployments", Query: q}
+	var out ListDeploymentsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// HeartbeatTrainerJob: Renew the job lease; reports whether the worker should stop
-func (c *Client) HeartbeatTrainerJob(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/heartbeat", url.PathEscape(id)), body, nil)
+// ListEvalFailures calls GET /v1/evals/{id}/failures.
+//
+// List failing task records from an evaluation run for mining.
+func (c *Client) ListEvalFailures(ctx context.Context, id string, params *ListEvalFailuresParams, opts ...RequestOption) (*ListEvalFailuresResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Model != nil {
+			q.Add("model", FormatScalar(*params.Model))
+		}
+		if params.Threshold != nil {
+			q.Add("threshold", FormatScalar(*params.Threshold))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/evals/" + p0 + "/failures", Query: q}
+	var out ListEvalFailuresResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListApiKeys: List workspace API keys
-func (c *Client) ListApiKeys(ctx context.Context, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/keys", nil, query)
+// ListEvalOutputs calls GET /v1/evals/{id}/outputs.
+//
+// Page through generated model outputs (filter by model or by a code scorer that still needs a score).
+func (c *Client) ListEvalOutputs(ctx context.Context, id string, params *ListEvalOutputsParams, opts ...RequestOption) (*ListEvalOutputsResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Model != nil {
+			q.Add("model", FormatScalar(*params.Model))
+		}
+		if params.MissingScorer != nil {
+			q.Add("missing_scorer", FormatScalar(*params.MissingScorer))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/evals/" + p0 + "/outputs", Query: q}
+	var out ListEvalOutputsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListArtifacts: List immutable artifacts (newest first)
-func (c *Client) ListArtifacts(ctx context.Context, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/artifacts", nil, query)
+// ListEvalResults calls GET /v1/evals/{id}/results.
+//
+// Per-task, per-model results of a completed evaluation.
+func (c *Client) ListEvalResults(ctx context.Context, id string, params *ListEvalResultsParams, opts ...RequestOption) (*ListEvalResultsResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Model != nil {
+			q.Add("model", FormatScalar(*params.Model))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/evals/" + p0 + "/results", Query: q}
+	var out ListEvalResultsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListDatasetRecords: Read records of a dataset version
-func (c *Client) ListDatasetRecords(ctx context.Context, name string, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/datasets/%s/records", url.PathEscape(name)), nil, query)
+// ListEvals calls GET /v1/evals.
+//
+// List evaluation runs.
+func (c *Client) ListEvals(ctx context.Context, params *ListEvalsParams, opts ...RequestOption) (*ListEvalsResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/evals", Query: q}
+	var out ListEvalsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListDatasets: List datasets (newest first)
-func (c *Client) ListDatasets(ctx context.Context, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/datasets", nil, query)
+// ListImports calls GET /v1/imports.
+//
+// List dataset import jobs (newest first).
+func (c *Client) ListImports(ctx context.Context, params *ListImportsParams, opts ...RequestOption) (*ListImportsResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/imports", Query: q}
+	var out ListImportsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListDeployments: List deployments
-func (c *Client) ListDeployments(ctx context.Context, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/deployments", nil, query)
+// ListModels calls GET /v1/models.
+//
+// List trainable base models (the server catalog and price source).
+func (c *Client) ListModels(ctx context.Context, opts ...RequestOption) (*ListModelsResponse, error) {
+	spec := RequestSpec{Method: "GET", Path: "/v1/models"}
+	var out ListModelsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListEvalFailures: List failing task records from an evaluation run for mining
-func (c *Client) ListEvalFailures(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s/failures", url.PathEscape(id)), nil, query)
+// ListRunCheckpoints calls GET /v1/runs/{id}/checkpoints.
+//
+// List unexpired checkpoints of a run (best and final never expire).
+func (c *Client) ListRunCheckpoints(ctx context.Context, id string, params *ListRunCheckpointsParams, opts ...RequestOption) (*ListRunCheckpointsResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0 + "/checkpoints", Query: q}
+	var out ListRunCheckpointsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListEvalOutputs: Page through generated model outputs (filter by model or by a code scorer that still needs a score)
-func (c *Client) ListEvalOutputs(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s/outputs", url.PathEscape(id)), nil, query)
+// ListRunMetrics calls GET /v1/runs/{id}/metrics.
+//
+// Training step metrics as JSON pages, or a live SSE stream.
+func (c *Client) ListRunMetrics(ctx context.Context, id string, params *ListRunMetricsParams, opts ...RequestOption) (*MetricsPage, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.AfterStep != nil {
+			q.Add("after_step", FormatScalar(*params.AfterStep))
+		}
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0 + "/metrics", Query: q}
+	var out MetricsPage
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListEvalResults: Per-task, per-model results of a completed evaluation
-func (c *Client) ListEvalResults(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s/results", url.PathEscape(id)), nil, query)
+// ListRunMetricsStream opens GET /v1/runs/{id}/metrics as a Server-Sent Events stream (resume with WithLastEventID).
+func (c *Client) ListRunMetricsStream(ctx context.Context, id string, params *ListRunMetricsParams, opts ...RequestOption) (*SSEStream, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if params != nil {
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.AfterStep != nil {
+			q.Add("after_step", FormatScalar(*params.AfterStep))
+		}
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0 + "/metrics", Query: q}
+	return c.T.DoSSE(ctx, spec, opts...)
 }
 
-// ListEvals: List evaluation runs
-func (c *Client) ListEvals(ctx context.Context, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/evals", nil, query)
+// ListRuns calls GET /v1/runs.
+//
+// List training runs (newest first).
+func (c *Client) ListRuns(ctx context.Context, params *ListRunsParams, opts ...RequestOption) (*ListRunsResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs", Query: q}
+	var out ListRunsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListImports: List dataset import jobs (newest first)
-func (c *Client) ListImports(ctx context.Context, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/imports", nil, query)
+// PlanEval calls POST /v1/evals/plan.
+//
+// Estimate tasks, model/judge calls, and cost before running an eval.
+func (c *Client) PlanEval(ctx context.Context, body *PlanEvalRequest, opts ...RequestOption) (*PlanEvalResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "PlanEval: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals/plan", Body: body}
+	var out PlanEvalResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListModels: List trainable base models (the server catalog and price source)
-func (c *Client) ListModels(ctx context.Context) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/models", nil, nil)
+// PlanRun calls POST /v1/runs/plan.
+//
+// Dry-run a training recipe at zero cost.
+func (c *Client) PlanRun(ctx context.Context, body *PlanRunRequest, opts ...RequestOption) (*PlanRunResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "PlanRun: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs/plan", Body: body}
+	var out PlanRunResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListRunCheckpoints: List unexpired checkpoints of a run (best and final never expire)
-func (c *Client) ListRunCheckpoints(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/runs/%s/checkpoints", url.PathEscape(id)), nil, query)
+// PostEvalScores calls POST /v1/evals/{id}/scores.
+//
+// Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing.
+func (c *Client) PostEvalScores(ctx context.Context, id string, body *PostEvalScoresRequest, opts ...RequestOption) (*PostEvalScoresResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "PostEvalScores: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/evals/" + p0 + "/scores", Body: body}
+	var out PostEvalScoresResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListRunMetrics: Training step metrics as JSON pages, or a live SSE stream
-func (c *Client) ListRunMetrics(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/runs/%s/metrics", url.PathEscape(id)), nil, query)
+// PostImportRecords calls POST /v1/trainer-jobs/{id}/records.
+//
+// Append a batch of parsed records to an import job.
+func (c *Client) PostImportRecords(ctx context.Context, id string, body *PostImportRecordsRequest, opts ...RequestOption) (*PostImportRecordsResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "PostImportRecords: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/records", Body: body}
+	var out PostImportRecordsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// ListRuns: List training runs (newest first)
-func (c *Client) ListRuns(ctx context.Context, query map[string]string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/runs", nil, query)
+// PromoteCheckpoint calls POST /v1/checkpoints/{id}/promote.
+//
+// Copy an exportable checkpoint into a new immutable artifact.
+func (c *Client) PromoteCheckpoint(ctx context.Context, id string, body *PromoteCheckpointRequest, opts ...RequestOption) (*Artifact, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/checkpoints/" + p0 + "/promote", Body: body}
+	var out Artifact
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// PlanEval: Estimate tasks, model/judge calls, and cost before running an eval
-func (c *Client) PlanEval(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/evals/plan", body, nil)
+// PushDatasetRecords calls POST /v1/datasets/{name}/records.
+//
+// Append records as a new dataset version (creates the dataset if needed).
+func (c *Client) PushDatasetRecords(ctx context.Context, name string, body *PushDatasetRequest, opts ...RequestOption) (*Dataset, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "PushDatasetRecords: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/records", Body: body}
+	var out Dataset
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// PlanRun: Dry-run a training recipe at zero cost
-func (c *Client) PlanRun(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/runs/plan", body, nil)
+// RecordFeedback calls POST /v1/feedback.
+//
+// Record deduplicated outcome scores and gold corrections.
+func (c *Client) RecordFeedback(ctx context.Context, body *RecordFeedbackRequest, opts ...RequestOption) (*RecordFeedbackResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "RecordFeedback: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/feedback", Body: body}
+	var out RecordFeedbackResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// PostEvalScores: Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing
-func (c *Client) PostEvalScores(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/evals/%s/scores", url.PathEscape(id)), body, nil)
+// RegisterEnvWorker calls POST /v1/env-workers/register.
+//
+// Register or heartbeat an outbound `grad env serve` worker.
+func (c *Client) RegisterEnvWorker(ctx context.Context, body *EnvWorkerRegister, opts ...RequestOption) (*RegisterEnvWorkerResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "RegisterEnvWorker: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/env-workers/register", Body: body}
+	var out RegisterEnvWorkerResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// PostImportRecords: Append a batch of parsed records to an import job
-func (c *Client) PostImportRecords(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/records", url.PathEscape(id)), body, nil)
+// RegisterTrainerCheckpoint calls POST /v1/trainer-jobs/{id}/checkpoints.
+//
+// Register an uploaded checkpoint bundle.
+func (c *Client) RegisterTrainerCheckpoint(ctx context.Context, id string, body *RegisterTrainerCheckpointRequest, opts ...RequestOption) (*Checkpoint, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "RegisterTrainerCheckpoint: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/checkpoints", Body: body}
+	var out Checkpoint
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// PromoteCheckpoint: Copy an exportable checkpoint into a new immutable artifact
-func (c *Client) PromoteCheckpoint(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/checkpoints/%s/promote", url.PathEscape(id)), body, nil)
+// RenderDataset calls POST /v1/datasets/{name}/render.
+//
+// Preview chat-template rendering and loss masks (estimated token counts).
+func (c *Client) RenderDataset(ctx context.Context, name string, body *RenderDatasetRequest, opts ...RequestOption) (*RenderDatasetResponse, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "RenderDataset: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/render", Body: body}
+	var out RenderDatasetResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// PushDatasetRecords: Append records as a new dataset version (creates the dataset if needed)
-func (c *Client) PushDatasetRecords(ctx context.Context, name string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/datasets/%s/records", url.PathEscape(name)), body, nil)
+// ReportTrainerProgress calls POST /v1/trainer-jobs/{id}/progress.
+//
+// Report one training step's metrics.
+func (c *Client) ReportTrainerProgress(ctx context.Context, id string, body *ReportTrainerProgressRequest, opts ...RequestOption) (*ReportTrainerProgressResponse, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "ReportTrainerProgress: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/trainer-jobs/" + p0 + "/progress", Body: body}
+	var out ReportTrainerProgressResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// RecordFeedback: Record deduplicated outcome scores and gold corrections
-func (c *Client) RecordFeedback(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/feedback", body, nil)
+// ResumeRun calls POST /v1/runs/{id}/resume.
+//
+// Resume a stopped, failed or cancelled run from its latest checkpoint.
+func (c *Client) ResumeRun(ctx context.Context, id string, body *ResumeRunRequest, opts ...RequestOption) (*Run, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/runs/" + p0 + "/resume", Body: body}
+	var out Run
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// RegisterEnvWorker: Register or heartbeat an outbound `grad env serve` worker
-func (c *Client) RegisterEnvWorker(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/env-workers/register", body, nil)
+// RevokeAPIKey calls DELETE /v1/keys/{id}.
+//
+// Revoke a workspace API key.
+func (c *Client) RevokeAPIKey(ctx context.Context, id string, opts ...RequestOption) (*APIKey, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "DELETE", Path: "/v1/keys/" + p0}
+	var out APIKey
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// RegisterTrainerCheckpoint: Register an uploaded checkpoint bundle
-func (c *Client) RegisterTrainerCheckpoint(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/checkpoints", url.PathEscape(id)), body, nil)
+// RollbackDeployment calls POST /v1/deployments/{name}/rollback.
+//
+// Roll a deployment back to its previous artifact.
+func (c *Client) RollbackDeployment(ctx context.Context, name string, opts ...RequestOption) (*Deployment, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/deployments/" + p0 + "/rollback"}
+	var out Deployment
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// RenderDataset: Preview chat-template rendering and loss masks (estimated token counts)
-func (c *Client) RenderDataset(ctx context.Context, name string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/datasets/%s/render", url.PathEscape(name)), body, nil)
-}
-
-// ReportTrainerProgress: Report one training step's metrics
-func (c *Client) ReportTrainerProgress(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/progress", url.PathEscape(id)), body, nil)
-}
-
-// ResumeRun: Resume a stopped, failed or cancelled run from its latest checkpoint
-func (c *Client) ResumeRun(ctx context.Context, id string, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/runs/%s/resume", url.PathEscape(id)), body, nil)
-}
-
-// RevokeApiKey: Revoke a workspace API key
-func (c *Client) RevokeApiKey(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "DELETE", fmt.Sprintf("/v1/keys/%s", url.PathEscape(id)), nil, nil)
-}
-
-// RollbackDeployment: Roll a deployment back to its previous artifact
-func (c *Client) RollbackDeployment(ctx context.Context, name string) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/deployments/%s/rollback", url.PathEscape(name)), nil, nil)
-}
-
-// RouteRequest: Ask a deployed model router which model to call
-func (c *Client) RouteRequest(ctx context.Context, body any) (map[string]any, error) {
-	return c.doJSON(ctx, "POST", "/v1/route", body, nil)
+// RouteRequest calls POST /v1/route.
+//
+// Ask a deployed model router which model to call.
+func (c *Client) RouteRequest(ctx context.Context, body *RouteRequest, opts ...RequestOption) (*RouteResponse, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "RouteRequest: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/route", Body: body}
+	var out RouteResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

@@ -1,0 +1,217 @@
+# Edge-case ("torture") spec for the SDK generator. The codegen tests generate
+# TypeScript, Go and Rust from it, compile all three, and run the TS and Go
+# outputs against a fake server. Every construct here once broke an emitter.
+openapi: 3.1.0
+info:
+  title: Codegen edge cases
+  version: 0.0.1
+paths:
+  /v1/runs/{run_id}/checkpoints/{step}:
+    # Path-level param declared before the op-level one, and in the opposite
+    # order to the template: emitters must fill the URL by name.
+    parameters:
+      - name: step
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: getCheckpointAtStep
+      summary: "Path params out of order */ \"\"\" with comment terminators"
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page-size
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: body
+          in: query
+          schema: { type: string }
+        - name: url
+          in: query
+          schema: { type: string }
+        - name: ctx
+          in: query
+          schema: { type: boolean }
+        - name: type
+          in: query
+          schema: { type: array, items: { type: string } }
+        - name: X-Trace-Id
+          in: header
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Checkpoint" }
+  /v1/items/{url}/{type}:
+    delete:
+      operationId: delete_item
+      summary: Keyword and package-name path params
+      parameters:
+        - { name: url, in: path, required: true, schema: { type: string } }
+        - { name: type, in: path, required: true, schema: { type: string } }
+        - { name: self, in: query, schema: { type: string } }
+        - { name: class, in: query, schema: { type: string, enum: [a, b] } }
+      responses:
+        "204":
+          description: deleted
+  /v1/items:
+    post:
+      operationId: createItem
+      summary: Inline request and response bodies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                tree: { $ref: "#/components/schemas/TreeNode" }
+                tags: { type: array, items: { type: string } }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, created_at]
+                properties:
+                  id: { type: string }
+                  created_at: { type: string, format: date-time }
+                  shape: { $ref: "#/components/schemas/Shape" }
+    get:
+      operationId: listItems
+      summary: Array of refs at the top level
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Record" }
+  /v1/blobs/{id}:
+    get:
+      operationId: downloadBlob
+      summary: Binary download
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+  /v1/events:
+    get:
+      operationId: streamEvents
+      summary: Event stream only
+      responses:
+        "200":
+          description: events
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /v1/metrics/{id}:
+    get:
+      operationId: getMetrics
+      summary: JSON or SSE
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: after, in: query, schema: { type: [integer, "null"] } }
+      responses:
+        "200":
+          description: metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+            text/event-stream:
+              schema: { type: string }
+  /v1/lines:
+    get:
+      operationId: getLines
+      summary: NDJSON is streamed, not parsed
+      responses:
+        "200":
+          description: lines
+          content:
+            application/x-ndjson:
+              schema: { type: string }
+components:
+  schemas:
+    Checkpoint:
+      type: object
+      required: [id, step, run_id, eval_score, format]
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        step: { type: integer }
+        eval_score: { type: number, nullable: true }
+        format: { $ref: "#/components/schemas/Format" }
+        metadata: { type: object, additionalProperties: {} }
+        scores: { type: object, additionalProperties: { type: number } }
+    Format:
+      type: [string, "null"]
+      enum: [peft_lora, prefix-kv, "2bit", null]
+    Shape:
+      oneOf:
+        - type: object
+          required: [kind, radius]
+          properties:
+            kind: { const: circle }
+            radius: { type: number }
+        - type: object
+          required: [kind, side_len]
+          properties:
+            kind: { const: square }
+            side_len: { type: number }
+      discriminator: { propertyName: kind }
+    Content:
+      anyOf:
+        - type: string
+        - type: array
+          items: { $ref: "#/components/schemas/Record" }
+        - type: "null"
+    TreeNode:
+      type: object
+      required: [value]
+      properties:
+        value: { type: string }
+        parent: { $ref: "#/components/schemas/TreeNode" }
+        children: { type: array, items: { $ref: "#/components/schemas/TreeNode" } }
+        last_seen: { allOf: [{ $ref: "#/components/schemas/Record" }, { type: [object, "null"] }] }
+    Record:
+      type: object
+      required: [type]
+      additionalProperties: true
+      properties:
+        type: { type: string }
+        self: { type: string }
+        1st_place: { type: boolean }
+        kebab-case: { type: string }
+        camelCase: { type: integer }
+        content: { $ref: "#/components/schemas/Content" }
+        nested:
+          type: object
+          properties:
+            inner_value: { type: string }
+    Error:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+        items: { type: array, items: { $ref: "#/components/schemas/Checkpoint" } }
+    Client:
+      type: string
+      enum: [one, two]
+    Option:
+      type: object
+      additionalProperties: { $ref: "#/components/schemas/Checkpoint" }
+    Anything: {}
