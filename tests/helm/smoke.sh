@@ -54,10 +54,15 @@ kubectl -n "$NS" run make-bucket --rm -i --restart=Never --image grad-server:dev
   --env AWS_ACCESS_KEY_ID=gradkind --env AWS_SECRET_ACCESS_KEY=grad-kind-only-secret -- \
   node --input-type=module -e "import {S3Client,CreateBucketCommand} from '@aws-sdk/client-s3';
     await new S3Client({endpoint:'http://minio:9000',region:'us-east-1',forcePathStyle:true}).send(new CreateBucketCommand({Bucket:'grad-kind'}))"
+# One worker key per pool, each scoped to its pool's job kinds.
+sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+TRAIN_KEY="grad_kind_train_$(openssl rand -hex 12)" IMPORT_KEY="grad_kind_import_$(openssl rand -hex 12)"
 kubectl -n "$NS" create secret generic grad \
   --from-literal=database-url="postgres://grad:grad-kind-only@postgres:5432/grad" \
-  --from-literal=admin-api-key-hash="$(printf '%s' "$ADMIN_KEY" | sha256sum | cut -d' ' -f1)" \
-  --from-literal=trainer-api-key="grad_kind_trainer_$(openssl rand -hex 12)" \
+  --from-literal=admin-api-key-hash="$(sha "$ADMIN_KEY")" \
+  --from-literal=trainer-keys-json="[{\"label\":\"train\",\"sha256\":\"$(sha "$TRAIN_KEY")\",\"kinds\":[\"train\"]},{\"label\":\"import\",\"sha256\":\"$(sha "$IMPORT_KEY")\",\"kinds\":[\"import\"]}]" \
+  --from-literal=train-worker-api-key="$TRAIN_KEY" \
+  --from-literal=import-worker-api-key="$IMPORT_KEY" \
   --from-literal=secrets-key="$(openssl rand -base64 32)" \
   --from-literal=aws-access-key-id=gradkind \
   --from-literal=aws-secret-access-key=grad-kind-only-secret

@@ -65,6 +65,12 @@ grep -q "support-sft@" eval.out || fail "eval"
 "$GRAD" --json deploy support-sft@latest 2>deploy.err && fail "deploy must be unavailable self-hosted"
 grep -q deploy_unavailable deploy.err || fail "deploy error code"
 
+step "workspace secrets (GRAD_SECRETS_KEY from the local profile)"
+printf 'hf_smoke_not_a_real_token' | "$GRAD" secrets set hf-token
+"$GRAD" secrets list | tee secrets.out
+grep -q hf-token secrets.out || fail "secret not listed"
+grep -q hf_smoke_not_a_real_token secrets.out && fail "secret value echoed"
+
 step "Python SDK quickstart"
 PYTHONPATH="$ROOT/sdks/python" "$PY" "$ROOT/tests/compose/smoke_sdk.py"
 
@@ -77,6 +83,7 @@ step "restart: data persists"
 "$GRAD" local down
 "$GRAD" local up --build --timeout 600
 "$GRAD" --json runs list | grep -q '"support-sft"' || fail "run lost across restart"
+"$GRAD" secrets list | grep -q hf-token || fail "secret lost across restart"
 rm -rf support-sft
 "$GRAD" artifacts download support-sft@latest --output ./support-sft
 test -f support-sft/adapter_model.safetensors || fail "artifact lost across restart"

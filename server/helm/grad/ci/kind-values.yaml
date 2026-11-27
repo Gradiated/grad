@@ -15,6 +15,7 @@ workerDefaults:
 workers:
   train:
     image: {tag: dev}
+    apiKeySecretKey: train-worker-api-key
     gpuCount: 0
     terminationGracePeriodSeconds: 30
     env:
@@ -24,6 +25,7 @@ workers:
       limits: {cpu: "1", memory: 768Mi}
   import:
     image: {tag: dev}
+    apiKeySecretKey: import-worker-api-key
     resources:
       requests: {cpu: 50m, memory: 128Mi}
       limits: {cpu: "1", memory: 768Mi}
