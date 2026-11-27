@@ -32,8 +32,8 @@ def record_count(args: argparse.Namespace) -> int:
 
 def parser(description: str) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=description)
-    p.add_argument("--steps", type=int, default=8, help="about this many optimizer steps (default 8)")
-    p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--steps", type=int, default=8, help="about this many optimizer steps (default 8; reward.py 40)")
+    p.add_argument("--batch-size", type=int, default=4, help="default 4; reward.py 8")
     p.add_argument("--lr", type=float, default=None, help="default: the recipe's auto lr")
     p.add_argument("--price", type=float, default=0.15, help="student $/M tokens for the cost line (catalog: Qwen3-0.6B)")
     p.add_argument("--workdir", type=Path, default=None, help="keep outputs here (default: a temp dir)")
