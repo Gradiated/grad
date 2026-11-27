@@ -23,6 +23,8 @@ export interface CloudAuthOptions {
   cache?: {
     positiveTtlMs?: number;
     negativeTtlMs?: number;
+    /** With the view unreachable, a key's last answer is reused this long (default 5 min). */
+    staleTtlMs?: number;
     maxEntries?: number;
   };
 }
@@ -32,6 +34,10 @@ interface CacheEntry {
   /** A key whose principal is not active (403). */
   refused?: ApiError | undefined;
   expiresAt: number;
+  /** Until when the answer may stand in for an unreachable view. */
+  staleUntil: number;
+  /** The key's own `expires_at` (ms), never served past. */
+  keyExpiresAt: number | null;
 }
 
 const keySuspended = () =>
@@ -74,6 +80,9 @@ export const principalOfClaims = (claims: JwtClaims): AuthPrincipal | null => {
   });
 };
 
+const isUnavailable = (error: unknown): boolean =>
+  error instanceof ApiError && error.code === "auth_unavailable";
+
 const principalOfRow = (row: AuthViewRow, now: Date): AuthPrincipal | null => {
   if (row.expires_at && row.expires_at.getTime() <= now.getTime()) return null;
   if (!WORKSPACE_ID_RE.test(row.workspace_id) || !isCloudRole(row.role)) {
@@ -92,13 +101,15 @@ const principalOfRow = (row: AuthViewRow, now: Date): AuthPrincipal | null => {
  * Gradiated Cloud auth. A JWT is verified locally (JWKS); any other token is
  * a `grad_` key, looked up by SHA-256 in the product's read-only
  * `auth_principals_v1` view and cached in-process (5 s either way, bounded
- * LRU; no revocation push). With the database unreachable, an uncached key
- * gets 503 auth_unavailable: auth fails closed.
+ * LRU; no revocation push). With the database unreachable (a failover, say),
+ * a key's last answer stands in for up to 5 min (never past the key's own
+ * expiry); a key without one gets 503 auth_unavailable: auth fails closed.
  */
 export const createCloudAuth = (options: CloudAuthOptions): AuthAdapter => {
   const { clock, view, jwt } = options;
   const positiveTtlMs = options.cache?.positiveTtlMs ?? 5_000;
   const negativeTtlMs = options.cache?.negativeTtlMs ?? 5_000;
+  const staleTtlMs = options.cache?.staleTtlMs ?? 300_000;
   const maxEntries = options.cache?.maxEntries ?? 10_000;
   const cache = new Map<string, CacheEntry>();
   const inFlight = new Map<string, Promise<AuthPrincipal | null>>();
@@ -107,13 +118,16 @@ export const createCloudAuth = (options: CloudAuthOptions): AuthAdapter => {
     key: string,
     principal: AuthPrincipal | null,
     refused?: ApiError,
+    keyExpiresAt: Date | null = null,
   ): void => {
+    const now = clock.now().getTime();
     cache.delete(key);
     cache.set(key, {
       principal,
       refused,
-      expiresAt:
-        clock.now().getTime() + (principal ? positiveTtlMs : negativeTtlMs),
+      expiresAt: now + (principal ? positiveTtlMs : negativeTtlMs),
+      staleUntil: now + staleTtlMs,
+      keyExpiresAt: keyExpiresAt?.getTime() ?? null,
     });
     while (cache.size > maxEntries) {
       const oldest = cache.keys().next().value as string;
@@ -142,7 +156,7 @@ export const createCloudAuth = (options: CloudAuthOptions): AuthAdapter => {
     }
     const principal = row ? principalOfRow(row, clock.now()) : null;
     metrics.cloudAuthLookups.inc({ result: principal ? "found" : "not_found" });
-    remember(key, principal);
+    remember(key, principal, undefined, row?.expires_at ?? null);
 
     return principal;
   };
@@ -167,7 +181,17 @@ export const createCloudAuth = (options: CloudAuthOptions): AuthAdapter => {
       inFlight.set(key, pending);
     }
 
-    return pending;
+    try {
+      return await pending;
+    } catch (error) {
+      const now = clock.now().getTime();
+      if (!hit || !isUnavailable(error) || hit.staleUntil <= now) throw error;
+      // The view is down: its last answer stands (revocations apply when it is back).
+      metrics.cloudAuthLookups.inc({ result: "stale" });
+      if (hit.refused) throw hit.refused;
+      if (hit.keyExpiresAt !== null && hit.keyExpiresAt <= now) return null;
+      return hit.principal;
+    }
   };
 
   return {

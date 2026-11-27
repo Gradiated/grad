@@ -62,9 +62,13 @@ SELECT api_key_id::text, org_id::text, org_slug, workspace_id::text,
   therefore takes effect within 5 s. There is no LISTEN/NOTIFY or Redis.
   Concurrent requests with the same key share one query.
 - The view's pool: 4 connections per replica, 2 s connect and statement
-  timeouts. The database unreachable and the key not cached: 503
-  `auth_unavailable` (auth fails closed). Lookups are counted on
-  `grad_cloud_auth_lookups_total{result}`.
+  timeouts. The database unreachable (a failover, a network blip): each
+  key's last answer, found or refused, stands in for up to 5 minutes, never
+  past the key's own `expires_at`; a revocation made meanwhile applies on the
+  first lookup after the view is back. A key with no answer in the last 5
+  minutes: 503 `auth_unavailable` (auth fails closed). Lookups are counted on
+  `grad_cloud_auth_lookups_total{result}` (`stale` when a last answer was
+  reused).
 
 ### Console JWTs
 
@@ -78,9 +82,12 @@ Auth's jwt() plugin), sent as `Authorization: Bearer` (never cookies).
   `org`, `role` (`admin` | `member`), optional `scopes` (narrowing). The
   product issues them for 10 minutes; an `exp` more than an hour ahead is
   refused (console and service tokens alike).
-- The JWKS is fetched once, cached, re-fetched every 10 minutes and on an
-  unknown `kid` (at most once per 30 s). If it can't be fetched and none is
-  cached: 503 `auth_unavailable`.
+- The JWKS is fetched once, cached, re-fetched every 10 minutes in the
+  background (a slow or failing JWKS never delays a request the cached keys
+  can answer, and a failure keeps them) and on an unknown `kid` (at most once
+  per 30 s, counted apart from the periodic refresh, so a key rotated in just
+  after one verifies at once). If it can't be fetched and none is cached: 503
+  `auth_unavailable`.
 - `sub = service:<name>` tokens (below) are refused on the public API.
 
 ### Roles

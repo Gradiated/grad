@@ -7,8 +7,9 @@ import { cloudRequest, isOk } from "./http.js";
 /**
  * Verifies Gradiated Cloud JWTs (Better Auth's jwt() plugin) locally against
  * the control plane's JWKS: no network call per request. The key set is
- * fetched once, cached, re-fetched every `refreshMs` and on an unknown `kid`
- * (at most once per `minRefetchMs`).
+ * fetched once, cached, re-fetched every `refreshMs` in the background (a
+ * slow or failing JWKS never holds a request that cached keys can answer)
+ * and on an unknown `kid` (at most once per `minRefetchMs`).
  */
 
 /** Asymmetric algorithms only; Better Auth signs EdDSA (Ed25519) by default. */
@@ -163,6 +164,8 @@ export const createJwtVerifier = (options: JwtVerifierOptions): JwtVerifier => {
   let keys: Map<string, VerifyKey> | null = null;
   let fetchedAt = 0;
   let attemptedAt = -Infinity;
+  /** The last refetch for an unknown kid: its own throttle, so a key rotated in just after a periodic refresh still verifies. */
+  let kidRefetchedAt = -Infinity;
   let inFlight: Promise<void> | null = null;
 
   const fetchKeys = async (): Promise<void> => {
@@ -195,14 +198,20 @@ export const createJwtVerifier = (options: JwtVerifierOptions): JwtVerifier => {
 
   const keyFor = async (kid: string): Promise<VerifyKey | null> => {
     const now = options.clock.now().getTime();
-    const canRefetch = now - attemptedAt >= minRefetchMs;
-    if (!keys || (now - fetchedAt >= refreshMs && canRefetch)) {
+    if (!keys) {
       await refetch();
+    } else if (
+      now - fetchedAt >= refreshMs &&
+      now - attemptedAt >= minRefetchMs
+    ) {
+      // Stale-while-revalidate: refetch keeps the cached keys on failure.
+      void refetch().catch(() => undefined);
     }
     const known = keys?.get(kid);
     if (known) return known;
     // A key rotated in since the last fetch: refetch, rate-limited.
-    if (options.clock.now().getTime() - attemptedAt >= minRefetchMs) {
+    if (options.clock.now().getTime() - kidRefetchedAt >= minRefetchMs) {
+      kidRefetchedAt = options.clock.now().getTime();
       await refetch();
     }
 

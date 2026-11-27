@@ -268,7 +268,7 @@ export const metrics = {
   }),
   cloudAuthLookups: counter(
     "grad_cloud_auth_lookups_total",
-    "Cloud: API-key lookups in the auth view, by result (found, not_found, inactive, error).",
+    "Cloud: API-key lookups in the auth view, by result (found, not_found, inactive, error, stale: the view unreachable and the last answer reused).",
     ["result"],
   ),
   workerAuth: counter(

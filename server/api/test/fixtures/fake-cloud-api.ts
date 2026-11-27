@@ -497,8 +497,17 @@ export const startFakeCloudApi = async (
         else write();
       };
 
+      const failure = failures.find(
+        (f) => f.remaining > 0 && (!f.path || f.path === path),
+      );
+
       try {
+        // The JWKS is public; failNext with its path takes it down.
         if (path === "/api/auth/jwks") {
+          if (failure?.path === path) {
+            failure.remaining -= 1;
+            return send(failure.status, { detail: "injected failure" });
+          }
           return send(200, { keys: signingKeys.map((k) => k.jwk) });
         }
         if (path.startsWith("/_control/")) {
@@ -512,9 +521,6 @@ export const startFakeCloudApi = async (
         if (req.headers.authorization !== `Bearer ${serviceToken}`) {
           return send(401, { detail: "invalid service token" });
         }
-        const failure = failures.find(
-          (f) => f.remaining > 0 && (!f.path || f.path === path),
-        );
         if (failure) {
           failure.remaining -= 1;
           return send(failure.status, { detail: "injected failure" });

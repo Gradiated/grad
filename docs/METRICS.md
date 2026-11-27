@@ -14,7 +14,7 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_checkpoint_upload_bytes_total` | counter | `recipe_kind` | Bytes of registered checkpoint bundles. |
 | `grad_checkpoint_upload_duration_seconds` | histogram | `recipe_kind` | Checkpoint upload time the worker reported. |
 | `grad_checkpoints_total` | counter | `recipe_kind`, `reason` | Checkpoints registered, by recipe and reason (periodic, emergency). |
-| `grad_cloud_auth_lookups_total` | counter | `result` | Cloud: API-key lookups in the auth view, by result (found, not_found, inactive, error). |
+| `grad_cloud_auth_lookups_total` | counter | `result` | Cloud: API-key lookups in the auth view, by result (found, not_found, inactive, error, stale: the view unreachable and the last answer reused). |
 | `grad_dataset_part_bytes_total` | counter | `form` | Bytes of dataset parts written, by form (compressed, uncompressed). |
 | `grad_db_pool_connections` | gauge | `state` | Postgres pool connections by state (in_use, idle, waiting). |
 | `grad_db_query_duration_seconds` | histogram |  | Postgres query duration. |
