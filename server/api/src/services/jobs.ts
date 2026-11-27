@@ -10,6 +10,7 @@ import {
 } from "../contracts/trainer-jobs.js";
 import { metricKind, metrics } from "../telemetry/metrics.js";
 import { contextFromTraceparent, withSpan } from "../telemetry/tracing.js";
+import { claimGpuMemoryGb } from "../worker-auth/principal.js";
 import type { z } from "@hono/zod-openapi";
 import type {
   JobExpectation,
@@ -412,7 +413,8 @@ export const createJobQueue = (
     claim: async (principal, input) => {
       await expireLeases(clock.now());
       const worker: ClaimWorker = { gpu: input.gpu ?? null };
-      const gpuMemoryGb = input.gpu?.memory_gb || null;
+      // A lease token's gpu_memory_gb caps what the worker may be given.
+      const gpuMemoryGb = claimGpuMemoryGb(principal, input.gpu?.memory_gb);
       await store.jobs.seeWorker({
         id: input.workerId,
         kinds: input.kinds,

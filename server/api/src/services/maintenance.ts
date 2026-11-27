@@ -28,6 +28,7 @@ export interface MaintenanceReport {
   deletedOrphanBlobs: number;
   /** Workers unseen for a day (and holding no lease) forgotten. */
   prunedWorkers: number;
+  deletedWorkerTokens: number;
   exportedUsage: number;
   syncedSources: number;
   /** 1 when the metric gauges were refreshed. */
@@ -139,6 +140,9 @@ export const createMaintenance = (
       ),
       prunedWorkers: await step("gc_workers", () =>
         deps.store.jobs.pruneWorkers(addSeconds(now, -86_400)),
+      ),
+      deletedWorkerTokens: await step("gc_worker_tokens", () =>
+        deps.store.workerTokens.deleteExpired(now, 1000),
       ),
       exportedUsage: await step("export_usage", () =>
         services.usage.exportPending(),

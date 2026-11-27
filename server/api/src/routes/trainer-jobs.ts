@@ -29,6 +29,7 @@ import {
   requireScope,
   type AppEnv,
 } from "./helpers.js";
+import { assertClaimAllowed } from "../worker-auth/principal.js";
 
 const isImportJob = (id: string): boolean => id.startsWith("imp_");
 
@@ -71,6 +72,8 @@ export const registerTrainerJobRoutes = (
           `This trainer key may claim only ${(principal.workerKinds ?? []).join(", ")} jobs, not ${input.kinds.join(", ")}.`,
         );
       }
+      // A lease token is bound to its host and bounds the GPU the worker reports.
+      assertClaimAllowed(principal, input);
       // One queue, fair across workspaces, over the requested kinds.
       const job = await services.queue.claim(principal, {
         workerId: input.worker_id,

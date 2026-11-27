@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  parseWorkerAuthConfig,
+  type WorkerAuthConfig,
+} from "./worker-auth/config.js";
+
 const booleanFlag = (fallback: "true" | "false") =>
   z
     .enum(["true", "false", "1", "0"])
@@ -37,6 +42,14 @@ const EnvironmentSchema = z.object({
   TRAINER_API_KEY_HASH: optionalString,
   TRAINER_API_KEY: optionalString,
   TRAINER_KEYS_JSON: optionalString,
+  /** Worker authenticators, in order: static, kubernetes, lease (default static). */
+  GRAD_WORKER_AUTH: optionalString,
+  /** kubernetes: `{"<ns>/<service-account>": ["train"], ...}`. */
+  GRAD_WORKER_K8S_SERVICE_ACCOUNTS: optionalString,
+  /** lease: orchestrator keys for the internal worker-token routes. */
+  GRAD_ORCHESTRATOR_KEYS_JSON: optionalString,
+  /** Serve the internal routes (lease-token minting) on this port only; unset: off. */
+  INTERNAL_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   GRAD_SECRETS_KEY: optionalString,
   GRAD_SECRETS_KEYS_OLD: optionalString,
   DEFAULT_WORKSPACE_ID: z.string().min(1).max(64).default("local"),
@@ -176,6 +189,8 @@ const parseTrainerKeys = (raw: string | undefined): TrainerKeyConfig[] => {
 export interface ServerEnvironment extends RawEnvironment {
   /** Labelled, kind-scoped trainer keys from TRAINER_KEYS_JSON. */
   trainerKeys: TrainerKeyConfig[];
+  /** How workers authenticate (GRAD_WORKER_AUTH and its settings). */
+  workerAuth: WorkerAuthConfig;
   /** Whether to serve the web UI (UI_ENABLED, default off only for AUTH_MODE=cloud). */
   uiEnabled: boolean;
   /** Eval generations endpoint (GRAD_INFERENCE_BASE_URL). */
@@ -274,9 +289,22 @@ export const parseServerEnvironment = (
     throw new Error("METRICS_PORT must differ from PORT.");
   }
 
+  const trainerKeys = parseTrainerKeys(env.TRAINER_KEYS_JSON);
+  const workerAuth = parseWorkerAuthConfig(
+    {
+      ...env,
+      hasStaticKeys:
+        trainerKeys.length > 0 ||
+        env.TRAINER_API_KEY !== undefined ||
+        env.TRAINER_API_KEY_HASH !== undefined,
+    },
+    warnings,
+  );
+
   return {
     ...env,
-    trainerKeys: parseTrainerKeys(env.TRAINER_KEYS_JSON),
+    trainerKeys,
+    workerAuth,
     uiEnabled: env.UI_ENABLED ?? env.AUTH_MODE !== "cloud",
     inferenceBaseUrl,
     inferenceApiKey,

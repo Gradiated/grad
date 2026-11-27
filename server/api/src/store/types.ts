@@ -1027,6 +1027,33 @@ export interface SourceRepository {
   usingSecret(workspaceId: string, secretName: string): Promise<string[]>;
 }
 
+// --- Worker tokens -----------------------------------------------------------------
+
+/** A lease-scoped worker token (grad_worker_tokens); the token itself is never stored. */
+export interface WorkerTokenRecord {
+  hostId: string;
+  leaseId: string;
+  kinds: string[];
+  gpuMemoryGb: number | null;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  createdBy: string;
+}
+
+export interface WorkerTokenRepository {
+  create(
+    input: Omit<WorkerTokenRecord, "revokedAt"> & {
+      tokenSha256: string;
+      now: Date;
+    },
+  ): Promise<void>;
+  findByHash(tokenSha256: string): Promise<WorkerTokenRecord | null>;
+  /** Revokes the lease's live tokens that `createdBy` minted; returns how many. */
+  revokeLease(leaseId: string, createdBy: string, now: Date): Promise<number>;
+  /** Deletes up to `limit` tokens that expired before `now`. */
+  deleteExpired(now: Date, limit: number): Promise<number>;
+}
+
 // --- Composition ----------------------------------------------------------------------
 
 export interface Repositories {
@@ -1040,6 +1067,7 @@ export interface Repositories {
   usage: UsageRepository;
   secrets: SecretRepository;
   sources: SourceRepository;
+  workerTokens: WorkerTokenRepository;
 }
 
 // --- Telemetry -------------------------------------------------------------------

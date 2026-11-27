@@ -3,6 +3,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { ApiKeyScope, Scope } from "./contracts.js";
 import { PLATFORM_SCOPES } from "./contracts.js";
 import type { KeyLookupResult, LedgerRow } from "./store/types.js";
+import {
+  authenticateWorkerFirst,
+  toAuthPrincipal,
+  type WorkerAuthenticator,
+  type WorkerPrincipal,
+} from "./worker-auth/principal.js";
 
 export interface AuthPrincipal {
   kind: "workspace" | "worker" | "dev";
@@ -21,6 +27,8 @@ export interface AuthPrincipal {
    * workspace secrets, so a GPU host's key is train-only (TRAINER_KEYS_JSON).
    */
   workerKinds?: readonly WorkerJobKind[];
+  /** Trainer workers only: what the worker token proved (host binding, GPU bound, expiry). */
+  worker?: WorkerPrincipal | undefined;
 }
 
 export const WORKER_JOB_KINDS = ["train", "import"] as const;
@@ -130,29 +138,55 @@ const assertDigest = (name: string, value: string | undefined): void => {
 };
 
 /**
- * Checks a bearer token against the trainer keys; shared by the local and
- * Cloud auth adapters so worker keys never depend on workspace key storage.
+ * Static worker keys (GRAD_WORKER_AUTH=static): the token's SHA-256 against
+ * every configured key, in constant time and without stopping at a match.
  */
+export const findKeyByToken = <K extends { sha256: string }>(
+  token: string,
+  keys: readonly K[],
+): K | null => {
+  const digest = hashApiKey(token);
+  let key: K | null = null;
+  for (const candidate of keys) {
+    if (safeDigestEqual(digest, candidate.sha256) && key === null) {
+      key = candidate;
+    }
+  }
+
+  return key;
+};
+
+export const matchStaticWorkerKey = (
+  token: string,
+  keys: readonly TrainerKey[],
+): WorkerPrincipal | null => {
+  const key = findKeyByToken(token, keys);
+  if (!key) return null;
+
+  return {
+    kinds: key.kinds,
+    identity:
+      key.label === "trainer"
+        ? "trainer-worker"
+        : `trainer-worker:${key.label}`,
+  };
+};
+
+export const createStaticWorkerAuth = (
+  keys: readonly TrainerKey[],
+): WorkerAuthenticator => ({
+  mode: "static",
+  authenticate: async (token) => matchStaticWorkerKey(token, keys),
+});
+
+/** A static trainer key's principal, or null. */
 export const matchTrainerKey = (
   token: string,
   keys: readonly TrainerKey[],
 ): AuthPrincipal | null => {
-  const digest = hashApiKey(token);
-  const key = keys.find((k) => safeDigestEqual(digest, k.sha256));
-  if (!key) return null;
+  const worker = matchStaticWorkerKey(token, keys);
 
-  return {
-    kind: "worker",
-    workspaceId: "_platform",
-    actor:
-      key.label === "trainer"
-        ? "trainer-worker"
-        : `trainer-worker:${key.label}`,
-    scopes: ["trainer:worker"],
-    isPlatformAdmin: false,
-    workerWorkspaceId: null,
-    workerKinds: key.kinds,
-  };
+  return worker ? toAuthPrincipal(worker) : null;
 };
 
 /** The kinds `principal` may claim out of `requested` (every kind for non-key workers). */
@@ -170,51 +204,52 @@ export const createLocalApiKeyAuth = (options: {
   adminKeyHash?: string | undefined;
   trainerKeyHash?: string | undefined;
   trainerKeys?: readonly TrainerKey[] | undefined;
+  /** The worker authenticator chain (default: the static trainer keys). */
+  workers?: WorkerAuthenticator | undefined;
   workspaceId?: string;
   lookup: KeyLookup;
 }): AuthAdapter => {
   const defaultWorkspaceId = options.workspaceId ?? "default";
   assertDigest("adminKeyHash", options.adminKeyHash);
   assertDigest("trainerKeyHash", options.trainerKeyHash);
-  const trainerKeys = trainerKeysOf(
-    options.trainerKeyHash,
-    options.trainerKeys,
-  );
+  const workers =
+    options.workers ??
+    createStaticWorkerAuth(
+      trainerKeysOf(options.trainerKeyHash, options.trainerKeys),
+    );
+
+  const workspaceKey = async (token: string): Promise<AuthPrincipal | null> => {
+    const digest = hashApiKey(token);
+    if (options.adminKeyHash && safeDigestEqual(digest, options.adminKeyHash)) {
+      return {
+        kind: "workspace",
+        workspaceId: defaultWorkspaceId,
+        actor: "bootstrap-admin",
+        scopes: ["admin"],
+        isPlatformAdmin: true,
+        workerWorkspaceId: null,
+      };
+    }
+
+    const key = await options.lookup.findActiveByHash(digest);
+    if (!key) return null;
+
+    return {
+      kind: "workspace",
+      workspaceId: key.workspace_id,
+      actor: `key:${key.name}`,
+      scopes: key.scopes as ApiKeyScope[],
+      isPlatformAdmin: false,
+      workerWorkspaceId: null,
+    };
+  };
 
   return {
     authenticate: async (bearerToken) => {
       const token = bearerToken?.trim();
       if (!token) return null;
 
-      const worker = matchTrainerKey(token, trainerKeys);
-      if (worker) return worker;
-
-      const digest = hashApiKey(token);
-      if (
-        options.adminKeyHash &&
-        safeDigestEqual(digest, options.adminKeyHash)
-      ) {
-        return {
-          kind: "workspace",
-          workspaceId: defaultWorkspaceId,
-          actor: "bootstrap-admin",
-          scopes: ["admin"],
-          isPlatformAdmin: true,
-          workerWorkspaceId: null,
-        };
-      }
-
-      const key = await options.lookup.findActiveByHash(digest);
-      if (!key) return null;
-
-      return {
-        kind: "workspace",
-        workspaceId: key.workspace_id,
-        actor: `key:${key.name}`,
-        scopes: key.scopes as ApiKeyScope[],
-        isPlatformAdmin: false,
-        workerWorkspaceId: null,
-      };
+      return authenticateWorkerFirst(workers, token, () => workspaceKey(token));
     },
   };
 };

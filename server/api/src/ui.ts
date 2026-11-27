@@ -138,7 +138,7 @@ export const resolveUiBundle = (
 
 /** Paths that are never the SPA: the API, health probes, metrics, the spec and assets (the UI's own `/health` page is a route). */
 const NOT_UI =
-  /^\/(v1(\/|$)|health\/|healthz$|readyz$|livez$|metrics$|openapi\.json$|assets\/)/;
+  /^\/(v1(\/|$)|internal\/|health\/|healthz$|readyz$|livez$|metrics$|openapi\.json$|assets\/)/;
 
 const acceptsHtml = (c: Context): boolean =>
   (c.req.header("accept") ?? "").includes("text/html");

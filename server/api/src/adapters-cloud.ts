@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import {
-  matchTrainerKey,
+  createStaticWorkerAuth,
   trainerKeysOf,
   type AuthAdapter,
   type AuthPrincipal,
@@ -13,6 +13,10 @@ import {
 import { systemClock, type Clock } from "./clock.js";
 import { WORKSPACE_SCOPES, type Scope } from "./contracts.js";
 import { ApiError, errorMessage } from "./errors.js";
+import {
+  authenticateWorkerFirst,
+  type WorkerAuthenticator,
+} from "./worker-auth/principal.js";
 
 export interface CloudAdapterConfig {
   internalApiBaseUrl: string;
@@ -24,6 +28,8 @@ export interface CloudAdapterConfig {
   trainerKeyHash?: string | undefined;
   /** Labelled, kind-scoped trainer keys (TRAINER_KEYS_JSON). */
   trainerKeys?: readonly TrainerKey[] | undefined;
+  /** The worker authenticator chain (default: the static trainer keys). */
+  workers?: WorkerAuthenticator | undefined;
   clock?: Clock;
   authCache?: {
     positiveTtlMs?: number;
@@ -146,7 +152,9 @@ export const createCloudAuthAdapter = (
   cfg: CloudAdapterConfig,
 ): AuthAdapter => {
   const resolved = validateCloudConfig(cfg);
-  const trainerKeys = trainerKeysOf(cfg.trainerKeyHash, cfg.trainerKeys);
+  const workers =
+    cfg.workers ??
+    createStaticWorkerAuth(trainerKeysOf(cfg.trainerKeyHash, cfg.trainerKeys));
   const clock = cfg.clock ?? systemClock;
   const positiveTtlMs = cfg.authCache?.positiveTtlMs ?? 30_000;
   const negativeTtlMs = cfg.authCache?.negativeTtlMs ?? 5_000;
@@ -232,19 +240,18 @@ export const createCloudAuthAdapter = (
       const token = bearerToken?.trim();
       if (!token) return null;
 
-      const worker = matchTrainerKey(token, trainerKeys);
-      if (worker) return worker;
+      return authenticateWorkerFirst(workers, token, async () => {
+        const key = createHash("sha256").update(token).digest("hex");
+        const hit = cache.get(key);
+        if (hit && hit.expiresAt > clock.now().getTime()) {
+          return hit.principal;
+        }
 
-      const key = createHash("sha256").update(token).digest("hex");
-      const hit = cache.get(key);
-      if (hit && hit.expiresAt > clock.now().getTime()) {
-        return hit.principal;
-      }
+        const principal = await verify(token);
+        remember(key, principal);
 
-      const principal = await verify(token);
-      remember(key, principal);
-
-      return principal;
+        return principal;
+      });
     },
   };
 };

@@ -78,6 +78,7 @@ import {
   queueView,
   type JobQueue,
   type StopReason,
+  workerKeyOf,
 } from "./jobs.js";
 import {
   REASON_TEXT,
@@ -1665,7 +1666,12 @@ export const createRunLifecycle = (
 
     datasetStream: async (principal, id, attempt) => {
       const row = await collaborators.queue().loadForWorker(principal, id);
-      if (row.attempt !== attempt || row.worker_id === null)
+      // Only the credential holding the lease reads the training data.
+      if (
+        row.attempt !== attempt ||
+        row.worker_id === null ||
+        row.worker_key !== workerKeyOf(principal)
+      )
         throw leaseLost(id);
 
       const training = await trainingRecords(await loadById(id));

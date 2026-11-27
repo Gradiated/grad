@@ -5,6 +5,7 @@ import {
   createLocalNoneAuth,
   createNoopBillingAdapter,
   hashApiKey,
+  trainerKeysOf,
 } from "./adapters.js";
 import {
   createCloudAuthAdapter,
@@ -30,6 +31,7 @@ import { createPostgresStore } from "./store/postgres.js";
 import { log } from "./telemetry/log.js";
 import { metrics } from "./telemetry/metrics.js";
 import { instrumentObjectStore } from "./telemetry/storage.js";
+import { buildWorkerAuthenticator } from "./worker-auth/index.js";
 
 export { log } from "./telemetry/log.js";
 
@@ -103,11 +105,15 @@ export const buildDependencies = async (
   const trainerKeyHash =
     env.TRAINER_API_KEY_HASH ??
     (env.TRAINER_API_KEY ? hashApiKey(env.TRAINER_API_KEY) : undefined);
+  const workers = buildWorkerAuthenticator(env.workerAuth, {
+    staticKeys: trainerKeysOf(trainerKeyHash, env.trainerKeys),
+    tokens: store.workerTokens,
+    clock,
+  });
   const cloud = (): CloudAdapterConfig => ({
     internalApiBaseUrl: env.CLOUD_INTERNAL_API_URL as string,
     serviceToken: env.CLOUD_SERVICE_TOKEN as string,
-    trainerKeyHash,
-    trainerKeys: env.trainerKeys,
+    workers,
   });
 
   const auth =
@@ -116,8 +122,7 @@ export const buildDependencies = async (
       : env.AUTH_MODE === "api_key"
         ? createLocalApiKeyAuth({
             adminKeyHash: env.ADMIN_API_KEY_HASH,
-            trainerKeyHash,
-            trainerKeys: env.trainerKeys,
+            workers,
             workspaceId: env.DEFAULT_WORKSPACE_ID,
             lookup: store.apiKeys,
           })

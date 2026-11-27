@@ -5,6 +5,7 @@ import { serve } from "@hono/node-server";
 import { API_VERSION, createGradApp, createMetricsApp } from "./app.js";
 import { buildDependencies, log } from "./bootstrap.js";
 import { parseServerEnvironment } from "./environment.js";
+import { createInternalApp } from "./routes/internal.js";
 import { runMigrations } from "./migrations.js";
 import { gracefulShutdown } from "./shutdown.js";
 import { startTracing, stopTracing } from "./telemetry/tracing.js";
@@ -40,6 +41,19 @@ const main = async () => {
           port: env.METRICS_PORT,
         })
       : null;
+  const { internalPort, orchestratorKeys } = env.workerAuth;
+  const internalServer =
+    internalPort !== undefined
+      ? serve({
+          fetch: createInternalApp({
+            tokens: deps.store.workerTokens,
+            clock: deps.clock,
+            orchestratorKeys,
+          }).fetch,
+          hostname: env.HOST,
+          port: internalPort,
+        })
+      : null;
   log("info", "grad-server listening", {
     url: `http://${env.HOST}:${env.PORT}`,
     auth_mode: env.AUTH_MODE,
@@ -49,6 +63,8 @@ const main = async () => {
       ? `:${env.METRICS_PORT ?? env.PORT}/metrics`
       : "off",
     tracing: tracing ? "otlp" : "off",
+    worker_auth: env.workerAuth.modes.join(","),
+    internal: internalPort !== undefined ? `:${internalPort}` : "off",
     ui: deps.ui ? `http://${env.HOST}:${env.PORT}/` : "disabled",
   });
 
@@ -67,6 +83,7 @@ const main = async () => {
       },
       closeResources: async () => {
         metricsServer?.close();
+        internalServer?.close();
         await deps.regex.close();
         await deps.store.close();
         await stopTracing();
