@@ -583,4 +583,67 @@ fn live_cloud_quickstart_with_torch_worker() {
     assert_eq!(o.json()["data"]["active_artifact_id"], first.as_str());
     let o = grad(&home, &["deployments", "status", "support-router"], &[]);
     ok(&o);
+
+    // docs: recipes/distillation.mdx (YAML) and recipes/reward-models.mdx (flags), tiny models.
+    let prompts: String = (0..12)
+        .map(|i| format!("{}\n", json!({"messages": [{"role": "user", "content": format!("How do I rotate API key {i}?")}]})))
+        .collect();
+    std::fs::write(home.dir.join("prompts.jsonl"), prompts).unwrap();
+    ok(&grad(
+        &home,
+        &["import", "./prompts.jsonl", "--dataset", "support-prompts"],
+        &[],
+    ));
+    std::fs::write(
+        home.dir.join("distill.yaml"),
+        "dataset: support-prompts\nname: support-distilled\nrecipe: distill\nmodel: test/tiny-qwen3\nteacher: test/tiny-qwen3-teacher\nrollout: {kind: on_policy, max_new_tokens: 4}\nbatch_size: 4\n",
+    )
+    .unwrap();
+    let o = grad(&home, &["train", "-f", "distill.yaml", "--dry-run"], &[]);
+    ok(&o);
+    assert!(
+        o.stdout.contains("test/tiny-qwen3-teacher: ~"),
+        "{}",
+        o.stdout
+    );
+    ok(&grad(
+        &home,
+        &["train", "-f", "distill.yaml", "--wait"],
+        &[],
+    ));
+    let pairs: String = (0..16)
+        .map(|i| format!("{}\n", json!({"prompt": format!("Count users {i}"), "chosen": "SELECT count(*) FROM users;", "rejected": "no idea"})))
+        .collect();
+    std::fs::write(home.dir.join("pairs.jsonl"), pairs).unwrap();
+    ok(&grad(
+        &home,
+        &["import", "./pairs.jsonl", "--dataset", "sql-preferences"],
+        &[],
+    ));
+    let o = grad(
+        &home,
+        &[
+            "train",
+            "--dataset",
+            "sql-preferences",
+            "--name",
+            "sql-verifier",
+            "--recipe",
+            "reward-model",
+            "--model",
+            "test/tiny-qwen3",
+            "--batch-size",
+            "4",
+            "--wait",
+        ],
+        &[],
+    );
+    ok(&o);
+    let o = grad(
+        &home,
+        &["--json", "artifacts", "inspect", "sql-verifier@latest"],
+        &[],
+    );
+    ok(&o);
+    assert_eq!(o.json()["data"]["format"], "reward_bundle");
 }

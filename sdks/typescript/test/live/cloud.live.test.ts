@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { AuthenticationError, Grad, recipes, type DatasetRecord } from "../../src/index.js";
+import { AuthenticationError, Grad, recipes, rollouts, type DatasetRecord } from "../../src/index.js";
 import { liveSkipReason, scratchHome, Stack } from "./stack.js";
 
 const skipReference = liveSkipReason("reference");
@@ -94,5 +94,30 @@ describe.skipIf(skipTorch !== undefined)("live: cloud router with the torch work
     const status = await grad.deployments.get("support-router");
     expect(status.feedbackCount).toBeGreaterThanOrEqual(1);
     expect((await grad.deployments.list().all()).map((d) => d.name)).toContain("support-router");
+  });
+
+  it("distills a tiny teacher and trains a reward model", async () => {
+    const grad = new Grad({ apiKey: stack.apiKey, baseURL: stack.baseURL });
+    const prompts = await grad.datasets.push(
+      "support-prompts",
+      Array.from({ length: 12 }, (_, i) => ({ messages: [{ role: "user" as const, content: `How do I rotate API key ${i}?` }] })),
+    );
+    const recipe = recipes.distill({ model: "test/tiny-qwen3", teacher: "test/tiny-qwen3-teacher", rollout: rollouts.onPolicy({ maxNewTokens: 4 }), batchSize: 4 });
+    const plan = await grad.runs.plan({ dataset: prompts, name: "support-distilled", recipe });
+    expect(plan.teacher?.model).toBe("test/tiny-qwen3-teacher");
+    const distilled = await grad.runs.create({ dataset: prompts, name: "support-distilled", recipe }).wait({ timeoutMs: 480_000 });
+    expect(distilled.artifact.format).toBe("peft_lora");
+    expect(distilled.evalReport?.metricName).toBe("eval_kl");
+
+    const pairs = await grad.datasets.push(
+      "sql-preferences",
+      Array.from({ length: 16 }, (_, i) => ({ prompt: `Count users ${i}`, chosen: "SELECT count(*) FROM users;", rejected: "no idea" })),
+    );
+    const verifier = await grad.runs
+      .create({ dataset: pairs, name: "sql-verifier", recipe: recipes.rewardModel({ model: "test/tiny-qwen3", batchSize: 4 }) })
+      .wait({ timeoutMs: 480_000 });
+    expect(verifier.artifact.format).toBe("reward_bundle");
+    expect(verifier.evalReport?.metricName).toBe("preference_accuracy");
+    expect(verifier.evalReport?.preferenceAccuracy).not.toBeNull();
   });
 });

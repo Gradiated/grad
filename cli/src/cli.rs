@@ -410,7 +410,7 @@ pub struct TrainArgs {
     /// Run name (also the artifact name)
     #[arg(long)]
     pub name: Option<String>,
-    /// Recipe: sft, dpo, router, decision-model, cartridge, embedding
+    /// Recipe: sft, dpo, router, decision-model, cartridge, embedding, distill, reward-model
     #[arg(long)]
     pub recipe: Option<String>,
     /// Base model (default: the recipe's default)
@@ -446,9 +446,21 @@ pub struct TrainArgs {
     /// Router: largest acceptable quality drop vs. the fallback
     #[arg(long)]
     pub max_quality_drop: Option<f64>,
-    /// Cartridge: file with the document to compress
+    /// Cartridge: file with the document to compress (distill: a document only the teacher reads)
     #[arg(long, value_name = "FILE")]
     pub context_file: Option<PathBuf>,
+    /// Distill and cartridge: the model to learn from (distill off-policy also takes NAME@VERSION)
+    #[arg(long)]
+    pub teacher: Option<String>,
+    /// Distill: on-policy (the student writes, the teacher scores) or off-policy (train on the teacher's answers)
+    #[arg(long, value_parser = ["on-policy", "off-policy"])]
+    pub rollout: Option<String>,
+    /// Distill: longest answer per prompt (on-policy default: sized from your records)
+    #[arg(long, requires = "rollout")]
+    pub max_new_tokens: Option<u32>,
+    /// Reward model: a score name in [0, 1] on your records to also train pointwise
+    #[arg(long, value_name = "SCORE")]
+    pub score: Option<String>,
     /// Cartridge: number of trained prefix tokens
     #[arg(long)]
     pub num_tokens: Option<u32>,

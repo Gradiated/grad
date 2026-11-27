@@ -53,6 +53,7 @@
     "price_per_million_tokens": 0.15,
     "trained_token_fraction": 0.62,
     "labeling": null,
+    "teacher": null,
     "warnings": [
       "3 records have no scores"
     ]

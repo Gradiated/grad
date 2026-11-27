@@ -75,6 +75,18 @@ def format_plan(plan: Any, max_cost_usd: float | None = None) -> str:
     if max_cost_usd is not None:
         estimate += f" · cap max_cost_usd={_num(max_cost_usd)}"
     lines.append(estimate)
+    teacher = getattr(plan, "teacher", None)
+    if teacher:
+        lines.append(
+            f"Teacher     {teacher.get('model')}: ~{_tokens(teacher.get('estimated_tokens', 0))} tokens, "
+            f"~{_usd(teacher.get('estimated_cost_usd', 0))} at {_usd(teacher.get('price_per_million_tokens', 0))}/M (included above)"
+        )
+    labeling = getattr(plan, "labeling", None)
+    if labeling:
+        lines.append(
+            f"Labeling    {_num(labeling.get('estimated_model_calls', 0))} model · {_num(labeling.get('estimated_judge_calls', 0))} judge calls, "
+            f"~{_usd(labeling.get('estimated_cost_usd', 0))} (billed as an eval, included above)"
+        )
     lines.append(f"Warnings    {len(plan.warnings)}")
     lines.extend(f"  ! {w}" for w in plan.warnings)
     return "\n".join(lines)

@@ -88,6 +88,22 @@ func TestParityRequests(t *testing.T) {
 			_, err := c.Runs.Plan(ctx, grad.RunParams{Dataset: grad.DatasetName("decisions"), Name: "decision", Recipe: grad.DecisionModelRecipe{}})
 			return err
 		},
+		"plan_distill": func() error {
+			_, err := c.Runs.Plan(ctx, grad.RunParams{Dataset: grad.DatasetName("support-prompts"), Name: "distill-params",
+				Recipe: grad.DistillRecipe{Common: grad.Common{Model: "test/tiny-qwen3"}, Teacher: "test/tiny-qwen3-teacher", MaxNewTokens: 64, TopK: 16,
+					Context: grad.ContextFromText("Refunds take 30 days.")}})
+			return err
+		},
+		"plan_distill_off_policy": func() error {
+			_, err := c.Runs.Plan(ctx, grad.RunParams{Dataset: grad.DatasetName("support-prompts"), Name: "distill-off",
+				Recipe: grad.DistillRecipe{Teacher: artifact, OffPolicy: true, MaxNewTokens: 128}})
+			return err
+		},
+		"plan_reward": func() error {
+			_, err := c.Runs.Plan(ctx, grad.RunParams{Dataset: grad.DatasetName("sql-preferences"), Name: "sql-verifier",
+				Recipe: grad.RewardModelRecipe{Common: grad.Common{Model: "test/tiny-qwen3", Adapter: grad.FrozenHead{}}, Rubric: "resolved"}})
+			return err
+		},
 		"create_eval": func() error {
 			_, err := c.Evals.Create(ctx, grad.EvalParams{Name: "parity-eval", Models: []string{"test/tiny-qwen3", artifact},
 				Dataset: grad.DatasetName("support"), Rubric: grad.Rubric{judge, grad.Scorer{Name: "non_empty", Validator: grad.ValidatorNonEmpty, Weight: 1}},

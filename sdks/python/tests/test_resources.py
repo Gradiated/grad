@@ -287,6 +287,12 @@ class RunTests(unittest.TestCase):
         self.assertIn("thinking=on", text)
         self.assertIn("context_text=<50 chars>", text)
         self.assertIn("~38.0M tokens (~$15.20", text)
+        self.assertNotIn("Teacher", text)
+        data["teacher"] = {"model": "qwen/qwen3-32b", "price_per_million_tokens": 1.2, "estimated_tokens": 2_000_000, "estimated_cost_usd": 2.4}
+        data["labeling"] = {"estimated_model_calls": 1200, "estimated_judge_calls": 0, "estimated_cost_usd": 0.42}
+        text = str(grad.Plan.from_api(data))
+        self.assertIn("Teacher     qwen/qwen3-32b: ~2.0M tokens, ~$2.40", text)
+        self.assertIn("Labeling    1,200 model · 0 judge calls, ~$0.42", text)
         for adapter, expected in (({"kind": "encoder_full"}, "full encoder"), ({"kind": "lora", "rank": 8, "alpha": 32, "merge_on_export": True}, "merge_on_export"), (None, "—"), ({"kind": "frozen_head"}, "frozen_head")):
             data["resolved_config"]["adapter"] = adapter
             self.assertIn(expected, str(grad.Plan.from_api(data)))

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { adapters, Context, GradUsageError, Judge, losses, optim, pooling, Recipe, recipes, Rubric, Scorer, splits, Trajectory, validators, type ScoreInput } from "../src/index.js";
+import { adapters, Context, GradUsageError, Judge, losses, optim, pooling, Recipe, recipes, Rubric, rollouts, Scorer, splits, Trajectory, validators, type ScoreInput } from "../src/index.js";
 
 const spec = (recipe: Recipe) => recipe.toSpec();
 
@@ -83,6 +83,30 @@ describe("recipes", () => {
     ).toEqual({ kind: "cartridge", numTokens: 512, teacher: "qwen/qwen3-32b", adapter: { kind: "prefix_kv", numTokens: 512 }, contextText: "API docs" });
     expect(await spec(recipes.cartridge({ context: Context.fromText("x") }))).toEqual({ kind: "cartridge", contextText: "x" });
     expect(adapters.lora()).toEqual({ kind: "lora" });
+  });
+
+  it("builds distillation and reward-model recipes", async () => {
+    expect(await spec(recipes.distill({ model: "qwen/qwen3-4b", teacher: "qwen/qwen3-32b" }))).toEqual({ kind: "distill", model: "qwen/qwen3-4b", teacher: "qwen/qwen3-32b" });
+    expect(
+      await spec(recipes.distill({ teacher: "t/m", rollout: rollouts.onPolicy({ maxNewTokens: "auto" }), loss: losses.topKKLDistill({ topK: 16 }), context: Context.fromText("doc") })),
+    ).toEqual({ kind: "distill", teacher: "t/m", rollout: { kind: "on_policy" }, loss: { kind: "top_k_kl_distill", topK: 16 }, contextText: "doc" });
+    expect(await spec(recipes.distill({ teacher: { name: "big", version: "1" }, rollout: rollouts.offPolicy() }))).toEqual({
+      kind: "distill",
+      teacher: "big@1",
+      rollout: { kind: "off_policy" },
+    });
+    expect(() => recipes.distill({} as never)).toThrow(/needs teacher/);
+    expect(() => recipes.distill({ teacher: "t", loss: losses.crossEntropy() })).toThrow(/top_k_kl_distill/);
+    expect(() => recipes.distill({ teacher: "t", rollout: rollouts.offPolicy(), loss: losses.topKKLDistill() })).toThrow(/cross_entropy/);
+    expect(() => recipes.distill({ teacher: "t", rollout: rollouts.offPolicy(), context: Context.fromText("x") })).toThrow(/on-policy/);
+    expect(await spec(recipes.rewardModel())).toEqual({ kind: "reward" });
+    expect(await spec(recipes.rewardModel({ model: "qwen/qwen3-8b", adapter: adapters.lora({ rank: 8 }), rubric: "resolved" }))).toEqual({
+      kind: "reward",
+      model: "qwen/qwen3-8b",
+      adapter: { kind: "lora", rank: 8 },
+      rubric: "resolved",
+    });
+    expect(() => recipes.rewardModel({ beta: 0.1 } as never)).toThrow(/does not support 'beta'/);
   });
 
   it("reads Context.fromFile from disk when the run is submitted", async () => {

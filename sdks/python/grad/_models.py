@@ -406,6 +406,10 @@ class Plan(APIObject):
     estimated_cost_usd: float = 0.0
     price_per_million_tokens: float = 0.0
     trained_token_fraction: float = 0.0
+    labeling: dict[str, Any] | None = None
+    """The labeling eval that runs first (router Judge rubrics, off-policy distillation), billed as an eval."""
+    teacher: dict[str, Any] | None = None
+    """On-policy distillation: the teacher's scoring tokens and cost (included in the estimate)."""
     warnings: list[str] = field(default_factory=list)
     max_cost_usd: float | None = None
 

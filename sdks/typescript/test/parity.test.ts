@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { adapters, Context, Judge, losses, optim, pooling, recipes, Scorer, splits, validators, type Grad } from "../src/index.js";
+import { adapters, Context, Judge, losses, optim, pooling, recipes, rollouts, Scorer, splits, validators, type Grad } from "../src/index.js";
 import type { EvalRun, PlanEvalResponse, Run } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
@@ -74,6 +74,30 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
     }),
   plan_embedding: () => grad.runs.plan({ dataset: "pairs", name: "embedding-params", recipe: recipes.embedding({ model: "test/tiny-bert", pool: pooling.cls(), temp: 0.1 }) }),
   plan_decision: () => grad.runs.plan({ dataset: "decisions", name: "decision", recipe: recipes.decisionModel() }),
+  plan_distill: () =>
+    grad.runs.plan({
+      dataset: "support-prompts",
+      name: "distill-params",
+      recipe: recipes.distill({
+        model: "test/tiny-qwen3",
+        teacher: "test/tiny-qwen3-teacher",
+        rollout: rollouts.onPolicy({ maxNewTokens: 64 }),
+        loss: losses.topKKLDistill({ topK: 16 }),
+        context: Context.fromText("Refunds take 30 days."),
+      }),
+    }),
+  plan_distill_off_policy: () =>
+    grad.runs.plan({
+      dataset: "support-prompts",
+      name: "distill-off",
+      recipe: recipes.distill({ teacher: artifact, rollout: rollouts.offPolicy({ maxNewTokens: 128 }), loss: losses.crossEntropy() }),
+    }),
+  plan_reward: () =>
+    grad.runs.plan({
+      dataset: "sql-preferences",
+      name: "sql-verifier",
+      recipe: recipes.rewardModel({ model: "test/tiny-qwen3", adapter: adapters.frozenHead(), rubric: "resolved" }),
+    }),
   create_eval: async () =>
     grad.evals.create(
       {

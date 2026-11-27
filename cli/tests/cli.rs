@@ -857,6 +857,98 @@ fn train_dry_run_prints_the_plan_and_sends_the_recipe() {
 }
 
 #[test]
+fn train_distill_and_reward_flags_and_teacher_costs() {
+    let srv = MockServer::start(|r| match r.path() {
+        "/v1/runs/plan" => {
+            let mut plan = plan_obj();
+            plan["teacher"] = json!({"model": "qwen/qwen3-32b", "price_per_million_tokens": 1.2,
+                "estimated_tokens": 2_500_000, "estimated_cost_usd": 3.0});
+            plan["labeling"] = json!({"estimated_model_calls": 1200, "estimated_judge_calls": 0,
+                "estimated_cost_usd": 0.42});
+            Reply::json(200, plan)
+        }
+        _ => Reply::problem(404, "not_found", "nope"),
+    });
+    let sb = Sandbox::new("distill");
+    let u = Some(srv.url.as_str());
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "--dataset",
+            "support-prompts",
+            "--name",
+            "d",
+            "--recipe",
+            "distill",
+            "--model",
+            "qwen/qwen3-4b",
+            "--teacher",
+            "qwen/qwen3-32b",
+            "--rollout",
+            "off-policy",
+            "--max-new-tokens",
+            "64",
+            "--dry-run",
+        ],
+    );
+    expect(&r, 0);
+    for needle in [
+        "teacher   : qwen/qwen3-32b: ~2.5M tokens, $3.00",
+        "1,200 model + 0 judge calls, $0.42",
+    ] {
+        assert!(
+            r.stdout.contains(needle),
+            "missing {:?}:\n{}",
+            needle,
+            r.stdout
+        );
+    }
+    let body = srv.last("POST", "/v1/runs/plan").unwrap().json();
+    assert_eq!(
+        body["recipe"],
+        json!({"kind": "distill", "model": "qwen/qwen3-4b", "teacher": "qwen/qwen3-32b",
+            "rollout": {"kind": "off_policy", "max_new_tokens": 64}})
+    );
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "--dataset",
+            "sql-preferences",
+            "--name",
+            "v",
+            "--recipe",
+            "reward-model",
+            "--score",
+            "resolved",
+            "--dry-run",
+        ],
+    );
+    expect(&r, 0);
+    let body = srv.last("POST", "/v1/runs/plan").unwrap().json();
+    assert_eq!(
+        body["recipe"],
+        json!({"kind": "reward", "rubric": "resolved"})
+    );
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "--dataset",
+            "d",
+            "--name",
+            "n",
+            "--recipe",
+            "distill",
+            "--max-new-tokens",
+            "5",
+        ],
+    );
+    expect(&r, 2);
+}
+
+#[test]
 fn train_wait_streams_metrics_and_prints_the_readout() {
     let srv = api();
     let sb = Sandbox::new("wait");

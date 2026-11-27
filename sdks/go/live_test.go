@@ -386,4 +386,27 @@ func TestLiveCloudRouterWithTorch(t *testing.T) {
 	if status.FeedbackCount < 1 {
 		t.Fatalf("status %+v", status)
 	}
+
+	// docs: recipes/distillation.mdx and recipes/reward-models.mdx (tiny student and teacher)
+	var prompts, pairs []grad.Trajectory
+	for i := 0; i < 12; i++ {
+		prompts = append(prompts, grad.TrajectoryFromMessages([]grad.Message{{Role: "user", Content: fmt.Sprintf("How do I rotate API key %d?", i)}}))
+		pairs = append(pairs, grad.Trajectory{Prompt: fmt.Sprintf("Count users %d", i), Chosen: "SELECT count(*) FROM users;", Rejected: "no idea"})
+	}
+	promptsDS := must(client.Datasets.Push(ctx, "support-prompts", prompts))(t)
+	distill := grad.DistillRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 4}, Teacher: "test/tiny-qwen3-teacher", MaxNewTokens: 4}
+	plan := must(client.Runs.Plan(ctx, grad.RunParams{Dataset: promptsDS, Name: "support-distilled", Recipe: distill}))(t)
+	if plan.Teacher == nil || plan.Teacher.Model != "test/tiny-qwen3-teacher" {
+		t.Fatalf("plan teacher %+v", plan.Teacher)
+	}
+	distilled := must(client.Runs.Create(ctx, grad.RunParams{Dataset: promptsDS, Name: "support-distilled", Recipe: distill}).Wait(ctx))(t)
+	if distilled.Artifact == nil || *distilled.Artifact.Format != "peft_lora" || distilled.EvalReport.MetricName != "eval_kl" {
+		t.Fatalf("distill run %+v", distilled.Run)
+	}
+	pairsDS := must(client.Datasets.Push(ctx, "sql-preferences", pairs))(t)
+	verifier := must(client.Runs.Create(ctx, grad.RunParams{Dataset: pairsDS, Name: "sql-verifier",
+		Recipe: grad.RewardModelRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 4}}}).Wait(ctx))(t)
+	if verifier.Artifact == nil || *verifier.Artifact.Format != "reward_bundle" || verifier.EvalReport.MetricName != "preference_accuracy" {
+		t.Fatalf("reward run %+v", verifier.Run)
+	}
 }

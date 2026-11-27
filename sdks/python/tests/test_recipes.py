@@ -194,22 +194,59 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SFTRecipe(thinking="maybe")  # type: ignore[arg-type]
 
-    def test_wave2_recipes_are_typed_but_refuse_to_submit(self) -> None:
-        recipes = [
-            DistillRecipe(model="qwen/qwen3-4b", teacher="qwen/qwen3-32b", rollout=OnPolicy(), loss=losses.TopKKLDistill(), context=Context.from_text("x")),
-            DistillRecipe(teacher="t", rollout=OffPolicy()),
-            RewardModelRecipe(model="qwen/qwen3-8b"),
-            GRPORecipe(model="qwen/qwen3-4b", rubric=grad.Rubric([grad.Judge(model="m")]), group_size=16, kl_coef=0.01, max_staleness=1, advantage=grad.advantages.GroupStd()),
-        ]
-        for recipe in recipes:
-            with self.subTest(recipe=type(recipe).__name__), self.assertRaises(grad.NotAvailableInV0Error) as ctx:
-                coerce_recipe(recipe)
-            self.assertIn("Wave 2", str(ctx.exception))
+    def test_grpo_is_typed_but_refuses_to_submit(self) -> None:
+        recipe = GRPORecipe(model="qwen/qwen3-4b", rubric=grad.Rubric([grad.Judge(model="m")]), group_size=16, kl_coef=0.01, max_staleness=1, advantage=grad.advantages.GroupStd())
+        with self.assertRaises(grad.NotAvailableInV0Error) as ctx:
+            coerce_recipe(recipe)
+        self.assertIn("Wave 2", str(ctx.exception))
         self.assertEqual(GRPORecipe().max_new_tokens, "auto")
         self.assertEqual(GRPORecipe().temperature, 1.0)
+
+    def test_distill_recipe_wire_fields(self) -> None:
+        on = DistillRecipe(model="qwen/qwen3-4b", teacher="qwen/qwen3-32b", rollout=OnPolicy(max_new_tokens=128), loss=losses.TopKKLDistill(top_k=16), context=Context.from_text("x"))
+        self.assertEqual(
+            on.to_spec(),
+            {
+                "kind": "distill",
+                "model": "qwen/qwen3-4b",
+                "teacher": "qwen/qwen3-32b",
+                "rollout": {"kind": "on_policy", "max_new_tokens": 128},
+                "loss": {"kind": "top_k_kl_distill", "top_k": 16},
+                "context_text": "x",
+            },
+        )
+        art = grad.Artifact.from_api({"id": "big@1", "name": "big", "version": "1"})
+        off = DistillRecipe(teacher=art, rollout=OffPolicy(max_new_tokens=64), loss=losses.CrossEntropy())
+        self.assertEqual(off.to_spec(), {"kind": "distill", "teacher": "big@1", "rollout": {"kind": "off_policy", "max_new_tokens": 64}, "loss": {"kind": "cross_entropy"}})
+        self.assertEqual(DistillRecipe(teacher="t", rollout=OnPolicy()).to_spec()["rollout"], {"kind": "on_policy"})
+        self.assertEqual(DistillRecipe(teacher="t", rollout={"kind": "off_policy"}).to_spec()["rollout"], {"kind": "off_policy"})
+        self.assertEqual(DistillRecipe(teacher="t", context="doc").to_spec()["context_text"], "doc")
         with self.assertRaises(ValueError):
             DistillRecipe()
+        for bad in (
+            lambda: DistillRecipe(teacher="t", rollout={"kind": "x"}),
+            lambda: DistillRecipe(teacher="t", rollout=OffPolicy(), context="doc"),
+            lambda: OnPolicy(max_new_tokens=0),
+            lambda: OffPolicy(max_new_tokens=True),  # type: ignore[arg-type]
+        ):
+            with self.assertRaises(ValueError):
+                bad()
+        with self.assertRaises(grad.NotAvailableInV0Error):
+            DistillRecipe(teacher="t", loss=losses.CrossEntropy())
+        with self.assertRaises(grad.NotAvailableInV0Error):
+            DistillRecipe(teacher="t", rollout=OffPolicy(), loss=losses.TopKKLDistill())
+        with self.assertRaises(TypeError):
+            DistillRecipe(teacher="t", context=3)  # type: ignore[arg-type]
         self.assertIn("teacher", recipe_fields(DistillRecipe))
+
+    def test_reward_model_recipe_wire_fields(self) -> None:
+        self.assertEqual(RewardModelRecipe().to_spec(), {"kind": "reward"})
+        self.assertEqual(
+            RewardModelRecipe(model="qwen/qwen3-8b", adapter=adapters.LoRA(rank=8), rubric="resolved").to_spec(),
+            {"kind": "reward", "model": "qwen/qwen3-8b", "adapter": {"kind": "lora", "rank": 8, "alpha": 32, "merge_on_export": False}, "rubric": "resolved"},
+        )
+        with self.assertRaises(grad.NotAvailableInV0Error):
+            RewardModelRecipe(rubric=grad.Judge(model="m"))  # type: ignore[arg-type]
 
     def test_dict_recipes_are_checked_against_the_contract(self) -> None:
         spec, split = coerce_recipe({"kind": "sft", "lr": 1e-4, "split": splits.Random(0.2, seed=1), "adapter": adapters.LoRA(rank=8)})

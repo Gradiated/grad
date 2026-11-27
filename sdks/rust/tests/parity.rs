@@ -118,6 +118,46 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             let req = PlanRunRequest::new("docs", "cartridge-params", recipe);
             c.runs().plan(&req).await.map(drop)
         }
+        "plan_distill" => {
+            let recipe = RecipeSpec {
+                teacher: model("test/tiny-qwen3-teacher"),
+                rollout: Some(recipes::on_policy(Some(64))),
+                loss: Some(LossSpec {
+                    kind: LossSpecKind::TopKKlDistill,
+                    top_k: Some(16),
+                    ..Default::default()
+                }),
+                context_text: model("Refunds take 30 days."),
+                ..RecipeSpec::new(RecipeKind::Distill).model("test/tiny-qwen3")
+            };
+            let req = PlanRunRequest::new("support-prompts", "distill-params", recipe);
+            c.runs().plan(&req).await.map(drop)
+        }
+        "plan_distill_off_policy" => {
+            let recipe = RecipeSpec {
+                teacher: model("support-sft@2026-11-27-1"),
+                rollout: Some(recipes::off_policy(Some(128))),
+                loss: Some(LossSpec {
+                    kind: LossSpecKind::CrossEntropy,
+                    ..Default::default()
+                }),
+                ..RecipeSpec::new(RecipeKind::Distill)
+            };
+            let req = PlanRunRequest::new("support-prompts", "distill-off", recipe);
+            c.runs().plan(&req).await.map(drop)
+        }
+        "plan_reward" => {
+            let recipe = RecipeSpec {
+                adapter: Some(AdapterSpec {
+                    kind: AdapterSpecKind::FrozenHead,
+                    ..Default::default()
+                }),
+                rubric: Some(json!("resolved")),
+                ..RecipeSpec::new(RecipeKind::Reward).model("test/tiny-qwen3")
+            };
+            let req = PlanRunRequest::new("sql-preferences", "sql-verifier", recipe);
+            c.runs().plan(&req).await.map(drop)
+        }
         "plan_embedding" => {
             let recipe = RecipeSpec {
                 temp: Some(0.1),

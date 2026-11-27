@@ -260,6 +260,10 @@ func TestRecipesSendOnlyUserSetFields(t *testing.T) {
 		{grad.EmbeddingRecipe{Temp: 0.03}, `{"kind":"embedding","temp":0.03}`},
 		{grad.DecisionModelRecipe{Common: grad.Common{Adapter: grad.FrozenHead{}}}, `{"kind":"decision","adapter":{"kind":"frozen_head"}}`},
 		{grad.RawRecipe{Kind: "sft", BatchSize: grad.Int(8)}, `{"kind":"sft","batch_size":8}`},
+		{grad.DistillRecipe{Common: grad.Common{Model: "qwen/qwen3-4b"}, Teacher: "qwen/qwen3-32b"}, `{"kind":"distill","model":"qwen/qwen3-4b","teacher":"qwen/qwen3-32b"}`},
+		{grad.DistillRecipe{Teacher: "big@1", OffPolicy: true}, `{"kind":"distill","teacher":"big@1","rollout":{"kind":"off_policy"},"loss":{"kind":"cross_entropy"}}`},
+		{grad.RewardModelRecipe{}, `{"kind":"reward"}`},
+		{grad.RewardModelRecipe{Common: grad.Common{Model: "qwen/qwen3-8b", Adapter: grad.LoRA{Rank: 8}}, Rubric: "resolved"}, `{"kind":"reward","model":"qwen/qwen3-8b","adapter":{"kind":"lora","rank":8},"rubric":"resolved"}`},
 	}
 	for _, tc := range cases {
 		if got := recipeJSON(t, tc.recipe); got != tc.want {
@@ -273,6 +277,10 @@ func TestRecipesSendOnlyUserSetFields(t *testing.T) {
 		grad.RouterRecipe{Rubric: grad.Judge{Name: "j", Model: "m"}},
 		grad.RouterRecipe{Rubric: 42},
 		grad.CartridgeRecipe{Context: grad.ContextFromFile(filepath.Join(t.TempDir(), "missing"))},
+		grad.DistillRecipe{},
+		grad.DistillRecipe{Teacher: "t", OffPolicy: true, TopK: 8},
+		grad.DistillRecipe{Teacher: "t", OffPolicy: true, Context: grad.ContextFromText("x")},
+		grad.DistillRecipe{Teacher: "t", Common: grad.Common{LR: 1e-3, Optimizer: &grad.AdamW{LR: 1e-4}}},
 	} {
 		if _, err := bad.RecipeSpec(); err == nil {
 			t.Errorf("%T accepted", bad)

@@ -74,6 +74,18 @@ pub fn build_request(a: &TrainArgs) -> CliResult<PlanRunRequest> {
         in_range(a.max_quality_drop, "--max-quality-drop", 0.0, 1.0)?.map(|x| json!(x)),
     );
     set("num_tokens", a.num_tokens.map(|x| json!(x)));
+    set("teacher", a.teacher.clone().map(Value::String));
+    set(
+        "rollout",
+        a.rollout.as_ref().map(|r| {
+            let mut v = json!({"kind": r.replace('-', "_")});
+            if let Some(n) = a.max_new_tokens {
+                v["max_new_tokens"] = json!(n);
+            }
+            v
+        }),
+    );
+    set("rubric", a.score.clone().map(Value::String));
     if let Some(path) = &a.context_file {
         let text = std::fs::read_to_string(path)
             .map_err(|e| CliError::usage(format!("--context-file {}: {}", path.display(), e)))?;
@@ -163,6 +175,29 @@ fn print_plan(out: &Out, req: &PlanRunRequest, plan: &PlanRunResponse) {
     ];
     if let Ok(adapter) = serde_json::to_value(&rc.adapter) {
         rows.push(("adapter", compact_json(&adapter)));
+    }
+    if let Some(t) = &plan.teacher {
+        rows.push((
+            "teacher",
+            format!(
+                "{}: ~{} tokens, {} at {}/1M (included above)",
+                t.model,
+                compact(t.estimated_tokens),
+                usd(t.estimated_cost_usd),
+                usd(t.price_per_million_tokens)
+            ),
+        ));
+    }
+    if let Some(l) = &plan.labeling {
+        rows.push((
+            "labeling",
+            format!(
+                "{} model + {} judge calls, {} (billed as an eval, included above)",
+                thousands(l.estimated_model_calls),
+                thousands(l.estimated_judge_calls),
+                usd(l.estimated_cost_usd)
+            ),
+        ));
     }
     for (k, v) in rows {
         out.line(format!("  {:<10}: {}", k, v));

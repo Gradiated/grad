@@ -14,7 +14,18 @@ from _fakes import fixture, json_reply, make_client
 
 import grad
 from grad import Context, Judge, validators
-from grad.recipes import CartridgeRecipe, DecisionModelRecipe, DPORecipe, EmbeddingRecipe, RouterRecipe, SFTRecipe
+from grad.recipes import (
+    CartridgeRecipe,
+    DecisionModelRecipe,
+    DistillRecipe,
+    DPORecipe,
+    EmbeddingRecipe,
+    OffPolicy,
+    OnPolicy,
+    RewardModelRecipe,
+    RouterRecipe,
+    SFTRecipe,
+)
 from grad.specs import adapters, losses, optim, pooling, splits
 
 PARITY = fixture("sdk-parity.json")
@@ -59,6 +70,15 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         loss=losses.TopKKLDistill(top_k=7),
         max_new_tokens=5,
     )
+    distill = DistillRecipe(
+        model="test/tiny-qwen3",
+        teacher="test/tiny-qwen3-teacher",
+        rollout=OnPolicy(max_new_tokens=64),
+        loss=losses.TopKKLDistill(top_k=16),
+        context=Context.from_text("Refunds take 30 days."),
+    )
+    off_policy = DistillRecipe(teacher=artifact, rollout=OffPolicy(max_new_tokens=128), loss=losses.CrossEntropy())
+    reward = RewardModelRecipe(model="test/tiny-qwen3", adapter=adapters.FrozenHead(), rubric="resolved")
     return {
         "plan_sft_every_param": lambda: client.runs.plan("support", name="sft-params", recipe=sft, max_cost_usd=5),
         "create_dpo_from_artifact": lambda: client.runs.create("prefs", name="dpo-continued", recipe=DPORecipe(model=artifact, beta=0.3), idempotency_key="parity-run-key"),
@@ -66,6 +86,9 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "plan_cartridge": lambda: client.runs.plan("docs", name="cartridge-params", recipe=cartridge),
         "plan_embedding": lambda: client.runs.plan("pairs", name="embedding-params", recipe=EmbeddingRecipe(model="test/tiny-bert", pool=pooling.CLS(), temp=0.1)),
         "plan_decision": lambda: client.runs.plan("decisions", name="decision", recipe=DecisionModelRecipe()),
+        "plan_distill": lambda: client.runs.plan("support-prompts", name="distill-params", recipe=distill),
+        "plan_distill_off_policy": lambda: client.runs.plan("support-prompts", name="distill-off", recipe=off_policy),
+        "plan_reward": lambda: client.runs.plan("sql-preferences", name="sql-verifier", recipe=reward),
         "create_eval": lambda: client.evals.create(
             name="parity-eval",
             models=["test/tiny-qwen3", artifact],

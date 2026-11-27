@@ -91,6 +91,14 @@ export const recipesPages = async () => {
   const judge = new Judge({ name: "resolved", model: "qwen/qwen3-32b", prompt: "Did the answer resolve the ticket?" });
   await grad.runs.create({ dataset: "support-traces", name: "support-router", recipe: recipes.router({ models: ["qwen/qwen3-8b", "qwen/qwen3-32b"], rubric: judge }) }).wait();
   void new Scorer("correct", { fn: validators.numericMatch({ field: "answer" }) });
+  const prompts2 = await grad.datasets.get("support-prompts");
+  const distilled = await grad.runs
+    .create({ dataset: prompts2, name: "support-4b-distilled", recipe: recipes.distill({ model: "qwen/qwen3-4b", teacher: "qwen/qwen3-32b" }) })
+    .wait();
+  console.log(distilled.artifact.id, distilled.evalReport);
+  const pairsDs = await grad.datasets.get("sql-preferences");
+  const verifier = await grad.runs.create({ dataset: pairsDs, name: "sql-verifier", recipe: recipes.rewardModel({ model: "qwen/qwen3-8b" }) }).wait();
+  console.log(verifier.artifact.id, verifier.evalReport?.preferenceAccuracy);
 };
 
 export const trajectories = async () => {

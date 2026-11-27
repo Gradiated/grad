@@ -343,6 +343,73 @@ func (r CartridgeRecipe) RecipeSpec() (RecipeSpec, error) {
 	return s, r.Context.apply(&s)
 }
 
+// DistillRecipe trains a LoRA student on a smaller base to copy a teacher on your prompts.
+type DistillRecipe struct {
+	Common
+	// Teacher is required: a catalog model sharing the student's tokenizer, or, with
+	// OffPolicy, also an artifact ("name@version") or any model the inference endpoint serves.
+	Teacher string
+	// OffPolicy has the teacher answer each prompt once through the inference endpoint (a
+	// labeling eval, billed as an eval) and trains the student on those answers with
+	// cross-entropy. The default, on-policy, has the student write answers that the teacher scores.
+	OffPolicy bool
+	// MaxNewTokens is the answer length (0: auto on-policy, 1024 off-policy).
+	MaxNewTokens int
+	// TopK is the on-policy top-k KL loss's k (default 32).
+	TopK int
+	// Context is read by the teacher only (on-policy).
+	Context Context
+}
+
+// RecipeSpec implements Recipe.
+func (r DistillRecipe) RecipeSpec() (RecipeSpec, error) {
+	s, err := r.spec(generated.RecipeKindDistill)
+	if err != nil {
+		return s, err
+	}
+	if r.Teacher == "" {
+		return s, fmt.Errorf("grad: DistillRecipe needs a Teacher")
+	}
+	s.Teacher = ptr(r.Teacher)
+	kind := generated.RolloutSpecKindOnPolicy
+	if r.OffPolicy {
+		if r.TopK > 0 {
+			return s, fmt.Errorf("grad: DistillRecipe.TopK is the on-policy KL loss; off-policy trains with cross-entropy")
+		}
+		if r.Context != (Context{}) {
+			return s, fmt.Errorf("grad: DistillRecipe.Context is read by the teacher on-policy; drop OffPolicy")
+		}
+		kind = generated.RolloutSpecKindOffPolicy
+		s.Loss = &generated.LossSpec{Kind: generated.LossSpecKindCrossEntropy}
+	} else if r.TopK > 0 {
+		s.Loss = &generated.LossSpec{Kind: generated.LossSpecKindTopKKLDistill, TopK: ptr(r.TopK)}
+	}
+	if r.OffPolicy || r.MaxNewTokens > 0 {
+		s.Rollout = &generated.RolloutSpec{Kind: kind}
+		if r.MaxNewTokens > 0 {
+			s.Rollout.MaxNewTokens = r.MaxNewTokens
+		}
+	}
+	return s, r.Context.apply(&s)
+}
+
+// RewardModelRecipe trains a scalar reward head on chosen/rejected pairs (scores are sigmoid(reward) in [0, 1]).
+type RewardModelRecipe struct {
+	Common
+	// Rubric optionally names a score in [0, 1] on records ending in an assistant turn,
+	// trained pointwise next to the pairs.
+	Rubric string
+}
+
+// RecipeSpec implements Recipe.
+func (r RewardModelRecipe) RecipeSpec() (RecipeSpec, error) {
+	s, err := r.spec(generated.RecipeKindReward)
+	if r.Rubric != "" {
+		s.Rubric = r.Rubric
+	}
+	return s, err
+}
+
 // EmbeddingRecipe fine-tunes an encoder on query/positive/negatives records.
 type EmbeddingRecipe struct {
 	Common

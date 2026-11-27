@@ -1,4 +1,4 @@
-import type { AdapterSpec, LossSpec, OptimizerSpec, PoolingSpec, RecipeKind, RecipeSpec, SplitSpec } from "./generated/models.js";
+import type { AdapterSpec, LossSpec, OptimizerSpec, PoolingSpec, RecipeKind, RecipeSpec, RolloutSpec, SplitSpec } from "./generated/models.js";
 import { isNodeRuntime } from "./core.js";
 import { GradUsageError } from "./errors.js";
 import { toRubric, type RubricInput } from "./rubrics.js";
@@ -46,6 +46,20 @@ export const losses = {
   dpo: (options: { beta?: number } = {}) => ({ kind: "dpo" as const, ...options }),
   infoNCE: (options: { temp?: number } = {}) => ({ kind: "infonce" as const, ...options }),
   topKKLDistill: (options: { topK?: number } = {}): LossSpec => ({ kind: "top_k_kl_distill", ...options }),
+};
+
+/** Distillation rollouts (`recipes.distill({ rollout })`). */
+export const rollouts = {
+  /** The student writes each answer (default "auto": sized from your records) and the teacher scores those tokens. */
+  onPolicy: (options: { maxNewTokens?: number | "auto" } = {}): RolloutSpec => ({
+    kind: "on_policy",
+    ...(options.maxNewTokens !== undefined && options.maxNewTokens !== "auto" ? { maxNewTokens: options.maxNewTokens } : {}),
+  }),
+  /** The teacher answers each prompt once through the inference endpoint (a labeling eval) and the student trains on them. */
+  offPolicy: (options: { maxNewTokens?: number } = {}): RolloutSpec => ({
+    kind: "off_policy",
+    ...(options.maxNewTokens !== undefined ? { maxNewTokens: options.maxNewTokens } : {}),
+  }),
 };
 
 /** AdamW settings (`lr` here is the same as the recipe's `lr`). */
@@ -231,6 +245,33 @@ export const recipes = {
       },
       options.context,
     );
+  },
+  /**
+   * Distillation: a LoRA student learns a teacher on your prompts. On-policy (default) the teacher
+   * must be a catalog model sharing the student's tokenizer; off-policy it can be an Artifact or any
+   * model the inference endpoint serves.
+   */
+  distill: (
+    options: CommonRecipeOptions & { teacher: ModelRef; rollout?: RolloutSpec; loss?: LossSpec; context?: Context },
+  ): Recipe => {
+    const fields = build("distill", options, ["teacher", "rollout", "loss", "context"]);
+    if (options.teacher === undefined) throw new GradUsageError("recipes.distill() needs teacher: a catalog model or an Artifact.", "invalid_recipe");
+    const offPolicy = options.rollout?.kind === "off_policy";
+    const expected = offPolicy ? "cross_entropy" : "top_k_kl_distill";
+    if (options.loss !== undefined && options.loss.kind !== expected) {
+      throw usage(`recipes.distill(): ${offPolicy ? "off" : "on"}-policy distillation trains with loss kind '${expected}', not '${options.loss.kind}'.`);
+    }
+    if (options.context !== undefined && offPolicy) throw usage("recipes.distill(): context is read by the teacher on-policy; drop rollout: rollouts.offPolicy().");
+    return new Recipe(
+      "distill",
+      { ...fields, teacher: modelId(options.teacher), ...set("rollout", options.rollout), ...set("loss", options.loss) },
+      options.context,
+    );
+  },
+  /** Reward model: a scalar head trained on chosen/rejected pairs (and, with `rubric`, scored answers). */
+  rewardModel: (options: CommonRecipeOptions & { rubric?: string } = {}): Recipe => {
+    const fields = build("rewardModel", options, ["rubric"]);
+    return new Recipe("reward", { ...fields, ...set("rubric", options.rubric) });
   },
   /** Embedding model (full encoder fine-tune; default baai/bge-small-en-v1.5). */
   embedding: (options: CommonRecipeOptions & { temp?: number; loss?: ReturnType<typeof losses.infoNCE>; pool?: PoolingSpec } = {}): Recipe => {

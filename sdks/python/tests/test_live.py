@@ -27,9 +27,10 @@ from _stack import Stack, live_skip_reason
 
 import grad
 from grad import Grad, Rubric, Scorer, validators
-from grad.recipes import RouterRecipe, SFTRecipe
+from grad.recipes import DistillRecipe, OffPolicy, OnPolicy, RewardModelRecipe, RouterRecipe, SFTRecipe
 
 LLM = "test/tiny-qwen3"
+TEACHER = "test/tiny-qwen3-teacher"
 
 SQL_RECORDS = [
     {
@@ -297,6 +298,38 @@ class CloudTorchLiveTests(_LiveCase):
         self.assertEqual(again.id, sft.id, "the same key replays the first create instead of starting a run")
         plan = client.runs.plan(dataset=ds, name="sql-helper-2", recipe=SFTRecipe(model=sft.artifact))
         self.assertEqual(plan.resolved_config["base_artifact"]["id"], sft.artifact.id)
+
+    def test_distill_and_reward_model(self) -> None:
+        # docs: recipes/distillation.mdx and recipes/reward-models.mdx (tiny student/teacher)
+        client = Grad()
+        prompts = client.datasets.push("support-prompts", [{"messages": [{"role": "user", "content": f"How do I rotate API key {i}?"}]} for i in range(12)])
+        recipe = DistillRecipe(model=LLM, teacher=TEACHER, rollout=OnPolicy(max_new_tokens=4), batch_size=4, thinking="off")
+        plan = client.runs.plan(dataset=prompts, name="support-distilled", recipe=recipe)
+        assert plan.teacher is not None
+        self.assertEqual(plan.teacher["model"], TEACHER)
+        self.assertGreater(plan.estimated_cost_usd, plan.teacher["estimated_cost_usd"])
+        run = client.runs.create(dataset=prompts, name="support-distilled", recipe=recipe).wait(timeout=600)
+        self.assertEqual((run.status, run.artifact.format), ("completed", "peft_lora"))
+        assert run.eval_report is not None
+        self.assertEqual(run.eval_report.metric_name, "eval_kl")
+        self.assertIsNotNone(run.eval_report.eval_kl)
+
+        # Off-policy: the teacher answers through the inference endpoint first (a labeling eval).
+        off = DistillRecipe(model=LLM, teacher=TEACHER, rollout=OffPolicy(max_new_tokens=16), batch_size=4)
+        self.assertIsNotNone(client.runs.plan(dataset=prompts, name="support-off", recipe=off).labeling)
+        off_run = client.runs.create(dataset=prompts, name="support-off", recipe=off).wait(timeout=600)
+        self.assertEqual(off_run.status, "completed")
+        self.assertIsNotNone(off_run.resolved_config["label_eval_id"])
+
+        pairs = client.datasets.push("sql-preferences", [{"prompt": f"Count users {i}", "chosen": "SELECT count(*) FROM users;", "rejected": "no idea"} for i in range(16)])
+        verifier = client.runs.create(dataset=pairs, name="sql-verifier", recipe=RewardModelRecipe(model=LLM, batch_size=4)).wait(timeout=600)
+        self.assertEqual((verifier.status, verifier.artifact.format), ("completed", "reward_bundle"))
+        assert verifier.eval_report is not None
+        self.assertEqual(verifier.eval_report.metric_name, "preference_accuracy")
+        self.assertIsNotNone(verifier.eval_report.preference_accuracy)
+        bundle = verifier.artifact.download(self.tmp / "sql-verifier")
+        self.assertTrue((bundle / "reward_config.json").is_file())
+        self.assertTrue((bundle / "reward_head.safetensors").is_file())
 
 
 if __name__ == "__main__":
