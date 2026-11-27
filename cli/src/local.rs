@@ -4,7 +4,8 @@
 //! `$XDG_DATA_HOME/gradiated/local/docker-compose.yml` and uses published
 //! images, so it works from any directory. `--build` (or `--file`) uses a
 //! source checkout's `server/docker-compose.yml` instead. The published images
-//! are public on GHCR and pulled without a login; their tag defaults to
+//! are public on Docker Hub (`docker.io/gradiated/*`, mirrored on GHCR) and
+//! pulled without a login; their tag defaults to
 //! [`DEFAULT_IMAGE_TAG`] (`--image-tag` overrides it). The first `up`
 //! generates an admin key, a trainer key and the workspace-secrets key and
 //! stores them in the `local` profile; the server only ever sees the admin
@@ -289,7 +290,7 @@ async fn pull_images(
         })
         .stderr(Stdio::piped());
     ctx.out
-        .note(format!("Pulling ghcr.io/gradiated images tagged {}", tag));
+        .note(format!("Pulling docker.io/gradiated images tagged {}", tag));
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             CliError::general("docker_not_found", format!("'{}' not found", docker_bin()))
@@ -319,12 +320,16 @@ async fn pull_images(
     match classify_pull_failure(&output) {
         PullFailure::Denied => Err(CliError::general(
             "image_pull_denied",
-            format!("GHCR refused to serve the grad images tagged {}", tag),
+            format!(
+                "the registry refused to serve the grad images tagged {}",
+                tag
+            ),
         )
         .hint(
-            "The images are meant to be public, but they may still be private. If you have access, \
-             run `docker login ghcr.io -u <github-user>` with a token that has read:packages; \
-             otherwise build them from a grad checkout with `grad local up --build`.",
+            "The images are public on Docker Hub, so this is usually a stale or wrong login: run \
+             `docker logout` (or `docker login`) and retry, point GRAD_SERVER_IMAGE / \
+             GRAD_TRAINER_IMAGE at the ghcr.io/gradiated mirror, or build them from a grad \
+             checkout with `grad local up --build`.",
         )),
         PullFailure::NotFound => Err(CliError::general(
             "image_not_found",
@@ -754,9 +759,10 @@ mod tests {
         for (out, want) in [
             ("Error response from daemon: Head \"https://ghcr.io/v2/gradiated/grad-server/manifests/main\": unauthorized", Denied),
             ("grad-server Error response from daemon: denied", Denied),
+            ("Error response from daemon: pull access denied for gradiated/grad-server, repository does not exist or may require 'docker login'", Denied),
             ("Error response from daemon: manifest unknown", NotFound),
-            ("Error response from daemon: manifest for ghcr.io/gradiated/grad-server:9.9.9 not found: manifest unknown", NotFound),
-            ("dial tcp: lookup ghcr.io: no such host", Other),
+            ("Error response from daemon: manifest for docker.io/gradiated/grad-server:9.9.9 not found: manifest unknown", NotFound),
+            ("dial tcp: lookup registry-1.docker.io: no such host", Other),
         ] {
             assert_eq!(classify_pull_failure(out), want, "{out}");
         }

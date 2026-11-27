@@ -45,7 +45,7 @@ secrets:
 api:
   replicaCount: 2
   image:
-    repository: ghcr.io/gradiated/grad-server
+    repository: docker.io/gradiated/grad-server
     tag: "0.2.0-alpha.2"
     pullPolicy: IfNotPresent
   service:
@@ -122,7 +122,7 @@ models:
 # provider keys and HF tokens) run on the CPU `import` workers.
 workerDefaults:
   image:
-    repository: ghcr.io/gradiated/grad-trainer
+    repository: docker.io/gradiated/grad-trainer
     pullPolicy: IfNotPresent
   # With secrets.existingSecret: the Secret key holding a worker's API key
   # (override per pool with workers.<name>.apiKeySecretKey). The chart's own

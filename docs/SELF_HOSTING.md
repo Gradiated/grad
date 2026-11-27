@@ -24,13 +24,15 @@ grad local up --dev-models
 
 ### Images
 
-The images are public on GitHub Container Registry, so pulling them needs no login:
+The images are public on Docker Hub, so pulling them needs no login:
 
 | Image | Platforms | Tags |
 | --- | --- | --- |
-| `ghcr.io/gradiated/grad-server` | linux/amd64, linux/arm64 | `X.Y.Z`, `latest`, `main`, `sha-<7>` |
-| `ghcr.io/gradiated/grad-trainer` (CPU) | linux/amd64, linux/arm64 | `X.Y.Z`, `latest`, `main`, `sha-<7>` |
-| `ghcr.io/gradiated/grad-trainer` (CUDA) | linux/amd64 | `X.Y.Z-gpu`, `latest-gpu`, `main-gpu`, `sha-<7>-gpu` |
+| [`docker.io/gradiated/grad-server`](https://hub.docker.com/r/gradiated/grad-server) | linux/amd64, linux/arm64 | `X.Y.Z`, `latest`, `main`, `sha-<7>` |
+| [`docker.io/gradiated/grad-trainer`](https://hub.docker.com/r/gradiated/grad-trainer) (CPU) | linux/amd64, linux/arm64 | `X.Y.Z`, `latest`, `main`, `sha-<7>` |
+| [`docker.io/gradiated/grad-trainer`](https://hub.docker.com/r/gradiated/grad-trainer) (CUDA) | linux/amd64 | `X.Y.Z-gpu`, `latest-gpu`, `main-gpu`, `sha-<7>-gpu` |
+
+GitHub Container Registry mirrors every tag at `ghcr.io/gradiated/grad-server` and `ghcr.io/gradiated/grad-trainer` (the same build, so the same digests). To use the mirror, set `GRAD_SERVER_IMAGE` / `GRAD_TRAINER_IMAGE` / `GRAD_TRAINER_GPU_IMAGE` for `grad local up`, or `api.image.repository` and `workerDefaults.image.repository` in the Helm values.
 
 Every push to `main` that touches the server or trainer publishes `main` and `sha-<7>` (the commit's short SHA); the CUDA image is rebuilt on `main` only when the trainer changes. Each release publishes `X.Y.Z` and moves `latest` (prereleases don't). Every image carries an SBOM and a provenance attestation.
 

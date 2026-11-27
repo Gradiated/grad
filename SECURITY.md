@@ -23,7 +23,7 @@ window to ship a fix before you disclose it publicly.
 
 In scope: everything in this repository and the artifacts we publish from it (`grad-sdk` on
 PyPI and crates.io, `@gradiated/grad` on npm, `grad-cli`, the Go module, the
-`ghcr.io/gradiated/*` images and the Helm chart).
+`docker.io/gradiated/*` images and their `ghcr.io/gradiated/*` mirror, and the Helm chart).
 
 The hosted Gradiated Cloud service runs this code too, so a vulnerability here usually affects
 it as well. Report it the same way. Please don't test against other people's data or run load

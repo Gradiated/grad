@@ -2605,7 +2605,7 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let text = std::fs::read_to_string(&compose).unwrap();
     // A source build pulls `main`; release.yml bakes the version in (build.rs).
     assert!(text.contains(&format!(
-        "ghcr.io/gradiated/grad-server:{}",
+        "docker.io/gradiated/grad-server:{}",
         env!("GRAD_DEFAULT_IMAGE_TAG")
     )));
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
@@ -2830,7 +2830,7 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     );
     expect(&r, 0);
     let text = std::fs::read_to_string(&compose).unwrap();
-    assert!(text.contains("ghcr.io/gradiated/grad-trainer:sha-abc1234-gpu"));
+    assert!(text.contains("docker.io/gradiated/grad-trainer:sha-abc1234-gpu"));
     for bad in [
         vec!["local", "up", "--image-tag", "a\nb: c"],
         vec!["local", "up", "--image-tag", "main", "--build"],
@@ -2848,12 +2848,12 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
     assert!(!log.contains(" pull") && log.contains("up -d"), "{}", log);
 
-    // A refused pull (private packages) or a missing tag fails with a hint before `up`.
+    // A refused pull (a bad login) or a missing tag fails with a hint before `up`.
     for (msg, code, hint) in [
         (
-            "Error response from daemon: Head \\\"https://ghcr.io/v2/gradiated/grad-server/manifests/main\\\": denied",
+            "Error response from daemon: pull access denied for gradiated/grad-server, repository does not exist or may require 'docker login'",
             "image_pull_denied",
-            "may still be private",
+            "docker logout",
         ),
         (
             "Error response from daemon: manifest unknown",

@@ -7,6 +7,12 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+### Changed
+
+- The images are published to Docker Hub as `docker.io/gradiated/grad-server` and
+  `docker.io/gradiated/grad-trainer`, with the same tags mirrored on GHCR. `grad local up`, the
+  embedded compose file and the Helm chart default to Docker Hub.
+
 ## [0.2.0-alpha.2] - 2026-11-27
 
 ### Security

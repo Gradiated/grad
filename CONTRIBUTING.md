@@ -122,8 +122,9 @@ version. To release `0.3.0`:
    - `grad-sdk`, then `grad-cli`, to crates.io,
    - the Go module, by pushing the tag `sdks/go/v0.3.0` (Go modules in a subdirectory are
      versioned by tags with that prefix, so users run `go get github.com/Gradiated/grad/sdks/go@v0.3.0`),
-   - `ghcr.io/gradiated/grad-server` and `ghcr.io/gradiated/grad-trainer` (`0.3.0` for CPU,
-     `0.3.0-gpu` for CUDA), with SBOM and provenance attestations, through
+   - `docker.io/gradiated/grad-server` and `docker.io/gradiated/grad-trainer` (`0.3.0` for CPU,
+     `0.3.0-gpu` for CUDA), mirrored to `ghcr.io/gradiated/`, with SBOM and provenance
+     attestations, through
      [`images.yml`](.github/workflows/images.yml), the workflow that also publishes `main` and
      `sha-<7>` on every push to `main`,
    - the Helm chart to `oci://ghcr.io/gradiated/charts/grad`.
@@ -155,5 +156,11 @@ These are configured on GitHub, not in this repository:
   first release, add `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN` as secrets of the `release`
   environment. Afterwards, configure trusted publishing for `@gradiated/grad`, `grad-sdk` and
   `grad-cli` with the same workflow and environment, then delete both secrets.
+- Docker Hub: the `gradiated` organization's public repositories `grad-server` and
+  `grad-trainer`, and the repository secrets `DOCKERHUB_USERNAME` (`gradiated`, the
+  organization name, for an organization access token) and `DOCKERHUB_TOKEN` (an organization
+  access token with Image Pull and Push). Pushes to `main` also sync each repository's overview
+  from [`deploy/dockerhub/`](deploy/dockerhub); that step only warns if the token can't edit
+  repositories.
 - GHCR: after the first push, make `grad-server`, `grad-trainer` and `charts/grad` public and
   connect them to this repository.

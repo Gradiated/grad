@@ -257,7 +257,7 @@ export GRADIATED_PROFILE=local
 
 The CPU trainer is for trying the workflow on small data; real training uses `grad local up --gpu` or GPU nodes.
 
-The images are public on GHCR: `ghcr.io/gradiated/grad-server` and `ghcr.io/gradiated/grad-trainer` (CPU, amd64 and arm64; CUDA as `grad-trainer:*-gpu`, amd64). Releases are tagged `X.Y.Z` and `latest`; every push to `main` publishes `main` and `sha-<7>`. A release `grad` pulls its own version and a source build pulls `main`; `grad local up --image-tag TAG` picks another. See [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md#images).
+The images are public on Docker Hub: [`gradiated/grad-server`](https://hub.docker.com/r/gradiated/grad-server) and [`gradiated/grad-trainer`](https://hub.docker.com/r/gradiated/grad-trainer) (CPU, amd64 and arm64; CUDA as `grad-trainer:*-gpu`, amd64), mirrored with the same tags at `ghcr.io/gradiated/`. Releases are tagged `X.Y.Z` and `latest`; every push to `main` publishes `main` and `sha-<7>`. A release `grad` pulls its own version and a source build pulls `main`; `grad local up --image-tag TAG` picks another. See [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md#images).
 
 The first run generates an admin key, a trainer key and the workspace-secrets key and saves them to a `local` CLI profile. `grad local status`, `grad local logs` and `grad local down` manage the stack.
 
