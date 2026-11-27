@@ -12,6 +12,7 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_checkpoint_upload_bytes_total` | counter | `recipe_kind` | Bytes of registered checkpoint bundles. |
 | `grad_checkpoint_upload_duration_seconds` | histogram | `recipe_kind` | Checkpoint upload time the worker reported. |
 | `grad_checkpoints_total` | counter | `recipe_kind`, `reason` | Checkpoints registered, by recipe and reason (periodic, emergency). |
+| `grad_cloud_auth_lookups_total` | counter | `result` | Cloud: API-key lookups in the auth view, by result (found, not_found, inactive, error). |
 | `grad_dataset_part_bytes_total` | counter | `form` | Bytes of dataset parts written, by form (compressed, uncompressed). |
 | `grad_db_pool_connections` | gauge | `state` | Postgres pool connections by state (in_use, idle, waiting). |
 | `grad_db_query_duration_seconds` | histogram |  | Postgres query duration. |
@@ -49,6 +50,9 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_storage_operation_duration_seconds` | histogram | `op` | Object storage operation duration, by operation. |
 | `grad_storage_operation_errors_total` | counter | `op` | Object storage operations that failed, by operation. |
 | `grad_training_tokens_total` | counter | `recipe_kind`, `model_family` | Tokens processed by training attempts, by recipe and model family. |
+| `grad_usage_export_failures_total` | counter |  | Cloud: usage pushes to billing that failed (the rows stay and are retried). |
+| `grad_usage_export_lag_seconds` | gauge |  | Cloud: age of the oldest usage row not yet pushed to billing (0 when none). |
+| `grad_usage_export_pending_rows` | gauge |  | Cloud: usage ledger rows not yet pushed to billing. |
 | `grad_usage_flush_lag_seconds` | gauge |  | Longest time a running attempt has gone without writing usage. |
 | `grad_worker_gpu_memory_used_bytes` | gauge | `kind` | Sum of the GPU memory leased workers last reported. |
 | `grad_worker_gpu_utilization_ratio` | gauge | `kind` | Mean GPU utilisation (0-1) leased workers last reported. |

@@ -9,6 +9,23 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Changed
 
+- **Gradiated Cloud adapters** ([docs/CLOUD_MODE.md](docs/CLOUD_MODE.md)). `AUTH_MODE=cloud`
+  reads API keys from the product's read-only auth view (cached 5 s) and verifies console JWTs
+  against the control plane's JWKS; `BILLING_MODE=cloud` prices from Cloud's versioned price
+  list, checks balances in nano-USD and pushes the usage ledger as usage events; evals can call
+  the Gradiated gateway's eval lane (`GRAD_CLOUD_GATEWAY_URL`); the internal listener takes the
+  product's workspace hooks (suspend, reinstate, delete and purge) and artifact pins. Usage
+  records gain `billed_by` (`grad` | `gateway`). **Breaking (Cloud operators only):**
+  `CLOUD_INTERNAL_API_URL`'s `/auth/verify` and `billing/usage/cursor` calls and
+  `USAGE_EXPORT_LAG_SECONDS` are gone.
+
+- **Browser clients.** `GRAD_CORS_ORIGINS` (default off) allows listed origins on `/v1`, and
+  `GET /v1/artifacts/{id}/download-url` returns a presigned download (`artifacts.downloadUrl`,
+  `download_url`, `DownloadURL`, `grad artifacts download REF --url`).
+
+- **Workspace secrets on AWS KMS.** `GRAD_SECRETS_KMS_KEY_ID` seals each value under its own
+  data key wrapped by KMS; values sealed by `GRAD_SECRETS_KEY` move onto KMS in the background.
+
 - **Evals run on eval workers, not in grad-server.** Evals, `dataset.score()`, router
   labelling, distillation's teacher answers and checkpoint evals are `eval` jobs on the job
   queue, claimed by `node dist/main.js worker --kinds eval` (the grad-server image): the Helm
