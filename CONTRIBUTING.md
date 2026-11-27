@@ -130,10 +130,15 @@ version. To release `0.3.0`:
    - the Helm chart to `oci://ghcr.io/gradiated/charts/grad`.
 
    After that, a second approval creates the GitHub Release with the CHANGELOG notes, the CLI
-   archives, the Python distributions, the chart and `sha256sums.txt`.
+   archives, the Python distributions, the chart and `sha256sums.txt`, and a third updates
+   `Formula/grad.rb` in [Gradiated/homebrew-tap](https://github.com/Gradiated/homebrew-tap)
+   with the archives' SHA-256 (`scripts/homebrew-formula`, pushed with the
+   `HOMEBREW_TAP_DEPLOY_KEY` deploy key).
 
-A version with a suffix, like `0.3.0-rc.1`, is a prerelease: npm gets the `next` dist-tag, the
-images don't move `latest` and the GitHub Release is marked as a prerelease.
+A version with a suffix, like `0.3.0-rc.1`, is a prerelease: the images don't move `latest`
+and the GitHub Release is marked as a prerelease. On npm, 0.x pre-releases still get the
+`latest` dist-tag, so `npm i @gradiated/grad` installs the newest alpha; from 1.0 on a
+pre-release gets `next`.
 
 If a publish job fails, fix the cause and re-run the failed jobs; jobs that already succeeded
 don't run again. Registries never accept the same version twice, so a broken release is fixed

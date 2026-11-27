@@ -23,6 +23,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      npm-tag: ${{ steps.version.outputs.npm-tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,6 +47,13 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Until 1.0 every release is a 0.x pre-release or minor, and `npm i @gradiated/grad`
+          # should get the newest one; from 1.0 on, pre-releases go to `next`.
+          if [[ "$version" == *-* && "$version" != 0.* ]]; then
+            echo "npm-tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm-tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload release notes
@@ -175,7 +183,7 @@ jobs:
     env:
       # Only for the very first publish, before npm knows the package; Trusted Publishing after.
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      DIST_TAG: ${{ needs.prepare.outputs.prerelease == 'true' && 'next' || 'latest' }}
+      DIST_TAG: ${{ needs.prepare.outputs.npm-tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -361,3 +369,51 @@ jobs:
           gh release create "$GITHUB_REF_NAME" assets/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md "${flags[@]}"
+
+  # After the GitHub Release, so the formula's download URLs exist. The deploy key can push to
+  # Gradiated/homebrew-tap only. Re-running is a no-op once the formula is at this version.
+  homebrew:
+    name: Update the Homebrew formula
+    needs: [prepare, github-release]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/Gradiated/homebrew-tap/blob/main/Formula/grad.rb
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: grad
+
+      - name: Download the CLI archives' checksums
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: cli-*
+          path: cli/
+          merge-multiple: true
+
+      - name: Checkout Gradiated/homebrew-tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Gradiated/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Commit and push Formula/grad.rb
+        working-directory: tap
+        run: |
+          python3 ../grad/scripts/homebrew-formula "$VERSION" ../cli > Formula/grad.rb
+          if git diff --quiet; then
+            echo "Formula/grad.rb is already at $VERSION"
+            exit 0
+          fi
+          git diff
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "grad $VERSION"
+          git push origin HEAD
