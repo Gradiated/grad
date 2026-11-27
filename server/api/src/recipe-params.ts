@@ -11,24 +11,25 @@ const RECIPE_FIELDS = {
   beta: ["dpo"],
   models: ["router"],
   max_quality_drop: ["router"],
-  rubric: ["router"],
+  rubric: ["router", "reward"],
   pricing: ["router"],
   fallback: ["router"],
-  context_text: ["cartridge"],
-  context_uri: ["cartridge"],
+  context_text: ["cartridge", "distill"],
+  context_uri: ["cartridge", "distill"],
   num_tokens: ["cartridge"],
   max_new_tokens: ["cartridge"],
   slot_token: ["cartridge"],
-  teacher: ["cartridge"],
+  teacher: ["cartridge", "distill"],
+  rollout: ["distill"],
   temp: ["embedding"],
   pool: ["embedding"],
 } as const satisfies Partial<Record<keyof RecipeSpec, readonly RecipeKind[]>>;
 
 const LOSS_RECIPES: Record<LossSpec["kind"], readonly RecipeKind[]> = {
-  cross_entropy: ["sft"],
+  cross_entropy: ["sft", "distill"],
   dpo: ["dpo"],
   infonce: ["embedding"],
-  top_k_kl_distill: ["cartridge"],
+  top_k_kl_distill: ["cartridge", "distill"],
 };
 
 const DEFAULT_OPTIMIZER: OptimizerSpec = {
@@ -164,6 +165,46 @@ export const resolveRecipeParams = (
         top_k: loss?.kind === "top_k_kl_distill" ? (loss.top_k ?? 20) : 20,
       };
       break;
+    case "distill": {
+      const rollout = recipe.rollout ?? { kind: "on_policy" };
+      const onPolicy = rollout.kind === "on_policy";
+      if (onPolicy && loss?.kind === "cross_entropy") {
+        throw invalid(
+          "loss_unsupported",
+          "On-policy distillation trains with losses.TopKKLDistill against the teacher's logits; losses.CrossEntropy needs rollout=OffPolicy().",
+        );
+      }
+      if (!onPolicy && loss?.kind === "top_k_kl_distill") {
+        throw invalid(
+          "loss_unsupported",
+          "Off-policy distillation trains on the teacher's answers with losses.CrossEntropy (the inference endpoint returns text, not logits); use rollout=OnPolicy() for losses.TopKKLDistill.",
+        );
+      }
+      if (!onPolicy && recipe.context_text !== undefined) {
+        throw invalid(
+          "distill_context_needs_on_policy",
+          "recipe.context is read by the teacher during on-policy distillation; it can't be combined with rollout=OffPolicy().",
+        );
+      }
+      copy(["teacher", "context_text"]);
+      params.rollout = rollout;
+      params.loss = onPolicy
+        ? {
+            kind: "top_k_kl_distill",
+            top_k: loss?.kind === "top_k_kl_distill" ? (loss.top_k ?? 32) : 32,
+          }
+        : { kind: "cross_entropy" };
+      break;
+    }
+    case "reward":
+      if (recipe.rubric !== undefined && typeof recipe.rubric !== "string") {
+        throw invalid(
+          "reward_rubric_unsupported",
+          "RewardModelRecipe(rubric=...) takes the name of a score in [0, 1] already on your records, not Judge or validator items.",
+        );
+      }
+      if (recipe.rubric !== undefined) params.rubric = recipe.rubric;
+      break;
     case "router":
       copy(ROUTER_KEYS);
       if (recipe.rubric !== undefined) {
@@ -172,7 +213,7 @@ export const resolveRecipeParams = (
       }
       break;
     default:
-      // sft and decision: cross_entropy (reduction above); Wave 2 kinds never get here.
+      // sft and decision: cross_entropy (reduction above); grpo never gets here.
       break;
   }
 

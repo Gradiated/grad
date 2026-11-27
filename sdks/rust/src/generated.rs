@@ -144,6 +144,7 @@ string_enum! {
         EncoderSafetensors => "encoder_safetensors",
         RouterBundle => "router_bundle",
         DecisionBundle => "decision_bundle",
+        RewardBundle => "reward_bundle",
         Reference => "reference",
     }
 }
@@ -521,7 +522,7 @@ pub struct EvalOutputUsage {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EvalReport {
-    /// Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge), recall_at_10 (embedding).
+    /// Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding).
     pub metric_name: String,
     pub selected_step: i64,
     pub best_step: Option<i64>,
@@ -529,19 +530,19 @@ pub struct EvalReport {
     pub train_records: i64,
     pub eval_records: i64,
     pub warnings: Vec<String>,
-    /// Written by: sft, dpo, router, decision.
+    /// Written by: sft, dpo, router, decision, distill, reward.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eval_loss: Option<f64>,
-    /// Written by: sft.
+    /// Written by: sft, distill.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eval_token_accuracy: Option<f64>,
     /// Written by: sft.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trained_token_fraction: Option<f64>,
-    /// Written by: sft.
+    /// Written by: sft, distill.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub train_examples: Option<i64>,
-    /// Written by: sft, router, decision.
+    /// Written by: sft, router, decision, distill.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eval_examples: Option<i64>,
     /// Written by: router, decision.
@@ -550,39 +551,54 @@ pub struct EvalReport {
     /// Written by: sft, dpo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<i64>,
-    /// Written by: dpo.
+    /// Share of held-out pairs whose chosen answer outscores the rejected one. Written by: dpo, reward.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preference_accuracy: Option<f64>,
-    /// Written by: dpo.
+    /// Written by: dpo, reward.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reward_margin: Option<f64>,
     /// Written by: dpo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub beta: Option<f64>,
-    /// Written by: dpo, embedding.
+    /// Written by: dpo, embedding, reward.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub train_pairs: Option<i64>,
-    /// Written by: dpo, embedding.
+    /// Written by: dpo, embedding, reward.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eval_pairs: Option<i64>,
-    /// Written by: dpo, embedding.
+    /// Written by: dpo, embedding, reward.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dropped_records: Option<i64>,
-    /// Written by: cartridge.
+    /// Written by: reward (pointwise).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub train_points: Option<i64>,
+    /// Written by: reward (pointwise).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eval_points: Option<i64>,
+    /// Mean squared error of sigmoid(reward) against the held-out scores. Written by: reward (pointwise).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointwise_brier: Option<f64>,
+    /// Written by: cartridge, distill.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eval_kl: Option<f64>,
+    /// Held-out KL of the untrained student to the teacher. Written by: distill (on-policy).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_kl: Option<f64>,
     /// Written by: cartridge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_context_kl: Option<f64>,
-    /// Written by: cartridge.
+    /// Written by: cartridge, distill.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kl_reduction: Option<f64>,
     /// Written by: cartridge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub num_tokens: Option<i64>,
-    /// Written by: cartridge.
+    /// Written by: cartridge, distill.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub teacher: Option<String>,
+    /// Written by: distill.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout: Option<EvalReportRollout>,
     /// Written by: router.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<String>>,
@@ -637,6 +653,14 @@ pub struct EvalReportBaseline {
     /// Members not declared in the schema (round-tripped verbatim).
     #[serde(flatten)]
     pub additional_properties: BTreeMap<String, Value>,
+}
+
+string_enum! {
+    /// Written by: distill.
+    EvalReportRollout {
+        OnPolicy => "on_policy",
+        OffPolicy => "off_policy",
+    }
 }
 
 /// Generated from the OpenAPI schema `EvalRubricItem`.
@@ -1082,17 +1106,29 @@ pub struct PlanRunResponse {
     pub estimated_cost_usd: f64,
     pub price_per_million_tokens: f64,
     pub trained_token_fraction: f64,
-    /// Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+    /// The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
     pub labeling: Option<PlanRunResponseLabeling>,
+    /// On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).
+    pub teacher: Option<PlanRunResponseTeacher>,
     pub warnings: Vec<String>,
 }
 
-/// Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+/// The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlanRunResponseLabeling {
     pub estimated_model_calls: i64,
     pub estimated_judge_calls: i64,
+    pub estimated_cost_usd: f64,
+}
+
+/// On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlanRunResponseTeacher {
+    pub model: String,
+    pub price_per_million_tokens: f64,
+    pub estimated_tokens: i64,
     pub estimated_cost_usd: f64,
 }
 
@@ -1199,8 +1235,11 @@ pub struct RecipeSpec {
     pub num_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temp: Option<f64>,
+    /// CartridgeRecipe and DistillRecipe: the model to learn from. DistillRecipe also takes an artifact (name@version) with rollout off_policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub teacher: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout: Option<RolloutSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub optimizer: Option<OptimizerSpec>,
     /// Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
@@ -1210,7 +1249,7 @@ pub struct RecipeSpec {
     pub loss: Option<LossSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool: Option<PoolingSpec>,
-    /// RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.
+    /// RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training. RewardModelRecipe: a score name in [0, 1] on records ending in an assistant turn, trained pointwise next to the chosen/rejected pairs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rubric: Option<Value>,
     /// RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
@@ -1229,7 +1268,7 @@ pub struct RecipeSpec {
 
 impl RecipeSpec {
     /// Every property name in the schema.
-    pub const FIELDS: &'static [&'static str] = &["kind", "model", "adapter", "lr", "lr_scale", "batch_size", "epochs", "schedule", "warmup", "train_on", "thinking", "preserve_thinking", "reduction", "select", "checkpoint_ttl_days", "beta", "models", "max_quality_drop", "context_text", "context_uri", "num_tokens", "temp", "teacher", "optimizer", "eval_every", "loss", "pool", "rubric", "pricing", "fallback", "max_new_tokens", "slot_token"];
+    pub const FIELDS: &'static [&'static str] = &["kind", "model", "adapter", "lr", "lr_scale", "batch_size", "epochs", "schedule", "warmup", "train_on", "thinking", "preserve_thinking", "reduction", "select", "checkpoint_ttl_days", "beta", "models", "max_quality_drop", "context_text", "context_uri", "num_tokens", "temp", "teacher", "rollout", "optimizer", "eval_every", "loss", "pool", "rubric", "pricing", "fallback", "max_new_tokens", "slot_token"];
 }
 
 string_enum! {
@@ -1384,7 +1423,7 @@ pub struct ResolvedRunConfig {
     pub optimizer: OptimizerSpec,
     pub checkpoint_ttl_days: i64,
     pub split: ResolvedRunConfigSplit,
-    /// Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.
+    /// The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).
     pub label_eval_id: Option<String>,
     pub base_artifact: Option<BaseArtifact>,
     pub recipe_params: BTreeMap<String, Value>,
@@ -1474,6 +1513,24 @@ string_enum! {
     ResolvedRunConfigTrainOn {
         Last => "last",
         AllAssistant => "all_assistant",
+    }
+}
+
+/// A union of object shapes: set the fields of exactly one variant.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RolloutSpec {
+    pub kind: RolloutSpecKind,
+    /// Length of each student answer; auto (default) sizes it from the assistant turns in your records (256 without any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_new_tokens: Option<Value>,
+}
+
+string_enum! {
+    /// Allowed values of `RolloutSpecKind`.
+    RolloutSpecKind {
+        OnPolicy => "on_policy",
+        OffPolicy => "off_policy",
     }
 }
 

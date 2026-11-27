@@ -83,6 +83,8 @@ export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
       return "router_bundle";
     case "decision":
       return "decision_bundle";
+    case "reward":
+      return "reward_bundle";
     default:
       return "peft_lora";
   }

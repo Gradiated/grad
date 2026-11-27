@@ -853,8 +853,32 @@ components:
             - estimated_model_calls
             - estimated_judge_calls
             - estimated_cost_usd
-          description: "Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates
-            (billed as an eval, included in estimated_cost_usd)."
+          description: "The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router
+            runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the
+            teacher answer each prompt."
+        teacher:
+          type:
+            - object
+            - "null"
+          properties:
+            model:
+              type: string
+            price_per_million_tokens:
+              type: number
+              minimum: 0
+            estimated_tokens:
+              type: integer
+              minimum: 0
+            estimated_cost_usd:
+              type: number
+              minimum: 0
+          required:
+            - model
+            - price_per_million_tokens
+            - estimated_tokens
+            - estimated_cost_usd
+          description: "On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens
+            as student-price tokens, and in estimated_cost_usd)."
         warnings:
           type: array
           items:
@@ -870,6 +894,7 @@ components:
         - price_per_million_tokens
         - trained_token_fraction
         - labeling
+        - teacher
         - warnings
     ResolvedRunConfig:
       type: object
@@ -1029,7 +1054,8 @@ components:
           type:
             - string
             - "null"
-          description: "Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on."
+          description: "The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and
+            off-policy distill runs (the teacher's answers)."
         base_artifact:
           $ref: "#/components/schemas/BaseArtifact"
         recipe_params:
@@ -1251,6 +1277,10 @@ components:
           type: string
           minLength: 1
           maxLength: 160
+          description: "CartridgeRecipe and DistillRecipe: the model to learn from. DistillRecipe also takes an artifact
+            (name@version) with rollout off_policy."
+        rollout:
+          $ref: "#/components/schemas/RolloutSpec"
         optimizer:
           $ref: "#/components/schemas/OptimizerSpec"
         eval_every:
@@ -1277,7 +1307,9 @@ components:
               minItems: 1
               maxItems: 32
           description: "RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then
-            replays each prompt against recipe.models and scores the answers in a labeling eval before training."
+            replays each prompt against recipe.models and scores the answers in a labeling eval before training.
+            RewardModelRecipe: a score name in [0, 1] on records ending in an assistant turn, trained pointwise next to
+            the chosen/rejected pairs."
         pricing:
           type: object
           additionalProperties:
@@ -1348,6 +1380,43 @@ components:
                 - frozen_head
           required:
             - kind
+    RolloutSpec:
+      oneOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - on_policy
+            max_new_tokens:
+              anyOf:
+                - type: string
+                  enum:
+                    - auto
+                - type: integer
+                  minimum: 1
+                  maximum: 8192
+              description: Length of each student answer; auto (default) sizes it from the assistant turns in your records (256
+                without any).
+          required:
+            - kind
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - off_policy
+            max_new_tokens:
+              type: integer
+              minimum: 1
+              maximum: 8192
+          required:
+            - kind
+          additionalProperties: false
+      description: "DistillRecipe: on_policy (default) samples answers from the student and the trainer scores them with the
+        teacher's top-k logits; off_policy has the teacher answer each prompt once through the inference endpoint and
+        trains the student on those answers."
     LossSpec:
       oneOf:
         - type: object
@@ -1658,8 +1727,8 @@ components:
       properties:
         metric_name:
           type: string
-          description: "Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge),
-            recall_at_10 (embedding)."
+          description: "Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward),
+            preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding)."
         selected_step:
           type: integer
           minimum: 0
@@ -1685,23 +1754,23 @@ components:
           type:
             - number
             - "null"
-          description: "Written by: sft, dpo, router, decision."
+          description: "Written by: sft, dpo, router, decision, distill, reward."
         eval_token_accuracy:
           type:
             - number
             - "null"
-          description: "Written by: sft."
+          description: "Written by: sft, distill."
         trained_token_fraction:
           type: number
           description: "Written by: sft."
         train_examples:
           type: integer
           minimum: 0
-          description: "Written by: sft."
+          description: "Written by: sft, distill."
         eval_examples:
           type: integer
           minimum: 0
-          description: "Written by: sft, router, decision."
+          description: "Written by: sft, router, decision, distill."
         selection_examples:
           type: integer
           minimum: 0
@@ -1714,32 +1783,50 @@ components:
           type:
             - number
             - "null"
-          description: "Written by: dpo."
+          description: "Share of held-out pairs whose chosen answer outscores the rejected one. Written by: dpo, reward."
         reward_margin:
           type:
             - number
             - "null"
-          description: "Written by: dpo."
+          description: "Written by: dpo, reward."
         beta:
           type: number
           description: "Written by: dpo."
         train_pairs:
           type: integer
           minimum: 0
-          description: "Written by: dpo, embedding."
+          description: "Written by: dpo, embedding, reward."
         eval_pairs:
           type: integer
           minimum: 0
-          description: "Written by: dpo, embedding."
+          description: "Written by: dpo, embedding, reward."
         dropped_records:
           type: integer
           minimum: 0
-          description: "Written by: dpo, embedding."
+          description: "Written by: dpo, embedding, reward."
+        train_points:
+          type: integer
+          minimum: 0
+          description: "Written by: reward (pointwise)."
+        eval_points:
+          type: integer
+          minimum: 0
+          description: "Written by: reward (pointwise)."
+        pointwise_brier:
+          type:
+            - number
+            - "null"
+          description: "Mean squared error of sigmoid(reward) against the held-out scores. Written by: reward (pointwise)."
         eval_kl:
           type:
             - number
             - "null"
-          description: "Written by: cartridge."
+          description: "Written by: cartridge, distill."
+        base_kl:
+          type:
+            - number
+            - "null"
+          description: "Held-out KL of the untrained student to the teacher. Written by: distill (on-policy)."
         no_context_kl:
           type:
             - number
@@ -1749,14 +1836,20 @@ components:
           type:
             - number
             - "null"
-          description: "Written by: cartridge."
+          description: "Written by: cartridge, distill."
         num_tokens:
           type: integer
           minimum: 0
           description: "Written by: cartridge."
         teacher:
           type: string
-          description: "Written by: cartridge."
+          description: "Written by: cartridge, distill."
+        rollout:
+          type: string
+          enum:
+            - on_policy
+            - off_policy
+          description: "Written by: distill."
         candidates:
           type: array
           items:
@@ -2084,6 +2177,7 @@ components:
         - encoder_safetensors
         - router_bundle
         - decision_bundle
+        - reward_bundle
         - reference
         - null
       description: Artifact format when this checkpoint is exportable (promotable); null for training state only.

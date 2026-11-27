@@ -15,8 +15,37 @@ import { combineScores } from "./evals/scoring.js";
  * Router runs with Judge/validator rubric items: a labeling eval replays each
  * prompt against the candidates and scores the answers, and the router trains
  * on those scored responses (one record per answer: `metadata.model` plus the
- * combined rubric score as `scores.rubric`).
+ * combined rubric score as `scores.rubric`). Off-policy distill runs use the
+ * same machinery with the teacher as the only model.
  */
+
+/**
+ * Off-policy distill runs: the teacher answers each prompt once (greedy, the
+ * rollout's max_new_tokens) and the student trains on those answers.
+ */
+const teacherAnswersRequest = (
+  request: PlanRunRequest,
+  datasetVersion: number,
+) => {
+  const { recipe } = request;
+  if (recipe.teacher === undefined) {
+    throw invalid(
+      "distill_teacher_required",
+      "DistillRecipe needs teacher=: the model whose answers the student learns.",
+    );
+  }
+  const maxTokens = recipe.rollout?.max_new_tokens;
+
+  return PlanEvalRequestSchema.parse({
+    name: `${request.name}-teacher`.slice(0, 64),
+    models: [recipe.teacher],
+    dataset: request.dataset,
+    dataset_version: datasetVersion,
+    samples: 1,
+    temperature: 0,
+    ...(typeof maxTokens === "number" ? { max_tokens: maxTokens } : {}),
+  });
+};
 
 /** The labeling eval's request, or null when the run needs no labeling. */
 export const labelingEvalRequest = (
@@ -24,6 +53,9 @@ export const labelingEvalRequest = (
   datasetVersion: number,
 ) => {
   const { recipe } = request;
+  if (recipe.kind === "distill" && recipe.rollout?.kind === "off_policy") {
+    return teacherAnswersRequest(request, datasetVersion);
+  }
   if (recipe.kind !== "router" || !Array.isArray(recipe.rubric)) return null;
 
   const items: EvalRubricItem[] = recipe.rubric;

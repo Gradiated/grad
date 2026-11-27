@@ -21,6 +21,8 @@ V0_RECIPES: dict[str, tuple[str, str]] = {
     "decision": ("decision", "DecisionRunner"),
     "cartridge": ("cartridge", "CartridgeRunner"),
     "embedding": ("embedding", "EmbeddingRunner"),
+    "distill": ("distill", "DistillRunner"),
+    "reward": ("reward", "RewardRunner"),
 }
 BACKENDS = ("torch", "reference")
 _TORCH_STACK = {"torch", "transformers", "peft", "safetensors", "tokenizers", "accelerate"}

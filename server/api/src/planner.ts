@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { ModelCatalog } from "./catalog.js";
 import { isArtifactRef, resolveContinuation } from "./continued-training.js";
+import { planDistill, type DistillPlan } from "./distill-plan.js";
 import {
   V0_RECIPE_KINDS,
   messageText,
@@ -384,12 +385,13 @@ export const planRun = (
   if (!isV0Recipe(recipe.kind)) {
     throw invalid(
       "recipe_deferred",
-      `Recipe '${recipe.kind}' is deferred past v0; supported v0 recipes are ${V0_RECIPE_KINDS.join(", ")}.`,
+      `Recipe '${recipe.kind}' is deferred past v0 (it arrives in Wave 2); supported v0 recipes are ${V0_RECIPE_KINDS.join(", ")}.`,
     );
   }
 
   const { model, adapter, base } = resolveStart(request, context);
   if (
+    recipe.kind === "cartridge" &&
     recipe.teacher !== undefined &&
     context.catalog.find(recipe.teacher)?.family !== model.family
   ) {
@@ -418,9 +420,8 @@ export const planRun = (
   }
 
   const labelled = Array.isArray(recipe.rubric);
-  if (labelled && !context.labeling) {
-    throw new Error("A router rubric of rubric items needs a labeling plan.");
-  }
+  const offPolicy =
+    recipe.kind === "distill" && recipe.rollout?.kind === "off_policy";
   const usability = assessRecipeUsability(recipe.kind, records, {
     rubric: typeof recipe.rubric === "string" ? recipe.rubric : undefined,
     labelled,
@@ -432,12 +433,13 @@ export const planRun = (
       `None of the ${records.length} records in '${request.dataset}' can train recipe '${recipe.kind}' (${usability.reasons.join("; ")}). ${recordShapeHelp(recipe.kind)}`,
     );
   }
-  if (usability.usable < usability.total && recipe.kind !== "dpo") {
+  const paired = recipe.kind === "dpo" || recipe.kind === "reward";
+  if (usability.usable < usability.total && !paired) {
     warnings.push(
       `${usability.total - usability.usable} of ${usability.total} records cannot be used by '${recipe.kind}' and will be skipped (${usability.reasons.join("; ")}).`,
     );
   }
-  if (recipe.kind === "dpo" && usability.reasons.length > 0) {
+  if (paired && usability.reasons.length > 0) {
     warnings.push(
       `Some records were not paired: ${usability.reasons.join("; ")}.`,
     );
@@ -445,6 +447,9 @@ export const planRun = (
 
   const resolvedParams = resolveRecipeParams(recipe);
   const recipeParams = resolvedParams.params;
+  if ((labelled || offPolicy) && !context.labeling) {
+    throw new Error("This run trains on a labeling eval and needs its plan.");
+  }
   if (recipe.kind === "router") {
     recipeParams.models = resolveRouterCandidates(
       recipe,
@@ -460,8 +465,7 @@ export const planRun = (
     request.split?.eval_fraction ??
     (recipe.kind === "router" || recipe.kind === "decision" ? 0.15 : 0.1);
   const splitStrategy =
-    request.split?.strategy ??
-    (recipe.kind === "dpo" ? "by_group" : "by_session");
+    request.split?.strategy ?? (paired ? "by_group" : "by_session");
   const splitSeed = request.split?.seed ?? 42;
   const { train, eval: evalSet } = splitRecords(records, {
     strategy: splitStrategy,
@@ -505,6 +509,22 @@ export const planRun = (
     if (counts.total > model.max_context_tokens) truncated += 1;
   }
 
+  let distill: DistillPlan | null = null;
+  if (recipe.kind === "distill") {
+    distill = planDistill(
+      request,
+      model,
+      context.catalog,
+      { train, eval: evalSet },
+      renderOptions,
+    );
+    warnings.push(...distill.warnings);
+    recipeParams.rollout = distill.rollout;
+    if (distill.teacherTokenWeight !== null) {
+      recipeParams.teacher_token_weight = distill.teacherTokenWeight;
+    }
+  }
+
   const estimatedSteps = Math.max(
     1,
     Math.ceil((train.length * recipe.epochs) / batchSize),
@@ -524,7 +544,9 @@ export const planRun = (
     );
   }
 
-  const estimatedTokens = totalTokens * recipe.epochs;
+  const estimatedTokens = distill
+    ? distill.estimatedTokens
+    : totalTokens * recipe.epochs;
   const price = model.price_per_million_tokens_usd;
   const labeling = context.labeling ?? null;
   const estimatedCostUsd = Number(
@@ -533,7 +555,11 @@ export const planRun = (
       (labeling?.estimated_cost_usd ?? 0)
     ).toFixed(4),
   );
-  if (labeling) {
+  if (labeling && offPolicy) {
+    warnings.push(
+      `Before training, the teacher '${recipe.teacher ?? ""}' answers each prompt in a labeling eval: ${labeling.estimated_model_calls} model calls, about $${labeling.estimated_cost_usd.toFixed(4)} (billed as an eval).`,
+    );
+  } else if (labeling) {
     warnings.push(
       `Before training, a labeling eval replays each prompt against ${(recipe.models ?? []).join(", ")} and scores the answers with your rubric: ${labeling.estimated_model_calls} model calls and ${labeling.estimated_judge_calls} judge calls, about $${labeling.estimated_cost_usd.toFixed(4)} (billed as an eval).`,
     );
@@ -607,6 +633,7 @@ export const planRun = (
     trained_token_fraction:
       totalTokens > 0 ? Number((trainedTokens / totalTokens).toFixed(4)) : 0,
     labeling,
+    teacher: distill?.teacher ?? null,
     warnings,
   };
 };

@@ -216,6 +216,116 @@
       }
     }
   },
+  "distill": {
+    "rule_version": "auto@2",
+    "dataset": "ds",
+    "dataset_version": 1,
+    "name": "run",
+    "recipe_kind": "distill",
+    "model": "test/tiny-qwen3",
+    "template_revision": "qwen3@3",
+    "adapter": {
+      "kind": "lora",
+      "rank": 32,
+      "alpha": 32,
+      "merge_on_export": false
+    },
+    "lr": 0.000177,
+    "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+    "batch_size": 4,
+    "epochs": 1,
+    "schedule": "linear",
+    "warmup": 0.03,
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false,
+    "reduction": "per_example",
+    "select": "best",
+    "checkpoint_every_steps": 1,
+    "eval_every_steps": 1,
+    "optimizer": {
+      "kind": "adamw",
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "weight_decay": 0,
+      "grad_clip": 1
+    },
+    "checkpoint_ttl_days": 30,
+    "split": {
+      "strategy": "by_session",
+      "eval_fraction": 0.1,
+      "seed": 42,
+      "train_records": 20,
+      "eval_records": 4
+    },
+    "label_eval_id": null,
+    "base_artifact": null,
+    "recipe_params": {
+      "teacher": "test/tiny-qwen3-teacher",
+      "context_text": "The capital of Testland is Tinytown.",
+      "rollout": {
+        "kind": "on_policy",
+        "max_new_tokens": 6
+      },
+      "loss": {
+        "kind": "top_k_kl_distill",
+        "top_k": 5
+      },
+      "teacher_token_weight": 2
+    }
+  },
+  "reward": {
+    "rule_version": "auto@2",
+    "dataset": "ds",
+    "dataset_version": 1,
+    "name": "run",
+    "recipe_kind": "reward",
+    "model": "test/tiny-qwen3",
+    "template_revision": "qwen3@3",
+    "adapter": {
+      "kind": "lora",
+      "rank": 8,
+      "alpha": 16,
+      "merge_on_export": false
+    },
+    "lr": 0.000177,
+    "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+    "batch_size": 4,
+    "epochs": 1,
+    "schedule": "linear",
+    "warmup": 0.03,
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false,
+    "reduction": "per_example",
+    "select": "best",
+    "checkpoint_every_steps": 1,
+    "eval_every_steps": 1,
+    "optimizer": {
+      "kind": "adamw",
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "weight_decay": 0,
+      "grad_clip": 1
+    },
+    "checkpoint_ttl_days": 30,
+    "split": {
+      "strategy": "by_group",
+      "eval_fraction": 0.1,
+      "seed": 42,
+      "train_records": 22,
+      "eval_records": 2
+    },
+    "label_eval_id": null,
+    "base_artifact": null,
+    "recipe_params": {
+      "rubric": "ok"
+    }
+  },
   "embedding": {
     "rule_version": "auto@2",
     "dataset": "ds",

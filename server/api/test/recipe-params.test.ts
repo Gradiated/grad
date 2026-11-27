@@ -31,7 +31,14 @@ const catalog = createModelCatalog(
       price_per_million_tokens_usd: 1,
       max_context_tokens: 2048,
       template_revision: "qwen3@3",
-      calibrated_lrs: { sft: 1e-3, dpo: 1e-4, router: 1e-3, cartridge: 1e-2 },
+      calibrated_lrs: {
+        sft: 1e-3,
+        dpo: 1e-4,
+        router: 1e-3,
+        cartridge: 1e-2,
+        distill: 1e-3,
+        reward: 1e-3,
+      },
     },
     {
       id: "test/tiny-qwen3-teacher",
@@ -169,6 +176,36 @@ const FULL_REQUESTS: Record<
       batch_size: 4,
     },
     records: chats.map((r) => ({ ...r, messages: r.messages?.slice(0, 1) })),
+  },
+  distill: {
+    recipe: {
+      kind: "distill",
+      model: "test/tiny-qwen3",
+      teacher: "test/tiny-qwen3-teacher",
+      rollout: { kind: "on_policy", max_new_tokens: 6 },
+      loss: { kind: "top_k_kl_distill", top_k: 5 },
+      context_text: "The capital of Testland is Tinytown.",
+      batch_size: 4,
+    },
+    records: chats,
+  },
+  reward: {
+    recipe: {
+      kind: "reward",
+      model: "test/tiny-qwen3",
+      adapter: { kind: "lora", rank: 8, alpha: 16 },
+      rubric: "ok",
+      batch_size: 4,
+    },
+    records: [
+      ...Array.from({ length: 16 }, (_, i) => ({
+        id: `rp${i}`,
+        prompt: `p${i}`,
+        chosen: `good ${i}`,
+        rejected: `bad ${i}`,
+      })),
+      ...chats.slice(0, 8).map((r, i) => ({ ...r, scores: { ok: i % 2 } })),
+    ],
   },
   embedding: {
     recipe: {
@@ -336,6 +373,92 @@ describe("recipe parameters", () => {
       "unknown_model",
       /Teacher 'test\/tiny-bert' is not a llm model/,
     );
+  });
+
+  it("validates distillation and reward-model parameters", () => {
+    const prompts = chats.map((r) => ({
+      ...r,
+      messages: r.messages?.slice(0, 1),
+    }));
+    const distill = (recipe: Record<string, unknown>) =>
+      plan({ kind: "distill", model: "test/tiny-qwen3", ...recipe }, prompts);
+    const onPolicy = distill({ teacher: "test/tiny-qwen3-teacher" });
+    expect(onPolicy.resolved_config.recipe_params).toEqual({
+      teacher: "test/tiny-qwen3-teacher",
+      rollout: { kind: "on_policy", max_new_tokens: 256 },
+      loss: { kind: "top_k_kl_distill", top_k: 32 },
+      teacher_token_weight: 2,
+    });
+    expectCode(() => distill({}), "distill_teacher_required");
+    expectCode(
+      () =>
+        distill({
+          teacher: "test/tiny-qwen3-teacher",
+          loss: { kind: "cross_entropy" },
+        }),
+      "loss_unsupported",
+      /OffPolicy/,
+    );
+    expectCode(
+      () =>
+        planRun(
+          PlanRunRequestSchema.parse({
+            dataset: "ds",
+            name: "run",
+            recipe: {
+              kind: "distill",
+              model: "test/tiny-qwen3",
+              teacher: "big/m",
+              rollout: { kind: "off_policy" },
+              loss: { kind: "top_k_kl_distill" },
+            },
+          }),
+          prompts,
+          { catalog, datasetVersion: 1 },
+        ),
+      "loss_unsupported",
+      /CrossEntropy/,
+    );
+    expectCode(
+      () =>
+        distill({
+          teacher: "big/m",
+          rollout: { kind: "off_policy" },
+          context_text: "doc",
+        }),
+      "distill_context_needs_on_policy",
+    );
+    expectCode(
+      () => distill({ teacher: "test/tiny-qwen3", max_new_tokens: 5 }),
+      "recipe_param_unsupported",
+      /max_new_tokens does not apply/,
+    );
+    expectCode(
+      () =>
+        plan(
+          {
+            kind: "reward",
+            model: "test/tiny-qwen3",
+            rubric: [{ name: "q", kind: "judge", model: "j/m", prompt: "ok?" }],
+          },
+          FULL_REQUESTS.reward?.records ?? [],
+        ),
+      "reward_rubric_unsupported",
+    );
+    expectCode(
+      () =>
+        plan({ kind: "reward", model: "test/tiny-qwen3", rubric: "ok" }, [
+          { ...chats[0], scores: { ok: 2 } } as DatasetRecord,
+        ]),
+      "reward_score_out_of_range",
+    );
+    const pairsOnly = plan(
+      { kind: "reward", model: "test/tiny-qwen3" },
+      FULL_REQUESTS.reward?.records ?? [],
+    );
+    expect(pairsOnly.resolved_config.recipe_params).toEqual({});
+    expect(pairsOnly.usable_records).toBe(16);
+    expect(pairsOnly.resolved_config.split.strategy).toBe("by_group");
   });
 
   it("validates router labels, fallback and pricing like the trainer", () => {

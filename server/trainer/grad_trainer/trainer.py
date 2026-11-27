@@ -6,7 +6,8 @@ must behave the same for every recipe:
 - Data order: epoch ``e`` visits train items in a permutation seeded by ``(seed, e)``; step
   ``s`` is batch ``s % batches_per_epoch`` of epoch ``s // batches_per_epoch``. The data cursor
   is therefore just the step number, and resuming at step ``k`` replays the same batches.
-- Metering is per attempt: each step's tokens are known before it runs (``task.item_tokens``).
+- Metering is per attempt: each step's tokens are bounded before it runs (``task.item_tokens``;
+  a task may report fewer as ``metered_tokens`` once the step has run).
   A step runs only if ``(this attempt's tokens + step tokens) * price`` stays within
   ``max_cost_usd``, which is the budget left for this attempt (the server subtracts what earlier
   attempts were billed). Otherwise the run stops with ``stopped_budget`` and a final checkpoint.
@@ -300,6 +301,11 @@ class TrainingLoop:
             stats = self.task.train_step(indices, lr)
             elapsed = max(time.perf_counter() - started, 1e-9)
             self.step += 1
+            # Tasks whose step length is only known afterwards (on-policy distillation) report
+            # what they used; ``item_tokens`` is the upper bound the budget check reserved.
+            metered = stats.pop("metered_tokens", None)
+            if metered is not None:
+                step_tokens = min(step_tokens, int(metered))
             self.tokens_total += step_tokens
 
             eval_metrics = None

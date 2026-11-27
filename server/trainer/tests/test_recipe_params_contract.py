@@ -87,3 +87,22 @@ class RecipeParamsContractTests(TorchCase):
         records = [{"query": f"q{i}", "positive": f"p{i}"} for i in range(4)]
         task = EmbeddingTask(spec_for("embedding"), records, [], self.tmpdir())
         self.assertEqual((task.pooling, task.temp), ("cls", 0.1))
+
+    def test_distill_teacher_rollout_loss_context_and_weight(self) -> None:
+        from grad_trainer.recipes.distill import OnPolicyDistillTask
+
+        prompts = [{"id": f"c{i}", "messages": [{"role": "user", "content": f"q {i}"}]} for i in range(4)]
+        task = OnPolicyDistillTask(spec_for("distill"), prompts, [], self.tmpdir())
+        self.assertEqual((task.teacher_id, task.max_new_tokens, task.top_k), (QWEN_TEACHER_ID, 6, 5))
+        self.assertEqual(task.teacher_weight, 2.0)
+        self.assertEqual(task.context, "The capital of Testland is Tinytown.")
+        self.assertEqual(task.lora["rank"], 32)
+
+    def test_reward_adapter_and_pointwise_score(self) -> None:
+        from grad_trainer.recipes.reward import RewardTask
+
+        pairs = [{"id": f"d{i}", "prompt": f"p{i}", "chosen": f"good {i}", "rejected": f"bad {i}"} for i in range(4)]
+        points = [{**c, "scores": {"ok": 1.0}} for c in CHATS[:2]]
+        task = RewardTask(spec_for("reward"), pairs + points, [], self.tmpdir())
+        self.assertEqual((task.score_name, task.lora["rank"], task.lora["alpha"]), ("ok", 8, 16))
+        self.assertEqual(sorted(it["kind"] for it in task.train), ["pair"] * 4 + ["point"] * 2)

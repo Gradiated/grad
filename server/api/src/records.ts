@@ -205,6 +205,10 @@ export interface RecipeUsability {
 const SHAPE_HELP: Record<string, string> = {
   sft: 'SFT needs chat records with an assistant turn: {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}, a grad.trajectory/1 record with input.messages and output.turns, or {"prompt": ..., "completion": ...}.',
   dpo: 'DPO needs preference pairs {"prompt", "chosen", "rejected"} or grad.trajectory/1 records sharing a group_id with role "chosen" and role "rejected".',
+  reward:
+    'Reward models need preference pairs {"prompt", "chosen", "rejected"} (or grad.trajectory/1 records sharing a group_id with role "chosen" and role "rejected"), or, with recipe.rubric, answers carrying that score in [0, 1]: {"messages": [..., {"role": "assistant", ...}], "scores": {"resolved": 1.0}}.',
+  distill:
+    'Distillation needs prompts: {"messages": [{"role": "user", ...}]} (trailing assistant turns are ignored), a grad.trajectory/1 record, or {"prompt": ...}.',
   router:
     'Router training needs scored responses: one record per response with {"messages": [...], "metadata": {"model": "qwen/qwen3-8b"}, "scores": {"resolved": 1.0}} (pass recipe.rubric when records carry several scores), or one record per prompt with "scores" keyed by model id, e.g. {"qwen/qwen3-8b": 0.4, "qwen/qwen3-32b": 0.9}.',
   decision:
@@ -230,13 +234,27 @@ export const assessRecipeUsability = (
     if (reasons.size < 3) reasons.add(reason);
   };
 
-  if (kind === "dpo") {
+  if (kind === "dpo" || kind === "reward") {
     let usable = 0;
     const groups = new Map<string, Set<string>>();
+    const pointwise = kind === "reward" ? routerOptions.rubric : undefined;
     for (const r of records) {
       if (isPreferencePair(r)) {
         usable += 1;
         continue;
+      }
+      if (pointwise !== undefined && r.scores?.[pointwise] !== undefined) {
+        const value = r.scores[pointwise];
+        if (value < 0 || value > 1) {
+          throw invalid(
+            "reward_score_out_of_range",
+            `Reward scores must be in [0, 1]; record '${r.id ?? "(no id)"}' has ${value} for '${pointwise}'.`,
+          );
+        }
+        if (hasAssistantTarget(recordConversation(r))) {
+          usable += 1;
+          continue;
+        }
       }
       if (r.group_id && (r.role === "chosen" || r.role === "rejected")) {
         const roles = groups.get(r.group_id) ?? new Set<string>();
@@ -245,7 +263,9 @@ export const assessRecipeUsability = (
         continue;
       }
       note(
-        "record is neither a {prompt, chosen, rejected} pair nor a chosen/rejected trajectory",
+        pointwise === undefined
+          ? "record is neither a {prompt, chosen, rejected} pair nor a chosen/rejected trajectory"
+          : `record is neither a {prompt, chosen, rejected} pair, a chosen/rejected trajectory nor an answer with a '${pointwise}' score`,
       );
     }
     let oneSided = 0;
@@ -270,14 +290,14 @@ export const assessRecipeUsability = (
   const models = new Set<string>();
   for (const r of records) {
     let ok = false;
-    if (
-      kind === "sft" ||
-      kind === "distill" ||
-      kind === "reward" ||
-      kind === "grpo"
-    ) {
+    if (kind === "sft" || kind === "grpo") {
       ok = hasAssistantTarget(recordConversation(r));
       if (!ok) note("record has no assistant turn to train on");
+    } else if (kind === "distill") {
+      ok =
+        recordPromptAndReference(r)?.prompt.some((m) => m.role === "user") ??
+        false;
+      if (!ok) note("record has no user prompt");
     } else if (kind === "router") {
       const hasPrompt =
         recordConversation(r).length > 0 ||

@@ -163,3 +163,74 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
     expect(labels.status).toBe("cancelled");
   });
 });
+
+describe("off-policy distillation: the teacher answers in a labeling eval", () => {
+  let h: EvalHarness | undefined;
+
+  afterEach(async () => {
+    await h?.close();
+    h = undefined;
+  });
+
+  const distillRequest = (recipe: Record<string, unknown> = {}) => ({
+    dataset: "prompts",
+    name: "support-distilled",
+    recipe: {
+      kind: "distill",
+      model: "test/tiny-qwen3",
+      teacher: "qwen/qwen3-32b",
+      rollout: { kind: "off_policy", max_new_tokens: 64 },
+      ...recipe,
+    },
+  });
+
+  it("plans the teacher's calls, then trains on its answers", async () => {
+    h = await makeEvalHarness();
+    const { t } = h;
+    await seedDataset(t, "prompts", qaRecords(4));
+    h.fake.setModel("qwen/qwen3-32b", () => ({ content: "teacher answer" }));
+
+    const plan = await t.json<Record<string, any>>("/v1/runs/plan", {
+      body: distillRequest(),
+    });
+    expect(plan.status).toBe(200);
+    expect(plan.body.labeling).toMatchObject({
+      estimated_model_calls: 4,
+      estimated_judge_calls: 0,
+    });
+    expect(plan.body.teacher).toBeNull();
+    expect(plan.body.estimated_cost_usd).toBeGreaterThan(
+      plan.body.labeling.estimated_cost_usd,
+    );
+    expect(plan.body.resolved_config.recipe_params).toEqual({
+      teacher: "qwen/qwen3-32b",
+      rollout: { kind: "off_policy", max_new_tokens: 64 },
+      loss: { kind: "cross_entropy" },
+    });
+
+    const worker = new FakeWorker(t);
+    const created = await t.json<Record<string, any>>("/v1/runs", {
+      body: distillRequest(),
+    });
+    expect(created.status).toBe(202);
+    const labels = await t.services.evals.get(
+      WORKSPACE_A,
+      created.body.resolved_config.label_eval_id as string,
+    );
+    expect(labels).toMatchObject({
+      name: "support-distilled-teacher",
+      models: ["qwen/qwen3-32b"],
+      max_tokens: 64,
+      temperature: 0,
+    });
+    expect(await worker.claim()).toBeNull();
+    await t.services.evals.drain();
+    const job = await worker.claim();
+    const records = await worker.downloadDataset(job!);
+    expect(records).toHaveLength(4);
+    expect((records[0] as Record<string, any>).messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "teacher answer",
+    });
+  });
+});

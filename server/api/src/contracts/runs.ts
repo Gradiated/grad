@@ -49,14 +49,11 @@ export const V0_RECIPE_KINDS = [
   "decision",
   "cartridge",
   "embedding",
-] as const;
-
-export const ALL_RECIPE_KINDS = [
-  ...V0_RECIPE_KINDS,
   "distill",
   "reward",
-  "grpo",
 ] as const;
+
+export const ALL_RECIPE_KINDS = [...V0_RECIPE_KINDS, "grpo"] as const;
 
 export const RecipeKindSchema = z.enum(ALL_RECIPE_KINDS).openapi("RecipeKind");
 export type RecipeKind = z.infer<typeof RecipeKindSchema>;
@@ -108,6 +105,34 @@ export const LossSpecSchema = z
 
 export type LossSpec = z.infer<typeof LossSpecSchema>;
 
+export const RolloutSpecSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("on_policy"),
+        max_new_tokens: z
+          .union([z.literal("auto"), z.number().int().min(1).max(8192)])
+          .optional()
+          .openapi({
+            description:
+              "Length of each student answer; auto (default) sizes it from the assistant turns in your records (256 without any).",
+          }),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("off_policy"),
+        max_new_tokens: z.number().int().min(1).max(8192).optional(),
+      })
+      .strict(),
+  ])
+  .openapi("RolloutSpec", {
+    description:
+      "DistillRecipe: on_policy (default) samples answers from the student and the trainer scores them with the teacher's top-k logits; off_policy has the teacher answer each prompt once through the inference endpoint and trains the student on those answers.",
+  });
+
+export type RolloutSpec = z.infer<typeof RolloutSpecSchema>;
+
 export const PoolingSpecSchema = z
   .object({ kind: z.enum(["mean", "cls"]) })
   .strict()
@@ -139,7 +164,11 @@ export const RecipeSpecSchema = z
     context_uri: z.string().max(2048).optional(),
     num_tokens: z.number().int().min(16).max(4096).optional(),
     temp: z.number().positive().optional(),
-    teacher: ModelIdSchema.optional(),
+    teacher: ModelIdSchema.optional().openapi({
+      description:
+        "CartridgeRecipe and DistillRecipe: the model to learn from. DistillRecipe also takes an artifact (name@version) with rollout off_policy.",
+    }),
+    rollout: RolloutSpecSchema.optional(),
     optimizer: OptimizerSpecSchema.optional(),
     eval_every: z
       .union([z.literal("auto"), z.number().int().min(1)])
@@ -158,7 +187,7 @@ export const RecipeSpecSchema = z
       .optional()
       .openapi({
         description:
-          "RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.",
+          "RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training. RewardModelRecipe: a score name in [0, 1] on records ending in an assistant turn, trained pointwise next to the chosen/rejected pairs.",
       }),
     pricing: z.record(ModelIdSchema, z.number().min(0)).optional().openapi({
       description:
@@ -247,7 +276,7 @@ export const ResolvedRunConfigSchema = z
     }),
     label_eval_id: z.string().nullable().openapi({
       description:
-        "Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.",
+        "The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).",
     }),
     base_artifact: BaseArtifactSchema.nullable().openapi({
       description:
@@ -279,7 +308,19 @@ export const PlanRunResponseSchema = z
       .nullable()
       .openapi({
         description:
-          "Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).",
+          "The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.",
+      }),
+    teacher: z
+      .object({
+        model: z.string(),
+        price_per_million_tokens: z.number().min(0),
+        estimated_tokens: z.number().int().min(0),
+        estimated_cost_usd: z.number().min(0),
+      })
+      .nullable()
+      .openapi({
+        description:
+          "On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).",
       }),
     warnings: z.array(z.string()),
   })
@@ -409,6 +450,7 @@ export const ArtifactFormatSchema = z
     "encoder_safetensors",
     "router_bundle",
     "decision_bundle",
+    "reward_bundle",
     "reference",
   ])
   .openapi("ArtifactFormat");

@@ -72,7 +72,7 @@ export const EvalReportSchema = z
   .looseObject({
     metric_name: z.string().openapi({
       description:
-        "Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge), recall_at_10 (embedding).",
+        "Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding).",
     }),
     selected_step: count,
     best_step: count.nullable(),
@@ -81,26 +81,49 @@ export const EvalReportSchema = z
     eval_records: count,
     warnings: z.array(z.string()),
 
-    eval_loss: score.optional().openapi(recipes("sft, dpo, router, decision")),
-    eval_token_accuracy: score.optional().openapi(recipes("sft")),
+    eval_loss: score
+      .optional()
+      .openapi(recipes("sft, dpo, router, decision, distill, reward")),
+    eval_token_accuracy: score.optional().openapi(recipes("sft, distill")),
     trained_token_fraction: z.number().optional().openapi(recipes("sft")),
-    train_examples: count.optional().openapi(recipes("sft")),
-    eval_examples: count.optional().openapi(recipes("sft, router, decision")),
+    train_examples: count.optional().openapi(recipes("sft, distill")),
+    eval_examples: count
+      .optional()
+      .openapi(recipes("sft, router, decision, distill")),
     selection_examples: count.optional().openapi(recipes("router, decision")),
     truncated: count.optional().openapi(recipes("sft, dpo")),
 
-    preference_accuracy: score.optional().openapi(recipes("dpo")),
-    reward_margin: score.optional().openapi(recipes("dpo")),
+    preference_accuracy: score.optional().openapi({
+      description:
+        "Share of held-out pairs whose chosen answer outscores the rejected one. Written by: dpo, reward.",
+    }),
+    reward_margin: score.optional().openapi(recipes("dpo, reward")),
     beta: z.number().optional().openapi(recipes("dpo")),
-    train_pairs: count.optional().openapi(recipes("dpo, embedding")),
-    eval_pairs: count.optional().openapi(recipes("dpo, embedding")),
-    dropped_records: count.optional().openapi(recipes("dpo, embedding")),
+    train_pairs: count.optional().openapi(recipes("dpo, embedding, reward")),
+    eval_pairs: count.optional().openapi(recipes("dpo, embedding, reward")),
+    dropped_records: count
+      .optional()
+      .openapi(recipes("dpo, embedding, reward")),
+    train_points: count.optional().openapi(recipes("reward (pointwise)")),
+    eval_points: count.optional().openapi(recipes("reward (pointwise)")),
+    pointwise_brier: score.optional().openapi({
+      description:
+        "Mean squared error of sigmoid(reward) against the held-out scores. Written by: reward (pointwise).",
+    }),
 
-    eval_kl: score.optional().openapi(recipes("cartridge")),
+    eval_kl: score.optional().openapi(recipes("cartridge, distill")),
+    base_kl: score.optional().openapi({
+      description:
+        "Held-out KL of the untrained student to the teacher. Written by: distill (on-policy).",
+    }),
     no_context_kl: score.optional().openapi(recipes("cartridge")),
-    kl_reduction: score.optional().openapi(recipes("cartridge")),
+    kl_reduction: score.optional().openapi(recipes("cartridge, distill")),
     num_tokens: count.optional().openapi(recipes("cartridge")),
-    teacher: z.string().optional().openapi(recipes("cartridge")),
+    teacher: z.string().optional().openapi(recipes("cartridge, distill")),
+    rollout: z
+      .enum(["on_policy", "off_policy"])
+      .optional()
+      .openapi(recipes("distill")),
 
     candidates: z.array(z.string()).optional().openapi(recipes("router")),
     fallback_model: z.string().optional().openapi(recipes("router")),

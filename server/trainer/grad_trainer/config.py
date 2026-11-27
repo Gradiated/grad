@@ -21,6 +21,8 @@ DEFAULT_LR: dict[str, float] = {
     "decision": 3e-4,
     "cartridge": 1e-2,
     "embedding": 2e-5,
+    "distill": 2e-4,
+    "reward": 1e-4,
 }
 DEFAULT_BATCH_SIZE = 128
 DEFAULT_EVAL_FRACTION: dict[str, float] = {"router": 0.15, "decision": 0.15}
@@ -28,6 +30,7 @@ DEFAULT_MODEL: dict[str, str] = {
     "router": "qwen/qwen3-0.6b",
     "decision": "gradiated/linden-1",
     "embedding": "baai/bge-small-en-v1.5",
+    "distill": "qwen/qwen3-4b",
 }
 
 _SCHEDULES = ("linear", "cosine", "constant")

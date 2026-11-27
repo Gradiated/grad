@@ -302,9 +302,174 @@ describe("planRun", () => {
   });
 
   it("rejects Wave 2 recipes", () => {
-    for (const kind of ["grpo", "distill", "reward"]) {
-      expectCode(() => plan({ kind }, records), "recipe_deferred");
-    }
+    expectCode(() => plan({ kind: "grpo" }, records), "recipe_deferred");
+  });
+
+  it("plans distillation with the teacher's cost and validates the teacher", () => {
+    const prompts = records.map((r) => ({
+      ...r,
+      messages: r.messages?.slice(0, 1),
+    }));
+    const distill = (
+      recipe: Record<string, unknown>,
+      rows: DatasetRecord[] = prompts,
+    ) => plan({ kind: "distill", ...recipe }, rows);
+
+    const onPolicy = distill({
+      model: "qwen/qwen3-4b",
+      teacher: "qwen/qwen3-32b",
+      rollout: { kind: "on_policy", max_new_tokens: 64 },
+    });
+    expect(onPolicy.resolved_config.model).toBe("qwen/qwen3-4b");
+    expect(onPolicy.resolved_config.lr).toBeCloseTo(2e-4, 8);
+    expect(onPolicy.resolved_config.adapter).toMatchObject({ kind: "lora" });
+    expect(onPolicy.resolved_config.recipe_params).toMatchObject({
+      teacher: "qwen/qwen3-32b",
+      rollout: { kind: "on_policy", max_new_tokens: 64 },
+      loss: { kind: "top_k_kl_distill", top_k: 32 },
+      teacher_token_weight: 4,
+    });
+    const teacher = onPolicy.teacher;
+    expect(teacher).toMatchObject({
+      model: "qwen/qwen3-32b",
+      price_per_million_tokens: 1.2,
+    });
+    expect(teacher?.estimated_tokens).toBeGreaterThan(64 * prompts.length);
+    const train = onPolicy.resolved_config.split.train_records;
+    expect(onPolicy.estimated_tokens).toBeGreaterThan(
+      (teacher?.estimated_tokens ?? 0) * 4,
+    );
+    expect(onPolicy.estimated_tokens).toBeGreaterThan(2 * 64 * train);
+    expect(onPolicy.estimated_cost_usd).toBeCloseTo(
+      (onPolicy.estimated_tokens / 1e6) * 0.3,
+      4,
+    );
+    expect(onPolicy.labeling).toBeNull();
+
+    // auto sizes answers from the records' own assistant turns (or 256 without any).
+    const sized = distill(
+      { model: "qwen/qwen3-4b", teacher: "qwen/qwen3-32b" },
+      records,
+    );
+    expect(sized.resolved_config.recipe_params.rollout).toEqual({
+      kind: "on_policy",
+      max_new_tokens: 32,
+    });
+    expect(
+      distill({ teacher: "qwen/qwen3-32b" }).resolved_config,
+    ).toMatchObject({
+      model: "qwen/qwen3-4b",
+      recipe_params: { rollout: { max_new_tokens: 256 } },
+    });
+
+    expectCode(
+      () => distill({ teacher: "qwen/qwen3-4b" }),
+      "distill_teacher_is_student",
+    );
+    const contextOnly = distill({
+      teacher: "qwen/qwen3-4b",
+      context_text: "Refunds take 30 days.",
+    });
+    expect(contextOnly.teacher?.estimated_tokens).toBeGreaterThan(0);
+    expect(
+      distill({
+        model: "qwen/qwen3-8b",
+        teacher: "qwen/qwen3-4b",
+      }).warnings.join(" "),
+    ).toMatch(/smaller than the student/);
+    expectCode(
+      () => distill({ teacher: "sft@2026-11-27-1" }),
+      "distill_teacher_unsupported",
+      /OffPolicy/,
+    );
+    expectCode(
+      () => distill({ teacher: "openai/gpt-x" }),
+      "unknown_model",
+      /OffPolicy/,
+    );
+    expectCode(
+      () => distill({ teacher: "gradiated/linden-1" }),
+      "distill_tokenizer_mismatch",
+    );
+    expectCode(
+      () =>
+        distill(
+          { teacher: "qwen/qwen3-32b" },
+          records.map((r) => ({
+            ...r,
+            messages: [{ role: "system", content: "x" }],
+          })),
+        ),
+      "no_usable_records",
+      /no user prompt/,
+    );
+
+    // Off-policy: the teacher answers in a labeling eval, billed as an eval.
+    const labeling = {
+      estimated_model_calls: 40,
+      estimated_judge_calls: 0,
+      estimated_cost_usd: 0.05,
+    };
+    const offPolicy = planRun(
+      request({
+        kind: "distill",
+        model: "qwen/qwen3-4b",
+        teacher: "anthropic/claude-x",
+        rollout: { kind: "off_policy" },
+      }),
+      prompts,
+      { catalog, datasetVersion: 3, labeling },
+    );
+    expect(offPolicy.resolved_config.recipe_params).toEqual({
+      teacher: "anthropic/claude-x",
+      rollout: { kind: "off_policy", max_new_tokens: 1024 },
+      loss: { kind: "cross_entropy" },
+    });
+    expect(offPolicy.teacher).toBeNull();
+    expect(offPolicy.labeling).toEqual(labeling);
+    expect(offPolicy.estimated_cost_usd).toBeGreaterThan(0.05);
+    expect(offPolicy.warnings.join(" ")).toMatch(
+      /teacher 'anthropic\/claude-x' answers each prompt/,
+    );
+    expect(() =>
+      plan(
+        { kind: "distill", teacher: "x/y", rollout: { kind: "off_policy" } },
+        prompts,
+      ),
+    ).toThrow(/labeling eval/);
+  });
+
+  it("plans reward models on pairs and pointwise scores", () => {
+    const pairs = Array.from({ length: 20 }, (_, i) => ({
+      id: `p${i}`,
+      prompt: `q${i}`,
+      chosen: "good",
+      rejected: "bad",
+    }));
+    const reward = plan({ kind: "reward" }, [...pairs, ...records]);
+    expect(reward.resolved_config).toMatchObject({
+      model: "qwen/qwen3-8b",
+      adapter: { kind: "lora", rank: 32 },
+      recipe_kind: "reward",
+      split: { strategy: "by_group" },
+    });
+    expect(reward.resolved_config.lr).toBeCloseTo(1e-4, 8);
+    expect(reward.usable_records).toBe(20);
+    expect(reward.warnings.join(" ")).toMatch(/not paired/);
+    const scored = records.map((r, i) => ({
+      ...r,
+      scores: { resolved: i % 2 },
+    }));
+    const pointwise = plan({ kind: "reward", rubric: "resolved" }, scored);
+    expect(pointwise.usable_records).toBe(40);
+    expect(pointwise.resolved_config.recipe_params).toEqual({
+      rubric: "resolved",
+    });
+    expectCode(
+      () => plan({ kind: "reward" }, scored),
+      "no_usable_records",
+      /Reward models need/,
+    );
   });
 
   it("scales lr, warns on few steps, empty eval split and budget, and supports explicit lr", () => {

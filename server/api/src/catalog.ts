@@ -9,12 +9,50 @@ import {
 type CatalogEntry = Omit<TrainableModel, "recipes">;
 
 const QWEN_LRS = {
-  "qwen/qwen3-0.6b": { sft: 8e-4, dpo: 3e-5, router: 5e-4, decision: 5e-4 },
-  "qwen/qwen3-1.7b": { sft: 7e-4, dpo: 3e-5, router: 5e-4, decision: 4e-4 },
-  "qwen/qwen3-4b": { sft: 6e-4, dpo: 2.5e-5, cartridge: 1.2e-2 },
-  "qwen/qwen3-8b": { sft: 5e-4, dpo: 2e-5, cartridge: 1e-2 },
-  "qwen/qwen3-14b": { sft: 4e-4, dpo: 1.5e-5, cartridge: 1e-2 },
-  "qwen/qwen3-32b": { sft: 3e-4, dpo: 1e-5, cartridge: 1e-2 },
+  "qwen/qwen3-0.6b": {
+    sft: 8e-4,
+    dpo: 3e-5,
+    router: 5e-4,
+    decision: 5e-4,
+    distill: 3e-4,
+    reward: 1.5e-4,
+  },
+  "qwen/qwen3-1.7b": {
+    sft: 7e-4,
+    dpo: 3e-5,
+    router: 5e-4,
+    decision: 4e-4,
+    distill: 2.5e-4,
+    reward: 1.2e-4,
+  },
+  "qwen/qwen3-4b": {
+    sft: 6e-4,
+    dpo: 2.5e-5,
+    cartridge: 1.2e-2,
+    distill: 2e-4,
+    reward: 1e-4,
+  },
+  "qwen/qwen3-8b": {
+    sft: 5e-4,
+    dpo: 2e-5,
+    cartridge: 1e-2,
+    distill: 2e-4,
+    reward: 1e-4,
+  },
+  "qwen/qwen3-14b": {
+    sft: 4e-4,
+    dpo: 1.5e-5,
+    cartridge: 1e-2,
+    distill: 1.5e-4,
+    reward: 8e-5,
+  },
+  "qwen/qwen3-32b": {
+    sft: 3e-4,
+    dpo: 1e-5,
+    cartridge: 1e-2,
+    distill: 1e-4,
+    reward: 6e-5,
+  },
 } as const;
 
 const qwen = (
@@ -38,13 +76,19 @@ const qwen = (
 export const BUILTIN_MODELS: readonly CatalogEntry[] = [
   qwen("qwen/qwen3-0.6b", "Qwen/Qwen3-0.6B", 0.15, ["lora"], ["router"]),
   qwen("qwen/qwen3-1.7b", "Qwen/Qwen3-1.7B", 0.22, ["lora"], []),
-  qwen("qwen/qwen3-4b", "Qwen/Qwen3-4B", 0.3, ["lora", "prefix_kv"], []),
+  qwen(
+    "qwen/qwen3-4b",
+    "Qwen/Qwen3-4B",
+    0.3,
+    ["lora", "prefix_kv"],
+    ["distill"],
+  ),
   qwen(
     "qwen/qwen3-8b",
     "Qwen/Qwen3-8B",
     0.4,
     ["lora", "prefix_kv"],
-    ["sft", "dpo", "cartridge"],
+    ["sft", "dpo", "cartridge", "reward"],
   ),
   qwen("qwen/qwen3-14b", "Qwen/Qwen3-14B", 0.7, ["lora", "prefix_kv"], []),
   qwen("qwen/qwen3-32b", "Qwen/Qwen3-32B", 1.2, ["lora", "prefix_kv"], []),

@@ -45,9 +45,9 @@ export interface Artifact {
 }
 
 /** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
-export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference";
+export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reward_bundle" | "reference";
 
-export const ArtifactFormatValues = ["peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference"] as const;
+export const ArtifactFormatValues = ["peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference"] as const;
 
 /** Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference). */
 export interface BaseArtifact {
@@ -263,7 +263,7 @@ export interface EvalOutput {
 }
 
 export interface EvalReport {
-  /** Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge), recall_at_10 (embedding). */
+  /** Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding). */
   metricName: string;
   selectedStep: number;
   bestStep: number | null;
@@ -271,42 +271,52 @@ export interface EvalReport {
   trainRecords: number;
   evalRecords: number;
   warnings: Array<string>;
-  /** Written by: sft, dpo, router, decision. */
+  /** Written by: sft, dpo, router, decision, distill, reward. */
   evalLoss?: number | null | undefined;
-  /** Written by: sft. */
+  /** Written by: sft, distill. */
   evalTokenAccuracy?: number | null | undefined;
   /** Written by: sft. */
   trainedTokenFraction?: number | undefined;
-  /** Written by: sft. */
+  /** Written by: sft, distill. */
   trainExamples?: number | undefined;
-  /** Written by: sft, router, decision. */
+  /** Written by: sft, router, decision, distill. */
   evalExamples?: number | undefined;
   /** Written by: router, decision. */
   selectionExamples?: number | undefined;
   /** Written by: sft, dpo. */
   truncated?: number | undefined;
-  /** Written by: dpo. */
+  /** Share of held-out pairs whose chosen answer outscores the rejected one. Written by: dpo, reward. */
   preferenceAccuracy?: number | null | undefined;
-  /** Written by: dpo. */
+  /** Written by: dpo, reward. */
   rewardMargin?: number | null | undefined;
   /** Written by: dpo. */
   beta?: number | undefined;
-  /** Written by: dpo, embedding. */
+  /** Written by: dpo, embedding, reward. */
   trainPairs?: number | undefined;
-  /** Written by: dpo, embedding. */
+  /** Written by: dpo, embedding, reward. */
   evalPairs?: number | undefined;
-  /** Written by: dpo, embedding. */
+  /** Written by: dpo, embedding, reward. */
   droppedRecords?: number | undefined;
-  /** Written by: cartridge. */
+  /** Written by: reward (pointwise). */
+  trainPoints?: number | undefined;
+  /** Written by: reward (pointwise). */
+  evalPoints?: number | undefined;
+  /** Mean squared error of sigmoid(reward) against the held-out scores. Written by: reward (pointwise). */
+  pointwiseBrier?: number | null | undefined;
+  /** Written by: cartridge, distill. */
   evalKl?: number | null | undefined;
+  /** Held-out KL of the untrained student to the teacher. Written by: distill (on-policy). */
+  baseKl?: number | null | undefined;
   /** Written by: cartridge. */
   noContextKl?: number | null | undefined;
-  /** Written by: cartridge. */
+  /** Written by: cartridge, distill. */
   klReduction?: number | null | undefined;
   /** Written by: cartridge. */
   numTokens?: number | undefined;
-  /** Written by: cartridge. */
+  /** Written by: cartridge, distill. */
   teacher?: string | undefined;
+  /** Written by: distill. */
+  rollout?: "on_policy" | "off_policy" | undefined;
   /** Written by: router. */
   candidates?: Array<string> | undefined;
   /** Written by: router. */
@@ -566,10 +576,17 @@ export interface PlanRunResponse {
   estimatedCostUsd: number;
   pricePerMillionTokens: number;
   trainedTokenFraction: number;
-  /** Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd). */
+  /** The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt. */
   labeling: {
     estimatedModelCalls: number;
     estimatedJudgeCalls: number;
+    estimatedCostUsd: number;
+  } | null;
+  /** On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd). */
+  teacher: {
+    model: string;
+    pricePerMillionTokens: number;
+    estimatedTokens: number;
     estimatedCostUsd: number;
   } | null;
   warnings: Array<string>;
@@ -630,13 +647,15 @@ export interface RecipeSpec {
   contextUri?: string | undefined;
   numTokens?: number | undefined;
   temp?: number | undefined;
+  /** CartridgeRecipe and DistillRecipe: the model to learn from. DistillRecipe also takes an artifact (name@version) with rollout off_policy. */
   teacher?: string | undefined;
+  rollout?: RolloutSpec | undefined;
   optimizer?: OptimizerSpec | undefined;
   /** Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval). */
   evalEvery?: "auto" | number | undefined;
   loss?: LossSpec | undefined;
   pool?: PoolingSpec | undefined;
-  /** RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training. */
+  /** RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training. RewardModelRecipe: a score name in [0, 1] on records ending in an assistant turn, trained pointwise next to the chosen/rejected pairs. */
   rubric?: string | Array<EvalRubricItem> | undefined;
   /** RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records. */
   pricing?: Record<string, number> | undefined;
@@ -729,7 +748,7 @@ export interface ResolvedRunConfig {
     trainRecords: number;
     evalRecords: number;
   };
-  /** Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on. */
+  /** The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers). */
   labelEvalId: string | null;
   baseArtifact: BaseArtifact | null;
   recipeParams: Record<string, unknown>;
@@ -738,6 +757,16 @@ export interface ResolvedRunConfig {
 export interface ResumeRunRequest {
   maxCostUsd?: number | undefined;
 }
+
+/** DistillRecipe: on_policy (default) samples answers from the student and the trainer scores them with the teacher's top-k logits; off_policy has the teacher answer each prompt once through the inference endpoint and trains the student on those answers. */
+export type RolloutSpec = {
+  kind: "on_policy";
+  /** Length of each student answer; auto (default) sizes it from the assistant turns in your records (256 without any). */
+  maxNewTokens?: "auto" | number | undefined;
+} | {
+  kind: "off_policy";
+  maxNewTokens?: number | undefined;
+};
 
 export interface RouteRequest {
   deployment: string;

@@ -81,6 +81,7 @@ const (
 	ArtifactFormatEncoderSafetensors ArtifactFormat = "encoder_safetensors"
 	ArtifactFormatRouterBundle       ArtifactFormat = "router_bundle"
 	ArtifactFormatDecisionBundle     ArtifactFormat = "decision_bundle"
+	ArtifactFormatRewardBundle       ArtifactFormat = "reward_bundle"
 	ArtifactFormatReference          ArtifactFormat = "reference"
 )
 
@@ -488,7 +489,7 @@ type EvalOutputUsage struct {
 
 // EvalReport is generated from the OpenAPI schema.
 type EvalReport struct {
-	// MetricName Selection metric: eval_loss (sft, router, decision), preference_accuracy (dpo), eval_kl (cartridge), recall_at_10 (embedding).
+	// MetricName Selection metric: eval_loss (sft, router, decision, off-policy distill, pointwise-only reward), preference_accuracy (dpo, reward), eval_kl (cartridge, on-policy distill), recall_at_10 (embedding).
 	MetricName   string   `json:"metric_name"`
 	SelectedStep int      `json:"selected_step"`
 	BestStep     *int     `json:"best_step"`
@@ -496,42 +497,52 @@ type EvalReport struct {
 	TrainRecords int      `json:"train_records"`
 	EvalRecords  int      `json:"eval_records"`
 	Warnings     []string `json:"warnings"`
-	// EvalLoss Written by: sft, dpo, router, decision.
+	// EvalLoss Written by: sft, dpo, router, decision, distill, reward.
 	EvalLoss *float64 `json:"eval_loss,omitempty"`
-	// EvalTokenAccuracy Written by: sft.
+	// EvalTokenAccuracy Written by: sft, distill.
 	EvalTokenAccuracy *float64 `json:"eval_token_accuracy,omitempty"`
 	// TrainedTokenFraction Written by: sft.
 	TrainedTokenFraction *float64 `json:"trained_token_fraction,omitempty"`
-	// TrainExamples Written by: sft.
+	// TrainExamples Written by: sft, distill.
 	TrainExamples *int `json:"train_examples,omitempty"`
-	// EvalExamples Written by: sft, router, decision.
+	// EvalExamples Written by: sft, router, decision, distill.
 	EvalExamples *int `json:"eval_examples,omitempty"`
 	// SelectionExamples Written by: router, decision.
 	SelectionExamples *int `json:"selection_examples,omitempty"`
 	// Truncated Written by: sft, dpo.
 	Truncated *int `json:"truncated,omitempty"`
-	// PreferenceAccuracy Written by: dpo.
+	// PreferenceAccuracy Share of held-out pairs whose chosen answer outscores the rejected one. Written by: dpo, reward.
 	PreferenceAccuracy *float64 `json:"preference_accuracy,omitempty"`
-	// RewardMargin Written by: dpo.
+	// RewardMargin Written by: dpo, reward.
 	RewardMargin *float64 `json:"reward_margin,omitempty"`
 	// Beta Written by: dpo.
 	Beta *float64 `json:"beta,omitempty"`
-	// TrainPairs Written by: dpo, embedding.
+	// TrainPairs Written by: dpo, embedding, reward.
 	TrainPairs *int `json:"train_pairs,omitempty"`
-	// EvalPairs Written by: dpo, embedding.
+	// EvalPairs Written by: dpo, embedding, reward.
 	EvalPairs *int `json:"eval_pairs,omitempty"`
-	// DroppedRecords Written by: dpo, embedding.
+	// DroppedRecords Written by: dpo, embedding, reward.
 	DroppedRecords *int `json:"dropped_records,omitempty"`
-	// EvalKL Written by: cartridge.
+	// TrainPoints Written by: reward (pointwise).
+	TrainPoints *int `json:"train_points,omitempty"`
+	// EvalPoints Written by: reward (pointwise).
+	EvalPoints *int `json:"eval_points,omitempty"`
+	// PointwiseBrier Mean squared error of sigmoid(reward) against the held-out scores. Written by: reward (pointwise).
+	PointwiseBrier *float64 `json:"pointwise_brier,omitempty"`
+	// EvalKL Written by: cartridge, distill.
 	EvalKL *float64 `json:"eval_kl,omitempty"`
+	// BaseKL Held-out KL of the untrained student to the teacher. Written by: distill (on-policy).
+	BaseKL *float64 `json:"base_kl,omitempty"`
 	// NoContextKL Written by: cartridge.
 	NoContextKL *float64 `json:"no_context_kl,omitempty"`
-	// KLReduction Written by: cartridge.
+	// KLReduction Written by: cartridge, distill.
 	KLReduction *float64 `json:"kl_reduction,omitempty"`
 	// NumTokens Written by: cartridge.
 	NumTokens *int `json:"num_tokens,omitempty"`
-	// Teacher Written by: cartridge.
+	// Teacher Written by: cartridge, distill.
 	Teacher *string `json:"teacher,omitempty"`
+	// Rollout Written by: distill.
+	Rollout *EvalReportRollout `json:"rollout,omitempty"`
 	// Candidates Written by: router.
 	Candidates []string `json:"candidates,omitempty"`
 	// FallbackModel Written by: router.
@@ -582,11 +593,16 @@ var knownEvalReportFields = map[string]bool{
 	"train_pairs":            true,
 	"eval_pairs":             true,
 	"dropped_records":        true,
+	"train_points":           true,
+	"eval_points":            true,
+	"pointwise_brier":        true,
 	"eval_kl":                true,
+	"base_kl":                true,
 	"no_context_kl":          true,
 	"kl_reduction":           true,
 	"num_tokens":             true,
 	"teacher":                true,
+	"rollout":                true,
 	"candidates":             true,
 	"fallback_model":         true,
 	"fallback_quality":       true,
@@ -662,6 +678,15 @@ func (m *EvalReportBaseline) UnmarshalJSON(data []byte) error {
 	m.AdditionalProperties = extra
 	return nil
 }
+
+// EvalReportRollout Written by: distill.
+type EvalReportRollout string
+
+// Values of EvalReportRollout.
+const (
+	EvalReportRolloutOnPolicy  EvalReportRollout = "on_policy"
+	EvalReportRolloutOffPolicy EvalReportRollout = "off_policy"
+)
 
 // EvalRubricItem is generated from the OpenAPI schema.
 type EvalRubricItem struct {
@@ -1247,16 +1272,26 @@ type PlanRunResponse struct {
 	EstimatedCostUSD      float64           `json:"estimated_cost_usd"`
 	PricePerMillionTokens float64           `json:"price_per_million_tokens"`
 	TrainedTokenFraction  float64           `json:"trained_token_fraction"`
-	// Labeling Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+	// Labeling The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
 	Labeling *PlanRunResponseLabeling `json:"labeling"`
-	Warnings []string                 `json:"warnings"`
+	// Teacher On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).
+	Teacher  *PlanRunResponseTeacher `json:"teacher"`
+	Warnings []string                `json:"warnings"`
 }
 
-// PlanRunResponseLabeling Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+// PlanRunResponseLabeling The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
 type PlanRunResponseLabeling struct {
 	EstimatedModelCalls int     `json:"estimated_model_calls"`
 	EstimatedJudgeCalls int     `json:"estimated_judge_calls"`
 	EstimatedCostUSD    float64 `json:"estimated_cost_usd"`
+}
+
+// PlanRunResponseTeacher On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).
+type PlanRunResponseTeacher struct {
+	Model                 string  `json:"model"`
+	PricePerMillionTokens float64 `json:"price_per_million_tokens"`
+	EstimatedTokens       int     `json:"estimated_tokens"`
+	EstimatedCostUSD      float64 `json:"estimated_cost_usd"`
 }
 
 // PoolingSpec is generated from the OpenAPI schema.
@@ -1344,13 +1379,15 @@ type RecipeSpec struct {
 	ContextURI        *string              `json:"context_uri,omitempty"`
 	NumTokens         *int                 `json:"num_tokens,omitempty"`
 	Temp              *float64             `json:"temp,omitempty"`
-	Teacher           *string              `json:"teacher,omitempty"`
-	Optimizer         *OptimizerSpec       `json:"optimizer,omitempty"`
+	// Teacher CartridgeRecipe and DistillRecipe: the model to learn from. DistillRecipe also takes an artifact (name@version) with rollout off_policy.
+	Teacher   *string        `json:"teacher,omitempty"`
+	Rollout   *RolloutSpec   `json:"rollout,omitempty"`
+	Optimizer *OptimizerSpec `json:"optimizer,omitempty"`
 	// EvalEvery Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
 	EvalEvery any          `json:"eval_every,omitempty"`
 	Loss      *LossSpec    `json:"loss,omitempty"`
 	Pool      *PoolingSpec `json:"pool,omitempty"`
-	// Rubric RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.
+	// Rubric RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training. RewardModelRecipe: a score name in [0, 1] on records ending in an assistant turn, trained pointwise next to the chosen/rejected pairs.
 	Rubric any `json:"rubric,omitempty"`
 	// Pricing RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
 	Pricing map[string]float64 `json:"pricing,omitempty"`
@@ -1510,7 +1547,7 @@ type ResolvedRunConfig struct {
 	Optimizer            OptimizerSpec              `json:"optimizer"`
 	CheckpointTTLDays    int                        `json:"checkpoint_ttl_days"`
 	Split                ResolvedRunConfigSplit     `json:"split"`
-	// LabelEvalID Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.
+	// LabelEvalID The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).
 	LabelEvalID  *string        `json:"label_eval_id"`
 	BaseArtifact *BaseArtifact  `json:"base_artifact"`
 	RecipeParams map[string]any `json:"recipe_params"`
@@ -1606,6 +1643,22 @@ const (
 type ResumeRunRequest struct {
 	MaxCostUSD *float64 `json:"max_cost_usd,omitempty"`
 }
+
+// RolloutSpec is a union of object shapes; set the fields of exactly one variant.
+type RolloutSpec struct {
+	Kind RolloutSpecKind `json:"kind"`
+	// MaxNewTokens Length of each student answer; auto (default) sizes it from the assistant turns in your records (256 without any).
+	MaxNewTokens any `json:"max_new_tokens,omitempty"`
+}
+
+// RolloutSpecKind is an enumeration of allowed values.
+type RolloutSpecKind string
+
+// Values of RolloutSpecKind.
+const (
+	RolloutSpecKindOnPolicy  RolloutSpecKind = "on_policy"
+	RolloutSpecKindOffPolicy RolloutSpecKind = "off_policy"
+)
 
 // RouteRequest is generated from the OpenAPI schema.
 type RouteRequest struct {

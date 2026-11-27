@@ -58,7 +58,7 @@ Artifact = TypedDict(
     },
 )
 
-ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reference'] | None"
+ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reward_bundle', 'reference'] | None"
 
 BaseArtifact = TypedDict(
     "BaseArtifact",
@@ -371,11 +371,16 @@ EvalReport = TypedDict(
         "train_pairs": "NotRequired[int]",
         "eval_pairs": "NotRequired[int]",
         "dropped_records": "NotRequired[int]",
+        "train_points": "NotRequired[int]",
+        "eval_points": "NotRequired[int]",
+        "pointwise_brier": "NotRequired[float | None]",
         "eval_kl": "NotRequired[float | None]",
+        "base_kl": "NotRequired[float | None]",
         "no_context_kl": "NotRequired[float | None]",
         "kl_reduction": "NotRequired[float | None]",
         "num_tokens": "NotRequired[int]",
         "teacher": "NotRequired[str]",
+        "rollout": "NotRequired[Literal['on_policy', 'off_policy']]",
         "candidates": "NotRequired[list[str]]",
         "fallback_model": "NotRequired[str]",
         "fallback_quality": "NotRequired[float | None]",
@@ -635,6 +640,7 @@ PlanRunResponse = TypedDict(
         "price_per_million_tokens": "float",
         "trained_token_fraction": "float",
         "labeling": "dict[str, Any] | None",
+        "teacher": "dict[str, Any] | None",
         "warnings": "list[str]",
     },
 )
@@ -736,6 +742,7 @@ RecipeSpec = TypedDict(
         "num_tokens": "NotRequired[int]",
         "temp": "NotRequired[float]",
         "teacher": "NotRequired[str]",
+        "rollout": "NotRequired[RolloutSpec]",
         "optimizer": "NotRequired[OptimizerSpec]",
         "eval_every": "NotRequired[Literal['auto'] | int]",
         "loss": "NotRequired[LossSpec]",
@@ -857,6 +864,8 @@ ResumeRunRequest = TypedDict(
         "max_cost_usd": "NotRequired[float]",
     },
 )
+
+RolloutSpec: TypeAlias = "dict[str, Any]"
 
 RouteRequest = TypedDict(
     "RouteRequest",
@@ -1153,7 +1162,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "EmbedResponse": frozenset({"data", "model", "usage"}),
     "EvalModelSummary": frozenset({"ci_high", "ci_low", "cost_per_1k_tasks_usd", "errors", "model", "overall", "pass_at_k", "tasks", "tokens_per_task", "vs_baseline"}),
     "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
-    "EvalReport": frozenset({"baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_records", "trained_token_fraction", "truncated", "warnings"}),
+    "EvalReport": frozenset({"base_kl", "baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_points", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "pointwise_brier", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "rollout", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_points", "train_records", "trained_token_fraction", "truncated", "warnings"}),
     "EvalRubricItem": frozenset({"flags", "kind", "model", "name", "pattern", "prompt", "runtime", "validator", "weight"}),
     "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "models", "name", "pass_threshold", "progress", "rubric", "samples", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
     "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),
@@ -1168,7 +1177,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "PlanEvalRequest": frozenset({"baseline", "dataset", "dataset_version", "limit", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
     "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
-    "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "labeling", "price_per_million_tokens", "resolved_config", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
+    "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "labeling", "price_per_million_tokens", "resolved_config", "teacher", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
     "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
     "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
@@ -1177,7 +1186,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
-    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "epochs", "eval_every", "fallback", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
+    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "epochs", "eval_every", "fallback", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rollout", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
     "RecordFeedbackRequest": frozenset({"events"}),
     "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
@@ -1205,7 +1214,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
 
 SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "deployments:write", "feedback:write", "env:serve",),
-    "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference", None,),
+    "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference", None,),
     "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
     "ImportStatus": ("queued", "running", "completed", "failed",),
     "JobKind": ("train", "import",),
