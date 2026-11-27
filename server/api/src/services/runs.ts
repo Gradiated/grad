@@ -1233,16 +1233,9 @@ export const createRunLifecycle = (
 
       const run = await loadRun(workspaceId, checkpoint.run_id);
       const releaseName = name ?? run.name;
-      // Natural key (checkpoint, name): promoting twice returns one release.
-      const promoted = await store.artifacts.findPromoted(
-        workspaceId,
-        checkpoint.id,
-        releaseName,
-      );
-      if (promoted) return toPublicArtifact(promoted);
-
       // The release references the checkpoint's immutable blob (no copy);
-      // the expiry sweep keeps blobs a release shares.
+      // the expiry sweep keeps blobs a release shares. Natural key
+      // (checkpoint, name): promoting twice returns the first release.
       const artifact = await store.artifacts.createRelease({
         workspaceId,
         name: releaseName,

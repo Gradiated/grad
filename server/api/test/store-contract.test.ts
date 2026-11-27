@@ -892,12 +892,12 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect((await store.artifacts.get("ws_a", "a@latest"))?.id).toBe(a3.id);
       expect(await store.artifacts.get("ws_a", "b@latest")).toBeNull();
       expect(await store.artifacts.get("ws_b", a1.id)).toBeNull();
-      expect(
-        (await store.artifacts.findPromoted("ws_a", "ckpt_x", "a"))?.id,
-      ).toBe(a2.id);
-      expect(
-        await store.artifacts.findPromoted("ws_a", "ckpt_x", "b"),
-      ).toBeNull();
+      // (checkpoint, name) is the natural key: concurrent duplicates get one
+      // release (r8 E2: 8 concurrent promotes made 4).
+      const dups = await Promise.all(
+        Array.from({ length: 8 }, () => release("a", "ws_a", "ckpt_x")),
+      );
+      expect(new Set(dups.map((d) => d.id))).toEqual(new Set([a2.id]));
       const listed = await store.artifacts.list(
         "ws_a",
         { name: "a" },

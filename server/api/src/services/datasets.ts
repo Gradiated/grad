@@ -52,6 +52,12 @@ export interface DatasetService {
     name: string,
     version?: number,
   ): Promise<ResolvedDatasetVersion>;
+  /**
+   * Replaces the head version's record_count (each part's own distinct
+   * records, summed) with its merged count, after records arrived whose ids
+   * may already be in the dataset.
+   */
+  settleCount(dataset: Dataset): Promise<Dataset>;
   /** A version's records with later parts (score updates) merged in by id. */
   readRecords(version: DatasetVersion): Promise<DatasetRecord[]>;
   /**
@@ -166,6 +172,24 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
     return { dataset, version: row };
   };
 
+  const settleCount = async (dataset: Dataset): Promise<Dataset> => {
+    const version = await store.datasets.getVersion(
+      dataset.id,
+      dataset.version,
+    );
+    if (!version) return dataset;
+    const { total } = await indexes.get(version);
+    if (total === dataset.record_count) return dataset;
+
+    return (
+      (await store.datasets.setRecordCount(
+        dataset.id,
+        dataset.version,
+        total,
+      )) ?? dataset
+    );
+  };
+
   return {
     create: (workspaceId, name, metadata, idempotency) =>
       createOnce(
@@ -213,23 +237,22 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
           );
           // Re-pushing records the dataset already holds is a no-op: the
           // current version is returned and no new one is created.
-          const current = await store.datasets.getVersion(
-            dataset.id,
-            dataset.version,
-          );
-          if (current?.parts.some((p) => p.sha256 === part.sha256)) {
-            return get(workspaceId, name);
-          }
-          return store.datasets.appendVersion({
+          const appended = await store.datasets.appendPush({
             datasetId: dataset.id,
-            parts: [part],
+            part,
             ...(metadata ? { metadata } : {}),
             idempotency,
           });
+          if (!appended) return get(workspaceId, name);
+          // Only caller-chosen ids can repeat ones the dataset holds.
+          return appended.version > 1 && records.some((r) => r.id)
+            ? settleCount(appended)
+            : appended;
         },
       );
     },
     resolve,
+    settleCount,
     readRecords,
     filter: async (workspaceId, name, request) => {
       const { version: wanted, name: given, ...filter } = request;

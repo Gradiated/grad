@@ -217,6 +217,39 @@ describe("datasets, uploads and imports", () => {
     expect(last.body).toMatchObject({ version: 2, record_count: 3 });
   });
 
+  it("counts merged records when a push repeats ids (r8 E1)", async () => {
+    const withIds = (n: number, tag: string) =>
+      sftRecords(n, tag).map((r, i) => ({ ...r, id: `id${i}` }));
+    await t.json("/v1/datasets/merged/records", {
+      body: { records: withIds(3, "a") },
+    });
+    const changed = await t.json("/v1/datasets/merged/records", {
+      body: { records: withIds(2, "b") },
+    });
+    expect(changed.body).toMatchObject({ version: 2, record_count: 3 });
+    expect((await t.json("/v1/datasets/merged")).body).toMatchObject({
+      record_count: 3,
+    });
+    const listed = await t.json<{ total: number }>(
+      "/v1/datasets/merged/records",
+    );
+    expect(listed.body.total).toBe(3);
+  });
+
+  it("makes concurrent identical pushes one version (r8 E3)", async () => {
+    const records = sftRecords(5, "same");
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        t.json("/v1/datasets/racing/records", { body: { records } }),
+      ),
+    );
+    expect(results.map((r) => r.status).every((s) => s < 300)).toBe(true);
+    expect((await t.json("/v1/datasets/racing")).body).toMatchObject({
+      version: 1,
+      record_count: 5,
+    });
+  });
+
   it("keeps every concurrent append (no in-process locks)", async () => {
     await Promise.all(
       Array.from({ length: 10 }, (_, i) =>

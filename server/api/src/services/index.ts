@@ -42,6 +42,7 @@ export const createServices = (deps: AppDependencies): Services => {
   const imports = createImportService(deps, {
     uploads,
     sources,
+    datasets,
     queue: getQueue,
   });
   const evals = createEvalService(deps, { datasets, usage, queue: getQueue });

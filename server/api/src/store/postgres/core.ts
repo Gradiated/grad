@@ -119,13 +119,15 @@ export const createDatasetRepository = (
     version: number,
     parts: readonly DatasetPart[],
     idempotency: { key: string; hash: string } | undefined,
-  ) => {
+    push = false,
+  ): Promise<boolean> => {
     for (const [i, part] of parts.entries()) {
-      await db.query(
+      const inserted = await db.query(
         `INSERT INTO grad_dataset_parts
            (dataset_id, version, key, count, resets, sha256, bytes, idempotency_key, request_hash,
-            created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz)`,
+            created_at, push_sha256)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11)
+         ON CONFLICT (dataset_id, push_sha256) DO NOTHING RETURNING id`,
         [
           datasetId,
           version,
@@ -137,9 +139,13 @@ export const createDatasetRepository = (
           i === 0 ? (idempotency?.key ?? null) : null,
           i === 0 ? (idempotency?.hash ?? null) : null,
           nowIso(clock),
+          push ? part.sha256 : null,
         ],
       );
+      if (inserted.length === 0) return false;
     }
+
+    return true;
   };
 
   /**
@@ -251,6 +257,43 @@ export const createDatasetRepository = (
 
         return dataset;
       }),
+    appendPush: async ({ datasetId, part, metadata, idempotency }) => {
+      const duplicate = new Error("duplicate push");
+      try {
+        return await db.atomic(async () => {
+          const dataset = await bump(datasetId, [part], metadata);
+          // The row lock taken by bump serializes pushes; the unique key
+          // makes an identical one roll back to a no-op.
+          if (
+            !(await insertParts(
+              datasetId,
+              dataset.version,
+              [part],
+              idempotency,
+              true,
+            ))
+          ) {
+            throw duplicate;
+          }
+
+          return dataset;
+        });
+      } catch (error) {
+        if (error === duplicate) return null;
+        throw error;
+      }
+    },
+    setRecordCount: async (datasetId, version, count) => {
+      const row = first(
+        await db.query(
+          `UPDATE grad_datasets SET record_count = $3
+           WHERE id = $1 AND version = $2 RETURNING *`,
+          [datasetId, version, count],
+        ),
+      );
+
+      return row ? toDataset(row) : null;
+    },
     findIdempotentPush: (datasetId, key) =>
       findHit(
         db,

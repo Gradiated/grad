@@ -160,6 +160,7 @@ export const createArtifactRepository = (
             eval_report, created_at)
          VALUES ($1, $2, 'release', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                  $15::jsonb, $16::jsonb, $17::timestamptz)
+         ON CONFLICT (workspace_id, source_id, name) WHERE kind = 'release' DO NOTHING
          RETURNING *`,
         [
           `${input.name}@${version}`,
@@ -181,21 +182,20 @@ export const createArtifactRepository = (
           at.toISOString(),
         ],
       );
+      // Natural key (checkpoint, name): a duplicate promote gets the first.
+      const row =
+        rows[0] ??
+        first(
+          await db.query(
+            `SELECT * FROM grad_artifacts
+             WHERE kind = 'release' AND workspace_id = $1 AND source_id = $2 AND name = $3`,
+            [input.workspaceId, input.sourceId, input.name],
+          ),
+        );
+      if (!row) throw new Error(`Release '${input.name}' was not created.`);
 
-      return toArtifact(rows[0] ?? {});
+      return toArtifact(row);
     }),
-  findPromoted: async (workspaceId, sourceId, name) => {
-    const row = first(
-      await db.query(
-        `SELECT * FROM grad_artifacts
-         WHERE kind = 'release' AND workspace_id = $1 AND source_id = $2 AND name = $3
-         ORDER BY created_at LIMIT 1`,
-        [workspaceId, sourceId, name],
-      ),
-    );
-
-    return row ? toArtifact(row) : null;
-  },
   get: async (workspaceId, reference) => {
     const row = reference.endsWith("@latest")
       ? first(

@@ -28,6 +28,7 @@ import type {
   PageRequest,
 } from "../store/types.js";
 import { writeRecordsPart } from "./dataset-records.js";
+import type { DatasetService } from "./datasets.js";
 import {
   DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
@@ -131,6 +132,7 @@ export const createImportService = (
   collaborators: {
     uploads: UploadService;
     sources: SourceService;
+    datasets: Pick<DatasetService, "settleCount">;
     queue: () => JobQueue;
   },
 ): ImportService => {
@@ -486,45 +488,64 @@ export const createImportService = (
         drop_reasons: [],
       };
       const staged = await store.datasets.listStaged(job.id, job.attempt);
-      const { completed, orphans } = await store.transaction(async (tx) => {
-        const benchmark = benchmarkMetadata(job.source);
-        const { dataset, orphanKeys } = await tx.datasets.commitStaged({
-          datasetId: job.dataset_id,
-          jobId: job.id,
-          attempt: job.attempt,
-          ...(benchmark ? { metadata: benchmark } : {}),
-          // A sync that found nothing new adds no empty version.
-          keepVersionIfEmpty: isSyncPayload(job.source),
-        });
-        const updated = await tx.imports.update(
-          id,
-          {
-            ...RELEASE,
-            status: "completed",
-            finished_at: now,
-            imported_count: staged.count,
-            dropped_count: staged.dropped + summary.dropped_count,
-            detected_scores: [
-              ...new Set([...job.detected_scores, ...summary.detected_scores]),
-            ].sort(),
-            drop_reasons: [...job.drop_reasons, ...summary.drop_reasons].slice(
-              0,
-              MAX_DROP_REASONS,
-            ),
-            dataset_version: dataset.version,
-            error: null,
-          },
-          fenceOf(job, ["running"]),
-        );
-        if (!updated) throw leaseLost(id);
-        if (isSyncPayload(job.source)) {
-          await collaborators.sources.completeSync(tx, job, summary.watermark);
-        }
+      const { completed, orphans, dataset } = await store.transaction(
+        async (tx) => {
+          const benchmark = benchmarkMetadata(job.source);
+          const { dataset, orphanKeys } = await tx.datasets.commitStaged({
+            datasetId: job.dataset_id,
+            jobId: job.id,
+            attempt: job.attempt,
+            ...(benchmark ? { metadata: benchmark } : {}),
+            // A sync that found nothing new adds no empty version.
+            keepVersionIfEmpty: isSyncPayload(job.source),
+          });
+          const updated = await tx.imports.update(
+            id,
+            {
+              ...RELEASE,
+              status: "completed",
+              finished_at: now,
+              imported_count: staged.count,
+              dropped_count: staged.dropped + summary.dropped_count,
+              detected_scores: [
+                ...new Set([
+                  ...job.detected_scores,
+                  ...summary.detected_scores,
+                ]),
+              ].sort(),
+              drop_reasons: [
+                ...job.drop_reasons,
+                ...summary.drop_reasons,
+              ].slice(0, MAX_DROP_REASONS),
+              dataset_version: dataset.version,
+              error: null,
+            },
+            fenceOf(job, ["running"]),
+          );
+          if (!updated) throw leaseLost(id);
+          if (isSyncPayload(job.source)) {
+            await collaborators.sources.completeSync(
+              tx,
+              job,
+              summary.watermark,
+            );
+          }
 
-        return { completed: updated, orphans: orphanKeys };
-      });
+          return { completed: updated, orphans: orphanKeys, dataset };
+        },
+      );
       // Parts staged by earlier attempts are never visible: drop them.
       await deleteObjects(orphans);
+      // Synced or imported ids may already be in the dataset (an updated
+      // trace, a re-import). Best effort: the next writer settles it again.
+      if (
+        staged.count > 0 &&
+        (dataset.version > 1 || staged.parts.length > 1)
+      ) {
+        await collaborators.datasets
+          .settleCount(dataset)
+          .catch(() => undefined);
+      }
 
       return toPublicImport(completed);
     },

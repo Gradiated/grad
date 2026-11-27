@@ -557,6 +557,10 @@ describe("sources", () => {
     expect(late.imported_count).toBe(1);
     expect(await dataset()).toBe(4);
     expect(await total()).toBe(4);
+    // A trace updated after the watermark comes back whole: no new record.
+    await syncWith([record("t3"), record("t6")]);
+    expect(await dataset()).toBe(5);
+    expect(await total()).toBe(5);
     // A full resync: the reset marker, then what the provider holds now.
     await syncWith(
       [

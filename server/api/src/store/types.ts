@@ -130,6 +130,25 @@ export interface DatasetRepository {
     metadata?: Record<string, unknown>;
     idempotency?: IdempotencyInput | undefined;
   }): Promise<Dataset>;
+  /**
+   * Appends a pushed part as the next version, or returns null (and changes
+   * nothing) when the dataset already holds a push with the same content.
+   */
+  appendPush(input: {
+    datasetId: string;
+    part: DatasetPart;
+    metadata?: Record<string, unknown>;
+    idempotency?: IdempotencyInput | undefined;
+  }): Promise<Dataset | null>;
+  /**
+   * Sets the merged record count while `version` is still current; null
+   * when a newer version superseded it (its writer settles its own count).
+   */
+  setRecordCount(
+    datasetId: string,
+    version: number,
+    count: number,
+  ): Promise<Dataset | null>;
   /** The push an Idempotency-Key already appended to this dataset. */
   findIdempotentPush(
     datasetId: string,
@@ -542,12 +561,6 @@ export interface ArtifactRepository {
     manifest: Record<string, unknown>;
     evalReport: EvalReport | null;
   }): Promise<ArtifactRecord>;
-  /** The release promoted from checkpoint `sourceId` under `name`, if any. */
-  findPromoted(
-    workspaceId: string,
-    sourceId: string,
-    name: string,
-  ): Promise<ArtifactRecord | null>;
   /** `reference` is a release id or `name@latest`. */
   get(workspaceId: string, reference: string): Promise<ArtifactRecord | null>;
   list(
