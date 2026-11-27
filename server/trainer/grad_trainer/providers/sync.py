@@ -5,7 +5,8 @@ S}``. For most providers both are ISO timestamps: traces are fetched from T, and
 ``min(S, now - provider.rescan_window)`` so late edits still land. Only rows up to ``now -
 SETTLE`` are taken (providers expose writes with a delay); the rest are picked up next time, so
 a re-sync of the same window emits nothing new. ``cursor_watermark`` providers keep their own
-opaque cursor instead. ``full=True`` ignores the watermark and re-reads everything.
+opaque cursor instead. ``full=True`` ignores the watermark, re-reads everything and first emits
+the reset marker, so the new dataset version holds only what this sync read.
 
 Records are deduped by provider trace id within a sync (an identical re-read is dropped, a
 changed one is re-emitted and wins when the parts are merged). Score updates for the same trace
@@ -16,14 +17,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
 from ..errors import PaginationLoopError
+from ..records import RESET_RECORD
 from .base import Page, Provider, ScoreUpdate, iso, parse_time
 
-SETTLE = timedelta(minutes=10)  # Langfuse documents ~10 min before reads see new data
+# Langfuse documents ~10 min before reads see new data. GRAD_SOURCES_SETTLE_SECONDS overrides
+# it (the live tests' fake providers are consistent at once).
+SETTLE = timedelta(seconds=float(os.environ.get("GRAD_SOURCES_SETTLE_SECONDS") or 600))
 DEFAULT_BATCH_SIZE = 500
 MAX_PAGES = 100_000
 MAX_EMPTY_PAGES = 20  # some APIs (Langfuse) may return empty pages that still carry a cursor
@@ -88,6 +93,9 @@ class SyncEngine:
         self._seen: dict[str, bytes] = {}
         self._traces: dict[str, dict[str, Any]] = {}
         self._scores: dict[str, ScoreUpdate] = {}
+        if full:
+            # A rebuild: readers drop every part before this marker (records.merge_records).
+            self.emit_batch([dict(RESET_RECORD)])
 
         traces_since = wm.get("traces")
         scores_since = wm.get("scores")

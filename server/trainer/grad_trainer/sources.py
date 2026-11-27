@@ -11,6 +11,14 @@ from .records import NATIVE_FIELDS
 from .errors import SourceUnavailableError
 from .models import is_offline
 
+def redact(text: str, *secrets: Any) -> str:
+    """``text`` with every secret (and each ``:``-separated part of one) replaced by ``***``."""
+    parts = {p for s in secrets if isinstance(s, str) and s for p in (s, *s.split(":")) if len(p) >= 4}
+    for part in sorted(parts, key=len, reverse=True):
+        text = text.replace(part, "***")
+    return text
+
+
 # A row is (location for error messages, parsed object or None, error or None).
 Row = tuple[str, Any, str | None]
 
@@ -102,9 +110,12 @@ def hf_rows(source: dict[str, Any]) -> Iterator[Row]:
     columns.update({f: str(source[f]) for f in HF_MAPPABLE if isinstance(source.get(f), str) and f not in ("id",)})
     limit = source.get("limit")
     try:
-        ds = datasets.load_dataset(str(repo), config, split=split, revision=source.get("revision"), streaming=True)
+        ds = datasets.load_dataset(
+            str(repo), config, split=split, revision=source.get("revision"), streaming=True, token=source.get("token") or None
+        )
     except Exception as exc:
-        raise SourceUnavailableError(f"Can't load Hugging Face dataset '{repo}' split '{split}': {exc}") from exc
+        detail = redact(str(exc), source.get("token"))
+        raise SourceUnavailableError(f"Can't load Hugging Face dataset '{repo}' split '{split}': {detail}") from exc
 
     checked = False
     for index, row in enumerate(ds):

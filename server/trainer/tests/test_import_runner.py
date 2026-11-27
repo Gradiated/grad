@@ -88,6 +88,15 @@ class ImportRunnerTests(TempDirCase):
             self.assertEqual(batches[0][0]["id"], "org/chats:train_sft:0")
             self.assertEqual(batches[0][0]["messages"][0]["content"], "q0")
             self.assertEqual(calls[0][2]["split"], "train_sft")
+            self.assertIsNone(calls[0][2]["token"])
+            # A gated dataset: the token from the workspace secret reaches the Hub client only.
+            self.run_import({"type": "hf", "repo": "org/gated", "messages": "conv", "token": "hf_secret_token"})
+            self.assertEqual(calls[-1][2]["token"], "hf_secret_token")
+            fake.load_dataset = mock.Mock(side_effect=ValueError("401 for token hf_secret_token"))
+            with self.assertRaises(SourceUnavailableError) as raised:
+                self.run_import({"type": "hf", "repo": "org/gated", "token": "hf_secret_token"})
+            self.assertNotIn("hf_secret_token", str(raised.exception))
+            fake.load_dataset = load_dataset
             # Without a mapping, only DatasetRecord fields are kept.
             fake.load_dataset = lambda *a, **k: iter([{"query": "q", "positive": "d", "junk": 1}])
             _, batches = self.run_import({"type": "hf", "repo": "org/pairs"})

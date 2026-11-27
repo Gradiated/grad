@@ -479,6 +479,19 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in records], ["t1", "t1"])
         self.assertEqual(srv.bodies("complete")[0]["import_summary"]["watermark"], {"traces": "c1", "scores": "c1"})
 
+    def test_failed_sync_never_echoes_the_secret(self) -> None:
+        class Leaky:
+            def run(self, source, connector, *, emit_batch, workdir, source_page=None):  # type: ignore[no-untyped-def]
+                raise RuntimeError(f"auth failed for {source['secret']} (public {source['secret'].split(':')[0]})")
+
+        srv = self.server(jobs=[import_job({"kind": "provider", "provider": "langfuse", "secret": "pk-lf-abcd:sk-lf-wxyz"})])
+        result = self.worker(srv, importer=Leaky()).run_once()
+        self.assertEqual(result["status"], "failed")
+        error = srv.bodies("complete")[0]["error"]
+        self.assertNotIn("sk-lf-wxyz", error)
+        self.assertNotIn("pk-lf-abcd", error)
+        self.assertIn("auth failed for ***", error)
+
     def test_training_merges_score_updates_into_their_records(self) -> None:
         storage_lines = [
             {"id": "t1", "messages": [{"role": "user", "content": "q"}], "scores": {"thumbs": 0.0}},

@@ -16,7 +16,7 @@ from grad_trainer.errors import PaginationLoopError
 from grad_trainer.providers import Page, Provider, ScoreUpdate, SyncEngine
 from grad_trainer.providers.langfuse import LangfuseProvider
 from grad_trainer.providers.sync import pages
-from grad_trainer.records import merge_records
+from grad_trainer.records import RESET_RECORD, merge_records
 
 
 class Scripted(Provider):
@@ -118,6 +118,17 @@ class MergeTests(unittest.TestCase):
             [{"id": "a", "messages": [4], "scores": {"s": 1.0}, "expected_output": "fix"}, {"messages": [2]}, {"id": "b", "messages": [3], "scores": {"early": 1.0}}],
         )
         self.assertEqual(merge_records([{"id": "c", "messages": []}, {"id": "c", "messages": [1]}]), [{"id": "c", "messages": [1]}])
+
+    def test_reset_marker_drops_everything_before_it(self) -> None:
+        parts = [
+            {"id": "old", "messages": [1], "scores": {"s": 0.0}},
+            {"id": "a", "messages": [1], "scores": {"stale": 1.0}},
+            ScoreUpdate("pending", scores={"s": 1.0}).to_record("x"),
+            dict(RESET_RECORD),
+            {"id": "a", "messages": [2], "scores": {"s": 1.0}},
+            {"id": "pending", "messages": [3]},
+        ]
+        self.assertEqual(merge_records(parts), [{"id": "a", "messages": [2], "scores": {"s": 1.0}}, {"id": "pending", "messages": [3]}])
 
 
 class ImportSeamTests(unittest.TestCase):

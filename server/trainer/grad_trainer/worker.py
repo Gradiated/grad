@@ -37,6 +37,7 @@ from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
 from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
 from .records import merge_records
+from .sources import redact
 from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
@@ -706,6 +707,8 @@ class TrainerWorker:
         spec = job.get("import") or {}
         runner = self.import_runner
         source = dict(spec.get("source") or {})
+        # Provider keys and HF tokens arrive only in this claim; never echo them back.
+        secrets = (source.get("secret"), source.get("token"))
         connector = spec.get("connector")
         try:
             if source.get("kind") == "upload":
@@ -720,7 +723,7 @@ class TrainerWorker:
             raise
         except Exception as exc:
             return self._complete(
-                state, {"status": "failed", "error": f"download failed: {exc}"[:4000]}
+                state, {"status": "failed", "error": redact(f"download failed: {exc}", *secrets)[:4000]}
             )
 
         def emit_batch(records: list[dict[str, Any]]) -> None:
@@ -762,7 +765,7 @@ class TrainerWorker:
         except Exception as exc:
             return self._complete(
                 state,
-                {"status": "failed", "error": str(exc)[:4000] or type(exc).__name__},
+                {"status": "failed", "error": redact(str(exc), *secrets)[:4000] or type(exc).__name__},
             )
         return self._complete(
             state,

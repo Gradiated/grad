@@ -15,6 +15,9 @@ from typing import Any, Iterable
 
 MAX_DEPTH = 8
 SCORE_UPDATE = "score_update"
+DATASET_RESET = "dataset_reset"
+# A full source sync starts with this record: everything before it is dropped on read.
+RESET_RECORD: dict[str, Any] = {"id": "grad:reset", "metadata": {DATASET_RESET: True}}
 
 # DatasetRecord fields kept verbatim from native rows (server/api/src/contracts/datasets.ts).
 NATIVE_FIELDS = (
@@ -176,14 +179,23 @@ def _apply(target: dict[str, Any], patch: dict[str, Any]) -> None:
         target["expected_output"] = patch["expected_output"]
 
 
+def is_reset(record: dict[str, Any]) -> bool:
+    meta = record.get("metadata")
+    return isinstance(meta, dict) and meta.get(DATASET_RESET) is True
+
+
 def merge_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Fold dataset parts (in order) into one record per ``id``; see the module docstring.
-    Records without an id pass through unchanged."""
+    Records without an id pass through unchanged; a reset marker (a full source sync) drops
+    everything before it."""
     out: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
     position: dict[str, int] = {}
     pending: dict[str, dict[str, Any]] = {}  # updates that arrived before their trace
     for rec in records:
+        if is_reset(rec):
+            out, by_id, position, pending = [], {}, {}, {}
+            continue
         rid = rec.get("id")
         if not isinstance(rid, str) or not rid:
             out.append(rec)

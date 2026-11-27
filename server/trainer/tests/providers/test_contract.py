@@ -18,7 +18,7 @@ from fixtures.providers.base import NOW
 from grad_trainer.errors import PaginationLoopError, SourceAuthError
 from grad_trainer.providers import PROVIDERS, SyncEngine, build_provider
 from grad_trainer.providers.http import EgressPolicy
-from grad_trainer.records import is_score_update, merge_records
+from grad_trainer.records import RESET_RECORD, is_score_update, merge_records
 
 LOOPBACK = EgressPolicy(allow=(ipaddress.ip_network("127.0.0.0/8"),))
 LATER = NOW + timedelta(hours=1)
@@ -96,7 +96,8 @@ class ProviderContract:
         _, first = self.sync()
         self.fx.add_score(self.fx.trace_id(2), "resolved", 1.0, NOW + timedelta(minutes=20))
         records, result = self.sync(first.watermark, now=LATER, full=True)
-        merged = {r["id"]: r for r in merge_records(records)}
+        self.assertEqual(records[0], RESET_RECORD, "a rebuild starts with the reset marker")
+        merged = {r["id"]: r for r in merge_records([{"id": "stale", "messages": [{"role": "user", "content": "x"}]}, *records])}
         self.assertEqual(sorted(merged), self.all_ids())
         self.assertEqual(merged[self.fx.trace_id(2)]["scores"], {"resolved": 1.0})
         self.assertTrue(result.watermark["traces"])
