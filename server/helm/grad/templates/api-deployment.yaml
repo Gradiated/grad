@@ -48,6 +48,12 @@ spec:
                   name: {{ .Values.auth.existingSecret }}
                   key: {{ .Values.auth.adminKeyHashKey }}
                   optional: true
+            - name: TRAINER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.trainerApiKeyKey }}
+                  optional: true
             {{- if .Values.cloud.existingSecret }}
             - name: CLOUD_SERVICE_TOKEN
               valueFrom:

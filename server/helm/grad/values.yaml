@@ -6,7 +6,7 @@ api:
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
-    port: 8080
+    port: 8787
   authMode: api_key
   deployMode: disabled
   billingMode: noop

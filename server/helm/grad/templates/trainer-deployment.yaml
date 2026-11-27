@@ -49,7 +49,7 @@ spec:
               value: "http://{{ include "grad.fullname" . }}-api:{{ .Values.api.service.port }}"
             - name: GRAD_POLL_INTERVAL_S
               value: {{ .Values.trainer.pollIntervalSeconds | quote }}
-            - name: GRAD_API_KEY
+            - name: TRAINER_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.auth.existingSecret }}

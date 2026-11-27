@@ -26,17 +26,23 @@ services:
         condition: service_healthy
     environment:
       HOST: "0.0.0.0"
-      PORT: "8080"
+      PORT: "8787"
       DATABASE_URL: "postgres://grad:${GRAD_POSTGRES_PASSWORD:-grad_local_dev_only}@postgres:5432/grad"
+      # Local development default; the port is published on loopback only.
       AUTH_MODE: "${GRAD_AUTH_MODE:-none}"
-      DEPLOY_MODE: "${GRAD_DEPLOY_MODE:-local}"
+      ADMIN_API_KEY_HASH: "${GRAD_ADMIN_API_KEY_HASH:-}"
+      TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
+      DEPLOY_MODE: "${GRAD_DEPLOY_MODE:-disabled}"
+      INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-}"
+      INFERENCE_API_KEY: "${GRAD_INFERENCE_API_KEY:-}"
       STORAGE_DIR: "/var/lib/grad"
+    restart: unless-stopped
     ports:
-      - "${GRAD_PORT:-8080}:8080"
+      - "127.0.0.1:${GRAD_PORT:-8787}:8787"
     volumes:
       - grad-storage:/var/lib/grad
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8787/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -50,7 +56,8 @@ services:
       grad-server:
         condition: service_healthy
     environment:
-      GRAD_SERVER_URL: "http://grad-server:8080"
+      GRAD_SERVER_URL: "http://grad-server:8787"
+      TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
       GRAD_WORKER_ID: "local-cpu-trainer"
       GRAD_POLL_INTERVAL_S: "1.0"
 
@@ -64,7 +71,8 @@ services:
       grad-server:
         condition: service_healthy
     environment:
-      GRAD_SERVER_URL: "http://grad-server:8080"
+      GRAD_SERVER_URL: "http://grad-server:8787"
+      TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
       GRAD_WORKER_ID: "local-gpu-trainer"
       GRAD_POLL_INTERVAL_S: "1.0"
     deploy:

@@ -27,7 +27,8 @@ spec:
   triggers:
     - type: postgresql
       metadata:
-        query: "SELECT COUNT(*) FROM grad_runs WHERE status = 'queued'"
+        # Queued plus running (open-lease) jobs, so a scale-down never strands a running job.
+        query: "SELECT (SELECT COUNT(*) FROM grad_runs WHERE status = 'queued' OR worker_id IS NOT NULL) + (SELECT COUNT(*) FROM grad_import_jobs WHERE status = 'queued' OR worker_id IS NOT NULL)"
         targetQueryValue: {{ .Values.keda.targetQueuedRuns | quote }}
       authenticationRef:
         name: {{ include "grad.fullname" . }}-postgres-trigger-auth
