@@ -267,6 +267,7 @@ sdks/typescript/         @gradiated/grad
 sdks/go/                 github.com/Gradiated/grad/sdks/go
 sdks/rust/               grad-sdk crate
 scripts/generate-sdks.mjs  OpenAPI -> SDK transport codegen (`--check` in CI)
+scripts/check-docs-snippets.py  Runs the docs' Python and CLI blocks against a live stack
 tests/harness/           Live stack (Postgres, S3, fake Cloud) the SDK and CLI suites run against
 tests/fixtures/wire/     Wire fixtures every SDK replays, including the parity fixture
 ```
@@ -290,6 +291,15 @@ cargo test --workspace                       # Rust SDK + CLI
 
 grad local up --build                        # run the stack from this checkout
 ```
+
+To check the code blocks of the public training docs (a checkout of the website repo), build the CLI and run:
+
+```bash
+python3 scripts/check-docs-snippets.py --docs ../workspace/product/website/src/docs/training          # reference worker
+GRAD_TRAINER_PYTHON=/path/to/torch/python python3 scripts/check-docs-snippets.py --docs ... --cloud   # deploy, route, embed
+```
+
+It prints PASS, FAIL or SKIP (with the reason) for every block. Blocks that need a GPU, Hugging Face, the inference gateway or a cluster are skipped; the skip list and fixtures are at the top of the script.
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs all of this, plus the server on real Postgres and S3, every recipe on tiny models on CPU, the codegen drift check, and every SDK and the CLI against a live stack. Pull requests are welcome; please keep the self-hosted path free of Cloud-only dependencies.
 
