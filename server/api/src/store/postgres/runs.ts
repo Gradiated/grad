@@ -143,6 +143,17 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
 
     return row ? toRun(row) : null;
   },
+  heldBy: async (workerId) => {
+    const row = first(
+      await db.query(
+        `SELECT * FROM grad_runs WHERE worker_id = $1 AND status IN ('running', 'cancelled')
+         ORDER BY updated_at DESC LIMIT 1`,
+        [workerId],
+      ),
+    );
+
+    return row ? toRun(row) : null;
+  },
   listExpiredLeases: async (now, limit) =>
     (
       await db.query(

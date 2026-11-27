@@ -166,6 +166,8 @@ export interface ImportJobRepository {
   ): Promise<ImportJobRecord | null>;
   /** Oldest queued job → running, attempt + 1, lease set (SKIP LOCKED). */
   claimNext(input: ClaimInput): Promise<ImportJobRecord | null>;
+  /** The job `workerId` holds a lease on, if any (a claim retried after a lost response). */
+  heldBy(workerId: string): Promise<ImportJobRecord | null>;
   listExpiredLeases(now: Date, limit: number): Promise<ImportJobRecord[]>;
   /**
    * Records batch `batch` of an attempt once: false when (import, attempt,
@@ -205,7 +207,11 @@ export interface RunRecord {
   /** Total attempts ever started (monotonic; used in billing keys). */
   attempt: number;
   max_attempts: number;
-  /** Consecutive lease expiries since creation or the last resume. */
+  /**
+   * Attempts that ended without a result (lease expired or abandoned by a
+   * preempted worker) since creation or the last resume; at max_attempts the
+   * run fails.
+   */
   failed_attempts: number;
   /** Tokens of closed (billed) attempts; their cost is derived from them. */
   billed_tokens: number;
@@ -278,6 +284,8 @@ export interface RunRepository {
     input: ClaimInput & { recipes?: readonly RecipeKind[] | undefined },
   ): Promise<RunRecord | null>;
   /** Runs with an open attempt (worker set) whose lease has expired. */
+  /** The run `workerId` holds a lease on, if any (a claim retried after a lost response). */
+  heldBy(workerId: string): Promise<RunRecord | null>;
   listExpiredLeases(now: Date, limit: number): Promise<RunRecord[]>;
   /** Queue depth for autoscaling: queued + running (open attempts). */
 }

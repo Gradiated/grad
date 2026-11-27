@@ -23,7 +23,7 @@ describe("parseServerEnvironment", () => {
       AUTH_MODE: "api_key",
       DEPLOY_MODE: "disabled",
       BILLING_MODE: "noop",
-      MAX_ATTEMPTS: 3,
+      MAX_ATTEMPTS: 10,
     });
     expect(env.warnings).toEqual([]);
     expect(isLoopbackHost("::1")).toBe(true);

@@ -124,6 +124,28 @@ export const toPublicRun = (run: RunRecord): Run => ({
   finished_at: run.finished_at,
 });
 
+/**
+ * The one attempt rule: an attempt that ends without a result (lease expired,
+ * or abandoned by a preempted worker) counts, and the run fails once
+ * max_attempts of them have happened since creation or the last resume.
+ */
+const requeuePatch = (run: RunRecord, what: string, now: string): RunPatch => {
+  const failedAttempts = run.failed_attempts + 1;
+
+  return failedAttempts >= run.max_attempts
+    ? {
+        status: "failed",
+        failed_attempts: failedAttempts,
+        finished_at: now,
+        error: `${what}; ${failedAttempts} attempt(s) ended without a result (max_attempts=${run.max_attempts}).`,
+      }
+    : {
+        status: "queued",
+        failed_attempts: failedAttempts,
+        error: `${what}; requeued.`,
+      };
+};
+
 export const toPublicArtifact = ({
   storage_key: _key,
   ...artifact
@@ -472,26 +494,14 @@ export const createRunLifecycle = (
     let closed = 0;
 
     for (const run of expired) {
-      const failedAttempts =
-        run.status === "cancelled"
-          ? run.failed_attempts
-          : run.failed_attempts + 1;
-      const exhausted = failedAttempts >= run.max_attempts;
       const patch: RunPatch =
         run.status === "cancelled"
           ? { status: "cancelled", finished_at: now.toISOString() }
-          : exhausted
-            ? {
-                status: "failed",
-                failed_attempts: failedAttempts,
-                finished_at: now.toISOString(),
-                error: `The worker stopped heartbeating ${failedAttempts} time(s) (max_attempts=${run.max_attempts}); last error: ${run.error ?? "lease expired"}.`,
-              }
-            : {
-                status: "queued",
-                failed_attempts: failedAttempts,
-                error: `Attempt ${run.attempt} lost its lease; requeued.`,
-              };
+          : requeuePatch(
+              run,
+              `Attempt ${run.attempt} lost its lease`,
+              now.toISOString(),
+            );
 
       try {
         await store.transaction((tx) =>
@@ -758,6 +768,20 @@ export const createRunLifecycle = (
     claim: async (principal, input) => {
       const now = clock.now();
       await expireLeases(now);
+
+      // A worker retrying a claim whose response was lost gets its job back.
+      const held = await store.runs.heldBy(input.workerId);
+      if (held) {
+        const renewed = await store.runs.update(
+          held.id,
+          {
+            lease_expires_at: addSeconds(now, input.leaseSeconds).toISOString(),
+            lease_seconds: input.leaseSeconds,
+          },
+          { workerId: held.worker_id, attempt: held.attempt },
+        );
+        if (renewed) return buildJob(renewed);
+      }
 
       for (;;) {
         const run = await store.runs.claimNext({
@@ -1039,7 +1063,11 @@ export const createRunLifecycle = (
           run.status === "cancelled"
             ? { status: "cancelled", finished_at: now }
             : body.status === "abandoned"
-              ? { status: "queued", error: null }
+              ? requeuePatch(
+                  run,
+                  `Attempt ${run.attempt} was abandoned by its worker (shutdown or preemption)`,
+                  now,
+                )
               : {
                   status:
                     body.status === "cancelled" ? "cancelled" : body.status,

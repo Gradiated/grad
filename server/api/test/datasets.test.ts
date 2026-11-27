@@ -400,9 +400,15 @@ describe("datasets, uploads and imports", () => {
       body: { source: { kind: "hf", repo: "org/name" } },
     });
     const job = await worker.claim();
+    // A claim retried after a lost response returns the same job.
+    expect(await worker.claim()).toMatchObject({ id: job!.id, attempt: 1 });
     const aborted = await worker.complete(job!, { status: "abandoned" });
     expect(aborted.body.import).toMatchObject({ status: "queued" });
     const job2 = await worker.claim();
+    // Abandons count toward max_attempts like lease expiries.
+    expect(
+      (await t.deps.store.imports.getById(job2!.id))?.failed_attempts,
+    ).toBe(1);
     const stale = await worker.call(`/v1/trainer-jobs/${job2!.id}/records`, {
       worker_id: worker.workerId,
       attempt: 1,

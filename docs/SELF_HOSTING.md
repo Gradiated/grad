@@ -47,7 +47,7 @@ export GRAD_TRAINER_API_KEY=$(openssl rand -hex 32)   # shared by grad-server an
 | `INFERENCE_BASE_URL`, `INFERENCE_API_KEY` | none | OpenAI-compatible endpoint used by evals (your vLLM/SGLang with LoRA modules named by artifact id). Without it `POST /v1/evals` returns `501 inference_unavailable`. |
 | `JUDGE_BASE_URL`, `JUDGE_API_KEY` | inference endpoint | Endpoint for `Judge` rubric items (`GRAD_JUDGE_BASE_URL` is accepted as an alias). |
 | `GRAD_EXTRA_MODELS_JSON` | none | JSON array adding or overriding catalog models (the single price source for billing). |
-| `MAX_ATTEMPTS` | `3` | Lease expiries tolerated before a job fails. |
+| `MAX_ATTEMPTS` | `10` | Attempts that may end without a result (lease expired, or abandoned by a preempted worker) before a job fails. |
 
 ## Production Kubernetes (Helm)
 

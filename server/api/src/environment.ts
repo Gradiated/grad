@@ -42,7 +42,7 @@ const EnvironmentSchema = z.object({
   EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
   GRAD_EXTRA_MODELS_JSON: optionalString,
   BLOB_SIGNING_SECRET: optionalString,
-  MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(3),
+  MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
   MAINTENANCE_INTERVAL_MS: z.coerce.number().int().min(100).default(15_000),
 });
 

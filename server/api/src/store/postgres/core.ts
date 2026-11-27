@@ -330,6 +330,17 @@ export const createImportJobRepository = (
 
     return row ? toImportJob(row) : null;
   },
+  heldBy: async (workerId) => {
+    const row = first(
+      await db.query(
+        `SELECT * FROM grad_import_jobs WHERE worker_id = $1 AND status IN ('running', 'cancelled')
+         ORDER BY updated_at DESC LIMIT 1`,
+        [workerId],
+      ),
+    );
+
+    return row ? toImportJob(row) : null;
+  },
   listExpiredLeases: async (now, limit) =>
     (
       await db.query(

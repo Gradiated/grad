@@ -583,7 +583,7 @@ describe("run lifecycle and worker protocol", () => {
     expect(done.body.run).toMatchObject({ status: "completed" });
   });
 
-  it("abandoned attempts are billed and requeued without counting as failures", async () => {
+  it("abandoned attempts are billed and count toward max_attempts, so preemption cannot loop forever", async () => {
     const run = await createSftRun(t);
     const job = await worker.claim();
     const res = await worker.complete(job!, {
@@ -593,8 +593,27 @@ describe("run lifecycle and worker protocol", () => {
     expect(res.body.run).toMatchObject({ status: "queued" });
     const job2 = await worker.claim();
     expect(job2?.attempt).toBe(2);
+    await worker.complete(job2!, { status: "abandoned" });
+    const job3 = await worker.claim();
+    const last = await worker.complete(job3!, { status: "abandoned" });
+    expect(last.body.run).toMatchObject({ status: "failed", attempt: 3 });
+    expect(String(last.body.run?.error)).toMatch(/max_attempts=3/);
+    expect(await worker.claim()).toBeNull();
+    await settle();
+    expect(billing.calls.map((c) => c.attempt)).toEqual([1]);
     const internal = await t.deps.store.runs.getById(run.id);
-    expect(internal?.failed_attempts).toBe(0);
+    expect(internal?.failed_attempts).toBe(3);
+  });
+
+  it("gives a worker that retries a lost claim response its own job back", async () => {
+    const run = await createSftRun(t);
+    const first = await worker.claim();
+    const retry = await worker.claim();
+    expect(retry).toMatchObject({ id: first!.id, attempt: 1 });
+    // Another worker does not get it.
+    expect(await new FakeWorker(t, "worker-2").claim()).toBeNull();
+    const internal = await t.deps.store.runs.getById(run.id);
+    expect(internal).toMatchObject({ attempt: 1, failed_attempts: 0 });
   });
 
   it("completion is atomic: a failure after the artifact insert leaves no artifact and keeps the lease", async () => {

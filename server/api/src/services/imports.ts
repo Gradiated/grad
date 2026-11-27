@@ -101,6 +101,23 @@ const batchRecordId = (
 ): string =>
   `rec_${createHash("sha256").update(`${job.id}:${job.attempt}:${seq}:${index}`).digest("hex").slice(0, 16)}`;
 
+/** Same attempt rule as runs: lease expiries and abandons count toward maxAttempts. */
+const requeuePatch = (
+  job: ImportJobRecord,
+  maxAttempts: number,
+  what: string,
+): ImportJobPatch => {
+  const failedAttempts = job.failed_attempts + 1;
+
+  return failedAttempts >= maxAttempts
+    ? {
+        status: "failed",
+        failed_attempts: failedAttempts,
+        error: `Attempt ${job.attempt} ${what}; ${failedAttempts} attempt(s) ended without a result (max_attempts=${maxAttempts}).`,
+      }
+    : { status: "queued", failed_attempts: failedAttempts };
+};
+
 export const createImportService = (
   deps: AppDependencies,
   collaborators: { datasets: DatasetService; uploads: UploadService },
@@ -199,24 +216,41 @@ export const createImportService = (
     },
 
     claim: async (principal, input) => {
-      const job = await store.imports.claimNext({
-        workerId: input.workerId,
-        leaseSeconds: input.leaseSeconds,
-        now: clock.now(),
-        workspaceId: principal.workerWorkspaceId ?? undefined,
-      });
+      const now = clock.now();
+      // A worker retrying a claim whose response was lost gets its job back.
+      const held = await store.imports.heldBy(input.workerId);
+      const renewed =
+        held &&
+        (await store.imports.update(
+          held.id,
+          {
+            lease_expires_at: addSeconds(now, input.leaseSeconds).toISOString(),
+            lease_seconds: input.leaseSeconds,
+          },
+          { workerId: held.worker_id, attempt: held.attempt },
+        ));
+      const job =
+        renewed ||
+        (await store.imports.claimNext({
+          workerId: input.workerId,
+          leaseSeconds: input.leaseSeconds,
+          now,
+          workspaceId: principal.workerWorkspaceId ?? undefined,
+        }));
       if (!job) return null;
 
-      const reset = await store.imports.update(
-        job.id,
-        {
-          imported_count: 0,
-          dropped_count: 0,
-          detected_scores: [],
-          drop_reasons: [],
-        },
-        { workerId: job.worker_id, attempt: job.attempt },
-      );
+      const reset = renewed
+        ? null
+        : await store.imports.update(
+            job.id,
+            {
+              imported_count: 0,
+              dropped_count: 0,
+              detected_scores: [],
+              drop_reasons: [],
+            },
+            { workerId: job.worker_id, attempt: job.attempt },
+          );
       const claimed = reset ?? job;
       const source =
         claimed.upload_key !== null
@@ -375,7 +409,11 @@ export const createImportService = (
       if (body.status !== "completed") {
         const patch: ImportJobPatch =
           body.status === "abandoned"
-            ? { status: "queued" }
+            ? requeuePatch(
+                job,
+                settings.maxAttempts,
+                "was abandoned by its worker",
+              )
             : {
                 status: "failed",
                 error:
@@ -426,15 +464,7 @@ export const createImportService = (
       const expired = await store.imports.listExpiredLeases(now, 100);
       let closed = 0;
       for (const job of expired) {
-        const failedAttempts = job.failed_attempts + 1;
-        const patch: ImportJobPatch =
-          failedAttempts >= settings.maxAttempts
-            ? {
-                status: "failed",
-                failed_attempts: failedAttempts,
-                error: `The import worker stopped heartbeating ${failedAttempts} time(s) (max_attempts=${settings.maxAttempts}).`,
-              }
-            : { status: "queued", failed_attempts: failedAttempts };
+        const patch = requeuePatch(job, settings.maxAttempts, "lost its lease");
         const updated = await store.imports.update(job.id, release(patch), {
           workerId: job.worker_id,
           attempt: job.attempt,
