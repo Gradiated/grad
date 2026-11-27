@@ -9,6 +9,18 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Changed
 
+- **Usage reports.** `grad usage` prints a period's total cost and tokens, a breakdown by kind
+  (training, eval, scoring, labeling, teacher) and the top runs and evals; `--by
+  day|week|month|model|recipe|kind` prints one grouped table, and `--from`/`--to` set the period
+  in UTC (default: the current calendar month; a date `--to` covers that whole day). The old
+  row listing is `grad usage list`, with `--from`/`--to`, `--run`, `--eval`, `--kind` and
+  readable columns. The API adds `GET /v1/usage/summary` and those filters on `GET /v1/usage`;
+  every SDK has `usage.summary(...)` and a filtered `usage.list(...)` taking strings or native
+  dates. **Breaking:** a `UsageRecord`'s `kind` is now the usage kind (`training` replaces
+  `run`; evals are `eval`, `scoring`, `labeling` or `teacher`), and records carry `ref_name`
+  and `run_id`. Rust `client.usage().list` takes a `UsageQuery`. The web UI's usage page has a
+  date range, groups and the top runs and evals.
+
 - **Storage is S3-compatible only.** grad-server always uses an S3 bucket (AWS S3, SeaweedFS,
   MinIO, R2 and similar): `S3_BUCKET` is required, and the local-disk mode (`STORAGE_DIR`,
   `BLOB_SIGNING_SECRET` and the server-proxied `/blobs/*` routes) is gone. `grad local up`

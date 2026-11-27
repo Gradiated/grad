@@ -790,8 +790,8 @@ Examples:
   grad usage list --kind labeling --limit 50
 
 --run takes a run id or name and also lists the evals the run started
-(labeling, teacher answers, checkpoint evals). When several runs or evals share
-the name, the newest is used and a note says how many matched.")]
+(labeling, teacher answers, checkpoint evals). A name several runs or evals
+share resolves to the newest, with a warning saying how many matched.")]
     List(UsageListArgs),
 }
 

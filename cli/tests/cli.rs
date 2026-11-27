@@ -1924,7 +1924,13 @@ fn usage_api() -> MockServer {
         ),
         "/v1/evals" => Reply::json(
             200,
-            json!({"data": [{"id": "eval_one", "name": "nightly", "status": "completed"}], "next_cursor": null}),
+            json!({"data": [{"id": "eval_new", "name": "nightly", "status": "completed"},
+                            {"id": "eval_old", "name": "nightly", "status": "completed"},
+                            {"id": "eval_one", "name": "weekly", "status": "completed"}], "next_cursor": null}),
+        ),
+        p if p.starts_with("/v1/runs/") => Reply::json(
+            404,
+            json!({"type": "about:blank", "title": "Not Found", "status": 404, "code": "not_found", "detail": "no such run"}),
         ),
         other => panic!("unexpected {}", other),
     })
@@ -2069,7 +2075,7 @@ fn usage_list_filters_and_resolves_names() {
     expect(&r, 0);
     assert!(
         r.stderr.contains(
-            "2 runs match 'support-sft', showing the newest (run_new); pass an id for another."
+            "warning: 2 runs match 'support-sft'; showing the newest (run_new). Pass a run id to choose."
         ),
         "{}",
         r.stderr
@@ -2082,13 +2088,27 @@ fn usage_list_filters_and_resolves_names() {
 
     let r = run(
         sb.grad(Some(&srv.url)),
-        &["usage", "list", "--eval", "nightly", "--to", "2026-11-30"],
+        &["usage", "list", "--eval", "weekly", "--to", "2026-11-30"],
     );
     expect(&r, 0);
     assert!(!r.stderr.contains("match"), "{}", r.stderr);
     assert_eq!(
         srv.last("GET", "/v1/usage").unwrap().query(),
         "to=2026-11-30&eval_id=eval_one"
+    );
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &["--json", "usage", "list", "--eval", "nightly"],
+    );
+    expect(&r, 0);
+    let v: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        v["warnings"][0],
+        "2 evals match 'nightly'; showing the newest (eval_new). Pass an eval id to choose."
+    );
+    assert_eq!(
+        srv.last("GET", "/v1/usage").unwrap().query(),
+        "eval_id=eval_new"
     );
 
     let r = run(

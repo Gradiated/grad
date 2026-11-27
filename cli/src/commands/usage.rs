@@ -4,7 +4,7 @@ use grad_sdk::{
     Client, UsageBound, UsageGroupBy, UsageKind, UsageQuery, UsageSummary, UsageSummaryQuery,
 };
 
-use super::{more_hint, Ctx};
+use super::{more_hint, resolve_run, Ctx};
 use crate::cli::{UsageCmd, UsageListArgs, UsagePeriodArgs, UsageSummaryArgs, UsageTop};
 use crate::output::{thousands, usd, when, CliError, CliResult, Out, EXIT_NOT_FOUND};
 
@@ -120,12 +120,14 @@ async fn list(ctx: &Ctx, a: UsageListArgs) -> CliResult {
     let out = &ctx.out;
     let (from, to) = period(&a.period)?;
     let c = ctx.client()?;
+    // An id is a filter as is; a name resolves to the newest run with it.
     let run_id = match &a.run {
-        Some(r) => Some(resolve(out, "run", r, run_ids(&c, r).await?)?),
+        Some(r) if r.starts_with("run_") => Some(r.clone()),
+        Some(r) => Some(resolve_run(&c, out, r).await?.id),
         None => None,
     };
     let eval_id = match &a.eval {
-        Some(e) => Some(resolve(out, "eval", e, eval_ids(&c, e).await?)?),
+        Some(e) => Some(resolve_eval(&c, out, e).await?),
         None => None,
     };
     let q = UsageQuery {
@@ -167,54 +169,34 @@ async fn list(ctx: &Ctx, a: UsageListArgs) -> CliResult {
     out.done(&res)
 }
 
-/// Ids of the runs `arg` names, newest first (an id names itself).
-async fn run_ids(c: &Client, arg: &str) -> CliResult<Vec<String>> {
-    if arg.starts_with("run_") {
-        return Ok(vec![arg.to_string()]);
-    }
-    let runs = c.runs().list_all().await?;
-    Ok(runs
-        .into_iter()
-        .filter(|r| r.name == arg)
-        .map(|r| r.id)
-        .collect())
-}
-
-/// Ids of the evals `arg` names, newest first (an id names itself).
-async fn eval_ids(c: &Client, arg: &str) -> CliResult<Vec<String>> {
+/// An eval id, or the newest eval with this name (saying so when several share it).
+async fn resolve_eval(c: &Client, out: &Out, arg: &str) -> CliResult<String> {
     if arg.starts_with("eval_") {
-        return Ok(vec![arg.to_string()]);
+        return Ok(arg.to_string());
     }
-    let evals = c.evals().list_all().await?;
-    Ok(evals
+    let named: Vec<String> = c
+        .evals()
+        .list_all()
+        .await?
         .into_iter()
         .filter(|e| e.name == arg)
         .map(|e| e.id)
-        .collect())
-}
-
-/// One id for a read-only filter: several matches use the newest, with a note.
-fn resolve(out: &Out, what: &str, arg: &str, ids: Vec<String>) -> CliResult<String> {
-    match ids.as_slice() {
-        [] => Err(CliError::new(
+        .collect();
+    let Some(newest) = named.first() else {
+        return Err(CliError::new(
             EXIT_NOT_FOUND,
-            &format!("{}_not_found", what),
-            format!("no {} with id or name '{}'", what, arg),
+            "eval_not_found",
+            format!("no eval with id or name '{}'", arg),
         )
-        .hint(format!(
-            "List them with `grad {} list`.",
-            if what == "run" { "runs" } else { "eval" }
-        ))),
-        [one] => Ok(one.clone()),
-        [newest, ..] => {
-            out.note(format!(
-                "{} {}s match '{}', showing the newest ({}); pass an id for another.",
-                ids.len(),
-                what,
-                arg,
-                newest
-            ));
-            Ok(newest.clone())
-        }
+        .hint("List evals with `grad eval list`."));
+    };
+    if named.len() > 1 {
+        out.warn(format!(
+            "{} evals match '{}'; showing the newest ({}). Pass an eval id to choose.",
+            named.len(),
+            arg,
+            newest
+        ));
     }
+    Ok(newest.clone())
 }

@@ -344,13 +344,25 @@ fn live_self_hosted_quickstart() {
     );
     let o = grad(
         &home,
-        &["--json", "usage", "list", "--run", "support-sft", "--kind", "training"],
+        &[
+            "--json",
+            "usage",
+            "list",
+            "--run",
+            "support-sft",
+            "--kind",
+            "training",
+        ],
         &[],
     );
     ok(&o);
     let rows = o.json()["data"]["data"].as_array().unwrap().clone();
     assert!(!rows.is_empty());
-    assert!(rows.iter().all(|r| r["ref_name"] == "support-sft"), "{:?}", rows);
+    assert!(
+        rows.iter().all(|r| r["ref_name"] == "support-sft"),
+        "{:?}",
+        rows
+    );
     let o = grad(&home, &["usage", "list", "--from", "2026-02-30"], &[]);
     assert_eq!(o.code, 2, "{}", o.stderr);
 
