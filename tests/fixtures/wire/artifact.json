@@ -13,7 +13,7 @@
   "manifest": {
     "recipe": "sft",
     "backend": "reference",
-    "lr": 0.0000884,
+    "lr": 8.84e-05,
     "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
     "rule_version": "auto@2",
     "seed": 42,
@@ -45,7 +45,7 @@
         "alpha": 32,
         "merge_on_export": false
       },
-      "lr": 0.0000884,
+      "lr": 8.84e-05,
       "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
       "batch_size": 1,
       "epochs": 1,
@@ -67,6 +67,12 @@
       },
       "recipe_params": {}
     }
+  },
+  "provenance": {
+    "source": "run",
+    "run_id": "run_015437ae0c01e09a573e4811",
+    "uploader": null,
+    "uri": null
   },
   "eval_report": {
     "eval_loss": null,

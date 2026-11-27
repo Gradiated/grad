@@ -255,10 +255,9 @@ describe("runs", () => {
     expect(list[0]!.toJSON().id).toBe(ckpts.data[0]?.id);
   });
 
-  it("refuses to deploy or download a run with no artifact", async () => {
+  it("refuses to download a run with no artifact", async () => {
     const server = new FakeServer().on("GET", RUN, json(withStatus("running", { artifact_id: null })));
     const run = await makeGrad(server).grad.runs.get(completed.id);
-    await expect(run.deploy()).rejects.toThrow(/no artifact to deploy/);
     await expect(run.download("x")).rejects.toThrow(/no artifact to download/);
   });
 });

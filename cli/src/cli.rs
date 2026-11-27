@@ -11,7 +11,7 @@ Exit codes:
   3    authentication or permission error (401/403)
   4    not found (404)
   5    conflict or validation error (409/422)
-  6    capability unavailable on this server (deploy_unavailable, inference_unavailable)
+  6    capability unavailable on this server (inference_unavailable, secrets_unavailable)
   7    run, eval or import finished unsuccessfully (failed, cancelled; runs also stopped_budget, stopped_balance)
   130  interrupted (Ctrl-C); a started run keeps going on the server";
 
@@ -31,14 +31,14 @@ Quickstart:
   grad import ./support_traces.jsonl --dataset support-prod
   grad train --dataset support-prod --name support-router --recipe router --dry-run
   grad train --dataset support-prod --name support-router --recipe router --wait
-  grad deploy support-router@latest
+  grad artifacts download support-router@latest --output ./support-router
 ";
 
 #[derive(Parser, Debug)]
 #[command(
     name = "grad",
     version,
-    about = "Train, evaluate and deploy models on Gradiated (Cloud or self-hosted)",
+    about = "Train, evaluate and download models on Gradiated (Cloud or self-hosted)",
     after_help = format!("{}\n{}", MAIN_AFTER, EXIT_CODES),
     disable_help_subcommand = false
 )]
@@ -187,27 +187,10 @@ Code scorers run in your process: use the Python SDK for those."
     )]
     Eval(EvalTop),
 
-    /// List, inspect and download immutable artifacts
+    /// List, inspect, download, upload, import and delete immutable artifacts
     Artifacts {
         #[command(subcommand)]
         action: ArtifactsCmd,
-    },
-
-    /// Deploy an artifact behind a stable model name (Gradiated Cloud)
-    #[command(after_help = "\
-Examples:
-  grad deploy support-router@latest
-  grad deploy fast-diff-merge@2026-11-26-1 --name fast-diff-merge
-
-Self-hosted servers have no hosted serving and exit with code 6; download the
-artifact with `grad artifacts download NAME@latest --output DIR` and serve it
-on vLLM or SGLang instead.")]
-    Deploy(DeployArgs),
-
-    /// Inspect and roll back deployments
-    Deployments {
-        #[command(subcommand)]
-        action: DeploymentsCmd,
     },
 
     /// Manage scoped workspace API keys
@@ -958,43 +941,64 @@ against the bundle manifest before the directory is moved into place.")]
         #[arg(long)]
         force: bool,
     },
+    /// Register local weights as an artifact (validated against the format spec)
+    #[command(after_help = "\
+Examples:
+  grad artifacts upload ./my-lora --base qwen/qwen3-8b
+  grad artifacts upload ./cartridge.safetensors --base qwen/qwen3-8b --format cartridge --name support-kb
+
+PATH is a directory (tarred), a single file or a .tar.gz. An import worker
+checks the files against docs/ARTIFACT_FORMATS.md and the base model's
+config.json; for a PEFT LoRA that is adapter_config.json, the base model and
+revision, the target modules and every tensor shape. A failure names the file
+and exits with code 5. The result is a normal artifact: download it, evaluate
+it, or continue training from it with --model NAME@VERSION.")]
+    Upload {
+        /// Directory, file or .tar.gz with the artifact's files
+        path: PathBuf,
+        #[command(flatten)]
+        import: ArtifactImportArgs,
+    },
+    /// Import weights from the Hugging Face Hub (hf://owner/name[@revision])
+    #[command(after_help = "\
+Examples:
+  grad artifacts import hf://acme/support-lora --base qwen/qwen3-8b
+  grad artifacts import hf://acme/support-lora@v2 --base qwen/qwen3-8b --secret hf-token
+
+The same checks as `grad artifacts upload`; the artifact pins the commit the
+revision resolved to (its provenance uri).")]
+    Import {
+        /// hf://owner/name or hf://owner/name@revision
+        uri: String,
+        #[command(flatten)]
+        import: ArtifactImportArgs,
+        /// Workspace secret holding an HF token (gated or private repos)
+        #[arg(long)]
+        secret: Option<String>,
+    },
+    /// Delete an artifact and its bundle (refused while a published model version pins it)
+    Delete {
+        /// Artifact reference (NAME@VERSION or NAME@latest)
+        reference: String,
+    },
 }
 
 #[derive(Args, Debug)]
-pub struct DeployArgs {
-    /// Artifact reference (id, NAME@VERSION or NAME@latest)
-    pub artifact: String,
-    /// Deployment name (default: the artifact name)
+pub struct ArtifactImportArgs {
+    /// The catalog base model the weights were trained on (`grad models`)
+    #[arg(long)]
+    pub base: String,
+    /// peft_lora, merged_safetensors, cartridge, encoder_safetensors, router_bundle, decision_bundle or reward_bundle
+    #[arg(long, default_value = "peft_lora")]
+    pub format: String,
+    /// Artifact name (default: the directory, file or repo name)
     #[arg(long)]
     pub name: Option<String>,
-    /// Fallback model for routers
-    #[arg(long)]
-    pub fallback: Option<String>,
-    /// Fraction of router traffic explored (0.0-0.5)
-    #[arg(long)]
-    pub explore_rate: Option<f64>,
-    /// Idempotency-Key: rerunning with the same key replays the first deploy
+    /// Idempotency-Key: rerunning with the same key replays the first import
     #[arg(long, value_name = "KEY")]
     pub idempotency_key: Option<String>,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum DeploymentsCmd {
-    /// List deployments
-    List {
-        #[command(flatten)]
-        page: PageArgs,
-    },
-    /// Show a deployment and its feedback summary
-    Status {
-        /// Deployment name
-        name: String,
-    },
-    /// Roll back to the previous artifact
-    Rollback {
-        /// Deployment name
-        name: String,
-    },
+    #[command(flatten)]
+    pub wait: ImportWaitArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1011,7 +1015,7 @@ Examples:
   grad keys create --name inference-cd --scopes artifacts:read
 
 Scopes: admin, datasets:read, datasets:write, runs:read, runs:write,
-artifacts:read, artifacts:write, secrets:read, secrets:write,
+artifacts:read, artifacts:write, artifacts:pin, secrets:read, secrets:write,
 sources:read, sources:write, deployments:write")]
     Create {
         /// Key name

@@ -1,5 +1,10 @@
 import type { AppDependencies } from "../deps.js";
 import {
+  createArtifactImportService,
+  type ArtifactImportService,
+} from "./artifact-imports.js";
+import { createArtifactService, type ArtifactService } from "./artifacts.js";
+import {
   createTelemetrySampler,
   type TelemetrySampler,
 } from "../telemetry/sampler.js";
@@ -18,6 +23,8 @@ export interface Services {
   datasets: DatasetService;
   uploads: UploadService;
   imports: ImportService;
+  artifacts: ArtifactService;
+  artifactImports: ArtifactImportService;
   runs: RunLifecycle;
   usage: UsageService;
   evals: EvalService;
@@ -42,10 +49,16 @@ export const createServices = (deps: AppDependencies): Services => {
   const uploads = createUploadService(deps);
   const usage = createUsageService(deps);
   const sources = createSourceService(deps, { queue: getQueue });
+  const artifacts = createArtifactService(deps);
+  const artifactImports = createArtifactImportService(deps, {
+    uploads,
+    sources,
+  });
   const imports = createImportService(deps, {
     uploads,
     sources,
     datasets,
+    artifactImports,
     queue: getQueue,
   });
   const evals = createEvalService(deps, { datasets, usage, queue: getQueue });
@@ -79,6 +92,8 @@ export const createServices = (deps: AppDependencies): Services => {
     datasets,
     uploads,
     imports,
+    artifacts,
+    artifactImports,
     runs,
     usage,
     evals,

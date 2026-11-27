@@ -32,6 +32,7 @@ const artifact: ArtifactRecord = {
     candidates: ["qwen/qwen3-8b", "qwen/qwen3-32b"],
     fallback_model: "qwen/qwen3-32b",
   },
+  provenance: { source: "run", run_id: "run_1", uploader: null, uri: null },
   eval_report: null,
   created_at: "2026-11-27T12:00:00.000Z",
 };

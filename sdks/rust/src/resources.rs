@@ -122,7 +122,6 @@ resource!(Imports);
 resource!(Runs);
 resource!(Checkpoints);
 resource!(Artifacts);
-resource!(Deployments);
 resource!(Evals);
 resource!(Secrets);
 resource!(UsageLedger);
@@ -845,6 +844,11 @@ pub fn for_each_jsonl(path: &Path, mut f: impl FnMut(usize, Value) -> Result<()>
 impl Client {
     /// Hash a file, create an upload ticket and stream the bytes to it.
     pub async fn upload_file(&self, path: &Path) -> Result<UploadTicket> {
+        self.upload_file_for(path, "dataset_import").await
+    }
+
+    /// [`Client::upload_file`] for a `purpose` (`dataset_import` or `artifact_import`).
+    async fn upload_file_for(&self, path: &Path, purpose: &str) -> Result<UploadTicket> {
         let meta = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
         if !meta.is_file() {
             return Err(Error::InvalidInput(format!(
@@ -866,7 +870,7 @@ impl Client {
         let ticket: UploadTicket = self
             .t()
             .json(Req::post("/v1/uploads").json(json!({
-                "purpose": "dataset_import",
+                "purpose": purpose,
                 "filename": filename,
                 "size_bytes": meta.len(),
                 "sha256": sha,
@@ -913,6 +917,192 @@ pub fn sha256_file(path: &Path) -> Result<String> {
         h.update(&buf[..n]);
     }
     Ok(hex::encode(h.finalize()))
+}
+
+/// Options for [`Artifacts::upload`].
+#[derive(Debug, Clone, Default)]
+pub struct ArtifactUploadOptions {
+    /// The catalog base model the files were trained on (required).
+    pub base: String,
+    /// `peft_lora` (default), `merged_safetensors`, `cartridge`, `encoder_safetensors`,
+    /// `router_bundle`, `decision_bundle` or `reward_bundle`.
+    pub format: Option<String>,
+    /// Artifact name (default: the file or directory name).
+    pub name: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+/// Options for [`Artifacts::import_hf`].
+#[derive(Debug, Clone, Default)]
+pub struct ArtifactHfOptions {
+    /// The catalog base model the weights were trained on (required).
+    pub base: String,
+    pub format: Option<String>,
+    /// Artifact name (default: the repo's name).
+    pub name: Option<String>,
+    /// Branch, tag or commit (or pass `hf://owner/name@revision`).
+    pub revision: Option<String>,
+    /// Workspace secret holding an HF token (gated or private repos).
+    pub secret: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+/// `(repo, revision)` of `hf://owner/name[@revision]` (or `owner/name`).
+pub fn parse_hf_uri(uri: &str, revision: Option<&str>) -> Result<(String, Option<String>)> {
+    let trimmed = uri.trim();
+    let rest = trimmed.strip_prefix("hf://").unwrap_or(trimmed);
+    let (repo, pinned) = match rest.split_once('@') {
+        Some((r, p)) => (r, Some(p)),
+        None => (rest, None),
+    };
+    let segment_ok = |s: &str| {
+        s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+    };
+    let parts: Vec<&str> = repo.split('/').collect();
+    let valid = (1..=2).contains(&parts.len())
+        && parts.iter().all(|p| segment_ok(p))
+        && !repo.contains("..")
+        && pinned.is_none_or(|p| !p.is_empty() && !p.contains(['@', ' ']));
+    if !valid {
+        return Err(Error::InvalidInput(format!(
+            "'{}' is not a Hugging Face repo: use hf://owner/name or hf://owner/name@revision",
+            uri
+        )));
+    }
+    if let (Some(p), Some(r)) = (pinned, revision) {
+        if p != r {
+            return Err(Error::InvalidInput(format!(
+                "'{}' pins revision '{}', but revision '{}' was passed too",
+                uri, p, r
+            )));
+        }
+    }
+    Ok((repo.to_string(), pinned.or(revision).map(str::to_string)))
+}
+
+/// An upload's default name: its file or directory name as a slug.
+pub fn artifact_name(path: &Path) -> String {
+    let mut base = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for suffix in [".grad.tar.gz", ".tar.gz", ".tgz", ".tar"] {
+        if let Some(stripped) = base.strip_suffix(suffix) {
+            base = stripped.to_string();
+            break;
+        }
+    }
+    let mut slug = String::new();
+    for c in base.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() || "._-".contains(c) {
+            slug.push(c);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug: String = slug
+        .trim_start_matches(['-', '.', '_'])
+        .chars()
+        .take(64)
+        .collect();
+    let slug = slug.trim_end_matches(['-', '.', '_']);
+    if slug.is_empty() {
+        "upload".into()
+    } else {
+        slug.to_string()
+    }
+}
+
+fn is_archive(path: &Path) -> bool {
+    let name = path.to_string_lossy();
+    name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".tar")
+}
+
+/// The file to upload for `path`: a `.tar`/`.tar.gz` as is, else a gzip tar of
+/// the directory's regular files (sorted, relative paths) or of the single file,
+/// in a temporary directory the returned guard removes.
+fn pack_artifact(path: &Path) -> Result<(PathBuf, Option<TempDir>)> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
+    if meta.is_file() && is_archive(path) {
+        return Ok((path.to_path_buf(), None));
+    }
+    let (root, names) = if meta.is_dir() {
+        let mut names = Vec::new();
+        collect_files(path, path, &mut names)?;
+        if names.is_empty() {
+            return Err(Error::InvalidInput(format!(
+                "{} has no files to upload",
+                path.display()
+            )));
+        }
+        names.sort();
+        (path.to_path_buf(), names)
+    } else if meta.is_file() {
+        let name = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        (
+            path.parent().map(Path::to_path_buf).unwrap_or_default(),
+            vec![name],
+        )
+    } else {
+        return Err(Error::InvalidInput(format!(
+            "{} is not a file or directory",
+            path.display()
+        )));
+    };
+    let tmp = TempDir::new_in(&std::env::temp_dir(), "grad-upload")?;
+    let out = tmp.path.join("upload.tar.gz");
+    let file = std::fs::File::create(&out).map_err(|e| Error::io(&out, e))?;
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        file,
+        flate2::Compression::default(),
+    ));
+    for name in &names {
+        let src = root.join(name);
+        let mut f = std::fs::File::open(&src).map_err(|e| Error::io(&src, e))?;
+        let len = f.metadata().map_err(|e| Error::io(&src, e))?.len();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(len);
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_entry_type(tar::EntryType::Regular);
+        tar.append_data(&mut header, name, &mut f)
+            .map_err(|e| Error::io(&src, e))?;
+    }
+    tar.into_inner()
+        .and_then(|gz| gz.finish())
+        .map_err(|e| Error::io(&out, e))?;
+    Ok((out, Some(tmp)))
+}
+
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))? {
+        let entry = entry.map_err(|e| Error::io(dir, e))?;
+        let path = entry.path();
+        let kind = entry.file_type().map_err(|e| Error::io(&path, e))?;
+        if kind.is_symlink() {
+            return Err(Error::InvalidInput(format!(
+                "refusing to upload symlink {}; copy the file instead",
+                path.display()
+            )));
+        }
+        if kind.is_dir() {
+            collect_files(root, &path, out)?;
+        } else if kind.is_file() {
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            out.push(
+                rel.components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            );
+        }
+    }
+    Ok(())
 }
 
 impl Imports<'_> {
@@ -1300,6 +1490,132 @@ impl Artifacts<'_> {
         .await
     }
 
+    /// Delete an artifact and its bundle ([`Error::Conflict`] `artifact_pinned`
+    /// while a published model version pins it).
+    pub async fn delete(&self, reference: &str) -> Result<()> {
+        check_path_param("artifact reference", reference)?;
+        let req = Req::new(Method::DELETE, format!("/v1/artifacts/{}", seg(reference)));
+        self.c.t().send(&req).await.map(drop)
+    }
+
+    /// Register local weights (a directory, a file or a `.tar.gz`) as an
+    /// artifact: the files go up through a presigned PUT and an import worker
+    /// checks them against the format spec and `opts.base` (for `peft_lora`:
+    /// the adapter config, base model and revision, target modules and every
+    /// tensor shape). [`Artifacts::wait_import`] returns the artifact.
+    pub async fn upload(
+        &self,
+        path: &Path,
+        opts: &ArtifactUploadOptions,
+    ) -> Result<ArtifactImport> {
+        let name = match &opts.name {
+            Some(n) => n.clone(),
+            None => artifact_name(path),
+        };
+        let (packed, _tmp) = pack_artifact(path)?;
+        let ticket = self.c.upload_file_for(&packed, "artifact_import").await?;
+        self.create_import(
+            &CreateArtifactImportRequest {
+                source: ArtifactImportSource {
+                    kind: ArtifactImportSourceKind::Upload,
+                    upload_id: Some(ticket.upload_id),
+                    ..Default::default()
+                },
+                base_model: opts.base.clone(),
+                format: Some(ImportableArtifactFormat::from(
+                    opts.format.as_deref().unwrap_or("peft_lora"),
+                )),
+                name: Some(name),
+            },
+            opts.idempotency_key.as_deref(),
+        )
+        .await
+    }
+
+    /// Import weights from the Hugging Face Hub (`hf://owner/name[@revision]`),
+    /// pinned to the commit the revision resolves to; the same checks as
+    /// [`Artifacts::upload`].
+    pub async fn import_hf(&self, uri: &str, opts: &ArtifactHfOptions) -> Result<ArtifactImport> {
+        let (repo, revision) = parse_hf_uri(uri, opts.revision.as_deref())?;
+        self.create_import(
+            &CreateArtifactImportRequest {
+                source: ArtifactImportSource {
+                    kind: ArtifactImportSourceKind::Hf,
+                    repo: Some(repo),
+                    revision,
+                    secret: opts.secret.clone(),
+                    ..Default::default()
+                },
+                base_model: opts.base.clone(),
+                format: Some(ImportableArtifactFormat::from(
+                    opts.format.as_deref().unwrap_or("peft_lora"),
+                )),
+                name: opts.name.clone(),
+            },
+            opts.idempotency_key.as_deref(),
+        )
+        .await
+    }
+
+    /// `POST /v1/artifact-imports`.
+    pub async fn create_import(
+        &self,
+        req: &CreateArtifactImportRequest,
+        idempotency_key: Option<&str>,
+    ) -> Result<ArtifactImport> {
+        get(
+            self.c,
+            Req::post("/v1/artifact-imports")
+                .key(idempotency_key)
+                .json(body(req)?),
+        )
+        .await
+    }
+
+    /// An upload or HF import.
+    pub async fn get_import(&self, id: &str) -> Result<ArtifactImport> {
+        check_path_param("artifact import id", id)?;
+        get(
+            self.c,
+            Req::get(format!("/v1/artifact-imports/{}", seg(id))),
+        )
+        .await
+    }
+
+    /// Poll an upload or HF import until it finishes and return its artifact; a
+    /// failure is [`Error::ArtifactImportFailed`].
+    pub async fn wait_import(&self, id: &str, opts: &WaitOptions) -> Result<Artifact> {
+        let mut poll = Poller::new(opts);
+        loop {
+            match self.get_import(id).await {
+                Ok(job) => match (&job.status, &job.artifact_id) {
+                    (ArtifactImportStatus::Completed, Some(artifact)) => {
+                        return self.get(artifact).await
+                    }
+                    (ArtifactImportStatus::Completed | ArtifactImportStatus::Failed, _) => {
+                        return Err(Error::ArtifactImportFailed(Box::new(job)))
+                    }
+                    _ => {
+                        if poll.expired() {
+                            return Err(poll.timeout_error(
+                                "artifact import",
+                                id,
+                                job.status.as_str(),
+                            ));
+                        }
+                    }
+                },
+                Err(e) => {
+                    poll.on_error(e)?;
+                    if poll.expired() {
+                        return Err(poll.timeout_error("artifact import", id, "unknown"));
+                    }
+                }
+            }
+            poll.sleep().await;
+        }
+    }
+
     /// Download, verify and extract (or keep) an artifact bundle.
     pub async fn download(
         &self,
@@ -1460,42 +1776,6 @@ impl Artifacts<'_> {
             f.sync_all().map_err(|e| Error::io(&tmp.path, e))?;
         }
         Ok((tmp, actual, size))
-    }
-}
-
-impl Deployments<'_> {
-    /// Deploy or update an artifact under a stable model name.
-    pub async fn create(
-        &self,
-        req: &DeployArtifactRequest,
-        idempotency_key: Option<&str>,
-    ) -> Result<Deployment> {
-        get(
-            self.c,
-            Req::post("/v1/deployments")
-                .key(idempotency_key)
-                .json(body(req)?),
-        )
-        .await
-    }
-
-    pub async fn list(&self, p: &ListParams) -> Result<Page<Deployment>> {
-        get(self.c, Req::get("/v1/deployments").query(p.query())).await
-    }
-
-    pub async fn get(&self, name: &str) -> Result<DeploymentStatus> {
-        check_path_param("deployment name", name)?;
-        get(self.c, Req::get(format!("/v1/deployments/{}", seg(name)))).await
-    }
-
-    /// Roll back to the previous artifact.
-    pub async fn rollback(&self, name: &str) -> Result<Deployment> {
-        check_path_param("deployment name", name)?;
-        get(
-            self.c,
-            Req::post(format!("/v1/deployments/{}/rollback", seg(name))),
-        )
-        .await
     }
 }
 

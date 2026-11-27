@@ -1,5 +1,5 @@
 import { GradError } from "./transport.js";
-import type { EvalRun, ImportJob, Run } from "./generated/models.js";
+import type { ArtifactImport, EvalRun, ImportJob, Run } from "./generated/models.js";
 
 export {
   APIConnectionError,
@@ -9,7 +9,6 @@ export {
   AuthenticationError,
   BadRequestError,
   ConflictError,
-  DeployUnavailableError,
   GradError,
   InferenceUnavailableError,
   NotFoundError,
@@ -63,6 +62,23 @@ export class ImportFailedError extends GradError {
       `Import ${job.id} into dataset '${job.dataset}' failed${job.error ? `: ${job.error}` : ""}.`,
       { code: "import_failed" },
     );
+    this.job = job;
+  }
+}
+
+/**
+ * An artifact upload or HF import failed. `code` is `invalid_artifact` (`status` 422) when the
+ * files break the format spec or don't fit the base model; the message names the file.
+ */
+export class ArtifactImportFailedError extends GradError {
+  readonly job: ArtifactImport;
+
+  constructor(job: ArtifactImport) {
+    const code = job.errorCode ?? "artifact_import_failed";
+    super(`Artifact import ${job.id} ('${job.name}') failed${job.error ? `: ${job.error}` : ""}.`, {
+      code,
+      status: code === "invalid_artifact" ? 422 : undefined,
+    });
     this.job = job;
   }
 }

@@ -35,8 +35,10 @@ type parityFixture struct {
 		Usage    struct {
 			Data []json.RawMessage `json:"data"`
 		} `json:"usage_page"`
-		UsageSummary json.RawMessage `json:"usage_summary"`
-		RunEvents    json.RawMessage `json:"run_events"`
+		UsageSummary   json.RawMessage `json:"usage_summary"`
+		RunEvents      json.RawMessage `json:"run_events"`
+		Artifact       json.RawMessage `json:"artifact"`
+		ArtifactImport json.RawMessage `json:"artifact_import"`
 	} `json:"responses"`
 	Expect map[string]any `json:"expect"`
 }
@@ -155,11 +157,12 @@ func TestParityRequests(t *testing.T) {
 			_, err := c.Datasets.Filter(ctx, "support-logs", grad.FilterOptions{IDs: []string{"rec_a", "rec_c"}})
 			return err
 		},
-		"deploy": func() error {
-			_, err := c.Deployments.Create(ctx, artifact, grad.WithDeploymentName("support"), grad.WithFallback("test/tiny-qwen3"),
-				grad.WithExploreRate(0.1), grad.WithDeployIdempotencyKey("parity-deploy-key"))
+		"import_artifact_hf": func() error {
+			_, err := c.Artifacts.FromHF(ctx, "hf://acme/support-lora@v2", grad.FromHFParams{Base: "test/tiny-qwen3", Name: "support-lora",
+				Secret: "hf-token", IdempotencyKey: "parity-artifact-import-key"})
 			return err
 		},
+		"delete_artifact": func() error { return c.Artifacts.Delete(ctx, "support-sft@2026-11-27-1") },
 		"set_secret": func() error {
 			_, err := c.Secrets.Set(ctx, "langfuse-prod", "pk-lf-1:sk-lf-2")
 			return err
@@ -257,8 +260,10 @@ func TestParityRequests(t *testing.T) {
 			}
 			continue
 		}
-		if err := json.Unmarshal(sent.Body, &body); err != nil {
-			t.Fatal(err)
+		if len(sent.Body) > 0 {
+			if err := json.Unmarshal(sent.Body, &body); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if sent.Method != tc.Method || sent.Path != tc.Path || !reflect.DeepEqual(body, tc.Body) {
 			got, _ := json.Marshal(body)
@@ -266,9 +271,9 @@ func TestParityRequests(t *testing.T) {
 			t.Errorf("%s: %s %s\n got %s\nwant %s", tc.Case, sent.Method, sent.Path, got, exp)
 		}
 		key := sent.Header.Get("Idempotency-Key")
-		if tc.Method == "PATCH" {
+		if tc.Method == "PATCH" || tc.Method == "DELETE" {
 			if key != "" {
-				t.Errorf("%s: PATCH sent Idempotency-Key %q", tc.Case, key)
+				t.Errorf("%s: %s sent Idempotency-Key %q", tc.Case, tc.Method, key)
 			}
 			continue
 		}
@@ -287,6 +292,14 @@ func TestParityTypedResponses(t *testing.T) {
 	var runPlan generated.PlanRunResponse
 	var source grad.Source
 	var secret grad.SecretRef
+	var artifact grad.Artifact
+	var artifactImport grad.ArtifactImport
+	if err := json.Unmarshal(p.Responses.Artifact, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(p.Responses.ArtifactImport, &artifactImport); err != nil {
+		t.Fatal(err)
+	}
 	var usage grad.UsageRecord
 	if err := json.Unmarshal(p.Responses.Usage.Data[0], &usage); err != nil {
 		t.Fatal(err)
@@ -307,6 +320,10 @@ func TestParityTypedResponses(t *testing.T) {
 	ev2, ev4, ev7, ev11, ev12, ev14, ev24 := events.Data[2], events.Data[4], events.Data[7], events.Data[11], events.Data[12], events.Data[14], events.Data[24]
 	report := run.EvalReport
 	got := map[string]any{
+		"artifact.provenance.source":                       string(artifact.Provenance.Source),
+		"artifact.provenance.uploader":                     *artifact.Provenance.Uploader,
+		"artifact_import.status":                           string(artifactImport.Status),
+		"artifact_import.error_code":                       *artifactImport.ErrorCode,
 		"run.phase":                                        string(*run.Phase),
 		"run.last_interruption.reason":                     string(run.LastInterruption.Reason),
 		"run.last_interruption.resume_step":                float64(*run.LastInterruption.ResumeStep),

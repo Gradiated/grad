@@ -1,8 +1,15 @@
-import type { Artifact as ArtifactData, Deployment, DeploymentStatus } from "../generated/models.js";
+import type {
+  Artifact as ArtifactData,
+  ArtifactImport as ArtifactImportData,
+  CreateArtifactImportRequest,
+  ImportableArtifactFormat,
+} from "../generated/models.js";
 import { GradError, type RawResponse, type RequestOptions, type StreamOptions } from "../transport.js";
 import { isNodeRuntime, type Core } from "../core.js";
-import { GradUsageError } from "../errors.js";
+import { ArtifactImportFailedError, GradUsageError } from "../errors.js";
 import { Paginator } from "../pagination.js";
+import { Pending } from "../pending.js";
+import { pollUntil, type WaitOptions } from "../polling.js";
 
 export type ArtifactRef = string | { id: string } | { name: string; version: string };
 
@@ -13,13 +20,22 @@ export const artifactRef = (ref: ArtifactRef): string => {
   return (ref as { id: string }).id;
 };
 
-export interface DeployOptions extends RequestOptions {
-  /** Deployment name (default: the artifact name). */
+export interface ArtifactUploadOptions extends RequestOptions {
+  /** The catalog base model the files were trained on (GET /v1/base-models). */
+  base: string;
+  /** Default `peft_lora`. */
+  format?: ImportableArtifactFormat;
+  /** Artifact name (default: the file or directory name). */
   name?: string;
-  /** Model that serves traffic when a router can't, or after a rollback. */
-  fallback?: string;
-  /** Share of traffic routed to exploration (routers). */
-  exploreRate?: number;
+}
+
+export interface ArtifactFromHfOptions extends Omit<ArtifactUploadOptions, "name"> {
+  /** Artifact name (default: the repo's name). */
+  name?: string;
+  /** Branch, tag or commit (or `hf://owner/name@revision`); the import pins the commit. */
+  revision?: string;
+  /** Workspace secret holding an HF token (gated or private repos). */
+  secret?: string;
 }
 
 export interface DownloadOptions extends StreamOptions {
@@ -39,14 +55,104 @@ export interface ArtifactStream {
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
-export const deployArtifact = async (core: Core, ref: ArtifactRef, options: DeployOptions = {}): Promise<Deployment> => {
-  const { name, fallback, exploreRate, ...request } = options;
-  return core.api.deployArtifact(
+const HF_URI = /^(?:hf:\/\/)?([A-Za-z0-9][\w.-]*(?:\/[A-Za-z0-9][\w.-]*)?)(?:@([^@\s]+))?$/;
+
+/** `{ repo, revision }` of `hf://owner/name[@revision]` (or `owner/name`). */
+export const parseHfUri = (uri: string, revision?: string): { repo: string; revision: string | undefined } => {
+  const match = HF_URI.exec(uri.trim());
+  if (!match?.[1] || match[1].includes("..")) {
+    throw new GradUsageError(`'${uri}' is not a Hugging Face repo: use hf://owner/name or hf://owner/name@revision.`, "invalid_hf_uri");
+  }
+  if (match[2] && revision && match[2] !== revision) {
+    throw new GradUsageError(`'${uri}' pins revision '${match[2]}', but revision '${revision}' was passed too.`, "invalid_hf_uri");
+  }
+  return { repo: match[1], revision: match[2] ?? revision };
+};
+
+/** The default upload name: the file or directory name as a slug. */
+export const artifactName = (path: string): string => {
+  const base = (path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "").replace(/(\.grad)?\.(tar\.gz|tgz|tar)$/, "");
+  const slug = base.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-._]+/, "").slice(0, 64).replace(/[-._]+$/, "");
+  return slug || "upload";
+};
+
+/** An upload or HF import an import worker validates and releases; `wait()` returns the Artifact. */
+export interface ArtifactImport extends ArtifactImportData {}
+export class ArtifactImport {
+  readonly #core: Core;
+
+  constructor(core: Core, data: ArtifactImportData) {
+    this.#core = core;
+    Object.assign(this, data);
+  }
+
+  async refresh(options?: RequestOptions): Promise<this> {
+    Object.assign(this, await this.#core.api.getArtifactImport(this.id, options));
+    return this;
+  }
+
+  /** Polls until the import finishes; throws ArtifactImportFailedError (`invalid_artifact`, 422) on failure. */
+  async wait(options: WaitOptions = {}): Promise<Artifact> {
+    const done = await pollUntil(
+      `artifact import ${this.id}`,
+      (signal) => this.#core.api.getArtifactImport(this.id, { signal }),
+      (job) => job.status === "completed" || job.status === "failed",
+      options,
+      this.#core.poll,
+    );
+    Object.assign(this, done);
+    if (done.status === "failed" || !done.artifactId) throw new ArtifactImportFailedError(done);
+    return new Artifact(this.#core, await this.#core.api.getArtifact(done.artifactId, { signal: options.signal }));
+  }
+
+  toJSON(): ArtifactImportData {
+    return { ...this } as ArtifactImportData;
+  }
+}
+
+export type PendingArtifactImport = Pending<ArtifactImport, Artifact, WaitOptions>;
+
+const createImport = async (core: Core, body: CreateArtifactImportRequest, request: RequestOptions): Promise<ArtifactImport> =>
+  new ArtifactImport(core, await core.api.createArtifactImport(body, request));
+
+const uploadArtifact = async (core: Core, path: string, options: ArtifactUploadOptions): Promise<ArtifactImport> => {
+  if (!isNodeRuntime()) throw new GradUsageError("artifacts.upload reads files from disk and needs Node.js.", "node_only");
+  const { base, format = "peft_lora", name, ...request } = options;
+  const { describeFile, packArtifact } = await import("../node/files.js");
+  const packed = await packArtifact(path);
+  try {
+    const file = await describeFile(packed.path);
+    const ticket = await core.api.createUpload(
+      { purpose: "artifact_import", filename: file.filename, sizeBytes: file.sizeBytes, sha256: file.sha256 },
+      request,
+    );
+    const put = await core.upload(ticket.url, ticket.headers, file.blob, request);
+    await put.cancel();
+    return await createImport(
+      core,
+      { source: { kind: "upload", uploadId: ticket.uploadId }, baseModel: base, format, name: name ?? artifactName(path) },
+      request,
+    );
+  } finally {
+    await packed.cleanup();
+  }
+};
+
+const importHf = (core: Core, uri: string, options: ArtifactFromHfOptions): Promise<ArtifactImport> => {
+  const { base, format = "peft_lora", name, revision, secret, ...request } = options;
+  const parsed = parseHfUri(uri, revision);
+  return createImport(
+    core,
     {
-      artifact: artifactRef(ref),
+      source: {
+        kind: "hf",
+        repo: parsed.repo,
+        ...(parsed.revision !== undefined ? { revision: parsed.revision } : {}),
+        ...(secret !== undefined ? { secret } : {}),
+      },
+      baseModel: base,
+      format,
       ...(name !== undefined ? { name } : {}),
-      ...(fallback !== undefined ? { fallback } : {}),
-      ...(exploreRate !== undefined ? { exploreRate } : {}),
     },
     request,
   );
@@ -105,9 +211,9 @@ export class Artifact {
     return `${this.name}@${this.version}`;
   }
 
-  /** Points `your-org/<name>` at this version (Cloud; self-hosted servers raise DeployUnavailableError). */
-  async deploy(options?: DeployOptions): Promise<Deployment> {
-    return deployArtifact(this.#core, this.id, options);
+  /** Deletes this artifact and its bundle (ConflictError `artifact_pinned` while a published model version pins it). */
+  async delete(options?: RequestOptions): Promise<void> {
+    await this.#core.api.deleteArtifact(this.id, options);
   }
 
   /** Streams the bundle to `dest` (a file, or a directory for the server's file name), verifying SHA-256. */
@@ -148,33 +254,32 @@ export class ArtifactsResource {
     return downloadArtifact(this.core, artifactRef(ref), dest, options);
   }
 
+  /**
+   * Registers local weights (a directory, a file or a `.tar.gz`) as an artifact. An import
+   * worker checks them against the format spec and `base` (for `peft_lora`: the adapter
+   * config, base model and revision, target modules and every tensor shape); `.wait()`
+   * returns the Artifact or throws ArtifactImportFailedError (`invalid_artifact`, 422).
+   */
+  upload(path: string, options: ArtifactUploadOptions): PendingArtifactImport {
+    return new Pending(uploadArtifact(this.core, path, options));
+  }
+
+  /** Imports weights from the Hugging Face Hub (`hf://owner/name[@revision]`), pinned to the commit; same checks as `upload`. */
+  fromHf(uri: string, options: ArtifactFromHfOptions): PendingArtifactImport {
+    return new Pending(importHf(this.core, uri, options));
+  }
+
+  /** An upload or HF import. */
+  async getImport(id: string, options?: RequestOptions): Promise<ArtifactImport> {
+    return new ArtifactImport(this.core, await this.core.api.getArtifactImport(id, options));
+  }
+
+  /** Deletes an artifact and its bundle (ConflictError `artifact_pinned` while pinned). */
+  async delete(ref: ArtifactRef, options?: RequestOptions): Promise<void> {
+    await this.core.api.deleteArtifact(artifactRef(ref), options);
+  }
+
   stream(ref: ArtifactRef, options?: StreamOptions): Promise<ArtifactStream> {
     return openArtifact(this.core, artifactRef(ref), options);
-  }
-}
-
-export class DeploymentsResource {
-  constructor(private readonly core: Core) {}
-
-  /** Deploys an artifact; deploying an earlier version is a rollback. */
-  create(artifact: ArtifactRef, options?: DeployOptions): Promise<Deployment> {
-    return deployArtifact(this.core, artifact, options);
-  }
-
-  get(name: string, options?: RequestOptions): Promise<DeploymentStatus> {
-    return this.core.api.getDeployment(name, options);
-  }
-
-  list(options: { limit?: number } & RequestOptions = {}): Paginator<Deployment> {
-    const { limit, ...request } = options;
-    return new Paginator(async (cursor) => {
-      const page = await this.core.api.listDeployments({ ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) }, request);
-      return { data: page.data, nextCursor: page.nextCursor };
-    }, request.signal);
-  }
-
-  /** Re-points the deployment at its previous artifact. */
-  rollback(name: string, options?: RequestOptions): Promise<Deployment> {
-    return this.core.api.rollbackDeployment(name, options);
   }
 }

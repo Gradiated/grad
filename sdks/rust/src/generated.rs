@@ -99,7 +99,7 @@ pub struct ApiKey {
 }
 
 string_enum! {
-    /// `x:write` implies `x:read`; `admin` implies every workspace scope. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.
+    /// `x:write` implies `x:read`; `admin` implies every workspace scope. `artifacts:pin` (pin and unpin artifacts; Gradiated Cloud's publishing calls it) is implied by `admin` only. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.
     ApiKeyScope {
         Admin => "admin",
         DatasetsRead => "datasets:read",
@@ -108,6 +108,7 @@ string_enum! {
         RunsWrite => "runs:write",
         ArtifactsRead => "artifacts:read",
         ArtifactsWrite => "artifacts:write",
+        ArtifactsPin => "artifacts:pin",
         SecretsRead => "secrets:read",
         SecretsWrite => "secrets:write",
         SourcesRead => "sources:read",
@@ -134,6 +135,7 @@ pub struct Artifact {
     pub sha256: String,
     pub size_bytes: i64,
     pub manifest: BTreeMap<String, Value>,
+    pub provenance: ArtifactProvenance,
     pub eval_report: Option<EvalReport>,
     pub created_at: String,
 }
@@ -150,6 +152,106 @@ string_enum! {
         DecisionBundle => "decision_bundle",
         RewardBundle => "reward_bundle",
         Reference => "reference",
+    }
+}
+
+/// Generated from the OpenAPI schema `ArtifactImport`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactImport {
+    pub id: String,
+    pub workspace_id: String,
+    pub status: ArtifactImportStatus,
+    pub name: String,
+    pub base_model: String,
+    pub format: Option<ArtifactFormat>,
+    pub source: ArtifactImportSourceType,
+    /// The artifact (name@version) once the import completed.
+    pub artifact_id: Option<String>,
+    /// Why it failed. Validation failures name the file and the problem (`adapter_config.json: ...`).
+    pub error: Option<String>,
+    /// invalid_artifact (the files don't match the format spec or the base model), source_unavailable, or null.
+    pub error_code: Option<String>,
+    pub attempt: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A union of object shapes: set the fields of exactly one variant.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactImportSource {
+    pub kind: ArtifactImportSourceKind,
+    /// A tar (optionally gzip) of the artifact's files, uploaded with POST /v1/uploads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Branch, tag or commit (default main). The import pins the commit it resolves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// Name of a workspace secret holding a Hugging Face token, for gated or private repos.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+}
+
+string_enum! {
+    /// Allowed values of `ArtifactImportSourceKind`.
+    ArtifactImportSourceKind {
+        Upload => "upload",
+        Hf => "hf",
+    }
+}
+
+/// Generated from the OpenAPI schema `ArtifactImportSourceType`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactImportSourceType {
+    pub kind: ArtifactImportSourceTypeKind,
+    pub upload_id: Option<String>,
+    pub repo: Option<String>,
+    /// HF imports: the requested revision, then the pinned commit once imported.
+    pub revision: Option<String>,
+}
+
+string_enum! {
+    /// Allowed values of `ArtifactImportSourceTypeKind`.
+    ArtifactImportSourceTypeKind {
+        Upload => "upload",
+        Hf => "hf",
+    }
+}
+
+string_enum! {
+    /// Allowed values of `ArtifactImportStatus`.
+    ArtifactImportStatus {
+        Queued => "queued",
+        Running => "running",
+        Completed => "completed",
+        Failed => "failed",
+    }
+}
+
+/// Generated from the OpenAPI schema `ArtifactProvenance`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactProvenance {
+    /// run: trained by a grad run; upload: files uploaded with `grad artifacts upload`; import: pulled from the Hugging Face Hub with `grad artifacts import`.
+    pub source: ArtifactProvenanceSource,
+    /// source=run: the run that trained it.
+    pub run_id: Option<String>,
+    /// source=upload: the API key (principal) that uploaded it.
+    pub uploader: Option<String>,
+    /// source=import: `hf://owner/name@<40-hex commit>`, the pinned revision it was imported from.
+    pub uri: Option<String>,
+}
+
+string_enum! {
+    /// run: trained by a grad run; upload: files uploaded with `grad artifacts upload`; import: pulled from the Hugging Face Hub with `grad artifacts import`.
+    ArtifactProvenanceSource {
+        Run => "run",
+        Upload => "upload",
+        Import => "import",
     }
 }
 
@@ -244,6 +346,20 @@ string_enum! {
         Failed => "failed",
         Cancelled => "cancelled",
     }
+}
+
+/// Generated from the OpenAPI schema `CreateArtifactImportRequest`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CreateArtifactImportRequest {
+    pub source: ArtifactImportSource,
+    /// The catalog base model (GET /v1/base-models) the files were trained on.
+    pub base_model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<ImportableArtifactFormat>,
+    /// The artifact name (name@YYYY-MM-DD-n). Required for uploads; HF imports default to the repo's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Generated from the OpenAPI schema `CreateImportRequest`.
@@ -422,53 +538,6 @@ string_enum! {
         Choice => "choice",
         Noul => "noul",
         Score => "score",
-    }
-}
-
-/// Generated from the OpenAPI schema `DeployArtifactRequest`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DeployArtifactRequest {
-    pub artifact: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fallback: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub explore_rate: Option<f64>,
-}
-
-/// Generated from the OpenAPI schema `Deployment`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Deployment {
-    pub id: String,
-    pub workspace_id: String,
-    pub name: String,
-    pub model_id: String,
-    pub active_artifact_id: String,
-    pub previous_artifact_id: Option<String>,
-    pub fallback_model: Option<String>,
-    pub explore_rate: f64,
-    pub status: DeploymentStatusType,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// Generated from the OpenAPI schema `DeploymentStatus`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DeploymentStatus {
-    pub deployment: Deployment,
-    pub feedback_count: i64,
-    pub average_score: Option<f64>,
-}
-
-string_enum! {
-    /// Allowed values of `DeploymentStatusType`.
-    DeploymentStatusType {
-        Active => "active",
-        Disabled => "disabled",
     }
 }
 
@@ -970,6 +1039,19 @@ string_enum! {
         Running => "running",
         Completed => "completed",
         Failed => "failed",
+    }
+}
+
+string_enum! {
+    /// Allowed values of `ImportableArtifactFormat`.
+    ImportableArtifactFormat {
+        PeftLora => "peft_lora",
+        MergedSafetensors => "merged_safetensors",
+        Cartridge => "cartridge",
+        EncoderSafetensors => "encoder_safetensors",
+        RouterBundle => "router_bundle",
+        DecisionBundle => "decision_bundle",
+        RewardBundle => "reward_bundle",
     }
 }
 
@@ -2003,8 +2085,6 @@ pub const LIST_ARTIFACTS_LIMIT_MAX: u32 = 200;
 pub const LIST_DATASET_RECORDS_LIMIT_MAX: u32 = 1000;
 /// Largest `limit` accepted by `list_datasets` (the server clamps larger values).
 pub const LIST_DATASETS_LIMIT_MAX: u32 = 200;
-/// Largest `limit` accepted by `list_deployments` (the server clamps larger values).
-pub const LIST_DEPLOYMENTS_LIMIT_MAX: u32 = 200;
 /// Largest `limit` accepted by `list_eval_failures` (the server clamps larger values).
 pub const LIST_EVAL_FAILURES_LIMIT_MAX: u32 = 200;
 /// Largest `limit` accepted by `list_eval_outputs` (the server clamps larger values).

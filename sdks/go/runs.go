@@ -472,15 +472,6 @@ func (r *Run) artifactRef() (string, error) {
 	return *r.ArtifactID, nil
 }
 
-// Deploy deploys the run's artifact (Cloud; self-hosted servers return *DeployUnavailableError).
-func (r *Run) Deploy(ctx context.Context, opts ...DeployOption) (*Deployment, error) {
-	ref, err := r.artifactRef()
-	if err != nil {
-		return nil, err
-	}
-	return r.c.Deployments.Create(ctx, ref, opts...)
-}
-
 // Download streams the run's artifact bundle to dest with SHA-256 verification.
 func (r *Run) Download(ctx context.Context, dest string) (*Download, error) {
 	ref, err := r.artifactRef()

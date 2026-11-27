@@ -128,7 +128,7 @@ func TestArtifactsGetListAndHelpers(t *testing.T) {
 		"GET /v1/artifacts/" + id:                jsonValue(200, art),
 		"GET /v1/artifacts":                      jsonBody(200, wire(t, "artifacts-page.json")),
 		"GET /v1/artifacts/" + id + "/download":  bundleRoute(payload, hex.EncodeToString(sum[:])),
-		"POST /v1/deployments":                   jsonBody(200, wire(t, "deployment.json")),
+		"DELETE /v1/artifacts/" + id:             func(w http.ResponseWriter, _ *http.Request, _ []byte) { w.WriteHeader(204) },
 		"GET /v1/runs/" + art["run_id"].(string): jsonBody(200, wire(t, "run-completed.json")),
 	})
 	c, _ := f.client()
@@ -146,11 +146,11 @@ func TestArtifactsGetListAndHelpers(t *testing.T) {
 	if _, err := a.Download(ctx, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Deploy(ctx); err != nil {
-		t.Fatal(err)
+	if string(a.Provenance.Source) != "run" || a.Provenance.RunID == nil || *a.Provenance.RunID != art["run_id"] {
+		t.Fatalf("provenance %+v", a.Provenance)
 	}
-	if body := f.last("POST", "/v1/deployments").JSON(t); len(body) != 1 || body["artifact"] != id {
-		t.Fatalf("deploy body %v", body)
+	if err := a.Delete(ctx); err != nil || f.count("DELETE", "/v1/artifacts/"+id) != 1 {
+		t.Fatalf("delete %v", err)
 	}
 	run, err := c.Runs.Get(ctx, art["run_id"].(string))
 	if err != nil {
@@ -161,28 +161,15 @@ func TestArtifactsGetListAndHelpers(t *testing.T) {
 	}
 }
 
-func TestDeploymentsKeysModels(t *testing.T) {
+func TestKeysModels(t *testing.T) {
 	ctx := context.Background()
 	f := newFake(t, map[string]route{
-		"GET /v1/deployments/support-router":           jsonBody(200, wire(t, "deployment-status.json")),
-		"GET /v1/deployments":                          jsonBody(200, wire(t, "deployments-page.json")),
-		"POST /v1/deployments/support-router/rollback": jsonBody(200, wire(t, "deployment.json")),
-		"POST /v1/keys":                                jsonBody(201, wire(t, "api-key-created.json")),
-		"GET /v1/keys":                                 jsonBody(200, wire(t, "api-keys-page.json")),
-		"DELETE /v1/keys/key_1":                        jsonValue(200, wireMap(t, "api-key-created.json")["key"]),
-		"GET /v1/base-models":                          jsonBody(200, wire(t, "models.json")),
+		"POST /v1/keys":         jsonBody(201, wire(t, "api-key-created.json")),
+		"GET /v1/keys":          jsonBody(200, wire(t, "api-keys-page.json")),
+		"DELETE /v1/keys/key_1": jsonValue(200, wireMap(t, "api-key-created.json")["key"]),
+		"GET /v1/base-models":   jsonBody(200, wire(t, "models.json")),
 	})
 	c, _ := f.client()
-	st, err := c.Deployments.Get(ctx, "support-router")
-	if err != nil || st.FeedbackCount != 2 || st.Deployment.FallbackModel == nil {
-		t.Fatalf("get %+v %v", st, err)
-	}
-	if deps, err := grad.Collect(c.Deployments.List(ctx)); err != nil || len(deps) != 1 {
-		t.Fatalf("list %v", err)
-	}
-	if _, err := c.Deployments.Rollback(ctx, "support-router"); err != nil {
-		t.Fatal(err)
-	}
 
 	key, err := c.Keys.Create(ctx, "ci", "runs:read", "datasets:write")
 	if err != nil || key.Secret == "" {
@@ -241,12 +228,13 @@ func TestEverythingSurfacesConfigErrors(t *testing.T) {
 	check("download", err)
 	_, err = c.Artifacts.Open(ctx, "a")
 	check("open", err)
-	_, err = c.Deployments.Create(ctx, "a")
-	check("deploy", err)
-	_, err = c.Deployments.Get(ctx, "a")
-	check("deployment", err)
-	_, err = c.Deployments.Rollback(ctx, "a")
-	check("rollback", err)
+	check("delete artifact", c.Artifacts.Delete(ctx, "a"))
+	_, err = c.Artifacts.FromHF(ctx, "acme/lora", grad.FromHFParams{Base: "b"})
+	check("from hf", err)
+	_, err = c.Artifacts.Upload(ctx, t.TempDir(), grad.UploadParams{Base: "b"})
+	check("upload", err)
+	_, err = c.Artifacts.GetImport(ctx, "i")
+	check("get import", err)
 	_, err = c.Models.List(ctx)
 	check("models", err)
 	_, err = c.Keys.Create(ctx, "k")

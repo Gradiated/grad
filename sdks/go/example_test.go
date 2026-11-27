@@ -23,7 +23,7 @@ func Example_quickstart() {
 		Name:    "support-router",
 		Recipe:  grad.RouterRecipe{},
 	}).Wait(ctx)
-	_, _ = run.Deploy(ctx)
+	_, _ = run.Download(ctx, "./support-router")
 }
 
 func Example_apiKey() {
@@ -88,11 +88,14 @@ func Example_router() {
 	fmt.Println(run.Artifact.ID, run.EvalReport)
 }
 
-func Example_deployArtifact() {
+func Example_uploadArtifact() {
 	ctx := context.Background()
 	client := grad.NewClient()
-	artifact, _ := client.Artifacts.Get(ctx, "fast-diff-merge@2026-11-26-1")
-	_, _ = artifact.Deploy(ctx)
+	job, _ := client.Artifacts.Upload(ctx, "./my-lora", grad.UploadParams{Base: "qwen/qwen3-8b"})
+	artifact, _ := job.Wait(ctx)
+	imported, _ := client.Artifacts.FromHF(ctx, "hf://acme/support-lora@main", grad.FromHFParams{Base: "qwen/qwen3-8b"})
+	fromHub, _ := imported.Wait(ctx)
+	fmt.Println(artifact.ID, artifact.Provenance.Source, fromHub.Provenance.URI)
 }
 
 func Example_trajectories() {

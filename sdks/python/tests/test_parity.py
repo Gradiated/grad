@@ -123,7 +123,10 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         ),
         "import_benchmark": lambda: client.datasets.from_benchmark("gsm8k", limit=200, name="gsm8k-test-200", wait=False),
         "filter_dataset_ids": lambda: client.datasets.filter("support-logs", ids=["rec_a", "rec_c"]),
-        "deploy": lambda: client.deploy(artifact, name="support", fallback="test/tiny-qwen3", explore_rate=0.1, idempotency_key="parity-deploy-key"),
+        "import_artifact_hf": lambda: client.artifacts.from_hf(
+            "hf://acme/support-lora@v2", base="test/tiny-qwen3", name="support-lora", secret="hf-token", idempotency_key="parity-artifact-import-key"
+        ),
+        "delete_artifact": lambda: client.artifacts.delete("support-sft@2026-11-27-1"),
         "set_secret": lambda: client.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
         "set_secret_hosts": lambda: client.secrets.set(
             "langfuse-self", "pk-lf-1:sk-lf-2", allowed_hosts=["langfuse.internal:3000"]
@@ -175,7 +178,7 @@ class ParityTests(unittest.TestCase):
                 if case["method"] == "GET":
                     self.assertEqual({k: v[0] for k, v in sent.query.items()}, case["query"])
                     self.assertIsNone(key)
-                elif case["method"] == "PATCH":
+                elif case["method"] in ("PATCH", "DELETE"):
                     self.assertIsNone(key)
                 elif case["idempotency_key"] is None:
                     self.assertRegex(key or "", r"^[0-9a-f-]{36}$")
@@ -194,6 +197,8 @@ class ParityTests(unittest.TestCase):
         usage = grad.UsageRecord.from_api(responses["usage_page"]["data"][0])
         totals = grad.UsageSummary.from_api(responses["usage_summary"])
         events: list[Any] = [grad._models.run_event_from_api(e) for e in responses["run_events"]["data"]]
+        artifact = grad.Artifact.from_api(responses["artifact"])
+        artifact_import = grad.ArtifactImport.from_api(responses["artifact_import"])
         assert run.last_interruption is not None
         assert source.last_sync is not None
         assert run.eval_report is not None and run.eval_report.pareto_summary is not None and run.latest_metric is not None
@@ -241,6 +246,10 @@ class ParityTests(unittest.TestCase):
             "usage_summary.top_evals[0].kind": totals.top_evals[0].kind,
             "usage_summary.groups[1].key": totals.groups[1].key,
             "usage_summary.groups[1].tokens": totals.groups[1].tokens,
+            "artifact.provenance.source": artifact.provenance.source,
+            "artifact.provenance.uploader": artifact.provenance.uploader,
+            "artifact_import.status": artifact_import.status,
+            "artifact_import.error_code": artifact_import.error_code,
             "run.phase": run.phase,
             "run.last_interruption.reason": run.last_interruption.reason,
             "run.last_interruption.resume_step": run.last_interruption.resume_step,

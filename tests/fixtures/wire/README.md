@@ -10,8 +10,6 @@ same shapes and the same error-mapping table.
 - `source-filter-keys.json`: each source provider's filter keys; the trainer's
   providers and grad-server's validation are both tested against it.
 - Everything else: response bodies captured from a live self-hosted stack with
-  the reference worker (`node tests/fixtures/wire/capture.mjs`). The
-  deployment bodies (`deployment*.json`, `deployments-page.json`) need Cloud
-  serving and are written by hand from `spec/openapi.yaml`.
+  the reference worker (`node tests/fixtures/wire/capture.mjs`).
 
 Add language-specific files with a language prefix (`py-`, `rs-`, `go-`, `ts-`).

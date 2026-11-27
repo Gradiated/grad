@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { jobBlobKey, stagingKey } from "../src/services/uploads.js";
+import {
+  artifactKey,
+  jobBlobKey,
+  stagingKey,
+} from "../src/services/uploads.js";
 import { makeTestApp, WORKSPACE_A, type TestApp } from "./fixtures/app.js";
 import {
   createSftRun,
@@ -22,58 +26,26 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
     await t.close();
   });
 
-  it("answers 501 on the paths Gradiated Cloud serves, with what to do instead", async () => {
-    const cases: Array<[string, string, unknown, string]> = [
-      [
-        "POST",
-        "/v1/deployments",
-        { artifact: "a@latest" },
-        "deploy_unavailable",
-      ],
-      ["GET", "/v1/deployments", undefined, "deploy_unavailable"],
-      ["GET", "/v1/deployments/router", undefined, "deploy_unavailable"],
-      [
-        "POST",
-        "/v1/deployments/router/rollback",
-        undefined,
-        "deploy_unavailable",
-      ],
-      [
-        "POST",
-        "/v1/route",
-        { deployment: "router", messages: [{ role: "user", content: "hi" }] },
-        "inference_unavailable",
-      ],
-      [
-        "POST",
-        "/v1/embeddings",
-        { model: "emb", input: "hi" },
-        "inference_unavailable",
-      ],
-      [
-        "POST",
-        "/v1/feedback",
-        { events: [{ idempotency_key: "k", score: 1 }] },
-        "inference_unavailable",
-      ],
-    ];
-    for (const [method, path, body, code] of cases) {
-      const res = await t.json<{ code: string; detail: string }>(path, {
+  it("serves no deploy, route, embeddings or feedback paths: those are Gradiated Cloud's inference API", async () => {
+    for (const [method, path] of [
+      ["POST", "/v1/deployments"],
+      ["GET", "/v1/deployments"],
+      ["GET", "/v1/deployments/router"],
+      ["POST", "/v1/deployments/router/rollback"],
+      ["POST", "/v1/route"],
+      ["POST", "/v1/embeddings"],
+      ["POST", "/v1/feedback"],
+    ] as const) {
+      const res = await t.json<{ code: string }>(path, {
         method,
-        ...(body !== undefined ? { body } : {}),
+        ...(method === "POST" ? { body: {} } : {}),
       });
-      expect(res.status, path).toBe(501);
-      expect(res.body.code, path).toBe(code);
-      expect(res.body.detail, path).toMatch(/Gradiated Cloud/);
-      expect(res.body.detail, path).toMatch(/vLLM/);
+      expect(res.status, path).toBe(404);
+      expect(res.body.code, path).toBe("route_not_found");
     }
-    // The documented request shapes still validate.
-    expect(
-      (await t.json("/v1/deployments", { body: { artifact: "" } })).status,
-    ).toBe(422);
   });
 
-  it("promotes a checkpoint by reference, once per name, and keeps its blob past checkpoint expiry", async () => {
+  it("promotes a checkpoint into the artifacts/ prefix, once per name, and keeps it past checkpoint expiry", async () => {
     const run = await createSftRun(t);
     const job = (await worker.claim())!;
     await worker.checkpoint(job, 5, "ckpt-five", { format: "peft_lora" });
@@ -99,19 +71,29 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
       { body: { name: "best" } },
     );
     expect(again.body.id).toBe(promoted.body.id);
+    // Checkpoints are never servable: the release gets its own copy under
+    // the content-addressed artifacts/ prefix.
     const blob = jobBlobKey(run as never, 1, sha256Hex("ckpt-five"));
     const release = await t.deps.store.artifacts.get(
       WORKSPACE_A,
       promoted.body.id,
     );
-    expect(release?.storage_key).toBe(blob);
+    expect(release?.storage_key).toBe(
+      artifactKey(WORKSPACE_A, sha256Hex("ckpt-five")),
+    );
+    expect(release?.provenance).toEqual({
+      source: "run",
+      run_id: run.id,
+      uploader: null,
+      uri: null,
+    });
 
-    // Past the TTL the checkpoints expire; only the unshared blob goes.
+    // Past the TTL both checkpoints and their job blobs go; the release stays.
     t.clock.advanceDays(31);
     await worker.heartbeat(job).catch(() => undefined);
     const report = await t.services.maintenance.tick();
-    expect(report.deletedCheckpoints).toBe(1);
-    expect(await t.deps.storage.head(blob)).not.toBeNull();
+    expect(report.deletedCheckpoints).toBe(2);
+    expect(await t.deps.storage.head(blob)).toBeNull();
     expect(
       await t.deps.storage.head(
         jobBlobKey(run as never, 1, sha256Hex("ckpt-six")),

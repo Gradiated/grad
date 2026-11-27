@@ -346,32 +346,6 @@
       }
     },
     {
-      "name": "501 deploy_unavailable",
-      "status": 501,
-      "headers": {
-        "content-type": "application/problem+json",
-        "x-request-id": "req_501d"
-      },
-      "body": {
-        "type": "https://gradiated.com/problems/deploy_unavailable",
-        "title": "Hosted serving is not available",
-        "status": 501,
-        "detail": "Hosted serving is disabled on this self-hosted server (DEPLOY_MODE=disabled). Download the artifact and serve it with vLLM or SGLang.",
-        "code": "deploy_unavailable",
-        "request_id": "req_501d"
-      },
-      "expect": {
-        "class": "DeployUnavailableError",
-        "status": 501,
-        "code": "deploy_unavailable",
-        "request_id": "req_501d",
-        "message_contains": [
-          "vLLM or SGLang"
-        ],
-        "retryable": false
-      }
-    },
-    {
       "name": "501 inference_unavailable",
       "status": 501,
       "headers": {

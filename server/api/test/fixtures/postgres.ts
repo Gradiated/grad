@@ -79,3 +79,19 @@ export const createTestStore = async (clock: Clock): Promise<TestStore> => {
 
   return { store, dispose: () => store.close() };
 };
+
+/** Runs raw SQL in this test file's schema (what no repository does). */
+export const sql = async (
+  text: string,
+  params: unknown[] = [],
+): Promise<Array<Record<string, unknown>>> => {
+  const schema = await fileSchemaName();
+  const client = new pg.Client({ connectionString: postgresUrl() });
+  await client.connect();
+  try {
+    await client.query(`SET search_path TO "${schema}"`);
+    return (await client.query(text, params)).rows;
+  } finally {
+    await client.end();
+  }
+};

@@ -15,13 +15,12 @@ import { DEFAULT_BASE_URL, defaultConfigPath, isLoopback, loadProfile, missingKe
 import { GradUsageError } from "./errors.js";
 import type { Core } from "./core.js";
 import { defaultPollContext, type PollContext } from "./polling.js";
-import { Artifact, ArtifactsResource, deployArtifact, DeploymentsResource, type ArtifactRef, type DeployOptions } from "./resources/artifacts.js";
+import { ArtifactsResource } from "./resources/artifacts.js";
 import { DatasetsResource, ImportsResource } from "./resources/datasets.js";
 import { EvalsResource } from "./resources/evals.js";
 import { KeysResource, ModelsResource, UsageResource } from "./resources/misc.js";
 import { CheckpointsResource, RunsResource } from "./resources/runs.js";
 import { SecretsResource, SourcesResource } from "./resources/sources.js";
-import type { Deployment } from "./generated/models.js";
 
 export interface GradOptions {
   /** API key (default: the selected profile, GRADIATED_API_KEY, then the default profile). `""` talks to a server without authentication. */
@@ -196,7 +195,6 @@ export class Grad {
   readonly runs: RunsResource;
   readonly checkpoints: CheckpointsResource;
   readonly artifacts: ArtifactsResource;
-  readonly deployments: DeploymentsResource;
   readonly evals: EvalsResource;
   readonly keys: KeysResource;
   readonly secrets: SecretsResource;
@@ -227,7 +225,6 @@ export class Grad {
     this.runs = new RunsResource(this.#core);
     this.checkpoints = new CheckpointsResource(this.#core);
     this.artifacts = new ArtifactsResource(this.#core);
-    this.deployments = new DeploymentsResource(this.#core);
     this.evals = new EvalsResource(this.#core);
     this.keys = new KeysResource(this.#core);
     this.secrets = new SecretsResource(this.#core);
@@ -239,10 +236,5 @@ export class Grad {
   async config(): Promise<{ baseURL: string; apiKeySource: ResolvedConfig["apiKeySource"] }> {
     const { config } = await this.#transport.resolve();
     return { baseURL: config.baseURL, apiKeySource: config.apiKeySource };
-  }
-
-  /** Deploys an artifact (same as `grad.deployments.create`). */
-  deploy(artifact: ArtifactRef | Artifact, options?: DeployOptions): Promise<Deployment> {
-    return deployArtifact(this.#core, artifact, options);
   }
 }

@@ -258,13 +258,6 @@ export const createNoopBillingAdapter = (): BillingAdapter => ({
   checkCanStartRun: async () => ({ allowed: true }),
 });
 
-/** Why the serving paths answer 501 here: they belong to Gradiated Cloud. */
-export const DEPLOY_DISABLED_DETAIL =
-  "Deployments are served by Gradiated Cloud (api.gradiated.com), not by grad-server. Self-hosted: download the artifact with `grad artifacts download <id> --output ./adapter` and serve it with vLLM or SGLang (`vllm serve <base> --enable-lora --lora-modules name=./adapter`).";
-
-export const INFERENCE_DISABLED_DETAIL =
-  "Routing, embeddings and feedback are served by Gradiated Cloud's inference gateway, not by grad-server. Self-hosted: serve the downloaded artifact with vLLM or SGLang, and record scores in your observability tool (`grad sources` syncs them into datasets).";
-
 /** One page of Gradiated Cloud gateway traces and scores (the `gradiated` source). */
 export interface TracesPage {
   records: Record<string, unknown>[];

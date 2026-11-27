@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { adapters, Context, Judge, loggers, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
-import type { EvalRun, PlanEvalResponse, PlanRunResponse, Run, RunEventsPage, Secret, Source, UsageRecord, UsageSummary } from "../src/generated/models.js";
+import type {
+  Artifact as ArtifactData,
+  ArtifactImport as ArtifactImportData,
+  EvalRun,
+  PlanEvalResponse, PlanRunResponse, Run, RunEventsPage, Secret, Source, UsageRecord, UsageSummary } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
 import { FakeServer, json, makeGrad, wire } from "./helpers.js";
@@ -9,7 +13,7 @@ import { FakeServer, json, makeGrad, wire } from "./helpers.js";
 /** tests/fixtures/wire/sdk-parity.json: every SDK and the CLI send these requests for the same calls. */
 interface Parity {
   requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown; query?: Record<string, string> }[];
-  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; run_plan: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] }; usage_summary: unknown; run_events: { run_id: string } };
+  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; run_plan: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] }; usage_summary: unknown; run_events: { run_id: string }; artifact: unknown; artifact_import: unknown };
   expect: Record<string, unknown>;
 }
 const parity = wire<Parity>("sdk-parity.json");
@@ -131,7 +135,14 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
     }),
   import_benchmark: () => grad.datasets.fromBenchmark("gsm8k", { limit: 200, name: "gsm8k-test-200", wait: false }),
   filter_dataset_ids: () => grad.datasets.filter("support-logs", { ids: ["rec_a", "rec_c"] }),
-  deploy: () => grad.deploy(artifact, { name: "support", fallback: "test/tiny-qwen3", exploreRate: 0.1, idempotencyKey: "parity-deploy-key" }),
+  import_artifact_hf: async () =>
+    await grad.artifacts.fromHf("hf://acme/support-lora@v2", {
+      base: "test/tiny-qwen3",
+      name: "support-lora",
+      secret: "hf-token",
+      idempotencyKey: "parity-artifact-import-key",
+    }),
+  delete_artifact: () => grad.artifacts.delete("support-sft@2026-11-27-1"),
   set_secret: () => grad.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
   set_secret_hosts: () =>
     grad.secrets.set("langfuse-self", "pk-lf-1:sk-lf-2", { allowedHosts: ["langfuse.internal:3000"] }),
@@ -165,7 +176,7 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
 describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
   it("sends the fixture's request for every case", async () => {
     const server = new FakeServer();
-    for (const c of parity.requests) server.on(c.method, c.path, () => json({ id: "x", status: "queued" }));
+    for (const c of parity.requests) server.on(c.method, encodeURI(c.path).replace(/@/g, "%40"), () => json({ id: "x", status: "queued" }));
     server.on("GET", "/v1/usage", () => json({ data: [], next_cursor: null }));
     server.on("GET", `/v1/runs/${parity.responses.run_events.run_id}/events`, () => json({ data: [], next_cursor: null }));
     // fromBenchmark reads the dataset back.
@@ -176,14 +187,14 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     for (const c of parity.requests) {
       await table[c.case]?.();
       // The last request to the case's endpoint (a helper may read the result back).
-      const sent = server.calls.filter((call) => call.method === c.method && call.url.pathname === c.path).at(-1);
-      expect([sent?.method, sent?.url.pathname], c.case).toEqual([c.method, c.path]);
+      const sent = server.calls.filter((call) => call.method === c.method && decodeURIComponent(call.url.pathname) === c.path).at(-1);
+      expect([sent?.method, decodeURIComponent(sent?.url.pathname ?? "")], c.case).toEqual([c.method, c.path]);
       expect(JSON.parse(sent?.body ?? "null"), c.case).toEqual(c.body);
       const key = sent?.headers.get("idempotency-key");
       if (c.method === "GET") {
         expect(Object.fromEntries(sent?.url.searchParams ?? []), c.case).toEqual(c.query);
         expect(key, c.case).toBeNull();
-      } else if (c.method === "PATCH") expect(key, c.case).toBeNull();
+      } else if (c.method === "PATCH" || c.method === "DELETE") expect(key, c.case).toBeNull();
       else if (c.idempotency_key === null) expect(key, c.case).toMatch(/^[0-9a-f-]{36}$/);
       else expect(key, c.case).toBe(c.idempotency_key);
     }
@@ -201,6 +212,8 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const usage = decode<UsageRecord>("UsageRecord", parity.responses.usage_page.data[0]);
     const totals = decode<UsageSummary>("UsageSummary", parity.responses.usage_summary);
     const events = decode<RunEventsPage>("RunEventsPage", parity.responses.run_events).data;
+    const artifact = decode<ArtifactData>("Artifact", parity.responses.artifact);
+    const artifactImport = decode<ArtifactImportData>("ArtifactImport", parity.responses.artifact_import);
     const at = <T extends RunEventsPage["data"][number]["type"]>(i: number, type: T) => {
       const event = events[i];
       if (event?.type !== type) throw new Error(`event ${i} is ${event?.type}, not ${type}`);
@@ -250,6 +263,10 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "usage_summary.top_evals[0].kind": totals.topEvals[0]?.kind,
       "usage_summary.groups[1].key": totals.groups[1]?.key,
       "usage_summary.groups[1].tokens": totals.groups[1]?.tokens,
+      "artifact.provenance.source": artifact.provenance.source,
+      "artifact.provenance.uploader": artifact.provenance.uploader,
+      "artifact_import.status": artifactImport.status,
+      "artifact_import.error_code": artifactImport.errorCode,
       "run.phase": run.phase,
       "run.last_interruption.reason": run.lastInterruption?.reason,
       "run.last_interruption.resume_step": run.lastInterruption?.resumeStep,

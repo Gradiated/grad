@@ -683,10 +683,6 @@ async fn report_finished(ctx: &Ctx, c: &Client, run: &Run) -> Option<Artifact> {
                     a.reference(),
                     a.name
                 ));
-                out.line(format!(
-                    "    or: grad deploy {}   # Gradiated Cloud",
-                    a.reference()
-                ));
             }
         }
         None => {
@@ -1147,7 +1143,11 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
                 checkpoint,
                 a.reference()
             ));
-            out.line(format!("  Next: grad deploy {}", a.reference()));
+            out.line(format!(
+                "  Next: grad artifacts download {} --output ./{}",
+                a.reference(),
+                a.name
+            ));
             out.done(&a)
         }
     }

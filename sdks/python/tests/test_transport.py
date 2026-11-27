@@ -94,12 +94,7 @@ class ErrorMappingTests(unittest.TestCase):
         self.assertEqual(err.request_id, "req_hdr")
         self.assertIn("request_id=req_hdr", str(err))
 
-    def test_code_based_501_classes_from_fixture(self) -> None:
-        client, _, _ = make_client({"POST /v1/deployments": fixture_reply("python-problem-501-deploy.json")})
-        with self.assertRaises(grad.DeployUnavailableError) as ctx:
-            client.deploy("sql@latest")
-        self.assertIn("vLLM", ctx.exception.detail)
-        self.assertIsInstance(ctx.exception, grad.FeatureUnavailableError)
+    def test_code_based_501_classes(self) -> None:
         err = error_from_response(status=501, headers={}, body=b'{"code":"inference_unavailable","detail":"no INFERENCE_BASE_URL"}', method="POST", url="u")
         self.assertIsInstance(err, grad.InferenceUnavailableError)
 
@@ -312,9 +307,9 @@ class SenderContractTests(unittest.TestCase):
             client.models.list()
 
     def test_json_body_rejects_nan(self) -> None:
-        client, _, _ = make_client({"POST /v1/deployments": json_reply({})})
+        client, _, _ = make_client({"POST /v1/runs/plan": json_reply({})})
         with self.assertRaises(ValueError):
-            client.wire.deploy_artifact({"artifact": "a@1", "explore_rate": float("nan")})
+            client.wire.plan_run({"dataset": "d", "name": "n", "recipe": {"kind": "sft", "lr": float("nan")}})
         self.assertEqual(json.dumps({"a": 1}), '{"a": 1}')
 
 

@@ -1,5 +1,6 @@
 import { z } from "@hono/zod-openapi";
 
+import { ArtifactImportSchema } from "./artifacts.js";
 import { IsoTimestampSchema, Sha256HexSchema } from "./common.js";
 import { EvalReportSchema } from "./eval-report.js";
 import {
@@ -14,6 +15,7 @@ import {
 } from "./datasets.js";
 import {
   ArtifactFormatSchema,
+  ArtifactProvenanceSchema,
   ArtifactSchema,
   CheckpointSchema,
   GpuInfoSchema,
@@ -102,6 +104,25 @@ export const TrainerJobSchema = z
         connector: z.enum(CONNECTOR_NAMES),
       })
       .nullable(),
+    artifact_import: z
+      .object({
+        id: z.string().min(1),
+        workspace_id: z.string().min(1),
+        name: z.string().min(1),
+        base_model: z.string().min(1),
+        format: ArtifactFormatSchema,
+        provenance: ArtifactProvenanceSchema,
+        source: z.record(z.string(), z.unknown()).openapi({
+          description:
+            "`{kind: upload, download_url, sha256, size_bytes}` (a tar, optionally gzip) or `{kind: hf, repo, revision, token?}`.",
+        }),
+      })
+      .nullable()
+      .optional()
+      .openapi({
+        description:
+          "Import jobs that write an artifact (`grad artifacts upload` / `import`): validate the files, bundle them as grad.artifact/1 and complete with the bundle's upload_id and manifest. `import` is null then.",
+      }),
     price_per_million_tokens: z.number().positive().nullable(),
     max_cost_usd: z.number().min(0).nullable().openapi({
       description:
@@ -433,6 +454,13 @@ export const CompleteJobRequestSchema = z
     eval_report: EvalReportSchema.nullable().optional(),
     tokens_processed: z.number().int().min(0).default(0),
     error: z.string().max(4000).optional(),
+    error_code: z
+      .enum(["invalid_artifact", "source_unavailable"])
+      .optional()
+      .openapi({
+        description:
+          "Failed artifact imports: invalid_artifact (the files break the format spec or don't fit the base model; `error` names the file) or source_unavailable.",
+      }),
     stop_reason: z.enum(["budget", "insufficient_balance"]).optional().openapi({
       description:
         "With status stopped_budget: why the run stopped. budget = the run's max_cost_usd (the worker's own check or the heartbeat's stop_reason); insufficient_balance = the heartbeat said the workspace ran out of balance (the run becomes stopped_balance).",
@@ -468,6 +496,7 @@ export const CompleteJobResponseSchema = z
     artifact: ArtifactSchema.nullable(),
     import: ImportJobSchema.nullable(),
     eval: EvalRunSchema.nullable().optional(),
+    artifact_import: ArtifactImportSchema.nullable().optional(),
   })
   .openapi("CompleteTrainerJobResponse");
 

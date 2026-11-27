@@ -33,7 +33,7 @@ export const isTransient = (error: unknown): boolean => {
   if (error instanceof APIUserAbortError) return false;
   if (error instanceof APIConnectionError) return true;
   if (error instanceof APIError) {
-    if (error.code === "deploy_unavailable" || error.code === "inference_unavailable") return false;
+    if (error.code === "inference_unavailable") return false;
     return error.status === 408 || error.status === 429 || error.status >= 500;
   }
   return false;

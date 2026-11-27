@@ -2,7 +2,7 @@
 // The torch worker trains a tiny distilled student and a reward model.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { AuthenticationError, Grad, recipes, rollouts } from "../../src/index.js";
+import { ArtifactImportFailedError, AuthenticationError, Grad, NotFoundError, recipes, rollouts } from "../../src/index.js";
 import { liveSkipReason, Stack } from "./stack.js";
 
 const skipReference = liveSkipReason("reference");
@@ -68,5 +68,27 @@ describe.skipIf(skipTorch !== undefined)("live: cloud distillation and reward mo
     expect(verifier.artifact.format).toBe("reward_bundle");
     expect(verifier.evalReport?.metricName).toBe("preference_accuracy");
     expect(verifier.evalReport?.preferenceAccuracy).not.toBeNull();
+  });
+
+  it("uploads a LoRA as an artifact, refuses an invalid one, and continues training from it", async () => {
+    const grad = new Grad({ apiKey: stack.apiKey, baseURL: stack.baseURL });
+    const art = await grad.artifacts.upload(stack.tinyLora.valid, { base: "test/tiny-qwen3", name: "uploaded-lora" }).wait({ timeoutMs: 240_000 });
+    expect(art.id).toMatch(/^uploaded-lora@\d{4}-\d{2}-\d{2}-\d+$/);
+    expect(art.provenance.source).toBe("upload");
+    expect(art.provenance.uploader).toBeTruthy();
+    expect(art.manifest.format_version).toBe(2);
+    const bad = await grad.artifacts.upload(stack.tinyLora.invalid, { base: "test/tiny-qwen3" }).wait({ timeoutMs: 240_000 }).catch((e: unknown) => e);
+    expect(bad).toBeInstanceOf(ArtifactImportFailedError);
+    expect((bad as ArtifactImportFailedError).status).toBe(422);
+    expect((bad as Error).message).toContain("adapter_config.json: base_model_name_or_path is 'Qwen/Qwen3-8B'");
+    const pairs = await grad.datasets.push(
+      "upload-prefs",
+      Array.from({ length: 12 }, (_, i) => ({ prompt: `Count users ${i}`, chosen: "SELECT count(*) FROM users;", rejected: "no idea" })),
+    );
+    const plan = await grad.runs.plan({ dataset: pairs, name: "dpo-from-upload", recipe: recipes.dpo({ model: art.id }) });
+    expect(plan.resolvedConfig.baseArtifact?.id).toBe(art.id);
+    await art.delete();
+    await expect(grad.artifacts.get(art.id)).rejects.toThrow();
+    await expect(art.delete()).rejects.toBeInstanceOf(NotFoundError);
   });
 });

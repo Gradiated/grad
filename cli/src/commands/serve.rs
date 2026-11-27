@@ -1,10 +1,29 @@
-//! `grad artifacts`, `grad deploy`, `grad deployments`.
+//! `grad artifacts`: list, inspect, download, upload, import and delete.
 
-use grad_sdk::{Artifact, DeployArtifactRequest, DownloadOptions};
+use std::time::Duration;
 
-use super::{in_range, page, Ctx};
-use crate::cli::{ArtifactsCmd, DeployArgs, DeploymentsCmd};
-use crate::output::{num, opt, thousands, when, CliError, CliResult, Out};
+use grad_sdk::{
+    Artifact, ArtifactHfOptions, ArtifactImport, ArtifactUploadOptions, DownloadOptions,
+    WaitOptions,
+};
+
+use super::{page, Ctx};
+use crate::cli::{ArtifactsCmd, ImportWaitArgs};
+use crate::output::{opt, thousands, when, CliError, CliResult, Out};
+
+/// `run run_…`, `upload by key_…` or `import hf://owner/name@<commit>`.
+fn provenance(a: &Artifact) -> String {
+    let p = &a.provenance;
+    let detail = match p.source.as_str() {
+        "run" => p.run_id.clone(),
+        "upload" => p.uploader.as_ref().map(|u| format!("by {}", u)),
+        _ => p.uri.clone(),
+    };
+    match detail {
+        Some(d) => format!("{} {}", p.source, d),
+        None => p.source.to_string(),
+    }
+}
 
 fn print_artifact(out: &Out, a: &Artifact) {
     out.kv(&[
@@ -13,7 +32,7 @@ fn print_artifact(out: &Out, a: &Artifact) {
         ("format", opt(&a.format)),
         ("base model", a.base_model.clone()),
         ("recipe", a.recipe_kind.to_string()),
-        ("run", opt(&a.run_id)),
+        ("source", provenance(a)),
         ("size", format!("{} bytes", thousands(a.size_bytes))),
         ("sha256", a.sha256.clone()),
         ("created", when(&a.created_at)),
@@ -109,100 +128,69 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
             }
             out.done(&res)
         }
+        ArtifactsCmd::Upload { path, import } => {
+            out.note(format!("Uploading {}", path.display()));
+            let job = c
+                .artifacts()
+                .upload(
+                    &path,
+                    &ArtifactUploadOptions {
+                        base: import.base.clone(),
+                        format: Some(import.format.clone()),
+                        name: import.name.clone(),
+                        idempotency_key: import.idempotency_key.clone(),
+                    },
+                )
+                .await?;
+            finish_import(ctx, &c, job, &import.wait).await
+        }
+        ArtifactsCmd::Import {
+            uri,
+            import,
+            secret,
+        } => {
+            let job = c
+                .artifacts()
+                .import_hf(
+                    &uri,
+                    &ArtifactHfOptions {
+                        base: import.base.clone(),
+                        format: Some(import.format.clone()),
+                        name: import.name.clone(),
+                        revision: None,
+                        secret,
+                        idempotency_key: import.idempotency_key.clone(),
+                    },
+                )
+                .await?;
+            finish_import(ctx, &c, job, &import.wait).await
+        }
+        ArtifactsCmd::Delete { reference } => {
+            c.artifacts().delete(&reference).await?;
+            out.line(format!("✓ Deleted artifact {}", reference));
+            out.done(&serde_json::json!({ "deleted": reference }))
+        }
     }
 }
 
-pub async fn deploy(ctx: &Ctx, a: DeployArgs) -> CliResult {
-    let c = ctx.client()?;
-    let rate = in_range(a.explore_rate, "--explore-rate", 0.0, 0.5)?;
-    let d = c
-        .deployments()
-        .create(
-            &DeployArtifactRequest {
-                artifact: a.artifact.clone(),
-                name: a.name,
-                fallback: a.fallback,
-                explore_rate: rate,
-            },
-            a.idempotency_key.as_deref(),
-        )
-        .await?;
+async fn finish_import(
+    ctx: &Ctx,
+    c: &grad_sdk::Client,
+    job: ArtifactImport,
+    wait: &ImportWaitArgs,
+) -> CliResult {
     let out = &ctx.out;
-    out.line(format!(
-        "✓ Deployed {} as {} ({})",
-        a.artifact, d.model_id, d.status
-    ));
-    if let Some(prev) = &d.previous_artifact_id {
+    if wait.no_wait {
         out.line(format!(
-            "  Previous artifact {}; roll back with: grad deployments rollback {}",
-            prev, d.name
+            "✓ Queued artifact import {} ({})",
+            job.id, job.name
         ));
+        return out.done(&job);
     }
-    out.line(format!(
-        "  Call it with model=\"{}\" through the OpenAI-compatible gateway.",
-        d.model_id
-    ));
-    out.done(&d)
-}
-
-pub async fn rollback(ctx: &Ctx, name: &str) -> CliResult {
-    let c = ctx.client()?;
-    let d = c.deployments().rollback(name).await?;
-    ctx.out.line(format!(
-        "✓ Rolled {} back to artifact {}",
-        d.name, d.active_artifact_id
-    ));
-    ctx.out.done(&d)
-}
-
-pub async fn deployments(ctx: &Ctx, action: DeploymentsCmd) -> CliResult {
-    let c = ctx.client()?;
-    let out = &ctx.out;
-    match action {
-        DeploymentsCmd::List { page: p } => {
-            let res = c.deployments().list(&page(&p)).await?;
-            out.table(
-                &["name", "model", "active artifact", "status", "updated"],
-                res.data
-                    .iter()
-                    .map(|d| {
-                        vec![
-                            d.name.clone(),
-                            d.model_id.clone(),
-                            d.active_artifact_id.clone(),
-                            d.status.to_string(),
-                            when(&d.updated_at),
-                        ]
-                    })
-                    .collect(),
-            );
-            out.done(&res)
-        }
-        DeploymentsCmd::Status { name } => {
-            let s = c.deployments().get(&name).await?;
-            let d = &s.deployment;
-            out.kv(&[
-                ("Model", d.model_id.clone()),
-                ("Active", d.active_artifact_id.clone()),
-                ("Previous", opt(&d.previous_artifact_id)),
-                ("Status", d.status.to_string()),
-                ("Fallback", opt(&d.fallback_model)),
-                ("Explore", num(d.explore_rate)),
-            ]);
-            out.line("");
-            out.line("  Feedback");
-            out.line(format!(
-                "    Events        : {}",
-                thousands(s.feedback_count)
-            ));
-            out.line(format!(
-                "    Average score : {}",
-                s.average_score
-                    .map(|x| format!("{:.1}%", x * 100.0))
-                    .unwrap_or_else(|| "-".into())
-            ));
-            out.done(&s)
-        }
-        DeploymentsCmd::Rollback { name } => rollback(ctx, &name).await,
-    }
+    out.note(format!("Validating {} ({})", job.name, job.id));
+    let opts = WaitOptions::default().timeout(Duration::from_secs(wait.timeout));
+    let a = c.artifacts().wait_import(&job.id, &opts).await?;
+    out.line(format!("✓ Registered artifact {}", a.reference()));
+    print_artifact(out, &a);
+    out.done(&a)
 }

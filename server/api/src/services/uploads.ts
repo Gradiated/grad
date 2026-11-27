@@ -7,6 +7,8 @@ import { type ApiError, conflict, invalid } from "../errors.js";
 
 /**
  * Uploads keep no rows. Keys are content-addressed and scoped:
+ * - released artifact bundles: `artifacts/<ws>/<sha256>` (the only prefix
+ *   serving reads; checkpoints stay under their job until promoted);
  * - worker blobs: `ws/<ws>/jobs/<job>/<attempt>/<sha256>`;
  * - user files for imports: `uploads/<ws>/<sha256>` (the staging prefix).
  * A presigned PUT binds Content-Length and x-amz-checksum-sha256, so the
@@ -23,6 +25,7 @@ export const DOWNLOAD_URL_TTL_SECONDS = 3600;
 /** User uploads expire this long after upload (the import must be claimed by then). */
 export const STAGING_TTL_SECONDS = 7 * 86_400;
 export const STAGING_PREFIX = "uploads";
+export const ARTIFACTS_PREFIX = "artifacts";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
@@ -33,6 +36,9 @@ export const jobBlobKey = (
   attempt: number,
   sha256: string,
 ): string => `ws/${ws(job.workspace_id)}/jobs/${job.id}/${attempt}/${sha256}`;
+
+export const artifactKey = (workspaceId: string, sha256: string): string =>
+  `${ARTIFACTS_PREFIX}/${ws(workspaceId)}/${sha256}`;
 
 export const stagingKey = (workspaceId: string, sha256: string): string =>
   `${STAGING_PREFIX}/${ws(workspaceId)}/${sha256}`;

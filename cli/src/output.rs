@@ -82,9 +82,10 @@ impl From<SdkError> for CliError {
             SdkError::Authentication(_) | SdkError::PermissionDenied(_) => EXIT_AUTH,
             SdkError::NotFound(_) => EXIT_NOT_FOUND,
             SdkError::Conflict(_) | SdkError::Validation(_) => EXIT_CONFLICT,
-            SdkError::DeployUnavailable(_)
-            | SdkError::InferenceUnavailable(_)
-            | SdkError::FeatureUnavailable(_) => EXIT_UNAVAILABLE,
+            SdkError::InferenceUnavailable(_) | SdkError::FeatureUnavailable(_) => EXIT_UNAVAILABLE,
+            // Files that break the format spec are a 422; a source that failed is a failed job.
+            SdkError::ArtifactImportFailed(_) if e.status() == 422 => EXIT_CONFLICT,
+            SdkError::ArtifactImportFailed(_) => EXIT_RUN_FAILED,
             SdkError::RunFailed(_) | SdkError::EvalFailed(_) | SdkError::ImportFailed(_) => {
                 EXIT_RUN_FAILED
             }
@@ -92,9 +93,6 @@ impl From<SdkError> for CliError {
             _ => EXIT_ERROR,
         };
         let hint = match &e {
-            SdkError::DeployUnavailable(b) if !b.detail.to_lowercase().contains("download") => Some(
-                "This server has no hosted serving. Download the weights with `grad artifacts download NAME@latest --output DIR` and serve them on vLLM or SGLang.".to_string(),
-            ),
             SdkError::InferenceUnavailable(b) if !b.detail.contains("INFERENCE_BASE_URL") => Some(
                 "Evals need an OpenAI-compatible endpoint: set GRAD_INFERENCE_BASE_URL (and GRAD_INFERENCE_API_KEY) on the server.".to_string(),
             ),
@@ -105,6 +103,7 @@ impl From<SdkError> for CliError {
             SdkError::RunFailed(run) => serde_json::to_value(run).ok(),
             SdkError::EvalFailed(ev) => serde_json::to_value(ev).ok(),
             SdkError::ImportFailed(job) => serde_json::to_value(job).ok(),
+            SdkError::ArtifactImportFailed(job) => serde_json::to_value(job).ok(),
             SdkError::Validation(b) => b.errors.clone().map(|e| json!({ "errors": e })),
             _ => None,
         };

@@ -313,7 +313,9 @@ export const registerDatasetRoutes = (
       path: "/v1/uploads",
       operationId: "createUpload",
       summary:
-        "Get an upload URL for a file to import (PUT the bytes, then create an import)",
+        "Get an upload URL for a file to import (PUT the bytes, then create a dataset or artifact import)",
+      description:
+        "The staged file expires after 7 days unless an import uses it.",
       tags,
       request: jsonBody(CreateUploadRequestSchema),
       responses: {
@@ -323,8 +325,13 @@ export const registerDatasetRoutes = (
     }),
     async (c) => {
       const input = c.req.valid("json");
+      // Dataset files and artifact uploads share the staging prefix.
+      const scope =
+        input.purpose === "artifact_import"
+          ? "artifacts:write"
+          : "datasets:write";
       const ticket = await services.uploads.ticket(
-        stagingKey(workspaceOf(c, "datasets:write"), input.sha256),
+        stagingKey(workspaceOf(c, scope), input.sha256),
         input.size_bytes,
         { forClient: true },
       );

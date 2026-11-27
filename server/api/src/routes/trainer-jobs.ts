@@ -210,10 +210,13 @@ export const registerTrainerJobRoutes = (
       if (isEvalJob(id)) {
         throw conflict("wrong_job_kind", "Eval jobs upload nothing.");
       }
-      if (isImportJob(id) !== (input.kind === "records")) {
+      const allowed = isImportJob(id)
+        ? input.kind !== "checkpoint"
+        : input.kind !== "records";
+      if (!allowed) {
         throw conflict(
           "wrong_job_kind",
-          "Import jobs upload records parts; train jobs upload checkpoints and artifacts.",
+          "Train jobs upload checkpoints and artifacts; import jobs upload records parts (dataset imports) or their artifact bundle (artifact imports).",
         );
       }
       const ticket = isImportJob(id)
@@ -356,16 +359,17 @@ export const registerTrainerJobRoutes = (
       }
 
       if (isImportJob(id)) {
-        const job = await services.imports.complete(principal, id, input);
+        const done = await services.imports.complete(principal, id, input);
 
         return c.json(
           {
             job_id: id,
             kind: "import" as const,
-            status: job.status,
+            status: (done.import ?? done.artifactImport).status,
             run: null,
-            artifact: null,
-            import: job,
+            artifact: done.artifact,
+            import: done.import,
+            artifact_import: done.artifactImport,
           },
           200,
         );

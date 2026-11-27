@@ -118,8 +118,24 @@ export const createImportJobRepository = (
         "payload->>'dataset_id' = $1 AND payload->'source'->>'sha256' = $2 AND payload->'source'->>'kind' = 'upload'",
         [datasetId, sha256],
       ),
-    list: repo.list,
+    list: (workspaceId, page) =>
+      repo.list(workspaceId, page, "NOT (payload ? 'artifact')"),
     update: repo.update,
+    createArtifactImport: (input) =>
+      repo.insert(
+        {
+          prefix: "imp",
+          kind: "import",
+          workspaceId: input.workspaceId,
+          maxAttempts: input.maxAttempts,
+          idempotency: input.idempotency,
+          payload: {
+            artifact: input.artifact,
+            upload_key: input.uploadKey,
+          },
+        },
+        null,
+      ),
     create: (input) =>
       repo.insert(
         {

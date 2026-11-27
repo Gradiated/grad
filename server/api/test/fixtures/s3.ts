@@ -50,6 +50,7 @@ export const prefixedStore = (
         )
       ).map((full) => full.slice(prefix.length + 1)),
     delete: (key) => store.delete(k(key)),
+    copy: (from, to) => store.copy(k(from), k(to)),
     presignUpload: (key, input) => store.presignUpload(k(key), input),
     presignDownload: (key, seconds) => store.presignDownload(k(key), seconds),
   };

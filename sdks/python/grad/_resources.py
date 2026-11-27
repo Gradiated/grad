@@ -22,6 +22,7 @@ from ._errors import (
     APIConnectionError,
     EvalFailedError,
     GradAPIError,
+    ArtifactImportFailedError,
     ImportFailedError,
     NotFoundError,
     RateLimitError,
@@ -38,8 +39,7 @@ from ._models import (
     CursorTrail,
     Dataset,
     DatasetScoring,
-    Deployment,
-    DeploymentStatus,
+    ArtifactImport,
     Eval,
     EvalFailures,
     EvalOutput,
@@ -1058,6 +1058,112 @@ class Artifacts(_Resource):
         """Artifacts, newest first (optionally one name's versions)."""
         return self._page(Artifact, lambda cursor: self._wire.list_artifacts(name=name, limit=limit, cursor=cursor))
 
+    def upload(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        base: Any,
+        format: str = "peft_lora",
+        name: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> ArtifactImport:
+        """Register local weights as an artifact; ``.wait()`` on the result returns it (``name@YYYY-MM-DD-n``).
+
+        ``path`` is a directory (tarred), a single file or a ``.tar``/``.tar.gz``. An import
+        worker checks the files against the format spec and ``base`` (a catalog model id):
+        for ``peft_lora``, ``adapter_config.json``, the base model and revision, the target
+        modules and every tensor shape against the base's ``config.json``. A failure raises
+        :class:`grad.ArtifactImportFailedError` from ``wait()`` (``code`` ``invalid_artifact``,
+        status 422) naming the file. The result downloads, evaluates and continues training like a
+        trained artifact. ``name`` defaults to the file or directory name.
+        """
+        source = Path(path).expanduser()
+        body: dict[str, Any] = {
+            "base_model": model_ref(base),
+            "format": h.check_artifact_format(format),
+            "name": h.check_slug(name if name is not None else h.artifact_name(source), "artifact name"),
+        }
+        with tempfile.TemporaryDirectory(prefix="grad-upload-") as workdir:
+            packed = h.pack_artifact(source, Path(workdir))
+            ticket = self._wire.create_upload(h.artifact_upload_request(packed))
+            with open(packed, "rb") as fh:
+                self._client._transport.upload(
+                    ticket["url"],
+                    fh,
+                    length=packed.stat().st_size,
+                    headers=ticket.get("headers") or {},
+                    method=ticket.get("method") or "PUT",
+                    timeout=max(self._client._transport.timeout, 300.0),
+                )
+        body["source"] = {"kind": "upload", "upload_id": ticket["upload_id"]}
+        return self._create_import(body, idempotency_key)
+
+    def from_hf(
+        self,
+        uri: str,
+        *,
+        base: Any,
+        format: str = "peft_lora",
+        name: str | None = None,
+        revision: str | None = None,
+        secret: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> ArtifactImport:
+        """Import weights from the Hugging Face Hub (``hf://owner/name[@revision]``); ``.wait()`` returns the artifact.
+
+        The same checks as :meth:`upload`; the artifact pins the commit it imported
+        (``provenance.uri``). ``secret`` names a workspace secret holding an HF token for
+        gated or private repos. ``name`` defaults to the repo's name.
+        """
+        repo, rev = h.parse_hf_uri(uri, revision)
+        source: dict[str, Any] = {"kind": "hf", "repo": repo}
+        if rev is not None:
+            source["revision"] = rev
+        if secret is not None:
+            source["secret"] = secret_name(secret)
+        body: dict[str, Any] = {"source": source, "base_model": model_ref(base), "format": h.check_artifact_format(format)}
+        if name is not None:
+            body["name"] = h.check_slug(name, "artifact name")
+        return self._create_import(body, idempotency_key)
+
+    def get_import(self, import_id: str) -> ArtifactImport:
+        """An upload or HF import (``artifacts.upload`` and ``from_hf`` wait for it)."""
+        return ArtifactImport.from_api(self._wire.get_artifact_import(import_id), self._client)
+
+    def _create_import(self, body: dict[str, Any], idempotency_key: str | None) -> ArtifactImport:
+        return ArtifactImport.from_api(self._wire.create_artifact_import(body, idempotency_key=idempotency_key), self._client)
+
+    def wait_import(self, import_id: str, *, timeout: float | None = None) -> Artifact:
+        """Block until an upload or HF import finishes and return its artifact.
+
+        Raises :class:`grad.ArtifactImportFailedError` (``code`` ``invalid_artifact``, status
+        422, for files that break the format spec) when it failed.
+        """
+        deadline = self._deadline(timeout)
+        backoff = h.Backoff()
+        job = self.get_import(import_id)
+        while job.status not in TERMINAL_IMPORT_STATUSES:
+            if self._expired(deadline):
+                raise WaitTimeoutError(
+                    f"Artifact import {job.id} is still {job.status} after {timeout or DEFAULT_WAIT_TIMEOUT:g}s (is an import worker running?).",
+                    resource=job,
+                )
+            self._sleep(backoff.next(), deadline)
+            try:
+                job = self.get_import(job.id)
+            except TRANSIENT:
+                continue
+        if job.status == "failed" or not job.artifact_id:
+            code = job.error_code or "artifact_import_failed"
+            exc = ArtifactImportFailedError(f"Artifact import {job.id} ('{job.name}') failed: {job.error}", resource=job, error=job.error, code=code)
+            exc.status = 422 if code == "invalid_artifact" else None
+            raise exc
+        return self.get(job.artifact_id)
+
+    def delete(self, ref: Any) -> None:
+        """Delete an artifact and its bundle. A pinned one (a published Cloud model version) raises ``ConflictError`` ``artifact_pinned``."""
+        self._wire.delete_artifact(model_ref(ref))
+
     def download(
         self,
         ref: Any,
@@ -1120,43 +1226,6 @@ def _extract(bundle: Path, plan: h.DownloadPlan, artifact_format: str | None, ov
 
 def _json(text: str) -> Any:
     return json.loads(text)
-
-
-class Deployments(_Resource):
-    """``client.deployments``: stable model names pointing at artifact versions."""
-
-    def create(
-        self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None, idempotency_key: str | None = None
-    ) -> Deployment:
-        """Deploy (or update) an artifact under a stable name. Same as ``client.deploy``."""
-        body: dict[str, Any] = {"artifact": _artifact_ref(artifact)}
-        if name is not None:
-            body["name"] = h.check_slug(name, "deployment name")
-        if fallback is not None:
-            body["fallback"] = model_ref(fallback)
-        if explore_rate is not None:
-            body["explore_rate"] = explore_rate
-        return Deployment.from_api(self._wire.deploy_artifact(body, idempotency_key=idempotency_key), self._client)
-
-    def get(self, name: str) -> DeploymentStatus:
-        """A deployment with its feedback count and average score."""
-        return DeploymentStatus.from_api(self._wire.get_deployment(name), self._client)
-
-    def list(self, *, limit: int | None = None) -> Page[Deployment]:
-        """Deployments."""
-        return self._page(Deployment, lambda cursor: self._wire.list_deployments(limit=limit, cursor=cursor))
-
-    def rollback(self, name: str) -> Deployment:
-        """Point a deployment back at its previous artifact."""
-        return Deployment.from_api(self._wire.rollback_deployment(name), self._client)
-
-
-def _artifact_ref(artifact: Any) -> str:
-    if isinstance(artifact, Run):
-        if not artifact.artifact_id:
-            raise artifact._no_artifact()
-        return artifact.artifact_id
-    return model_ref(artifact)
 
 
 class Keys(_Resource):

@@ -164,6 +164,7 @@ describe("continued training from an artifact", () => {
       sha256: "0".repeat(64),
       size_bytes: 1,
       manifest: LORA_MANIFEST,
+      provenance: { source: "run", run_id: null, uploader: null, uri: null },
       eval_report: null,
       created_at: "2026-11-27T00:00:00Z",
       ...over,

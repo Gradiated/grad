@@ -118,7 +118,8 @@ test("x-internal operations and the schemas only they use are left out of the pu
 
   const spec = await generateAllTargets(specPath);
   const internal = spec.ir.operations.filter((o) => o.internal).map((o) => o.id).sort();
-  assert.deepEqual(internal.filter((id) => !/TrainerJob|Trainer|ImportRecords/.test(id)), []);
+  // Worker protocol ops, plus artifact pins (Gradiated Cloud's publishing calls them).
+  assert.deepEqual(internal.filter((id) => !/Trainer|ImportRecords|ImportPart|^(un)?pinArtifact$/.test(id)), []);
   assert.ok(internal.length >= 8, `trainer-job ops are x-internal (${internal.length})`);
   assert.ok(!spec.files["sdks/typescript/src/generated/models.ts"].includes("export interface ClaimJobRequest"));
 });

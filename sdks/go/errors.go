@@ -38,8 +38,6 @@ type (
 	RateLimitError = generated.RateLimitError
 	// ServerError is a 5xx response.
 	ServerError = generated.ServerError
-	// DeployUnavailableError is 501 deploy_unavailable: this server cannot deploy or serve models.
-	DeployUnavailableError = generated.DeployUnavailableError
 	// InferenceUnavailableError is 501 inference_unavailable: no inference endpoint is configured.
 	InferenceUnavailableError = generated.InferenceUnavailableError
 	// ConnectionError means no response was received.
@@ -96,6 +94,17 @@ type ImportFailedError struct {
 
 // Unwrap exposes the embedded *GradError.
 func (e *ImportFailedError) Unwrap() error { return e.GradError }
+
+// ArtifactImportFailedError is returned by ArtifactImport.Wait when an upload or HF
+// import fails. Code is "invalid_artifact" (Status 422) when the files break the
+// format spec or don't fit the base model; the message names the file.
+type ArtifactImportFailedError struct {
+	*GradError
+	Job *generated.ArtifactImport
+}
+
+// Unwrap exposes the embedded *GradError.
+func (e *ArtifactImportFailedError) Unwrap() error { return e.GradError }
 
 // WaitTimeoutError is returned when WithWaitTimeout elapses before a terminal status.
 type WaitTimeoutError struct {

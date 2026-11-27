@@ -28,9 +28,8 @@ __all__ = [
     "Checkpoint",
     "CursorTrail",
     "CreatedApiKey",
+    "ArtifactImport",
     "Dataset",
-    "Deployment",
-    "DeploymentStatus",
     "Eval",
     "EvalFailures",
     "EvalModelSummary",
@@ -665,7 +664,7 @@ def _metric(value: Any, client: Any) -> Any:
 
 @dataclass(kw_only=True, repr=False, eq=False)
 class Run(APIObject):
-    """A training run. ``wait()``, stream ``metrics(follow=True)``, then ``deploy()`` or download."""
+    """A training run. ``wait()``, stream ``metrics(follow=True)``, then ``download()``."""
 
     id: str
     name: str
@@ -803,13 +802,6 @@ class Run(APIObject):
         artifact: Artifact = self._need_client().artifacts.get(self.artifact_id)
         return artifact
 
-    def deploy(self, *, name: str | None = None, fallback: str | None = None, explore_rate: float | None = None) -> Deployment:
-        """Deploy the run's artifact (Gradiated Cloud). Self-hosted servers raise ``DeployUnavailableError``."""
-        if not self.artifact_id:
-            raise self._no_artifact()
-        deployment: Deployment = self._need_client().deploy(self.artifact_id, name=name, fallback=fallback, explore_rate=explore_rate)
-        return deployment
-
     def download(self, path: str | Path, *, format: str = "peft", overwrite: bool = False) -> Path:
         """Download the run's artifact (see ``Artifact.download``)."""
         if not self.artifact_id:
@@ -865,15 +857,17 @@ class Artifact(APIObject):
     sha256: str | None = None
     size_bytes: int = 0
     manifest: AttrDict = field(default_factory=AttrDict)
+    provenance: AttrDict = field(default_factory=AttrDict)
+    """Where it came from: ``source`` is ``run`` (with ``run_id``), ``upload`` (``uploader``) or ``import`` (``uri``, ``hf://owner/name@<commit>``)."""
     eval_report: EvalReport | None = None
     created_at: str | None = None
 
     _repr_fields = ("id", "format", "base_model", "size_bytes")
-    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"manifest": _attrdict, "eval_report": _eval_report}
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"manifest": _attrdict, "provenance": _attrdict, "eval_report": _eval_report}
 
     @property
     def ref(self) -> str:
-        """``name@version``, the reference you pass as ``model=`` or to ``deploy``."""
+        """``name@version``, the reference you pass as ``model=``."""
         return f"{self.name}@{self.version}" if self.name and self.version else self.id
 
     def __str__(self) -> str:
@@ -885,10 +879,9 @@ class Artifact(APIObject):
         self._update_from(self._need_client().artifacts.get(self.id))
         return self
 
-    def deploy(self, *, name: str | None = None, fallback: str | None = None, explore_rate: float | None = None) -> Deployment:
-        """Deploy under ``your-org/<name>`` (Gradiated Cloud)."""
-        deployment: Deployment = self._need_client().deploy(self.ref, name=name, fallback=fallback, explore_rate=explore_rate)
-        return deployment
+    def delete(self) -> None:
+        """Delete this artifact and its bundle (``ConflictError`` ``artifact_pinned`` while a published model version pins it)."""
+        self._need_client().artifacts.delete(self.ref)
 
     def download(self, path: str | Path, *, format: str = "peft", overwrite: bool = False) -> Path:
         """Download and verify (SHA-256); ``format="peft"`` extracts a vLLM-loadable directory."""
@@ -896,53 +889,41 @@ class Artifact(APIObject):
         return target
 
 
-# ------------------------------------------------------------------------- deployments
-
-
 @dataclass(kw_only=True, repr=False, eq=False)
-class Deployment(APIObject):
-    """A stable model name pointing at one artifact version."""
+class ArtifactImport(APIObject):
+    """An upload or Hugging Face import an import worker validates and releases as an :class:`Artifact`."""
 
     id: str
+    status: str
     name: str
-    model_id: str | None = None
     workspace_id: str | None = None
-    active_artifact_id: str | None = None
-    previous_artifact_id: str | None = None
-    fallback_model: str | None = None
-    explore_rate: float = 0.0
-    status: str | None = None
+    base_model: str | None = None
+    format: str | None = None
+    source: AttrDict = field(default_factory=AttrDict)
+    artifact_id: str | None = None
+    error: str | None = None
+    error_code: str | None = None
+    attempt: int = 0
     created_at: str | None = None
     updated_at: str | None = None
 
-    _repr_fields = ("name", "model_id", "active_artifact_id", "status")
+    _repr_fields = ("id", "name", "status", "artifact_id")
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"source": _attrdict}
 
+    @property
+    def done(self) -> bool:
+        """True once the import completed or failed."""
+        return self.status in TERMINAL_IMPORT_STATUSES
 
-    def rollback(self) -> Deployment:
-        """Point back at the previous artifact (in place)."""
-        self._update_from(self._need_client().deployments.rollback(self.name))
-        return self
+    def wait(self, *, timeout: float | None = None) -> Artifact:
+        """Block until the import finishes and return the :class:`Artifact`.
 
-    def status_summary(self) -> DeploymentStatus:
-        """Feedback count and average score."""
-        status: DeploymentStatus = self._need_client().deployments.get(self.name)
-        return status
+        Raises :class:`grad.ArtifactImportFailedError` if the files failed validation
+        (``code`` ``invalid_artifact``, ``error`` naming the file) or the source was unavailable.
+        """
+        artifact: Artifact = self._need_client().artifacts.wait_import(self.id, timeout=timeout)
+        return artifact
 
-
-def _deployment(value: Any, client: Any) -> Any:
-    return Deployment.from_api(value, client) if isinstance(value, Mapping) else value
-
-
-@dataclass(kw_only=True, repr=False, eq=False)
-class DeploymentStatus(APIObject):
-    """A deployment with its feedback summary."""
-
-    deployment: Deployment | None = None
-    feedback_count: int = 0
-    average_score: float | None = None
-
-    _repr_fields = ("deployment", "feedback_count", "average_score")
-    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"deployment": _deployment}
 
 
 @dataclass(kw_only=True, repr=False, eq=False)

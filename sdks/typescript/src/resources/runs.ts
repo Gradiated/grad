@@ -2,7 +2,6 @@ import { CODEC } from "../generated/client.js";
 import type {
   Artifact as ArtifactData,
   Checkpoint as CheckpointData,
-  Deployment,
   MetricPoint,
   PlanRunResponse,
   RecipeSpec,
@@ -19,7 +18,7 @@ import { collect, pages, Paginator } from "../pagination.js";
 import { Pending } from "../pending.js";
 import { isTransient, pollUntil, type WaitOptions } from "../polling.js";
 import { type Recipe, toRecipeSpec } from "../recipes.js";
-import { Artifact, deployArtifact, downloadArtifact, type DeployOptions, type DownloadOptions, type DownloadResult } from "./artifacts.js";
+import { Artifact, downloadArtifact, type DownloadOptions, type DownloadResult } from "./artifacts.js";
 import { datasetName, type DatasetRef } from "./datasets.js";
 
 export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["completed", "failed", "cancelled", "stopped_budget", "stopped_balance"];
@@ -321,11 +320,6 @@ export class Run {
       throw new GradUsageError(`Run ${this.id} has no artifact to ${action} (status ${this.status}); wait() for it to complete first.`, "no_artifact");
     }
     return this.artifactId;
-  }
-
-  /** Deploys the run's artifact (Cloud; self-hosted servers raise DeployUnavailableError). */
-  async deploy(options?: DeployOptions): Promise<Deployment> {
-    return deployArtifact(this.#core, this.requireArtifact("deploy"), options);
   }
 
   /** Streams the run's artifact to disk with SHA-256 verification. */

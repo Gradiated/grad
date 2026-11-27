@@ -19,9 +19,6 @@ const ListDatasetRecordsLimitMax = 1000
 // ListDatasetsLimitMax is the largest limit accepted by ListDatasets (the server clamps larger values).
 const ListDatasetsLimitMax = 200
 
-// ListDeploymentsLimitMax is the largest limit accepted by ListDeployments (the server clamps larger values).
-const ListDeploymentsLimitMax = 200
-
 // ListEvalFailuresLimitMax is the largest limit accepted by ListEvalFailures (the server clamps larger values).
 const ListEvalFailuresLimitMax = 200
 
@@ -113,6 +110,21 @@ func (c *Client) CreateAPIKey(ctx context.Context, body *CreateAPIKeyRequest, op
 	return &out, nil
 }
 
+// CreateArtifactImport calls POST /v1/artifact-imports.
+//
+// Register uploaded files or a Hugging Face repo as an artifact (async import job).
+func (c *Client) CreateArtifactImport(ctx context.Context, body *CreateArtifactImportRequest, opts ...RequestOption) (*ArtifactImport, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateArtifactImport: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/artifact-imports", Body: body, Idempotent: true}
+	var out ArtifactImport
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // CreateDataset calls POST /v1/datasets.
 //
 // Create an empty dataset.
@@ -166,21 +178,6 @@ func (c *Client) CreateDatasetSource(ctx context.Context, name string, body *Cre
 	return &out, nil
 }
 
-// CreateEmbeddings calls POST /v1/embeddings.
-//
-// Generate embeddings from a deployed embedding artifact.
-func (c *Client) CreateEmbeddings(ctx context.Context, body *EmbedRequest, opts ...RequestOption) (*EmbedResponse, error) {
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "CreateEmbeddings: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/embeddings", Body: body, Idempotent: true}
-	var out EmbedResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 // CreateEval calls POST /v1/evals.
 //
 // Queue an evaluation across models on a pinned dataset version (executed by the server).
@@ -213,7 +210,7 @@ func (c *Client) CreateRun(ctx context.Context, body *PlanRunRequest, opts ...Re
 
 // CreateUpload calls POST /v1/uploads.
 //
-// Get an upload URL for a file to import (PUT the bytes, then create an import).
+// Get an upload URL for a file to import (PUT the bytes, then create a dataset or artifact import).
 func (c *Client) CreateUpload(ctx context.Context, body *CreateUploadRequest, opts ...RequestOption) (*UploadTicket, error) {
 	if body == nil {
 		return nil, &GradError{Code: "invalid_request", Message: "CreateUpload: body is required"}
@@ -224,6 +221,18 @@ func (c *Client) CreateUpload(ctx context.Context, body *CreateUploadRequest, op
 		return nil, err
 	}
 	return &out, nil
+}
+
+// DeleteArtifact calls DELETE /v1/artifacts/{id}.
+//
+// Delete a released artifact and its bundle (409 artifact_pinned while a holder pins it).
+func (c *Client) DeleteArtifact(ctx context.Context, id string, opts ...RequestOption) error {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return err
+	}
+	spec := RequestSpec{Method: "DELETE", Path: "/v1/artifacts/" + p0}
+	return c.T.DoJSON(ctx, spec, nil, opts...)
 }
 
 // DeleteSecret calls DELETE /v1/secrets/{name}.
@@ -248,21 +257,6 @@ func (c *Client) DeleteSource(ctx context.Context, id string, opts ...RequestOpt
 	}
 	spec := RequestSpec{Method: "DELETE", Path: "/v1/sources/" + p0}
 	return c.T.DoJSON(ctx, spec, nil, opts...)
-}
-
-// DeployArtifact calls POST /v1/deployments.
-//
-// Deploy or update an artifact under a stable model name.
-func (c *Client) DeployArtifact(ctx context.Context, body *DeployArtifactRequest, opts ...RequestOption) (*Deployment, error) {
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "DeployArtifact: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/deployments", Body: body, Idempotent: true}
-	var out Deployment
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
 }
 
 // DownloadArtifact calls GET /v1/artifacts/{id}/download.
@@ -312,6 +306,22 @@ func (c *Client) GetArtifact(ctx context.Context, id string, opts ...RequestOpti
 	return &out, nil
 }
 
+// GetArtifactImport calls GET /v1/artifact-imports/{id}.
+//
+// Get an artifact import.
+func (c *Client) GetArtifactImport(ctx context.Context, id string, opts ...RequestOption) (*ArtifactImport, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/artifact-imports/" + p0}
+	var out ArtifactImport
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // GetDataset calls GET /v1/datasets/{name}.
 //
 // Get a dataset by name.
@@ -322,22 +332,6 @@ func (c *Client) GetDataset(ctx context.Context, name string, opts ...RequestOpt
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/datasets/" + p0}
 	var out Dataset
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// GetDeployment calls GET /v1/deployments/{name}.
-//
-// Get deployment status and feedback summary.
-func (c *Client) GetDeployment(ctx context.Context, name string, opts ...RequestOption) (*DeploymentStatus, error) {
-	p0, err := EscapePathParam("name", name)
-	if err != nil {
-		return nil, err
-	}
-	spec := RequestSpec{Method: "GET", Path: "/v1/deployments/" + p0}
-	var out DeploymentStatus
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -548,27 +542,6 @@ func (c *Client) ListDatasets(ctx context.Context, params *ListDatasetsParams, o
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/datasets", Query: q}
 	var out ListDatasetsResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// ListDeployments calls GET /v1/deployments.
-//
-// List deployments.
-func (c *Client) ListDeployments(ctx context.Context, params *ListDeploymentsParams, opts ...RequestOption) (*ListDeploymentsResponse, error) {
-	q := url.Values{}
-	if params != nil {
-		if params.Limit != nil {
-			q.Add("limit", FormatScalar(*params.Limit))
-		}
-		if params.Cursor != nil {
-			q.Add("cursor", FormatScalar(*params.Cursor))
-		}
-	}
-	spec := RequestSpec{Method: "GET", Path: "/v1/deployments", Query: q}
-	var out ListDeploymentsResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -1012,21 +985,6 @@ func (c *Client) PushDatasetRecords(ctx context.Context, name string, body *Push
 	return &out, nil
 }
 
-// RecordFeedback calls POST /v1/feedback.
-//
-// Record deduplicated outcome scores and gold corrections.
-func (c *Client) RecordFeedback(ctx context.Context, body *RecordFeedbackRequest, opts ...RequestOption) (*RecordFeedbackResponse, error) {
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "RecordFeedback: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/feedback", Body: body, Idempotent: true}
-	var out RecordFeedbackResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 // RenderDataset calls POST /v1/datasets/{name}/render.
 //
 // Preview chat-template rendering and loss masks (estimated token counts).
@@ -1072,37 +1030,6 @@ func (c *Client) RevokeAPIKey(ctx context.Context, id string, opts ...RequestOpt
 	}
 	spec := RequestSpec{Method: "DELETE", Path: "/v1/keys/" + p0}
 	var out APIKey
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// RollbackDeployment calls POST /v1/deployments/{name}/rollback.
-//
-// Roll a deployment back to its previous artifact.
-func (c *Client) RollbackDeployment(ctx context.Context, name string, opts ...RequestOption) (*Deployment, error) {
-	p0, err := EscapePathParam("name", name)
-	if err != nil {
-		return nil, err
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/deployments/" + p0 + "/rollback", Idempotent: true}
-	var out Deployment
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-// RouteRequest calls POST /v1/route.
-//
-// Ask a deployed model router which model to call.
-func (c *Client) RouteRequest(ctx context.Context, body *RouteRequest, opts ...RequestOption) (*RouteResponse, error) {
-	if body == nil {
-		return nil, &GradError{Code: "invalid_request", Message: "RouteRequest: body is required"}
-	}
-	spec := RequestSpec{Method: "POST", Path: "/v1/route", Body: body, Idempotent: true}
-	var out RouteResponse
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}

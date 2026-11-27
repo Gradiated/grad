@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -345,6 +346,26 @@ export class S3ObjectStore implements ObjectStore {
       new DeleteObjectCommand({ Bucket: this.bucket, Key: clean }),
       { abortSignal: this.signal(15_000) },
     );
+  };
+
+  copy = async (from: string, to: string): Promise<void> => {
+    const source = validateObjectKey(from);
+    const target = validateObjectKey(to);
+    if (await this.head(target)) return;
+    try {
+      await this.client.send(
+        new CopyObjectCommand({
+          Bucket: this.bucket,
+          Key: target,
+          CopySource: `${this.bucket}/${source.split("/").map(encodeURIComponent).join("/")}`,
+          ChecksumAlgorithm: "SHA256",
+        }),
+        { abortSignal: this.signal(15 * 60_000) },
+      );
+    } catch (error) {
+      if (isNotFound(error)) throw new ObjectNotFoundError(from);
+      throw error;
+    }
   };
 
   presignUpload = async (

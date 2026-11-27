@@ -20,10 +20,8 @@ import (
 
 // Wire types re-exported for convenience.
 type (
-	// Deployment is a stable model name pointing at an artifact version.
-	Deployment = generated.Deployment
-	// DeploymentStatus is a deployment plus its feedback statistics.
-	DeploymentStatus = generated.DeploymentStatus
+	// ArtifactProvenance says where an artifact came from: a run, an upload or an HF import.
+	ArtifactProvenance = generated.ArtifactProvenance
 	// TrainableModel is a catalog model.
 	TrainableModel = generated.TrainableModel
 	// APIKey is a scoped API key (without its secret).
@@ -256,85 +254,17 @@ func (a *Artifact) Download(ctx context.Context, dest string, opts ...DownloadOp
 	return a.c.Artifacts.Download(ctx, a.ID, dest, opts...)
 }
 
-// Deploy publishes this artifact (Cloud; self-hosted servers return *DeployUnavailableError).
-func (a *Artifact) Deploy(ctx context.Context, opts ...DeployOption) (*Deployment, error) {
-	return a.c.Deployments.Create(ctx, a.ID, opts...)
-}
+// Delete deletes this artifact and its bundle (a *ConflictError with code
+// artifact_pinned while a published model version pins it).
+func (a *Artifact) Delete(ctx context.Context) error { return a.c.Artifacts.Delete(ctx, a.Ref()) }
 
-type deployConfig struct {
-	name           string
-	fallback       string
-	exploreRate    *float64
-	idempotencyKey string
-}
-
-// DeployOption configures a deployment.
-type DeployOption func(*deployConfig)
-
-// WithDeploymentName publishes under this name (default: the artifact's name).
-func WithDeploymentName(name string) DeployOption { return func(d *deployConfig) { d.name = name } }
-
-// WithFallback sets the model that receives traffic when a router cannot serve.
-func WithFallback(model string) DeployOption { return func(d *deployConfig) { d.fallback = model } }
-
-// WithExploreRate routes this share of traffic to exploration (routers).
-func WithExploreRate(rate float64) DeployOption {
-	return func(d *deployConfig) { d.exploreRate = &rate }
-}
-
-// WithDeployIdempotencyKey makes a retried deploy replay the first one.
-func WithDeployIdempotencyKey(key string) DeployOption {
-	return func(d *deployConfig) { d.idempotencyKey = key }
-}
-
-// DeploymentsService manages deployments (Gradiated Cloud).
-type DeploymentsService struct{ c *Client }
-
-// Create points a deployment at an artifact (deploying an earlier version rolls back).
-func (s *DeploymentsService) Create(ctx context.Context, artifact string, opts ...DeployOption) (*Deployment, error) {
-	cfg := &deployConfig{}
-	for _, opt := range opts {
-		opt(cfg)
-	}
+// Delete deletes an artifact and its bundle; see Artifact.Delete.
+func (s *ArtifactsService) Delete(ctx context.Context, ref string) error {
 	api, err := s.c.api()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return api.DeployArtifact(ctx, &generated.DeployArtifactRequest{Artifact: artifact, Name: optString(cfg.name), Fallback: optString(cfg.fallback), ExploreRate: cfg.exploreRate},
-		idempotency(cfg.idempotencyKey)...)
-}
-
-// Get returns a deployment with its feedback statistics.
-func (s *DeploymentsService) Get(ctx context.Context, name string) (*DeploymentStatus, error) {
-	api, err := s.c.api()
-	if err != nil {
-		return nil, err
-	}
-	return api.GetDeployment(ctx, name)
-}
-
-// List iterates over deployments.
-func (s *DeploymentsService) List(ctx context.Context) iter.Seq2[*Deployment, error] {
-	return paginate(ctx, func(ctx context.Context, cursor *string) ([]*Deployment, *string, error) {
-		api, err := s.c.api()
-		if err != nil {
-			return nil, nil, err
-		}
-		page, err := api.ListDeployments(ctx, &generated.ListDeploymentsParams{Cursor: cursor})
-		if err != nil {
-			return nil, nil, err
-		}
-		return pointers(page.Data), page.NextCursor, nil
-	})
-}
-
-// Rollback points the deployment back at its previous artifact.
-func (s *DeploymentsService) Rollback(ctx context.Context, name string) (*Deployment, error) {
-	api, err := s.c.api()
-	if err != nil {
-		return nil, err
-	}
-	return api.RollbackDeployment(ctx, name)
+	return api.DeleteArtifact(ctx, ref)
 }
 
 // ModelsService lists trainable models.

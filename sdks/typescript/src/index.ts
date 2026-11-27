@@ -9,13 +9,16 @@ export { Judge, Rubric, Scorer, validators, type BuiltinValidator, type RubricIn
 export { Trajectory } from "./trajectory.js";
 export {
   Artifact,
+  ArtifactImport,
   ArtifactsResource,
-  DeploymentsResource,
+  parseHfUri,
+  type ArtifactFromHfOptions,
   type ArtifactRef,
   type ArtifactStream,
-  type DeployOptions,
+  type ArtifactUploadOptions,
   type DownloadOptions,
   type DownloadResult,
+  type PendingArtifactImport,
 } from "./resources/artifacts.js";
 export {
   Dataset,
@@ -71,7 +74,6 @@ export {
   LIST_ARTIFACTS_LIMIT_MAX,
   LIST_DATASET_RECORDS_LIMIT_MAX,
   LIST_DATASETS_LIMIT_MAX,
-  LIST_DEPLOYMENTS_LIMIT_MAX,
   LIST_EVAL_FAILURES_LIMIT_MAX,
   LIST_EVAL_OUTPUTS_LIMIT_MAX,
   LIST_EVAL_RESULTS_LIMIT_MAX,
@@ -90,9 +92,8 @@ export type {
   ApiKeyScope,
   ChatMessage,
   CreatedApiKey,
+  ArtifactProvenance,
   DatasetRecord,
-  Deployment,
-  DeploymentStatus,
   EvalModelSummary,
   EvalOutput,
   EvalReport,

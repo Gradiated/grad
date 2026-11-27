@@ -14,8 +14,10 @@ import {
 import type {
   ApiKey,
   Artifact,
+  ArtifactImport,
   Checkpoint,
   CreateApiKeyRequest,
+  CreateArtifactImportRequest,
   CreateDatasetRequest,
   CreateImportRequest,
   CreateSourceRequest,
@@ -23,11 +25,6 @@ import type {
   CreatedApiKey,
   Dataset,
   DatasetRecordsPage,
-  DeployArtifactRequest,
-  Deployment,
-  DeploymentStatus,
-  EmbedRequest,
-  EmbedResponse,
   EvalOutput,
   EvalRun,
   EvalTaskOutcome,
@@ -42,13 +39,9 @@ import type {
   PostEvalScoresResponse,
   PromoteCheckpointRequest,
   PushDatasetRequest,
-  RecordFeedbackRequest,
-  RecordFeedbackResponse,
   RenderDatasetRequest,
   RenderDatasetResponse,
   ResumeRunRequest,
-  RouteRequest,
-  RouteResponse,
   Run,
   RunEventsPage,
   ScoreDatasetRequest,
@@ -67,7 +60,10 @@ import type {
 export const CODEC: CodecTable = {
   "AdapterSpec": { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } },
   "ApiKey": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["revokedAt", "revoked_at", 0]] },
-  "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["evalReport", "eval_report", "EvalReport"], ["createdAt", "created_at", 0]] },
+  "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["provenance", "provenance", "ArtifactProvenance"], ["evalReport", "eval_report", "EvalReport"], ["createdAt", "created_at", 0]] },
+  "ArtifactImport": { o: [["workspaceId", "workspace_id", 0], ["baseModel", "base_model", 0], ["source", "source", { o: [["uploadId", "upload_id", 0]] }], ["artifactId", "artifact_id", 0], ["errorCode", "error_code", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "ArtifactImportSource": { u: { o: { o: [["uploadId", "upload_id", 0]] } } },
+  "ArtifactProvenance": { o: [["runId", "run_id", 0]] },
   "AttemptEvent": { o: [["runId", "run_id", 0], ["resumeStep", "resume_step", 0], ["maxAttempts", "max_attempts", 0]] },
   "BaseArtifact": { o: [["recipeKind", "recipe_kind", 0]] },
   "ChatMessage": { o: [["toolCalls", "tool_calls", 0], ["toolCallId", "tool_call_id", 0]] },
@@ -75,6 +71,7 @@ export const CODEC: CodecTable = {
   "CheckpointEvalResult": { o: [["checkpointId", "checkpoint_id", 0], ["evalId", "eval_id", 0], ["datasetVersion", "dataset_version", 0], ["costUsd", "cost_usd", 0]] },
   "CheckpointEvent": { o: [["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["evalScore", "eval_score", 0]] },
   "CompletedEvent": { o: [["runId", "run_id", 0], ["run", "run", "Run"]] },
+  "CreateArtifactImportRequest": { o: [["source", "source", "ArtifactImportSource"], ["baseModel", "base_model", 0]] },
   "CreateImportRequest": { o: [["source", "source", "ImportSource"]] },
   "CreateSourceRequest": { o: [["sampleRate", "sample_rate", 0], ["maxRecordsPerSync", "max_records_per_sync", 0], ["maxRecordsPerDay", "max_records_per_day", 0], ["versionInterval", "version_interval", 0]] },
   "CreateUploadRequest": { o: [["sizeBytes", "size_bytes", 0]] },
@@ -83,17 +80,11 @@ export const CODEC: CodecTable = {
   "DatasetRecord": { o: [["sessionId", "session_id", 0], ["groupId", "group_id", 0], ["messages", "messages", { a: "ChatMessage" }], ["input", "input", "TrajectoryInput"], ["output", "output", "TrajectoryOutput"], ["prompt", "prompt", { u: { a: { a: "ChatMessage" } } }], ["completion", "completion", { u: { a: { a: "ChatMessage" } } }], ["chosen", "chosen", { u: { a: { a: "ChatMessage" } } }], ["rejected", "rejected", { u: { a: { a: "ChatMessage" } } }], ["expectedOutput", "expected_output", 0]] },
   "DatasetRecordsPage": { o: [["data", "data", { a: "DatasetRecord" }], ["nextCursor", "next_cursor", 0]] },
   "DecisionHeadReport": { o: [["macroF1", "macro_f1", 0], ["perOption", "per_option", 0], ["confusionMatrix", "confusion_matrix", 0]] },
-  "DeployArtifactRequest": { o: [["exploreRate", "explore_rate", 0]] },
-  "Deployment": { o: [["workspaceId", "workspace_id", 0], ["modelId", "model_id", 0], ["activeArtifactId", "active_artifact_id", 0], ["previousArtifactId", "previous_artifact_id", 0], ["fallbackModel", "fallback_model", 0], ["exploreRate", "explore_rate", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
-  "DeploymentStatus": { o: [["deployment", "deployment", "Deployment"], ["feedbackCount", "feedback_count", 0], ["averageScore", "average_score", 0]] },
-  "EmbedResponse": { o: [["usage", "usage", { o: [["promptTokens", "prompt_tokens", 0], ["totalTokens", "total_tokens", 0]] }]] },
   "EvalModelSummary": { o: [["ciLow", "ci_low", 0], ["ciHigh", "ci_high", 0], ["passAtK", "pass_at_k", 0], ["vsBaseline", "vs_baseline", { o: [["ciLow", "ci_low", 0], ["ciHigh", "ci_high", 0]] }], ["tokensPerTask", "tokens_per_task", 0], ["costPer1kTasksUsd", "cost_per_1k_tasks_usd", 0]] },
   "EvalOutput": { o: [["evalId", "eval_id", 0], ["taskId", "task_id", 0], ["sampleIndex", "sample_index", 0], ["input", "input", { a: "ChatMessage" }], ["expectedOutput", "expected_output", 0], ["record", "record", "DatasetRecord"], ["usage", "usage", { o: [["promptTokens", "prompt_tokens", 0], ["completionTokens", "completion_tokens", 0]] }]] },
   "EvalReport": { o: [["metricName", "metric_name", 0], ["metricMode", "metric_mode", 0], ["selectedStep", "selected_step", 0], ["bestStep", "best_step", 0], ["finalStep", "final_step", 0], ["trainRecords", "train_records", 0], ["evalRecords", "eval_records", 0], ["evalLoss", "eval_loss", 0], ["evalTokenAccuracy", "eval_token_accuracy", 0], ["trainedTokenFraction", "trained_token_fraction", 0], ["trainExamples", "train_examples", 0], ["evalExamples", "eval_examples", 0], ["selectionExamples", "selection_examples", 0], ["preferenceAccuracy", "preference_accuracy", 0], ["rewardMargin", "reward_margin", 0], ["trainPairs", "train_pairs", 0], ["evalPairs", "eval_pairs", 0], ["droppedRecords", "dropped_records", 0], ["trainPoints", "train_points", 0], ["evalPoints", "eval_points", 0], ["pointwiseBrier", "pointwise_brier", 0], ["evalKl", "eval_kl", 0], ["baseKl", "base_kl", 0], ["noContextKl", "no_context_kl", 0], ["klReduction", "kl_reduction", 0], ["numTokens", "num_tokens", 0], ["fallbackModel", "fallback_model", 0], ["fallbackQuality", "fallback_quality", 0], ["routesAnyTraffic", "routes_any_traffic", 0], ["paretoSummary", "pareto_summary", "RouterParetoSummary"], ["heads", "heads", { m: "DecisionHeadReport" }], ["recallAt1", "recall_at_1", 0], ["recallAt5", "recall_at_5", 0], ["recallAt10", "recall_at_10", 0], ["corpusSize", "corpus_size", 0], ["baseline", "baseline", { o: [["recallAt1", "recall_at_1", 0], ["recallAt5", "recall_at_5", 0], ["recallAt10", "recall_at_10", 0]] }]] },
   "EvalRun": { o: [["workspaceId", "workspace_id", 0], ["taskSource", "task_source", 0], ["maxTokens", "max_tokens", 0], ["passThreshold", "pass_threshold", 0], ["judgeModels", "judge_models", 0], ["localScorers", "local_scorers", 0], ["progress", "progress", { o: [["totalOutputs", "total_outputs", 0], ["pendingLocalScores", "pending_local_scores", 0]] }], ["summary", "summary", { a: "EvalModelSummary" }], ["totalCostUsd", "total_cost_usd", 0], ["scoredDatasetVersion", "scored_dataset_version", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["completedAt", "completed_at", 0]] },
   "EvalTaskOutcome": { o: [["taskId", "task_id", 0], ["sampleScores", "sample_scores", 0], ["judgeModel", "judge_model", 0], ["record", "record", "DatasetRecord"]] },
-  "FeedbackEventInput": { o: [["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0]] },
-  "FeedbackRecord": { o: [["workspaceId", "workspace_id", 0], ["inferenceId", "inference_id", 0], ["sessionId", "session_id", 0], ["deploymentName", "deployment_name", 0], ["idempotencyKey", "idempotency_key", 0], ["expectedOutput", "expected_output", 0], ["createdAt", "created_at", 0]] },
   "FilterDatasetRequest": { o: [["createdAfter", "created_after", 0], ["createdBefore", "created_before", 0]] },
   "GpuInfo": { o: [["memoryGb", "memory_gb", 0]] },
   "ImportJob": { o: [["workspaceId", "workspace_id", 0], ["importedCount", "imported_count", 0], ["droppedCount", "dropped_count", 0], ["detectedScores", "detected_scores", 0], ["dropReasons", "drop_reasons", 0], ["datasetVersion", "dataset_version", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
@@ -115,15 +106,11 @@ export const CODEC: CodecTable = {
   "PostEvalScoresResponse": { o: [["pendingLocalScores", "pending_local_scores", 0]] },
   "PushDatasetRequest": { o: [["records", "records", { a: "DatasetRecord" }]] },
   "RecipeSpec": { o: [["adapter", "adapter", "AdapterSpec"], ["lrScale", "lr_scale", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["maxQualityDrop", "max_quality_drop", 0], ["contextText", "context_text", 0], ["numTokens", "num_tokens", 0], ["rollout", "rollout", "RolloutSpec"], ["optimizer", "optimizer", "OptimizerSpec"], ["evalEvery", "eval_every", 0], ["loss", "loss", "LossSpec"], ["maxNewTokens", "max_new_tokens", 0], ["slotToken", "slot_token", 0], ["loggers", "loggers", { a: "LoggerSpec" }]] },
-  "RecordFeedbackRequest": { o: [["events", "events", { a: "FeedbackEventInput" }]] },
-  "RecordFeedbackResponse": { o: [["records", "records", { a: "FeedbackRecord" }]] },
   "RenderDatasetRequest": { o: [["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0]] },
   "RenderDatasetResponse": { o: [["templateRevision", "template_revision", 0], ["tokenCounts", "token_counts", 0], ["examples", "examples", { a: { o: [["recordId", "record_id", 0], ["templateRevision", "template_revision", 0], ["totalTokens", "total_tokens", 0], ["trainedTokens", "trained_tokens", 0], ["trainedFraction", "trained_fraction", 0]] } }]] },
   "ResolvedRunConfig": { o: [["ruleVersion", "rule_version", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["templateRevision", "template_revision", 0], ["adapter", "adapter", { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } }], ["lrSource", "lr_source", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointEverySteps", "checkpoint_every_steps", 0], ["evalEverySteps", "eval_every_steps", 0], ["optimizer", "optimizer", "OptimizerSpec"], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["split", "split", { o: [["evalFraction", "eval_fraction", 0], ["trainRecords", "train_records", 0], ["evalRecords", "eval_records", 0]] }], ["labelEvalId", "label_eval_id", 0], ["baseArtifact", "base_artifact", "BaseArtifact"], ["recipeParams", "recipe_params", 0], ["checkpointEvals", "checkpoint_evals", { a: { o: [["datasetVersion", "dataset_version", 0]] } }], ["loggers", "loggers", { a: "LoggerSpec" }]] },
   "ResumeRunRequest": { o: [["maxCostUsd", "max_cost_usd", 0]] },
   "RolloutSpec": { u: { o: { o: [["maxNewTokens", "max_new_tokens", 0]] } } },
-  "RouteRequest": { o: [["messages", "messages", { a: "ChatMessage" }], ["sessionId", "session_id", 0]] },
-  "RouteResponse": { o: [["inferenceId", "inference_id", 0], ["artifactId", "artifact_id", 0], ["isExploration", "is_exploration", 0]] },
   "RouterParetoSummary": { o: [["targetMaxDrop", "target_max_drop", 0], ["routedQuality", "routed_quality", 0], ["qualityDrop", "quality_drop", 0], ["qualityDropCi95", "quality_drop_ci95", 0], ["offloadRate", "offload_rate", 0], ["costSavingsPct", "cost_savings_pct", 0]] },
   "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["phaseSince", "phase_since", 0], ["lastInterruption", "last_interruption", "RunInterruption"], ["workersOnline", "workers_online", 0], ["queuePosition", "queue_position", 0], ["queueMessage", "queue_message", 0], ["minGpuMemoryGb", "min_gpu_memory_gb", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", "EvalReport"], ["checkpointEvals", "checkpoint_evals", { a: "CheckpointEvalResult" }], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
   "RunEvent": { d: ["type", { "phase": "PhaseEvent", "metric": "MetricEvent", "checkpoint": "CheckpointEvent", "attempt": "AttemptEvent", "warning": "WarningEvent", "log": "LogEvent", "completed": "CompletedEvent" }] },
@@ -199,18 +186,6 @@ export interface ListDatasetsParams {
 
 export type ListDatasetsResponse = {
   data: Array<Dataset>;
-  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
-  nextCursor: string | null;
-};
-
-export interface ListDeploymentsParams {
-  /** Page size (default 50). Values above 200 are clamped to 200. */
-  limit?: number | undefined;
-  cursor?: string | undefined;
-}
-
-export type ListDeploymentsResponse = {
-  data: Array<Deployment>;
   /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
 };
@@ -371,8 +346,6 @@ export const LIST_ARTIFACTS_LIMIT_MAX = 200;
 export const LIST_DATASET_RECORDS_LIMIT_MAX = 1000;
 /** Largest `limit` accepted by `listDatasets` (the server clamps larger values). */
 export const LIST_DATASETS_LIMIT_MAX = 200;
-/** Largest `limit` accepted by `listDeployments` (the server clamps larger values). */
-export const LIST_DEPLOYMENTS_LIMIT_MAX = 200;
 /** Largest `limit` accepted by `listEvalFailures` (the server clamps larger values). */
 export const LIST_EVAL_FAILURES_LIMIT_MAX = 200;
 /** Largest `limit` accepted by `listEvalOutputs` (the server clamps larger values). */
@@ -433,6 +406,16 @@ export class ApiClient {
   }
 
   /**
+   * Register uploaded files or a Hugging Face repo as an artifact (async import job)
+   *
+   * `POST /v1/artifact-imports`
+   */
+  async createArtifactImport(body: CreateArtifactImportRequest, options?: RequestOptions): Promise<ArtifactImport> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/artifact-imports`, json: convertKeys(CODEC, "CreateArtifactImportRequest", body, "encode"), idempotent: true }, options);
+    return convertKeys(CODEC, "ArtifactImport", data, "decode") as ArtifactImport;
+  }
+
+  /**
    * Create an empty dataset
    *
    * `POST /v1/datasets`
@@ -463,16 +446,6 @@ export class ApiClient {
   }
 
   /**
-   * Generate embeddings from a deployed embedding artifact
-   *
-   * `POST /v1/embeddings`
-   */
-  async createEmbeddings(body: EmbedRequest, options?: RequestOptions): Promise<EmbedResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/embeddings`, json: body, idempotent: true }, options);
-    return convertKeys(CODEC, "EmbedResponse", data, "decode") as EmbedResponse;
-  }
-
-  /**
    * Queue an evaluation across models on a pinned dataset version (executed by the server)
    *
    * `POST /v1/evals`
@@ -493,13 +466,22 @@ export class ApiClient {
   }
 
   /**
-   * Get an upload URL for a file to import (PUT the bytes, then create an import)
+   * Get an upload URL for a file to import (PUT the bytes, then create a dataset or artifact import)
    *
    * `POST /v1/uploads`
    */
   async createUpload(body: CreateUploadRequest, options?: RequestOptions): Promise<UploadTicket> {
     const data = await this.transport.json({ method: "POST", path: `/v1/uploads`, json: convertKeys(CODEC, "CreateUploadRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "UploadTicket", data, "decode") as UploadTicket;
+  }
+
+  /**
+   * Delete a released artifact and its bundle (409 artifact_pinned while a holder pins it)
+   *
+   * `DELETE /v1/artifacts/{id}`
+   */
+  async deleteArtifact(id: string, options?: RequestOptions): Promise<void> {
+    await this.transport.json({ method: "DELETE", path: `/v1/artifacts/${encodePathParam(id, "id")}` }, options);
   }
 
   /**
@@ -518,16 +500,6 @@ export class ApiClient {
    */
   async deleteSource(id: string, options?: RequestOptions): Promise<void> {
     await this.transport.json({ method: "DELETE", path: `/v1/sources/${encodePathParam(id, "id")}` }, options);
-  }
-
-  /**
-   * Deploy or update an artifact under a stable model name
-   *
-   * `POST /v1/deployments`
-   */
-  async deployArtifact(body: DeployArtifactRequest, options?: RequestOptions): Promise<Deployment> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/deployments`, json: convertKeys(CODEC, "DeployArtifactRequest", body, "encode"), idempotent: true }, options);
-    return convertKeys(CODEC, "Deployment", data, "decode") as Deployment;
   }
 
   /**
@@ -560,6 +532,16 @@ export class ApiClient {
   }
 
   /**
+   * Get an artifact import
+   *
+   * `GET /v1/artifact-imports/{id}`
+   */
+  async getArtifactImport(id: string, options?: RequestOptions): Promise<ArtifactImport> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/artifact-imports/${encodePathParam(id, "id")}` }, options);
+    return convertKeys(CODEC, "ArtifactImport", data, "decode") as ArtifactImport;
+  }
+
+  /**
    * Get a dataset by name
    *
    * `GET /v1/datasets/{name}`
@@ -567,16 +549,6 @@ export class ApiClient {
   async getDataset(name: string, options?: RequestOptions): Promise<Dataset> {
     const data = await this.transport.json({ method: "GET", path: `/v1/datasets/${encodePathParam(name, "name")}` }, options);
     return convertKeys(CODEC, "Dataset", data, "decode") as Dataset;
-  }
-
-  /**
-   * Get deployment status and feedback summary
-   *
-   * `GET /v1/deployments/{name}`
-   */
-  async getDeployment(name: string, options?: RequestOptions): Promise<DeploymentStatus> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/deployments/${encodePathParam(name, "name")}` }, options);
-    return convertKeys(CODEC, "DeploymentStatus", data, "decode") as DeploymentStatus;
   }
 
   /**
@@ -687,16 +659,6 @@ export class ApiClient {
   async listDatasets(params?: ListDatasetsParams, options?: RequestOptions): Promise<ListDatasetsResponse> {
     const data = await this.transport.json({ method: "GET", path: `/v1/datasets`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "Dataset" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListDatasetsResponse;
-  }
-
-  /**
-   * List deployments
-   *
-   * `GET /v1/deployments`
-   */
-  async listDeployments(params?: ListDeploymentsParams, options?: RequestOptions): Promise<ListDeploymentsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/deployments`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
-    return convertKeys(CODEC, { o: [["data", "data", { a: "Deployment" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListDeploymentsResponse;
   }
 
   /**
@@ -884,16 +846,6 @@ export class ApiClient {
   }
 
   /**
-   * Record deduplicated outcome scores and gold corrections
-   *
-   * `POST /v1/feedback`
-   */
-  async recordFeedback(body: RecordFeedbackRequest, options?: RequestOptions): Promise<RecordFeedbackResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/feedback`, json: convertKeys(CODEC, "RecordFeedbackRequest", body, "encode"), idempotent: true }, options);
-    return convertKeys(CODEC, "RecordFeedbackResponse", data, "decode") as RecordFeedbackResponse;
-  }
-
-  /**
    * Preview chat-template rendering and loss masks (estimated token counts)
    *
    * `POST /v1/datasets/{name}/render`
@@ -921,26 +873,6 @@ export class ApiClient {
   async revokeApiKey(id: string, options?: RequestOptions): Promise<ApiKey> {
     const data = await this.transport.json({ method: "DELETE", path: `/v1/keys/${encodePathParam(id, "id")}` }, options);
     return convertKeys(CODEC, "ApiKey", data, "decode") as ApiKey;
-  }
-
-  /**
-   * Roll a deployment back to its previous artifact
-   *
-   * `POST /v1/deployments/{name}/rollback`
-   */
-  async rollbackDeployment(name: string, options?: RequestOptions): Promise<Deployment> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/deployments/${encodePathParam(name, "name")}/rollback`, idempotent: true }, options);
-    return convertKeys(CODEC, "Deployment", data, "decode") as Deployment;
-  }
-
-  /**
-   * Ask a deployed model router which model to call
-   *
-   * `POST /v1/route`
-   */
-  async routeRequest(body: RouteRequest, options?: RequestOptions): Promise<RouteResponse> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/route`, json: convertKeys(CODEC, "RouteRequest", body, "encode"), idempotent: true }, options);
-    return convertKeys(CODEC, "RouteResponse", data, "decode") as RouteResponse;
   }
 
   /**

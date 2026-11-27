@@ -8,7 +8,7 @@ import type { EvalService } from "./evals/service.js";
 import type { JobQueue } from "./jobs.js";
 import type { RunLifecycle } from "./runs.js";
 import type { SourceService } from "./sources.js";
-import type { UploadService } from "./uploads.js";
+import { ARTIFACTS_PREFIX, type UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
 
 export const DEFAULT_JOB_EVENT_RETENTION_DAYS = 90;
@@ -17,6 +17,8 @@ export const DEFAULT_ORPHAN_BLOB_DAYS = 7;
 const ORPHAN_PAGE = 1000;
 /** A finished pass waits this long before the next one starts. */
 const ORPHAN_PASS_INTERVAL_MS = 3_600_000;
+/** Swept for orphans: job blobs under `ws/`, released bundles under `artifacts/`. */
+const ORPHAN_PREFIXES = ["ws", ARTIFACTS_PREFIX];
 
 export interface MaintenanceReport {
   expiredJobs: number;
@@ -57,38 +59,53 @@ export const createMaintenance = (
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<unknown> | null = null;
 
-  // The orphaned-blob sweep pages through `ws/` a page per tick (this
-  // replica's cursor), then rests. Deletes are idempotent, so replicas
-  // sweeping the same keys is harmless.
-  let orphanCursor: string | undefined;
+  // The orphaned-blob sweep pages through `ws/` and `artifacts/`, a page of
+  // each per tick (this replica's cursors), then rests. Deletes are
+  // idempotent, so replicas sweeping the same keys is harmless.
+  const orphanCursors = new Map<string, string | undefined>();
   let nextOrphanPass = 0;
 
   /**
    * The backstop for best-effort blob deletes: deletes job blobs (worker
-   * uploads, staged import parts) older than ORPHAN_BLOB_DAYS that no
-   * artifact or dataset part references (an upload never registered, a
-   * delete a crash skipped). Dataset parts are content-addressed and reused
-   * by an identical later write, so they are left alone.
+   * uploads, staged import parts) and released bundles older than
+   * ORPHAN_BLOB_DAYS that no artifact or dataset part references (an upload
+   * never registered, a delete a crash skipped). A pinned artifact's row
+   * can't be deleted, so its bundle is always referenced. Dataset parts are
+   * content-addressed and reused by an identical later write, so they are
+   * left alone.
    */
   const sweepOrphanBlobs = async (now: Date): Promise<number> => {
-    if (orphanCursor === undefined && now.getTime() < nextOrphanPass) return 0;
+    if (orphanCursors.size === 0) {
+      if (now.getTime() < nextOrphanPass) return 0;
+      for (const prefix of ORPHAN_PREFIXES)
+        orphanCursors.set(prefix, undefined);
+    }
     const days = deps.settings.orphanBlobDays ?? DEFAULT_ORPHAN_BLOB_DAYS;
-    const keys = await deps.storage.listOlder(
-      "ws",
-      addSeconds(now, -days * 86_400),
-      ORPHAN_PAGE,
-      orphanCursor,
-    );
-    orphanCursor = keys.length < ORPHAN_PAGE ? undefined : keys.at(-1);
-    if (orphanCursor === undefined) {
+    let deleted = 0;
+    for (const [prefix, cursor] of [...orphanCursors]) {
+      const keys = await deps.storage.listOlder(
+        prefix,
+        addSeconds(now, -days * 86_400),
+        ORPHAN_PAGE,
+        cursor,
+      );
+      if (keys.length < ORPHAN_PAGE) orphanCursors.delete(prefix);
+      else orphanCursors.set(prefix, keys.at(-1));
+      const orphans = await deps.store.unreferencedKeys(
+        keys.filter(
+          (key) =>
+            key.startsWith(`${ARTIFACTS_PREFIX}/`) ||
+            /^ws\/[^/]+\/jobs\//.test(key),
+        ),
+      );
+      for (const key of orphans) await deps.storage.delete(key);
+      deleted += orphans.length;
+    }
+    if (orphanCursors.size === 0) {
       nextOrphanPass = now.getTime() + ORPHAN_PASS_INTERVAL_MS;
     }
-    const orphans = await deps.store.unreferencedKeys(
-      keys.filter((key) => /^ws\/[^/]+\/jobs\//.test(key)),
-    );
-    for (const key of orphans) await deps.storage.delete(key);
 
-    return orphans.length;
+    return deleted;
   };
 
   /** One step's failure (an S3 outage, say) is logged and never stops the others. */

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import copy
 import datetime
+import io
 import json
+import tarfile
 import tempfile
 import unittest
+import urllib.parse
 import warnings
 from unittest import mock
 from pathlib import Path
@@ -637,12 +640,11 @@ class RunTests(unittest.TestCase):
         client.checkpoints.promote(ckpts["data"][0]["id"])
         self.assertEqual(sender.sent[-1].json, {})
 
-    def test_run_artifact_deploy_and_list(self) -> None:
+    def test_run_artifact_and_list(self) -> None:
         art = fixture("python-artifact.json")
         client, sender, _ = make_client(
             {
                 f"GET /v1/artifacts/{RUN_C['artifact_id']}": json_reply(art),
-                "POST /v1/deployments": fixture_reply("python-problem-501-deploy.json"),
                 "GET /v1/runs": json_reply(fixture("python-runs-page.json")),
             }
         )
@@ -650,57 +652,113 @@ class RunTests(unittest.TestCase):
         artifact = run.artifact
         assert artifact is not None
         self.assertEqual(artifact.ref, f"{art['name']}@{art['version']}")
-        with self.assertRaises(grad.DeployUnavailableError):
-            run.deploy(fallback="qwen/qwen3-32b")
-        self.assertEqual(sender.sent[-1].json, {"artifact": RUN_C["artifact_id"], "fallback": "qwen/qwen3-32b"})
+        self.assertEqual(artifact.provenance.source, "run")
+        self.assertEqual(artifact.provenance.run_id, art["run_id"])
         self.assertEqual([r.id for r in client.runs.list(limit=1)], [RUN_ID])
         no_art = grad.Run.from_api(RUN_Q, client)
+        self.assertIsNone(no_art.artifact)
         with self.assertRaises(RuntimeError) as ctx:
-            no_art.deploy()
-        self.assertIn("wait()", str(ctx.exception))
-        with self.assertRaises(RuntimeError):
             no_art.download("x")
+        self.assertIn("wait()", str(ctx.exception))
         with self.assertRaises(AttributeError):
             run.url  # noqa: B018
 
 
-class ServingTests(unittest.TestCase):
-    DEPLOYMENT = {
-        "id": "dep_1",
-        "workspace_id": "ws",
-        "name": "support-router",
-        "model_id": "ws/support-router",
-        "active_artifact_id": "support-router@2026-11-27-2",
-        "previous_artifact_id": "support-router@2026-11-27-1",
-        "fallback_model": "qwen/qwen3-32b",
-        "explore_rate": 0.05,
-        "status": "active",
+class ArtifactRegistryTests(unittest.TestCase):
+    IMPORT: dict[str, Any] = {
+        "id": "imp_1",
+        "workspace_id": "ws_a",
+        "status": "queued",
+        "name": "my-lora",
+        "base_model": "test/tiny-qwen3",
+        "format": "peft_lora",
+        "source": {"kind": "upload", "upload_id": "a" * 64, "repo": None, "revision": None},
+        "artifact_id": None,
+        "error": None,
+        "error_code": None,
+        "attempt": 0,
         "created_at": "t",
         "updated_at": "t",
     }
+    ARTIFACT = {"id": "my-lora@2026-11-27-1", "name": "my-lora", "version": "2026-11-27-1"}
 
-    def test_deploy_status_list_rollback(self) -> None:
+    def upload_routes(self, final: dict[str, Any]) -> dict[str, Any]:
+        ticket = fixture("python-upload-ticket.json")
+        return {
+            "POST /v1/uploads": json_reply(ticket, 201),
+            f"PUT {urllib.parse.urlsplit(ticket['url']).path}": json_reply({}),
+            "POST /v1/artifact-imports": json_reply(self.IMPORT, 202),
+            "GET /v1/artifact-imports/imp_1": [json_reply({**self.IMPORT, "status": "running"}), json_reply(final)],
+            "GET /v1/artifacts/my-lora@2026-11-27-1": json_reply({**fixture("python-artifact.json"), **self.ARTIFACT}),
+        }
+
+    def test_upload_tars_a_directory_and_waits_for_the_artifact(self) -> None:
+        ticket = fixture("python-upload-ticket.json")
+        client, sender, _ = make_client(self.upload_routes({**self.IMPORT, "status": "completed", "artifact_id": self.ARTIFACT["id"]}))
+        with tempfile.TemporaryDirectory() as tmp:
+            lora = Path(tmp) / "My LoRA"
+            (lora / "sub").mkdir(parents=True)
+            (lora / "adapter_config.json").write_text("{}")
+            (lora / "sub" / "x.bin").write_bytes(b"x")
+            job = client.artifacts.upload(lora, base="test/tiny-qwen3")
+            self.assertIsInstance(job, grad.ArtifactImport)
+            self.assertFalse(job.done)
+            art = job.wait()
+        self.assertEqual(art.id, "my-lora@2026-11-27-1")
+        up = sender.sent[0].json
+        self.assertEqual((up["purpose"], up["filename"]), ("artifact_import", "upload.tar.gz"))
+        with tarfile.open(fileobj=io.BytesIO(sender.sent[1].body or b""), mode="r:gz") as tar:
+            self.assertEqual(sorted(tar.getnames()), ["adapter_config.json", "sub/x.bin"])
+            self.assertEqual({m.mtime for m in tar.getmembers()}, {0})
+        self.assertEqual(
+            sender.sent[2].json,
+            {"base_model": "test/tiny-qwen3", "format": "peft_lora", "name": "my-lora", "source": {"kind": "upload", "upload_id": ticket["upload_id"]}},
+        )
+        self.assertRegex(sender.sent[2].header("Idempotency-Key") or "", r"^[0-9a-f-]{36}$")
+
+    def test_upload_failure_raises_a_422_naming_the_file(self) -> None:
+        failed = {**self.IMPORT, "status": "failed", "error": "adapter_model.safetensors: tensor shape mismatch", "error_code": "invalid_artifact"}
+        client, sender, _ = make_client(self.upload_routes(failed))
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "bad-lora.tar.gz"
+            archive.write_bytes(b"not really a tar")
+            with self.assertRaises(grad.ArtifactImportFailedError) as ctx:
+                client.artifacts.upload(archive, base="test/tiny-qwen3", format="peft_lora").wait()
+            self.assertEqual(sender.sent[1].body, b"not really a tar")
+            self.assertEqual(sender.sent[2].json["name"], "bad-lora")
+            with self.assertRaises(ValueError):
+                client.artifacts.upload(archive, base="b", format="onnx")
+            with self.assertRaises(FileNotFoundError):
+                client.artifacts.upload(Path(tmp) / "missing", base="b")
+        err = ctx.exception
+        self.assertEqual((err.code, err.status), ("invalid_artifact", 422))
+        self.assertIn("adapter_model.safetensors", str(err))
+        self.assertEqual(err.job.name, "my-lora")
+
+    def test_from_hf_pins_and_delete(self) -> None:
+        hf = {**self.IMPORT, "source": {"kind": "hf", "upload_id": None, "repo": "acme/lora", "revision": "main"}}
         client, sender, _ = make_client(
             {
-                "POST /v1/deployments": json_reply(self.DEPLOYMENT),
-                "POST /v1/deployments/support-router/rollback": json_reply({**self.DEPLOYMENT, "active_artifact_id": "support-router@2026-11-27-1"}),
-                "GET /v1/deployments/support-router": json_reply({"deployment": self.DEPLOYMENT, "feedback_count": 1, "average_score": 1.0}),
-                "GET /v1/deployments": json_reply({"data": [self.DEPLOYMENT], "next_cursor": None}),
+                "POST /v1/artifact-imports": json_reply(hf, 202),
+                "GET /v1/artifact-imports/imp_1": json_reply({**hf, "status": "running"}),
+                "DELETE /v1/artifacts/my-lora@2026-11-27-1": json_reply(None, 204),
             }
         )
-        art = grad.Artifact.from_api(fixture("python-artifact.json"), client)
-        dep = art.deploy(name="support-router", fallback="qwen/qwen3-32b", explore_rate=0.05)
-        self.assertEqual(sender.sent[0].json, {"artifact": art.ref, "name": "support-router", "fallback": "qwen/qwen3-32b", "explore_rate": 0.05})
-        self.assertEqual(dep.rollback().active_artifact_id, "support-router@2026-11-27-1")
-        status = dep.status_summary()
-        self.assertEqual((status.feedback_count, status.average_score), (1, 1.0))
-        self.assertIsInstance(status.deployment, grad.Deployment)
-        self.assertEqual([d.name for d in client.deployments.list()], ["support-router"])
-        run = grad.Run.from_api(RUN_C, client)
-        client.deploy(run)
-        self.assertEqual(sender.sent[-1].json, {"artifact": RUN_C["artifact_id"]})
-        with self.assertRaises(RuntimeError):
-            client.deploy(grad.Run.from_api(RUN_Q, client))
+        job = client.artifacts.from_hf("hf://acme/lora@main", base="test/tiny-qwen3", secret="hf-token")
+        self.assertEqual(job.source.repo, "acme/lora")
+        self.assertEqual(sender.sent[0].json["source"], {"kind": "hf", "repo": "acme/lora", "revision": "main", "secret": "hf-token"})
+        client.artifacts.from_hf("acme/lora", base="test/tiny-qwen3", revision="v1", name="x")
+        self.assertEqual(
+            sender.sent[-1].json, {"source": {"kind": "hf", "repo": "acme/lora", "revision": "v1"}, "base_model": "test/tiny-qwen3", "format": "peft_lora", "name": "x"}
+        )
+        with self.assertRaises(ValueError):
+            client.artifacts.from_hf("hf://acme/lora@a", base="b", revision="b")
+        with self.assertRaises(ValueError):
+            client.artifacts.from_hf("hf://../x", base="b")
+        with self.assertRaises(grad.WaitTimeoutError):
+            job.wait(timeout=3)
+        grad.Artifact.from_api({**fixture("python-artifact.json"), **self.ARTIFACT}, client).delete()
+        self.assertEqual(sender.paths()[-1], "DELETE /v1/artifacts/my-lora@2026-11-27-1")
 
     def test_artifacts_list(self) -> None:
         client, sender, _ = make_client({"GET /v1/artifacts": json_reply(fixture("python-artifacts-page.json"))})

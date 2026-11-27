@@ -21,7 +21,8 @@
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
  *          "workspace_id","mode","worker","model_paths","fault_url",
  *          "worker_url","replicas":[{"url","pid"}],"eval_worker_pid",
- *          "langfuse_url","langfuse_secret","ui_url","s3"}
+ *          "langfuse_url","langfuse_secret","ui_url","s3","tiny_lora",
+ *          "tiny_lora_invalid"}
  * `eval_worker_pid` is the eval worker, so a chaos test can kill -9 it.
  * `ui_url` is the web UI (null in --cloud mode or until `pnpm -C server/ui
  * build` has run); open `<ui_url>#key=<api_key>` to sign in.
@@ -38,7 +39,9 @@
  * `--drop-worker-ack-every N`, cuts every N-th worker POST's response after
  * the server committed it. Workers started here use `worker_url`.
  * Trainer Python: $GRAD_TRAINER_PYTHON (default python3). Torch workers build
- * the tiny test models from server/trainer/tests/fixtures/tiny_models.py.
+ * the tiny test models from server/trainer/tests/fixtures/tiny_models.py, and
+ * `tiny_lora` / `tiny_lora_invalid` (PEFT LoRA directories for test/tiny-qwen3;
+ * the invalid one names another base) for live `artifacts upload` tests.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -162,14 +165,19 @@ const waitReady = async (url: string, child: ChildProcess) => {
   throw new Error("grad-server did not become ready within 60s");
 };
 
-const tinyModelPaths = (python: string): Record<string, string> => {
+/** The tiny models' GRAD_MODEL_PATHS and two PEFT LoRAs for them (valid, and naming the wrong base). */
+const tinyModels = (
+  python: string,
+): { paths: Record<string, string>; lora: string; lora_invalid: string } => {
   const script = [
-    "import json, os, sys",
+    "import json, os, sys, tempfile",
+    "from pathlib import Path",
     "sys.path.insert(0, 'tests')",
     "from fixtures import tiny_models as t",
     "t.ensure_tiny_models()",
     "t.atexit.unregister(t.shutil.rmtree)",
-    "print(os.environ['GRAD_MODEL_PATHS'])",
+    "loras = t.build_tiny_loras(Path(tempfile.mkdtemp(prefix='grad-tiny-lora-')))",
+    "print(json.dumps({'paths': json.loads(os.environ['GRAD_MODEL_PATHS']), **loras}))",
   ].join("\n");
   const out = spawnSync(python, ["-c", script], {
     cwd: trainerDir,
@@ -181,7 +189,9 @@ const tinyModelPaths = (python: string): Record<string, string> => {
   }
   const lines = out.stdout.trim().split("\n");
 
-  return JSON.parse(lines[lines.length - 1] ?? "{}") as Record<string, string>;
+  return JSON.parse(lines[lines.length - 1] ?? "{}") as ReturnType<
+    typeof tinyModels
+  >;
 };
 
 const main = async () => {
@@ -195,6 +205,7 @@ const main = async () => {
     ? await startFakeCloudApi({ serviceToken: "svc_e2e_token" })
     : undefined;
   let modelPaths: Record<string, string> = {};
+  let tinyLoras: { lora: string; lora_invalid: string } | null = null;
   let faultProxy: FaultProxy | undefined;
   let workerProxy: FaultProxy | undefined;
   let postgres: Promise<DockerPostgres> | undefined;
@@ -235,9 +246,10 @@ const main = async () => {
       () => undefined,
     );
     rmSync(scratch, { recursive: true, force: true });
-    for (const dir of new Set(
-      Object.values(modelPaths).map((p) => dirname(p)),
-    )) {
+    for (const dir of new Set([
+      ...Object.values(modelPaths).map((p) => dirname(p)),
+      ...(tinyLoras ? [dirname(tinyLoras.lora)] : []),
+    ])) {
       rmSync(dir, { recursive: true, force: true });
     }
     process.exit(code);
@@ -374,7 +386,11 @@ const main = async () => {
 
     const python = process.env.GRAD_TRAINER_PYTHON ?? "python3";
     if (args.worker !== "none") {
-      if (args.worker === "torch") modelPaths = tinyModelPaths(python);
+      if (args.worker === "torch") {
+        const tiny = tinyModels(python);
+        modelPaths = tiny.paths;
+        tinyLoras = { lora: tiny.lora, lora_invalid: tiny.lora_invalid };
+      }
       const worker = spawn(python, ["-m", "grad_trainer.worker"], {
         cwd: trainerDir,
         env: {
@@ -409,6 +425,9 @@ const main = async () => {
         mode: cloud ? "cloud" : "self_hosted",
         worker: args.worker,
         model_paths: modelPaths,
+        // --worker torch: PEFT LoRA directories for test/tiny-qwen3 (artifacts.upload).
+        tiny_lora: tinyLoras?.lora ?? null,
+        tiny_lora_invalid: tinyLoras?.lora_invalid ?? null,
         fault_url: faultProxy.url,
         worker_url: workerUrl,
         replicas,

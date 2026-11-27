@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from .._transport import Transport
 
-__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_EVENTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_SECRETS_LIMIT_MAX", "LIST_SOURCES_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_EVENTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_SECRETS_LIMIT_MAX", "LIST_SOURCES_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -36,7 +36,7 @@ ApiKey = TypedDict(
     },
 )
 
-ApiKeyScope: TypeAlias = "Literal['admin', 'datasets:read', 'datasets:write', 'runs:read', 'runs:write', 'artifacts:read', 'artifacts:write', 'secrets:read', 'secrets:write', 'sources:read', 'sources:write', 'deployments:write', 'feedback:write', 'env:serve']"
+ApiKeyScope: TypeAlias = "Literal['admin', 'datasets:read', 'datasets:write', 'runs:read', 'runs:write', 'artifacts:read', 'artifacts:write', 'artifacts:pin', 'secrets:read', 'secrets:write', 'sources:read', 'sources:write', 'deployments:write', 'feedback:write', 'env:serve']"
 
 Artifact = TypedDict(
     "Artifact",
@@ -53,12 +53,56 @@ Artifact = TypedDict(
         "sha256": "str",
         "size_bytes": "int",
         "manifest": "dict[str, Any]",
+        "provenance": "ArtifactProvenance",
         "eval_report": "EvalReport",
         "created_at": "str",
     },
 )
 
 ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reward_bundle', 'reference'] | None"
+
+ArtifactImport = TypedDict(
+    "ArtifactImport",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "status": "ArtifactImportStatus",
+        "name": "str",
+        "base_model": "str",
+        "format": "ArtifactFormat",
+        "source": "dict[str, Any]",
+        "artifact_id": "str | None",
+        "error": "str | None",
+        "error_code": "str | None",
+        "attempt": "int",
+        "created_at": "str",
+        "updated_at": "str",
+    },
+)
+
+ArtifactImportSource: TypeAlias = "dict[str, Any]"
+
+ArtifactImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
+
+ArtifactPin = TypedDict(
+    "ArtifactPin",
+    {
+        "artifact_id": "str",
+        "holder": "str",
+        "reason": "str",
+        "created_at": "str",
+    },
+)
+
+ArtifactProvenance = TypedDict(
+    "ArtifactProvenance",
+    {
+        "source": "Literal['run', 'upload', 'import']",
+        "run_id": "str | None",
+        "uploader": "str | None",
+        "uri": "str | None",
+    },
+)
 
 AttemptEvent = TypedDict(
     "AttemptEvent",
@@ -183,6 +227,7 @@ CompleteTrainerJobRequest = TypedDict(
         "eval_report": "NotRequired[EvalReport]",
         "tokens_processed": "NotRequired[int]",
         "error": "NotRequired[str]",
+        "error_code": "NotRequired[Literal['invalid_artifact', 'source_unavailable']]",
         "stop_reason": "NotRequired[Literal['budget', 'insufficient_balance']]",
         "import_summary": "NotRequired[dict[str, Any]]",
     },
@@ -198,6 +243,7 @@ CompleteTrainerJobResponse = TypedDict(
         "artifact": "Artifact",
         "import": "ImportJob",
         "eval": "NotRequired[EvalRun]",
+        "artifact_import": "NotRequired[ArtifactImport]",
     },
 )
 
@@ -219,6 +265,16 @@ CreateApiKeyRequest = TypedDict(
     {
         "name": "str",
         "scopes": "list[ApiKeyScope]",
+    },
+)
+
+CreateArtifactImportRequest = TypedDict(
+    "CreateArtifactImportRequest",
+    {
+        "source": "ArtifactImportSource",
+        "base_model": "str",
+        "format": "NotRequired[ImportableArtifactFormat]",
+        "name": "NotRequired[str]",
     },
 )
 
@@ -253,7 +309,7 @@ CreateSourceRequest = TypedDict(
 CreateUploadRequest = TypedDict(
     "CreateUploadRequest",
     {
-        "purpose": "Literal['dataset_import']",
+        "purpose": "Literal['dataset_import', 'artifact_import']",
         "filename": "str",
         "size_bytes": "int",
         "sha256": "str",
@@ -347,59 +403,6 @@ DecisionHeadReport = TypedDict(
         "macro_f1": "NotRequired[float | None]",
         "per_option": "NotRequired[dict[str, dict[str, Any]]]",
         "confusion_matrix": "NotRequired[dict[str, Any]]",
-    },
-)
-
-DeployArtifactRequest = TypedDict(
-    "DeployArtifactRequest",
-    {
-        "artifact": "str",
-        "name": "NotRequired[str]",
-        "fallback": "NotRequired[str]",
-        "explore_rate": "NotRequired[float]",
-    },
-)
-
-Deployment = TypedDict(
-    "Deployment",
-    {
-        "id": "str",
-        "workspace_id": "str",
-        "name": "str",
-        "model_id": "str",
-        "active_artifact_id": "str",
-        "previous_artifact_id": "str | None",
-        "fallback_model": "str | None",
-        "explore_rate": "float",
-        "status": "Literal['active', 'disabled']",
-        "created_at": "str",
-        "updated_at": "str",
-    },
-)
-
-DeploymentStatus = TypedDict(
-    "DeploymentStatus",
-    {
-        "deployment": "Deployment",
-        "feedback_count": "int",
-        "average_score": "float | None",
-    },
-)
-
-EmbedRequest = TypedDict(
-    "EmbedRequest",
-    {
-        "model": "str",
-        "input": "str | list[str]",
-    },
-)
-
-EmbedResponse = TypedDict(
-    "EmbedResponse",
-    {
-        "model": "str",
-        "data": "list[dict[str, Any]]",
-        "usage": "dict[str, Any]",
     },
 )
 
@@ -548,35 +551,6 @@ EvalTaskOutcome = TypedDict(
     },
 )
 
-FeedbackEventInput = TypedDict(
-    "FeedbackEventInput",
-    {
-        "inference_id": "NotRequired[str]",
-        "session_id": "NotRequired[str]",
-        "deployment_name": "NotRequired[str]",
-        "idempotency_key": "str",
-        "score": "NotRequired[float]",
-        "expected_output": "NotRequired[Any]",
-        "metrics": "NotRequired[dict[str, float]]",
-    },
-)
-
-FeedbackRecord = TypedDict(
-    "FeedbackRecord",
-    {
-        "id": "str",
-        "workspace_id": "str",
-        "inference_id": "str | None",
-        "session_id": "str | None",
-        "deployment_name": "str | None",
-        "idempotency_key": "str",
-        "score": "float | None",
-        "expected_output": "NotRequired[Any]",
-        "metrics": "dict[str, float]",
-        "created_at": "str",
-    },
-)
-
 FilterDatasetRequest: TypeAlias = "DatasetFilter"
 
 GpuInfo = TypedDict(
@@ -627,6 +601,8 @@ ImportJob = TypedDict(
 ImportSource: TypeAlias = "dict[str, Any]"
 
 ImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
+
+ImportableArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reward_bundle']"
 
 InterruptionReason: TypeAlias = "Literal['lease_lost', 'compute_reclaimed', 'worker_error', 'oom']"
 
@@ -732,6 +708,14 @@ PhaseEvent = TypedDict(
         "queue_position": "int | None",
         "message": "str | None",
         "gpu": "GpuInfo",
+    },
+)
+
+PinArtifactRequest = TypedDict(
+    "PinArtifactRequest",
+    {
+        "holder": "str",
+        "reason": "str",
     },
 )
 
@@ -931,22 +915,6 @@ RecipeSpec = TypedDict(
     },
 )
 
-RecordFeedbackRequest = TypedDict(
-    "RecordFeedbackRequest",
-    {
-        "events": "list[FeedbackEventInput]",
-    },
-)
-
-RecordFeedbackResponse = TypedDict(
-    "RecordFeedbackResponse",
-    {
-        "accepted": "int",
-        "deduplicated": "int",
-        "records": "list[FeedbackRecord]",
-    },
-)
-
 RegisterImportPartRequest = TypedDict(
     "RegisterImportPartRequest",
     {
@@ -1069,29 +1037,6 @@ ResumeRunRequest = TypedDict(
 )
 
 RolloutSpec: TypeAlias = "dict[str, Any]"
-
-RouteRequest = TypedDict(
-    "RouteRequest",
-    {
-        "deployment": "str",
-        "messages": "list[ChatMessage]",
-        "tools": "NotRequired[list[dict[str, Any]]]",
-        "session_id": "NotRequired[str]",
-    },
-)
-
-RouteResponse = TypedDict(
-    "RouteResponse",
-    {
-        "inference_id": "str",
-        "deployment": "str",
-        "artifact_id": "str",
-        "model": "str",
-        "is_exploration": "bool",
-        "confidence": "float",
-        "scores": "dict[str, float]",
-    },
-)
 
 RouterParetoSummary = TypedDict(
     "RouterParetoSummary",
@@ -1369,6 +1314,7 @@ TrainerJob = TypedDict(
         "lease_expires_at": "str",
         "run": "dict[str, Any] | None",
         "import": "dict[str, Any] | None",
+        "artifact_import": "NotRequired[dict[str, Any] | None]",
         "price_per_million_tokens": "float | None",
         "max_cost_usd": "float | None",
         "dataset": "dict[str, Any] | None",
@@ -1557,14 +1503,6 @@ ListDatasetsResponse = TypedDict(
     },
 )
 
-ListDeploymentsResponse = TypedDict(
-    "ListDeploymentsResponse",
-    {
-        "data": "list[Deployment]",
-        "next_cursor": "str | None",
-    },
-)
-
 ListEvalFailuresResponse = TypedDict(
     "ListEvalFailuresResponse",
     {
@@ -1648,7 +1586,10 @@ ListUsageResponse = TypedDict(
 
 SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ApiKey": frozenset({"created_at", "id", "name", "prefix", "revoked_at", "scopes", "workspace_id"}),
-    "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
+    "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "provenance", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
+    "ArtifactImport": frozenset({"artifact_id", "attempt", "base_model", "created_at", "error", "error_code", "format", "id", "name", "source", "status", "updated_at", "workspace_id"}),
+    "ArtifactPin": frozenset({"artifact_id", "created_at", "holder", "reason"}),
+    "ArtifactProvenance": frozenset({"run_id", "source", "uploader", "uri"}),
     "AttemptEvent": frozenset({"attempt", "event", "max_attempts", "message", "reason", "resume_step", "run_id", "seq", "step", "timestamp", "type"}),
     "BaseArtifact": frozenset({"format", "id", "recipe_kind", "sha256"}),
     "ChatMessage": frozenset({"content", "name", "role", "tool_call_id", "tool_calls", "train"}),
@@ -1657,10 +1598,11 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "CheckpointEvent": frozenset({"attempt", "checkpoint_id", "eval_score", "format", "run_id", "seq", "step", "timestamp", "type"}),
     "ClaimJobRequest": frozenset({"device", "gpu", "kinds", "lease_seconds", "recipes", "worker_id"}),
     "ClaimJobResponse": frozenset({"job", "protocol"}),
-    "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "reason", "status", "stop_reason", "tokens_processed", "upload_id", "worker_id"}),
-    "CompleteTrainerJobResponse": frozenset({"artifact", "eval", "import", "job_id", "kind", "run", "status"}),
+    "CompleteTrainerJobRequest": frozenset({"attempt", "error", "error_code", "eval_report", "format", "import_summary", "manifest", "reason", "status", "stop_reason", "tokens_processed", "upload_id", "worker_id"}),
+    "CompleteTrainerJobResponse": frozenset({"artifact", "artifact_import", "eval", "import", "job_id", "kind", "run", "status"}),
     "CompletedEvent": frozenset({"attempt", "run", "run_id", "seq", "status", "timestamp", "type"}),
     "CreateApiKeyRequest": frozenset({"name", "scopes"}),
+    "CreateArtifactImportRequest": frozenset({"base_model", "format", "name", "source"}),
     "CreateDatasetRequest": frozenset({"metadata", "name"}),
     "CreateImportRequest": frozenset({"connector", "source"}),
     "CreateSourceRequest": frozenset({"max_records_per_day", "max_records_per_sync", "provider", "sample_rate", "schedule", "version_interval"}),
@@ -1671,19 +1613,12 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "DatasetRecord": frozenset({"chosen", "completion", "expected_output", "group_id", "id", "input", "messages", "metadata", "metrics", "negatives", "output", "positive", "prompt", "query", "questions", "rejected", "role", "schema", "scores", "session_id", "source", "state", "timestamp", "tools"}),
     "DatasetRecordsPage": frozenset({"data", "dataset", "next_cursor", "total", "version"}),
     "DecisionHeadReport": frozenset({"accuracy", "brier", "confusion_matrix", "ece", "examples", "macro_f1", "mae", "per_option", "temperature", "type"}),
-    "DeployArtifactRequest": frozenset({"artifact", "explore_rate", "fallback", "name"}),
-    "Deployment": frozenset({"active_artifact_id", "created_at", "explore_rate", "fallback_model", "id", "model_id", "name", "previous_artifact_id", "status", "updated_at", "workspace_id"}),
-    "DeploymentStatus": frozenset({"average_score", "deployment", "feedback_count"}),
-    "EmbedRequest": frozenset({"input", "model"}),
-    "EmbedResponse": frozenset({"data", "model", "usage"}),
     "EvalModelSummary": frozenset({"ci_high", "ci_low", "cost_per_1k_tasks_usd", "errors", "model", "overall", "pass_at_k", "tasks", "tokens_per_task", "vs_baseline"}),
     "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
     "EvalReport": frozenset({"base_kl", "baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_points", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_mode", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "pointwise_brier", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "rollout", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_points", "train_records", "trained_token_fraction", "truncated", "warnings"}),
     "EvalRubricItem": frozenset({"flags", "kind", "model", "name", "pattern", "prompt", "runtime", "validator", "weight"}),
     "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "mode", "models", "name", "pass_threshold", "progress", "rubric", "samples", "scored_dataset_version", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
     "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),
-    "FeedbackEventInput": frozenset({"deployment_name", "expected_output", "idempotency_key", "inference_id", "metrics", "score", "session_id"}),
-    "FeedbackRecord": frozenset({"created_at", "deployment_name", "expected_output", "id", "idempotency_key", "inference_id", "metrics", "score", "session_id", "workspace_id"}),
     "GpuInfo": frozenset({"memory_gb", "name"}),
     "HfColumnMapping": frozenset({"answer", "chosen", "completion", "messages", "positive", "prompt", "query", "rejected"}),
     "ImportJob": frozenset({"attempt", "connector", "created_at", "dataset", "dataset_version", "detected_scores", "drop_reasons", "dropped_count", "error", "id", "imported_count", "source", "status", "updated_at", "workspace_id"}),
@@ -1694,6 +1629,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
     "OptimizerSpec": frozenset({"betas", "grad_clip", "kind", "weight_decay"}),
     "PhaseEvent": frozenset({"attempt", "autoscaling", "gpu", "message", "phase", "queue_position", "run_id", "seq", "step", "timestamp", "type", "workers_online"}),
+    "PinArtifactRequest": frozenset({"holder", "reason"}),
     "PlanCostBreakdown": frozenset({"eval_usd", "teacher_usd", "train_usd"}),
     "PlanEvalRequest": frozenset({"baseline", "dataset", "dataset_version", "limit", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
@@ -1709,8 +1645,6 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "PushDatasetRequest": frozenset({"metadata", "records"}),
     "RecipeEval": frozenset({"dataset", "limit", "name", "rubric", "version"}),
     "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "epochs", "eval_every", "evals", "fallback", "kind", "loggers", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rollout", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
-    "RecordFeedbackRequest": frozenset({"events"}),
-    "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
     "RegisterImportPartRequest": frozenset({"attempt", "count", "detected_scores", "records", "resets", "score_updates", "seq", "sha256", "upload_id", "worker_id"}),
     "RegisterImportPartResponse": frozenset({"staged"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
@@ -1720,8 +1654,6 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ReportTrainerProgressResponse": frozenset({"cost_usd", "should_stop", "status", "stop_reason"}),
     "ResolvedRunConfig": frozenset({"adapter", "base_artifact", "batch_size", "checkpoint_evals", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "eval_every_steps", "label_eval_id", "loggers", "lr", "lr_source", "model", "name", "optimizer", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
     "ResumeRunRequest": frozenset({"max_cost_usd"}),
-    "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
-    "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
     "Run": frozenset({"artifact_id", "attempt", "autoscaling", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "last_interruption", "latest_metric", "max_attempts", "max_cost_usd", "min_gpu_memory_gb", "name", "phase", "phase_since", "price_per_million_tokens", "queue_message", "queue_position", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "warnings", "workers_online", "workspace_id"}),
     "RunEventsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
@@ -1741,7 +1673,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "TrainerEvalOutput": frozenset({"completion_tokens", "error", "expected_output", "input", "judge_tokens", "model", "output", "prompt_tokens", "record", "sample_index", "scores", "task_id", "task_index"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "stats", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
-    "TrainerJob": frozenset({"attempt", "base", "dataset", "eval", "id", "import", "kind", "lease_expires_at", "lease_seconds", "loggers", "max_cost_usd", "price_per_million_tokens", "resume", "run", "traceparent"}),
+    "TrainerJob": frozenset({"artifact_import", "attempt", "base", "dataset", "eval", "id", "import", "kind", "lease_expires_at", "lease_seconds", "loggers", "max_cost_usd", "price_per_million_tokens", "resume", "run", "traceparent"}),
     "TrainerUploadRequest": frozenset({"attempt", "kind", "sha256", "size_bytes", "worker_id"}),
     "TrainerWorkerStats": frozenset({"gpu_memory_used_bytes", "gpu_utilization", "phase", "tokens_per_second"}),
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
@@ -1758,11 +1690,13 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
 """Property names of every object schema (for client-side typo checks)."""
 
 SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
-    "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve",),
+    "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "artifacts:pin", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve",),
     "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference", None,),
+    "ArtifactImportStatus": ("queued", "running", "completed", "failed",),
     "EvalMode": ("eval", "score",),
     "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
     "ImportStatus": ("queued", "running", "completed", "failed",),
+    "ImportableArtifactFormat": ("peft_lora", "merged_safetensors", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle",),
     "InterruptionReason": ("lease_lost", "compute_reclaimed", "worker_error", "oom",),
     "JobKind": ("train", "import", "eval",),
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
@@ -1777,21 +1711,21 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "cancel_eval": ("POST", "/v1/evals/{id}/cancel"),
     "cancel_run": ("POST", "/v1/runs/{id}/cancel"),
     "create_api_key": ("POST", "/v1/keys"),
+    "create_artifact_import": ("POST", "/v1/artifact-imports"),
     "create_dataset": ("POST", "/v1/datasets"),
     "create_dataset_import": ("POST", "/v1/datasets/{name}/imports"),
     "create_dataset_source": ("POST", "/v1/datasets/{name}/sources"),
-    "create_embeddings": ("POST", "/v1/embeddings"),
     "create_eval": ("POST", "/v1/evals"),
     "create_run": ("POST", "/v1/runs"),
     "create_upload": ("POST", "/v1/uploads"),
+    "delete_artifact": ("DELETE", "/v1/artifacts/{id}"),
     "delete_secret": ("DELETE", "/v1/secrets/{name}"),
     "delete_source": ("DELETE", "/v1/sources/{id}"),
-    "deploy_artifact": ("POST", "/v1/deployments"),
     "download_artifact": ("GET", "/v1/artifacts/{id}/download"),
     "filter_dataset": ("POST", "/v1/datasets/{name}/filter"),
     "get_artifact": ("GET", "/v1/artifacts/{id}"),
+    "get_artifact_import": ("GET", "/v1/artifact-imports/{id}"),
     "get_dataset": ("GET", "/v1/datasets/{name}"),
-    "get_deployment": ("GET", "/v1/deployments/{name}"),
     "get_eval": ("GET", "/v1/evals/{id}"),
     "get_import": ("GET", "/v1/imports/{id}"),
     "get_run": ("GET", "/v1/runs/{id}"),
@@ -1803,7 +1737,6 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "list_base_models": ("GET", "/v1/base-models"),
     "list_dataset_records": ("GET", "/v1/datasets/{name}/records"),
     "list_datasets": ("GET", "/v1/datasets"),
-    "list_deployments": ("GET", "/v1/deployments"),
     "list_eval_failures": ("GET", "/v1/evals/{id}/failures"),
     "list_eval_outputs": ("GET", "/v1/evals/{id}/outputs"),
     "list_eval_results": ("GET", "/v1/evals/{id}/results"),
@@ -1821,12 +1754,9 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "post_eval_scores": ("POST", "/v1/evals/{id}/scores"),
     "promote_checkpoint": ("POST", "/v1/checkpoints/{id}/promote"),
     "push_dataset_records": ("POST", "/v1/datasets/{name}/records"),
-    "record_feedback": ("POST", "/v1/feedback"),
     "render_dataset": ("POST", "/v1/datasets/{name}/render"),
     "resume_run": ("POST", "/v1/runs/{id}/resume"),
     "revoke_api_key": ("DELETE", "/v1/keys/{id}"),
-    "rollback_deployment": ("POST", "/v1/deployments/{name}/rollback"),
-    "route_request": ("POST", "/v1/route"),
     "score_dataset": ("POST", "/v1/datasets/{name}/score"),
     "set_secret": ("POST", "/v1/secrets"),
     "sync_source": ("POST", "/v1/sources/{id}/sync"),
@@ -1839,7 +1769,6 @@ LIST_API_KEYS_LIMIT_MAX = 200
 LIST_ARTIFACTS_LIMIT_MAX = 200
 LIST_DATASET_RECORDS_LIMIT_MAX = 1000
 LIST_DATASETS_LIMIT_MAX = 200
-LIST_DEPLOYMENTS_LIMIT_MAX = 200
 LIST_EVAL_FAILURES_LIMIT_MAX = 200
 LIST_EVAL_OUTPUTS_LIMIT_MAX = 200
 LIST_EVAL_RESULTS_LIMIT_MAX = 200
@@ -1872,6 +1801,10 @@ class GeneratedApiClient:
         """Create a scoped workspace API key (trainer worker keys are platform config, not keys)."""
         return cast("CreatedApiKey", self._t.request("POST", "/v1/keys", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
+    def create_artifact_import(self, body: CreateArtifactImportRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> ArtifactImport:
+        """Register uploaded files or a Hugging Face repo as an artifact (async import job)."""
+        return cast("ArtifactImport", self._t.request("POST", "/v1/artifact-imports", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
     def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
         """Create an empty dataset."""
         return cast("Dataset", self._t.request("POST", "/v1/datasets", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
@@ -1884,10 +1817,6 @@ class GeneratedApiClient:
         """Connect an observability provider to a dataset."""
         return cast("Source", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/sources", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EmbedResponse:
-        """Generate embeddings from a deployed embedding artifact."""
-        return cast("EmbedResponse", self._t.request("POST", "/v1/embeddings", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
     def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
         """Queue an evaluation across models on a pinned dataset version (executed by the server)."""
         return cast("EvalRun", self._t.request("POST", "/v1/evals", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
@@ -1897,8 +1826,12 @@ class GeneratedApiClient:
         return cast("Run", self._t.request("POST", "/v1/runs", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> UploadTicket:
-        """Get an upload URL for a file to import (PUT the bytes, then create an import)."""
+        """Get an upload URL for a file to import (PUT the bytes, then create a dataset or artifact import)."""
         return cast("UploadTicket", self._t.request("POST", "/v1/uploads", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
+    def delete_artifact(self, id: str, *, timeout: float | None = None) -> Any:
+        """Delete a released artifact and its bundle (409 artifact_pinned while a holder pins it)."""
+        return self._t.request("DELETE", f"/v1/artifacts/{quote_path_param(id, 'id')}", timeout=timeout)
 
     def delete_secret(self, name: str, *, timeout: float | None = None) -> Any:
         """Delete a secret (409 while a source uses it)."""
@@ -1907,10 +1840,6 @@ class GeneratedApiClient:
     def delete_source(self, id: str, *, timeout: float | None = None) -> Any:
         """Remove a source (its dataset and versions stay)."""
         return self._t.request("DELETE", f"/v1/sources/{quote_path_param(id, 'id')}", timeout=timeout)
-
-    def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
-        """Deploy or update an artifact under a stable model name."""
-        return cast("Deployment", self._t.request("POST", "/v1/deployments", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:
         """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 (streams `application/octet-stream`; read or close the response)."""
@@ -1924,13 +1853,13 @@ class GeneratedApiClient:
         """Get an artifact by id or name@latest."""
         return cast("Artifact", self._t.request("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}", timeout=timeout))
 
+    def get_artifact_import(self, id: str, *, timeout: float | None = None) -> ArtifactImport:
+        """Get an artifact import."""
+        return cast("ArtifactImport", self._t.request("GET", f"/v1/artifact-imports/{quote_path_param(id, 'id')}", timeout=timeout))
+
     def get_dataset(self, name: str, *, timeout: float | None = None) -> Dataset:
         """Get a dataset by name."""
         return cast("Dataset", self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}", timeout=timeout))
-
-    def get_deployment(self, name: str, *, timeout: float | None = None) -> DeploymentStatus:
-        """Get deployment status and feedback summary."""
-        return cast("DeploymentStatus", self._t.request("GET", f"/v1/deployments/{quote_path_param(name, 'name')}", timeout=timeout))
 
     def get_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
         """Get an evaluation run by ID."""
@@ -1975,10 +1904,6 @@ class GeneratedApiClient:
     def list_datasets(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDatasetsResponse:
         """List datasets (newest first)."""
         return cast("ListDatasetsResponse", self._t.request("GET", "/v1/datasets", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    def list_deployments(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDeploymentsResponse:
-        """List deployments."""
-        return cast("ListDeploymentsResponse", self._t.request("GET", "/v1/deployments", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
     def list_eval_failures(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, threshold: float | None = None, timeout: float | None = None) -> ListEvalFailuresResponse:
         """List failing task records from an evaluation run for mining."""
@@ -2056,10 +1981,6 @@ class GeneratedApiClient:
         """Append records as a new dataset version (creates the dataset if needed)."""
         return cast("Dataset", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
-    def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RecordFeedbackResponse:
-        """Record deduplicated outcome scores and gold corrections."""
-        return cast("RecordFeedbackResponse", self._t.request("POST", "/v1/feedback", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
     def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RenderDatasetResponse:
         """Preview chat-template rendering and loss masks (estimated token counts)."""
         return cast("RenderDatasetResponse", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
@@ -2071,14 +1992,6 @@ class GeneratedApiClient:
     def revoke_api_key(self, id: str, *, timeout: float | None = None) -> ApiKey:
         """Revoke a workspace API key."""
         return cast("ApiKey", self._t.request("DELETE", f"/v1/keys/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    def rollback_deployment(self, name: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
-        """Roll a deployment back to its previous artifact."""
-        return cast("Deployment", self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    def route_request(self, body: RouteRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RouteResponse:
-        """Ask a deployed model router which model to call."""
-        return cast("RouteResponse", self._t.request("POST", "/v1/route", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def score_dataset(self, name: str, body: ScoreDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
         """Score a dataset's records with a rubric (async; the scores become the next version)."""

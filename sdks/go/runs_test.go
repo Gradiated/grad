@@ -23,7 +23,7 @@ func runFixture(t *testing.T, status string) map[string]any {
 	return r
 }
 
-func TestRunsPlanCreateWaitDeploy(t *testing.T) {
+func TestRunsPlanCreateWait(t *testing.T) {
 	ctx := context.Background()
 	run := runFixture(t, "completed")
 	id := run["id"].(string)
@@ -38,7 +38,6 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 			jsonValue(200, map[string]any{"run_id": id, "status": "completed", "data": []any{}, "next_cursor": nil, "tail_cursor": "c6"}),
 		),
 		"GET /v1/artifacts/" + artifact["id"].(string): jsonValue(200, artifact),
-		"POST /v1/deployments":                         jsonBody(200, wire(t, "deployment.json")),
 	})
 	c, clk := f.client(grad.WithMaxRetries(0))
 	params := grad.RunParams{
@@ -107,13 +106,6 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 	want := []time.Duration{500 * time.Millisecond, 750 * time.Millisecond, 1125 * time.Millisecond}
 	if fmt.Sprint(sleeps) != fmt.Sprint(want) {
 		t.Fatalf("poll backoff %v", sleeps)
-	}
-	dep, err := got.Deploy(ctx, grad.WithDeploymentName("support"), grad.WithFallback("qwen/qwen3-32b"), grad.WithExploreRate(0))
-	if err != nil || dep.Name != "support-router" {
-		t.Fatalf("deploy %+v %v", dep, err)
-	}
-	if body := f.last("POST", "/v1/deployments").JSON(t); body["artifact"] != artifact["id"] || body["name"] != "support" || body["fallback"] != "qwen/qwen3-32b" || body["explore_rate"] != 0.0 {
-		t.Fatalf("deploy body %v", body)
 	}
 }
 
@@ -255,9 +247,6 @@ func TestRunListCancelResumeCheckpointsPromote(t *testing.T) {
 		t.Fatal("IsTerminal")
 	}
 	noArtifact := &grad.Run{}
-	if _, err := noArtifact.Deploy(ctx); err == nil {
-		t.Fatal("deploy without artifact")
-	}
 	if _, err := noArtifact.Download(ctx, t.TempDir()); err == nil {
 		t.Fatal("download without artifact")
 	}

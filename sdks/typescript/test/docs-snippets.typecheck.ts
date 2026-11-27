@@ -8,7 +8,7 @@ export const quickstart = async () => {
   await dataset.importFile("./support_traces.jsonl").wait();
 
   const run = await grad.runs.create({ dataset, name: "support-router", recipe: recipes.router() }).wait();
-  await run.deploy();
+  await run.download("./support-router");
 };
 
 export const explicitKey = () => new Grad({ apiKey: process.env.GRADIATED_API_KEY });
@@ -38,10 +38,13 @@ export const followMetrics = async () => {
   }
 };
 
-export const deployArtifact = async () => {
+// docs: artifacts.mdx "Upload or import an artifact"
+export const uploadArtifact = async () => {
   const grad = new Grad();
-  const artifact = await grad.artifacts.get("fast-diff-merge@2026-11-26-1");
-  await artifact.deploy();
+  const artifact = await grad.artifacts.upload("./my-lora", { base: "qwen/qwen3-8b" }).wait();
+  const imported = await grad.artifacts.fromHf("hf://acme/support-lora@main", { base: "qwen/qwen3-8b" }).wait();
+  console.log(artifact.id, artifact.provenance.source, imported.provenance.uri);
+  await artifact.delete();
 };
 
 export const evaluations = async () => {

@@ -79,6 +79,12 @@
     "tokens_total": 23,
     "total_steps": 1
   },
+  "provenance": {
+    "source": "run",
+    "run_id": "run_674bf5d2f414690236a912d9",
+    "uploader": null,
+    "uri": null
+  },
   "name": "support-sft",
   "recipe_kind": "sft",
   "run_id": "run_674bf5d2f414690236a912d9",

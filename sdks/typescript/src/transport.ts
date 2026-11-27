@@ -99,8 +99,6 @@ export class ConflictError extends APIError {}
 export class ValidationError extends APIError {}
 export class RateLimitError extends APIError {}
 export class ServerError extends APIError {}
-/** 501 `deploy_unavailable`: this server has no Cloud serving (self-hosted); download the artifact and serve it yourself. */
-export class DeployUnavailableError extends APIError {}
 /** 501 `inference_unavailable`: no inference endpoint is configured, so evals cannot generate outputs. */
 export class InferenceUnavailableError extends APIError {}
 
@@ -156,7 +154,6 @@ export const parseRetryAfterMs = (
 };
 
 const errorClassFor = (status: number, code: string): typeof APIError => {
-  if (code === "deploy_unavailable") return DeployUnavailableError;
   if (code === "inference_unavailable") return InferenceUnavailableError;
   if (status === 400) return BadRequestError;
   if (status === 401) return AuthenticationError;

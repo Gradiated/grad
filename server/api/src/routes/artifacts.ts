@@ -1,27 +1,39 @@
 import { createRoute, type OpenAPIHono, z } from "@hono/zod-openapi";
 
 import {
+  ArtifactImportSchema,
+  ArtifactPinSchema,
   ArtifactSchema,
+  CreateArtifactImportRequestSchema,
   pageOf,
   PageQuerySchema,
+  PinArtifactRequestSchema,
+  PinHolderSchema,
   SlugSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { notFound } from "../errors.js";
+import { idempotencyOf, replayAware } from "../idempotency.js";
+import { toPublicArtifact } from "../services/artifacts.js";
 import type { Services } from "../services/index.js";
-import { toPublicArtifact } from "../services/runs.js";
 import {
   defaultErrors,
   IdParamSchema,
   jsonResponse,
+  requireScope,
+  requireSecretUse,
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
 
+const jsonBody = <T extends z.ZodType>(schema: T) => ({
+  body: { required: true, content: { "application/json": { schema } } },
+});
+
 export const registerArtifactRoutes = (
   app: OpenAPIHono<AppEnv>,
   deps: AppDependencies,
-  _services: Services,
+  services: Services,
 ): void => {
   const tags = ["Artifacts"];
 
@@ -127,5 +139,141 @@ export const registerArtifactRoutes = (
         },
       });
     },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/v1/artifacts/{id}",
+      operationId: "deleteArtifact",
+      summary:
+        "Delete a released artifact and its bundle (409 artifact_pinned while a holder pins it)",
+      tags,
+      request: { params: IdParamSchema },
+      responses: {
+        204: { description: "Deleted." },
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      await services.artifacts.delete(
+        workspaceOf(c, "artifacts:write"),
+        c.req.valid("param").id,
+      );
+
+      return c.body(null, 204);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/artifacts/{id}/pins",
+      operationId: "pinArtifact",
+      summary:
+        "Pin an artifact for a holder (artifacts:pin): a pinned artifact is never deleted",
+      description:
+        "Gradiated Cloud pins the artifact a published model version references. Pinning again with the same holder returns the existing pin (200).",
+      tags,
+      "x-internal": true,
+      request: { params: IdParamSchema, ...jsonBody(PinArtifactRequestSchema) },
+      responses: {
+        200: jsonResponse(ArtifactPinSchema, "Existing pin."),
+        201: jsonResponse(ArtifactPinSchema, "Pinned."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const { workspaceId } = requireScope(c, "artifacts:pin");
+      const body = c.req.valid("json");
+      const { pin, created } = await services.artifacts.pin(
+        workspaceId,
+        c.req.valid("param").id,
+        body.holder,
+        body.reason,
+      );
+
+      return created ? c.json(pin, 201) : c.json(pin, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/v1/artifacts/{id}/pins/{holder}",
+      operationId: "unpinArtifact",
+      summary: "Remove a holder's pin (artifacts:pin)",
+      tags,
+      "x-internal": true,
+      request: {
+        params: IdParamSchema.extend({ holder: PinHolderSchema }),
+      },
+      responses: {
+        204: { description: "Unpinned." },
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const { workspaceId } = requireScope(c, "artifacts:pin");
+      const { id, holder } = c.req.valid("param");
+      await services.artifacts.unpin(workspaceId, id, holder);
+
+      return c.body(null, 204);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/artifact-imports",
+      operationId: "createArtifactImport",
+      summary:
+        "Register uploaded files or a Hugging Face repo as an artifact (async import job)",
+      description:
+        "An import worker validates the files against docs/ARTIFACT_FORMATS.md and the base model's config.json, bundles them as grad.artifact/1 and releases them as name@YYYY-MM-DD-n. A validation failure fails the import with error_code invalid_artifact and an error that names the file.",
+      tags,
+      request: jsonBody(CreateArtifactImportRequestSchema),
+      responses: {
+        202: jsonResponse(ArtifactImportSchema, "Queued import."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "artifacts:write");
+      const body = c.req.valid("json");
+      requireSecretUse(c, [
+        body.source.kind === "hf" ? body.source.secret : undefined,
+      ]);
+      const created = await services.artifactImports.create(
+        principal,
+        body,
+        await idempotencyOf(c),
+      );
+
+      return c.json(replayAware(c, created), 202);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/artifact-imports/{id}",
+      operationId: "getArtifactImport",
+      summary: "Get an artifact import",
+      tags,
+      request: { params: IdParamSchema },
+      responses: {
+        200: jsonResponse(ArtifactImportSchema, "Artifact import."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) =>
+      c.json(
+        await services.artifactImports.get(
+          workspaceOf(c, "artifacts:read"),
+          c.req.valid("param").id,
+        ),
+        200,
+      ),
   );
 };

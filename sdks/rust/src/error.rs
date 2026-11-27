@@ -13,14 +13,14 @@ use std::time::Duration;
 
 #[cfg(test)]
 use crate::models::RunStatus;
-use crate::models::{EvalRun, ImportJob, Run};
+use crate::models::{ArtifactImport, EvalRun, ImportJob, Run};
 
 /// Details of an HTTP error response from grad-server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiErrorBody {
     /// HTTP status code.
     pub status: u16,
-    /// Machine-readable problem code (`run_not_found`, `deploy_unavailable`, ...).
+    /// Machine-readable problem code (`run_not_found`, `artifact_pinned`, ...).
     pub code: String,
     /// Short problem title.
     pub title: String,
@@ -97,8 +97,6 @@ pub enum Error {
     Validation(Box<ApiErrorBody>),
     /// 429: rate limited (already retried with backoff).
     RateLimit(Box<ApiErrorBody>),
-    /// 501 `deploy_unavailable`: hosted serving is not configured on this server.
-    DeployUnavailable(Box<ApiErrorBody>),
     /// 501 `inference_unavailable`: no inference endpoint is configured for evals.
     InferenceUnavailable(Box<ApiErrorBody>),
     /// Any other 501: a capability this server has not configured
@@ -148,6 +146,10 @@ pub enum Error {
     EvalFailed(Box<EvalRun>),
     /// A dataset import job failed.
     ImportFailed(Box<ImportJob>),
+    /// An artifact upload or HF import failed: `code()` is `invalid_artifact`
+    /// (`status()` 422) when the files break the format spec or don't fit the
+    /// base model, and the message names the file.
+    ArtifactImportFailed(Box<ArtifactImport>),
     /// `wait` gave up before the resource reached a terminal state.
     WaitTimeout {
         what: String,
@@ -182,7 +184,6 @@ impl Error {
             | Error::Conflict(b)
             | Error::Validation(b)
             | Error::RateLimit(b)
-            | Error::DeployUnavailable(b)
             | Error::InferenceUnavailable(b)
             | Error::FeatureUnavailable(b)
             | Error::Server(b)
@@ -193,7 +194,14 @@ impl Error {
 
     /// HTTP status, or 0 when no response was received.
     pub fn status(&self) -> u16 {
-        self.api().map(|b| b.status).unwrap_or(0)
+        match self {
+            Error::ArtifactImportFailed(job)
+                if job.error_code.as_deref() == Some("invalid_artifact") =>
+            {
+                422
+            }
+            _ => self.api().map(|b| b.status).unwrap_or(0),
+        }
     }
 
     /// Machine-readable error code.
@@ -211,6 +219,10 @@ impl Error {
             Error::RunFailed(run) => format!("run_{}", run.status.as_str()),
             Error::EvalFailed(ev) => format!("eval_{}", ev.status.as_str()),
             Error::ImportFailed(_) => "import_failed".into(),
+            Error::ArtifactImportFailed(job) => job
+                .error_code
+                .clone()
+                .unwrap_or_else(|| "artifact_import_failed".into()),
             Error::WaitTimeout { .. } => "wait_timeout".into(),
             Error::PaginationLoop { .. } => "pagination_loop".into(),
             Error::PaginationLimit { .. } => "pagination_limit".into(),
@@ -247,7 +259,6 @@ impl Error {
     pub(crate) fn from_status(body: ApiErrorBody) -> Self {
         let body = Box::new(body);
         match (body.status, body.code.as_str()) {
-            (_, "deploy_unavailable") => Error::DeployUnavailable(body),
             (_, "inference_unavailable") => Error::InferenceUnavailable(body),
             (401, _) => Error::Authentication(body),
             (403, _) => Error::PermissionDenied(body),
@@ -271,7 +282,6 @@ impl fmt::Display for Error {
             | Error::Conflict(b)
             | Error::Validation(b)
             | Error::RateLimit(b)
-            | Error::DeployUnavailable(b)
             | Error::InferenceUnavailable(b)
             | Error::FeatureUnavailable(b)
             | Error::Server(b)
@@ -341,6 +351,13 @@ impl fmt::Display for Error {
             }
             Error::ImportFailed(job) => {
                 write!(f, "import {} into dataset {} failed", job.id, job.dataset)?;
+                if let Some(err) = &job.error {
+                    write!(f, ": {}", err)?;
+                }
+                Ok(())
+            }
+            Error::ArtifactImportFailed(job) => {
+                write!(f, "artifact import {} ({}) failed", job.id, job.name)?;
                 if let Some(err) = &job.error {
                     write!(f, ": {}", err)?;
                 }
@@ -429,7 +446,6 @@ mod tests {
             (413, "payload_too_large", "payload_too_large"),
             (429, "rate_limited", "rate_limited"),
             (429, "queue_limit", "queue_limit"),
-            (501, "deploy_unavailable", "deploy_unavailable"),
             (501, "inference_unavailable", "inference_unavailable"),
             (501, "secrets_unavailable", "secrets_unavailable"),
             (502, "x", "x"),

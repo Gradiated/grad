@@ -14,6 +14,7 @@ const OPS = [
   "head",
   "listOlder",
   "delete",
+  "copy",
   "presignUpload",
   "presignDownload",
 ] as const;

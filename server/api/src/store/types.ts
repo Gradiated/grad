@@ -3,6 +3,8 @@ import type {
   CheckpointEvalResult,
   ApiKeyScope,
   Artifact,
+  ArtifactPin,
+  ArtifactProvenance,
   ArtifactFormat,
   ChatMessage,
   Checkpoint,
@@ -462,6 +464,25 @@ interface JobCreate {
 
 // --- Imports (a job and its payload) -------------------------------------------
 
+/** An artifact import's own fields (`payload.artifact`). */
+export interface ArtifactImportPayload {
+  name: string;
+  base_model: string;
+  format: ArtifactFormat;
+  source:
+    | { kind: "upload"; upload_id: string; size_bytes: number }
+    | {
+        kind: "hf";
+        repo: string;
+        revision: string | null;
+        secret: string | null;
+      };
+  /** Set at create (run/upload/import); an HF import's `uri` once pinned. */
+  provenance: ArtifactProvenance;
+  artifact_id: string | null;
+  error_code: string | null;
+}
+
 /** The fields an import keeps in its job's payload. */
 export interface ImportPayload {
   dataset_id: string;
@@ -474,6 +495,8 @@ export interface ImportPayload {
   detected_scores: string[];
   drop_reasons: string[];
   dataset_version: number | null;
+  /** Set for artifact imports (their dataset fields are empty). */
+  artifact: ArtifactImportPayload | null;
 }
 
 export type ImportJobRecord = JobFields<ImportStatus> & ImportPayload;
@@ -490,6 +513,13 @@ export interface ImportJobRepository {
       uploadKey: string | null;
     },
   ): Promise<ImportJobRecord>;
+  /** An import job that writes an artifact instead of a dataset version. */
+  createArtifactImport(
+    input: JobCreate & {
+      artifact: ArtifactImportPayload;
+      uploadKey: string | null;
+    },
+  ): Promise<ImportJobRecord>;
   get(workspaceId: string, id: string): Promise<ImportJobRecord | null>;
   getById(id: string): Promise<ImportJobRecord | null>;
   /** The import of the uploaded file `sha256` into `datasetId`, if any. */
@@ -497,6 +527,7 @@ export interface ImportJobRepository {
     datasetId: string,
     sha256: string,
   ): Promise<ImportJobRecord | null>;
+  /** Dataset imports only (artifact imports are left out). */
   list(workspaceId: string, page: PageRequest): Promise<Page<ImportJobRecord>>;
   update(
     id: string,
@@ -660,6 +691,33 @@ export interface ArtifactRepository {
   }): Promise<ArtifactRecord>;
   /** `reference` is a release id or `name@latest`. */
   get(workspaceId: string, reference: string): Promise<ArtifactRecord | null>;
+  /**
+   * Pins a release for `holder`; a repeat keeps the first pin (`created`
+   * false). Null when the release doesn't exist.
+   */
+  pin(input: {
+    workspaceId: string;
+    artifactId: string;
+    holder: string;
+    reason: string;
+  }): Promise<{ pin: ArtifactPin; created: boolean } | null>;
+  /** False when `holder` held no pin on it. */
+  unpin(
+    workspaceId: string,
+    artifactId: string,
+    holder: string,
+  ): Promise<boolean>;
+  /** A release's pins, oldest first. */
+  pins(workspaceId: string, artifactId: string): Promise<ArtifactPin[]>;
+  /**
+   * Deletes an unpinned release (and clears its run's artifact_id). Returns
+   * null when it doesn't exist, its pins when it is pinned (nothing is
+   * deleted), else its storage key when no other row references the object.
+   */
+  deleteRelease(
+    workspaceId: string,
+    id: string,
+  ): Promise<null | { pins: ArtifactPin[]; orphanKey: string | null }>;
   list(
     workspaceId: string,
     filter: { name?: string | undefined },

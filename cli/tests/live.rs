@@ -2,8 +2,8 @@
 //!
 //! Skips cleanly when `server/api/node_modules/.bin/tsx` is missing (run
 //! `pnpm -C server/api install --frozen-lockfile`) or `GRAD_SKIP_LIVE=1` is set.
-//! Hosted serving is Cloud-only, so the self-hosted test only checks that
-//! `grad deploy` exits 6 with the download hint. The torch test also
+//! The torch test also uploads the harness's tiny LoRAs (`grad artifacts
+//! upload`), valid and invalid, and plans continued training from one. It
 //! needs `GRAD_TRAINER_PYTHON` pointing at a Python with the pinned torch stack
 //! (for example /root/grad-work/venv-trainer/bin/python); it skips otherwise.
 
@@ -406,11 +406,15 @@ fn live_self_hosted_quickstart() {
     ok(&o);
     assert!(home.dir.join("support-sft/manifest.json").is_file());
 
-    // Self-hosted: no hosted serving, exit 6 with the download hint.
-    let o = grad(&home, &["--json", "deploy", "support-sft@latest"], &[]);
-    assert_eq!(o.code, 6, "{}", o.stderr);
-    let e: Value = serde_json::from_str(&o.stderr).unwrap();
-    assert_eq!(e["error"]["code"], "deploy_unavailable");
+    // A trained artifact records its run.
+    let o = grad(
+        &home,
+        &["--json", "artifacts", "inspect", "support-sft@latest"],
+        &[],
+    );
+    ok(&o);
+    let a: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert_eq!(a["data"]["provenance"]["source"], "run");
 
     // grad eval against the harness's OpenAI-compatible inference fixture.
     std::fs::write(
@@ -849,6 +853,71 @@ fn live_router_quickstart_with_torch_worker() {
         .dir
         .join("support-router/adapter_model.safetensors")
         .is_file());
+
+    // docs: artifacts.mdx "Upload or import an artifact": the harness's tiny LoRAs.
+    let lora = stack.info["tiny_lora"].as_str().unwrap();
+    let o = grad(
+        &home,
+        &[
+            "--json",
+            "artifacts",
+            "upload",
+            lora,
+            "--base",
+            "test/tiny-qwen3",
+            "--name",
+            "uploaded-lora",
+        ],
+        &[],
+    );
+    ok(&o);
+    let up: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert_eq!(up["data"]["provenance"]["source"], "upload");
+    let uploaded = up["data"]["id"].as_str().unwrap().to_string();
+    let bad = stack.info["tiny_lora_invalid"].as_str().unwrap();
+    let o = grad(
+        &home,
+        &["artifacts", "upload", bad, "--base", "test/tiny-qwen3"],
+        &[],
+    );
+    assert_eq!(o.code, 5, "{}", o.stderr);
+    assert!(
+        o.stderr
+            .contains("adapter_config.json: base_model_name_or_path is 'Qwen/Qwen3-8B'"),
+        "{}",
+        o.stderr
+    );
+    std::fs::write(
+        home.dir.join("prefs.jsonl"),
+        (0..12)
+            .map(|i| format!("{}\n", json!({"prompt": format!("Count users {i}"), "chosen": "SELECT count(*) FROM users;", "rejected": "no idea"})))
+            .collect::<String>(),
+    )
+    .unwrap();
+    ok(&grad(
+        &home,
+        &["import", "./prefs.jsonl", "--dataset", "upload-prefs"],
+        &[],
+    ));
+    let o = grad(
+        &home,
+        &[
+            "train",
+            "--dataset",
+            "upload-prefs",
+            "--name",
+            "dpo-from-upload",
+            "--recipe",
+            "dpo",
+            "--model",
+            &uploaded,
+            "--dry-run",
+        ],
+        &[],
+    );
+    ok(&o);
+    assert!(o.stdout.contains(&uploaded), "{}", o.stdout);
+    ok(&grad(&home, &["artifacts", "delete", &uploaded], &[]));
 
     // docs: recipes/distillation.mdx (YAML) and recipes/reward-models.mdx (flags), tiny models.
     let prompts: String = (0..12)

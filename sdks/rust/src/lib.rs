@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Resources hang off [`Client`]: [`Client::datasets`], [`Client::runs`],
-//! [`Client::artifacts`], [`Client::deployments`], [`Client::evals`], ...
+//! [`Client::artifacts`], [`Client::evals`], ...
 //! Every call returns [`Result`] with a typed [`Error`]. The request and
 //! response models are generated from `spec/openapi.yaml` (`generated`).
 //!
@@ -334,9 +334,6 @@ impl Client {
     }
     pub fn artifacts(&self) -> Artifacts<'_> {
         Artifacts { c: self }
-    }
-    pub fn deployments(&self) -> Deployments<'_> {
-        Deployments { c: self }
     }
     pub fn evals(&self) -> Evals<'_> {
         Evals { c: self }

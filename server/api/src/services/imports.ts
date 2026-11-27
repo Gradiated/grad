@@ -3,6 +3,8 @@ import type { z } from "@hono/zod-openapi";
 import type { AuthPrincipal } from "../adapters.js";
 import { benchmarkMetadata, benchmarkSource } from "../benchmarks.js";
 import type {
+  Artifact,
+  ArtifactImport,
   CreateImportRequestSchema,
   ImportJob,
   TrainerJob,
@@ -14,7 +16,7 @@ import type {
   WorkerUploadRequestSchema,
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
-import { errorMessage, notFound } from "../errors.js";
+import { conflict, errorMessage, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { HF_HOST } from "../secret-hosts.js";
 import type {
@@ -25,6 +27,11 @@ import type {
   Page,
   PageRequest,
 } from "../store/types.js";
+import {
+  toPublicArtifactImport,
+  type ArtifactImportService,
+} from "./artifact-imports.js";
+import { toPublicArtifact } from "./artifacts.js";
 import type { DatasetService } from "./datasets.js";
 import {
   DEFAULT_MAX_PREEMPTIONS,
@@ -44,7 +51,12 @@ import {
   type SecretUse,
   type SourceService,
 } from "./sources.js";
-import { jobBlobKey, stagingKey, type UploadService } from "./uploads.js";
+import {
+  artifactKey,
+  jobBlobKey,
+  stagingKey,
+  type UploadService,
+} from "./uploads.js";
 import { metricKind, metrics } from "../telemetry/metrics.js";
 
 /** Records a worker posted (counted once per batch), and a sync's split. */
@@ -109,11 +121,19 @@ export interface ImportService {
     id: string,
     body: PartBody,
   ): Promise<{ staged: boolean }>;
+  /** A dataset import's final state, or an artifact import's and its artifact. */
   complete(
     principal: AuthPrincipal,
     id: string,
     body: CompleteBody,
-  ): Promise<ImportJob>;
+  ): Promise<
+    | { import: ImportJob; artifactImport: null; artifact: null }
+    | {
+        import: null;
+        artifactImport: ArtifactImport;
+        artifact: Artifact | null;
+      }
+  >;
   /** The import kind's hooks in the job queue. */
   handler: JobKindHandler;
 }
@@ -124,6 +144,7 @@ export const createImportService = (
     uploads: UploadService;
     sources: SourceService;
     datasets: Pick<DatasetService, "settleCount">;
+    artifactImports: ArtifactImportService;
     queue: () => JobQueue;
   },
 ): ImportService => {
@@ -214,8 +235,9 @@ export const createImportService = (
             fenceOf(row, ["running"]),
           );
       if (!job) return null;
-      let source: Record<string, unknown>;
+      let source: Record<string, unknown> = {};
       try {
+        if (job.artifact) return await collaborators.artifactImports.claim(job);
         source = await claimSource(job);
       } catch (error) {
         // Unbuildable (source removed, secret gone): fail it, claim the next.
@@ -342,7 +364,7 @@ export const createImportService = (
 
     get: async (workspaceId, id) => {
       const job = await store.imports.get(workspaceId, id);
-      if (!job) throw notFound("import", id);
+      if (!job || job.artifact) throw notFound("import", id);
 
       return toPublicImport(job);
     },
@@ -361,9 +383,22 @@ export const createImportService = (
         .queue()
         .loadLeased(principal, id, body.worker_id, body.attempt);
       const job = await load(id);
+      // An artifact import uploads its bundle to the released-artifacts
+      // prefix; a dataset import uploads gzip JSONL parts.
+      const wants = job.artifact ? "artifact" : "records";
+      if (body.kind !== wants) {
+        throw conflict(
+          "wrong_job_kind",
+          job.artifact
+            ? "Artifact imports upload their bundle (kind artifact)."
+            : "Dataset imports upload records parts (kind records).",
+        );
+      }
 
       return uploads.ticket(
-        jobBlobKey(job, job.attempt, body.sha256),
+        job.artifact
+          ? artifactKey(job.workspace_id, body.sha256)
+          : jobBlobKey(job, job.attempt, body.sha256),
         body.size_bytes,
       );
     },
@@ -373,6 +408,9 @@ export const createImportService = (
         .queue()
         .loadLeased(principal, id, body.worker_id, body.attempt);
       const job = await load(id);
+      if (job.artifact) {
+        throw conflict("wrong_job_kind", "Artifact imports stage no parts.");
+      }
       const blob = await uploads.commit(body.upload_id, (sha) =>
         jobBlobKey(job, job.attempt, sha),
       );
@@ -423,10 +461,35 @@ export const createImportService = (
     complete: async (principal, id, body) => {
       const row = await collaborators.queue().loadForWorker(principal, id);
       const job = await load(row.id);
+      const done = async (
+        final: ImportJobRecord,
+        artifact?: Artifact | null,
+      ) =>
+        final.artifact
+          ? {
+              import: null,
+              artifactImport: toPublicArtifactImport({
+                ...final,
+                artifact: final.artifact,
+              }),
+              artifact:
+                artifact !== undefined
+                  ? artifact
+                  : final.artifact.artifact_id
+                    ? await store.artifacts
+                        .get(final.workspace_id, final.artifact.artifact_id)
+                        .then((a) => (a ? toPublicArtifact(a) : null))
+                    : null,
+            }
+          : {
+              import: toPublicImport(final),
+              artifactImport: null,
+              artifact: null,
+            };
       if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
         // Idempotent retry of a completion that already committed.
         if (closedBy(principal, job, body.attempt)) {
-          return toPublicImport(job);
+          return done(job);
         }
         throw leaseLost(id);
       }
@@ -436,7 +499,7 @@ export const createImportService = (
         observeInterruption(job, body.reason ?? "worker_error");
       }
       if (body.status !== "completed") {
-        return toPublicImport(
+        return done(
           await close(
             job,
             body.status === "abandoned"
@@ -457,9 +520,24 @@ export const createImportService = (
                   error:
                     body.error ??
                     `The import worker reported '${body.status}'.`,
+                  ...(job.artifact
+                    ? {
+                        artifact: {
+                          ...job.artifact,
+                          error_code: body.error_code ?? null,
+                        },
+                      }
+                    : {}),
                 },
           ),
         );
+      }
+      if (job.artifact) {
+        const published = await collaborators.artifactImports.publish(
+          job,
+          body,
+        );
+        return done(published.job, published.artifact);
       }
 
       const summary = body.import_summary ?? {
@@ -546,7 +624,7 @@ export const createImportService = (
           .catch(() => undefined);
       }
 
-      return toPublicImport(completed);
+      return done(completed);
     },
   };
 };

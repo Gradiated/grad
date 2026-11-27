@@ -1,9 +1,13 @@
 /* Node-only file helpers. Loaded with dynamic import so the browser build never touches node:fs. */
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, openAsBlob } from "node:fs";
-import { mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { createReadStream, createWriteStream, openAsBlob } from "node:fs";
+import { lstat, mkdir, mkdtemp, open, readdir, rename, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 
 import { ChecksumMismatchError, GradUsageError } from "../errors.js";
 import type { RawResponse } from "../transport.js";
@@ -34,6 +38,89 @@ export const describeFile = async (file: string): Promise<LocalFile> => {
     sha256: await sha256File(file),
     blob: await openAsBlob(file),
   };
+};
+
+const ARCHIVE = /\.(tar\.gz|tgz|tar)$/;
+const BLOCK = 512;
+
+/** A ustar header for a regular file (`name` up to 255 bytes, split into prefix/name). */
+const tarHeader = (name: string, size: number): Buffer => {
+  const header = Buffer.alloc(BLOCK);
+  let prefix = "";
+  let base = name;
+  if (Buffer.byteLength(base) > 100) {
+    const cut = name.lastIndexOf("/", 155);
+    prefix = cut > 0 ? name.slice(0, cut) : "";
+    base = cut > 0 ? name.slice(cut + 1) : name;
+    if (!prefix || Buffer.byteLength(base) > 100 || Buffer.byteLength(prefix) > 155) {
+      throw new GradUsageError(`Path ${name} is too long to upload (255 bytes at most).`, "path_too_long");
+    }
+  }
+  const field = (value: string, offset: number, width: number) => header.write(value, offset, width, "utf8");
+  field(base, 0, 100);
+  field("0000644\0", 100, 8);
+  field("0000000\0", 108, 8);
+  field("0000000\0", 116, 8);
+  field(`${size.toString(8).padStart(11, "0")}\0`, 124, 12);
+  field("00000000000\0", 136, 12);
+  field("        ", 148, 8);
+  field("0", 156, 1);
+  field("ustar\0", 257, 6);
+  field("00", 263, 2);
+  field(prefix, 345, 155);
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  field(`${sum.toString(8).padStart(6, "0")}\0 `, 148, 8);
+  return header;
+};
+
+const listFiles = async (root: string, dir = root): Promise<string[]> => {
+  const out: string[] = [];
+  for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new GradUsageError(`Refusing to upload symlink ${full}; copy the file instead.`, "symlink");
+    if (entry.isDirectory()) out.push(...(await listFiles(root, full)));
+    else if (entry.isFile()) out.push(path.relative(root, full).split(path.sep).join("/"));
+  }
+  return out;
+};
+
+async function* tarStream(root: string, names: string[]): AsyncGenerator<Buffer> {
+  for (const name of names) {
+    const file = path.join(root, ...name.split("/"));
+    const { size } = await stat(file);
+    yield tarHeader(name, size);
+    for await (const chunk of createReadStream(file)) yield chunk as Buffer;
+    if (size % BLOCK) yield Buffer.alloc(BLOCK - (size % BLOCK));
+  }
+  yield Buffer.alloc(BLOCK * 2);
+}
+
+/**
+ * The file `artifacts.upload` sends for `target`: a `.tar`/`.tar.gz` as is, else a gzip tar
+ * of the directory's regular files (sorted, relative paths) or of the single file.
+ */
+export const packArtifact = async (target: string): Promise<{ path: string; cleanup: () => Promise<void> }> => {
+  const info = await lstat(target).catch(() => {
+    throw new GradUsageError(`No such file or directory: ${target}`, "file_not_found");
+  });
+  if (info.isFile() && ARCHIVE.test(target)) return { path: target, cleanup: async () => undefined };
+  let root: string;
+  let names: string[];
+  if (info.isDirectory()) {
+    root = target;
+    names = await listFiles(target);
+    if (names.length === 0) throw new GradUsageError(`${target} has no files to upload.`, "empty_upload");
+  } else if (info.isFile()) {
+    root = path.dirname(target);
+    names = [path.basename(target)];
+  } else {
+    throw new GradUsageError(`${target} is not a file or directory.`, "file_not_found");
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), "grad-upload-"));
+  const out = path.join(dir, "upload.tar.gz");
+  await pipeline(Readable.from(tarStream(root, names)), createGzip(), createWriteStream(out));
+  return { path: out, cleanup: () => rm(dir, { recursive: true, force: true }) };
 };
 
 export const readTextFile = async (file: string): Promise<string> => {

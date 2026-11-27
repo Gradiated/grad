@@ -5,9 +5,9 @@ Every exception the SDK raises derives from :class:`GradError`. HTTP failures ar
 problem+json ``code``), so callers can catch exactly what they handle::
 
     try:
-        client.deploy("sql-helper@latest")
-    except grad.DeployUnavailableError as exc:
-        print(exc.detail)  # the server's hint: download the artifact and serve it on vLLM
+        client.evals.create(...)
+    except grad.InferenceUnavailableError as exc:
+        print(exc.detail)  # the server's hint: set GRAD_INFERENCE_BASE_URL
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ __all__ = [
     "AuthenticationError",
     "BadRequestError",
     "ChecksumMismatchError",
+    "ArtifactImportFailedError",
     "ConflictError",
-    "DeployUnavailableError",
     "EvalFailedError",
     "FeatureUnavailableError",
     "FieldError",
@@ -181,6 +181,19 @@ class ImportFailedError(JobFailedError):
         return self.resource
 
 
+class ArtifactImportFailedError(JobFailedError):
+    """``artifacts.upload`` / ``artifacts.from_hf`` failed. ``job`` is the final :class:`grad.ArtifactImport`.
+
+    ``code`` is ``invalid_artifact`` (``status`` 422) when the files break the format spec or
+    don't fit the base model; ``error`` then names the file and the problem.
+    """
+
+    @property
+    def job(self) -> Any:
+        """The failed artifact import."""
+        return self.resource
+
+
 class EvalFailedError(JobFailedError):
     """An evaluation failed. ``eval`` is the final :class:`grad.Eval`."""
 
@@ -330,13 +343,6 @@ class FeatureUnavailableError(GradAPIError):
     """501: the server does not offer this capability in its current configuration."""
 
 
-class DeployUnavailableError(FeatureUnavailableError):
-    """501 ``deploy_unavailable``: hosted serving is disabled (self-hosted servers).
-
-    ``detail`` explains how to download the artifact and serve it on vLLM or SGLang.
-    """
-
-
 class InferenceUnavailableError(FeatureUnavailableError):
     """501 ``inference_unavailable``: no inference endpoint is configured for evals."""
 
@@ -358,7 +364,6 @@ _STATUS_CLASSES: dict[int, type[GradAPIError]] = {
 }
 
 _CODE_CLASSES: dict[str, type[GradAPIError]] = {
-    "deploy_unavailable": DeployUnavailableError,
     "inference_unavailable": InferenceUnavailableError,
 }
 

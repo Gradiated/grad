@@ -646,12 +646,17 @@ export const createJobBackedRepository = <R extends JobFields<string>>(
           params,
         )
       ).map(spec.map),
-    list: (workspaceId: string, page: PageRequest): Promise<Page<R>> => {
+    /** `where`: an extra condition (constant SQL) on the listed rows. */
+    list: (
+      workspaceId: string,
+      page: PageRequest,
+      where?: string,
+    ): Promise<Page<R>> => {
       const params = new Params();
 
       return listNewest(db, {
         table: from,
-        where: `kind = '${spec.kind}' AND workspace_id = ${params.add(workspaceId)}`,
+        where: `kind = '${spec.kind}' AND workspace_id = ${params.add(workspaceId)}${where ? ` AND ${where}` : ""}`,
         params,
         page,
         map: spec.map,

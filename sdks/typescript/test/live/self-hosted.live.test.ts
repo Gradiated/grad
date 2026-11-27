@@ -8,7 +8,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   AuthenticationError,
   ConflictError,
-  DeployUnavailableError,
   Grad,
   PermissionDeniedError,
   Rubric,
@@ -55,7 +54,7 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
     home?.cleanup();
   });
 
-  it("quickstart: create, importFile().wait(), plan, train with .wait(), metrics, download, deploy refused", async () => {
+  it("quickstart: create, importFile().wait(), plan, train with .wait(), metrics, download, provenance", async () => {
     const traces = path.join(home.dir, "support_traces.jsonl");
     writeTraces(traces, 40);
 
@@ -94,11 +93,7 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(run.artifact.sha256);
     expect(result.sizeBytes).toBe(bytes.byteLength);
 
-    // Self-hosted servers have no hosted serving.
-    const refused = await run.deploy().catch((e: unknown) => e);
-    expect(refused).toBeInstanceOf(DeployUnavailableError);
-    expect((refused as DeployUnavailableError).status).toBe(501);
-    expect((refused as Error).message).toContain("vLLM or SGLang");
+    expect(run.artifact.provenance).toEqual({ source: "run", runId: run.id, uploader: null, uri: null });
 
     const latest = await grad.artifacts.get("support-sft@latest");
     expect(latest.id).toBe(run.artifact.id);

@@ -17,11 +17,11 @@
 //	if err != nil {
 //		log.Fatal(err)
 //	}
-//	_, _ = run.Deploy(ctx)
+//	_, _ = run.Download(ctx, "./support-router")
 //
 // Every error unwraps to *GradError (status, code, request id); match specific
 // cases with errors.As and types such as *NotFoundError, *ValidationError,
-// *RateLimitError, *DeployUnavailableError, *RunFailedError or
+// *RateLimitError, *RunFailedError, *ArtifactImportFailedError or
 // *ChecksumMismatchError. Idempotent requests are retried twice on 408, 429
 // and 5xx with jittered backoff honouring Retry-After; POSTs only on 429 or
 // when the connection never opened. Redirects that leave the API origin are

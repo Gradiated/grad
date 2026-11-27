@@ -104,9 +104,6 @@ type RateLimitError struct{ *APIError }
 // ServerError is a 5xx response.
 type ServerError struct{ *APIError }
 
-// DeployUnavailableError is a 501 deploy_unavailable response: this server cannot deploy or serve.
-type DeployUnavailableError struct{ *APIError }
-
 // InferenceUnavailableError is a 501 inference_unavailable response: no inference endpoint is configured.
 type InferenceUnavailableError struct{ *APIError }
 
@@ -118,7 +115,6 @@ func (e *ConflictError) Unwrap() error             { return e.APIError }
 func (e *ValidationError) Unwrap() error           { return e.APIError }
 func (e *RateLimitError) Unwrap() error            { return e.APIError }
 func (e *ServerError) Unwrap() error               { return e.APIError }
-func (e *DeployUnavailableError) Unwrap() error    { return e.APIError }
 func (e *InferenceUnavailableError) Unwrap() error { return e.APIError }
 
 // ConnectionError means no HTTP response was received (DNS, refused, reset, TLS).
@@ -270,8 +266,6 @@ func NewAPIError(status int, header http.Header, body []byte, method, rawURL str
 		base.FieldErrors = ParseFieldErrors(problem, detail)
 	}
 	switch {
-	case code == "deploy_unavailable":
-		return &DeployUnavailableError{base}
 	case code == "inference_unavailable":
 		return &InferenceUnavailableError{base}
 	case status == http.StatusBadRequest:

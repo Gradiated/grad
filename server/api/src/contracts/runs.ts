@@ -735,6 +735,27 @@ export const PromoteCheckpointRequestSchema = z
   })
   .openapi("PromoteCheckpointRequest");
 
+export const ArtifactProvenanceSchema = z
+  .object({
+    source: z.enum(["run", "upload", "import"]).openapi({
+      description:
+        "run: trained by a grad run; upload: files uploaded with `grad artifacts upload`; import: pulled from the Hugging Face Hub with `grad artifacts import`.",
+    }),
+    run_id: z.string().nullable().openapi({
+      description: "source=run: the run that trained it.",
+    }),
+    uploader: z.string().nullable().openapi({
+      description: "source=upload: the API key (principal) that uploaded it.",
+    }),
+    uri: z.string().nullable().openapi({
+      description:
+        "source=import: `hf://owner/name@<40-hex commit>`, the pinned revision it was imported from.",
+    }),
+  })
+  .openapi("ArtifactProvenance");
+
+export type ArtifactProvenance = z.infer<typeof ArtifactProvenanceSchema>;
+
 export const ArtifactSchema = z
   .object({
     id: z.string().min(1),
@@ -749,6 +770,7 @@ export const ArtifactSchema = z
     sha256: Sha256HexSchema,
     size_bytes: z.number().int().min(0),
     manifest: z.record(z.string(), z.unknown()),
+    provenance: ArtifactProvenanceSchema,
     eval_report: EvalReportSchema.nullable(),
     created_at: IsoTimestampSchema,
   })

@@ -1,14 +1,15 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiClient,
   Artifact,
+  ArtifactImportFailedError,
   ConflictError,
   Dataset,
-  DeployUnavailableError,
   Grad,
   GradError,
   GradUsageError,
@@ -16,6 +17,7 @@ import {
   Judge,
   NotFoundError,
   Paginator,
+  parseHfUri,
   Scorer,
   Trajectory,
   ValidationError,
@@ -372,7 +374,7 @@ describe("datasets and imports", () => {
   });
 });
 
-describe("artifacts and deployments", () => {
+describe("artifacts", () => {
   const artifactFixture = wire<{ id: string; name: string; version: string; sha256: string }>("artifact.json");
 
   it("gets and lists artifacts and maps 404", async () => {
@@ -393,34 +395,105 @@ describe("artifacts and deployments", () => {
     expect((e as NotFoundError).requestId).toMatch(/^req_/);
   });
 
-  it("deploys, rolls back, lists and inspects deployments", async () => {
+  const IMPORT = {
+    id: "imp_1",
+    workspace_id: "ws_e2e",
+    status: "queued",
+    name: "my-lora",
+    base_model: "test/tiny-qwen3",
+    format: "peft_lora",
+    source: { kind: "upload", upload_id: "a".repeat(64), repo: null, revision: null },
+    artifact_id: null,
+    error: null,
+    error_code: null,
+    attempt: 0,
+    created_at: "t",
+    updated_at: "t",
+  };
+
+  it("uploads a directory as a gzip tar and waits for the validated artifact", async () => {
+    const ticket = wire<{ url: string; upload_id: string }>("upload-ticket.json");
+    const ticketPath = new URL(ticket.url, BASE).pathname;
+    let sent: Buffer | undefined;
     const server = new FakeServer()
-      .on("POST", "/v1/deployments", json(wire("deployment.json")))
-      .on("GET", "/v1/deployments/support-router", json(wire("deployment-status.json")))
-      .on("GET", "/v1/deployments", json(wire("deployments-page.json")))
-      .on("POST", "/v1/deployments/support-router/rollback", json(wire("deployment.json")));
-    server.on("GET", `/v1/artifacts/${encodeURIComponent(artifactFixture.id)}`, json(artifactFixture));
+      .on("POST", "/v1/uploads", json(ticket, 201))
+      .on("PUT", ticketPath, async (call) => {
+        sent = Buffer.from(await (call.rawBody as Blob).arrayBuffer());
+        return new Response(null, { status: 200 });
+      })
+      .on("POST", "/v1/artifact-imports", json(IMPORT, 202))
+      .on(
+        "GET",
+        "/v1/artifact-imports/imp_1",
+        json({ ...IMPORT, status: "running" }),
+        json({ ...IMPORT, status: "completed", artifact_id: artifactFixture.id }),
+      )
+      .on("GET", `/v1/artifacts/${encodeURIComponent(artifactFixture.id)}`, json(artifactFixture));
     const { grad } = makeGrad(server);
-    const art = await grad.artifacts.get(artifactFixture.id);
-    const dep = await art.deploy({ name: "support-router", fallback: "qwen/qwen3-32b", exploreRate: 0.05 });
-    expect(dep.modelId).toBe("ws_e2e/support-router");
-    expect(server.lastBody("POST", "/v1/deployments")).toEqual({ artifact: artifactFixture.id, name: "support-router", fallback: "qwen/qwen3-32b", explore_rate: 0.05 });
-    await grad.deploy({ name: "support-sft", version: "2026-11-27-1" });
-    expect(server.lastBody("POST", "/v1/deployments")).toEqual({ artifact: "support-sft@2026-11-27-1" });
-    await grad.deployments.create({ id: "art_x" });
-    expect(server.lastBody("POST", "/v1/deployments")).toEqual({ artifact: "art_x" });
-    expect((await grad.deployments.get("support-router")).feedbackCount).toBe(2);
-    expect((await grad.deployments.list()).data[0]?.previousArtifactId).toBeNull();
-    expect((await grad.deployments.rollback("support-router")).status).toBe("active");
+    const dir = path.join(scratch(), "My LoRA");
+    mkdirSync(path.join(dir, "sub"), { recursive: true });
+    writeFileSync(path.join(dir, "adapter_config.json"), "{}");
+    writeFileSync(path.join(dir, "sub", "x.bin"), "xyz");
+
+    const pending = grad.artifacts.upload(dir, { base: "test/tiny-qwen3" });
+    const art = await pending.wait();
+    expect(art).toBeInstanceOf(Artifact);
+    expect(art.provenance.source).toBe("run");
+    expect(server.lastBody("POST", "/v1/uploads")).toMatchObject({ purpose: "artifact_import", filename: "upload.tar.gz" });
+    expect(server.lastBody("POST", "/v1/artifact-imports")).toEqual({
+      source: { kind: "upload", upload_id: ticket.upload_id },
+      base_model: "test/tiny-qwen3",
+      format: "peft_lora",
+      name: "my-lora",
+    });
+    expect(server.callsTo("POST", "/v1/artifact-imports")[0]?.headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/);
+    // A ustar archive of the regular files, at their relative paths.
+    const tar = gunzipSync(sent!);
+    const names: string[] = [];
+    for (let at = 0; at + 512 <= tar.length && tar[at] !== 0; ) {
+      const name = tar.subarray(at, at + 100).toString("utf8").replace(/\0.*$/s, "");
+      const size = parseInt(tar.subarray(at + 124, at + 135).toString("utf8"), 8);
+      names.push(name);
+      expect(tar.subarray(at + 257, at + 262).toString("utf8")).toBe("ustar");
+      at += 512 + Math.ceil(size / 512) * 512;
+    }
+    expect(names).toEqual(["adapter_config.json", "sub/x.bin"]);
+    await expect(grad.artifacts.upload(path.join(dir, "missing"), { base: "b" })).rejects.toThrow(/No such file/);
   });
 
-  it("raises DeployUnavailableError on self-hosted servers with the server's hint", async () => {
-    const server = new FakeServer().on("POST", "/v1/deployments", problemFixture("deploy-unavailable"));
+  it("throws ArtifactImportFailedError (invalid_artifact, 422) naming the file", async () => {
+    const failed = { ...IMPORT, status: "failed", error: "adapter_model.safetensors: tensor shape mismatch", error_code: "invalid_artifact" };
+    const server = new FakeServer().on("GET", "/v1/artifact-imports/imp_1", json(failed));
     const { grad } = makeGrad(server);
-    const e = await grad.deploy("support-sft@latest").catch((x: unknown) => x);
-    expect(e).toBeInstanceOf(DeployUnavailableError);
-    expect((e as Error).message).toContain("vLLM or SGLang");
-    expect((e as Error).message).toContain("POST http://grad.test/v1/deployments");
+    const job = await grad.artifacts.getImport("imp_1");
+    const e = await job.wait().catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ArtifactImportFailedError);
+    expect((e as ArtifactImportFailedError).status).toBe(422);
+    expect((e as ArtifactImportFailedError).code).toBe("invalid_artifact");
+    expect((e as Error).message).toContain("adapter_model.safetensors");
+    expect(JSON.parse(JSON.stringify(job)).errorCode).toBe("invalid_artifact");
+  });
+
+  it("imports from the Hub, parses hf:// URIs and deletes artifacts", async () => {
+    const server = new FakeServer()
+      .on("POST", "/v1/artifact-imports", json({ ...IMPORT, source: { kind: "hf", upload_id: null, repo: "acme/lora", revision: "main" } }, 202))
+      .on("DELETE", `/v1/artifacts/${encodeURIComponent(artifactFixture.id)}`, new Response(null, { status: 204 }))
+      .on("GET", `/v1/artifacts/${encodeURIComponent(artifactFixture.id)}`, json(artifactFixture));
+    const { grad } = makeGrad(server);
+    const job = await grad.artifacts.fromHf("hf://acme/lora@main", { base: "test/tiny-qwen3", secret: "hf-token" });
+    expect(job.source.repo).toBe("acme/lora");
+    expect(server.lastBody("POST", "/v1/artifact-imports")).toEqual({
+      source: { kind: "hf", repo: "acme/lora", revision: "main", secret: "hf-token" },
+      base_model: "test/tiny-qwen3",
+      format: "peft_lora",
+    });
+    await grad.artifacts.fromHf("acme/lora", { base: "b", revision: "v1", name: "x", format: "cartridge" });
+    expect(server.lastBody("POST", "/v1/artifact-imports")).toMatchObject({ source: { kind: "hf", repo: "acme/lora", revision: "v1" }, name: "x", format: "cartridge" });
+    expect(() => parseHfUri("hf://acme/lora@a", "b")).toThrow(/pins revision/);
+    expect(() => parseHfUri("hf://../x")).toThrow(/not a Hugging Face repo/);
+    await (await grad.artifacts.get(artifactFixture.id)).delete();
+    await grad.artifacts.delete({ name: artifactFixture.name, version: artifactFixture.version });
+    expect(server.callsTo("DELETE", `/v1/artifacts/${encodeURIComponent(artifactFixture.id)}`)).toHaveLength(2);
   });
 });
 

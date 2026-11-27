@@ -451,21 +451,19 @@ fn handler(r: &Recorded) -> Reply {
         ("GET", "/v1/artifacts/art_1") | ("GET", "/v1/artifacts/support-router%40latest") => {
             Reply::json(200, artifact_obj())
         }
-        ("POST", "/v1/deployments") => Reply::json(
-            200,
-            json!({"name": "support-router", "model_id": "ws/support-router", "active_artifact_id": "art_1", "previous_artifact_id": "art_0", "status": "active"}),
+        ("DELETE", "/v1/artifacts/support-router%40latest") => Reply::problem(
+            409,
+            "artifact_pinned",
+            "Artifact 'support-router@2026-11-26-1' is pinned by inference:mv_1 (acme/support v3).",
         ),
-        ("GET", "/v1/deployments") => Reply::json(
-            200,
-            json!({"data": [{"name": "support-router", "model_id": "ws/support-router", "active_artifact_id": "art_1", "status": "active"}]}),
+        ("DELETE", "/v1/artifacts/art_1") => Reply::bytes(204, vec![], vec![]),
+        ("POST", "/v1/artifact-imports") => Reply::json(
+            202,
+            json!({"id": "imp_9", "name": r.json()["name"].as_str().unwrap_or("support-lora"), "status": "queued"}),
         ),
-        ("GET", "/v1/deployments/support-router") => Reply::json(
+        ("GET", "/v1/artifact-imports/imp_9") => Reply::json(
             200,
-            json!({"deployment": {"name": "support-router", "model_id": "ws/support-router", "active_artifact_id": "art_1", "status": "active", "explore_rate": 0.05}, "feedback_count": 12, "average_score": 0.941}),
-        ),
-        ("POST", "/v1/deployments/support-router/rollback") => Reply::json(
-            200,
-            json!({"name": "support-router", "active_artifact_id": "art_0", "status": "active"}),
+            json!({"id": "imp_9", "name": "my-lora", "status": "completed", "artifact_id": "art_1"}),
         ),
         ("POST", "/v1/keys") => Reply::json(
             201,
@@ -559,7 +557,8 @@ fn help_documents_exit_codes_and_every_command_has_help() {
         vec!["datasets", "import", "hf"],
         vec!["runs", "inspect"],
         vec!["keys", "create"],
-        vec!["deploy"],
+        vec!["artifacts", "upload"],
+        vec!["artifacts", "import"],
         vec!["secrets"],
         vec!["sources"],
         vec!["ui"],
@@ -789,11 +788,6 @@ fn api_errors_map_to_exit_codes_and_json_envelopes() {
             "artifact_not_found",
             "Artifact 'missing@latest' not found.",
         ),
-        "/v1/deployments" => Reply::problem(
-            501,
-            "deploy_unavailable",
-            "Hosted serving is disabled on this self-hosted server.",
-        ),
         "/v1/evals" => Reply::problem(501, "inference_unavailable", "No inference endpoint."),
         "/v1/keys" => Reply::problem(403, "insufficient_scope", "This key lacks the admin scope."),
         "/v1/runs/plan" => Reply::problem(
@@ -831,13 +825,9 @@ fn api_errors_map_to_exit_codes_and_json_envelopes() {
         .unwrap()
         .contains("grad runs list"));
 
+    // Deploying is Gradiated Cloud's (its Models API), not a grad command.
     let r = run(sb.grad(u), &["deploy", "x@latest"]);
-    expect(&r, 6);
-    assert!(
-        r.stderr.contains("grad artifacts download"),
-        "hint names the alternative: {}",
-        r.stderr
-    );
+    expect(&r, 2);
     let r = run(sb.grad(u), &["eval", "--models", "a", "--dataset", "d"]);
     expect(&r, 6);
     assert!(r.stderr.contains("INFERENCE_BASE_URL"));
@@ -1142,7 +1132,6 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
         "! small eval split",
         "✓ Exported artifact support-router@2026-11-26-1",
         "Next: grad artifacts download support-router@2026-11-26-1 --output ./support-router",
-        "or: grad deploy support-router@2026-11-26-1   # Gradiated Cloud",
     ] {
         assert!(
             r.stdout.contains(needle),
@@ -2532,30 +2521,64 @@ fn artifacts_download_extracts_a_verified_peft_directory() {
 }
 
 #[test]
-fn deploy_rollback_and_keys() {
+fn artifact_upload_import_delete_and_keys() {
     let srv = api();
     let sb = Sandbox::new("serve");
     let u = Some(srv.url.as_str());
+    std::fs::create_dir_all(sb.path("My LoRA")).unwrap();
+    std::fs::write(sb.path("My LoRA/adapter_config.json"), "{}").unwrap();
     let r = run(
         sb.grad(u),
-        &["deploy", "support-router@latest", "--explore-rate", "0.05"],
+        &[
+            "artifacts",
+            "upload",
+            "My LoRA",
+            "--base",
+            "test/tiny-qwen3",
+        ],
     );
     expect(&r, 0);
-    assert!(r.stdout.contains("ws/support-router"));
+    assert!(r.stdout.contains("✓ Registered artifact"), "{}", r.stdout);
+    assert!(r.stdout.contains("source"), "{}", r.stdout);
     assert_eq!(
-        srv.last("POST", "/v1/deployments").unwrap().json(),
-        json!({"artifact": "support-router@latest", "explore_rate": 0.05})
+        srv.last("POST", "/v1/uploads").unwrap().json()["purpose"],
+        "artifact_import"
     );
-    let r = run(sb.grad(u), &["deploy", "x", "--explore-rate", "0.9"]);
+    assert_eq!(
+        srv.last("POST", "/v1/artifact-imports").unwrap().json(),
+        json!({"source": {"kind": "upload", "upload_id": "up_1"}, "base_model": "test/tiny-qwen3", "format": "peft_lora", "name": "my-lora"})
+    );
+    let r = run(
+        sb.grad(u),
+        &[
+            "--json",
+            "artifacts",
+            "import",
+            "hf://acme/lora@main",
+            "--base",
+            "test/tiny-qwen3",
+            "--no-wait",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["id"], "imp_9");
+    let r = run(
+        sb.grad(u),
+        &["artifacts", "import", "hf://../x", "--base", "b"],
+    );
     expect(&r, 2);
-    let r = run(sb.grad(u), &["deployments", "status", "support-router"]);
+    let r = run(sb.grad(u), &["artifacts", "delete", "art_1"]);
     expect(&r, 0);
-    assert!(r.stdout.contains("94.1%"), "{}", r.stdout);
-    let r = run(sb.grad(u), &["deployments", "list"]);
-    expect(&r, 0);
-    let r = run(sb.grad(u), &["deployments", "rollback", "support-router"]);
-    expect(&r, 0);
-    assert!(r.stdout.contains("art_0"));
+    let r = run(
+        sb.grad(u),
+        &["artifacts", "delete", "support-router@latest"],
+    );
+    expect(&r, 5);
+    assert!(
+        r.stderr.contains("pinned by inference:mv_1"),
+        "{}",
+        r.stderr
+    );
 
     let r = run(
         sb.grad(u),
@@ -3586,7 +3609,7 @@ fn norm(v: &Value) -> Value {
 
 /// The CLI sends tests/fixtures/wire/sdk-parity.json's requests: runs through a
 /// `grad train -f` run file (the request body is a valid run file), evals and
-/// deploys through flags, each with --idempotency-key when the fixture has one.
+/// artifact imports through flags, each with --idempotency-key when the fixture has one.
 #[test]
 fn parity_requests_match_the_shared_fixture() {
     let raw = std::fs::read_to_string(
@@ -3647,15 +3670,28 @@ fn parity_requests_match_the_shared_fixture() {
                 }
                 a
             }
-            "/v1/deployments" => vec![
-                "deploy".into(),
-                s("artifact"),
+            "/v1/artifact-imports" => vec![
+                "artifacts".into(),
+                "import".into(),
+                format!(
+                    "hf://{}@{}",
+                    body["source"]["repo"].as_str().unwrap(),
+                    body["source"]["revision"].as_str().unwrap()
+                ),
+                "--base".into(),
+                s("base_model"),
+                "--format".into(),
+                s("format"),
                 "--name".into(),
                 s("name"),
-                "--fallback".into(),
-                s("fallback"),
-                "--explore-rate".into(),
-                s("explore_rate"),
+                "--secret".into(),
+                body["source"]["secret"].as_str().unwrap().into(),
+                "--no-wait".into(),
+            ],
+            p if case["method"] == "DELETE" && p.starts_with("/v1/artifacts/") => vec![
+                "artifacts".into(),
+                "delete".into(),
+                p.trim_start_matches("/v1/artifacts/").into(),
             ],
             "/v1/datasets/support-logs/score" => {
                 std::fs::write(sb.path("rubric.yaml"), body["rubric"].to_string()).unwrap();
@@ -3841,7 +3877,7 @@ fn parity_requests_match_the_shared_fixture() {
         let r = run_stdin(sb.grad(Some(&srv.url)), &argv, &stdin);
         expect(&r, 0);
         let sent = srv
-            .last(case["method"].as_str().unwrap(), path)
+            .last(case["method"].as_str().unwrap(), &path.replace('@', "%40"))
             .unwrap_or_else(|| panic!("{}: nothing sent", name));
         let key = sent.header("idempotency-key").unwrap_or_default();
         if case["method"] == "GET" {
@@ -3865,7 +3901,7 @@ fn parity_requests_match_the_shared_fixture() {
             continue;
         }
         assert_eq!(norm(&sent.json()), norm(body), "{}", name);
-        if case["method"] == "PATCH" {
+        if case["method"] == "PATCH" || case["method"] == "DELETE" {
             assert_eq!(key, "", "{}", name);
             continue;
         }

@@ -185,7 +185,10 @@ export type UploadTicket = z.infer<typeof UploadTicketSchema>;
 
 export const CreateUploadRequestSchema = z
   .object({
-    purpose: z.literal("dataset_import"),
+    purpose: z.enum(["dataset_import", "artifact_import"]).openapi({
+      description:
+        "dataset_import (needs datasets:write) or artifact_import (artifacts:write).",
+    }),
     filename: z.string().min(1).max(255),
     size_bytes: z.number().int().min(1).max(MAX_UPLOAD_BYTES),
     sha256: Sha256HexSchema,
@@ -219,6 +222,16 @@ export const HfColumnMappingSchema = z
   })
   .openapi("HfColumnMapping");
 
+/** A Hugging Face Hub repo id ('owner/name'): never a path on the worker. */
+export const HfRepoSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(
+    /^[A-Za-z0-9](?:[\w-]|\.(?!\.))*(\/[A-Za-z0-9](?:[\w-]|\.(?!\.))*)?$/,
+    "Expected 'owner/name'.",
+  );
+
 export const ImportSourceSchema = z
   .discriminatedUnion("kind", [
     z.object({
@@ -228,14 +241,7 @@ export const ImportSourceSchema = z
     }),
     z.object({
       kind: z.literal("hf"),
-      repo: z
-        .string()
-        .min(1)
-        .max(200)
-        .regex(
-          /^[A-Za-z0-9](?:[\w-]|\.(?!\.))*(\/[A-Za-z0-9](?:[\w-]|\.(?!\.))*)?$/,
-          "Expected 'owner/name'.",
-        ),
+      repo: HfRepoSchema,
       split: z.string().min(1).max(64).default("train"),
       config: z.string().min(1).max(128).optional(),
       revision: z.string().min(1).max(128).optional(),

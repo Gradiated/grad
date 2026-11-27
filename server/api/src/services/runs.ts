@@ -90,7 +90,10 @@ import {
   toMetricPoint,
   toRunEvent,
 } from "./run-events.js";
-import { jobBlobKey, type UploadService } from "./uploads.js";
+import { toPublicArtifact } from "./artifacts.js";
+import { artifactKey, jobBlobKey, type UploadService } from "./uploads.js";
+
+export { toPublicArtifact };
 import type { UsageService } from "./usage.js";
 import {
   metrics,
@@ -241,11 +244,6 @@ export const toPublicRun = (
   updated_at: run.updated_at,
   finished_at: run.finished_at,
 });
-
-export const toPublicArtifact = ({
-  storage_key: _key,
-  ...artifact
-}: ArtifactRecord): Artifact => artifact;
 
 export const toPublicCheckpoint = ({
   storage_key: _key,
@@ -1298,9 +1296,11 @@ export const createRunLifecycle = (
 
       const run = await loadRun(workspaceId, checkpoint.run_id);
       const releaseName = name ?? run.name;
-      // The release references the checkpoint's immutable blob (no copy);
-      // the expiry sweep keeps blobs a release shares. Natural key
-      // (checkpoint, name): promoting twice returns the first release.
+      // Checkpoints are never servable: the release gets its own copy under
+      // the content-addressed artifacts/ prefix. Natural key (checkpoint,
+      // name): promoting twice returns the first release.
+      const storageKey = artifactKey(workspaceId, checkpoint.sha256);
+      await storage.copy(checkpoint.storage_key, storageKey);
       const artifact = await store.artifacts.createRelease({
         workspaceId,
         name: releaseName,
@@ -1309,13 +1309,14 @@ export const createRunLifecycle = (
         baseModel: run.resolved_config.model,
         recipeKind: run.recipe_kind,
         format: checkpoint.format,
-        storageKey: checkpoint.storage_key,
+        storageKey,
         sha256: checkpoint.sha256,
         sizeBytes: checkpoint.size_bytes,
         manifest: {
           ...checkpoint.metadata,
           schema: "grad.artifact/1",
           run_id: run.id,
+          provenance: { source: "run", run_id: run.id },
           promoted_from_checkpoint: checkpoint.id,
           step: checkpoint.step,
           attempt: checkpoint.attempt,
@@ -1399,7 +1400,11 @@ export const createRunLifecycle = (
       const run = await loadLeased(principal, id, body.worker_id, body.attempt);
 
       return uploads.ticket(
-        jobBlobKey(run, run.attempt, body.sha256),
+        // The final bundle goes straight to the released-artifacts prefix;
+        // checkpoints stay under the job until promoted.
+        body.kind === "artifact"
+          ? artifactKey(run.workspace_id, body.sha256)
+          : jobBlobKey(run, run.attempt, body.sha256),
         body.size_bytes,
       );
     },
@@ -1513,7 +1518,7 @@ export const createRunLifecycle = (
       const blob =
         wantsArtifact && body.upload_id
           ? await uploads.commit(body.upload_id, (sha) =>
-              jobBlobKey(run, run.attempt, sha),
+              artifactKey(run.workspace_id, sha),
             )
           : null;
 
@@ -1558,6 +1563,7 @@ export const createRunLifecycle = (
                 schema: "grad.artifact/1",
                 format,
                 run_id: run.id,
+                provenance: { source: "run", run_id: run.id },
                 attempt: run.attempt,
                 dataset: run.dataset_name,
                 dataset_version: run.dataset_version,

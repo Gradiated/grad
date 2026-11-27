@@ -10,7 +10,6 @@ import { documentIdempotencyHeader } from "./idempotency.js";
 import { registerArtifactRoutes } from "./routes/artifacts.js";
 import { registerCheckpointRoutes } from "./routes/checkpoints.js";
 import { registerDatasetRoutes } from "./routes/datasets.js";
-import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerEvalRoutes } from "./routes/evals.js";
 import { problemBody, requireScope, type AppEnv } from "./routes/helpers.js";
 import { registerModelsAndKeysRoutes } from "./routes/keys.js";
@@ -246,7 +245,6 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   registerCheckpointRoutes(app, deps, services);
   registerTrainerJobRoutes(app, deps, services);
   registerArtifactRoutes(app, deps, services);
-  registerDeploymentRoutes(app);
   registerUsageRoutes(app, services);
   registerEvalRoutes(app, deps, services);
   registerSourceRoutes(app, deps, services);

@@ -40,7 +40,6 @@ type Client struct {
 	Runs        *RunsService
 	Checkpoints *CheckpointsService
 	Artifacts   *ArtifactsService
-	Deployments *DeploymentsService
 	Evals       *EvalsService
 	Keys        *KeysService
 	Secrets     *SecretsService
@@ -325,7 +324,6 @@ func NewClient(opts ...Option) *Client {
 	c.Runs = &RunsService{c: c}
 	c.Checkpoints = &CheckpointsService{c: c}
 	c.Artifacts = &ArtifactsService{c: c}
-	c.Deployments = &DeploymentsService{c: c}
 	c.Evals = &EvalsService{c: c}
 	c.Keys = &KeysService{c: c}
 	c.Secrets = &SecretsService{c: c}

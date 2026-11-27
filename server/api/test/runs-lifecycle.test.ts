@@ -1090,7 +1090,7 @@ describe("run lifecycle and worker protocol", () => {
     const uploads = await worker.call("/v1/trainer-jobs/imp_x/uploads", {
       worker_id: "w",
       attempt: 1,
-      kind: "artifact",
+      kind: "checkpoint",
       sha256: "0".repeat(64),
       size_bytes: 1,
     });

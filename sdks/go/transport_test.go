@@ -48,7 +48,6 @@ func matchClass(err error, class string) bool {
 		"ValidationError":           new(*grad.ValidationError),
 		"RateLimitError":            new(*grad.RateLimitError),
 		"ServerError":               new(*grad.ServerError),
-		"DeployUnavailableError":    new(*grad.DeployUnavailableError),
 		"InferenceUnavailableError": new(*grad.InferenceUnavailableError),
 	}
 	target, ok := targets[class]
@@ -134,11 +133,10 @@ func TestErrorMappingFromSharedFixtures(t *testing.T) {
 
 func TestCapturedProblemFixturesMapToTypedErrors(t *testing.T) {
 	cases := map[string]string{
-		"problem-not-found.json":          "NotFoundError",
-		"problem-validation.json":         "ValidationError",
-		"problem-unauthorized.json":       "AuthenticationError",
-		"problem-deploy-unavailable.json": "DeployUnavailableError",
-		"problem-conflict.json":           "ConflictError",
+		"problem-not-found.json":    "NotFoundError",
+		"problem-validation.json":   "ValidationError",
+		"problem-unauthorized.json": "AuthenticationError",
+		"problem-conflict.json":     "ConflictError",
 	}
 	for file, class := range cases {
 		var fx struct {
@@ -149,7 +147,7 @@ func TestCapturedProblemFixturesMapToTypedErrors(t *testing.T) {
 		if err := json.Unmarshal(wire(t, file), &fx); err != nil {
 			t.Fatal(err)
 		}
-		f := newFake(t, map[string]route{"POST /v1/deployments": func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		f := newFake(t, map[string]route{"POST /v1/checkpoints/c1/promote": func(w http.ResponseWriter, _ *http.Request, _ []byte) {
 			for k, v := range fx.Headers {
 				w.Header().Set(k, v)
 			}
@@ -157,7 +155,7 @@ func TestCapturedProblemFixturesMapToTypedErrors(t *testing.T) {
 			_, _ = w.Write(fx.Body)
 		}})
 		c, _ := f.client()
-		_, err := c.Deployments.Create(context.Background(), "a@latest")
+		_, err := c.Checkpoints.Promote(context.Background(), "c1", "")
 		if !matchClass(err, class) {
 			t.Fatalf("%s: got %T %v", file, err, err)
 		}
@@ -174,12 +172,12 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 			w.Header().Set("Retry-After", "3")
 			problem(429, "rate_limited")(w, nil, nil)
 		}
-		f := newFake(t, map[string]route{"POST /v1/deployments": sequence(limited, jsonBody(200, wire(t, "deployment.json")))})
+		f := newFake(t, map[string]route{"POST /v1/checkpoints/c1/promote": sequence(limited, jsonBody(201, wire(t, "artifact.json")))})
 		c, clk := f.client()
-		if _, err := c.Deployments.Create(ctx, "a@latest"); err != nil {
+		if _, err := c.Checkpoints.Promote(ctx, "c1", ""); err != nil {
 			t.Fatal(err)
 		}
-		if n := f.count("POST", "/v1/deployments"); n != 2 {
+		if n := f.count("POST", "/v1/checkpoints/c1/promote"); n != 2 {
 			t.Fatalf("POST sent %d times", n)
 		}
 		if got := clk.Sleeps(); len(got) != 1 || got[0] != 3*time.Second {
@@ -325,12 +323,12 @@ func TestRedirects(t *testing.T) {
 		}
 	})
 	t.Run("POST redirect is refused even on the same origin", func(t *testing.T) {
-		f := newFake(t, map[string]route{"POST /v1/deployments": func(w http.ResponseWriter, r *http.Request, _ []byte) {
-			http.Redirect(w, r, "/v2/deployments", http.StatusTemporaryRedirect)
+		f := newFake(t, map[string]route{"POST /v1/checkpoints/c1/promote": func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			http.Redirect(w, r, "/v2/promote", http.StatusTemporaryRedirect)
 		}})
 		c, _ := f.client()
 		var re *grad.RedirectError
-		if _, err := c.Deployments.Create(ctx, "a@latest"); !errors.As(err, &re) {
+		if _, err := c.Checkpoints.Promote(ctx, "c1", ""); !errors.As(err, &re) {
 			t.Fatalf("err = %v", err)
 		}
 	})

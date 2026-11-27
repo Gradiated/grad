@@ -11,6 +11,7 @@ export const WORKSPACE_SCOPES = [
   "runs:write",
   "artifacts:read",
   "artifacts:write",
+  "artifacts:pin",
   "secrets:read",
   "secrets:write",
   "sources:read",
@@ -27,7 +28,7 @@ export const ApiKeyScopeSchema = z
   .enum(WORKSPACE_SCOPES)
   .openapi("ApiKeyScope", {
     description:
-      "`x:write` implies `x:read`; `admin` implies every workspace scope. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.",
+      "`x:write` implies `x:read`; `admin` implies every workspace scope. `artifacts:pin` (pin and unpin artifacts; Gradiated Cloud's publishing calls it) is implied by `admin` only. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.",
   });
 
 export type ApiKeyScope = z.infer<typeof ApiKeyScopeSchema>;

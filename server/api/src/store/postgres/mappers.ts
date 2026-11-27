@@ -1,5 +1,7 @@
 import type {
   ApiKey,
+  ArtifactPin,
+  ArtifactProvenance,
   Dataset,
   EvalReport,
   MetricPoint,
@@ -116,6 +118,7 @@ export const toImportPayload = (r: Row): ImportPayload => {
     detected_scores: j(p.detected_scores, []),
     drop_reasons: j(p.drop_reasons, []),
     dataset_version: nn(p.dataset_version),
+    artifact: j<ImportPayload["artifact"]>(p.artifact, null),
   };
 };
 
@@ -183,6 +186,33 @@ export const toCheckpoint = (r: Row): CheckpointRecord => ({
   created_at: iso(r.created_at),
 });
 
+/**
+ * The manifest's provenance (format_version 2 bundles write it); older
+ * releases are a run's, so they read as `source: run`.
+ */
+export const provenanceOf = (
+  manifest: Record<string, unknown>,
+  runId: string | null,
+): ArtifactProvenance => {
+  const p = (manifest.provenance ?? {}) as Record<string, unknown>;
+  const source =
+    p.source === "upload" || p.source === "import" ? p.source : "run";
+
+  return {
+    source,
+    run_id: source === "run" ? (sn(p.run_id) ?? runId) : null,
+    uploader: source === "upload" ? sn(p.uploader) : null,
+    uri: source === "import" ? sn(p.uri) : null,
+  };
+};
+
+export const toArtifactPin = (r: Row): ArtifactPin => ({
+  artifact_id: s(r.artifact_id),
+  holder: s(r.holder),
+  reason: s(r.reason),
+  created_at: iso(r.created_at),
+});
+
 export const toArtifact = (r: Row): ArtifactRecord => ({
   id: s(r.id),
   workspace_id: s(r.workspace_id),
@@ -197,6 +227,7 @@ export const toArtifact = (r: Row): ArtifactRecord => ({
   sha256: s(r.sha256),
   size_bytes: n(r.size_bytes),
   manifest: j(r.manifest, {}),
+  provenance: provenanceOf(j(r.manifest, {}), sn(r.run_id)),
   eval_report: j<EvalReport | null>(r.eval_report, null),
   created_at: iso(r.created_at),
 });

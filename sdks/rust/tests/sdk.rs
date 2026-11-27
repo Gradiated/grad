@@ -44,11 +44,6 @@ fn run_json(id: &str, status: &str) -> Value {
 async fn typed_errors_carry_status_code_request_id_and_url() {
     let srv = MockServer::start(|r| match r.path() {
         "/v1/runs/missing" => Reply::problem(404, "run_not_found", "Run 'missing' not found."),
-        "/v1/deployments" => Reply::problem(
-            501,
-            "deploy_unavailable",
-            "Hosted serving is not configured; download the artifact and serve it on vLLM.",
-        ),
         "/v1/evals" => Reply::problem(501, "inference_unavailable", "Set INFERENCE_BASE_URL."),
         "/v1/keys" => Reply::problem(403, "insufficient_scope", "Needs admin."),
         "/v1/runs/plan" => Reply::json(
@@ -81,20 +76,6 @@ async fn typed_errors_carry_status_code_request_id_and_url() {
         msg
     );
     assert!(msg.contains("Run 'missing' not found."), "{}", msg);
-
-    let e = c
-        .deployments()
-        .create(
-            &DeployArtifactRequest {
-                artifact: "a@latest".into(),
-                ..Default::default()
-            },
-            None,
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(e, Error::DeployUnavailable(_)));
-    assert!(e.to_string().contains("vLLM"));
 
     let e = c
         .evals()
@@ -288,28 +269,28 @@ async fn posts_retry_on_429_and_honour_retry_after() {
             Reply::problem(429, "rate_limited", "slow down").with_header("retry-after", "0")
         } else {
             Reply::json(
-                200,
-                json!({"name": "support", "model_id": "ws/support", "active_artifact_id": "art_1"}),
+                202,
+                json!({"id": "imp_1", "name": "lora", "status": "queued"}),
             )
         }
     });
     let c = client(&srv.url);
-    let d = c
-        .deployments()
-        .create(
-            &DeployArtifactRequest {
-                artifact: "support-sft@latest".into(),
+    let job = c
+        .artifacts()
+        .import_hf(
+            "hf://acme/lora",
+            &ArtifactHfOptions {
+                base: "test/tiny-qwen3".into(),
                 ..Default::default()
             },
-            None,
         )
         .await
         .unwrap();
-    assert_eq!(d.model_id, "ws/support");
+    assert_eq!(job.id, "imp_1");
     let sent: Vec<_> = srv
         .requests()
         .into_iter()
-        .filter(|r| r.method == "POST" && r.path() == "/v1/deployments")
+        .filter(|r| r.method == "POST" && r.path() == "/v1/artifact-imports")
         .collect();
     assert_eq!(sent.len(), 2);
     let key = sent[0]
@@ -321,7 +302,7 @@ async fn posts_retry_on_429_and_honour_retry_after() {
         "retries reuse the key"
     );
     let body = sent[1].json();
-    assert_eq!(body["artifact"], "support-sft@latest");
+    assert_eq!(body["source"], json!({"kind": "hf", "repo": "acme/lora"}));
     assert!(body.get("name").is_none(), "unset fields are not sent");
 }
 
@@ -1062,17 +1043,9 @@ async fn list_all_follows_cursors_and_path_params_are_checked() {
 #[tokio::test]
 async fn resources_send_documented_wire_shapes() {
     let srv = MockServer::start(|r| match (r.method.as_str(), r.path()) {
-        ("POST", "/v1/deployments") => Reply::json(
-            200,
-            json!({"name": "support-router", "model_id": "ws/support-router"}),
-        ),
-        ("POST", "/v1/deployments/support-router/rollback") => {
-            Reply::json(200, json!({"name": "support-router"}))
+        ("DELETE", "/v1/artifacts/support-router%402026-11-27-1") => {
+            Reply::bytes(204, vec![], vec![])
         }
-        ("GET", "/v1/deployments/support-router") => Reply::json(
-            200,
-            json!({"deployment": {"name": "support-router"}, "feedback_count": 3, "average_score": 0.9}),
-        ),
         ("POST", "/v1/checkpoints/ck_1/promote") => Reply::json(
             201,
             json!({"id": "art_9", "name": "n", "version": "2026-11-27-1"}),
@@ -1124,30 +1097,10 @@ async fn resources_send_documented_wire_shapes() {
         _ => Reply::problem(404, "nf", &format!("{} {}", r.method, r.path())),
     });
     let c = client(&srv.url);
-    c.deployments()
-        .create(
-            &DeployArtifactRequest {
-                artifact: "support-router@latest".into(),
-                explore_rate: Some(0.1),
-                ..Default::default()
-            },
-            None,
-        )
+    c.artifacts()
+        .delete("support-router@2026-11-27-1")
         .await
         .unwrap();
-    assert_eq!(
-        srv.last("POST", "/v1/deployments").unwrap().json(),
-        json!({"artifact": "support-router@latest", "explore_rate": 0.1})
-    );
-    c.deployments().rollback("support-router").await.unwrap();
-    assert_eq!(
-        c.deployments()
-            .get("support-router")
-            .await
-            .unwrap()
-            .feedback_count,
-        3
-    );
     assert_eq!(
         c.checkpoints()
             .promote("ck_1", Some("n"))
@@ -1543,4 +1496,134 @@ async fn create_returns_the_plan_warnings() {
         .await
         .unwrap();
     assert_eq!(run.warnings, Some(vec![dup.to_string()]));
+}
+
+fn artifact_import(status: &str, extra: Value) -> Value {
+    let mut job = json!({
+        "id": "imp_1", "workspace_id": "ws_a", "status": status, "name": "my-lora",
+        "base_model": "test/tiny-qwen3", "format": "peft_lora",
+        "source": {"kind": "upload", "upload_id": "a", "repo": null, "revision": null},
+        "artifact_id": null, "error": null, "error_code": null, "attempt": 0,
+        "created_at": "t", "updated_at": "t"
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        job[k] = v.clone();
+    }
+    job
+}
+
+#[tokio::test]
+async fn artifact_upload_tars_a_directory_and_waits_for_the_artifact() {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let p = polls.clone();
+    let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
+        ("POST", "/v1/uploads") => Reply::json(
+            201,
+            json!({"upload_id": "upl_1", "method": "PUT", "url": "/blobs/uploads/upl_1?sig=x",
+                   "headers": {"Content-Type": "application/octet-stream"}, "expires_at": "t"}),
+        ),
+        ("PUT", "/blobs/uploads/upl_1") => Reply::json(200, json!({})),
+        ("POST", "/v1/artifact-imports") => Reply::json(202, artifact_import("queued", json!({}))),
+        ("GET", "/v1/artifact-imports/imp_1") => {
+            if p.fetch_add(1, Ordering::SeqCst) == 0 {
+                Reply::json(200, artifact_import("running", json!({})))
+            } else {
+                Reply::json(
+                    200,
+                    artifact_import("completed", json!({"artifact_id": "my-lora@2026-11-27-1"})),
+                )
+            }
+        }
+        ("GET", "/v1/artifacts/my-lora%402026-11-27-1") => Reply::json(
+            200,
+            json!({"id": "my-lora@2026-11-27-1", "name": "my-lora", "version": "2026-11-27-1",
+                   "provenance": {"source": "upload", "uploader": "key_1"}}),
+        ),
+        _ => Reply::problem(404, "nf", &format!("{} {}", r.method, r.path())),
+    });
+    let c = client(&srv.url);
+    let dir = std::env::temp_dir().join(format!("grad-rs-upload-{}", std::process::id()));
+    let lora = dir.join("My LoRA");
+    std::fs::create_dir_all(lora.join("sub")).unwrap();
+    std::fs::write(lora.join("adapter_config.json"), "{}").unwrap();
+    std::fs::write(lora.join("sub").join("x.bin"), "xyz").unwrap();
+    let job = c
+        .artifacts()
+        .upload(
+            &lora,
+            &ArtifactUploadOptions {
+                base: "test/tiny-qwen3".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let art = c
+        .artifacts()
+        .wait_import(&job.id, &fast_wait())
+        .await
+        .unwrap();
+    assert_eq!(art.provenance.source.as_str(), "upload");
+    let up = srv.last("POST", "/v1/uploads").unwrap().json();
+    assert_eq!(
+        (up["purpose"].as_str(), up["filename"].as_str()),
+        (Some("artifact_import"), Some("upload.tar.gz"))
+    );
+    assert_eq!(
+        srv.last("POST", "/v1/artifact-imports").unwrap().json(),
+        json!({"source": {"kind": "upload", "upload_id": "upl_1"}, "base_model": "test/tiny-qwen3",
+               "format": "peft_lora", "name": "my-lora"})
+    );
+    let put = srv.last("PUT", "/blobs/uploads/upl_1").unwrap();
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(&put.body[..]));
+    let names: Vec<String> = archive
+        .entries()
+        .unwrap()
+        .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, vec!["adapter_config.json", "sub/x.bin"]);
+    let missing = c
+        .artifacts()
+        .upload(
+            &dir.join("missing"),
+            &ArtifactUploadOptions {
+                base: "b".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(missing.is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn artifact_import_failure_is_a_422_naming_the_file() {
+    let srv = MockServer::start(|_| {
+        Reply::json(
+            200,
+            artifact_import(
+                "failed",
+                json!({"error": "adapter_model.safetensors: tensor shape mismatch", "error_code": "invalid_artifact"}),
+            ),
+        )
+    });
+    let c = client(&srv.url);
+    let e = c
+        .artifacts()
+        .wait_import("imp_1", &fast_wait())
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::ArtifactImportFailed(_)), "{:?}", e);
+    assert_eq!((e.status(), e.code().as_str()), (422, "invalid_artifact"));
+    assert!(e.to_string().contains("adapter_model.safetensors"), "{}", e);
+    assert!(parse_hf_uri("hf://acme/lora@a", Some("b")).is_err());
+    assert!(parse_hf_uri("hf://../x", None).is_err());
+    assert_eq!(
+        parse_hf_uri("acme/lora", Some("v1")).unwrap(),
+        ("acme/lora".to_string(), Some("v1".to_string()))
+    );
+    assert_eq!(
+        artifact_name(std::path::Path::new("/x/My LoRA.tar.gz")),
+        "my-lora"
+    );
 }

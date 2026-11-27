@@ -25,6 +25,9 @@ export interface StackInfo {
   worker: string;
   /** The server behind a proxy that drops the first response of every keyed POST. */
   fault_url: string;
+  /** --worker torch: PEFT LoRA directories for test/tiny-qwen3 (valid, and naming another base). */
+  tiny_lora: string | null;
+  tiny_lora_invalid: string | null;
 }
 
 /** A Python with torch, transformers and peft for `--worker torch`, if configured. */
@@ -91,6 +94,11 @@ export class Stack {
 
   get apiKey(): string {
     return this.info.api_key;
+  }
+
+  get tinyLora(): { valid: string; invalid: string } {
+    if (!this.info.tiny_lora || !this.info.tiny_lora_invalid) throw new Error("tiny LoRAs need --worker torch");
+    return { valid: this.info.tiny_lora, invalid: this.info.tiny_lora_invalid };
   }
 
   logTail(): string {

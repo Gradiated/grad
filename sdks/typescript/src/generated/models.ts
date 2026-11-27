@@ -23,10 +23,10 @@ export interface ApiKey {
   revokedAt: string | null;
 }
 
-/** `x:write` implies `x:read`; `admin` implies every workspace scope. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them. */
-export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:read" | "runs:write" | "artifacts:read" | "artifacts:write" | "secrets:read" | "secrets:write" | "sources:read" | "sources:write" | "deployments:write" | "feedback:write" | "env:serve";
+/** `x:write` implies `x:read`; `admin` implies every workspace scope. `artifacts:pin` (pin and unpin artifacts; Gradiated Cloud's publishing calls it) is implied by `admin` only. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them. */
+export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:read" | "runs:write" | "artifacts:read" | "artifacts:write" | "artifacts:pin" | "secrets:read" | "secrets:write" | "sources:read" | "sources:write" | "deployments:write" | "feedback:write" | "env:serve";
 
-export const ApiKeyScopeValues = ["admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve"] as const;
+export const ApiKeyScopeValues = ["admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "artifacts:pin", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve"] as const;
 
 export interface Artifact {
   id: string;
@@ -41,6 +41,7 @@ export interface Artifact {
   sha256: string;
   sizeBytes: number;
   manifest: Record<string, unknown>;
+  provenance: ArtifactProvenance;
   evalReport: EvalReport | null;
   createdAt: string;
 }
@@ -49,6 +50,59 @@ export interface Artifact {
 export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reward_bundle" | "reference";
 
 export const ArtifactFormatValues = ["peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference"] as const;
+
+export interface ArtifactImport {
+  id: string;
+  workspaceId: string;
+  status: ArtifactImportStatus;
+  name: string;
+  baseModel: string;
+  format: ArtifactFormat | null;
+  source: {
+    kind: "upload" | "hf";
+    uploadId: string | null;
+    repo: string | null;
+    /** HF imports: the requested revision, then the pinned commit once imported. */
+    revision: string | null;
+  };
+  /** The artifact (name@version) once the import completed. */
+  artifactId: string | null;
+  /** Why it failed. Validation failures name the file and the problem (`adapter_config.json: ...`). */
+  error: string | null;
+  /** invalid_artifact (the files don't match the format spec or the base model), source_unavailable, or null. */
+  errorCode: string | null;
+  attempt: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ArtifactImportSource = {
+  kind: "upload";
+  /** A tar (optionally gzip) of the artifact's files, uploaded with POST /v1/uploads. */
+  uploadId: string;
+} | {
+  kind: "hf";
+  repo: string;
+  /** Branch, tag or commit (default main). The import pins the commit it resolves. */
+  revision?: string | undefined;
+  /** Name of a workspace secret holding a Hugging Face token, for gated or private repos. */
+  secret?: string | undefined;
+};
+
+export type ArtifactImportStatus = "queued" | "running" | "completed" | "failed";
+
+export const ArtifactImportStatusValues = ["queued", "running", "completed", "failed"] as const;
+
+export interface ArtifactProvenance {
+  /** run: trained by a grad run; upload: files uploaded with `grad artifacts upload`; import: pulled from the Hugging Face Hub with `grad artifacts import`. */
+  source: "run" | "upload" | "import";
+  /** source=run: the run that trained it. */
+  runId: string | null;
+  /** source=upload: the API key (principal) that uploaded it. */
+  uploader: string | null;
+  /** source=import: `hf://owner/name@<40-hex commit>`, the pinned revision it was imported from. */
+  uri: string | null;
+}
 
 export interface AttemptEvent {
   type: "attempt";
@@ -145,6 +199,15 @@ export interface CreateApiKeyRequest {
   scopes: Array<ApiKeyScope>;
 }
 
+export interface CreateArtifactImportRequest {
+  source: ArtifactImportSource;
+  /** The catalog base model (GET /v1/base-models) the files were trained on. */
+  baseModel: string;
+  format?: ImportableArtifactFormat | undefined;
+  /** The artifact name (name@YYYY-MM-DD-n). Required for uploads; HF imports default to the repo's name. */
+  name?: string | undefined;
+}
+
 export interface CreateDatasetRequest {
   name: string;
   metadata?: Record<string, unknown> | undefined;
@@ -170,7 +233,8 @@ export interface CreateSourceRequest {
 }
 
 export interface CreateUploadRequest {
-  purpose: "dataset_import";
+  /** dataset_import (needs datasets:write) or artifact_import (artifacts:write). */
+  purpose: "dataset_import" | "artifact_import";
   filename: string;
   sizeBytes: number;
   sha256: string;
@@ -251,51 +315,6 @@ export interface DecisionHeadReport {
     matrix: Array<Array<number>>;
   } | undefined;
   [key: string]: unknown;
-}
-
-export interface DeployArtifactRequest {
-  artifact: string;
-  name?: string | undefined;
-  fallback?: string | undefined;
-  exploreRate?: number | undefined;
-}
-
-export interface Deployment {
-  id: string;
-  workspaceId: string;
-  name: string;
-  modelId: string;
-  activeArtifactId: string;
-  previousArtifactId: string | null;
-  fallbackModel: string | null;
-  exploreRate: number;
-  status: "active" | "disabled";
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DeploymentStatus {
-  deployment: Deployment;
-  feedbackCount: number;
-  averageScore: number | null;
-}
-
-export interface EmbedRequest {
-  /** Name of a deployed embedding artifact. */
-  model: string;
-  input: string | Array<string>;
-}
-
-export interface EmbedResponse {
-  model: string;
-  data: Array<{
-    index: number;
-    embedding: Array<number>;
-  }>;
-  usage: {
-    promptTokens: number;
-    totalTokens: number;
-  };
 }
 
 /** `eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model `record`) and writes the scores to the dataset's next version. */
@@ -491,29 +510,6 @@ export interface EvalTaskOutcome {
   record: DatasetRecord;
 }
 
-export interface FeedbackEventInput {
-  inferenceId?: string | undefined;
-  sessionId?: string | undefined;
-  deploymentName?: string | undefined;
-  idempotencyKey: string;
-  score?: number | undefined;
-  expectedOutput?: unknown | undefined;
-  metrics?: Record<string, number> | undefined;
-}
-
-export interface FeedbackRecord {
-  id: string;
-  workspaceId: string;
-  inferenceId: string | null;
-  sessionId: string | null;
-  deploymentName: string | null;
-  idempotencyKey: string;
-  score: number | null;
-  expectedOutput?: unknown | undefined;
-  metrics: Record<string, number>;
-  createdAt: string;
-}
-
 export interface FilterDatasetRequest {
   /** Conditions on stored scores, `{name: "<op><number>"}` with op one of >=, <=, >, <, ==, != (a bare number means ==). A record without the score does not match. */
   scores?: Record<string, string | number> | undefined;
@@ -593,6 +589,10 @@ export type ImportSource = {
 export type ImportStatus = "queued" | "running" | "completed" | "failed";
 
 export const ImportStatusValues = ["queued", "running", "completed", "failed"] as const;
+
+export type ImportableArtifactFormat = "peft_lora" | "merged_safetensors" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reward_bundle";
+
+export const ImportableArtifactFormatValues = ["peft_lora", "merged_safetensors", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle"] as const;
 
 /** Why an attempt ended without a result: lease_lost (the worker was lost: it stopped heartbeating after a crash, kill or network failure), compute_reclaimed (the GPU was reclaimed; the worker saved a checkpoint when it had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back), oom (CUDA out of memory). */
 export type InterruptionReason = "lease_lost" | "compute_reclaimed" | "worker_error" | "oom";
@@ -880,16 +880,6 @@ export interface RecipeSpec {
   loggers?: Array<LoggerSpec> | undefined;
 }
 
-export interface RecordFeedbackRequest {
-  events: Array<FeedbackEventInput>;
-}
-
-export interface RecordFeedbackResponse {
-  accepted: number;
-  deduplicated: number;
-  records: Array<FeedbackRecord>;
-}
-
 export interface RenderDatasetRequest {
   model?: string | undefined;
   trainOn?: "last" | "all_assistant" | undefined;
@@ -989,23 +979,6 @@ export type RolloutSpec = {
   kind: "off_policy";
   maxNewTokens?: number | undefined;
 };
-
-export interface RouteRequest {
-  deployment: string;
-  messages: Array<ChatMessage>;
-  tools?: Array<Record<string, unknown>> | undefined;
-  sessionId?: string | undefined;
-}
-
-export interface RouteResponse {
-  inferenceId: string;
-  deployment: string;
-  artifactId: string;
-  model: string;
-  isExploration: boolean;
-  confidence: number;
-  scores: Record<string, number>;
-}
 
 /** Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no report prompt was scored for every candidate. */
 export interface RouterParetoSummary {

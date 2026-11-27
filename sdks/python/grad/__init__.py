@@ -7,7 +7,7 @@
     dataset = client.datasets.push("sql-quickstart", records)
     print(client.runs.plan(dataset=dataset, name="sql-helper", recipe=SFTRecipe()))
     run = client.runs.create(dataset=dataset, name="sql-helper", recipe=SFTRecipe(), max_cost_usd=5).wait()
-    run.download("./sql-helper")  # PEFT LoRA for vLLM / SGLang, or run.deploy() on Gradiated Cloud
+    run.download("./sql-helper")  # PEFT LoRA for vLLM / SGLang
 """
 
 from . import validators
@@ -19,7 +19,7 @@ from ._errors import (
     BadRequestError,
     ChecksumMismatchError,
     ConflictError,
-    DeployUnavailableError,
+    ArtifactImportFailedError,
     EvalFailedError,
     FeatureUnavailableError,
     FieldError,
@@ -56,8 +56,7 @@ from ._models import (
     CreatedApiKey,
     Dataset,
     DatasetScoring,
-    Deployment,
-    DeploymentStatus,
+    ArtifactImport,
     Eval,
     EvalFailures,
     EvalModelSummary,
@@ -136,9 +135,8 @@ __all__ = [
     "Dataset",
     "DatasetScoring",
     "DecisionModelRecipe",
-    "DeployUnavailableError",
-    "Deployment",
-    "DeploymentStatus",
+    "ArtifactImport",
+    "ArtifactImportFailedError",
     "DistillRecipe",
     "EmbeddingRecipe",
     "Environment",

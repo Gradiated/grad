@@ -119,14 +119,10 @@ class SelfHostedLiveTests(_LiveCase):
         self.assertGreaterEqual(summary.tokens, sum(u.tokens for u in rows))
         self.assertTrue(list(run.metrics()))
         self.assertTrue(run.checkpoints())
-        # Self-hosted serving is disabled: deploy fails with the documented, actionable error.
-        with self.assertRaises(grad.DeployUnavailableError) as ctx:
-            run.deploy()
-        self.assertEqual(ctx.exception.status, 501)
-        self.assertIn("vLLM", str(ctx.exception))
-
         art = run.artifact
         self.assertIsInstance(art, grad.Artifact)
+        assert art is not None
+        self.assertEqual((art.provenance.source, art.provenance.run_id), ("run", run.id))
         self.assertEqual(client.artifacts.get("sql-helper@latest").ref, art.ref)
         bundle = art.download(self.tmp / "sql-helper.grad.tar.gz", format="bundle")
         self.assertGreater(bundle.stat().st_size, 0)
@@ -372,16 +368,12 @@ class CloudReferenceLiveTests(_LiveCase):
     cloud = True
     worker = "reference"
 
-    def test_cloud_run_and_deploy_served_by_cloud(self) -> None:
+    def test_cloud_run_and_auth(self) -> None:
         client = Grad()
         dataset = client.datasets.push("sql-quickstart", SQL_RECORDS)
         run = client.runs.create(dataset=dataset, name="sql-helper", recipe=SFTRecipe(model=LLM), max_cost_usd=5).wait(timeout=180)
         self.assertEqual(run.status, "completed")
         self.assertGreaterEqual(run.cost_usd or 0.0, 0.0)
-        # Deploys go to Gradiated Cloud's product API; grad-server itself answers 501.
-        with self.assertRaises(grad.DeployUnavailableError) as ctx:
-            run.deploy()
-        self.assertEqual(ctx.exception.status, 501)
         with self.assertRaises(grad.AuthenticationError):
             Grad(api_key="grad_not_a_cloud_token").runs.list().to_list()
 
@@ -403,10 +395,28 @@ class CloudTorchLiveTests(_LiveCase):
         plan = client.runs.plan(dataset=ds, name="sql-helper-2", recipe=SFTRecipe(model=sft.artifact))
         self.assertEqual(plan.resolved_config["base_artifact"]["id"], sft.artifact.id)
 
+    def test_upload_a_lora_and_continue_training_from_it(self) -> None:
+        # docs: artifacts.mdx "Upload or import an artifact" (the harness's tiny LoRAs)
+        client = Grad()
+        art = client.artifacts.upload(self.stack.info["tiny_lora"], base=LLM, name="uploaded-lora").wait(timeout=300)
+        self.assertRegex(art.id, r"^uploaded-lora@\d{4}-\d{2}-\d{2}-\d+$")
+        self.assertEqual(art.provenance.source, "upload")
+        self.assertTrue(art.provenance.uploader)
+        self.assertEqual((art.manifest.format_version, art.manifest.adapter.rank), (2, 4))
+        with self.assertRaises(grad.ArtifactImportFailedError) as ctx:
+            client.artifacts.upload(self.stack.info["tiny_lora_invalid"], base=LLM).wait(timeout=300)
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (422, "invalid_artifact"))
+        self.assertIn("adapter_config.json: base_model_name_or_path is 'Qwen/Qwen3-8B'", str(ctx.exception))
+        ds = client.datasets.push("sql-sft-upload", SQL_RECORDS)
+        plan = client.runs.plan(dataset=ds, name="sft-from-upload", recipe=SFTRecipe(model=art))
+        self.assertEqual(plan.resolved_config["base_artifact"]["id"], art.id)
+        art.delete()
+        with self.assertRaises(grad.NotFoundError):
+            client.artifacts.get(art.id)
+
     def test_root_readme_quickstart_on_the_sample_traces(self) -> None:
         # The repository README's router quickstart on examples/support_traces.jsonl, with only the
-        # backbone swapped for the tiny one. The Judge and deploy blocks need Cloud inference and
-        # Cloud serving: they are compiled here, and deploy is covered by CloudReferenceLiveTests.
+        # backbone swapped for the tiny one. The Judge block needs Cloud inference: it is compiled here.
         repo = Path(__file__).resolve().parents[3]
         readme = (repo / "README.md").read_text(encoding="utf-8")
         blocks = re.findall(r"```python\n(.*?)```", readme, flags=re.S)

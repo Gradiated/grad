@@ -4,9 +4,6 @@
  * with the reference worker), so SDK unit tests replay real server shapes.
  *
  *   node tests/fixtures/wire/capture.mjs        # needs `pnpm -C server/api install`
- *
- * The deployment bodies need Cloud serving and a deployable artifact, so they
- * are written by hand from `spec/openapi.yaml` and kept as committed.
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -154,7 +151,6 @@ const main = async () => {
     await problem("not-found", "GET", "/v1/runs/run_missing");
     await problem("validation", "POST", "/v1/runs", { dataset: "support-prod", name: "Bad Name!", recipe: { kind: "sft", batch_size: -1 } });
     await problem("unauthorized", "GET", "/v1/runs", undefined, { authorization: "Bearer wrong" });
-    await problem("deploy-unavailable", "POST", "/v1/deployments", { artifact: done.artifact_id });
     await problem("conflict", "POST", "/v1/datasets", { name: "support-prod" });
   } finally {
     child.stdin.end();

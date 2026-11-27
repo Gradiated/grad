@@ -245,18 +245,21 @@ async fn call(c: &Client, case: &str) -> Result<()> {
                 .await
                 .map(drop)
         }
-        "deploy" => {
-            let req = DeployArtifactRequest {
-                artifact: ARTIFACT.into(),
-                name: model("support"),
-                fallback: model("test/tiny-qwen3"),
-                explore_rate: Some(0.1),
-            };
-            c.deployments()
-                .create(&req, Some("parity-deploy-key"))
-                .await
-                .map(drop)
-        }
+        "import_artifact_hf" => c
+            .artifacts()
+            .import_hf(
+                "hf://acme/support-lora@v2",
+                &ArtifactHfOptions {
+                    base: "test/tiny-qwen3".into(),
+                    name: Some("support-lora".into()),
+                    secret: Some("hf-token".into()),
+                    idempotency_key: Some("parity-artifact-import-key".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(drop),
+        "delete_artifact" => c.artifacts().delete("support-sft@2026-11-27-1").await,
         "score_dataset" => {
             let req = ScoreDatasetRequest {
                 rubric: vec![judge()],
@@ -411,7 +414,10 @@ async fn requests_match_the_shared_fixture() {
         call(&c, name).await.unwrap();
         let sent = srv.requests().pop().unwrap();
         assert_eq!(
-            (sent.method.as_str(), sent.path()),
+            (
+                sent.method.as_str(),
+                sent.path().replace("%40", "@").as_str()
+            ),
             (
                 case["method"].as_str().unwrap(),
                 case["path"].as_str().unwrap()
@@ -433,8 +439,12 @@ async fn requests_match_the_shared_fixture() {
             continue;
         }
         assert_eq!(norm(&sent.json()), norm(&case["body"]), "{}", name);
-        if case["method"] == "PATCH" {
-            assert_eq!(key, "", "{}: PATCHes carry no Idempotency-Key", name);
+        if case["method"] == "PATCH" || case["method"] == "DELETE" {
+            assert_eq!(
+                key, "",
+                "{}: PATCH and DELETE carry no Idempotency-Key",
+                name
+            );
             continue;
         }
         match case["idempotency_key"].as_str() {
@@ -462,6 +472,9 @@ fn typed_responses() {
         serde_json::from_value(fx["responses"]["usage_summary"].clone()).unwrap();
     let events: RunEventsPage =
         serde_json::from_value(fx["responses"]["run_events"].clone()).unwrap();
+    let artifact: Artifact = serde_json::from_value(fx["responses"]["artifact"].clone()).unwrap();
+    let artifact_import: ArtifactImport =
+        serde_json::from_value(fx["responses"]["artifact_import"].clone()).unwrap();
     let phase = |i: usize| match &events.data[i] {
         RunEvent::Phase(p) => p.clone(),
         other => panic!("event {} is {}", i, other.type_name()),
@@ -527,6 +540,10 @@ fn typed_responses() {
         "usage_summary.top_evals[0].kind": totals.top_evals[0].kind.as_str(),
         "usage_summary.groups[1].key": totals.groups[1].key,
         "usage_summary.groups[1].tokens": totals.groups[1].tokens,
+        "artifact.provenance.source": artifact.provenance.source.as_str(),
+        "artifact.provenance.uploader": artifact.provenance.uploader,
+        "artifact_import.status": artifact_import.status.as_str(),
+        "artifact_import.error_code": artifact_import.error_code,
         "run.phase": run.phase.as_ref().unwrap().as_str(),
         "run.last_interruption.reason": interruption.reason.as_str(),
         "run.last_interruption.resume_step": interruption.resume_step,

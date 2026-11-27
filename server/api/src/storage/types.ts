@@ -80,6 +80,12 @@ export interface ObjectStore {
   /** Idempotent. */
   delete(key: string): Promise<void>;
   /**
+   * Server-side copy of `from` to `to` (both under 5 GB, the upload cap).
+   * Keys are content-addressed, so an existing `to` is left as it is.
+   * Throws ObjectNotFoundError when `from` is missing.
+   */
+  copy(from: string, to: string): Promise<void>;
+  /**
    * Direct-to-storage presigned PUT whose Content-Length and
    * x-amz-checksum-sha256 are signed, so the store rejects any other body.
    * Keys are content-addressed (the sha256 is their last segment), so a

@@ -233,6 +233,11 @@ def upload_request(path: Path) -> dict[str, Any]:
     return {"purpose": "dataset_import", "filename": path.name[:255], "size_bytes": size, "sha256": sha}
 
 
+def artifact_upload_request(path: Path) -> dict[str, Any]:
+    """The ``CreateUploadRequest`` body for a packed artifact."""
+    return {**upload_request(path), "purpose": "artifact_import"}
+
+
 def hf_source(
     repo: str,
     *,
@@ -275,6 +280,73 @@ def hf_dataset_name(repo: str, split: str, config: str | None) -> str:
         parts.append(split)
     slug = re.sub(r"[^a-z0-9._-]+", "-", "-".join(parts).lower()).strip("-._") or "hf-dataset"
     return slug[:64].rstrip("-._")
+
+
+ARTIFACT_FORMATS = ("peft_lora", "merged_safetensors", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle")
+_ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar")
+_HF_URI = re.compile(r"^(?:hf://)?([A-Za-z0-9][\w.-]*(?:/[A-Za-z0-9][\w.-]*)?)(?:@([^@\s]+))?$")
+
+
+def check_artifact_format(fmt: str) -> str:
+    """Validate an upload's ``format``."""
+    if fmt not in ARTIFACT_FORMATS:
+        raise ValueError(f"Unknown artifact format {fmt!r}; use one of {', '.join(ARTIFACT_FORMATS)}.")
+    return fmt
+
+
+def artifact_name(path: Path) -> str:
+    """The default artifact name for an upload: its file or directory name as a slug."""
+    base = path.name
+    for suffix in (".grad.tar.gz", *_ARCHIVE_SUFFIXES):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    slug = re.sub(r"[^a-z0-9._-]+", "-", base.lower()).lstrip("-._")
+    return slug[:64].rstrip("-._") or "upload"
+
+
+def parse_hf_uri(uri: str, revision: str | None = None) -> tuple[str, str | None]:
+    """``(repo, revision)`` of ``hf://owner/name[@revision]`` (or ``owner/name``)."""
+    match = _HF_URI.match(uri.strip())
+    if not match or ".." in match.group(1):
+        raise ValueError(f"{uri!r} is not a Hugging Face repo: use hf://owner/name or hf://owner/name@revision.")
+    repo, pinned = match.group(1), match.group(2)
+    if pinned and revision and pinned != revision:
+        raise ValueError(f"{uri!r} pins revision {pinned!r}, but revision={revision!r} was passed too.")
+    return repo, pinned or revision
+
+
+def pack_artifact(path: Path, workdir: Path) -> Path:
+    """The file to upload for ``path``: a ``.tar``/``.tar.gz`` as is, else a gzip tar of it.
+
+    A directory's regular files go in at their relative paths (sorted, no symlinks); a single
+    file goes in at the root.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"No such file or directory: {path}")
+    if path.is_file() and path.name.endswith(_ARCHIVE_SUFFIXES):
+        return path
+    if path.is_dir():
+        files = []
+        for item in sorted(path.rglob("*")):
+            if item.is_symlink():
+                raise ValueError(f"Refusing to upload symlink {item}; copy the file instead.")
+            if item.is_file():
+                files.append((item.relative_to(path).as_posix(), item))
+        if not files:
+            raise ValueError(f"{path} has no files to upload.")
+    else:
+        files = [(path.name, path)]
+    out = workdir / "upload.tar.gz"
+    with tarfile.open(out, "w:gz", format=tarfile.PAX_FORMAT) as tar:
+        for name, item in files:
+            info = tar.gettarinfo(str(item), arcname=name)
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            info.mtime = 0
+            with open(item, "rb") as fh:
+                tar.addfile(info, fh)
+    return out
 
 
 class Backoff:

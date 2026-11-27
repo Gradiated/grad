@@ -15,7 +15,7 @@ type APIKey struct {
 	RevokedAt   *string       `json:"revoked_at"`
 }
 
-// APIKeyScope `x:write` implies `x:read`; `admin` implies every workspace scope. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.
+// APIKeyScope `x:write` implies `x:read`; `admin` implies every workspace scope. `artifacts:pin` (pin and unpin artifacts; Gradiated Cloud's publishing calls it) is implied by `admin` only. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.
 type APIKeyScope string
 
 // Values of APIKeyScope.
@@ -27,6 +27,7 @@ const (
 	APIKeyScopeRunsWrite        APIKeyScope = "runs:write"
 	APIKeyScopeArtifactsRead    APIKeyScope = "artifacts:read"
 	APIKeyScopeArtifactsWrite   APIKeyScope = "artifacts:write"
+	APIKeyScopeArtifactsPin     APIKeyScope = "artifacts:pin"
 	APIKeyScopeSecretsRead      APIKeyScope = "secrets:read"
 	APIKeyScopeSecretsWrite     APIKeyScope = "secrets:write"
 	APIKeyScopeSourcesRead      APIKeyScope = "sources:read"
@@ -57,20 +58,21 @@ const (
 
 // Artifact is generated from the OpenAPI schema.
 type Artifact struct {
-	ID           string          `json:"id"`
-	WorkspaceID  string          `json:"workspace_id"`
-	Name         string          `json:"name"`
-	Version      string          `json:"version"`
-	RunID        *string         `json:"run_id"`
-	CheckpointID *string         `json:"checkpoint_id"`
-	BaseModel    string          `json:"base_model"`
-	RecipeKind   RecipeKind      `json:"recipe_kind"`
-	Format       *ArtifactFormat `json:"format"`
-	SHA256       string          `json:"sha256"`
-	SizeBytes    int             `json:"size_bytes"`
-	Manifest     map[string]any  `json:"manifest"`
-	EvalReport   *EvalReport     `json:"eval_report"`
-	CreatedAt    string          `json:"created_at"`
+	ID           string             `json:"id"`
+	WorkspaceID  string             `json:"workspace_id"`
+	Name         string             `json:"name"`
+	Version      string             `json:"version"`
+	RunID        *string            `json:"run_id"`
+	CheckpointID *string            `json:"checkpoint_id"`
+	BaseModel    string             `json:"base_model"`
+	RecipeKind   RecipeKind         `json:"recipe_kind"`
+	Format       *ArtifactFormat    `json:"format"`
+	SHA256       string             `json:"sha256"`
+	SizeBytes    int                `json:"size_bytes"`
+	Manifest     map[string]any     `json:"manifest"`
+	Provenance   ArtifactProvenance `json:"provenance"`
+	EvalReport   *EvalReport        `json:"eval_report"`
+	CreatedAt    string             `json:"created_at"`
 }
 
 // ArtifactFormat Artifact format when this checkpoint is exportable (promotable); null for training state only.
@@ -87,6 +89,98 @@ const (
 	ArtifactFormatDecisionBundle     ArtifactFormat = "decision_bundle"
 	ArtifactFormatRewardBundle       ArtifactFormat = "reward_bundle"
 	ArtifactFormatReference          ArtifactFormat = "reference"
+)
+
+// ArtifactImport is generated from the OpenAPI schema.
+type ArtifactImport struct {
+	ID          string                   `json:"id"`
+	WorkspaceID string                   `json:"workspace_id"`
+	Status      ArtifactImportStatus     `json:"status"`
+	Name        string                   `json:"name"`
+	BaseModel   string                   `json:"base_model"`
+	Format      *ArtifactFormat          `json:"format"`
+	Source      ArtifactImportSourceType `json:"source"`
+	// ArtifactID The artifact (name@version) once the import completed.
+	ArtifactID *string `json:"artifact_id"`
+	// Error Why it failed. Validation failures name the file and the problem (`adapter_config.json: ...`).
+	Error *string `json:"error"`
+	// ErrorCode invalid_artifact (the files don't match the format spec or the base model), source_unavailable, or null.
+	ErrorCode *string `json:"error_code"`
+	Attempt   int     `json:"attempt"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+// ArtifactImportSource is a union of object shapes; set the fields of exactly one variant.
+type ArtifactImportSource struct {
+	Kind ArtifactImportSourceKind `json:"kind"`
+	// UploadID A tar (optionally gzip) of the artifact's files, uploaded with POST /v1/uploads.
+	UploadID *string `json:"upload_id,omitempty"`
+	Repo     *string `json:"repo,omitempty"`
+	// Revision Branch, tag or commit (default main). The import pins the commit it resolves.
+	Revision *string `json:"revision,omitempty"`
+	// Secret Name of a workspace secret holding a Hugging Face token, for gated or private repos.
+	Secret *string `json:"secret,omitempty"`
+}
+
+// ArtifactImportSourceKind is an enumeration of allowed values.
+type ArtifactImportSourceKind string
+
+// Values of ArtifactImportSourceKind.
+const (
+	ArtifactImportSourceKindUpload ArtifactImportSourceKind = "upload"
+	ArtifactImportSourceKindHF     ArtifactImportSourceKind = "hf"
+)
+
+// ArtifactImportSourceType is generated from the OpenAPI schema.
+type ArtifactImportSourceType struct {
+	Kind     ArtifactImportSourceTypeKind `json:"kind"`
+	UploadID *string                      `json:"upload_id"`
+	Repo     *string                      `json:"repo"`
+	// Revision HF imports: the requested revision, then the pinned commit once imported.
+	Revision *string `json:"revision"`
+}
+
+// ArtifactImportSourceTypeKind is an enumeration of allowed values.
+type ArtifactImportSourceTypeKind string
+
+// Values of ArtifactImportSourceTypeKind.
+const (
+	ArtifactImportSourceTypeKindUpload ArtifactImportSourceTypeKind = "upload"
+	ArtifactImportSourceTypeKindHF     ArtifactImportSourceTypeKind = "hf"
+)
+
+// ArtifactImportStatus is an enumeration of allowed values.
+type ArtifactImportStatus string
+
+// Values of ArtifactImportStatus.
+const (
+	ArtifactImportStatusQueued    ArtifactImportStatus = "queued"
+	ArtifactImportStatusRunning   ArtifactImportStatus = "running"
+	ArtifactImportStatusCompleted ArtifactImportStatus = "completed"
+	ArtifactImportStatusFailed    ArtifactImportStatus = "failed"
+)
+
+// ArtifactProvenance is generated from the OpenAPI schema.
+type ArtifactProvenance struct {
+	// Source run: trained by a grad run; upload: files uploaded with `grad artifacts upload`; import: pulled from the Hugging Face Hub with `grad artifacts import`.
+	Source ArtifactProvenanceSource `json:"source"`
+	// RunID source=run: the run that trained it.
+	RunID *string `json:"run_id"`
+	// Uploader source=upload: the API key (principal) that uploaded it.
+	Uploader *string `json:"uploader"`
+	// URI source=import: `hf://owner/name@<40-hex commit>`, the pinned revision it was imported from.
+	URI *string `json:"uri"`
+}
+
+// ArtifactProvenanceSource run: trained by a grad run; upload: files uploaded with `grad artifacts upload`; import: pulled from the Hugging Face Hub with `grad artifacts import`.
+type ArtifactProvenanceSource string
+
+// Values of ArtifactProvenanceSource.
+const (
+	ArtifactProvenanceSourceRun    ArtifactProvenanceSource = "run"
+	ArtifactProvenanceSourceUpload ArtifactProvenanceSource = "upload"
+	ArtifactProvenanceSourceImport ArtifactProvenanceSource = "import"
 )
 
 // AttemptEvent is generated from the OpenAPI schema.
@@ -286,6 +380,16 @@ type CreateAPIKeyRequest struct {
 	Scopes []APIKeyScope `json:"scopes"`
 }
 
+// CreateArtifactImportRequest is generated from the OpenAPI schema.
+type CreateArtifactImportRequest struct {
+	Source ArtifactImportSource `json:"source"`
+	// BaseModel The catalog base model (GET /v1/base-models) the files were trained on.
+	BaseModel string                    `json:"base_model"`
+	Format    *ImportableArtifactFormat `json:"format,omitempty"`
+	// Name The artifact name (name@YYYY-MM-DD-n). Required for uploads; HF imports default to the repo's name.
+	Name *string `json:"name,omitempty"`
+}
+
 // CreateDatasetRequest is generated from the OpenAPI schema.
 type CreateDatasetRequest struct {
 	Name     string         `json:"name"`
@@ -331,18 +435,20 @@ type CreateSourceRequest struct {
 
 // CreateUploadRequest is generated from the OpenAPI schema.
 type CreateUploadRequest struct {
+	// Purpose dataset_import (needs datasets:write) or artifact_import (artifacts:write).
 	Purpose   CreateUploadRequestPurpose `json:"purpose"`
 	Filename  string                     `json:"filename"`
 	SizeBytes int                        `json:"size_bytes"`
 	SHA256    string                     `json:"sha256"`
 }
 
-// CreateUploadRequestPurpose is an enumeration of allowed values.
+// CreateUploadRequestPurpose dataset_import (needs datasets:write) or artifact_import (artifacts:write).
 type CreateUploadRequestPurpose string
 
 // Values of CreateUploadRequestPurpose.
 const (
-	CreateUploadRequestPurposeDatasetImport CreateUploadRequestPurpose = "dataset_import"
+	CreateUploadRequestPurposeDatasetImport  CreateUploadRequestPurpose = "dataset_import"
+	CreateUploadRequestPurposeArtifactImport CreateUploadRequestPurpose = "artifact_import"
 )
 
 // CreatedAPIKey is generated from the OpenAPI schema.
@@ -501,71 +607,6 @@ const (
 	DecisionHeadReportTypeNoul   DecisionHeadReportType = "noul"
 	DecisionHeadReportTypeScore  DecisionHeadReportType = "score"
 )
-
-// DeployArtifactRequest is generated from the OpenAPI schema.
-type DeployArtifactRequest struct {
-	Artifact    string   `json:"artifact"`
-	Name        *string  `json:"name,omitempty"`
-	Fallback    *string  `json:"fallback,omitempty"`
-	ExploreRate *float64 `json:"explore_rate,omitempty"`
-}
-
-// Deployment is generated from the OpenAPI schema.
-type Deployment struct {
-	ID                 string               `json:"id"`
-	WorkspaceID        string               `json:"workspace_id"`
-	Name               string               `json:"name"`
-	ModelID            string               `json:"model_id"`
-	ActiveArtifactID   string               `json:"active_artifact_id"`
-	PreviousArtifactID *string              `json:"previous_artifact_id"`
-	FallbackModel      *string              `json:"fallback_model"`
-	ExploreRate        float64              `json:"explore_rate"`
-	Status             DeploymentStatusType `json:"status"`
-	CreatedAt          string               `json:"created_at"`
-	UpdatedAt          string               `json:"updated_at"`
-}
-
-// DeploymentStatus is generated from the OpenAPI schema.
-type DeploymentStatus struct {
-	Deployment    Deployment `json:"deployment"`
-	FeedbackCount int        `json:"feedback_count"`
-	AverageScore  *float64   `json:"average_score"`
-}
-
-// DeploymentStatusType is an enumeration of allowed values.
-type DeploymentStatusType string
-
-// Values of DeploymentStatusType.
-const (
-	DeploymentStatusTypeActive   DeploymentStatusType = "active"
-	DeploymentStatusTypeDisabled DeploymentStatusType = "disabled"
-)
-
-// EmbedRequest is generated from the OpenAPI schema.
-type EmbedRequest struct {
-	// Model Name of a deployed embedding artifact.
-	Model string `json:"model"`
-	Input any    `json:"input"`
-}
-
-// EmbedResponse is generated from the OpenAPI schema.
-type EmbedResponse struct {
-	Model string                  `json:"model"`
-	Data  []EmbedResponseDataItem `json:"data"`
-	Usage EmbedResponseUsage      `json:"usage"`
-}
-
-// EmbedResponseDataItem is generated from the OpenAPI schema.
-type EmbedResponseDataItem struct {
-	Index     int       `json:"index"`
-	Embedding []float64 `json:"embedding"`
-}
-
-// EmbedResponseUsage is generated from the OpenAPI schema.
-type EmbedResponseUsage struct {
-	PromptTokens int `json:"prompt_tokens"`
-	TotalTokens  int `json:"total_tokens"`
-}
 
 // EvalMode `eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model `record`) and writes the scores to the dataset's next version.
 type EvalMode string
@@ -951,31 +992,6 @@ type EvalTaskOutcome struct {
 	Record       DatasetRecord `json:"record"`
 }
 
-// FeedbackEventInput is generated from the OpenAPI schema.
-type FeedbackEventInput struct {
-	InferenceID    *string            `json:"inference_id,omitempty"`
-	SessionID      *string            `json:"session_id,omitempty"`
-	DeploymentName *string            `json:"deployment_name,omitempty"`
-	IdempotencyKey string             `json:"idempotency_key"`
-	Score          *float64           `json:"score,omitempty"`
-	ExpectedOutput any                `json:"expected_output,omitempty"`
-	Metrics        map[string]float64 `json:"metrics,omitempty"`
-}
-
-// FeedbackRecord is generated from the OpenAPI schema.
-type FeedbackRecord struct {
-	ID             string             `json:"id"`
-	WorkspaceID    string             `json:"workspace_id"`
-	InferenceID    *string            `json:"inference_id"`
-	SessionID      *string            `json:"session_id"`
-	DeploymentName *string            `json:"deployment_name"`
-	IdempotencyKey string             `json:"idempotency_key"`
-	Score          *float64           `json:"score"`
-	ExpectedOutput any                `json:"expected_output,omitempty"`
-	Metrics        map[string]float64 `json:"metrics"`
-	CreatedAt      string             `json:"created_at"`
-}
-
 // FilterDatasetRequest is generated from the OpenAPI schema.
 type FilterDatasetRequest struct {
 	// Scores Conditions on stored scores, `{name: "<op><number>"}` with op one of >=, <=, >, <, ==, != (a bare number means ==). A record without the score does not match.
@@ -1130,6 +1146,20 @@ const (
 	ImportStatusFailed    ImportStatus = "failed"
 )
 
+// ImportableArtifactFormat is an enumeration of allowed values.
+type ImportableArtifactFormat string
+
+// Values of ImportableArtifactFormat.
+const (
+	ImportableArtifactFormatPeftLora           ImportableArtifactFormat = "peft_lora"
+	ImportableArtifactFormatMergedSafetensors  ImportableArtifactFormat = "merged_safetensors"
+	ImportableArtifactFormatCartridge          ImportableArtifactFormat = "cartridge"
+	ImportableArtifactFormatEncoderSafetensors ImportableArtifactFormat = "encoder_safetensors"
+	ImportableArtifactFormatRouterBundle       ImportableArtifactFormat = "router_bundle"
+	ImportableArtifactFormatDecisionBundle     ImportableArtifactFormat = "decision_bundle"
+	ImportableArtifactFormatRewardBundle       ImportableArtifactFormat = "reward_bundle"
+)
+
 // InterruptionReason Why an attempt ended without a result: lease_lost (the worker was lost: it stopped heartbeating after a crash, kill or network failure), compute_reclaimed (the GPU was reclaimed; the worker saved a checkpoint when it had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back), oom (CUDA out of memory).
 type InterruptionReason string
 
@@ -1193,20 +1223,6 @@ type ListDatasetsParams struct {
 // ListDatasetsResponse is generated from the OpenAPI schema.
 type ListDatasetsResponse struct {
 	Data []Dataset `json:"data"`
-	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
-	NextCursor *string `json:"next_cursor"`
-}
-
-// ListDeploymentsParams holds the query and header parameters of ListDeployments.
-type ListDeploymentsParams struct {
-	// Limit Page size (default 50). Values above 200 are clamped to 200.
-	Limit  *int
-	Cursor *string
-}
-
-// ListDeploymentsResponse is generated from the OpenAPI schema.
-type ListDeploymentsResponse struct {
-	Data []Deployment `json:"data"`
 	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
 	NextCursor *string `json:"next_cursor"`
 }
@@ -1865,18 +1881,6 @@ const (
 	RecipeSpecTrainOnAllAssistant RecipeSpecTrainOn = "all_assistant"
 )
 
-// RecordFeedbackRequest is generated from the OpenAPI schema.
-type RecordFeedbackRequest struct {
-	Events []FeedbackEventInput `json:"events"`
-}
-
-// RecordFeedbackResponse is generated from the OpenAPI schema.
-type RecordFeedbackResponse struct {
-	Accepted     int              `json:"accepted"`
-	Deduplicated int              `json:"deduplicated"`
-	Records      []FeedbackRecord `json:"records"`
-}
-
 // RenderDatasetRequest is generated from the OpenAPI schema.
 type RenderDatasetRequest struct {
 	Model            *string                       `json:"model,omitempty"`
@@ -2090,25 +2094,6 @@ const (
 	RolloutSpecKindOnPolicy  RolloutSpecKind = "on_policy"
 	RolloutSpecKindOffPolicy RolloutSpecKind = "off_policy"
 )
-
-// RouteRequest is generated from the OpenAPI schema.
-type RouteRequest struct {
-	Deployment string           `json:"deployment"`
-	Messages   []ChatMessage    `json:"messages"`
-	Tools      []map[string]any `json:"tools,omitempty"`
-	SessionID  *string          `json:"session_id,omitempty"`
-}
-
-// RouteResponse is generated from the OpenAPI schema.
-type RouteResponse struct {
-	InferenceID   string             `json:"inference_id"`
-	Deployment    string             `json:"deployment"`
-	ArtifactID    string             `json:"artifact_id"`
-	Model         string             `json:"model"`
-	IsExploration bool               `json:"is_exploration"`
-	Confidence    float64            `json:"confidence"`
-	Scores        map[string]float64 `json:"scores"`
-}
 
 // RouterParetoSummary Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no report prompt was scored for every candidate.
 type RouterParetoSummary struct {

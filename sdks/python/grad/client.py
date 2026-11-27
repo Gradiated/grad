@@ -11,7 +11,6 @@ import httpx
 from . import _resources as r
 from ._config import ResolvedConfig, resolve_config
 from ._generated.client import GeneratedApiClient
-from ._models import Deployment
 from ._transport import Clock, RetryPolicy, Transport
 
 __all__ = ["Grad"]
@@ -71,7 +70,6 @@ class Grad:
         self.runs = r.Runs(self)
         self.checkpoints = r.Checkpoints(self)
         self.artifacts = r.Artifacts(self)
-        self.deployments = r.Deployments(self)
         self.evals = r.Evals(self)
         self.keys = r.Keys(self)
         self.secrets = r.Secrets(self)
@@ -90,17 +88,6 @@ class Grad:
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(base_url={self.base_url!r}, api_key={'set' if self._config.api_key else 'none'})"
-
-    def deploy(
-        self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None, idempotency_key: str | None = None
-    ) -> Deployment:
-        """Deploy an artifact (``name@version``, an :class:`Artifact` or a finished :class:`Run`).
-
-        Gradiated Cloud serves it as ``your-org/<name>``. Self-hosted servers raise
-        :class:`grad.DeployUnavailableError` explaining how to serve the download on vLLM.
-        Rolling back is deploying an earlier version (or ``deployments.rollback(name)``).
-        """
-        return self.deployments.create(artifact, name=name, fallback=fallback, explore_rate=explore_rate, idempotency_key=idempotency_key)
 
     def close(self) -> None:
         """Close pooled connections."""

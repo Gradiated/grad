@@ -3,7 +3,7 @@ import { newId } from "../../ids.js";
 import { decodeCursor, toPage } from "../cursor.js";
 import type { ArtifactRepository } from "../types.js";
 import { jsonParam, Params, type Db } from "./db.js";
-import { toArtifact, toCheckpoint } from "./mappers.js";
+import { toArtifact, toArtifactPin, toCheckpoint } from "./mappers.js";
 import { first, listNewest, nowIso } from "./shared.js";
 
 const UNEXPIRED = "(expires_at IS NULL OR expires_at > $NOW::timestamptz)";
@@ -215,6 +215,91 @@ export const createArtifactRepository = (
 
     return row ? toArtifact(row) : null;
   },
+  pin: (input) =>
+    db.atomic(async () => {
+      const inserted = first(
+        await db.query(
+          `INSERT INTO grad_artifact_pins (workspace_id, artifact_id, holder, reason, created_at)
+           SELECT $1, $2, $3, $4, $5::timestamptz
+           WHERE EXISTS (SELECT 1 FROM grad_artifacts
+                         WHERE kind = 'release' AND workspace_id = $1 AND id = $2)
+           ON CONFLICT DO NOTHING
+           RETURNING *`,
+          [
+            input.workspaceId,
+            input.artifactId,
+            input.holder,
+            input.reason,
+            nowIso(clock),
+          ],
+        ),
+      );
+      if (inserted) return { pin: toArtifactPin(inserted), created: true };
+      const existing = first(
+        await db.query(
+          "SELECT * FROM grad_artifact_pins WHERE workspace_id = $1 AND artifact_id = $2 AND holder = $3",
+          [input.workspaceId, input.artifactId, input.holder],
+        ),
+      );
+
+      return existing ? { pin: toArtifactPin(existing), created: false } : null;
+    }),
+  unpin: async (workspaceId, artifactId, holder) =>
+    (
+      await db.query(
+        `DELETE FROM grad_artifact_pins
+         WHERE workspace_id = $1 AND artifact_id = $2 AND holder = $3 RETURNING holder`,
+        [workspaceId, artifactId, holder],
+      )
+    ).length > 0,
+  pins: async (workspaceId, artifactId) =>
+    (
+      await db.query(
+        `SELECT * FROM grad_artifact_pins WHERE workspace_id = $1 AND artifact_id = $2
+         ORDER BY created_at, holder`,
+        [workspaceId, artifactId],
+      )
+    ).map(toArtifactPin),
+  deleteRelease: (workspaceId, id) =>
+    db.atomic(async () => {
+      // The row lock serializes with a concurrent pin (its FK check takes a
+      // KEY SHARE lock on this row): a pin either commits first and is seen
+      // here, or fails its FK check once the row is gone.
+      const row = first(
+        await db.query<{ storage_key: string }>(
+          `SELECT storage_key FROM grad_artifacts
+           WHERE kind = 'release' AND workspace_id = $1 AND id = $2 FOR UPDATE`,
+          [workspaceId, id],
+        ),
+      );
+      if (!row) return null;
+      const pins = (
+        await db.query(
+          `SELECT * FROM grad_artifact_pins WHERE workspace_id = $1 AND artifact_id = $2
+           ORDER BY created_at, holder`,
+          [workspaceId, id],
+        )
+      ).map(toArtifactPin);
+      if (pins.length > 0) return { pins, orphanKey: null };
+      await db.query(
+        "DELETE FROM grad_artifacts WHERE kind = 'release' AND workspace_id = $1 AND id = $2",
+        [workspaceId, id],
+      );
+      await db.query(
+        `UPDATE grad_runs r SET artifact_id = NULL FROM grad_jobs j
+         WHERE j.id = r.id AND j.workspace_id = $1 AND r.artifact_id = $2`,
+        [workspaceId, id],
+      );
+      const shared = await db.query(
+        "SELECT 1 FROM grad_artifacts WHERE storage_key = $1 LIMIT 1",
+        [row.storage_key],
+      );
+
+      return {
+        pins: [],
+        orphanKey: shared.length > 0 ? null : row.storage_key,
+      };
+    }),
   list: (workspaceId, filter, page) => {
     const params = new Params();
     let where = `kind = 'release' AND workspace_id = ${params.add(workspaceId)}`;

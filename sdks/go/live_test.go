@@ -32,6 +32,10 @@ type liveStack struct {
 	Mode    string `json:"mode"`
 	// FaultURL proxies BaseURL but drops the first response of every keyed POST.
 	FaultURL string `json:"fault_url"`
+	// TinyLora and TinyLoraInvalid (--worker torch) are PEFT LoRA directories for
+	// test/tiny-qwen3; the invalid one names another base.
+	TinyLora        string `json:"tiny_lora"`
+	TinyLoraInvalid string `json:"tiny_lora_invalid"`
 }
 
 func repoRoot(t *testing.T) string {
@@ -224,13 +228,8 @@ func TestLiveSelfHosted(t *testing.T) {
 			t.Fatalf("download %+v does not match artifact sha %s", dl, run.Artifact.SHA256)
 		}
 
-		// Self-hosted servers have no hosted serving.
-		var unavailable *grad.DeployUnavailableError
-		if _, err := run.Deploy(ctx); !errors.As(err, &unavailable) {
-			t.Fatalf("deploy: %v", err)
-		}
-		if unavailable.Status != 501 || unavailable.Code != "deploy_unavailable" || !strings.Contains(unavailable.Detail, "download") {
-			t.Fatalf("deploy_unavailable without the self-serve hint: %+v", unavailable.GradError)
+		if p := run.Artifact.Provenance; string(p.Source) != "run" || p.RunID == nil || *p.RunID != run.ID {
+			t.Fatalf("provenance %+v", p)
 		}
 		latest := must(client.Artifacts.Get(ctx, "support-sft@latest"))(t)
 		if latest.ID != run.Artifact.ID {
@@ -403,5 +402,25 @@ func TestLiveCloudDistillAndRewardWithTorch(t *testing.T) {
 		Recipe: grad.RewardModelRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 4}}}).Wait(ctx))(t)
 	if verifier.Artifact == nil || *verifier.Artifact.Format != "reward_bundle" || verifier.EvalReport.MetricName != "preference_accuracy" {
 		t.Fatalf("reward run %+v artifact %+v report %+v", verifier.Run, verifier.Artifact, verifier.EvalReport)
+	}
+
+	// docs: artifacts.mdx "Upload or import an artifact": an uploaded LoRA is a normal artifact.
+	job := must(client.Artifacts.Upload(ctx, stack.TinyLora, grad.UploadParams{Base: "test/tiny-qwen3", Name: "uploaded-lora"}))(t)
+	uploaded := must(job.Wait(ctx))(t)
+	if string(uploaded.Provenance.Source) != "upload" || uploaded.Provenance.Uploader == nil || uploaded.Manifest["format_version"] != float64(2) {
+		t.Fatalf("uploaded %+v", uploaded.Artifact)
+	}
+	bad := must(client.Artifacts.Upload(ctx, stack.TinyLoraInvalid, grad.UploadParams{Base: "test/tiny-qwen3"}))(t)
+	var failed *grad.ArtifactImportFailedError
+	if _, err := bad.Wait(ctx); !errors.As(err, &failed) || failed.Status != 422 ||
+		!strings.Contains(err.Error(), "adapter_config.json: base_model_name_or_path is 'Qwen/Qwen3-8B'") {
+		t.Fatalf("invalid upload: %v", err)
+	}
+	dpo := must(client.Runs.Plan(ctx, grad.RunParams{Dataset: pairsDS, Name: "dpo-from-upload", Recipe: grad.DPORecipe{Common: grad.Common{Model: uploaded.Ref()}}}))(t)
+	if base := dpo.ResolvedConfig.BaseArtifact; base == nil || base.ID != uploaded.ID {
+		t.Fatalf("continued training from the upload: %+v", base)
+	}
+	if err := uploaded.Delete(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
