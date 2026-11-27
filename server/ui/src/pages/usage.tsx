@@ -1,7 +1,10 @@
+import { useState } from "react";
+
 import type { UsageGroupBy, UsageKind, UsageRecord, UsageRefTotal } from "@sdk/generated/models.js";
 
+import { IconUsage } from "../components/icons.js";
 import { Card, Empty, ErrorBanner, Segmented, SkeletonRows, Stat } from "../components/ui.js";
-import { useApi } from "../lib/api.js";
+import { errorMessage, useApi } from "../lib/api.js";
 import { compact, dateTime, int, usd } from "../lib/format.js";
 import { useResource } from "../lib/hooks.js";
 import { Link, setQuery, useLocation } from "../lib/router.js";
@@ -94,7 +97,7 @@ const TopTable = ({ title, refs }: { title: string; refs: UsageRefTotal[] }) => 
   </Card>
 );
 
-const ROWS = 100;
+const ROWS = 25;
 
 export const UsagePage = () => {
   const { client } = useApi();
@@ -110,7 +113,23 @@ export const UsagePage = () => {
   const ranges = presets();
   const active = (Object.keys(ranges) as (keyof typeof ranges)[]).find((k) => ranges[k].from === from && ranges[k].to === to) ?? "custom";
   const maxGroup = Math.max(0, ...(s?.groups ?? []).map((g) => g.costUsd));
-  const billed: UsageRecord[] = rows.data?.data ?? [];
+  const [older, setOlder] = useState<{ key: string; rows: UsageRecord[]; cursor: string | null } | null>(null);
+  const [more, setMore] = useState<{ busy: boolean; error: unknown }>({ busy: false, error: null });
+  const period = `${from}:${to}`;
+  const extra = older?.key === period ? older : null;
+  const billed: UsageRecord[] = [...(rows.data?.data ?? []), ...(extra?.rows ?? [])];
+  const cursor = extra ? extra.cursor : (rows.data?.nextCursor ?? null);
+  const loadMore = async () => {
+    if (!cursor) return;
+    setMore({ busy: true, error: null });
+    try {
+      const page = await client.listUsage({ from, to, limit: ROWS, cursor });
+      setOlder({ key: period, rows: [...(extra?.rows ?? []), ...page.data], cursor: page.nextCursor });
+      setMore({ busy: false, error: null });
+    } catch (e) {
+      setMore({ busy: false, error: e });
+    }
+  };
 
   return (
     <div className="page">
@@ -135,17 +154,15 @@ export const UsagePage = () => {
           ]}
         />
         <div className="grow" />
-        <label className="muted" htmlFor="usage-from">
-          From
-        </label>
-        <input id="usage-from" className="input" type="date" value={from} max={to} onChange={(e) => setQuery({ from: e.target.value })} />
-        <label className="muted" htmlFor="usage-to">
-          to
-        </label>
-        <input id="usage-to" className="input" type="date" value={to} min={from} onChange={(e) => setQuery({ to: e.target.value })} />
+        <div className="field-inline">
+          <label htmlFor="usage-from">From</label>
+          <input id="usage-from" className="input" type="date" value={from} max={to} onChange={(e) => setQuery({ from: e.target.value })} />
+          <label htmlFor="usage-to">to</label>
+          <input id="usage-to" className="input" type="date" value={to} min={from} onChange={(e) => setQuery({ to: e.target.value })} />
+        </div>
       </div>
 
-      <ErrorBanner error={summary.error} />
+      <ErrorBanner error={summary.error} onRetry={summary.reload} />
       <div className="stats">
         <Stat label="Total cost" value={s ? usd(s.costUsd) : "—"} hint={s ? `${int(s.records)} billed rows` : undefined} />
         <Stat label="Tokens billed" value={s ? compact(s.tokens) : "—"} />
@@ -175,7 +192,7 @@ export const UsagePage = () => {
               {(s?.groups ?? []).map((g) => (
                 <tr key={g.key ?? "none"}>
                   <td className={g.key ? "mono" : "faint"}>{g.key ?? "(none)"}</td>
-                  <td style={{ width: "30%" }}>
+                  <td className="share">
                     <div className="progress slim">
                       <span style={{ width: `${maxGroup > 0 ? ((g.costUsd / maxGroup) * 100).toFixed(1) : 0}%` }} />
                     </div>
@@ -188,7 +205,11 @@ export const UsagePage = () => {
             </tbody>
           </table>
         </div>
-        {s && s.records === 0 && <Empty title="Nothing billed in this period" />}
+        {s && s.records === 0 && (
+          <Empty title="Nothing billed in this period" icon={<IconUsage />}>
+            Pick another range, or start a run or an eval.
+          </Empty>
+        )}
       </Card>
 
       <div className="grid-2">
@@ -229,9 +250,13 @@ export const UsagePage = () => {
             </tbody>
           </table>
         </div>
-        {rows.data?.nextCursor && (
-          <div className="table-foot muted">
-            Showing the newest {ROWS} rows; the totals above cover the whole period (<span className="mono">grad usage list --from {from} --to {to}</span> pages through all).
+        {cursor && (
+          <div className="table-foot">
+            <button type="button" className="btn sm" onClick={() => void loadMore()} disabled={more.busy}>
+              {more.busy && <span className="spinner" />}
+              Show older rows
+            </button>
+            {more.error ? <span>{errorMessage(more.error)}</span> : <span>The totals above cover the whole period.</span>}
           </div>
         )}
       </Card>

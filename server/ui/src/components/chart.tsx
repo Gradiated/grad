@@ -2,17 +2,20 @@ import { useEffect, useRef } from "react";
 import uPlot, { type AlignedData, type Options } from "uplot";
 import "uplot/dist/uPlot.min.css";
 
-import { useColorScheme } from "../lib/hooks.js";
+import { useTheme } from "../lib/theme.js";
 
-export type Tone = "accent" | "green" | "amber" | "blue" | "red";
+/** A colour token from styles/tokens.css: the chart palette, or red for limits. */
+export type ChartColor = "--chart-1" | "--chart-2" | "--chart-3" | "--chart-4" | "--chart-5" | "--red";
 
 export interface ChartSeries {
   label: string;
   values: (number | null)[];
-  tone: Tone;
+  color: ChartColor;
   dashed?: boolean;
   /** Draw only points (sparse series such as eval loss), joined by a line. */
   sparse?: boolean;
+  /** A raw series drawn faintly behind its smoothed copy; left out of the hover readout. */
+  faint?: boolean;
 }
 
 export interface LineChartProps {
@@ -24,48 +27,90 @@ export interface LineChartProps {
   empty?: string;
 }
 
+/** Exponential moving average (TensorBoard-style smoothing); nulls pass through. */
+export const smooth = (values: (number | null)[], weight = 0.9): (number | null)[] => {
+  let acc = 0;
+  let n = 0;
+  return values.map((v) => {
+    if (v === null) return null;
+    n++;
+    acc = acc * weight + v * (1 - weight);
+    // Debiased, so the first points don't lean towards zero.
+    return acc / (1 - weight ** n);
+  });
+};
+
 const cssVar = (name: string): string => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
 
-const buildOptions = (width: number, height: number, props: LineChartProps): Options => {
-  const grid = cssVar("--border");
+const withAlpha = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`;
+
+const readout = (el: HTMLElement | null, u: uPlot, props: LineChartProps) => {
+  if (!el) return;
+  const idx = u.cursor.idx;
+  if (idx === null || idx === undefined) {
+    el.replaceChildren();
+    return;
+  }
+  const parts: Node[] = [];
+  const add = (label: string, value: string) => {
+    const span = document.createElement("span");
+    const b = document.createElement("b");
+    b.textContent = value;
+    span.append(`${label} `, b);
+    parts.push(span);
+  };
+  add(props.xLabel ?? "step", (u.data[0][idx] ?? 0).toLocaleString("en-US"));
+  props.series.forEach((s, i) => {
+    const v = u.data[i + 1]?.[idx];
+    if (!s.faint && v !== null && v !== undefined) add(s.label, props.format(v));
+  });
+  el.replaceChildren(...parts);
+};
+
+const buildOptions = (width: number, height: number, props: LineChartProps, readoutEl: () => HTMLElement | null): Options => {
+  const grid = cssVar("--grid");
   const axis = cssVar("--faint");
   const font = `11px ${cssVar("--font")}`;
-  const axisCommon = { stroke: axis, font, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid, width: 1, size: 4 } };
+  const axisCommon = { stroke: axis, font, grid: { stroke: grid, width: 1 }, ticks: { show: false }, gap: 6 };
   return {
     width,
     height,
-    padding: [10, 8, 0, 0],
+    padding: [12, 12, 0, 0],
     legend: { show: false },
-    cursor: { y: false, points: { size: 6 }, drag: { x: true, y: false } },
+    cursor: { y: false, points: { size: 7, width: 2 }, drag: { x: true, y: false } },
     scales: { x: { time: false } },
+    hooks: { setCursor: [(u) => readout(readoutEl(), u, props)] },
     axes: [
-      { ...axisCommon, values: (_u, ticks) => ticks.map((t) => (Number.isInteger(t) ? t.toLocaleString("en-US") : "")) },
-      { ...axisCommon, size: 56, values: (_u, ticks) => ticks.map((t) => props.format(t)) },
+      { ...axisCommon, size: 28, values: (_u, ticks) => ticks.map((t) => (Number.isInteger(t) ? t.toLocaleString("en-US") : "")) },
+      { ...axisCommon, size: 60, values: (_u, ticks) => ticks.map((t) => props.format(t)) },
     ],
     series: [
       { label: props.xLabel ?? "step" },
-      ...props.series.map((s) => ({
-        label: s.label,
-        stroke: cssVar(`--${s.tone}`),
-        width: 1.6,
-        spanGaps: true,
-        ...(s.dashed ? { dash: [5, 4] } : {}),
-        points: s.sparse ? { show: true, size: 5, width: 1.5, fill: cssVar("--panel") } : { show: false },
-        value: (_u: uPlot, v: number | null) => (v === null ? "—" : props.format(v)),
-      })),
+      ...props.series.map((s) => {
+        const color = cssVar(s.color);
+        return {
+          label: s.label,
+          stroke: s.faint ? withAlpha(color, 0.28) : color,
+          width: s.faint ? 1 : 1.75,
+          spanGaps: true,
+          ...(s.dashed ? { dash: [5, 4] } : {}),
+          points: s.sparse ? { show: true, size: 6, width: 1.75, fill: cssVar("--panel") } : { show: false },
+        };
+      }),
     ],
   };
 };
 
-/** A themed uPlot line chart that resizes with its container and updates in place. */
+/** A themed uPlot line chart that resizes with its container, updates in place and reads out the hovered step. */
 export const LineChart = (props: LineChartProps) => {
   const host = useRef<HTMLDivElement>(null);
+  const out = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
-  const scheme = useColorScheme();
-  const height = props.height ?? 210;
+  const theme = useTheme();
+  const height = props.height ?? 200;
   const data: AlignedData = [props.x, ...props.series.map((s) => s.values)] as AlignedData;
   const hasData = props.x.length > 0 && props.series.some((s) => s.values.some((v) => v !== null));
-  const shape = props.series.map((s) => `${s.label}:${s.tone}:${s.dashed ? 1 : 0}`).join("|");
+  const shape = props.series.map((s) => `${s.label}:${s.color}:${s.dashed ? 1 : 0}`).join("|");
 
   // (Re)create on theme or series-shape change; data updates go through setData.
   useEffect(() => {
@@ -73,7 +118,11 @@ export const LineChart = (props: LineChartProps) => {
     if (!el || !hasData) return;
     let chart: uPlot;
     try {
-      chart = new uPlot(buildOptions(Math.max(200, el.clientWidth), height, props), data, el);
+      chart = new uPlot(
+        buildOptions(Math.max(200, el.clientWidth), height, props, () => out.current),
+        data,
+        el,
+      );
     } catch {
       return; // no canvas (tests, ancient browsers)
     }
@@ -86,14 +135,15 @@ export const LineChart = (props: LineChartProps) => {
       plot.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheme, shape, height, hasData]);
+  }, [theme, shape, height, hasData]);
 
   useEffect(() => {
     plot.current?.setData(data);
   });
 
   return (
-    <div className="chart" style={{ height: height + 12 }}>
+    <div className="chart" style={{ height: height + 10 }}>
+      <div className="chart-readout" ref={out} aria-hidden="true" />
       <div ref={host} />
       {!hasData && <div className="chart-empty">{props.empty ?? "No data yet"}</div>}
     </div>

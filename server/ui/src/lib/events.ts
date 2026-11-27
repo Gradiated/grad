@@ -258,3 +258,25 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
   }
   return { series, timeline, phase, gpu, final, lastSeq };
 };
+
+/** Folds runs of three or more consecutive checkpoints into one row, so frequent checkpoints don't bury the other events. */
+export const foldCheckpoints = (items: TimelineItem[]): TimelineItem[] => {
+  const out: TimelineItem[] = [];
+  let i = 0;
+  while (i < items.length) {
+    let j = i;
+    while (j < items.length && items[j]?.kind === "checkpoint") j++;
+    if (j - i >= 3) {
+      const first = items[i] as TimelineItem;
+      const last = items[j - 1] as TimelineItem;
+      const steps = items.slice(i, j).map((t) => t.step ?? 0);
+      const latest = first.timestamp > last.timestamp ? first : last;
+      out.push({ key: `ckpts:${first.key}`, kind: "checkpoint", timestamp: latest.timestamp, title: `${j - i} checkpoints`, detail: `steps ${Math.min(...steps)} to ${Math.max(...steps)}`, step: Math.max(...steps) });
+      i = j;
+    } else {
+      out.push(items[i] as TimelineItem);
+      i++;
+    }
+  }
+  return out;
+};

@@ -1,3 +1,4 @@
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/app.js";
@@ -7,13 +8,14 @@ import { followRun } from "../src/lib/stream.js";
 import { presets } from "../src/pages/usage.js";
 import type { RunEvent } from "../src/lib/events.js";
 // happy-dom has no canvas: stand in for uPlot and record what the charts draw.
-const charts = vi.hoisted(() => ({ created: [] as { series: string[]; data: unknown[] }[] }));
+type ChartOpts = { series: { label?: string }[]; hooks: { setCursor: ((u: unknown) => void)[] }; axes: { values: (u: unknown, ticks: number[]) => string[] }[] };
+const charts = vi.hoisted(() => ({ created: [] as { series: string[]; data: unknown[]; opts: ChartOpts }[] }));
 vi.mock("uplot", () => ({
   default: class {
     series: string[];
-    constructor(opts: { series: { label?: string }[] }, data: unknown[]) {
+    constructor(opts: ChartOpts, data: unknown[]) {
       this.series = opts.series.map((s) => s.label ?? "");
-      charts.created.push({ series: this.series, data });
+      charts.created.push({ series: this.series, data, opts });
     }
     setData(data: unknown[]) {
       const c = charts.created.find((x) => x.series === this.series);
@@ -103,6 +105,7 @@ const routes = (extra: Record<string, unknown> = {}) => ({
 
 let app: Mounted | undefined;
 beforeEach(() => {
+  charts.created.length = 0;
   sessionStorage.clear();
   history.replaceState(null, "", "/");
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => (String(input).endsWith("/health/ready") ? json({ status: "ready" }) : problem(404, "route_not_found")));
@@ -181,7 +184,8 @@ describe("runs", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("support-sft");
     expect(text).toContain("test/tiny-qwen3");
-    expect(text).toContain("$0.0114 / $5.00");
+    expect(text).toContain("$0.0114of $5.00");
+    expect(text).toContain("sft · support v1");
     expect(byText(container, "tbody tr", "router-queued")?.textContent).toContain("Queued");
     await click(byText(container, ".segmented button", "Failed"));
     await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(1));
@@ -204,6 +208,44 @@ describe("runs", () => {
     await click(byText(container, "button", "Load older runs"));
     await waitFor(() => expect(container.textContent).toContain("ancient"));
     expect(byText(container, "button", "Load older runs")).toBeUndefined();
+  });
+
+  it("draws the cost cap once the spend nears it", async () => {
+    const near = { ...RUN, cost_usd: 4.2, updated_at: "2099-01-01T00:00:00Z" };
+    const { container } = await boot(fakeServer(routes({ [`GET /v1/runs/${RUN_ID}`]: near })), `/runs/${RUN_ID}`);
+    await waitFor(() => expect(container.textContent).toContain("Checkpoints"));
+    await waitFor(() => expect(charts.created.some((c) => c.series.includes("cap"))).toBe(true));
+  });
+
+  it("shows a queued run's wait instead of empty charts", async () => {
+    const { container } = await boot(fakeServer(routes({ "GET /v1/runs/run_q1/events": () => sse("") })), "/runs/run_q1");
+    await waitFor(() => expect(container.textContent).toContain("Waiting for the first step"));
+    const text = container.textContent ?? "";
+    expect(text).toContain("queued for");
+    expect(text).toContain("Queued behind 2 runs");
+    expect(container.querySelectorAll(".chart").length).toBe(0);
+  });
+
+  it("retries a failed page load", async () => {
+    let fail = true;
+    const server = fakeServer(routes({ "GET /v1/runs": ({ url }: { url: URL }) => (fail && url.searchParams.get("limit") === "100" ? problem(400, "bad_request", "listing failed") : json({ data: [RUN], next_cursor: null })) }));
+    const { container } = await boot(server);
+    await waitFor(() => expect(container.textContent).toContain("listing failed"));
+    fail = false;
+    await click(byText(container, "button", "Retry"));
+    await waitFor(() => expect(byText(container, "tbody tr", "support-sft")).toBeTruthy());
+  });
+
+  it("switches between the dark and light themes and remembers the choice", async () => {
+    localStorage.clear();
+    const { container } = await boot();
+    await waitFor(() => expect(container.querySelector("[aria-label='Switch to the light theme']")).toBeTruthy());
+    await click(container.querySelector("[aria-label='Switch to the light theme']"));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(localStorage.getItem("grad-theme")).toBe("light");
+    await click(container.querySelector("[aria-label='Switch to the dark theme']"));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("grad-theme")).toBe("dark");
   });
 
   it("shows an empty state", async () => {
@@ -229,9 +271,22 @@ describe("runs", () => {
     expect(text).toContain("of $5.00 cap");
     expect(text).toMatch(/Loss/);
     const loss = charts.created.find((c) => c.series.includes("train"));
-    expect(loss?.series).toEqual(["step", "train", "eval"]);
+    expect(loss?.series).toEqual(["step", "raw", "train", "eval"]);
     expect(loss?.data[0]).toEqual([1, 2, 3]);
-    expect(charts.created.some((c) => c.series.includes("cap"))).toBe(true);
+    // Hovering reads out the step and the smoothed values, not the faint raw series.
+    const cursor = { cursor: { idx: 1 as number | null }, data: loss?.data };
+    act(() => loss?.opts.hooks.setCursor[0]?.(cursor));
+    const readout = container.querySelector(".chart-readout");
+    expect(readout?.textContent).toMatch(/^step 2train [\d.]+/);
+    expect(readout?.textContent).not.toContain("raw");
+    cursor.cursor.idx = null;
+    act(() => loss?.opts.hooks.setCursor[0]?.(cursor));
+    expect(readout?.textContent).toBe("");
+    expect(loss?.opts.axes[0]?.values(cursor, [1000, 1.5])).toEqual(["1,000", ""]);
+    expect(loss?.opts.axes[1]?.values(cursor, [0.5])).toEqual(["0.5"]);
+    // $0.01 of a $5 cap: the cap line would flatten the cost line, so the legend states the share instead.
+    expect(charts.created.some((c) => c.series.includes("cap"))).toBe(false);
+    expect(text).toContain("0% of cap");
     expect(container.querySelector("pre.code")?.textContent).toContain("model: test/tiny-qwen3");
     expect(container.querySelector("pre.code")?.textContent).toContain("checkpoint_every_steps: 1");
     expect(container.querySelectorAll(".table tbody tr").length).toBeGreaterThanOrEqual(3);
@@ -340,7 +395,7 @@ describe("datasets, evals, usage, health", () => {
     expect(location.search).toContain("by=model");
 
     await type(container.querySelector("#usage-from"), "2026-10-01");
-    await waitFor(() => expect(asked().some((p) => p === "/v1/usage?limit=100&from=2026-10-01&to=2026-11-30")).toBe(true));
+    await waitFor(() => expect(asked().some((p) => p === "/v1/usage?limit=25&from=2026-10-01&to=2026-11-30")).toBe(true));
     expect(container.textContent).toContain("Custom");
     await click(byText(container, "button", /^Last month$/));
     const last = presets()["last-month"];
@@ -348,11 +403,29 @@ describe("datasets, evals, usage, health", () => {
     expect(container.textContent).not.toContain("Custom");
   });
 
+  it("pages through older billed rows", async () => {
+    const rows = fixture<{ data: Record<string, unknown>[] }>("usage.json");
+    const server = fakeServer(
+      routes({
+        "GET /v1/usage": ({ url }: { url: URL }) =>
+          url.searchParams.get("cursor") === "u2" ? json({ data: [{ ...rows.data[0], id: "use_old", ref_name: "ancient-run" }], next_cursor: null }) : json({ ...rows, next_cursor: "u2" }),
+      }),
+    );
+    const { container } = await boot(server, "/usage");
+    await waitFor(() => expect(byText(container, "button", "Show older rows")).toBeTruthy());
+    await click(byText(container, "button", "Show older rows"));
+    await waitFor(() => expect(container.textContent).toContain("ancient-run"));
+    expect(byText(container, ".card", "Billed rows")?.querySelectorAll("tbody tr").length).toBe(4);
+    expect(byText(container, "button", "Show older rows")).toBeUndefined();
+  });
+
   it("shows pools and the queue on the health page", async () => {
     const { container } = await boot(undefined, "/health");
     await waitFor(() => expect(container.textContent).toContain("scaling up"));
     expect(container.textContent).toContain("router-queued");
     expect(container.textContent).toContain("database reachable");
+    expect(container.textContent).toContain("ready");
+    expect(container.textContent).toContain("Queued behind 2 runs");
   });
 
   it("renders a not-found page for unknown routes", async () => {

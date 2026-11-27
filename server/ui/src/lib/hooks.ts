@@ -69,19 +69,6 @@ export const useResource = <T>(fetcher: (signal: AbortSignal) => Promise<T>, dep
   return { data, error, loading, reload };
 };
 
-/** Tracks prefers-color-scheme so charts can re-theme. */
-export const useColorScheme = (): "light" | "dark" => {
-  const [query] = useState(() => (typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : undefined));
-  const [dark, setDark] = useState(query?.matches ?? false);
-  useEffect(() => {
-    if (!query) return;
-    const on = (e: MediaQueryListEvent) => setDark(e.matches);
-    query.addEventListener("change", on);
-    return () => query.removeEventListener("change", on);
-  }, [query]);
-  return dark ? "dark" : "light";
-};
-
 /** Re-renders every `ms` so relative times stay fresh. */
 export const useNow = (ms = 15_000): number => {
   const [now, setNow] = useState(() => Date.now());

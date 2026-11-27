@@ -108,8 +108,36 @@ export const IconImport = () => (
     <path d="M2.5 10.5v1.75a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10.5" />
   </Svg>
 );
-export const BrandMark = () => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="#fff" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M2.5 11.5 6 7l2.75 2.5L13.5 4" />
+export const IconSun = () => (
+  <Svg>
+    <circle cx="8" cy="8" r="2.75" />
+    <path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.06 1.06M11.34 11.34l1.06 1.06M3.6 12.4l1.06-1.06M11.34 4.66l1.06-1.06" />
+  </Svg>
+);
+export const IconMoon = () => (
+  <Svg>
+    <path d="M13.25 9.6A5.5 5.5 0 0 1 6.4 2.75a5.5 5.5 0 1 0 6.85 6.85Z" />
+  </Svg>
+);
+export const IconInbox = () => (
+  <Svg>
+    <path d="M2 9.5 3.75 3.5h8.5L14 9.5v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-3Z" />
+    <path d="M2 9.5h3.5l1 1.5h3l1-1.5H14" />
+  </Svg>
+);
+
+/** The grad wordmark (docs/assets/grad-wordmark.svg): strokes in currentColor, the dot in --mark. */
+export const Wordmark = ({ className = "wordmark" }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 306 126" role="img" aria-label="grad">
+    <g fill="none" stroke="currentColor" strokeWidth={11} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="40" cy="60" r="26" />
+      <path d="M66 34V92A26 26 0 0 1 19 107" />
+      <path d="M96 86V60A26 26 0 0 1 122 34" />
+      <circle cx="170" cy="60" r="26" />
+      <path d="M196 34V86" />
+      <circle cx="244" cy="60" r="26" />
+      <path d="M270 8V86" />
+    </g>
+    <circle cx="292" cy="80.5" r="7" fill="var(--mark)" />
   </svg>
 );

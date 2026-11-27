@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Artifact, Checkpoint, Run } from "@sdk/generated/models.js";
 
-import { LineChart } from "../components/chart.js";
-import { IconChevron, IconDownload, IconPlay, IconStop } from "../components/icons.js";
-import { Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
+import { LineChart, smooth, type ChartColor } from "../components/chart.js";
+import { IconChevron, IconDownload, IconPlay, IconRuns as IconChart, IconStop } from "../components/icons.js";
+import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { CODEC, convertKeys, errorMessage, isTerminalRun, lifecycleOf, useApi, type RunLifecycle, type RunPhase } from "../lib/api.js";
-import { evalLossOf, PHASE_LABEL, REASON_LABEL, type RunStreamState, type TimelineItem } from "../lib/events.js";
+import { evalLossOf, foldCheckpoints, PHASE_LABEL, REASON_LABEL, type RunStreamState, type TimelineItem } from "../lib/events.js";
 import { ago, bytes, compact, dateTime, duration, int, num, time, toYaml, usd } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
 import { renderReport } from "../lib/report.js";
@@ -30,7 +30,7 @@ export const RunDetailPage = ({ id }: { id: string }) => {
     return (
       <div className="page">
         <Crumbs name={id} />
-        {polled.error ? <ErrorBanner error={polled.error} /> : <div className="skeleton" style={{ height: 28, width: 260 }} />}
+        {polled.error ? <ErrorBanner error={polled.error} onRetry={polled.reload} /> : <div className="skeleton title" aria-label="Loading run" />}
       </div>
     );
   }
@@ -44,26 +44,35 @@ export const RunDetailPage = ({ id }: { id: string }) => {
     <div className="page">
       <Crumbs name={run.name} />
       <div className="page-header">
-        <div style={{ minWidth: 0 }}>
+        <div>
           <h1 className="page-title">
             {run.name}
             <StatusBadge status={run.status} />
+            {active && <span className={`led${streamError ? " off" : ""}`}>{streamError ? "offline" : "live"}</span>}
           </h1>
           <div className="page-sub">
-            <span className="mono">{run.id}</span>
-            <CopyButton text={run.id} label="Copy run id" />
+            <span className="group">
+              <span className="mono">{run.id}</span>
+              <CopyButton text={run.id} label="Copy run id" />
+            </span>
             <span className="sep" />
-            <span className="chip">{run.recipeKind}</span>
-            <span className="mono">{run.resolvedConfig.model}</span>
+            <span className="group">
+              <span className="chip">{run.recipeKind}</span>
+              <span className="mono">{run.resolvedConfig.model}</span>
+            </span>
             <span className="sep" />
-            <Link className="link" href={`/datasets/${encodeURIComponent(run.datasetName)}`}>
-              {run.datasetName}
-            </Link>
-            <span className="faint">v{run.datasetVersion}</span>
+            <span className="group">
+              <Link className="link" href={`/datasets/${encodeURIComponent(run.datasetName)}`}>
+                {run.datasetName}
+              </Link>
+              <span className="faint">v{run.datasetVersion}</span>
+            </span>
             <span className="sep" />
             <span title={dateTime(run.createdAt)}>created {ago(run.createdAt, now)}</span>
             <span className="sep" />
-            <span>{active ? "running for" : "took"} {duration(ended - started)}</span>
+            <span>
+              {active ? (run.status === "queued" ? "queued for" : "running for") : "took"} {duration(ended - started)}
+            </span>
           </div>
         </div>
         <div className="actions">
@@ -90,7 +99,15 @@ export const RunDetailPage = ({ id }: { id: string }) => {
 
       <Lifecycle run={run} life={life} stream={stream} now={now} />
       <RunStats run={run} stream={stream} />
-      <Charts run={run} stream={stream} />
+      {stream.series.step.length > 0 ? (
+        <Charts run={run} stream={stream} />
+      ) : (
+        <Card title="Metrics">
+          <Empty title={active ? "Waiting for the first step" : "No metrics were recorded"} icon={<IconChart />}>
+            {active ? "Loss, learning rate, throughput and cost charts appear once training starts." : "This run ended before its first training step."}
+          </Empty>
+        </Card>
+      )}
 
       <div className="split">
         <div className="stack">
@@ -162,42 +179,44 @@ const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; s
   const autoscaling = stream.phase?.autoscaling ?? life.autoscaling;
   const failed = run.status === "failed" || run.status === "cancelled" || run.status === "stopped_budget";
 
+  const headline = phase ? PHASE_LABEL[phase] : run.status === "completed" ? "Completed" : failed ? `Ended ${run.status === "failed" ? "with an error" : run.status === "cancelled" ? "by cancellation" : "at the cost cap"}` : "—";
+  const stepState = (i: number) => (i === groupIdx ? "now" : i < groupIdx || run.status === "completed" ? "done" : "");
   return (
-    <section className="card">
-      <div className="card-body" style={{ display: "grid", gap: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 15, fontWeight: 600 }}>{phase ? PHASE_LABEL[phase] : run.status === "completed" ? "Completed" : failed ? `Ended ${run.status === "failed" ? "with an error" : run.status === "cancelled" ? "by cancellation" : "at the cost cap"}` : "—"}</span>
+    <section className="card" aria-label="Lifecycle">
+      <div className="card-body lifecycle">
+        <div className="lifecycle-head">
+          <div className="lifecycle-phase">
+            <span className="now">{headline}</span>
             {phase && since && <span className="muted">for {duration(now - Date.parse(since))}</span>}
-            {stream.gpu && <span className="chip">{stream.gpu.name} · {stream.gpu.memoryGb} GB</span>}
+            {stream.gpu && (
+              <span className="chip">
+                {stream.gpu.name} · {stream.gpu.memoryGb} GB
+              </span>
+            )}
           </div>
-          <div style={{ display: "flex", gap: 16, alignItems: "baseline" }} className="num">
+          <div className="lifecycle-figures">
             <span>
               <span className="muted">Step </span>
-              {int(run.currentStep)}
+              <b>{int(run.currentStep)}</b>
               <span className="faint"> / {int(run.totalSteps)}</span>
+              {run.totalSteps > 0 && <span className="faint"> · {Math.floor(progress * 100)}%</span>}
             </span>
             <span title="Attempts started; attempts whose compute was reclaimed don't count toward the failure cap.">
               <span className="muted">Attempt </span>
-              {Math.max(run.attempt, 1)}
+              <b>{Math.max(run.attempt, 1)}</b>
               <span className="faint"> / {run.maxAttempts}</span>
             </span>
           </div>
         </div>
-        <div>
-          <div className={`phase-strip${failed ? " failed" : ""}`}>
-            {GROUPS.map((g, i) => (
-              <div key={g.label} className={`seg${i < groupIdx || run.status === "completed" ? " done" : i === groupIdx ? " now" : ""}`} />
-            ))}
-          </div>
-          <div className="phase-labels">
-            {GROUPS.map((g) => (
-              <span key={g.label}>{g.label}</span>
-            ))}
-          </div>
-        </div>
+        <ol className={`steps${failed ? " failed" : ""}${run.status === "completed" ? " complete" : ""}`} aria-label="Run phases">
+          {GROUPS.map((g, i) => (
+            <li key={g.label} className={stepState(i)} aria-current={i === groupIdx ? "step" : undefined}>
+              {g.label}
+            </li>
+          ))}
+        </ol>
         {run.status === "running" && run.totalSteps > 0 && (
-          <div className="progress slim" aria-label="Training progress">
+          <div className="progress slim" role="progressbar" aria-label="Training progress" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
             <span style={{ width: `${(progress * 100).toFixed(1)}%` }} />
           </div>
         )}
@@ -206,7 +225,9 @@ const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; s
           <Banner tone="info">
             {autoscaling
               ? "Starting a worker: the pool scales from zero, so the first claim can take a few minutes."
-              : `${workersOnline} worker${workersOnline === 1 ? "" : "s"} of this kind online, all busy. The run starts when one frees up.`}
+              : workersOnline === 0
+                ? "No worker of this kind is online. The run starts when one connects."
+                : `${workersOnline} worker${workersOnline === 1 ? "" : "s"} of this kind online, all busy. The run starts when one frees up.`}
           </Banner>
         )}
         {life.lastInterruption && (
@@ -241,57 +262,69 @@ const RunStats = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
       <Stat label="Learning rate" value={num(lr, 3)} hint={run.resolvedConfig.schedule} />
       <Stat label="Tokens / s" value={compact(tps)} />
       <Stat label="Tokens" value={compact(run.tokensProcessed)} hint={`${usd(run.pricePerMillionTokens)} / M`} />
-      <div className="stat" style={{ minWidth: 200 }}>
-        <Meter
-          label="Cost"
-          value={run.costUsd}
-          max={run.maxCostUsd}
-          right={
-            <>
-              <b>{usd(run.costUsd)}</b>
-              <span className="faint"> {run.maxCostUsd !== null ? `of ${usd(run.maxCostUsd)} cap` : "no cap"}</span>
-            </>
-          }
-        />
+      <div className="stat">
+        <div className="stat-label">Cost</div>
+        <div className="stat-value">
+          {usd(run.costUsd)}
+          <span className="of"> {run.maxCostUsd !== null ? `of ${usd(run.maxCostUsd)} cap` : "no cap"}</span>
+        </div>
+        <Meter label="Cost against the cap" value={run.costUsd} max={run.maxCostUsd} />
       </div>
     </div>
   );
 };
 
+/** Whether the cost cap is worth drawing: far above the spend, it flattens the cost line to zero. */
+const showCap = (spent: number, cap: number | null): cap is number => cap !== null && cap > 0 && spent >= cap * 0.2;
+
 const Charts = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
   const s = stream.series;
   const hasEval = s.evalLoss.some((v) => v !== null);
-  const cap = useMemo(() => (run.maxCostUsd === null ? null : s.step.map(() => run.maxCostUsd)), [run.maxCostUsd, s.step]);
-  const waiting = isTerminalRun(run) ? "No metrics were recorded" : "Waiting for the first step";
+  const drawCap = showCap(run.costUsd, run.maxCostUsd);
+  const cap = useMemo(() => (drawCap ? s.step.map(() => run.maxCostUsd) : null), [drawCap, run.maxCostUsd, s.step]);
+  const loss = useMemo(() => smooth(s.loss), [s.loss]);
+  const tps = useMemo(() => smooth(s.tokensPerSec), [s.tokensPerSec]);
+  const waiting = "No data yet";
   return (
     <div className="chart-grid">
-      <ChartCard title="Loss" value={num(last(s.loss))} legend={[{ label: "train", tone: "accent" }, ...(hasEval ? [{ label: "eval", tone: "amber", dashed: true }] : [])]}>
+      <ChartCard title="Loss" value={num(last(s.loss))} legend={[{ label: "train", color: "--chart-1" }, ...(hasEval ? [{ label: "eval", color: "--chart-2" as const, dashed: true }] : [])]}>
         <LineChart
           x={s.step}
           format={(v) => num(v, 3)}
           empty={waiting}
-          series={[{ label: "train", values: s.loss, tone: "accent" }, ...(hasEval ? [{ label: "eval", values: s.evalLoss, tone: "amber" as const, dashed: true, sparse: true }] : [])]}
+          series={[
+            { label: "raw", values: s.loss, color: "--chart-1", faint: true },
+            { label: "train", values: loss, color: "--chart-1" },
+            ...(hasEval ? [{ label: "eval", values: s.evalLoss, color: "--chart-2" as const, dashed: true, sparse: true }] : []),
+          ]}
         />
       </ChartCard>
-      <ChartCard title="Learning rate" value={num(last(s.lr), 3)}>
-        <LineChart x={s.step} format={(v) => num(v, 2)} empty={waiting} series={[{ label: "lr", values: s.lr, tone: "blue" }]} />
+      <ChartCard title="Learning rate" value={num(last(s.lr), 3)} legend={[{ label: run.resolvedConfig.schedule, color: "--chart-4" }]}>
+        <LineChart x={s.step} format={(v) => num(v, 3)} empty={waiting} series={[{ label: "lr", values: s.lr, color: "--chart-4" }]} />
       </ChartCard>
       <ChartCard title="Throughput" value={`${compact(last(s.tokensPerSec))} tok/s`}>
-        <LineChart x={s.step} format={compact} empty={waiting} series={[{ label: "tokens/s", values: s.tokensPerSec, tone: "green" }]} />
-      </ChartCard>
-      <ChartCard title="Cost" value={`${usd(run.costUsd)}${run.maxCostUsd !== null ? ` / ${usd(run.maxCostUsd)}` : ""}`} legend={cap ? [{ label: "spent", tone: "accent" }, { label: "cap", tone: "red", dashed: true }] : undefined}>
         <LineChart
           x={s.step}
-          format={usd}
+          format={compact}
           empty={waiting}
-          series={[{ label: "cost", values: s.costUsd, tone: "accent" }, ...(cap ? [{ label: "cap", values: cap, tone: "red" as const, dashed: true }] : [])]}
+          series={[
+            { label: "raw", values: s.tokensPerSec, color: "--chart-3", faint: true },
+            { label: "tok/s", values: tps, color: "--chart-3" },
+          ]}
         />
+      </ChartCard>
+      <ChartCard
+        title="Cost"
+        value={`${usd(run.costUsd)}${run.maxCostUsd !== null ? ` / ${usd(run.maxCostUsd)}` : ""}`}
+        legend={cap ? [{ label: "spent", color: "--chart-1" }, { label: "cap", color: "--red", dashed: true }] : run.maxCostUsd !== null ? [{ label: `${Math.round((run.costUsd / run.maxCostUsd) * 100)}% of cap`, color: "--chart-1" }] : undefined}
+      >
+        <LineChart x={s.step} format={usd} empty={waiting} series={[{ label: "spent", values: s.costUsd, color: "--chart-1" }, ...(cap ? [{ label: "cap", values: cap, color: "--red" as const, dashed: true }] : [])]} />
       </ChartCard>
     </div>
   );
 };
 
-const ChartCard = ({ title, value, legend, children }: { title: string; value: string; legend?: { label: string; tone: string; dashed?: boolean }[] | undefined; children: ReactNode }) => (
+const ChartCard = ({ title, value, legend, children }: { title: string; value: string; legend?: { label: string; color: ChartColor; dashed?: boolean }[] | undefined; children: ReactNode }) => (
   <section className="card chart-card">
     <header className="card-header">
       <h2 className="card-title">
@@ -304,7 +337,7 @@ const ChartCard = ({ title, value, legend, children }: { title: string; value: s
         <div className="chart-legend">
           {legend.map((l) => (
             <span key={l.label} className="key">
-              <span className={`swatch${l.dashed ? " dashed" : ""}`} style={{ background: `var(--${l.tone})`, borderColor: `var(--${l.tone})` }} />
+              <span className={`swatch${l.dashed ? " dashed" : ""}`} style={{ borderColor: `var(${l.color})` }} />
               {l.label}
             </span>
           ))}
@@ -347,7 +380,11 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
             {rows.map((c) => (
               <tr key={c.id}>
                 <td className="num">
-                  {int(c.step)} {c.best && <span className="badge green">best</span>} {c.final && <span className="badge outline">final</span>}
+                  <span className="actions">
+                    {int(c.step)}
+                    {c.best && <Badge tone="green">best</Badge>}
+                    {c.final && <Badge>final</Badge>}
+                  </span>
                 </td>
                 <td className="num muted">{c.attempt}</td>
                 <td className="right num">{num(c.evalScore)}</td>
@@ -371,18 +408,18 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
           </tbody>
         </table>
       </div>
-      {res.data && rows.length === 0 && <Empty title="No checkpoints yet">Checkpoints appear every {int(run.resolvedConfig.checkpointEverySteps)} steps.</Empty>}
+      {res.data && rows.length === 0 && <Empty title="No checkpoints yet">{isTerminalRun(run) ? "This run saved no checkpoints." : `Checkpoints appear every ${int(run.resolvedConfig.checkpointEverySteps)} steps.`}</Empty>}
       {promote && (
         <Confirm
           title={`Promote step ${promote.step}?`}
           confirm="Promote"
           body={
-            <div style={{ display: "grid", gap: 8 }}>
+            <div className="form">
               <p>Creates an immutable artifact from this checkpoint. It no longer expires.</p>
-              <label className="muted" htmlFor="promote-name" style={{ fontSize: 12 }}>
+              <label className="field">
                 Artifact name
+                <input id="promote-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
               </label>
-              <input id="promote-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           }
           onConfirm={async () => {
@@ -406,14 +443,14 @@ const EvalReportCard = ({ run }: { run: Run }) => {
   const r = renderReport(run.recipeKind, report);
   return (
     <Card title="Eval report" actions={<span className="chip">{run.recipeKind}</span>}>
-      <div style={{ display: "grid", gap: 16 }}>
+      <div className="stack">
         {r.warnings.map((w) => (
           <Banner key={w} tone="warn">
             {w}
           </Banner>
         ))}
         {r.headline.length > 0 && (
-          <div className="stats" style={{ boxShadow: "none" }}>
+          <div className="stats flat">
             {r.headline.map((row) => (
               <Stat key={row.label} label={row.label} value={row.value} hint={row.hint} />
             ))}
@@ -421,9 +458,7 @@ const EvalReportCard = ({ run }: { run: Run }) => {
         )}
         {r.pareto.length > 0 && (
           <div>
-            <div className="muted" style={{ marginBottom: 8, fontSize: 12 }}>
-              Routing trade-off
-            </div>
+            <div className="section-label">Routing trade-off</div>
             <dl className="kv">
               {r.pareto.map((row) => (
                 <Kv key={row.label} label={row.label} value={row.value} />
@@ -432,7 +467,7 @@ const EvalReportCard = ({ run }: { run: Run }) => {
           </div>
         )}
         {r.heads.length > 0 && (
-          <table className="table">
+          <table className="table flat">
             <thead>
               <tr>
                 <th>Head</th>
@@ -508,7 +543,7 @@ const ArtifactCard = ({ id }: { id: string }) => {
     >
       <ErrorBanner error={res.error ?? error} />
       {a ? (
-        <div style={{ display: "grid", gap: 14 }}>
+        <div className="stack">
           <dl className="kv">
             <Kv label="Name" value={<span className="mono">{`${a.name}@${a.version}`}</span>} />
             <Kv label="Format" value={a.format ?? "—"} />
@@ -519,7 +554,7 @@ const ArtifactCard = ({ id }: { id: string }) => {
           <Command cmd={`grad artifacts download ${a.name}@${a.version} --output ./${a.name}`} />
         </div>
       ) : (
-        !res.error && <div className="skeleton" style={{ width: "60%" }} />
+        !res.error && <div className="skeleton" />
       )}
     </Card>
   );
@@ -547,20 +582,20 @@ const ConfigCard = ({ run }: { run: Run }) => {
 
 const Timeline = ({ items }: { items: TimelineItem[] }) => {
   const list = useRef<HTMLOListElement>(null);
-  const ordered = [...items].reverse();
+  const ordered = foldCheckpoints([...items].reverse());
   useEffect(() => {
     list.current?.scrollTo?.({ top: 0 });
   }, [items.length]);
   return (
     <Card title="Events" count={items.length || undefined} tight>
       {ordered.length === 0 ? (
-        <Empty title="No events yet" />
+        <Empty title="No events yet">Phases, attempts, checkpoints and warnings appear here as they happen.</Empty>
       ) : (
         <ol className="timeline" ref={list}>
           {ordered.map((t) => (
             <li key={t.key} className={t.kind}>
               <span className="mark" />
-              <div style={{ minWidth: 0 }}>
+              <div>
                 <div className="t-title">{t.title}</div>
                 {t.detail && <div className="t-detail">{t.detail}</div>}
               </div>
@@ -585,12 +620,12 @@ const ResumeDialog = ({ run, onDone, onClose }: { run: Run; onDone: () => void; 
       title="Resume this run?"
       confirm="Resume"
       body={
-        <div style={{ display: "grid", gap: 8 }}>
+        <div className="form">
           <p>Continues from the latest checkpoint as a new attempt.</p>
-          <label className="muted" htmlFor="resume-cap" style={{ fontSize: 12 }}>
+          <label className="field">
             Cost cap (USD){run.maxCostUsd !== null ? `, currently ${usd(run.maxCostUsd)}` : ""}
+            <input id="resume-cap" className="input" inputMode="decimal" placeholder="keep current" value={cap} onChange={(e) => setCap(e.target.value)} />
           </label>
-          <input id="resume-cap" className="input" inputMode="decimal" placeholder="keep current" value={cap} onChange={(e) => setCap(e.target.value)} />
         </div>
       }
       onConfirm={async () => {

@@ -4,10 +4,13 @@ import type { EvalReport, Run } from "@sdk/generated/models.js";
 
 import { CODEC, convertKeys, lifecycleOf, listAll } from "../src/lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey } from "../src/lib/auth.js";
-import { applyEvents, decodeEvent, emptyStream, type RunEvent } from "../src/lib/events.js";
+import { smooth } from "../src/components/chart.js";
+import { applyEvents, decodeEvent, emptyStream, foldCheckpoints, type RunEvent, type TimelineItem } from "../src/lib/events.js";
 import { ago, bytes, compact, duration, int, num, pct, toYaml, usd } from "../src/lib/format.js";
 import { renderReport } from "../src/lib/report.js";
 import { match } from "../src/lib/router.js";
+import { savedTheme } from "../src/lib/theme.js";
+import { passLabel } from "../src/pages/evals.js";
 import { importPool, poolState, trainPool } from "../src/pages/health.js";
 import { filterRuns } from "../src/pages/runs.js";
 import { defaultPeriod, presets } from "../src/pages/usage.js";
@@ -295,5 +298,47 @@ describe("health and usage summaries", () => {
     expect(filterRuns(runs, "stopped", "").map((r) => r.id)).toEqual(["run_c"]);
     expect(filterRuns(runs, "all", "ROUTER").map((r) => r.id)).toEqual(["run_q"]);
     expect(filterRuns(runs, "all", "tiny-qwen3").length).toBe(4);
+  });
+});
+
+describe("presentation helpers", () => {
+  const item = (kind: TimelineItem["kind"], step: number): TimelineItem => ({ key: `${kind}:${step}`, kind, timestamp: `2026-11-27T13:00:${String(step).padStart(2, "0")}Z`, title: `${kind} ${step}`, step });
+
+  it("folds three or more consecutive checkpoints into one timeline row", () => {
+    const folded = foldCheckpoints([item("phase", 1), item("checkpoint", 2), item("checkpoint", 3), item("checkpoint", 4), item("warning", 5), item("checkpoint", 6), item("checkpoint", 7)]);
+    expect(folded.map((t) => t.title)).toEqual(["phase 1", "3 checkpoints", "warning 5", "checkpoint 6", "checkpoint 7"]);
+    expect(folded[1]).toMatchObject({ kind: "checkpoint", detail: "steps 2 to 4", step: 4, timestamp: "2026-11-27T13:00:04Z" });
+    // Newest first, as the run page lists them.
+    expect(foldCheckpoints([item("checkpoint", 9), item("checkpoint", 8), item("checkpoint", 7)])[0]).toMatchObject({ detail: "steps 7 to 9", timestamp: "2026-11-27T13:00:09Z" });
+  });
+
+  it("smooths a series with a debiased moving average", () => {
+    const out = smooth([1, null, 1, 3], 0.5);
+    expect(out[0]).toBeCloseTo(1);
+    expect(out[1]).toBeNull();
+    expect(out[2]).toBeCloseTo(1);
+    expect(out[3]).toBeCloseTo(1 + 2 * (0.5 / 0.875));
+  });
+
+  it("labels pass@k columns from either key form", () => {
+    expect(passLabel("1")).toBe("pass@1");
+    expect(passLabel("pass@4")).toBe("pass@4");
+  });
+
+  it("defaults to the dark theme when storage is empty or unavailable", () => {
+    localStorage.removeItem("grad-theme");
+    expect(savedTheme()).toBe("dark");
+    localStorage.setItem("grad-theme", "light");
+    expect(savedTheme()).toBe("light");
+    localStorage.removeItem("grad-theme");
+    const get = Storage.prototype.getItem;
+    Storage.prototype.getItem = () => {
+      throw new Error("denied");
+    };
+    try {
+      expect(savedTheme()).toBe("dark");
+    } finally {
+      Storage.prototype.getItem = get;
+    }
   });
 });

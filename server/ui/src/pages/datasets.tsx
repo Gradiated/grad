@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 
 import type { ChatMessage, DatasetRecord, ImportJob, Source } from "@sdk/generated/models.js";
 
-import { IconChevron, IconRefresh } from "../components/icons.js";
+import { IconChevron, IconDatasets, IconImport, IconRefresh } from "../components/icons.js";
 import { Banner, Card, Confirm, Empty, ErrorBanner, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { errorMessage, listAll, useApi } from "../lib/api.js";
 import { ago, dateTime, int, num } from "../lib/format.js";
@@ -22,7 +22,7 @@ export const DatasetsPage = () => {
           <div className="page-sub">Versioned record sets. Every push, import or sync adds a version.</div>
         </div>
       </div>
-      <ErrorBanner error={res.error} />
+      <ErrorBanner error={res.error} onRetry={res.reload} />
       <div className="card">
         <div className="table-wrap">
           <table className="table">
@@ -58,7 +58,7 @@ export const DatasetsPage = () => {
           </table>
         </div>
         {res.data && items.length === 0 && (
-          <Empty title="No datasets yet">
+          <Empty title="No datasets yet" icon={<IconDatasets />}>
             Push records with <code>grad datasets push</code> or import a file with <code>grad datasets import</code>.
           </Empty>
         )}
@@ -93,10 +93,8 @@ export const DatasetDetailPage = ({ name }: { name: string }) => {
           )}
         </div>
         {d && d.version > 0 && (
-          <div className="actions">
-            <label className="muted" htmlFor="version">
-              Version
-            </label>
+          <div className="actions field-inline">
+            <label htmlFor="version">Version</label>
             <select id="version" className="input" value={version} onChange={(e) => setQuery({ version: e.target.value === String(d.version) ? undefined : e.target.value })}>
               {Array.from({ length: d.version }, (_, i) => d.version - i).map((v) => (
                 <option key={v} value={v}>
@@ -108,7 +106,7 @@ export const DatasetDetailPage = ({ name }: { name: string }) => {
           </div>
         )}
       </div>
-      <ErrorBanner error={ds.error} />
+      <ErrorBanner error={ds.error} onRetry={ds.reload} />
       {d && (
         <>
           <div className="stats">
@@ -156,10 +154,10 @@ const Records = ({ name, version }: { name: string; version: number }) => {
     <Card title="Records" count={version ? `v${version}` : undefined} tight>
       <ErrorBanner error={first.error} />
       {first.loading && !first.data && (
-        <div className="card-body" style={{ display: "grid", gap: 10 }}>
+        <div className="skeleton-block" aria-label="Loading records">
           <div className="skeleton" />
-          <div className="skeleton" style={{ width: "70%" }} />
-          <div className="skeleton" style={{ width: "85%" }} />
+          <div className="skeleton" />
+          <div className="skeleton" />
         </div>
       )}
       {first.data && records.length === 0 && <Empty title="No records in this version" />}
@@ -238,28 +236,22 @@ const Sources = ({ name, onSynced }: { name: string; onSynced: () => void }) => 
     <Card title="Sources" count={sources.length || undefined} tight>
       <ErrorBanner error={res.error} />
       {sources.map((s) => (
-        <div key={s.id} className="pool">
+        <div key={s.id} className="item">
           <span className="chip">{s.provider.kind}</span>
-          <div style={{ minWidth: 0 }}>
-            <div className="pool-name" style={{ fontWeight: 500 }}>
-              {s.provider.project ?? s.provider.host ?? s.id}
-            </div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              {s.schedule ? `every ${s.schedule}` : "manual"} · {s.lastSyncedAt ? `synced ${ago(s.lastSyncedAt, now)}` : "never synced"}
+          <div className="truncate">
+            <div className="item-name">{s.provider.project ?? s.provider.host ?? s.id}</div>
+            <div className="item-sub">
+              {s.schedule ? <span className="mono">{s.schedule}</span> : "manual"} · {s.lastSyncedAt ? `synced ${ago(s.lastSyncedAt, now)}` : "never synced"}
               {s.nextSyncAt && ` · next ${ago(s.nextSyncAt, now)}`}
             </div>
-            {s.lastSync?.error && (
-              <div className="t-detail" style={{ color: "var(--red)", marginTop: 4 }}>
-                {s.lastSync.error}
-              </div>
-            )}
           </div>
-          <div style={{ display: "grid", gap: 6, justifyItems: "end" }}>
+          <div className="item-side">
             {s.lastSync && <StatusBadge status={s.lastSync.status} />}
             <button type="button" className="btn sm" onClick={() => setSync(s)}>
               <IconRefresh /> Sync
             </button>
           </div>
+          {s.lastSync?.error && <div className="item-error">{s.lastSync.error}</div>}
         </div>
       ))}
       {sync && (
@@ -292,7 +284,11 @@ const Imports = ({ name }: { name: string }) => {
   return (
     <Card title="Imports" count={jobs.length || undefined} tight>
       <ErrorBanner error={res.error} />
-      {res.data && jobs.length === 0 && <Empty title="No imports" />}
+      {res.data && jobs.length === 0 && (
+        <Empty title="No imports" icon={<IconImport />}>
+          <code>grad datasets import</code> loads files and Hugging Face datasets.
+        </Empty>
+      )}
       {jobs.map((j) => (
         <ImportRow key={j.id} job={j} now={now} />
       ))}
@@ -308,7 +304,7 @@ const ImportRow = ({ job, now }: { job: ImportJob; now: number }): ReactNode => 
       </span>
       <StatusBadge status={job.status} />
     </div>
-    <div className="muted num" style={{ fontSize: 12 }}>
+    <div className="muted num small">
       {int(job.importedCount)} imported
       {job.droppedCount > 0 && ` · ${int(job.droppedCount)} dropped`}
       {job.datasetVersion !== null && ` · v${job.datasetVersion}`} · {ago(job.createdAt, now)}

@@ -2,11 +2,11 @@ import { useMemo, useState } from "react";
 
 import type { Run } from "@sdk/generated/models.js";
 
-import { IconSearch } from "../components/icons.js";
+import { IconRuns, IconSearch } from "../components/icons.js";
 import { Empty, ErrorBanner, Segmented, SkeletonRows, StatusBadge } from "../components/ui.js";
 import { errorMessage, isTerminalRun, lifecycleOf, useApi } from "../lib/api.js";
 import { PHASE_LABEL } from "../lib/events.js";
-import { ago, usd } from "../lib/format.js";
+import { ago, duration, usd } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
 import { navigate, setQuery, useLocation } from "../lib/router.js";
 
@@ -99,7 +99,7 @@ export const RunsPage = () => {
         </label>
       </div>
 
-      <ErrorBanner error={first.error && !first.data ? first.error : null} />
+      <ErrorBanner error={first.error && !first.data ? first.error : null} onRetry={first.reload} />
 
       <div className="card">
         <div className="table-wrap">
@@ -108,16 +108,13 @@ export const RunsPage = () => {
               <tr>
                 <th>Run</th>
                 <th>Status</th>
-                <th>Phase</th>
-                <th>Recipe</th>
-                <th>Model</th>
-                <th>Dataset</th>
+                <th>Model and data</th>
                 <th className="right">Cost</th>
                 <th className="right">Created</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <SkeletonRows cols={8} />}
+              {loading && <SkeletonRows cols={5} />}
               {shown.map((r) => (
                 <RunRow key={r.id} run={r} now={now} />
               ))}
@@ -125,7 +122,7 @@ export const RunsPage = () => {
           </table>
         </div>
         {!loading && shown.length === 0 && (
-          <Empty title={runs.length === 0 ? "No runs yet" : "No runs match"}>
+          <Empty title={runs.length === 0 ? "No runs yet" : "No runs match"} icon={runs.length === 0 ? <IconRuns /> : <IconSearch />}>
             {runs.length === 0 ? (
               <>
                 Start one with <code>grad train</code> or <code>client.runs.create(...)</code>.
@@ -153,7 +150,7 @@ const RunRow = ({ run, now }: { run: Run; now: number }) => {
   const life = lifecycleOf(run);
   const active = !isTerminalRun(run);
   const progress = run.totalSteps > 0 ? run.currentStep / run.totalSteps : 0;
-  const phase = life.phase ? (PHASE_LABEL[life.phase] ?? life.phase) : active ? (run.status === "queued" ? "Queued" : run.currentStep > 0 ? "Training" : "Starting") : null;
+  const phase = life.phase ? (PHASE_LABEL[life.phase] ?? life.phase) : run.status === "queued" ? "Queued" : run.currentStep > 0 ? "Training" : "Starting";
   const open = () => navigate(`/runs/${encodeURIComponent(run.id)}`);
   return (
     <tr className="clickable" onClick={open} onKeyDown={(e) => e.key === "Enter" && open()} tabIndex={0}>
@@ -163,36 +160,34 @@ const RunRow = ({ run, now }: { run: Run; now: number }) => {
           <span className="sub">{run.id}</span>
         </div>
       </td>
-      <td>
-        <StatusBadge status={run.status} />
-      </td>
-      <td>
-        {active ? (
-          <div style={{ display: "grid", gap: 4, minWidth: 120 }}>
-            <span>{phase}</span>
-            {run.status === "running" && run.totalSteps > 0 && (
-              <div className="progress slim" title={`${run.currentStep} / ${run.totalSteps} steps`}>
+      <td className="cell-status">
+        <div className="cell-stack">
+          <StatusBadge status={run.status} />
+          {run.status === "running" && run.totalSteps > 0 ? (
+            <span className="bar-line small muted" title={`${run.currentStep} / ${run.totalSteps} steps`}>
+              <span className="progress slim">
                 <span style={{ width: `${(progress * 100).toFixed(1)}%` }} />
-              </div>
-            )}
-          </div>
-        ) : (
-          <span className="faint">{phase ?? "—"}</span>
-        )}
+              </span>
+              {phase} · {Math.floor(progress * 100)}%
+            </span>
+          ) : (
+            <span className={`small ${active ? "muted" : "faint"}`}>{active ? phase : run.finishedAt ? `took ${duration(Date.parse(run.finishedAt) - Date.parse(run.createdAt))}` : "—"}</span>
+          )}
+        </div>
       </td>
-      <td>
-        <span className="chip">{run.recipeKind}</span>
-      </td>
-      <td className="mono" style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }} title={run.resolvedConfig.model}>
-        {run.resolvedConfig.model}
-      </td>
-      <td>
-        {run.datasetName}
-        <span className="faint"> v{run.datasetVersion}</span>
+      <td className="clip" title={`${run.recipeKind} on ${run.resolvedConfig.model} with ${run.datasetName} v${run.datasetVersion}`}>
+        <div className="cell-main">
+          <span className="title mono">{run.resolvedConfig.model}</span>
+          <span className="sub">
+            {run.recipeKind} · {run.datasetName} v{run.datasetVersion}
+          </span>
+        </div>
       </td>
       <td className="right num">
-        {usd(run.costUsd)}
-        {run.maxCostUsd !== null && <span className="faint"> / {usd(run.maxCostUsd)}</span>}
+        <div className="cell-main">
+          <span>{usd(run.costUsd)}</span>
+          <span className="faint small">{run.maxCostUsd !== null ? `of ${usd(run.maxCostUsd)}` : "no cap"}</span>
+        </div>
       </td>
       <td className="right muted" title={run.createdAt}>
         {ago(run.createdAt, now)}

@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 
 import type { ImportJob, Run } from "@sdk/generated/models.js";
 
-import { IconCpu, IconEvals, IconImport } from "../components/icons.js";
-import { Banner, Card, Empty, ErrorBanner, Stat, StatusBadge } from "../components/ui.js";
+import { IconCpu, IconEvals, IconImport, IconRuns } from "../components/icons.js";
+import { Badge, Banner, Card, Empty, ErrorBanner, Stat, StatusBadge, type Tone } from "../components/ui.js";
 import { lifecycleOf, listAll, useApi } from "../lib/api.js";
 import { PHASE_LABEL } from "../lib/events.js";
 import { duration, int } from "../lib/format.js";
@@ -47,7 +47,7 @@ export const importPool = (jobs: ImportJob[], now: number): PoolView => {
   };
 };
 
-export const poolState = (p: PoolView): { label: string; tone: string } => {
+export const poolState = (p: PoolView): { label: string; tone: Tone } => {
   if (p.queued > 0 && p.autoscaling) return { label: "scaling up", tone: "accent" };
   if (p.queued > 0 && p.running === 0 && (p.online ?? 0) === 0) return { label: "no workers", tone: "red" };
   if (p.queued > 0) return { label: "backlog", tone: "amber" };
@@ -99,9 +99,9 @@ export const HealthPage = () => {
         </div>
       </div>
       {ready.data && !ready.data.ok && <Banner>grad-server is not ready: {ready.data.detail}</Banner>}
-      <ErrorBanner error={work.error} />
+      <ErrorBanner error={work.error} onRetry={work.reload} />
       <div className="stats">
-        <Stat label="Server" value={ready.data ? <StatusBadge status={ready.data.ok ? "completed" : "failed"} /> : "—"} hint={ready.data?.ok ? "database reachable" : ready.data?.detail} />
+        <Stat label="Server" value={ready.data ? <Badge tone={ready.data.ok ? "green" : "red"}>{ready.data.ok ? "ready" : "not ready"}</Badge> : "—"} hint={ready.data?.ok ? "database reachable" : ready.data?.detail} />
         <Stat label="Queued runs" value={train ? int(train.queued) : "—"} hint={train?.oldestQueuedMs ? `oldest ${duration(train.oldestQueuedMs)}` : "none waiting"} />
         <Stat label="Running runs" value={train ? int(train.running) : "—"} />
         <Stat label="Imports in flight" value={imp ? int(imp.queued + imp.running) : "—"} />
@@ -112,46 +112,47 @@ export const HealthPage = () => {
           {train && <Pool icon={<IconCpu />} name="Training" sub="GPU workers (kind train)" pool={train} />}
           {imp && <Pool icon={<IconImport />} name="Import" sub="CPU workers (kind import): files, Hugging Face, source syncs" pool={imp} />}
           {d && (
-            <div className="pool">
-              <span className="pool-icon">
+            <div className="item">
+              <span className="item-icon">
                 <IconEvals />
               </span>
               <div>
-                <div className="pool-name">Eval executor</div>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  Runs inside grad-server against the inference endpoint
-                </div>
+                <div className="item-name">Eval executor</div>
+                <div className="item-sub">Runs inside grad-server against the inference endpoint</div>
               </div>
-              <div className="pool-value">
+              <div className="item-side">
                 <div className="big">{int(evalsRunning)}</div>
-                <div className="faint" style={{ fontSize: 12 }}>
-                  in flight
-                </div>
+                <div className="faint small">in flight</div>
               </div>
             </div>
           )}
           {!d && !work.error && (
-            <div className="card-body">
+            <div className="skeleton-block" aria-label="Loading worker pools">
+              <div className="skeleton" />
               <div className="skeleton" />
             </div>
           )}
         </Card>
         <Card title="Queue" count={queuedRuns.length || undefined} tight>
-          {d && queuedRuns.length === 0 && <Empty title="Queue is empty">Every submitted run has a worker.</Empty>}
+          {d && queuedRuns.length === 0 && (
+            <Empty title="Queue is empty" icon={<IconRuns />}>
+              Every submitted run has a worker.
+            </Empty>
+          )}
           {queuedRuns.slice(0, 12).map((r) => {
             const life = lifecycleOf(r);
             return (
-              <div key={r.id} className="pool">
+              <div key={r.id} className="item">
                 <StatusBadge status={r.status} />
-                <div style={{ minWidth: 0 }}>
+                <div className="truncate">
                   <Link className="link" href={`/runs/${encodeURIComponent(r.id)}`}>
                     {r.name}
                   </Link>
-                  <div className="muted" style={{ fontSize: 12 }}>
-                    {life.phase ? PHASE_LABEL[life.phase] : "Queued"} · {r.recipeKind} · <span className="mono">{r.resolvedConfig.model}</span>
+                  <div className="item-sub truncate">
+                    {life.queueMessage ?? (life.phase ? PHASE_LABEL[life.phase] : "Queued")} · {r.recipeKind} · <span className="mono">{r.resolvedConfig.model}</span>
                   </div>
                 </div>
-                <div className="pool-value muted">{duration(now - Date.parse(r.createdAt))}</div>
+                <div className="item-side muted">{duration(now - Date.parse(r.createdAt))}</div>
               </div>
             );
           })}
@@ -164,28 +165,23 @@ export const HealthPage = () => {
 const Pool = ({ icon, name, sub, pool }: { icon: ReactNode; name: string; sub: string; pool: PoolView }) => {
   const state = poolState(pool);
   return (
-    <div className="pool">
-      <span className="pool-icon">{icon}</span>
-      <div style={{ minWidth: 0 }}>
-        <div className="pool-name" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+    <div className="item">
+      <span className="item-icon">{icon}</span>
+      <div>
+        <div className="item-name">
           {name}
-          <span className={`badge ${state.tone}`}>
-            <span className="dot" />
+          <Badge tone={state.tone} live={state.tone === "blue"}>
             {state.label}
-          </span>
+          </Badge>
         </div>
-        <div className="muted" style={{ fontSize: 12 }}>
-          {sub}
-        </div>
+        <div className="item-sub">{sub}</div>
       </div>
-      <div className="pool-value">
+      <div className="item-side">
         <div className="big">
           {int(pool.online !== null ? Math.max(pool.online, pool.running) : pool.running)}
-          {pool.queued > 0 && <span className="faint" style={{ fontSize: 13, fontWeight: 500 }}> +{pool.queued} queued</span>}
+          {pool.queued > 0 && <span className="faint small"> +{pool.queued} queued</span>}
         </div>
-        <div className="faint" style={{ fontSize: 12 }}>
-          {pool.online !== null ? "workers online" : "busy workers"}
-        </div>
+        <div className="faint small">{pool.online !== null ? "workers online" : "busy workers"}</div>
       </div>
     </div>
   );

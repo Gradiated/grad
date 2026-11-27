@@ -73,17 +73,17 @@ What it shows (read-mostly):
 - **Usage**: a date range (presets or from/to, UTC) with the total cost and tokens, a breakdown by kind (training, evals, dataset scoring, labeling, teacher answers), groups by day, week, month, model, recipe or kind, the top runs and evals, and the period's newest billed rows.
 - **Health**: server readiness, the training and import worker pools (busy workers, `workers_online` while a run waits, autoscaling from zero) and the queue.
 
-It follows the system light or dark theme and updates live from the run events stream.
+It is dark by default, in the Gradiated palette; the sun/moon button in the sidebar switches to the light theme (remembered per browser). It updates live from the run events stream.
 
 How it works and what it can reach:
 
-- It is a static build (`server/ui`, Vite + React + uPlot, about 120 KB gzipped) baked into the image and served from memory: hashed `/assets/*` files are cached forever, `index.html` is revalidated, and any other browser navigation outside `/v1`, `/health/*` and `/metrics` returns `index.html`. Unknown `/v1` paths still answer with problem+json 404s.
+- It is a static build (`server/ui`, Vite + React + uPlot, about 130 KB gzipped, plus 120 KB of self-hosted OFL fonts: Inter, Instrument Sans and JetBrains Mono) baked into the image and served from memory: hashed `/assets/*` files are cached forever, `index.html` is revalidated, and any other browser navigation outside `/v1`, `/health/*` and `/metrics` returns `index.html`. Unknown `/v1` paths still answer with problem+json 404s.
 - It calls only the public `/v1` API, with the viewer's API key, so a key sees exactly what it could see through the SDKs. It adds no endpoints.
 - With `AUTH_MODE=none` there is no login. With `api_key`, paste a key on the login page; it is kept in that tab's `sessionStorage` only (never `localStorage` or cookies, so there is no CSRF surface) and is forgotten when the tab closes. `grad ui` hands the profile's key over once in a `#key=` URL fragment, which browsers never send to the server; the page moves it into `sessionStorage` and removes it from the address bar.
 - Every UI response carries a strict Content-Security-Policy (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'`, nothing inline), `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`.
 - `UI_ENABLED=false` turns it off (it is off by default with `AUTH_MODE=cloud`); Helm sets it from `ui.enabled` (default `true`). The UI needs no extra exposure: keep the server on loopback or behind your ingress as before.
 
-To work on it, run the API (for example `grad local up` or the harness) and `pnpm -C server/ui dev`, which proxies `/v1` to `GRAD_API` (default `http://127.0.0.1:18787`, the `grad local up` default). `pnpm -C server/ui check` runs the typecheck and component tests; `pnpm -C server/ui build` writes `server/ui/dist`, which a source checkout's `grad-server` serves too.
+To work on it, run the API (for example `grad local up` or the harness) and `pnpm -C server/ui dev`, which proxies `/v1` to `GRAD_API` (default `http://127.0.0.1:18787`, the `grad local up` default). `pnpm -C server/ui check` runs the typecheck and component tests; `pnpm -C server/ui build` writes `server/ui/dist`, which a source checkout's `grad-server` serves too. `pnpm -C server/ui storybook` opens every component and page state (training, waiting for a GPU, interrupted, failed, empty, loading, error) against a fake server built from the test fixtures; CI runs `build-storybook`.
 
 ## Server configuration
 

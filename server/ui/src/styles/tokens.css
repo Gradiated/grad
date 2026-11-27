@@ -1,0 +1,183 @@
+/*
+ * grad web UI design tokens.
+ *
+ * Ported from the Gradiated design system (gradiated.com, product/website/src/styles:
+ * brand.css for the palette, tokens.css and themes.css for the roles) so this console
+ * reads as a sibling of the Gradiated product console. Brand families keep their names:
+ * zinc carries every neutral, Cloud (aubergine, lavender, azure) owns interaction,
+ * Hardware (teal, green) and Energy (yellow, red) colour charts. Status colours are
+ * functional (Tailwind steps), as the brand prescribes for meanings that are the same
+ * on every site. Contrast ratios in comments are against that theme's card surface.
+ *
+ * Dark is the default theme; `<html data-theme="light">` switches to light.
+ */
+
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../fonts/inter-latin-wght.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Instrument Sans Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400 700;
+  src: url("../fonts/instrument-sans-latin-wght.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-wght.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  /* Brand palette (brand.css, relaunch palette of 2 Nov 2026). */
+  --zinc-50: #fafafa;
+  --zinc-100: #f4f4f5;
+  --zinc-200: #e4e4e7;
+  --zinc-300: #d4d4d8;
+  --zinc-400: #a1a1aa;
+  --zinc-500: #71717a;
+  --zinc-600: #52525b;
+  --zinc-700: #3f3f46;
+  --zinc-800: #27272a;
+  --zinc-900: #18181b;
+  --zinc-950: #09090b;
+  --cloud-aubergine: #472f96;
+  --cloud-blue: #2a55e4;
+  --cloud-azure: #009fd9;
+  --cloud-lavender: #a28fe9;
+  --cloud-pink: #f66ae2;
+  --cloud-sky: #8ed3f2;
+  --hw-teal: #09b99e;
+  --hw-green: #4cbd79;
+  --energy-red: #e4504e;
+  --energy-yellow: #f4ce56;
+  --kiln-500: #be5e31;
+  /* The one emissive colour: an LED for live indicators, the same on every theme. */
+  --signal-green: #2fd655;
+
+  /* Type (tokens.css faces; Inter is the product console's UI face). */
+  --font: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Instrument Sans Variable", "Instrument Sans", var(--font);
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 22px;
+  /* The brand's caps voice: eyebrows, table headers, stat labels. */
+  --caps-size: 11px;
+  --caps-weight: 600;
+  --caps-tracking: 0.06em;
+
+  /* Geometry. --radius is the brand's 5px corner; cards take one step more. */
+  --radius-sm: 4px;
+  --radius: 5px;
+  --radius-lg: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Motion (tokens.css response family). */
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Roles, dark (themes.css "dark": zinc struck dark, Cloud owns interaction). */
+  color-scheme: dark;
+  --bg: var(--zinc-950);
+  --panel: var(--zinc-900);
+  --panel-2: #141417;
+  --sidebar: var(--zinc-950);
+  --hover: #1f1f23;
+  --active: var(--zinc-800);
+  --border: var(--zinc-800);
+  --border-strong: var(--zinc-700);
+  --text: var(--zinc-50); /* 16.97 */
+  --muted: var(--zinc-400); /* 6.91 */
+  --faint: #8b8b94; /* 5.25 */
+  --accent: var(--cloud-lavender); /* 6.45 */
+  --accent-hover: #b6a7ef;
+  --accent-soft: rgb(162 143 233 / 0.14);
+  --button: var(--zinc-50);
+  --button-ink: var(--zinc-950);
+  --button-hover: var(--zinc-200);
+  --emphasis: var(--energy-yellow);
+  --mark: #d8803f;
+  --green: #34d399; /* 9.22 */
+  --green-soft: rgb(52 211 153 / 0.12);
+  --red: #f87171; /* 6.40 */
+  --red-soft: rgb(248 113 113 / 0.12);
+  --amber: #fbbf24; /* 10.6 */
+  --amber-soft: rgb(251 191 36 / 0.12);
+  --blue: #60a5fa; /* 6.97 */
+  --blue-soft: rgb(96 165 250 / 0.13);
+  --gray-soft: rgb(161 161 170 / 0.12);
+  --chart-1: var(--cloud-lavender);
+  --chart-2: var(--energy-yellow);
+  --chart-3: var(--hw-teal);
+  --chart-4: var(--cloud-sky);
+  --chart-5: var(--cloud-pink);
+  --grid: rgb(255 255 255 / 0.06);
+  --code-bg: #111113;
+  --shadow: none;
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.55), 0 0 0 1px var(--border);
+  --overlay: rgb(0 0 0 / 0.6);
+}
+
+:root[data-theme="light"] {
+  /* themes.css "light": zinc-50 ground, white modules, aubergine interaction. */
+  color-scheme: light;
+  --bg: var(--zinc-50);
+  --panel: #ffffff;
+  --panel-2: var(--zinc-50);
+  --sidebar: var(--zinc-100);
+  --hover: var(--zinc-100);
+  --active: var(--zinc-200);
+  --border: var(--zinc-200);
+  --border-strong: var(--zinc-300);
+  --text: var(--zinc-950); /* 19.9 */
+  --muted: var(--zinc-600); /* 7.73 */
+  --faint: #6b6b74; /* 5.2 */
+  --accent: var(--cloud-aubergine); /* 9.93 */
+  --accent-hover: #5a3fb8;
+  --accent-soft: rgb(71 47 150 / 0.08);
+  --button: var(--zinc-950);
+  --button-ink: var(--zinc-50);
+  --button-hover: var(--zinc-800);
+  --emphasis: var(--energy-red);
+  --mark: var(--kiln-500);
+  --green: #047857; /* 5.48 */
+  --green-soft: rgb(4 120 87 / 0.09);
+  --red: #b91c1c; /* 6.47 */
+  --red-soft: rgb(185 28 28 / 0.07);
+  --amber: #b45309; /* 5.02 */
+  --amber-soft: rgb(180 83 9 / 0.09);
+  --blue: #1d4ed8; /* 6.70 */
+  --blue-soft: rgb(29 78 216 / 0.08);
+  --gray-soft: rgb(82 82 91 / 0.08);
+  --chart-1: var(--cloud-blue);
+  --chart-2: var(--kiln-500);
+  --chart-3: #0f766e;
+  --chart-4: var(--cloud-aubergine);
+  --chart-5: #c026d3;
+  --grid: rgb(9 9 11 / 0.07);
+  --code-bg: var(--zinc-50);
+  --shadow: 0 1px 2px rgb(9 9 11 / 0.04);
+  --shadow-pop: 0 12px 32px rgb(9 9 11 / 0.14), 0 0 0 1px var(--border);
+  --overlay: rgb(9 9 11 / 0.32);
+}

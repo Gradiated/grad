@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { BrandMark, IconDatasets, IconEvals, IconHealth, IconLogout, IconRuns, IconUsage } from "./components/icons.js";
-import { ToastProvider } from "./components/ui.js";
+import { IconDatasets, IconEvals, IconHealth, IconLogout, IconMoon, IconRuns, IconSun, IconUsage, Wordmark } from "./components/icons.js";
+import { Empty, ToastProvider } from "./components/ui.js";
 import { ApiContext, createApi, errorMessage, isUnauthorized, type Api } from "./lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey, type KeyStore } from "./lib/auth.js";
 import { Link, match, RouterProvider, useLocation } from "./lib/router.js";
+import { setTheme, useTheme } from "./lib/theme.js";
 import { DatasetDetailPage, DatasetsPage } from "./pages/datasets.js";
 import { EvalDetailPage, EvalsPage } from "./pages/evals.js";
 import { HealthPage } from "./pages/health.js";
@@ -99,36 +100,46 @@ const Shell = ({ apiKey, onSignOut }: { apiKey: string | undefined; onSignOut: (
   }, [page.title]);
   return (
     <div className="shell">
-      <nav className="sidebar" aria-label="Main">
-        <Link href="/runs" className="brand">
-          <span className="brand-mark">
-            <BrandMark />
-          </span>
-          grad
-          <span className="brand-sub">training</span>
-        </Link>
-        {NAV.map((n) => (
-          <Link key={n.href} href={n.href} className={`nav-item${isActive(path, n.prefix) ? " active" : ""}`} aria-current={isActive(path, n.prefix) ? "page" : undefined}>
-            {n.icon}
-            {n.label}
+      <aside className="sidebar">
+        <nav className="sidebar-inner" aria-label="Main">
+          <Link href="/runs" className="brand" aria-label="grad: runs">
+            <Wordmark />
+            <span className="brand-sub caps">Training</span>
           </Link>
-        ))}
-        <div className="sidebar-foot">
-          <div className="row" title={location.origin}>
-            <span className="host mono">{location.host}</span>
+          {NAV.map((n) => (
+            <Link key={n.href} href={n.href} className={`nav-item${isActive(path, n.prefix) ? " active" : ""}`} aria-current={isActive(path, n.prefix) ? "page" : undefined}>
+              {n.icon}
+              {n.label}
+            </Link>
+          ))}
+          <div className="sidebar-foot">
+            <div className="row" title={location.origin}>
+              <span className="host mono">{location.host}</span>
+              <ThemeToggle />
+            </div>
+            <div className="row">
+              <span className="host faint mono">{apiKey ? maskKey(apiKey) : "no auth (local)"}</span>
+              {apiKey && (
+                <button type="button" className="btn ghost sm icon push" onClick={onSignOut} title="Sign out" aria-label="Sign out">
+                  <IconLogout />
+                </button>
+              )}
+            </div>
           </div>
-          <div className="row">
-            <span className="host faint mono">{apiKey ? maskKey(apiKey) : "no auth (local)"}</span>
-            {apiKey && (
-              <button type="button" className="btn ghost sm" onClick={onSignOut} title="Sign out" aria-label="Sign out" style={{ marginLeft: "auto" }}>
-                <IconLogout />
-              </button>
-            )}
-          </div>
-        </div>
-      </nav>
+        </nav>
+      </aside>
       <main className="main">{page.node}</main>
     </div>
+  );
+};
+
+const ThemeToggle = () => {
+  const theme = useTheme();
+  const next = theme === "dark" ? "light" : "dark";
+  return (
+    <button type="button" className="btn ghost sm icon push" onClick={() => setTheme(next)} title={`Switch to the ${next} theme`} aria-label={`Switch to the ${next} theme`}>
+      {theme === "dark" ? <IconSun /> : <IconMoon />}
+    </button>
   );
 };
 
@@ -147,12 +158,11 @@ export const route = (path: string): { node: ReactNode; title: string } => {
     title: "Not found",
     node: (
       <div className="page">
-        <div className="empty">
-          <div className="title">Nothing here</div>
+        <Empty title="Nothing here">
           <Link className="link" href="/runs">
             Go to runs
           </Link>
-        </div>
+        </Empty>
       </div>
     ),
   };

@@ -2,11 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 import { errorMessage } from "../lib/api.js";
 import { humanize } from "../lib/format.js";
-import { IconAlert, IconCheck, IconCopy, IconInfo } from "./icons.js";
+import { IconAlert, IconCheck, IconCopy, IconInbox, IconInfo, IconRefresh } from "./icons.js";
 
 // ------------------------------------------------------------ status
 
-const STATUS_TONE: Record<string, string> = {
+export type Tone = "green" | "red" | "amber" | "blue" | "accent" | "";
+
+const STATUS_TONE: Record<string, Tone> = {
   queued: "amber",
   running: "blue",
   awaiting_scores: "accent",
@@ -16,18 +18,20 @@ const STATUS_TONE: Record<string, string> = {
   stopped_budget: "amber",
 };
 
-const STATUS_LABEL: Record<string, string> = { stopped_budget: "stopped at cap" };
+const STATUS_LABEL: Record<string, string> = { stopped_budget: "stopped at cap", awaiting_scores: "awaiting scores" };
 
-export const StatusBadge = ({ status }: { status: string }) => {
-  const tone = STATUS_TONE[status] ?? "";
-  const live = tone === "blue";
-  return (
-    <span className={`badge ${tone}${live ? " live" : ""}`} data-status={status}>
-      <span className="dot" />
-      {STATUS_LABEL[status] ?? humanize(status)}
-    </span>
-  );
-};
+export const Badge = ({ tone = "", live, status, children }: { tone?: Tone; live?: boolean; status?: string; children: ReactNode }) => (
+  <span className={`badge${tone ? ` ${tone}` : ""}${live ? " live" : ""}`} data-status={status}>
+    <span className="dot" aria-hidden="true" />
+    {children}
+  </span>
+);
+
+export const StatusBadge = ({ status }: { status: string }) => (
+  <Badge tone={STATUS_TONE[status] ?? ""} live={status === "running"} status={status}>
+    {STATUS_LABEL[status] ?? humanize(status)}
+  </Badge>
+);
 
 // ------------------------------------------------------------ surfaces
 
@@ -54,21 +58,38 @@ export const Stat = ({ label, value, hint }: { label: ReactNode; value: ReactNod
   </div>
 );
 
-export const Empty = ({ title, children }: { title: ReactNode; children?: ReactNode }) => (
+export const Empty = ({ title, icon, children }: { title: ReactNode; icon?: ReactNode; children?: ReactNode }) => (
   <div className="empty">
+    <span className="empty-icon" aria-hidden="true">
+      {icon ?? <IconInbox />}
+    </span>
     <div className="title">{title}</div>
-    {children && <div>{children}</div>}
+    {children && <div className="hint">{children}</div>}
   </div>
 );
 
-export const Banner = ({ tone = "error", children }: { tone?: "error" | "warn" | "info"; children: ReactNode }) => (
+export const Banner = ({ tone = "error", action, children }: { tone?: "error" | "warn" | "info"; action?: ReactNode; children: ReactNode }) => (
   <div className={`banner ${tone}`} role={tone === "error" ? "alert" : "status"}>
     {tone === "info" ? <IconInfo /> : <IconAlert />}
     <div className="body">{children}</div>
+    {action}
   </div>
 );
 
-export const ErrorBanner = ({ error }: { error: unknown }) => (error ? <Banner>{errorMessage(error)}</Banner> : null);
+export const ErrorBanner = ({ error, onRetry }: { error: unknown; onRetry?: () => void }) =>
+  error ? (
+    <Banner
+      action={
+        onRetry && (
+          <button type="button" className="btn sm" onClick={onRetry}>
+            <IconRefresh /> Retry
+          </button>
+        )
+      }
+    >
+      {errorMessage(error)}
+    </Banner>
+  ) : null;
 
 export const SkeletonRows = ({ rows = 5, cols = 5 }: { rows?: number; cols?: number }) => (
   <>
@@ -84,26 +105,21 @@ export const SkeletonRows = ({ rows = 5, cols = 5 }: { rows?: number; cols?: num
   </>
 );
 
-export const Meter = ({ value, max, tone, label, right }: { value: number; max: number | null; tone?: string; label: ReactNode; right: ReactNode }) => {
+/** A bar of `value` against `max`, amber from 85% and red when full. */
+export const Meter = ({ value, max, label }: { value: number; max: number | null; label: string }) => {
   const frac = max && max > 0 ? Math.min(1, value / max) : 0;
-  const auto = tone ?? (frac >= 1 ? "red" : frac >= 0.85 ? "amber" : "");
+  const tone = frac >= 1 ? " red" : frac >= 0.85 ? " amber" : "";
   return (
-    <div className="meter">
-      <div className="meter-head">
-        <span className="muted">{label}</span>
-        <span>{right}</span>
-      </div>
-      <div className={`progress ${auto}`} role="progressbar" aria-valuenow={Math.round(frac * 100)} aria-valuemin={0} aria-valuemax={100}>
-        <span style={{ width: `${(frac * 100).toFixed(1)}%` }} />
-      </div>
+    <div className={`progress slim meter${tone}`} role="progressbar" aria-label={label} aria-valuenow={Math.round(frac * 100)} aria-valuemin={0} aria-valuemax={100}>
+      <span style={{ width: `${(frac * 100).toFixed(1)}%` }} />
     </div>
   );
 };
 
 export const Segmented = <T extends string>({ value, options, onChange, label }: { value: T; options: { value: T; label: ReactNode; count?: number }[]; onChange: (v: T) => void; label: string }) => (
-  <div className="segmented" role="tablist" aria-label={label}>
+  <div className="segmented" role="group" aria-label={label}>
     {options.map((o) => (
-      <button key={o.value} type="button" role="tab" aria-selected={o.value === value} className={o.value === value ? "on" : ""} onClick={() => onChange(o.value)}>
+      <button key={o.value} type="button" aria-pressed={o.value === value} className={o.value === value ? "on" : ""} onClick={() => onChange(o.value)}>
         {o.label}
         {o.count !== undefined && <span className="n">{o.count}</span>}
       </button>
@@ -126,7 +142,7 @@ export const CopyButton = ({ text, label = "Copy" }: { text: string; label?: str
     }
   };
   return (
-    <button type="button" className="btn ghost sm" onClick={() => void copy()} aria-label={label} title={label}>
+    <button type="button" className="btn ghost sm icon" onClick={() => void copy()} aria-label={label} title={label}>
       {done ? <IconCheck /> : <IconCopy />}
     </button>
   );
@@ -164,15 +180,15 @@ export const Confirm = ({ title, body, confirm, danger, onConfirm, onClose }: { 
   };
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={title}>
-        <h2>{title}</h2>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+        <h2 id="dialog-title">{title}</h2>
         <div>{body}</div>
         <ErrorBanner error={error} />
         <div className="actions">
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button ref={ref} type="button" className={`btn ${danger ? "danger" : "primary"}`} onClick={() => void go()} disabled={busy}>
+          <button ref={ref} type="button" className={`btn ${danger ? "danger solid" : "primary"}`} onClick={() => void go()} disabled={busy}>
             {busy && <span className="spinner" />}
             {confirm}
           </button>

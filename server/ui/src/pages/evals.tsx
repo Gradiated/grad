@@ -1,7 +1,7 @@
 import type { EvalModelSummary, EvalRun } from "@sdk/generated/models.js";
 
-import { IconChevron } from "../components/icons.js";
-import { Banner, Card, Empty, ErrorBanner, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
+import { IconChevron, IconEvals } from "../components/icons.js";
+import { Badge, Banner, Card, Empty, ErrorBanner, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
 import { listAll, useApi } from "../lib/api.js";
 import { ago, compact, dateTime, int, num, usd } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
@@ -25,7 +25,7 @@ export const EvalsPage = () => {
           <div className="page-sub">Model comparisons and dataset scoring jobs.</div>
         </div>
       </div>
-      <ErrorBanner error={res.error} />
+      <ErrorBanner error={res.error} onRetry={res.reload} />
       <div className="card">
         <div className="table-wrap">
           <table className="table">
@@ -33,15 +33,14 @@ export const EvalsPage = () => {
               <tr>
                 <th>Eval</th>
                 <th>Status</th>
-                <th>Models</th>
-                <th>Dataset</th>
+                <th>Models and data</th>
                 <th>Progress</th>
                 <th className="right">Cost</th>
                 <th className="right">Created</th>
               </tr>
             </thead>
             <tbody>
-              {res.loading && !res.data && <SkeletonRows cols={7} />}
+              {res.loading && !res.data && <SkeletonRows cols={6} />}
               {evals.map((e) => {
                 const open = () => navigate(`/evals/${encodeURIComponent(e.id)}`);
                 const frac = e.progress.totalOutputs > 0 ? e.progress.generated / e.progress.totalOutputs : 0;
@@ -56,24 +55,25 @@ export const EvalsPage = () => {
                     <td>
                       <StatusBadge status={e.status} />
                     </td>
-                    <td>
-                      <div className="chips">
-                        {e.mode === "score" && <span className="chip">score</span>}
-                        {e.models.slice(0, 3).map((m) => (
-                          <span key={m} className="chip mono">
-                            {m}
-                          </span>
-                        ))}
-                        {e.models.length > 3 && <span className="chip">+{e.models.length - 3}</span>}
+                    <td className="clip" title={e.models.join(", ")}>
+                      <div className="cell-main">
+                        <span className="title mono">
+                          {e.models[0] ?? "—"}
+                          {e.models.length > 1 && <span className="faint"> +{e.models.length - 1}</span>}
+                        </span>
+                        <span className="sub">
+                          {e.mode === "score" ? "scoring" : "eval"} · {e.taskSource.dataset} v{e.taskSource.version}
+                        </span>
                       </div>
                     </td>
-                    <td>
-                      {e.taskSource.dataset}
-                      <span className="faint"> v{e.taskSource.version}</span>
-                    </td>
-                    <td style={{ minWidth: 110 }}>
-                      <div className="progress slim" title={`${e.progress.generated} / ${e.progress.totalOutputs}`}>
-                        <span style={{ width: `${(frac * 100).toFixed(1)}%` }} />
+                    <td className="cell-progress">
+                      <div className="cell-stack">
+                        <span className="small muted num">
+                          {int(e.progress.generated)} / {int(e.progress.totalOutputs)}
+                        </span>
+                        <div className={`progress slim${e.status === "completed" ? " green" : e.status === "failed" ? " red" : ""}`}>
+                          <span style={{ width: `${(frac * 100).toFixed(1)}%` }} />
+                        </div>
                       </div>
                     </td>
                     <td className="right num">{usd(e.totalCostUsd)}</td>
@@ -85,7 +85,7 @@ export const EvalsPage = () => {
           </table>
         </div>
         {res.data && evals.length === 0 && (
-          <Empty title="No evals yet">
+          <Empty title="No evals yet" icon={<IconEvals />}>
             Compare models with <code>grad eval</code> or <code>client.evals.create(...)</code>.
           </Empty>
         )}
@@ -106,7 +106,8 @@ export const EvalDetailPage = ({ id }: { id: string }) => {
         <IconChevron width={12} height={12} />
         <span>{e?.name ?? id}</span>
       </div>
-      <ErrorBanner error={res.error} />
+      <ErrorBanner error={res.error} onRetry={res.reload} />
+      {!e && !res.error && <div className="skeleton title" aria-label="Loading eval" />}
       {e && (
         <>
           <div className="page-header">
@@ -156,11 +157,15 @@ const CiBar = ({ low, mid, high, lo = 0, hi = 1 }: { low: number; mid: number; h
   );
 };
 
+/** pass@k keys arrive as "1" or "pass@1". */
+const kOf = (key: string): number => Number(key.replace(/^pass@/, ""));
+export const passLabel = (key: string): string => `pass@${kOf(key)}`;
+
 const Summary = ({ run }: { run: EvalRun }) => {
   const rows = [...run.summary].sort((a, b) => b.overall - a.overall);
   const lo = Math.min(0, ...rows.map((r) => r.ciLow));
   const hi = Math.max(1, ...rows.map((r) => r.ciHigh));
-  const ks = [...new Set(rows.flatMap((r) => Object.keys(r.passAtK)))].sort((a, b) => Number(a) - Number(b));
+  const ks = [...new Set(rows.flatMap((r) => Object.keys(r.passAtK)))].sort((a, b) => kOf(a) - kOf(b));
   return (
     <Card title="Summary" tight>
       <div className="table-wrap">
@@ -172,7 +177,7 @@ const Summary = ({ run }: { run: EvalRun }) => {
               <th>95% CI</th>
               {ks.map((k) => (
                 <th key={k} className="right">
-                  pass@{k}
+                  {passLabel(k)}
                 </th>
               ))}
               {run.baseline && <th className="right">vs {run.baseline}</th>}
@@ -189,7 +194,7 @@ const Summary = ({ run }: { run: EvalRun }) => {
           </tbody>
         </table>
       </div>
-      {rows.length === 0 && <Empty title={TERMINAL_EVAL.has(run.status) ? "No results" : "Results appear when scoring finishes"} />}
+      {rows.length === 0 && <Empty title={TERMINAL_EVAL.has(run.status) ? "No results" : "Results appear when scoring finishes"} icon={<IconEvals />} />}
     </Card>
   );
 };
@@ -199,17 +204,19 @@ const SummaryRow = ({ row, ks, lo, hi, baseline }: { row: EvalModelSummary; ks: 
   const sig = d && (d.ciLow > 0 ? "up" : d.ciHigh < 0 ? "down" : "");
   return (
     <tr>
-      <td className="mono">
-        {row.model}
-        {row.model === baseline && <span className="badge outline" style={{ marginLeft: 8 }}>baseline</span>}
+      <td>
+        <span className="actions">
+          <span className="mono">{row.model}</span>
+          {row.model === baseline && <Badge>baseline</Badge>}
+        </span>
       </td>
-      <td className="right num" style={{ fontWeight: 600 }}>
-        {num(row.overall, 3)}
+      <td className="right num">
+        <b>{num(row.overall, 3)}</b>
       </td>
       <td>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="ci-cell">
           <CiBar low={row.ciLow} mid={row.overall} high={row.ciHigh} lo={lo} hi={hi} />
-          <span className="faint num" style={{ fontSize: 12 }}>
+          <span className="faint num small">
             {num(row.ciLow, 3)}–{num(row.ciHigh, 3)}
           </span>
         </div>
