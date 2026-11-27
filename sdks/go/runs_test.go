@@ -307,14 +307,32 @@ func TestMetricsFollowGivesUpOnPermanentErrors(t *testing.T) {
 }
 
 func TestMetricsPagesWithoutFollow(t *testing.T) {
+	// The server hands back a tail cursor even on the last page; following it yields an empty page.
 	page := wireMap(t, "metrics-page.json")
-	f := newFake(t, map[string]route{"GET /v1/runs/run_x/metrics": jsonValue(200, page)})
+	tail := map[string]any{"run_id": "run_x", "status": "completed", "data": []any{}, "next_cursor": page["next_cursor"]}
+	f := newFake(t, map[string]route{"GET /v1/runs/run_x/metrics": sequence(jsonValue(200, page), jsonValue(200, tail))})
 	c, _ := f.client()
 	points, err := grad.Collect(c.Runs.Metrics(context.Background(), "run_x", false))
 	if err != nil || len(points) != 6 || points[5].Loss == 0 {
 		t.Fatalf("points %d %v", len(points), err)
 	}
-	if q := f.last("GET", "/v1/runs/run_x/metrics").Query; q != "limit=1000" {
+	if q := f.reqs[0].Query; q != "limit=1000" {
 		t.Fatalf("query %s", q)
+	}
+}
+
+func TestMetricsStopsOnRepeatedCursor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	page := wireMap(t, "metrics-page.json")
+	page["next_cursor"] = "same"
+	f := newFake(t, map[string]route{"GET /v1/runs/run_x/metrics": jsonValue(200, page)})
+	c, _ := f.client()
+	_, err := grad.Collect(c.Runs.Metrics(ctx, "run_x", false))
+	if !errors.Is(err, grad.ErrPaginationLoop) {
+		t.Fatalf("err %v", err)
+	}
+	if n := f.count("GET", "/v1/runs/run_x/metrics"); n != 2 {
+		t.Fatalf("fetched %d pages, want 2", n)
 	}
 }

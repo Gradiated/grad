@@ -64,6 +64,9 @@ type fake struct {
 	routes map[string]route
 }
 
+// maxFakeRequests caps every fake server so a looping client cannot run forever.
+const maxFakeRequests = 500
+
 func newFake(t *testing.T, routes map[string]route) *fake {
 	t.Helper()
 	f := &fake{t: t, routes: routes}
@@ -71,7 +74,16 @@ func newFake(t *testing.T, routes map[string]route) *fake {
 		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.reqs = append(f.reqs, recorded{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Header: r.Header.Clone(), Body: body})
+		n := len(f.reqs)
 		f.mu.Unlock()
+		// Every fake is finite: a client that loops gets a non-retryable error and fails the test.
+		if n > maxFakeRequests {
+			t.Errorf("fake: more than %d requests; the client is looping", maxFakeRequests)
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"about:blank","title":"Too many requests to the fake","status":400,"code":"fake_request_cap","request_id":"req_fake"}`))
+			return
+		}
 		key := r.Method + " " + r.URL.Path
 		if h, ok := f.routes[key]; ok {
 			h(w, r, body)

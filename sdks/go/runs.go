@@ -312,31 +312,17 @@ func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 //	for m, err := range run.Metrics(ctx, true) { ... }
 func (r *Run) Metrics(ctx context.Context, follow bool) iter.Seq2[MetricPoint, error] {
 	if !follow {
-		const limit = 1000
-		return func(yield func(MetricPoint, error) bool) {
-			var cursor *string
-			for {
-				api, err := r.c.api()
-				if err != nil {
-					yield(MetricPoint{}, err)
-					return
-				}
-				page, err := api.ListRunMetrics(ctx, r.ID, &generated.ListRunMetricsParams{Cursor: cursor, Limit: ptr(limit)})
-				if err != nil {
-					yield(MetricPoint{}, err)
-					return
-				}
-				for _, m := range page.Data {
-					if !yield(m, nil) {
-						return
-					}
-				}
-				if len(page.Data) < limit || page.NextCursor == nil {
-					return
-				}
-				cursor = page.NextCursor
+		return paginate(ctx, func(ctx context.Context, cursor *string) ([]MetricPoint, *string, error) {
+			api, err := r.c.api()
+			if err != nil {
+				return nil, nil, err
 			}
-		}
+			page, err := api.ListRunMetrics(ctx, r.ID, &generated.ListRunMetricsParams{Cursor: cursor, Limit: ptr(1000)})
+			if err != nil {
+				return nil, nil, err
+			}
+			return page.Data, page.NextCursor, nil
+		})
 	}
 	return func(yield func(MetricPoint, error) bool) {
 		lastID := ""
