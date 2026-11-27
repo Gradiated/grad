@@ -3,7 +3,9 @@
 //! By default the compose file embedded in this binary is written to
 //! `$XDG_DATA_HOME/gradiated/local/docker-compose.yml` and uses published
 //! images, so it works from any directory. `--build` (or `--file`) uses a
-//! source checkout's `server/docker-compose.yml` instead. The first `up`
+//! source checkout's `server/docker-compose.yml` instead. The published images
+//! are public on GHCR and pulled without a login; their tag defaults to
+//! [`DEFAULT_IMAGE_TAG`] (`--image-tag` overrides it). The first `up`
 //! generates an admin key, a trainer key and the workspace-secrets key and
 //! stores them in the `local` profile; the server only ever sees the admin
 //! key's SHA-256.
@@ -21,6 +23,15 @@ use crate::output::{CliError, CliResult, EXIT_AUTH};
 
 pub const EMBEDDED_COMPOSE: &str = include_str!("../assets/docker-compose.yml");
 pub const LOCAL_PROFILE: &str = "local";
+/// Image tag baked in at build time (see build.rs): the version for a release
+/// binary, `main` for a build from a checkout.
+pub const DEFAULT_IMAGE_TAG: &str = env!("GRAD_DEFAULT_IMAGE_TAG");
+/// Image overrides honoured by the embedded compose file.
+const IMAGE_OVERRIDES: [&str; 3] = [
+    "GRAD_SERVER_IMAGE",
+    "GRAD_TRAINER_IMAGE",
+    "GRAD_TRAINER_GPU_IMAGE",
+];
 
 fn data_dir() -> CliResult<PathBuf> {
     if let Some(x) = std::env::var_os("XDG_DATA_HOME")
@@ -41,13 +52,30 @@ fn data_dir() -> CliResult<PathBuf> {
         .join("local"))
 }
 
-/// Write the embedded compose file and return its path.
-pub fn write_embedded() -> CliResult<PathBuf> {
+/// A Docker tag: `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`. It is pasted into the
+/// compose file, so anything else is refused.
+fn valid_tag(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    tag.len() <= 128
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+/// Write the embedded compose file with images tagged `tag` and return its path.
+pub fn write_embedded(tag: &str) -> CliResult<PathBuf> {
+    if !valid_tag(tag) {
+        return Err(CliError::usage(format!(
+            "invalid image tag {:?}: use main, sha-<7 hex>, or a version like 0.3.0",
+            tag
+        )));
+    }
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| CliError::general("io_error", format!("{}: {}", dir.display(), e)))?;
     let path = dir.join("docker-compose.yml");
-    let body = EMBEDDED_COMPOSE.replace("__GRAD_VERSION__", env!("CARGO_PKG_VERSION"));
+    let body = EMBEDDED_COMPOSE.replace("__GRAD_VERSION__", tag);
     std::fs::write(&path, body)
         .map_err(|e| CliError::general("io_error", format!("{}: {}", path.display(), e)))?;
     Ok(path)
@@ -66,7 +94,7 @@ fn find_source_compose(start: &Path) -> Option<PathBuf> {
     None
 }
 
-fn compose_files(args: &ComposeArgs, build: bool) -> CliResult<Vec<PathBuf>> {
+fn compose_files(args: &ComposeArgs, build: bool, tag: &str) -> CliResult<Vec<PathBuf>> {
     if !args.file.is_empty() {
         if let Some(f) = args.file.iter().find(|f| !f.is_file()) {
             return Err(CliError::usage(format!(
@@ -82,7 +110,7 @@ fn compose_files(args: &ComposeArgs, build: bool) -> CliResult<Vec<PathBuf>> {
             CliError::usage("--build needs a source checkout: run it inside the grad repository or pass --file path/to/server/docker-compose.yml")
         });
     }
-    Ok(vec![write_embedded()?])
+    Ok(vec![write_embedded(tag)?])
 }
 
 fn docker_bin() -> String {
@@ -121,6 +149,115 @@ async fn run(ctx: &Ctx, mut cmd: tokio::process::Command, what: &str) -> CliResu
         ));
     }
     Ok(())
+}
+
+/// `up` pulls first only for the embedded compose file with the default images:
+/// with `--build`, `--file` or an image override the user manages the images.
+fn pulls_published_images(args: &ComposeArgs, build: bool) -> bool {
+    !build
+        && args.file.is_empty()
+        && IMAGE_OVERRIDES
+            .iter()
+            .all(|v| std::env::var_os(v).is_none_or(|x| x.is_empty()))
+}
+
+/// Why a `docker compose pull` failed, from its output.
+#[derive(Debug, PartialEq, Eq)]
+enum PullFailure {
+    /// The registry refused us: the packages are private (or a bad login).
+    Denied,
+    /// No image with that tag.
+    NotFound,
+    /// Anything else (offline, registry down): try the images already here.
+    Other,
+}
+
+fn classify_pull_failure(output: &str) -> PullFailure {
+    let o = output.to_ascii_lowercase();
+    if o.contains("manifest unknown") || (o.contains("manifest for") && o.contains("not found")) {
+        PullFailure::NotFound
+    } else if o.contains("denied") || o.contains("unauthorized") || o.contains("forbidden") {
+        PullFailure::Denied
+    } else {
+        PullFailure::Other
+    }
+}
+
+/// `docker compose pull`, so a moving tag like `main` is fresh and a refused
+/// pull gets a clear error instead of a failed `up`. Output is passed through.
+async fn pull_images(
+    ctx: &Ctx,
+    args: &ComposeArgs,
+    files: &[PathBuf],
+    gpu: bool,
+    tag: &str,
+) -> CliResult {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut cmd = compose(args, files);
+    if gpu {
+        cmd.arg("--profile").arg("gpu");
+    }
+    cmd.arg("pull")
+        .stdin(Stdio::null())
+        .stdout(if ctx.out.json {
+            Stdio::null()
+        } else {
+            Stdio::inherit()
+        })
+        .stderr(Stdio::piped());
+    ctx.out
+        .note(format!("Pulling ghcr.io/gradiated images tagged {}", tag));
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            CliError::general("docker_not_found", format!("'{}' not found", docker_bin()))
+                .hint("Install Docker with the Compose plugin (https://docs.docker.com/compose/install/), or set GRAD_DOCKER")
+        } else {
+            CliError::general("docker_failed", format!("could not run docker: {}", e))
+        }
+    })?;
+    let mut output = String::new();
+    if let Some(stderr) = child.stderr.take() {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if !ctx.out.json {
+                eprintln!("{}", line);
+            }
+            output.push_str(&line);
+            output.push('\n');
+        }
+    }
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| CliError::general("docker_failed", format!("could not run docker: {}", e)))?;
+    if status.success() {
+        return Ok(());
+    }
+    match classify_pull_failure(&output) {
+        PullFailure::Denied => Err(CliError::general(
+            "image_pull_denied",
+            format!("GHCR refused to serve the grad images tagged {}", tag),
+        )
+        .hint(
+            "The images are meant to be public, but they may still be private. If you have access, \
+             run `docker login ghcr.io -u <github-user>` with a token that has read:packages; \
+             otherwise build them from a grad checkout with `grad local up --build`.",
+        )),
+        PullFailure::NotFound => Err(CliError::general(
+            "image_not_found",
+            format!("no grad images are tagged {}", tag),
+        )
+        .hint(
+            "Tags are main, sha-<7 hex> (each commit on main) and X.Y.Z (releases); pick one with \
+             --image-tag, or build from a grad checkout with `grad local up --build`.",
+        )),
+        PullFailure::Other => {
+            ctx.out.note(
+                "Could not pull the images (see above); starting with the images already on this machine",
+            );
+            Ok(())
+        }
+    }
 }
 
 fn new_key(prefix: &str) -> String {
@@ -228,11 +365,13 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             compose: args,
             gpu,
             build,
+            image_tag,
             port,
             no_wait,
             timeout,
         } => {
-            let files = compose_files(&args, build)?;
+            let tag = image_tag.as_deref().unwrap_or(DEFAULT_IMAGE_TAG);
+            let files = compose_files(&args, build, tag)?;
             let base_url = format!("http://127.0.0.1:{}", port);
             let profile = profile_of(ctx);
             let keys = ensure_keys(&profile, &base_url)?;
@@ -251,6 +390,10 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+            on_interrupt("stopped waiting; the containers keep starting (`grad local status`)");
+            if pulls_published_images(&args, build) {
+                pull_images(ctx, &args, &files, gpu, tag).await?;
+            }
             let mut cmd = compose(&args, &files);
             if gpu {
                 cmd.arg("--profile").arg("gpu");
@@ -267,7 +410,6 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 .env("GRAD_TRAINER_API_KEY", &keys.trainer)
                 .env("GRAD_SECRETS_KEY", &keys.secrets)
                 .env("GRAD_PORT", port.to_string());
-            on_interrupt("stopped waiting; the containers keep starting (`grad local status`)");
             run(ctx, cmd, "up").await.map_err(|e| {
                 if e.code == "docker_failed" {
                     e.hint(format!(
@@ -322,7 +464,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             compose: args,
             volumes,
         } => {
-            let files = compose_files(&args, false)?;
+            let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
             let mut cmd = compose(&args, &files);
             cmd.arg("down");
             if volumes {
@@ -337,7 +479,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.done(&json!({ "project": args.project_name, "volumes_removed": volumes }))
         }
         LocalCmd::Status { compose: args } => {
-            let files = compose_files(&args, false)?;
+            let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
             let mut cmd = compose(&args, &files);
             cmd.arg("ps");
             run(ctx, cmd, "ps").await?;
@@ -370,7 +512,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             follow,
             tail,
         } => {
-            let files = compose_files(&args, false)?;
+            let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
             let mut cmd = compose(&args, &files);
             cmd.arg("logs").arg("--tail").arg(&tail);
             if follow {
@@ -398,7 +540,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                     return Err(CliError::usage("aborted"));
                 }
             }
-            let files = compose_files(&args, false)?;
+            let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
             let mut cmd = compose(&args, &files);
             cmd.arg("down").arg("--volumes").arg("--remove-orphans");
             run(ctx, cmd, "down").await?;
@@ -431,6 +573,40 @@ mod tests {
         assert!(!pg.contains("ports:"));
         let k = new_key("grad_local_");
         assert!(k.starts_with("grad_local_") && k.len() == "grad_local_".len() + 48);
+    }
+
+    #[test]
+    fn image_tags() {
+        assert!(!DEFAULT_IMAGE_TAG.is_empty() && valid_tag(DEFAULT_IMAGE_TAG));
+        for ok in ["main", "sha-abc1234", "0.3.0", "0.3.0-rc.1", "_x"] {
+            assert!(valid_tag(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "-x",
+            ".x",
+            "a b",
+            "a\nb",
+            "a:b",
+            "a/b",
+            &"x".repeat(129),
+        ] {
+            assert!(!valid_tag(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn classifies_pull_failures() {
+        use PullFailure::*;
+        for (out, want) in [
+            ("Error response from daemon: Head \"https://ghcr.io/v2/gradiated/grad-server/manifests/main\": unauthorized", Denied),
+            ("grad-server Error response from daemon: denied", Denied),
+            ("Error response from daemon: manifest unknown", NotFound),
+            ("Error response from daemon: manifest for ghcr.io/gradiated/grad-server:9.9.9 not found: manifest unknown", NotFound),
+            ("dial tcp: lookup ghcr.io: no such host", Other),
+        ] {
+            assert_eq!(classify_pull_failure(out), want, "{out}");
+        }
     }
 
     #[test]

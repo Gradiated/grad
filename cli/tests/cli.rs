@@ -2151,17 +2151,18 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     assert!(r.stdout.contains("grad --profile local models list"));
     let compose = sb.path("data/gradiated/local/docker-compose.yml");
     let text = std::fs::read_to_string(&compose).unwrap();
+    // A source build pulls `main`; release.yml bakes the version in (build.rs).
     assert!(text.contains(&format!(
         "ghcr.io/gradiated/grad-server:{}",
-        env!("CARGO_PKG_VERSION")
+        env!("GRAD_DEFAULT_IMAGE_TAG")
     )));
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    let pull = format!("compose -p grad-local -f {} pull", compose.display());
+    let up = format!("compose -p grad-local -f {} up -d", compose.display());
     assert!(
-        log.contains(&format!(
-            "compose -p grad-local -f {} up -d",
-            compose.display()
-        )),
-        "{}",
+        log.find(&pull)
+            .is_some_and(|p| log.find(&up).is_some_and(|u| p < u)),
+        "pulls, then starts: {}",
         log
     );
     let cfg: Value =
@@ -2295,6 +2296,73 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let r = run(c, &["local", "up", "--no-wait"]);
     expect(&r, 1);
     assert!(r.stderr.contains("--port"));
+
+    // --image-tag picks the tag; tags are validated; --build builds instead.
+    let shim = docker_shim(&sb, 0);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(
+        c,
+        &["local", "up", "--no-wait", "--image-tag", "sha-abc1234"],
+    );
+    expect(&r, 0);
+    let text = std::fs::read_to_string(&compose).unwrap();
+    assert!(text.contains("ghcr.io/gradiated/grad-trainer:sha-abc1234-gpu"));
+    for bad in [
+        vec!["local", "up", "--image-tag", "a\nb: c"],
+        vec!["local", "up", "--image-tag", "main", "--build"],
+    ] {
+        let mut c = sb.grad(None);
+        c.env("GRAD_DOCKER", &shim);
+        expect(&run(c, &bad), 2);
+    }
+    // An image override means the user manages images: no pull.
+    std::fs::remove_file(sb.path("docker.log")).unwrap();
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim)
+        .env("GRAD_SERVER_IMAGE", "my-server:dev");
+    expect(&run(c, &["local", "up", "--no-wait"]), 0);
+    let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+    assert!(!log.contains(" pull") && log.contains("up -d"), "{}", log);
+
+    // A refused pull (private packages) or a missing tag fails with a hint before `up`.
+    for (msg, code, hint) in [
+        (
+            "Error response from daemon: Head \\\"https://ghcr.io/v2/gradiated/grad-server/manifests/main\\\": denied",
+            "image_pull_denied",
+            "may still be private",
+        ),
+        (
+            "Error response from daemon: manifest unknown",
+            "image_not_found",
+            "--image-tag",
+        ),
+    ] {
+        let shim = sb.path("docker-pull-fails.sh");
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> \"{log}\"\ncase \"$*\" in *pull*) echo \"{msg}\" >&2; exit 18;; esac\nexit 0\n",
+                log = sb.path("docker.log").display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::remove_file(sb.path("docker.log")).unwrap();
+        let mut c = sb.grad(None);
+        c.env("GRAD_DOCKER", &shim).current_dir("/");
+        let r = run(c, &["--json", "local", "up", "--no-wait"]);
+        expect(&r, 1);
+        let err = &r.err_json()["error"];
+        assert_eq!(err["code"], code, "{}", r.stderr);
+        let h = err["hint"].as_str().unwrap_or_default();
+        assert!(h.contains(hint) && h.contains("--build"), "{}", h);
+        let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
+        assert!(!log.contains("up -d"), "{}", log);
+    }
 }
 
 // ---------------------------------------------------------------- interrupt

@@ -1009,6 +1009,10 @@ authentication on.")]
         /// Build images from this source checkout instead of pulling them
         #[arg(long)]
         build: bool,
+        /// Tag of the published images to pull (default: this binary's version for a
+        /// release build, `main` for a source build; see SELF_HOSTING.md)
+        #[arg(long, value_name = "TAG", conflicts_with = "build")]
+        image_tag: Option<String>,
         /// Loopback port for the API
         #[arg(long, env = "GRAD_PORT", default_value_t = 8787)]
         port: u16,
