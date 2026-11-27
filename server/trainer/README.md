@@ -58,7 +58,8 @@ summary = import_runner.run(source, connector, emit_batch=post_records, workdir=
 the job kinds in `GRAD_WORKER_KINDS` (default `train,import`). Run GPU pools with `train` and a
 CPU pool with `import`: imports and source syncs are the only jobs that carry workspace secrets.
 Also: `GRAD_WORKER_ID` (a name prefix, default host-pid; every process appends a random suffix), `GRAD_LEASE_SECONDS` (180),
-`GRAD_POLL_INTERVAL_S` (1.0), `GRAD_WORKDIR` (a temp dir).
+`GRAD_POLL_INTERVAL_S` (1.0), `GRAD_WORKDIR` (a temp dir; each job gets a locked directory in it,
+and a restarted worker deletes the ones a killed worker left, so a crash loop can't fill the disk).
 
 `GRAD_WORKER_METRICS_PORT` serves Prometheus metrics (`grad_trainer_*`: phase, step time,
 tokens/s, GPU utilisation and memory, checkpoint and upload times) on that port. Every
