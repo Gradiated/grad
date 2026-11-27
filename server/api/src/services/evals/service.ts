@@ -397,9 +397,24 @@ export const createEvalService = (
       });
   };
 
+  // Per eval: regex items that timed out once are not run again (bounded).
+  const timedOutRegex = new Map<string, Set<string>>();
+  const timedOutRegexFor = (evalId: string): Set<string> => {
+    let set = timedOutRegex.get(evalId);
+    if (!set) {
+      set = new Set();
+      timedOutRegex.set(evalId, set);
+      if (timedOutRegex.size > 1000) {
+        timedOutRegex.delete(timedOutRegex.keys().next().value as string);
+      }
+    }
+    return set;
+  };
+
   /** A scoring job's output: the record's own answer, scored by the rubric. */
   const scoringContext = (record: EvalRecord): ScoringContext => ({
     regex: deps.regex,
+    timedOutRegex: timedOutRegexFor(record.id),
     judge: deps.inference?.judge ?? null,
     workspace: record.workspace_id,
     judgeTargets: record.judge_targets,

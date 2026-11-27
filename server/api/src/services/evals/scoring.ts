@@ -25,6 +25,12 @@ export interface ScoringResult {
 
 export interface ScoringContext {
   regex: RegexEvaluator;
+  /**
+   * Regex items (flags/pattern) that already timed out in this eval: they score 0
+   * without running again, so one catastrophic pattern costs one timeout per eval,
+   * not one per output, on the replica's shared regex worker.
+   */
+  timedOutRegex?: Set<string>;
   judge: ChatCompletionClient | null;
   /** The eval's workspace: sent with every judge call. */
   workspace: string;
@@ -140,11 +146,17 @@ export const scoreOutput = async (
     }
 
     if (item.kind === "regex") {
+      const key = `${item.flags ?? ""}/${item.pattern ?? ""}`;
+      if (ctx.timedOutRegex?.has(key)) {
+        result.scores[item.name] = 0;
+        continue;
+      }
       const outcome = await ctx.regex.test(
         item.pattern ?? "",
         item.flags ?? "",
         input.output.slice(0, MAX_SCORED_CHARS),
       );
+      if ("timedOut" in outcome) ctx.timedOutRegex?.add(key);
       result.scores[item.name] =
         "matched" in outcome && outcome.matched ? 1 : 0;
       continue;

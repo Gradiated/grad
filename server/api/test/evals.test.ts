@@ -15,6 +15,7 @@ import {
   bootstrapMeanCI,
   computePassAtK,
 } from "../src/services/evals/stats.js";
+import type { RegexEvaluator } from "../src/services/evals/types.js";
 import type { EvalOutputRow } from "../src/store/types.js";
 import {
   judgeResponder,
@@ -104,6 +105,38 @@ describe("rubric scoring", () => {
       { regex, judge: null, workspace: "ws", judgeTargets: {} },
     );
     expect(bad.scores).toEqual({ json: 0, nonempty: 0, exact: 0, has_ok: 0 });
+  });
+
+  it("runs a regex that timed out only once per eval (r8 P2-10)", async () => {
+    const calls: string[] = [];
+    const slow: RegexEvaluator = {
+      test: async (pattern) => {
+        calls.push(pattern);
+        return pattern === "(a+)+$" ? { timedOut: true } : { matched: true };
+      },
+      close: async () => {},
+    };
+    const rubric = [
+      item({ name: "bad", kind: "regex", pattern: "(a+)+$" }),
+      item({ name: "good", kind: "regex", pattern: "a" }),
+    ];
+    const ctx = {
+      regex: slow,
+      judge: null,
+      workspace: "ws",
+      judgeTargets: {},
+      timedOutRegex: new Set<string>(),
+    };
+    for (let i = 0; i < 5; i += 1) {
+      const out = await scoreOutput(
+        rubric,
+        { prompt: [], output: "aaaa!", reference: null },
+        ctx,
+      );
+      expect(out.scores).toEqual({ bad: 0, good: 1 });
+    }
+    expect(calls.filter((p) => p === "(a+)+$")).toHaveLength(1);
+    expect(calls.filter((p) => p === "a")).toHaveLength(5);
   });
 
   it("combines weighted scores with missing items as zero", () => {
