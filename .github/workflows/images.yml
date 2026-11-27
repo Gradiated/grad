@@ -1,0 +1,176 @@
+name: Images
+
+# Builds and pushes the container images to GHCR (public packages):
+#   ghcr.io/gradiated/grad-server         linux/amd64 + linux/arm64
+#   ghcr.io/gradiated/grad-trainer        CPU, linux/amd64 + linux/arm64
+#   ghcr.io/gradiated/grad-trainer:*-gpu  CUDA, linux/amd64
+# A push to main tags `main` and `sha-<7>` (GPU: `main-gpu`, `sha-<7>-gpu`). The GPU image is
+# large, so main rebuilds it only when server/trainer/ or this workflow changed, or on a manual
+# run with `gpu`. release.yml calls this with `version`, which tags `X.Y.Z` (and `latest` unless
+# it's a prerelease) and always includes the GPU image.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - server/api/**
+      - server/trainer/**
+      - .github/workflows/images.yml
+  workflow_dispatch:
+    inputs:
+      gpu:
+        description: Also build the GPU trainer image
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        description: Release version (X.Y.Z) to tag the images with
+        type: string
+        required: true
+      environment:
+        description: Deployment environment for the publish jobs (approval gate)
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Pick the images to build
+    # Only main and releases publish; a manual run on another branch would move `main`.
+    if: inputs.version != '' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: CPU images always; the GPU image for releases, manual runs or trainer changes
+        id: plan
+        env:
+          VERSION: ${{ inputs.version }}
+          GPU_INPUT: ${{ inputs.gpu }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          gpu=false
+          if [ -n "$VERSION" ] || [ "$GPU_INPUT" = "true" ]; then
+            gpu=true
+          elif [ "$EVENT" = "push" ]; then
+            if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              gpu=true # first push or unknown base: build it to be safe
+            elif git diff --name-only "$BEFORE" "$GITHUB_SHA" -- server/trainer .github/workflows/images.yml | grep -q .; then
+              gpu=true
+            fi
+          fi
+          matrix='[
+            {"image":"grad-server","context":"server/api","target":"","platforms":"linux/amd64,linux/arm64","suffix":""},
+            {"image":"grad-trainer","context":"server/trainer","target":"cpu","platforms":"linux/amd64,linux/arm64","suffix":""}
+          ]'
+          if [ "$gpu" = "true" ]; then
+            matrix=$(jq -c '. + [{"image":"grad-trainer","context":"server/trainer","target":"gpu","platforms":"linux/amd64","suffix":"-gpu"}]' <<<"$matrix")
+          fi
+          echo "matrix=$(jq -c . <<<"$matrix")" >> "$GITHUB_OUTPUT"
+          echo "GPU image: $gpu"
+
+  build:
+    name: ${{ matrix.image }}${{ matrix.suffix }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.target == 'gpu' && 90 || 60 }}
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      packages: write
+    # On main only the newest commit matters, so a newer push cancels the CPU builds in flight.
+    # The GPU build is never cancelled: the next push may not rebuild it.
+    concurrency:
+      group: images-${{ github.ref }}-${{ matrix.image }}${{ matrix.suffix }}
+      cancel-in-progress: ${{ inputs.version == '' && matrix.target != 'gpu' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      RELEASE: ${{ inputs.version != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The CUDA torch image does not fit on a stock runner disk.
+      - name: Free disk space
+        if: matrix.target == 'gpu'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Set up QEMU
+        if: contains(matrix.platforms, 'arm64')
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Releases: 0.3.0 and latest (0.3.0-gpu, latest-gpu); prereleases never move latest.
+      # main: main and sha-abc1234 (main-gpu, sha-abc1234-gpu).
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ghcr.io/gradiated/${{ matrix.image }}
+          flavor: |
+            latest=${{ env.RELEASE == 'true' && 'auto' || 'false' }}
+            suffix=${{ matrix.suffix }},onlatest=true
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ env.RELEASE == 'true' }}
+            type=raw,value=main,enable=${{ env.RELEASE != 'true' }}
+            type=sha,prefix=sha-,format=short,enable=${{ env.RELEASE != 'true' }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          # The GPU image's layers would crowd the CPU images out of the 10 GB cache.
+          cache-from: type=gha,scope=${{ matrix.image }}${{ matrix.suffix }}
+          cache-to: type=gha,scope=${{ matrix.image }}${{ matrix.suffix }},mode=${{ matrix.target == 'gpu' && 'min' || 'max' }}
+
+      - name: Summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### ${{ matrix.image }}${{ matrix.suffix }}"
+            echo
+            echo "Digest: \`$DIGEST\`"
+            echo
+            while read -r tag; do [ -n "$tag" ] && echo "- \`$tag\`"; done <<<"$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"
