@@ -7,7 +7,7 @@
  * SIGTERM/SIGINT or stdin closes, and tears every child process down.
  *
  *   pnpm -C server/api exec tsx ../../tests/harness/stack.ts [--cloud]
- *     [--auth none|api_key] [--worker none|reference|torch]
+ *     [--auth none|api_key] [--worker none|reference|torch] [--online]
  *     [--database-url postgres://...] [--replicas N]
  *     [--drop-worker-ack-every N]
  *
@@ -77,6 +77,7 @@ export const TINY_MODELS = [
       sft: 1e-3,
       dpo: 1e-4,
       router: 1e-3,
+      decision: 1e-3,
       cartridge: 1e-2,
       distill: 1e-3,
       reward: 1e-3,
@@ -114,6 +115,8 @@ const { values: args } = parseArgs({
     "database-url": { type: "string" },
     replicas: { type: "string", default: "1" },
     "drop-worker-ack-every": { type: "string", default: "0" },
+    // Let the worker download Hugging Face datasets (offline by default).
+    online: { type: "boolean", default: false },
   },
 });
 
@@ -320,8 +323,7 @@ const main = async () => {
           GRAD_TRAINER_BACKEND:
             args.worker === "reference" ? "reference" : "torch",
           GRAD_MODEL_PATHS: JSON.stringify(modelPaths),
-          GRAD_OFFLINE: "1",
-          HF_HUB_OFFLINE: "1",
+          ...(args.online ? {} : { GRAD_OFFLINE: "1", HF_HUB_OFFLINE: "1" }),
           GRAD_SOURCES_EGRESS_ALLOW: "127.0.0.1/32",
           GRAD_SOURCES_SETTLE_SECONDS: "0",
         },

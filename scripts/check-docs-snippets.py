@@ -4,14 +4,17 @@
     python3 scripts/check-docs-snippets.py --docs ../workspace/product/website/src/docs/training
     python3 scripts/check-docs-snippets.py --docs DOCS --cloud      # deploy/route/embed blocks
     python3 scripts/check-docs-snippets.py --docs DOCS --list       # show blocks, run nothing
+    python3 scripts/check-docs-snippets.py --docs DOCS --offline    # skip the Hugging Face blocks
 
 It starts tests/harness/stack.ts (reference worker; with --cloud the fake Cloud API and
 the torch worker, since reference artifacts can't be deployed), extracts every ```python
 and ```bash block from the v0 pages, and runs each one in a scratch directory with
 GRADIATED_BASE_URL/GRADIATED_API_KEY pointing at the stack. Placeholders are filled from
 the fixture maps below (files, seed datasets and artifacts, model and host rewrites).
-Blocks that can't run self-contained are listed in SKIP with a reason. Stdlib + the
-Python SDK only (PYTHONPATH=sdks/python is set for the blocks).
+Blocks that can't run self-contained are listed in SKIP with a reason. Hugging Face
+imports run online (with a small `limit` injected) unless --offline. Blocks that load a
+downloaded artifact with torch run in --cloud mode under GRAD_TRAINER_PYTHON. Stdlib + the
+Python SDK only (PYTHONPATH=sdks/python is set for the blocks; the SDK needs httpx).
 """
 
 from __future__ import annotations
@@ -38,27 +41,32 @@ WAVE2 = {
     "recipes/traces-to-environments.mdx",
 }
 
+CLOUD_SERVING = "Gradiated Cloud serving (coming soon); grad-server never deploys"
+
 # (page, text in the block, reason). The first match wins.
 SKIP = [
+    ("", "git clone", "clones the repository"),
     ("", "pip install", "installs a package"),
     ("", "npm install", "installs a package"),
     ("", "go get ", "installs a package"),
     ("", "cargo add", "installs a package"),
     ("", "cargo install", "installs the CLI"),
+    ("", "localhost:8000", "calls the artifact served on your own vLLM"),
     ("", "from openai import", "needs the openai package and the Gradiated inference gateway"),
     ("", "/v1/chat/completions", "Gradiated inference gateway, not grad-server"),
     ("", "/v1/systemone", "Gradiated inference gateway, not grad-server"),
     ("", "typesafe_sdk", "needs the SystemOne SDK and the Gradiated inference gateway"),
+    ("", ".deploy(", CLOUD_SERVING),
+    ("", "grad deploy", CLOUD_SERVING),
+    ("", "grad deployments", CLOUD_SERVING),
+    ("", "deployments.", CLOUD_SERVING),
+    ("", "from router_bundle import", "needs the reference loader saved from the artifact format spec"),
+    ("", "from sentence_transformers import", "needs sentence-transformers"),
     ("", "vllm serve", "needs a GPU and vLLM"),
     ("", "sglang.launch_server", "needs a GPU and SGLang"),
-    ("", "from_hf(", "needs network access to Hugging Face"),
-    ("", "import hf ", "needs network access to Hugging Face"),
-    ("", "from_benchmark(", "needs network access to Hugging Face"),
-    ("", "import benchmark ", "needs network access to Hugging Face"),
     ("", "grad local up", "starts Docker Compose (the harness is already a local stack)"),
     ("", "helm upgrade", "needs a Kubernetes cluster"),
     ("", "kubectl ", "needs a Kubernetes cluster"),
-    ("integrations/", "datasets.records", "reads a dataset a source synced"),
     ("", "langfuse.create_score", "Langfuse SDK and account"),
     ("", "from langfuse", "Langfuse SDK and account"),
     ("", "/api/public/scores", "Langfuse API and account"),
@@ -67,12 +75,26 @@ SKIP = [
     ("", "opentelemetry", "Phoenix SDK and server"),
     ("", "from posthog", "PostHog SDK and project"),
     ("", "posthog.capture", "PostHog SDK and project"),
-    ("", "--follow", "streams until the run ends; covered by `grad train --wait`"),
-    ("self-hosting.mdx", "GRADIATED_PROFILE=local", "uses the profile `grad local up` writes"),
     ("self-hosting.mdx", "grad --profile local ui", "opens a browser on the `grad local up` profile (cli/tests/cli.rs covers grad ui)"),
-    ("recipes/reward-models.mdx", "from peft import", "needs torch, peft and the reward model's base weights"),
-    ("recipes/decision-model.mdx", "deploy", "a deployable decision model needs a linden-1 or Qwen3-0.6B backbone; the harness has no tiny one"),
 ]
+# Hugging Face downloads: run online (the default), skipped with --offline.
+HF = ("from_hf(", "import hf ", "from_benchmark(", "import benchmark ")
+HF_LIMIT = 40
+ONLINE_LIMITS = f"""
+import grad._resources as _gr
+for _m in ("from_hf", "from_benchmark"):
+    def _limited(self, *a, _orig=getattr(_gr.Datasets, _m), **k):
+        if k.get("limit") is None:
+            k["limit"] = {HF_LIMIT}
+        return _orig(self, *a, **k)
+    setattr(_gr.Datasets, _m, _limited)
+"""
+# Blocks that load a downloaded artifact with torch: they run under the trainer's Python
+# (GRAD_TRAINER_PYTHON) in --cloud mode, after the prelude binds the names they use.
+TORCH = {
+    ("recipes/reward-models.mdx", "from peft import"): (
+        "sql-verifier", 'run = next(r for r in client.runs.list().data if r.name == "sql-verifier" and r.status == "completed")\n'),
+}
 
 # Blocks that need hosted serving (deploy, route, embeddings) or a real adapter (continued training,
 # evaluating an artifact; reference-worker artifacts can't be served): only run with --cloud.
@@ -80,6 +102,7 @@ CLOUD = re.compile(
     r"\.deploy\(|grad deploy|grad route|grad embed|client\.route\(|deployments\.|embeddings\.create|grad deployments"
     r"|model=\w+\.artifact|model=sft_art|--model [\w-]+@|models=\[[^\]]*@|--models \S*@"
     r"|sources add gradiated|sources\.Gradiated"
+    r"|\.download\("  # the SDKs check that a download is a servable adapter, which reference artifacts aren't
 )
 
 MODELS = {"{{SONNET_MODEL}}": "anthropic/claude-sonnet-5-5", "{{OPUS_MODEL}}": "anthropic/claude-opus-5-5", "{{GPT_MODEL}}": "openai/gpt-6.1-sol"}
@@ -99,6 +122,9 @@ for _name, _model in {"SFTRecipe": "test/tiny-qwen3", "DPORecipe": "test/tiny-qw
     _cls.__init__ = _init
 """
 HOSTS = ("https://api.gradiated.com", "https://grad.internal.example")
+# The server's default secret hosts, plus the fake Langfuse (a secret only goes to its allowed hosts).
+PUBLIC_SECRET_HOSTS = ["cloud.langfuse.com", "us.cloud.langfuse.com", "api.smith.langchain.com", "api.braintrust.dev", "us.posthog.com",
+                       "eu.posthog.com", "app.phoenix.arize.com", "huggingface.co", "api.wandb.ai"]
 
 CHAT = [
     {"session_id": f"s{i}", "messages": [{"role": "user", "content": f"Count active users from day {i}."},
@@ -152,17 +178,31 @@ ARTIFACTS = {
     "support-responder-sft": ("sft", "support-gold"), "support-router": ("router", "support-prod"),
     "ticket-triage": ("decision-model", "ticket-triage"), "docs-embedder": ("embedding", "docs-retrieval-triplets"),
     "api-docs-cartridge": ("cartridge", "api-docs-qa-prompts"), "support-4b-distilled": ("distill", "support-prompts"),
+    "sql-verifier": ("reward", "sql-preferences"), "support-sft": ("sft", "support-sft"),
 }
-DATASET_REFS = re.compile(r"""datasets\.get\(["']([a-z0-9._-]+)|--dataset[ =]([a-z0-9._-]+)|^\s*dataset: ([a-z0-9._-]+)|grad render ([a-z0-9._-]+)|/v1/datasets/([a-z0-9._-]+)/""", re.M)
+DATASET_REFS = re.compile(r"""datasets\.get\(["']([a-z0-9._-]+)|\bdataset=["']([a-z0-9._-]+)|EvalSpec\(["']([a-z0-9._-]+)|--dataset[ =]([a-z0-9._-]+)|^\s*dataset: ([a-z0-9._-]+)|grad render ([a-z0-9._-]+)|/v1/datasets/([a-z0-9._-]+)/""", re.M)
 ARTIFACT_REFS = re.compile(r"\b([a-z0-9][a-z0-9-]*)@(?:latest|20\d\d-\d\d-\d\d-\d+)")
 DATED_REFS = re.compile(r"\b([a-z0-9][a-z0-9-]*)@(20\d\d-\d\d-\d\d-\d+)")
 RUN_IDS = re.compile(r"\brun_01[0-9A-Z]+\b")
+RUN_NAMES = re.compile(r"\bgrad runs (?:logs|wait|inspect|checkpoints) ([a-z][a-z0-9-]+)")
 KEY_IDS = re.compile(r"\bkey_[0-9a-f]{16,}\b")
 # Sources: every provider key is the harness's fake Langfuse key, every Langfuse host the fake Langfuse,
 # and the docs' placeholder source id a source seeded on first use.
 SECRET_REFS = re.compile(r"""secrets\.get\(["']([a-z0-9._-]+)|--secret[ =]([a-z0-9._-]+)""")
 SOURCE_IDS = re.compile(r"\bsrc_01[0-9A-Z]+\b")
 LANGFUSE_HOSTS = ("https://us.cloud.langfuse.com", "https://cloud.langfuse.com")
+# Integration pages filter a dataset a source synced: support-prod also gets these traces
+# through a real sync from the fake Langfuse (scored, tagged with a version).
+SYNCED_TRACES = [
+    {"id": f"docs-tr-{i}", "timestamp": "2026-11-01T00:00:00Z", "input": f"Where is invoice {i}?", "output": f"Invoice {i} is in Billing.",
+     "sessionId": f"docs-s{i}", "version": "v42" if i % 2 else "v41"}
+    for i in range(8)
+]
+SYNCED_SCORES = [
+    {"id": f"docs-sc-{i}", "traceId": f"docs-tr-{i}", "name": "resolved", "dataType": "NUMERIC", "value": 1.0 if i % 4 else 0.0,
+     "timestamp": "2026-11-01T00:01:00Z"}
+    for i in range(8)
+]
 
 
 def blocks(docs: Path) -> list[dict]:
@@ -183,11 +223,16 @@ def blocks(docs: Path) -> list[dict]:
                     name = re.match(r"# ([\w.-]+\.ya?ml)\n", code)
                     if name:
                         out.append({"page": page, "line": i + 1, "lang": "file", "name": name.group(1), "code": code})
+                    if page == "self-hosting.mdx":  # Helm values: rendered against the chart
+                        out.append({"page": page, "line": i + 1, "lang": "helm", "code": code, "torch": None, "hf": False, "cloud": False,
+                                    "skip": None if shutil.which("helm") else "needs helm"})
                     i = j + 1
                     continue
                 lang = "python" if m.group(1) == "python" else "bash"
                 skip = next((r for p, text, r in SKIP if page.startswith(p) and text in code), None)
-                out.append({"page": page, "line": i + 1, "lang": lang, "code": code, "skip": skip, "cloud": bool(CLOUD.search(code))})
+                torch = next((v for (p, text), v in TORCH.items() if page.startswith(p) and text in code), None)
+                out.append({"page": page, "line": i + 1, "lang": lang, "code": code, "skip": skip, "torch": torch,
+                            "hf": any(t in code for t in HF), "cloud": bool(torch) or bool(CLOUD.search(code))})
                 i = j
             i += 1
     return out
@@ -196,8 +241,9 @@ def blocks(docs: Path) -> list[dict]:
 class Stack:
     """tests/harness/stack.ts, stopped by closing its stdin."""
 
-    def __init__(self, cloud: bool, worker: str, log: Path) -> None:
-        args = [str(API_DIR / "node_modules" / ".bin" / "tsx"), "../../tests/harness/stack.ts", "--worker", worker] + (["--cloud"] if cloud else [])
+    def __init__(self, cloud: bool, worker: str, log: Path, online: bool = True) -> None:
+        args = [str(API_DIR / "node_modules" / ".bin" / "tsx"), "../../tests/harness/stack.ts", "--worker", worker]
+        args += (["--cloud"] if cloud else []) + (["--online"] if online else [])
         self.log = open(log, "wb")
         self.proc = subprocess.Popen(args, cwd=API_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log)
         buf, deadline = b"", time.monotonic() + 300
@@ -234,6 +280,13 @@ class Runner:
         }
         for name, text in FILES.items():
             (work / name).write_text(text)
+        # The `local` profile `grad local up` writes, for blocks that `export GRADIATED_PROFILE=local`.
+        config = work / ".config" / "gradiated" / "config.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({"profiles": {"local": {"base_url": base_url, "api_key": api_key}}}))
+        config.chmod(0o600)
+        self.synced: set[str] = set()
+        self.helm_base: str | None = None
 
     def model(self, model: str) -> str:
         if not self.cloud:
@@ -251,7 +304,8 @@ class Runner:
             for host in LANGFUSE_HOSTS:
                 code = code.replace(host, self.langfuse_url)
             # Secrets go only to their allowed hosts: the fake Langfuse is one.
-            code = re.sub(r"(grad secrets set [a-z0-9._-]+)", rf"\1 --allowed-host {self.langfuse_url}", code)
+            hosts = "".join(f" --allowed-host {h}" for h in [self.langfuse_url, *PUBLIC_SECRET_HOSTS])
+            code = re.sub(r"(grad secrets set [a-z0-9._-]+)", lambda m: m.group(1) + hosts, code)
         if self.source_id:
             code = SOURCE_IDS.sub(self.source_id, code)
         for name in {m[0] for m in DATED_REFS.findall(code)}:  # the k-th oldest dated ref -> the k-th oldest seed version
@@ -271,8 +325,11 @@ class Runner:
             code = re.sub(r"^(grad train (?!.*(?:--model|-f )).*?)( --wait| --dry-run|$)",
                           lambda m: f"{m.group(1)} --model {'test/tiny-bert' if '--recipe embedding' in m.group(1) else 'test/tiny-qwen3'}{m.group(2)}",
                           code, flags=re.M)
-        # A block that creates a dataset gets a fresh name so it never collides with an earlier block.
-        for name in set(re.findall(r"""datasets\.create\(["']([a-z0-9._-]+)""", code)):
+        if "--limit" not in code:  # Hugging Face imports read only the first rows
+            code = re.sub(r"\bgrad datasets import (hf|benchmark) ", rf"grad datasets import \1 --limit {HF_LIMIT} ", code)
+        # A block that creates a dataset (or saves a filtered view) gets a fresh name so it never collides with an earlier block.
+        views = re.findall(r"""\bname=["']([a-z0-9._-]+)["']""", code) if ".filter(" in code else []
+        for name in set(re.findall(r"""datasets\.create\(["']([a-z0-9._-]+)""", code)) | set(views):
             code = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", f"{name}-b{n}", code)
         return code
 
@@ -301,7 +358,8 @@ class Runner:
             "decision-model": lambda: r.DecisionModelRecipe(model=self.model("gradiated/linden-1")),
             "embedding": lambda: r.EmbeddingRecipe(model=self.model("baai/bge-small-en-v1.5")),
             "cartridge": lambda: r.CartridgeRecipe(model=self.model("qwen/qwen3-8b"), context=__import__("grad").Context.from_text(FILES["context.md"])),
-            "distill": lambda: r.DistillRecipe(model=self.model("qwen/qwen3-4b"), teacher="test/tiny-qwen3-teacher" if self.cloud else "qwen/qwen3-32b"),
+            "distill": lambda: r.DistillRecipe(model=self.model("qwen/qwen3-4b"), teacher="test/tiny-qwen3-teacher" if self.cloud else "qwen/qwen3-14b"),
+            "reward": lambda: r.RewardModelRecipe(model=self.model("qwen/qwen3-8b")),
         }[kind]()
         run = self.client.runs.create(dataset=ds, name=name, recipe=recipe).wait(timeout=900)
         self.run_id = self.run_id or run.id
@@ -315,6 +373,9 @@ class Runner:
                 self.artifact(name, max(1, len({v for nm, v in DATED_REFS.findall(code) if nm == name})))
         if RUN_IDS.search(code) and not self.run_id:
             self.artifact("fast-diff-merge")
+        for name in set(RUN_NAMES.findall(code)):
+            if name in ARTIFACTS:
+                self.artifact(name)
         for m in SECRET_REFS.finditer(code):
             self.secret(next(g for g in m.groups() if g))
         if SOURCE_IDS.search(code) and not self.source_id:
@@ -325,31 +386,91 @@ class Runner:
             host = self.langfuse_url or LANGFUSE_HOSTS[-1]
             self.source_id = self.client.sources.create("support-prod", sources.Langfuse(host=host, secret="langfuse-prod")).id
 
+    def cwd(self, n: int) -> Path:
+        """A fresh directory per block (downloads never collide), with the shared files linked in."""
+        d = self.work / f"block-{n}"
+        d.mkdir(exist_ok=True)
+        for f in self.work.iterdir():
+            if f.is_file() and not (d / f.name).exists():
+                (d / f.name).symlink_to(f)
+        return d
+
+    def sync(self, name: str) -> None:
+        """Fill dataset `name` through a real source sync from the fake Langfuse (once)."""
+        from grad import sources
+
+        if name in self.synced or not self.langfuse_url:
+            return
+        import urllib.request
+
+        for path, rows in (("traces", SYNCED_TRACES), ("scores", SYNCED_SCORES)):
+            req = urllib.request.Request(f"{self.langfuse_url}/_control/{path}", data=json.dumps(rows).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(req, timeout=30).close()
+        self.dataset(name)
+        self.secret("langfuse-prod")
+        source = self.client.sources.create(name, sources.Langfuse(host=self.langfuse_url, secret="langfuse-prod"))
+        source.sync().wait(timeout=300)
+        self.synced.add(name)
+
     def secret(self, name: str) -> None:
         from grad import NotFoundError
 
         try:
             self.client.secrets.get(name)
         except NotFoundError:
-            hosts = [self.langfuse_url, "huggingface.co", "api.wandb.ai"] if self.langfuse_url else None
+            hosts = [self.langfuse_url, *PUBLIC_SECRET_HOSTS] if self.langfuse_url else None
             self.client.secrets.set(name, self.provider_key, allowed_hosts=hosts)
 
+    def helm(self, block: dict, n: int) -> tuple[bool, str]:
+        """`helm template` the chart with the page's first values block plus this one (an overlay)."""
+        files = []
+        for k, code in enumerate(dict.fromkeys([self.helm_base or block["code"], block["code"]])):
+            f = self.cwd(n) / f"values-{k}.yaml"
+            f.write_text(code)
+            files += ["-f", str(f)]
+        self.helm_base = self.helm_base or block["code"]
+        p = subprocess.run(["helm", "template", "grad", str(REPO / "server" / "helm" / "grad"), *files], capture_output=True, text=True, timeout=120)
+        return p.returncode == 0, p.stderr.strip()[-1500:]
+
     def run(self, block: dict, n: int) -> tuple[bool, str]:
+        if block["lang"] == "helm":
+            return self.helm(block, n)
         self.seed(block["code"])
+        if block["page"].startswith("integrations/") and re.search(r"\.filter\(|datasets\.records|\.records\(", block["code"]):
+            for name in {next(g for g in m.groups() if g) for m in DATASET_REFS.finditer(block["code"])}:
+                self.sync(name)
+        python = sys.executable
+        if block["torch"]:
+            name, prelude = block["torch"]
+            self.artifact(name)
+            python = os.environ.get("GRAD_TRAINER_PYTHON", sys.executable)
         code = self.rewrite(block["code"], n)
+        env = self.env
+        if re.search(r"^\s*export GRADIATED_PROFILE=", code, re.M):  # only the profile may point the block at the stack
+            env = {k: v for k, v in env.items() if k not in ("GRADIATED_BASE_URL", "GRADIATED_API_KEY")}
         if block["lang"] == "python":
+            if block["torch"]:
+                code = prelude + code
             if "client." in code and "client = " not in code:
                 code = "from grad import Grad\nclient = Grad()\n" + code
+            if block["hf"]:
+                code = ONLINE_LIMITS + code
             if self.cloud:
                 code = TINY_DEFAULTS + code
-            cmd = [sys.executable, "-c", code]
+            if block["torch"]:
+                # The SDK's own dependencies (httpx) come from this interpreter, after the trainer's packages.
+                import sysconfig
+
+                code = f"import sys\nsys.path.append({sysconfig.get_paths()['purelib']!r})\n" + code
+            cmd = [python, "-c", code]
         else:
             code = re.sub(r"^grad login$", 'grad login --api-key "$GRADIATED_API_KEY"', code, flags=re.M)
             cmd = ["bash", "-euo", "pipefail", "-c", code]
         try:
             # `grad secrets set NAME` reads the value from stdin.
             stdin = {"input": self.provider_key + "\n"} if "grad secrets set" in code else {"stdin": subprocess.DEVNULL}
-            p = subprocess.run(cmd, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=self.timeout, **stdin)
+            p = subprocess.run(cmd, cwd=self.cwd(n), env=env, capture_output=True, text=True, timeout=self.timeout, **stdin)
         except subprocess.TimeoutExpired:
             return False, f"timed out after {self.timeout}s"
         return p.returncode == 0, (p.stderr or p.stdout).strip()[-1500:]
@@ -365,6 +486,7 @@ def main() -> int:
     ap.add_argument("--only", help="run only pages whose path contains this")
     ap.add_argument("--timeout", type=int, default=900, help="seconds per block")
     ap.add_argument("--list", action="store_true", help="list the blocks and exit")
+    ap.add_argument("--offline", action="store_true", help="skip the blocks that download from Hugging Face")
     args = ap.parse_args()
 
     found = [b for b in blocks(args.docs) if not args.only or args.only in b["page"]]
@@ -372,7 +494,8 @@ def main() -> int:
         for b in found:
             if b["lang"] == "file":
                 continue
-            tag = f"skip: {b['skip']}" if b["skip"] else ("cloud" if b["cloud"] else "run")
+            skip = b["skip"] or ("needs network access to Hugging Face" if b["hf"] and args.offline else None)
+            tag = f"skip: {skip}" if skip else ("cloud" if b["cloud"] else "run")
             print(f"{b['page']}:{b['line']} {b['lang']} [{tag}]")
         return 0
     if not Path(args.grad_bin).exists():
@@ -382,7 +505,7 @@ def main() -> int:
     stack = None
     if not args.base_url:
         worker = "torch" if args.cloud else "reference"
-        stack = Stack(args.cloud, worker, work / "stack.log")
+        stack = Stack(args.cloud, worker, work / "stack.log", online=not args.offline)
         args.base_url, args.api_key = stack.info["base_url"], stack.info["api_key"]
     results = {"pass": 0, "fail": 0, "skip": 0}
     try:
@@ -392,7 +515,8 @@ def main() -> int:
                 (work / b["name"]).write_text(runner.rewrite(b["code"], n))
                 continue
             where = f"{b['page']}:{b['line']} ({b['lang']})"
-            reason = b["skip"] or (None if b["cloud"] == args.cloud else ("needs --cloud" if b["cloud"] else "runs without --cloud"))
+            reason = b["skip"] or ("needs network access to Hugging Face (--offline)" if b["hf"] and args.offline else None)
+            reason = reason or (None if b["cloud"] == args.cloud else ("needs --cloud" if b["cloud"] else "runs without --cloud"))
             if reason:
                 results["skip"] += 1
                 print(f"SKIP {where}: {reason}", flush=True)
