@@ -94,6 +94,15 @@ export const createArtifactRepository = (
         [runId, now.toISOString()],
       )
     ).map(toCheckpoint),
+  expireCheckpoints: async (runId, ids, at) => {
+    if (ids.length === 0) return;
+    await db.query(
+      `UPDATE grad_artifacts SET expires_at = $3::timestamptz
+       WHERE kind = 'checkpoint' AND run_id = $1 AND id = ANY($2::text[])
+         AND NOT best AND NOT final AND expires_at IS NOT NULL`,
+      [runId, ids, at.toISOString()],
+    );
+  },
   pinCheckpoints: async (runId, { bestId, finalId }) => {
     await db.query(
       `UPDATE grad_artifacts

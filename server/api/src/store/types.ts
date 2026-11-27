@@ -509,6 +509,11 @@ export interface ArtifactRepository {
   ): Promise<Page<CheckpointRecord>>;
   /** Unexpired checkpoints of a run, ordered by (step, attempt). */
   allCheckpoints(runId: string, now: Date): Promise<CheckpointRecord[]>;
+  /**
+   * Expires the given checkpoints of a run at `at` (retention), except pinned
+   * best/final ones; the expired-checkpoint GC then deletes them.
+   */
+  expireCheckpoints(runId: string, ids: string[], at: Date): Promise<void>;
   /** Marks best/final (they never expire: `expires_at = null`). */
   pinCheckpoints(
     runId: string,

@@ -140,6 +140,31 @@ export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
 };
 
 /** Tokens are the source of truth; cost is derived from them in one place. */
+/** Retention: the last N checkpoints of a run stay, plus the best and final ones. */
+export const CHECKPOINTS_KEPT = 3;
+
+/**
+ * The best checkpoint by eval score, in the direction of the run's metric
+ * (`metadata.metric_mode`: eval_loss is "min", accuracy-style metrics "max").
+ * Ties go to the later checkpoint, like the trainer's select="best".
+ */
+export const bestCheckpoint = (
+  checkpoints: readonly CheckpointRecord[],
+): CheckpointRecord | null =>
+  checkpoints.reduce<CheckpointRecord | null>((acc, c) => {
+    if (c.eval_score === null) return acc;
+    if (acc === null || acc.eval_score === null) return c;
+    // The trainer stores the selection metric's direction with it: minimised
+    // (eval_loss, eval_kl) or maximised (accuracy, recall@10).
+    const lower = metricMode(c.metadata) === "min";
+
+    return (
+      lower ? c.eval_score <= acc.eval_score : c.eval_score >= acc.eval_score
+    )
+      ? c
+      : acc;
+  }, null);
+
 const runCost = (run: RunRecord, attemptTokens = run.attempt_tokens): number =>
   costForTokens(
     run.billed_tokens + attemptTokens,
@@ -504,6 +529,27 @@ export const createRunLifecycle = (
     return { kind: "dataset", version };
   };
 
+  /**
+   * Checkpoint retention, applied as each one registers: a run keeps its last
+   * CHECKPOINTS_KEPT checkpoints plus the best by eval so far; the others expire
+   * now (best and final are pinned when the run ends; kept ones expire after
+   * checkpoint_ttl_days).
+   */
+  const applyCheckpointRetention = async (
+    run: RunRecord,
+    now: Date,
+  ): Promise<void> => {
+    const all = await store.artifacts.allCheckpoints(run.id, now);
+    const keep = new Set(all.slice(-CHECKPOINTS_KEPT).map((c) => c.id));
+    const best = bestCheckpoint(all);
+    if (best) keep.add(best.id);
+    await store.artifacts.expireCheckpoints(
+      run.id,
+      all.filter((c) => !keep.has(c.id)).map((c) => c.id),
+      now,
+    );
+  };
+
   const pinCheckpoints = async (
     tx: Repositories,
     run: RunRecord,
@@ -512,18 +558,7 @@ export const createRunLifecycle = (
     const all = await tx.artifacts.allCheckpoints(run.id, now);
     if (all.length === 0) return;
 
-    // The trainer stores the selection metric's direction with it: minimised
-    // (eval_loss, eval_kl) or maximised (accuracy, recall@10).
-    const scored = all.filter((c) => c.eval_score !== null);
-    const better = (c: CheckpointRecord, acc: CheckpointRecord): boolean => {
-      const [score, prev] = [c.eval_score ?? 0, acc.eval_score ?? 0];
-
-      return metricMode(c.metadata) === "min" ? score <= prev : score >= prev;
-    };
-    const best = scored.reduce<CheckpointRecord | null>(
-      (acc, c) => (acc === null || better(c, acc) ? c : acc),
-      null,
-    );
+    const best = bestCheckpoint(all);
     const final = all.reduce((acc, c) =>
       c.step > acc.step || (c.step === acc.step && c.attempt >= acc.attempt)
         ? c
@@ -1334,6 +1369,7 @@ export const createRunLifecycle = (
       // A checkpoint bills the attempt's usage so far.
       if (result.created) {
         observeCheckpoint(run.recipe_kind, blob.sizeBytes, body.metadata);
+        await applyCheckpointRetention(run, clock.now());
         await store.transaction((tx) =>
           usage.flush(tx, run, attemptUsage(run, run.attempt_tokens), true),
         );

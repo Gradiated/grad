@@ -632,6 +632,47 @@ describe("run lifecycle and worker protocol", () => {
     ]);
   });
 
+  it("keeps the last 3 checkpoints plus the best by the run's metric direction", async () => {
+    const run = await createSftRun(t);
+    const job = await worker.claim();
+    // eval_loss: lower is better, so step 2 is the best.
+    const losses = [0.9, 0.2, 0.5, 0.6, 0.7, 0.8];
+    for (const [i, loss] of losses.entries()) {
+      await worker.checkpoint(job!, i + 1, `c${i + 1}`, {
+        eval_score: loss,
+        metadata: { metric_name: "eval_loss", metric_mode: "min" },
+      });
+    }
+    const listed = async () =>
+      (
+        await t.json<{
+          data: Array<{ step: number; best: boolean; final: boolean }>;
+        }>(`/v1/runs/${run.id}/checkpoints`)
+      ).body.data.map((c) => [c.step, c.best, c.final]);
+    expect(await listed()).toEqual([
+      [2, false, false],
+      [4, false, false],
+      [5, false, false],
+      [6, false, false],
+    ]);
+    await worker.complete(
+      job!,
+      { status: "completed", tokens_processed: 1 },
+      "art",
+    );
+    expect(await listed()).toEqual([
+      [2, true, false],
+      [4, false, false],
+      [5, false, false],
+      [6, false, true],
+    ]);
+    // The retired ones are deleted by the next GC pass; kept ones still expire after 30 days.
+    expect((await t.services.maintenance.tick()).deletedCheckpoints).toBe(2);
+    t.clock.advanceDays(31);
+    expect((await t.services.maintenance.tick()).deletedCheckpoints).toBe(2);
+    expect((await listed()).map(([step]) => step)).toEqual([2, 6]);
+  });
+
   it("requeues expired leases with attempt+1, bills the lost attempt, and fails after max_attempts", async () => {
     const run = await createSftRun(t);
     for (let attempt = 1; attempt <= 3; attempt += 1) {
