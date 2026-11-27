@@ -78,7 +78,14 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
                     res.files.len(),
                     dir.display()
                 ));
-                if res.files.contains_key("adapter_config.json") {
+                let fmt = res
+                    .manifest
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let peft = fmt == "peft_lora"
+                    || (fmt.is_empty() && res.files.contains_key("adapter_config.json"));
+                if peft {
                     let base = res
                         .manifest
                         .get("base_model_ref")
