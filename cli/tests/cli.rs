@@ -200,6 +200,42 @@ fn sse_body(events: &[(&str, Option<u64>, Value)]) -> Vec<u8> {
     s.into_bytes()
 }
 
+/// One RunEvent of run `run` (seq, type, extra fields).
+fn ev(run: &str, seq: u64, ty: &str, extra: Value) -> Value {
+    let mut v = json!({"type": ty, "run_id": run, "seq": seq, "attempt": 1, "timestamp": "2026-11-26T10:00:00.000Z"});
+    for (k, x) in extra.as_object().unwrap() {
+        v[k] = x.clone();
+    }
+    v
+}
+
+fn metric_ev(run: &str, seq: u64, step: u64) -> (&'static str, Option<u64>, Value) {
+    (
+        "metric",
+        Some(seq),
+        ev(
+            run,
+            seq,
+            "metric",
+            json!({"step": step, "metric": metric(step)}),
+        ),
+    )
+}
+
+fn completed_ev(run: &str, seq: u64, final_run: Value) -> (&'static str, Option<u64>, Value) {
+    let status = final_run["status"].clone();
+    (
+        "completed",
+        None,
+        ev(
+            run,
+            seq,
+            "completed",
+            json!({"status": status, "run": final_run}),
+        ),
+    )
+}
+
 fn metric(seq: u64) -> Value {
     json!({"seq": seq, "attempt": 1, "step": seq, "loss": 0.5, "eval_loss": if seq == 2 { json!(0.4) } else { Value::Null },
            "lr": 0.0005, "tokens": seq * 550000, "cost_usd": 0.06 * seq as f64, "timestamp": "2026-11-26T10:00:10Z"})
@@ -275,6 +311,98 @@ fn handler(r: &Recorded) -> Reply {
             200,
             json!({"data": [run_obj("run_1", "support-router", "completed")], "next_cursor": null}),
         ),
+        ("GET", "/v1/runs/run_1/events") if !sse => Reply::json(
+            200,
+            json!({"run_id": "run_1", "status": "completed", "next_cursor": null, "tail_cursor": "c", "data": [
+                ev("run_1", 1, "phase", json!({"phase": "queued", "step": 0, "workers_online": 2, "autoscaling": false, "gpu": null})),
+                ev("run_1", 2, "phase", json!({"phase": "starting", "step": 0, "gpu": {"name": "NVIDIA L4", "memory_gb": 22.5}})),
+                ev("run_1", 3, "phase", json!({"phase": "training", "step": 0})),
+                ev("run_1", 4, "metric", json!({"step": 2, "metric": metric(2)})),
+                ev("run_1", 5, "checkpoint", json!({"step": 2, "checkpoint_id": "ckpt_2", "eval_score": 0.4, "format": "peft_lora"})),
+                ev("run_1", 6, "log", json!({"step": 2, "message": "uploaded"})),
+                ev("run_1", 7, "future", json!({})),
+                ev("run_1", 7, "completed", json!({"status": "completed", "run": run_obj("run_1", "support-router", "completed")})),
+            ]}),
+        ),
+        ("GET", "/v1/runs/run_1/events") => Reply::Stream {
+            status: 200,
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+            chunks: vec![
+                (
+                    Duration::ZERO,
+                    sse_body(&[
+                        (
+                            "phase",
+                            Some(1),
+                            ev(
+                                "run_1",
+                                1,
+                                "phase",
+                                json!({"phase": "waiting_for_compute", "step": 0, "workers_online": 0, "autoscaling": false, "gpu": null}),
+                            ),
+                        ),
+                        (
+                            "phase",
+                            Some(2),
+                            ev(
+                                "run_1",
+                                2,
+                                "phase",
+                                json!({"phase": "starting", "step": 0, "workers_online": null, "autoscaling": null, "gpu": {"name": "NVIDIA H100 80GB HBM3", "memory_gb": 79.6}}),
+                            ),
+                        ),
+                        (
+                            "phase",
+                            Some(3),
+                            ev("run_1", 3, "phase", json!({"phase": "training", "step": 0})),
+                        ),
+                        metric_ev("run_1", 4, 1),
+                        (
+                            "checkpoint",
+                            Some(5),
+                            ev(
+                                "run_1",
+                                5,
+                                "checkpoint",
+                                json!({"step": 1, "checkpoint_id": "ckpt_1", "eval_score": null, "format": null}),
+                            ),
+                        ),
+                        (
+                            "attempt",
+                            Some(6),
+                            ev(
+                                "run_1",
+                                6,
+                                "attempt",
+                                json!({"event": "interrupted", "reason": "compute_reclaimed", "step": 1, "resume_step": 1, "max_attempts": 3, "message": "attempt 1 interrupted at step 1: the GPU was reclaimed; resuming from step 1 on a new worker"}),
+                            ),
+                        ),
+                        (
+                            "warning",
+                            Some(7),
+                            ev(
+                                "run_1",
+                                7,
+                                "warning",
+                                json!({"step": null, "message": "wandb logger disabled"}),
+                            ),
+                        ),
+                        (
+                            "phase",
+                            Some(8),
+                            ev("run_1", 8, "phase", json!({"phase": "training", "step": 1})),
+                        ),
+                    ]),
+                ),
+                (
+                    Duration::from_millis(20),
+                    sse_body(&[
+                        metric_ev("run_1", 9, 2),
+                        completed_ev("run_1", 9, run_obj("run_1", "support-router", "completed")),
+                    ]),
+                ),
+            ],
+        },
         ("GET", "/v1/runs/run_1/metrics") if sse => Reply::Stream {
             status: 200,
             headers: vec![("content-type".into(), "text/event-stream".into())],
@@ -994,6 +1122,11 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
     for needle in [
         "✓ Dataset support-prod: 4,820 records",
         "✓ Split: 4,097 train / 723 eval (by session)",
+        "Waiting for a GPU (0 workers online)",
+        "▸ Starting on NVIDIA H100 80GB HBM3 (80 GB)",
+        "▸ Training",
+        "⚠ attempt 1 interrupted at step 1: the GPU was reclaimed; resuming from step 1 on a new worker",
+        "⚠ wandb logger disabled",
         "step     2/2",
         "eval 0.4",
         "✓ Trained qwen/qwen3-0.6b router in 42s (~1.1M tokens",
@@ -1048,14 +1181,14 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
 fn failing_server(status: &'static str) -> MockServer {
     MockServer::start(move |r| match (r.method.as_str(), r.path()) {
         ("POST", "/v1/runs") => Reply::json(202, run_obj("run_f", "n", "queued")),
-        ("GET", "/v1/runs/run_f/metrics") => Reply::Stream {
+        ("GET", "/v1/runs/run_f/events") => Reply::Stream {
             status: 200,
             headers: vec![("content-type".into(), "text/event-stream".into())],
             chunks: vec![(
                 Duration::ZERO,
                 sse_body(&[
-                    ("metric", Some(1), metric(1)),
-                    ("status", None, run_obj("run_f", "n", status)),
+                    metric_ev("run_f", 1, 1),
+                    completed_ev("run_f", 1, run_obj("run_f", "n", status)),
                 ]),
             )],
         },
@@ -1151,6 +1284,47 @@ fn runs_commands() {
     let r = run(sb.grad(u), &["--json", "runs", "logs", "run_1", "--follow"]);
     expect(&r, 0);
     assert_eq!(r.json()["data"]["metrics"].as_array().unwrap().len(), 2);
+    let r = run(sb.grad(u), &["runs", "events", "run_1", "--limit", "50"]);
+    expect(&r, 0);
+    for needle in [
+        "SEQ  ATTEMPT  TYPE  DETAIL",
+        "queued: Waiting for a GPU (2 workers online, all busy)",
+        "starting on NVIDIA L4 (22 GB)",
+        "training at step 0",
+        "step 2 loss 0.5 eval 0.4",
+        "step 2 ckpt_2 score 0.4",
+        "6  1  log  uploaded",
+        "completed  completed",
+    ] {
+        assert!(
+            r.stdout.contains(needle),
+            "missing {:?}:\n{}",
+            needle,
+            r.stdout
+        );
+    }
+    assert!(srv
+        .last("GET", "/v1/runs/run_1/events")
+        .unwrap()
+        .query()
+        .contains("limit=50"));
+    let r = run(sb.grad(u), &["runs", "events", "run_1", "--limit", "0"]);
+    expect(&r, 2);
+    let r = run(
+        sb.grad(u),
+        &["--json", "runs", "events", "support-router", "--follow"],
+    );
+    // A name resolves to its run.
+    expect(&r, 0);
+    assert_eq!(r.json()["data"]["run_id"], "run_1");
+    let r = run(
+        sb.grad(u),
+        &["--json", "runs", "events", "run_1", "--follow"],
+    );
+    expect(&r, 0);
+    let events = r.json()["data"]["events"].as_array().unwrap().clone();
+    assert_eq!(events.first().unwrap()["phase"], "waiting_for_compute");
+    assert_eq!(events.last().unwrap()["type"], "completed");
     let r = run(sb.grad(u), &["runs", "wait", "run_1"]);
     expect(&r, 0);
     assert!(r.stdout.contains("Next: grad deploy"));
@@ -2747,7 +2921,7 @@ fn ctrl_c_while_waiting_exits_130_and_says_the_run_continues() {
     let h = hits.clone();
     let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
         ("POST", "/v1/runs") => Reply::json(202, run_obj("run_slow", "n", "queued")),
-        ("GET", "/v1/runs/run_slow/metrics") => {
+        ("GET", "/v1/runs/run_slow/events") => {
             h.fetch_add(1, Ordering::SeqCst);
             Reply::Stream {
                 status: 200,
@@ -2986,6 +3160,15 @@ fn parity_requests_match_the_shared_fixture() {
                 "--limit".into(),
                 case["query"]["limit"].as_str().unwrap().into(),
             ],
+            p if p.starts_with("/v1/runs/") && p.ends_with("/events") => vec![
+                "runs".into(),
+                "events".into(),
+                p.trim_start_matches("/v1/runs/")
+                    .trim_end_matches("/events")
+                    .into(),
+                "--limit".into(),
+                case["query"]["limit"].as_str().unwrap().into(),
+            ],
             "/v1/sources/src_01J9X/sync" => {
                 let mut a = vec!["sources".into(), "sync".into(), "src_01J9X".into()];
                 if body["full"] == json!(true) {
@@ -3044,7 +3227,8 @@ fn parity_requests_match_the_shared_fixture() {
             .unwrap_or_else(|| panic!("{}: nothing sent", name));
         let key = sent.header("idempotency-key").unwrap_or_default();
         if case["method"] == "GET" {
-            assert_eq!(sent.query(), "limit=10", "{}", name);
+            let want = format!("limit={}", case["query"]["limit"].as_str().unwrap());
+            assert_eq!(sent.query(), want, "{}", name);
             assert_eq!(key, "", "{}", name);
             continue;
         }

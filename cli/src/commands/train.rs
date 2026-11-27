@@ -1,8 +1,8 @@
 //! `grad train` and `grad runs`.
 
 use grad_sdk::{
-    Artifact, Client, Error as SdkError, EvalReport, MetricEvent, MetricPoint, MetricsQuery,
-    PlanRunRequest, PlanRunResponse, Run, RunStatus, WaitOptions,
+    Artifact, AttemptKind, Client, Error as SdkError, EvalReport, MetricEvent, MetricPoint,
+    MetricsQuery, PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunPhase, RunStatus,
 };
 use serde_json::{json, Value};
 use std::io::Write;
@@ -275,9 +275,145 @@ struct Live {
     last_print: Option<Instant>,
     total: i64,
     open_line: bool,
+    /// While queued for compute: the phase event and when it began (epoch seconds).
+    waiting: Option<(PhaseEvent, Option<i64>)>,
+    /// The last phase line printed, so repeats stay quiet.
+    last_phase: Option<(i64, RunPhase)>,
+}
+
+/// Epoch seconds now (for "waiting since" readouts).
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// "Waiting for a GPU (0 workers online)" or, with scale-from-zero, "Starting a GPU worker (autoscaling)".
+pub(crate) fn waiting_line(p: &PhaseEvent, waited: Option<i64>) -> String {
+    let what = if p.autoscaling == Some(true) && p.workers_online.unwrap_or(0) == 0 {
+        "Starting a GPU worker (autoscaling)…".to_string()
+    } else {
+        let n = p.workers_online.unwrap_or(0);
+        format!(
+            "Waiting for a GPU ({} worker{} online{})",
+            n,
+            if n == 1 { "" } else { "s" },
+            if n > 0 { ", all busy" } else { "" }
+        )
+    };
+    match waited {
+        Some(s) => format!("  {} — {}", what, fmt_wait(s)),
+        None => format!("  {}", what),
+    }
+}
+
+fn fmt_wait(s: i64) -> String {
+    if s < 60 {
+        format!("{}s", s)
+    } else if s < 3600 {
+        format!("{}m {:02}s", s / 60, s % 60)
+    } else {
+        format!("{}h {:02}m", s / 3600, (s % 3600) / 60)
+    }
+}
+
+/// The plain-text line for a lifecycle event, if it gets one.
+pub(crate) fn event_line(ev: &RunEvent) -> Option<String> {
+    match ev {
+        RunEvent::Phase(p) => match p.phase {
+            RunPhase::Starting => Some(match &p.gpu {
+                Some(g) => format!("  ▸ Starting on {} ({:.0} GB)", g.name, g.memory_gb),
+                None => "  ▸ Starting".to_string(),
+            }),
+            RunPhase::LoadingModel => Some("  ▸ Loading the model".into()),
+            RunPhase::Training => Some("  ▸ Training".into()),
+            RunPhase::Uploading => Some("  ▸ Uploading the artifact".into()),
+            RunPhase::Completing => Some("  ▸ Completing".into()),
+            _ => None,
+        },
+        RunEvent::Attempt(a) => match a.event {
+            AttemptKind::Started if a.meta.attempt > 1 => Some(format!("  ▸ {}", a.message)),
+            AttemptKind::Interrupted | AttemptKind::GaveUp => Some(format!("⚠ {}", a.message)),
+            _ => None,
+        },
+        RunEvent::Warning(w) => Some(format!("⚠ {}", w.message)),
+        RunEvent::Log(l) => Some(format!("  · {}", l.message)),
+        _ => None,
+    }
 }
 
 impl Live {
+    fn clear(&mut self) {
+        if self.open_line {
+            print!("\r\x1b[2K");
+            let _ = std::io::stdout().flush();
+            self.open_line = false;
+        }
+    }
+
+    fn print(&mut self, line: &str) {
+        self.clear();
+        println!("{}", line);
+    }
+
+    /// Redraw the in-place waiting line (TTY only).
+    fn tick(&mut self) {
+        if self.json || !self.tty {
+            return;
+        }
+        if let Some((p, since)) = &self.waiting {
+            let line = waiting_line(p, since.map(|s| (now_secs() - s).max(0)));
+            print!("\r\x1b[2K{}", line);
+            let _ = std::io::stdout().flush();
+            self.open_line = true;
+        }
+    }
+
+    fn event(&mut self, ev: &RunEvent) {
+        if self.json {
+            return;
+        }
+        if let RunEvent::Metric(m) = ev {
+            self.metric(&m.metric);
+            return;
+        }
+        if let RunEvent::Phase(p) = ev {
+            if matches!(p.phase, RunPhase::Queued | RunPhase::WaitingForCompute) {
+                let since = parse_ts(&p.meta.timestamp);
+                let changed = self.waiting.as_ref().is_none_or(|(w, _)| {
+                    w.workers_online != p.workers_online || w.autoscaling != p.autoscaling
+                });
+                self.waiting = Some((p.clone(), since));
+                if self.tty {
+                    self.tick();
+                } else if changed {
+                    println!(
+                        "{}",
+                        waiting_line(p, since.map(|s| (now_secs() - s).max(0)))
+                    );
+                }
+                return;
+            }
+            if self.waiting.take().is_some() {
+                self.clear();
+            }
+            // Training resumes after every eval and checkpoint: say it once per attempt.
+            let key = (p.meta.attempt, p.phase.clone());
+            if p.phase == RunPhase::Training && self.last_phase.as_ref() == Some(&key) {
+                return;
+            }
+            if let Some(line) = event_line(ev) {
+                self.last_phase = Some(key);
+                self.print(&line);
+            }
+            return;
+        }
+        if let Some(line) = event_line(ev) {
+            self.print(&line);
+        }
+    }
+
     fn metric(&mut self, m: &MetricPoint) {
         if self.json {
             return;
@@ -312,6 +448,7 @@ impl Live {
     }
 
     fn end(&mut self) {
+        self.waiting = None;
         if self.open_line {
             println!();
             self.open_line = false;
@@ -404,14 +541,66 @@ async fn follow_lines(
         last_print: None,
         total: run.total_steps,
         open_line: false,
+        waiting: None,
+        last_phase: None,
     };
-    let opts = WaitOptions::default().timeout(timeout);
-    let res = c
-        .runs()
-        .wait_with_metrics(&run.id, &opts, |m| live.metric(m))
-        .await;
+    let res = follow_events(c, &run.id, timeout, &mut live).await;
     live.end();
     res
+}
+
+/// Follow the run's event stream into `live` until `completed` (ticking the
+/// waiting line once a second on a TTY); the terminal run, or a typed error.
+async fn follow_events(
+    c: &Client,
+    id: &str,
+    timeout: Duration,
+    live: &mut Live,
+) -> Result<Run, SdkError> {
+    let started = Instant::now();
+    let mut stream = c.runs().events(id, true);
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    loop {
+        // One read stays in flight across ticks, so the ticker never cancels it.
+        let next = stream.next();
+        tokio::pin!(next);
+        let ev = loop {
+            tokio::select! {
+                ev = &mut next => break ev,
+                _ = ticker.tick() => live.tick(),
+                _ = &mut deadline => {
+                    let status = c.runs().get(id).await.map(|r| r.status.as_str().to_string());
+                    return Err(SdkError::WaitTimeout {
+                        what: "run".into(),
+                        id: id.into(),
+                        status: status.unwrap_or_else(|_| "unknown".into()),
+                        after: started.elapsed(),
+                    });
+                }
+            }
+        };
+        match ev {
+            Some(Ok(RunEvent::Completed(done))) => {
+                return if done.run.status == RunStatus::Completed {
+                    Ok(done.run)
+                } else {
+                    Err(SdkError::RunFailed(Box::new(done.run)))
+                };
+            }
+            Some(Ok(ev)) => live.event(&ev),
+            Some(Err(e)) => return Err(e),
+            // The stream ends only after `completed` or an error; re-read to be sure.
+            None => {
+                let run = c.runs().get(id).await?;
+                return match run.status {
+                    RunStatus::Completed => Ok(run),
+                    _ => Err(SdkError::RunFailed(Box::new(run))),
+                };
+            }
+        }
+    }
 }
 
 /// Print the trained/eval/artifact readout; returns the artifact when there is one.
@@ -552,6 +741,56 @@ pub(crate) fn fmt_duration(s: i64) -> String {
     } else {
         format!("{}h{:02}m", s / 3600, (s % 3600) / 60)
     }
+}
+
+const EVENT_HEADERS: [&str; 4] = ["seq", "attempt", "type", "detail"];
+
+/// One `grad runs events` row: seq, attempt, type and a one-line summary.
+fn event_row(ev: &RunEvent) -> Vec<String> {
+    let detail = match ev {
+        RunEvent::Phase(p) => match p.phase {
+            RunPhase::Queued | RunPhase::WaitingForCompute => {
+                format!(
+                    "{}: {}",
+                    p.phase.as_str(),
+                    waiting_line(p, None).trim_start()
+                )
+            }
+            _ => match &p.gpu {
+                Some(g) => format!("{} on {} ({:.0} GB)", p.phase.as_str(), g.name, g.memory_gb),
+                None => format!("{} at step {}", p.phase.as_str(), p.step),
+            },
+        },
+        RunEvent::Metric(m) => format!(
+            "step {} loss {}{}",
+            m.step,
+            num(m.metric.loss),
+            m.metric
+                .eval_loss
+                .map(|x| format!(" eval {}", num(x)))
+                .unwrap_or_default()
+        ),
+        RunEvent::Checkpoint(k) => format!(
+            "step {} {}{}",
+            k.step,
+            k.checkpoint_id,
+            k.eval_score
+                .map(|x| format!(" score {}", num(x)))
+                .unwrap_or_default()
+        ),
+        RunEvent::Attempt(a) => a.message.clone(),
+        RunEvent::Warning(w) => w.message.clone(),
+        RunEvent::Log(l) => l.message.clone(),
+        RunEvent::Completed(d) => d.status.as_str().to_string(),
+        RunEvent::Unknown => String::new(),
+    };
+    let meta = ev.meta().cloned().unwrap_or_default();
+    vec![
+        meta.seq.to_string(),
+        meta.attempt.to_string(),
+        ev.type_name().to_string(),
+        detail,
+    ]
 }
 
 fn run_rows(runs: &[Run]) -> Vec<Vec<String>> {
@@ -736,6 +975,33 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             }
             out.done(&json!({ "metrics": collected }))
         }
+        RunsCmd::Events { run, follow, limit } => {
+            // An id needs no lookup; a name resolves to the newest run with it.
+            let id = if run.starts_with("run_") {
+                run
+            } else {
+                resolve_run(&c, &run).await?.id
+            };
+            if follow {
+                on_interrupt(format!("stopped following run {}", id));
+            }
+            let mut stream = c.runs().events(&id, follow);
+            if let Some(n) = in_range(limit.map(|n| n as f64), "--limit", 1.0, 5000.0)? {
+                stream = stream.limit(n as i64);
+            }
+            let mut collected = Vec::new();
+            if !out.json {
+                out.line(EVENT_HEADERS.map(|h| h.to_uppercase()).join("  "));
+            }
+            while let Some(ev) = stream.next().await {
+                let ev = ev?;
+                if !out.json {
+                    out.line(event_row(&ev).join("  "));
+                }
+                collected.push(ev);
+            }
+            out.done(&json!({ "run_id": id, "events": collected }))
+        }
         RunsCmd::Wait { run, timeout } | RunsCmd::Watch { run, timeout } => {
             let r = resolve_run(&c, &run).await?;
             if r.status.is_terminal() {
@@ -848,6 +1114,96 @@ mod tests {
             .collect(),
         );
         assert_eq!(eval_metrics_cell(&m), format!("eval_loss={}", num(0.5)));
+    }
+
+    #[test]
+    fn waiting_and_event_lines() {
+        let mut p = PhaseEvent {
+            phase: RunPhase::WaitingForCompute,
+            workers_online: Some(0),
+            autoscaling: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(
+            waiting_line(&p, Some(130)),
+            "  Waiting for a GPU (0 workers online) — 2m 10s"
+        );
+        p.workers_online = Some(1);
+        assert_eq!(
+            waiting_line(&p, None),
+            "  Waiting for a GPU (1 worker online, all busy)"
+        );
+        p.workers_online = Some(0);
+        p.autoscaling = Some(true);
+        assert_eq!(
+            waiting_line(&p, Some(5)),
+            "  Starting a GPU worker (autoscaling)… — 5s"
+        );
+        assert_eq!(fmt_wait(3 * 3600 + 120), "3h 02m");
+        let attempt = |kind: AttemptKind, attempt: i64| {
+            RunEvent::Attempt(grad_sdk::AttemptEvent {
+                meta: grad_sdk::EventMeta {
+                    attempt,
+                    ..Default::default()
+                },
+                event: kind,
+                message: "m".into(),
+                ..Default::default()
+            })
+        };
+        assert_eq!(
+            event_line(&attempt(AttemptKind::Interrupted, 1)).unwrap(),
+            "⚠ m"
+        );
+        assert_eq!(event_line(&attempt(AttemptKind::GaveUp, 3)).unwrap(), "⚠ m");
+        assert_eq!(
+            event_line(&attempt(AttemptKind::Started, 2)).unwrap(),
+            "  ▸ m"
+        );
+        assert!(event_line(&attempt(AttemptKind::Started, 1)).is_none());
+        for (phase, line) in [
+            (RunPhase::Starting, "  ▸ Starting"),
+            (RunPhase::LoadingModel, "  ▸ Loading the model"),
+            (RunPhase::Uploading, "  ▸ Uploading the artifact"),
+            (RunPhase::Completing, "  ▸ Completing"),
+        ] {
+            let ev = RunEvent::Phase(PhaseEvent {
+                phase,
+                ..Default::default()
+            });
+            assert_eq!(event_line(&ev).unwrap(), line);
+        }
+        let quiet = RunEvent::Phase(PhaseEvent {
+            phase: RunPhase::Evaluating,
+            ..Default::default()
+        });
+        assert!(event_line(&quiet).is_none());
+        let mut live = Live {
+            tty: true,
+            json: false,
+            last_print: None,
+            total: 2,
+            open_line: false,
+            waiting: None,
+            last_phase: None,
+        };
+        live.event(&RunEvent::Phase(p.clone()));
+        assert!(live.waiting.is_some() && live.open_line);
+        live.tick();
+        live.event(&RunEvent::Phase(PhaseEvent {
+            phase: RunPhase::Training,
+            ..Default::default()
+        }));
+        assert!(live.waiting.is_none());
+        live.event(&RunEvent::Phase(PhaseEvent {
+            phase: RunPhase::Training,
+            ..Default::default()
+        }));
+        live.event(&RunEvent::Log(grad_sdk::MessageEvent {
+            message: "x".into(),
+            ..Default::default()
+        }));
+        live.end();
     }
 
     #[test]

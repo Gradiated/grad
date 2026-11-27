@@ -681,6 +681,17 @@ Use --plain or GRAD_NO_TUI=1 for line output.")]
         #[arg(long, value_name = "SECS", default_value_t = 86_400)]
         timeout: u64,
     },
+    /// Print a run's lifecycle events (phases, metrics, checkpoints, attempts, warnings); --follow streams them
+    Events {
+        /// Run id or run name
+        run: String,
+        /// Stream new events until the run finishes
+        #[arg(long, short = 'f')]
+        follow: bool,
+        /// Events per page (without --follow)
+        #[arg(long)]
+        limit: Option<i64>,
+    },
     /// Wait for a run to finish
     Wait {
         /// Run id or run name
