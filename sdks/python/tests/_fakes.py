@@ -1,34 +1,29 @@
-"""Test doubles: a scripted fake transport (sync + async), a fake clock and wire fixtures.
+"""Test doubles: a scripted fake HTTP transport, a fake clock and wire fixtures.
 
-``FakeSender`` stands in for the HTTP connection pool, so every test exercises the real
-transport policy (auth headers, retries, redirects, error mapping) without sockets.
+``FakeSender`` is an ``httpx`` transport, so every test exercises the real request policy
+(auth headers, retries, redirects, error mapping) and httpx itself, without sockets.
 """
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
-import logging
 import sys
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from grad import AsyncGrad, Grad  # noqa: E402
-from grad._http import Request, TransportFailure  # noqa: E402
+from grad import Grad  # noqa: E402
 from grad._transport import Clock  # noqa: E402
 
 WIRE = HERE.parents[2] / "tests" / "fixtures" / "wire"
-
-# Expected warnings from the environment worker would otherwise clutter test output.
-logging.getLogger("grad").addHandler(logging.NullHandler())
-logging.getLogger("grad").propagate = False
 
 
 def fixture(name: str) -> Any:
@@ -44,16 +39,11 @@ class FakeClock(Clock):
     def __init__(self) -> None:
         self.now = 1000.0
         self.sleeps: list[float] = []
-        super().__init__(monotonic=lambda: self.now, sleep=self._sleep, random=lambda: 0.5, async_sleep=self._async_sleep)
+        super().__init__(monotonic=lambda: self.now, sleep=self._sleep, random=lambda: 0.5)
 
     def _sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
         self.now += seconds
-
-    async def _async_sleep(self, seconds: float) -> None:
-        self.sleeps.append(seconds)
-        self.now += seconds
-        await asyncio.sleep(0)
 
 
 @dataclass
@@ -103,74 +93,25 @@ def fixture_reply(name: str) -> Reply:
     return json_reply(data)
 
 
-class FakeResponse:
-    """Duck-types :class:`grad._http.Response`."""
+class _Body(httpx.SyncByteStream):
+    """A response body that yields ``chunks`` and then (optionally) fails mid-stream."""
 
-    def __init__(self, reply: Reply, url: str) -> None:
-        self.status = reply.status
-        self.reason = "OK"
-        self.headers = reply.all_headers()
-        self.url = url
-        self._reply = reply
+    def __init__(self, chunks: list[bytes], error: BaseException | None) -> None:
+        self.chunks = chunks
+        self.error = error
         self.closed = False
 
-    def _chunks(self) -> list[bytes]:
-        return list(self._reply.chunks) if self._reply.chunks is not None else [self._reply.payload()]
-
-    def read(self) -> bytes:
-        data = b"".join(self.iter_bytes())
-        return data
-
-    def iter_bytes(self, chunk_size: int = 65536) -> Any:
-        for chunk in self._chunks():
+    def __iter__(self) -> Iterator[bytes]:
+        for chunk in self.chunks:
             if chunk:
                 yield chunk
-        if self._reply.error is not None:
-            raise TransportFailure(self._reply.error, phase="receive")
-        self.closed = True
-
-    def iter_lines(self) -> Any:
-        from grad._http import LineSplitter
-
-        splitter = LineSplitter()
-        for chunk in self.iter_bytes():
-            yield from splitter.feed(chunk)
-        yield from splitter.flush()
+        if isinstance(self.error, httpx.TransportError):
+            raise self.error
+        if self.error is not None:  # a socket error mid-body, as httpx reports it
+            raise httpx.ReadError(f"{type(self.error).__name__}: {self.error}")
 
     def close(self) -> None:
         self.closed = True
-
-
-class FakeAsyncResponse(FakeResponse):
-    """Duck-types :class:`grad._http.AsyncResponse`."""
-
-    async def read(self) -> bytes:  # type: ignore[override]
-        return b"".join([c async for c in self.aiter_bytes()])
-
-    async def aiter_bytes(self, chunk_size: int = 65536) -> Any:
-        for chunk in self._chunks():
-            await asyncio.sleep(0)
-            if chunk:
-                yield chunk
-        if self._reply.error is not None:
-            raise TransportFailure(self._reply.error, phase="receive")
-        self.closed = True
-
-    async def aiter_lines(self) -> Any:
-        from grad._http import LineSplitter
-
-        splitter = LineSplitter()
-        async for chunk in self.aiter_bytes():
-            for line in splitter.feed(chunk):
-                yield line
-        for line in splitter.flush():
-            yield line
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-Handler = Callable[[Request], "Reply | BaseException"]
 
 
 @dataclass
@@ -201,7 +142,10 @@ class Sent:
         return None
 
 
-class FakeSender:
+Handler = Callable[[Sent], "Reply | BaseException"]
+
+
+class FakeSender(httpx.BaseTransport):
     """Answers requests from routes (``"GET /v1/runs/x"`` -> replies, used in order) or a handler."""
 
     # Every fake is finite: a client that keeps requesting past this is looping, so fail the test.
@@ -213,6 +157,7 @@ class FakeSender:
             self.add(key, value)
         self.handler = handler
         self.sent: list[Sent] = []
+        self.bodies: list[_Body] = []
         self.closed = False
 
     def add(self, key: str, value: Any) -> None:
@@ -220,24 +165,14 @@ class FakeSender:
         items = value if isinstance(value, list) else [value]
         self.routes.setdefault(key, []).extend(items)
 
-    def _record(self, request: Request) -> Sent:
-        body: bytes | None
-        if isinstance(request.body, (bytes, bytearray)):
-            body = bytes(request.body)
-        elif request.body is not None:
-            body = request.body.read()
-        else:
-            body = None
-        sent = Sent(request.method, request.url, dict(request.headers), body)
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
         if len(self.sent) >= self.MAX_REQUESTS:
             raise AssertionError(f"client sent more than {self.MAX_REQUESTS} requests (last: {request.method} {request.url}); it is looping")
+        body = request.read()
+        sent = Sent(request.method, str(request.url), dict(request.headers), body or None)
         self.sent.append(sent)
-        return sent
-
-    def _answer(self, request: Request) -> Reply:
-        sent = self._record(request)
         if self.handler is not None:
-            outcome = self.handler(request)
+            outcome = self.handler(sent)
         else:
             key = f"{request.method} {sent.path}"
             queue = self.routes.get(key)
@@ -245,32 +180,21 @@ class FakeSender:
                 raise AssertionError(f"unexpected request {key} (known: {sorted(self.routes)})")
             outcome = queue.pop(0) if len(queue) > 1 else queue[0]
             if callable(outcome) and not isinstance(outcome, Reply):
-                outcome = outcome(request)
+                outcome = outcome(sent)
         if isinstance(outcome, BaseException):
+            if isinstance(outcome, httpx.RequestError):
+                outcome.request = request
             raise outcome
-        if not isinstance(outcome, Reply):
-            outcome = json_reply(outcome)
-        return outcome
-
-    def send(self, request: Request, *, timeout: float) -> FakeResponse:
-        return FakeResponse(self._answer(request), request.url)
+        reply = outcome if isinstance(outcome, Reply) else json_reply(outcome)
+        stream = _Body(list(reply.chunks) if reply.chunks is not None else [reply.payload()], reply.error)
+        self.bodies.append(stream)
+        return httpx.Response(reply.status, headers=reply.all_headers(), stream=stream, request=request)
 
     def close(self) -> None:
         self.closed = True
 
     def paths(self) -> list[str]:
         return [f"{s.method} {s.path}" for s in self.sent]
-
-
-class FakeAsyncSender(FakeSender):
-    """Async twin of :class:`FakeSender`."""
-
-    async def send(self, request: Request, *, timeout: float) -> FakeAsyncResponse:  # type: ignore[override]
-        await asyncio.sleep(0)
-        return FakeAsyncResponse(self._answer(request), request.url)
-
-    async def aclose(self) -> None:
-        self.closed = True
 
 
 BASE = "https://api.test"
@@ -282,33 +206,23 @@ def make_client(routes: dict[str, Any] | None = None, *, handler: Handler | None
     clock = FakeClock()
     kwargs.setdefault("api_key", "grad_test_key")
     kwargs.setdefault("base_url", BASE)
-    client = Grad(_sender=sender, _clock=clock, _env={}, **kwargs)
+    client = Grad(_http_transport=sender, _clock=clock, _env={}, **kwargs)
     return client, sender, clock
 
 
-def make_async_client(routes: dict[str, Any] | None = None, *, handler: Handler | None = None, **kwargs: Any) -> tuple[AsyncGrad, FakeAsyncSender, FakeClock]:
-    """An ``AsyncGrad`` wired to a fake sender and clock."""
-    sender = FakeAsyncSender(routes, handler)
-    clock = FakeClock()
-    kwargs.setdefault("api_key", "grad_test_key")
-    kwargs.setdefault("base_url", BASE)
-    client = AsyncGrad(_sender=sender, _clock=clock, _env={}, **kwargs)
-    return client, sender, clock
+def refused() -> httpx.ConnectError:
+    """A connect failure (the request was never sent)."""
+    return httpx.ConnectError("[Errno 111] Connection refused")
 
 
-def refused() -> TransportFailure:
-    """A connect-phase failure (the request was never sent)."""
-    return TransportFailure(ConnectionRefusedError(111, "Connection refused"), phase="connect")
-
-
-def reset(phase: str = "receive", reused: bool = False) -> TransportFailure:
+def reset(phase: str = "receive") -> httpx.TransportError:
     """A failure after (part of) the request was sent."""
-    return TransportFailure(ConnectionResetError(104, "Connection reset by peer"), phase=phase, reused=reused)  # type: ignore[arg-type]
+    return httpx.WriteError("[Errno 104] Connection reset by peer") if phase == "send" else httpx.ReadError("[Errno 104] Connection reset by peer")
 
 
-def timed_out() -> TransportFailure:
+def timed_out() -> httpx.ReadTimeout:
     """A read timeout."""
-    return TransportFailure(TimeoutError("timed out"), phase="receive")
+    return httpx.ReadTimeout("timed out")
 
 
 def bundle_bytes(files: dict[str, bytes], *, manifest_extra: dict[str, Any] | None = None, raw_entries: list[Any] | None = None) -> bytes:

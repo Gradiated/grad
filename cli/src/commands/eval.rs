@@ -1,16 +1,19 @@
 //! `grad eval` and its subcommands.
 
-use grad_sdk::{EvalPlan, EvalRequest, EvalRun, EvalStatus, RubricItem, WaitOptions};
-use serde_json::{json, Value};
+use grad_sdk::{
+    EvalRubricItem, EvalRubricItemKind, EvalRun, EvalStatus, PlanEvalRequest, PlanEvalResponse,
+    WaitOptions,
+};
+use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{in_range, on_interrupt, page, positive, Ctx};
+use super::{in_range, on_interrupt, page, Ctx};
 use crate::cli::{EvalCmd, EvalRunArgs, EvalTop};
 use crate::output::{num, opt, pct, thousands, usd, when, CliError, CliResult, Out};
 
 /// Load a YAML/JSON rubric: a list of items, or `{items: [...]}` / `{rubric: [...]}`.
-pub fn load_rubric(path: &Path) -> CliResult<Vec<RubricItem>> {
+pub fn load_rubric(path: &Path) -> CliResult<Vec<EvalRubricItem>> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| CliError::usage(format!("--rubric {}: {}", path.display(), e)))?;
     let v: serde_norway::Value = serde_norway::from_str(&raw).map_err(|e| {
@@ -39,14 +42,14 @@ pub fn load_rubric(path: &Path) -> CliResult<Vec<RubricItem>> {
             )))
         }
     };
-    let items: Vec<RubricItem> = serde_json::from_value(items)
+    let items: Vec<EvalRubricItem> = serde_json::from_value(items)
         .map_err(|e| CliError::usage(format!("--rubric {}: {}", path.display(), e)))?;
     for it in &items {
-        match it.kind.as_str() {
-            "regex" | "validator" | "judge" => {}
-            "code" => {
+        match &it.kind {
+            EvalRubricItemKind::Regex | EvalRubricItemKind::Validator | EvalRubricItemKind::Judge => {}
+            EvalRubricItemKind::Code => {
                 return Err(CliError::usage(format!(
-                    "--rubric {}: '{}' is a code scorer; code scorers run on your machine, so define the rubric in a .py file (rubric = Rubric([...])) and pass that instead",
+                    "--rubric {}: '{}' is a code scorer; code scorers run in your process, so use the Python SDK (client.evals.create(rubric=Rubric([...])))",
                     path.display(),
                     it.name
                 )))
@@ -64,7 +67,7 @@ pub fn load_rubric(path: &Path) -> CliResult<Vec<RubricItem>> {
     Ok(items)
 }
 
-pub fn build_request(a: &EvalRunArgs) -> CliResult<EvalRequest> {
+pub fn build_request(a: &EvalRunArgs) -> CliResult<PlanEvalRequest> {
     let models: Vec<String> = a
         .models
         .iter()
@@ -78,7 +81,7 @@ pub fn build_request(a: &EvalRunArgs) -> CliResult<EvalRequest> {
         Some(p) => Some(load_rubric(p)?),
         None => None,
     };
-    Ok(EvalRequest {
+    Ok(PlanEvalRequest {
         name: a.name.clone(),
         models,
         baseline: a.baseline.clone(),
@@ -90,11 +93,11 @@ pub fn build_request(a: &EvalRunArgs) -> CliResult<EvalRequest> {
         max_tokens: a.max_tokens,
         limit: a.limit,
         pass_threshold: in_range(a.pass_threshold, "--pass-threshold", 0.0, 1.0)?,
-        max_cost_usd: positive(a.max_cost_usd, "--max-cost-usd")?,
+        ..Default::default()
     })
 }
 
-fn print_plan(out: &Out, p: &EvalPlan) {
+fn print_plan(out: &Out, p: &PlanEvalResponse) {
     out.line(format!("Eval plan (dataset version {})", p.dataset_version));
     out.kv(&[
         ("tasks", thousands(p.estimated_tasks)),
@@ -154,25 +157,15 @@ fn print_summary(out: &Out, ev: &EvalRun) {
         ev.summary
             .iter()
             .map(|s| {
-                let vs = match &s.vs_baseline {
-                    Some(Value::Object(m)) => m
-                        .get("delta")
-                        .and_then(Value::as_f64)
-                        .map(|d| format!("{:+.1}%", d * 100.0))
-                        .unwrap_or_else(|| "-".into()),
-                    Some(Value::Number(n)) => format!("{:+.1}%", n.as_f64().unwrap_or(0.0) * 100.0),
-                    _ => "-".into(),
-                };
+                let vs = s
+                    .vs_baseline
+                    .as_ref()
+                    .map(|b| format!("{:+.1}%", b.delta * 100.0))
+                    .unwrap_or_else(|| "-".into());
                 let pass = s
                     .pass_at_k
                     .iter()
-                    .map(|(k, v)| {
-                        format!(
-                            "{}={}",
-                            k,
-                            v.as_f64().map(pct).unwrap_or_else(|| v.to_string())
-                        )
-                    })
+                    .map(|(k, v)| format!("{}={}", k, pct(*v)))
                     .collect::<Vec<_>>()
                     .join(" ");
                 vec![
@@ -217,119 +210,11 @@ async fn wait_eval(ctx: &Ctx, c: &grad_sdk::Client, id: &str, timeout: u64) -> C
     Ok(ev)
 }
 
-/// Run a Python rubric through the Python SDK (code scorers execute locally).
-async fn eval_python(ctx: &Ctx, a: &EvalRunArgs) -> CliResult {
-    let c = ctx.client()?;
-    let rc = c.resolved_config();
-    let script = r#"
-import json, os, runpy, sys
-try:
-    from grad import Grad
-except ImportError as exc:
-    sys.stderr.write("grad eval --rubric FILE.py needs the Python SDK in %s (pip install grad-sdk, or pass --python): %s\n" % (sys.executable, exc))
-    sys.exit(86)
-args = json.loads(os.environ["GRAD_EVAL_ARGS"])
-ns = runpy.run_path(args.pop("rubric_path"))
-rubric = ns.get("rubric")
-if rubric is None:
-    sys.stderr.write("the rubric file must define a top-level `rubric = Rubric([...])`\n")
-    sys.exit(2)
-wait = args.pop("wait")
-client = Grad(base_url=os.environ["GRADIATED_BASE_URL"], api_key=os.environ.get("GRADIATED_API_KEY") or None)
-kwargs = {k: v for k, v in args.items() if v is not None}
-ev = client.evals.create(rubric=rubric, **kwargs)
-if wait:
-    ev = ev.wait()
-data = dict(ev) if isinstance(ev, dict) else getattr(ev, "__dict__", {"repr": repr(ev)})
-print(json.dumps(data, default=str))
-"#;
-    let path = a.rubric.as_ref().expect("python rubric path");
-    let args = json!({
-        "rubric_path": path,
-        "wait": a.wait,
-        "name": a.name,
-        "models": a.models,
-        "dataset": a.dataset,
-        "baseline": a.baseline,
-        "samples": a.samples,
-        "temperature": a.temperature,
-        "max_tokens": a.max_tokens,
-        "limit": a.limit,
-        "pass_threshold": a.pass_threshold,
-        "max_cost_usd": a.max_cost_usd,
-    });
-    let mut cmd = tokio::process::Command::new(&a.python);
-    cmd.arg("-c")
-        .arg(script)
-        .env("GRAD_EVAL_ARGS", args.to_string())
-        .env("GRADIATED_BASE_URL", &rc.base_url)
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    match &rc.api_key {
-        Some(k) => {
-            cmd.env("GRADIATED_API_KEY", k);
-        }
-        None => {
-            cmd.env_remove("GRADIATED_API_KEY");
-        }
-    }
-    let output = cmd.output().await.map_err(|e| {
-        CliError::usage(format!("could not run '{}': {}", a.python, e))
-            .hint("Install Python 3 with `pip install grad-sdk`, or pass --python /path/to/python")
-    })?;
-    match output.status.code() {
-        Some(0) => {}
-        Some(86) => {
-            return Err(
-                CliError::usage("the Python SDK is not installed for this interpreter")
-                    .hint("pip install grad-sdk"),
-            )
-        }
-        code => {
-            return Err(CliError::general(
-                "python_eval_failed",
-                format!(
-                    "the Python rubric eval exited with {}",
-                    code.map(|c| c.to_string())
-                        .unwrap_or_else(|| "a signal".into())
-                ),
-            ))
-        }
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let last = text
-        .lines()
-        .rev()
-        .find(|l| l.trim_start().starts_with('{'))
-        .unwrap_or("{}");
-    let data: Value = serde_json::from_str(last).unwrap_or(Value::Null);
-    if let Ok(ev) = serde_json::from_value::<EvalRun>(data.clone()) {
-        if !ev.id.is_empty() {
-            print_summary(&ctx.out, &ev);
-            if matches!(ev.status, EvalStatus::Failed | EvalStatus::Cancelled) {
-                return Err(grad_sdk::Error::EvalFailed(Box::new(ev)).into());
-            }
-        }
-    }
-    ctx.out.done(&data)
-}
-
 pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
     let out = &ctx.out;
     match top.action {
         None => {
             let a = top.run;
-            if a.rubric
-                .as_ref()
-                .is_some_and(|p| p.extension().is_some_and(|e| e == "py"))
-            {
-                if a.dry_run {
-                    return Err(CliError::usage(
-                        "--dry-run with a Python rubric: plan it with the Python SDK (client.evals.plan) or use a YAML rubric",
-                    ));
-                }
-                return eval_python(ctx, &a).await;
-            }
             let req = build_request(&a)?;
             let c = ctx.client()?;
             if a.dry_run {
@@ -337,7 +222,7 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
                 print_plan(out, &plan);
                 return out.done(&plan);
             }
-            let ev = c.evals().create(&req).await?;
+            let ev = c.evals().create(&req, a.idempotency_key.as_deref()).await?;
             if !a.wait {
                 out.line(format!(
                     "✓ Queued eval {} ({} models)",
@@ -356,14 +241,6 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
             let c = ctx.client()?;
             match cmd {
                 EvalCmd::Plan(a) => {
-                    if a.rubric
-                        .as_ref()
-                        .is_some_and(|p| p.extension().is_some_and(|e| e == "py"))
-                    {
-                        return Err(CliError::usage(
-                            "plan Python rubrics with the Python SDK (client.evals.plan)",
-                        ));
-                    }
                     let plan = c.evals().plan(&build_request(&a)?).await?;
                     print_plan(out, &plan);
                     out.done(&plan)

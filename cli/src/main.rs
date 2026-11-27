@@ -31,32 +31,11 @@ async fn dispatch(cli: Cli, ctx: &Ctx) -> CliResult {
         Command::Artifacts { action } => serve::artifacts(ctx, action).await,
         Command::Deploy(a) => serve::deploy(ctx, a).await,
         Command::Deployments { action } => serve::deployments(ctx, action).await,
-        Command::Rollback { name } => serve::rollback(ctx, &name).await,
         Command::Route(a) => serve::route(ctx, a).await,
         Command::Embed { model, input } => serve::embed(ctx, &model, input).await,
         Command::Keys { action } => auth::keys(ctx, action).await,
-        Command::Env { action } => envserve::env(ctx, action).await,
         Command::Local { action } => local::local(ctx, action).await,
-        Command::Secrets { .. } => Err(not_in_v0(
-            "grad secrets",
-            "the server stores no third-party credentials in v0 (they arrive with observability sources)",
-            "Keep provider keys in your own environment, export traces with them, then load the file with `grad import FILE --dataset NAME`.",
-        )),
-        Command::Sources { .. } => Err(not_in_v0(
-            "grad sources",
-            "syncing traces from Langfuse or other observability tools is post-v0",
-            "Export the traces to a file (Langfuse, LangSmith, OpenTelemetry/OpenInference, OpenAI or Anthropic logs) and load it with `grad import FILE --dataset NAME`; the format is detected for you.",
-        )),
     }
-}
-
-fn not_in_v0(cmd: &str, why: &str, hint: &str) -> CliError {
-    CliError::new(
-        output::EXIT_USAGE,
-        "not_available",
-        format!("`{cmd}` is not available in v0: {why}."),
-    )
-    .hint(hint)
 }
 
 #[tokio::main]

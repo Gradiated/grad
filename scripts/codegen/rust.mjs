@@ -1,14 +1,48 @@
 /**
- * Rust emitter: one `generated.rs` with the transport runtime, `models`
- * (serde structs, forward-compatible string enums) and typed client methods.
+ * Rust emitter: `generated.rs` with serde models (forward-compatible string
+ * enums) for the schemas the hand-written Rust SDK uses, plus page-size
+ * maxima. The Rust SDK's transport and resources are hand-written, so no
+ * client is generated.
  */
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { compareStrings, parameterMaxima, sanitizeSingleLine, schemaClosure, toPascal, toSnake } from "./ir.mjs";
 
-import { compareStrings, parameterMaxima, sanitizeSingleLine, toPascal, toSnake } from "./ir.mjs";
+/** The schemas the Rust SDK and CLI use; everything they reference is generated too. */
+export const RUST_MODELS = [
+  "ApiKey",
+  "Artifact",
+  "ChatMessage",
+  "Checkpoint",
+  "CreateImportRequest",
+  "Dataset",
+  "DatasetRecordsPage",
+  "DeployArtifactRequest",
+  "Deployment",
+  "DeploymentStatus",
+  "EmbedResponse",
+  "EvalOutput",
+  "EvalRun",
+  "EvalTaskOutcome",
+  "FeedbackEventInput",
+  "ImportJob",
+  "MetricsPage",
+  "PlanEvalRequest",
+  "PlanEvalResponse",
+  "PlanRunRequest",
+  "PlanRunResponse",
+  "PostEvalScoresRequest",
+  "PostEvalScoresResponse",
+  "RecordFeedbackResponse",
+  "RenderDatasetRequest",
+  "RenderDatasetResponse",
+  "RouteRequest",
+  "RouteResponse",
+  "Run",
+  "TrainableModel",
+  "UploadTicket",
+];
 
-const runtimeDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime", "rust");
+/** Schemas whose property names the CLI checks user input against (`<Type>::FIELDS`). */
+export const RUST_FIELD_LISTS = ["RecipeSpec"];
 
 export const HEADER = "// AUTO-GENERATED from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.\n";
 
@@ -16,9 +50,8 @@ const RS_KEYWORDS = new Set(
   "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while abstract become box do final macro override priv try typeof unsized virtual yield gen union".split(" "),
 );
 const RS_NO_RAW = new Set(["self", "Self", "super", "crate", "_"]);
-const RS_RESERVED_LOCALS = new Set(["body", "params", "path", "query", "headers", "last_event_id", "idempotency_key"]);
 const RS_RESERVED_TYPES = new Set(
-  "Option Result Vec String Box Value Default Clone Debug Copy Send Sync Sized Drop Fn Iterator Error ErrorKind ApiError FieldError GeneratedClient StreamResponse SseEvent SseStream QueryValue BTreeMap Serialize Deserialize".split(" "),
+  "Option Result Vec String Box Value Default Clone Debug Copy Send Sync Sized Drop Fn Iterator Error BTreeMap Serialize Deserialize".split(" "),
 );
 
 export const rsIdent = (raw) => {
@@ -28,11 +61,6 @@ export const rsIdent = (raw) => {
   if (RS_NO_RAW.has(ident)) return `${ident}_`;
   if (RS_KEYWORDS.has(ident)) return `r#${ident}`;
   return ident;
-};
-
-const rsParamIdent = (raw) => {
-  const ident = rsIdent(raw);
-  return RS_RESERVED_LOCALS.has(ident) ? `${ident}_param` : ident;
 };
 
 const rsTypeName = (name) => {
@@ -48,7 +76,9 @@ const doc = (text, indent = "") => {
 
 const unwrap = (node) => (node.k === "nullable" ? node.inner : node);
 
-export const generateRustFile = async (ir, { sdkVersion = "0.0.0" } = {}) => {
+export const generateRustFile = async (fullIR, { roots = RUST_MODELS, fieldLists = RUST_FIELD_LISTS } = {}) => {
+  const keep = schemaClosure(fullIR.schemas, roots);
+  const ir = { ...fullIR, schemas: Object.fromEntries(Object.entries(fullIR.schemas).filter(([name]) => keep.has(name))) };
   const names = new Map();
   const used = new Map();
   const claim = (name, owner) => {
@@ -123,6 +153,12 @@ export const generateRustFile = async (ir, { sdkVersion = "0.0.0" } = {}) => {
     return { k: "object", props, ...(additional ? { additional } : {}) };
   };
 
+  /** Inline `T | null` array items and map values become `Option<T>`. */
+  const element = (node, ctxName) => {
+    const inner = typeOf(node, ctxName, undefined);
+    return node.k === "nullable" && inner !== "Value" ? `Option<${inner}>` : inner;
+  };
+
   /** Rust type for a node (without Option). `owner` is the named schema containing it, for recursion. */
   const typeOf = (node, ctxName, owner) => {
     switch (node.k) {
@@ -148,9 +184,9 @@ export const generateRustFile = async (ir, { sdkVersion = "0.0.0" } = {}) => {
           return enumName;
         }
       case "array":
-        return `Vec<${typeOf(node.items, `${ctxName}Item`, undefined)}>`;
+        return `Vec<${element(node.items, `${ctxName}Item`)}>`;
       case "map":
-        return `BTreeMap<String, ${typeOf(node.values, `${ctxName}Value`, undefined)}>`;
+        return `BTreeMap<String, ${element(node.values, `${ctxName}Value`)}>`;
       case "object":
         if (node.props.length === 0) return "BTreeMap<String, Value>";
         {
@@ -181,56 +217,8 @@ export const generateRustFile = async (ir, { sdkVersion = "0.0.0" } = {}) => {
       seen.add(v);
       variants.push({ v, value });
     }
-    const first = variants[0].v;
-    const text = `${doc(node.description) || `/// Allowed values of \`${enumName}\` (unknown values from newer servers are kept in \`Other\`).\n`}#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ${enumName} {
-${variants.map(({ v, value }) => `    /// \`${JSON.stringify(value)}\`\n    ${v},`).join("\n")}
-    /// A value this SDK version does not know.
-    Other(String),
-}
-
-impl Default for ${enumName} {
-    fn default() -> Self {
-        Self::${first}
-    }
-}
-
-impl ${enumName} {
-    pub fn as_str(&self) -> &str {
-        match self {
-${variants.map(({ v, value }) => `            Self::${v} => ${JSON.stringify(value)},`).join("\n")}
-            Self::Other(s) => s.as_str(),
-        }
-    }
-}
-
-impl From<&str> for ${enumName} {
-    fn from(s: &str) -> Self {
-        match s {
-${variants.map(({ v, value }) => `            ${JSON.stringify(value)} => Self::${v},`).join("\n")}
-            other => Self::Other(other.to_string()),
-        }
-    }
-}
-
-impl std::fmt::Display for ${enumName} {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Serialize for ${enumName} {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for ${enumName} {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Ok(Self::from(s.as_str()))
-    }
-}`;
+    const docText = doc(node.description) || `/// Allowed values of \`${enumName}\`.\n`;
+    const text = `string_enum! {\n${docText.replace(/^/gm, "    ").trimEnd()}\n    ${enumName} {\n${variants.map(({ v, value }) => `        ${v} => ${JSON.stringify(value)},`).join("\n")}\n    }\n}`;
     decls.push({ name: enumName, text });
   };
 
@@ -248,8 +236,7 @@ impl<'de> Deserialize<'de> for ${enumName} {
       const attrs = [];
       const bare = ident.startsWith("r#") ? ident.slice(2) : ident;
       if (bare !== prop.name) attrs.push(`rename = ${JSON.stringify(prop.name)}`);
-      if (!prop.required) attrs.push('default, skip_serializing_if = "Option::is_none"');
-      else if (nullable) attrs.push("default");
+      if (!prop.required) attrs.push('skip_serializing_if = "Option::is_none"');
       fields.push(`${doc(prop.type.description, "    ")}${attrs.length ? `    #[serde(${attrs.join(", ")})]\n` : ""}    pub ${ident}: ${ty},`);
     }
     if (node.additional !== undefined && node.additional !== false) {
@@ -259,9 +246,12 @@ impl<'de> Deserialize<'de> for ${enumName} {
     const head = isUnion
       ? `/// A union of object shapes: set the fields of exactly one variant.\n`
       : doc(node.description) || `/// Generated from the OpenAPI schema \`${structName}\`.\n`;
+    const fieldList = fieldLists.includes(structName)
+      ? `\n\nimpl ${structName} {\n    /// Every property name in the schema.\n    pub const FIELDS: &'static [&'static str] = &[${node.props.map((p) => JSON.stringify(p.name)).join(", ")}];\n}`
+      : "";
     decls.push({
       name: structName,
-      text: `${head}#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]\npub struct ${structName} {\n${fields.join("\n")}\n}`,
+      text: `${head}#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]\n#[serde(default)]\npub struct ${structName} {\n${fields.join("\n")}\n}${fieldList}`,
     });
   };
 
@@ -276,149 +266,72 @@ impl<'de> Deserialize<'de> for ${enumName} {
     else decls.push({ name: rsName, text: `${doc(node.description) || `/// Generated from the OpenAPI schema \`${name}\`.\n`}pub type ${rsName} = ${typeOf(base, `${rsName}Value`, undefined)};` });
   }
 
-  const methods = [];
-  for (const op of ir.operations) {
-    const fnName = rsIdent(op.id);
-    const pascal = toPascal(op.id);
-    const args = ["&self"];
-    const idents = new Set();
-    const ident = (raw) => {
-      let id = rsParamIdent(raw);
-      while (idents.has(id)) id = `${id}_`;
-      idents.add(id);
-      return id;
-    };
-    const pathIdents = op.pathParams.map((p) => ({ p, id: ident(p.name) }));
-    for (const { id } of pathIdents) args.push(`${id}: &str`);
-    const pre = [];
-    const fmtParts = [];
-    const fmtArgs = [];
-    op.segments.forEach((seg, i) => {
-      if (i % 2 === 0) fmtParts.push(seg.replace(/[{}]/g, (c) => c + c));
-      else {
-        const match = pathIdents.find((x) => x.p.name === seg);
-        fmtParts.push("{}");
-        fmtArgs.push(`encode_path_segment(${JSON.stringify(seg)}, ${match.id})?`);
-      }
-    });
-    pre.push(
-      fmtArgs.length > 0
-        ? `        let path = format!(${JSON.stringify(fmtParts.join(""))}, ${fmtArgs.join(", ")});`
-        : `        let path = ${JSON.stringify(op.path)}.to_string();`,
-    );
-
-    let bodyExpr = "None::<&()>";
-    if (op.body) {
-      if (op.body.kind !== "json") throw new Error(`${op.id}: non-JSON request bodies are not supported by the Rust emitter.`);
-      let bodyType = op.body.type.k === "ref" ? names.get(op.body.type.name) : typeOf(op.body.type, `${pascal}Request`, undefined);
-      args.push(op.body.required ? `body: &${bodyType}` : `body: Option<&${bodyType}>`);
-      bodyExpr = op.body.required ? "Some(body)" : "body";
-    }
-
-    const allParams = [...op.queryParams, ...op.headerParams];
-    let queryExpr = "&[]";
-    let headerExpr = "&[]";
-    if (allParams.length > 0) {
-      const paramsName = claimInline(`${pascal}Params`);
-      const fields = [];
-      const seen = new Map();
-      const plan = allParams.map((p) => {
-        const id = rsIdent(p.name);
-        if (seen.has(id)) throw new Error(`${op.id}: parameters '${seen.get(id)}' and '${p.name}' both map to Rust field '${id}'.`);
-        seen.set(id, p.name);
-        const base = unwrap(p.type);
-        const isArray = base.k === "array";
-        const scalarNode = isArray ? unwrap(base.items) : base;
-        let ty = scalarNode.k === "enum" || (scalarNode.k === "prim" && scalarNode.t === "string") || scalarNode.k === "any" ? "String" : typeOf(scalarNode, `${paramsName}${toPascal(p.name)}`, undefined);
-        if (ty === "Value") ty = "String";
-        const full = isArray ? `Vec<${ty}>` : p.required ? ty : `Option<${ty}>`;
-        fields.push(`${doc(p.description, "    ")}    pub ${id}: ${full},`);
-        return { p, id, isArray, required: p.required };
-      });
-      decls.push({
-        name: paramsName,
-        text: `/// Query and header parameters of \`${fnName}\`.\n#[derive(Debug, Clone, PartialEq, Default)]\npub struct ${paramsName} {\n${fields.join("\n")}\n}`,
-      });
-      const anyRequired = allParams.some((p) => p.required);
-      args.push(anyRequired ? `params: &${paramsName}` : `params: Option<&${paramsName}>`);
-      if (!anyRequired) pre.push(`        let default_params = ${paramsName}::default();\n        let params = params.unwrap_or(&default_params);`);
-      const build = (location, varName) => {
-        const items = plan.filter((x) => x.p.in === location);
-        if (items.length === 0) return null;
-        pre.push(`        let mut ${varName}: Vec<(&str, String)> = Vec::new();`);
-        for (const item of items) {
-          const key = JSON.stringify(item.p.name);
-          if (item.isArray) pre.push(`        for v in &params.${item.id} {\n            ${varName}.push((${key}, v.query_value()));\n        }`);
-          else if (item.required) pre.push(`        ${varName}.push((${key}, params.${item.id}.query_value()));`);
-          else pre.push(`        if let Some(v) = &params.${item.id} {\n            ${varName}.push((${key}, v.query_value()));\n        }`);
-        }
-        return `&${varName}`;
-      };
-      queryExpr = build("query", "query") ?? "&[]";
-      headerExpr = build("header", "headers") ?? "&[]";
-    }
-
-    if (op.idempotent) {
-      // One key per call (reused by every retry); pass your own to retry a call across processes.
-      args.push("idempotency_key: Option<&str>");
-      const key = '("Idempotency-Key", idempotency_key.map(str::to_string).unwrap_or_else(new_idempotency_key))';
-      if (headerExpr === "&[]") {
-        pre.push(`        let headers: Vec<(&str, String)> = vec![${key}];`);
-        headerExpr = "&headers";
-      } else {
-        pre.push(`        headers.push(${key});`);
-      }
-    }
-
-    const summary = sanitizeSingleLine(op.summary || op.id);
-    const header = `    /// ${summary}\n    ///\n    /// \`${op.method} ${op.path}\`\n`;
-    const method = `reqwest::Method::${op.method}`;
-    const r = op.response;
-    if (r.kind === "json") {
-      const ret = r.type.k === "ref" ? names.get(r.type.name) : typeOf(r.type, `${pascal}Response`, undefined);
-      methods.push(
-        `${header}    pub async fn ${fnName}(${args.join(", ")}) -> Result<${ret}, ApiError> {\n${pre.join("\n")}\n        self.request_json(${method}, &path, ${queryExpr}, ${headerExpr}, ${bodyExpr}).await\n    }`,
-      );
-    } else if (r.kind === "binary") {
-      methods.push(
-        `${header}    pub async fn ${fnName}(${args.join(", ")}) -> Result<StreamResponse, ApiError> {\n${pre.join("\n")}\n        self.request_stream(${method}, &path, ${queryExpr}, ${headerExpr}, ${bodyExpr}, ${JSON.stringify(r.contentType)}).await\n    }`,
-      );
-    } else if (r.kind === "empty") {
-      methods.push(
-        `${header}    pub async fn ${fnName}(${args.join(", ")}) -> Result<(), ApiError> {\n${pre.join("\n")}\n        let _: Value = self.request_json(${method}, &path, ${queryExpr}, ${headerExpr}, ${bodyExpr}).await?;\n        Ok(())\n    }`,
-      );
-    }
-    if (r.sse || r.kind === "sse-only") {
-      if (op.body) throw new Error(`${op.id}: SSE operations with a request body are unsupported in Rust.`);
-      const streamName = r.kind === "sse-only" ? fnName : `${fnName}_stream`;
-      const sseArgs = [...args, "last_event_id: Option<&str>"];
-      methods.push(
-        `    /// ${summary} (Server-Sent Events; resume with \`last_event_id\`)\n    pub async fn ${streamName}(${sseArgs.join(", ")}) -> Result<SseStream, ApiError> {\n${pre.join("\n")}\n        self.request_sse(${method}, &path, ${queryExpr}, last_event_id).await\n    }`,
-      );
-    }
-  }
-
-  const transport = (await readFile(path.join(runtimeDir, "transport.rs"), "utf8")).replace("__SDK_VERSION__", sdkVersion);
   const sorted = decls.sort((a, b) => compareStrings(a.name, b.name)).map((d) => d.text);
   const maxima = parameterMaxima(ir).map(
     (m) => `/// Largest \`${m.param}\` accepted by \`${rsIdent(m.op)}\` (the server clamps larger values).\npub const ${rsIdent(m.op).toUpperCase()}_${rsIdent(m.param).toUpperCase()}_MAX: u32 = ${m.maximum};`,
   );
-  return `${HEADER}#![allow(clippy::all, clippy::pedantic, dead_code, unused_imports, non_camel_case_types)]
+  return `${HEADER}//! Request and response models of the schemas the SDK uses (see \`RUST_MODELS\` in scripts/codegen/rust.mjs).
+//! Structs decode leniently (missing fields take their defaults) and string enums keep unknown values in \`Other\`.
+#![allow(clippy::all, clippy::pedantic)]
 
-${transport}
-/// Request and response models generated from \`components.schemas\`.
-pub mod models {
-    use serde::{Deserialize, Serialize};
-    use serde_json::Value;
-    use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
-${sorted.map((t) => t.replace(/^(?=.)/gm, "    ")).join("\n\n")}
+/// A string enum that keeps values from newer servers in \`Other\` (default: the first variant).
+macro_rules! string_enum {
+    ($(#[$meta:meta])* $name:ident { $first:ident => $first_wire:literal $(, $variant:ident => $wire:literal)* $(,)? }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+        pub enum $name {
+            #[default]
+            $first,
+            $($variant,)*
+            /// A value this SDK version does not know.
+            Other(String),
+        }
+
+        impl $name {
+            /// The wire value.
+            pub fn as_str(&self) -> &str {
+                match self {
+                    Self::$first => $first_wire,
+                    $(Self::$variant => $wire,)*
+                    Self::Other(s) => s.as_str(),
+                }
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(s: &str) -> Self {
+                match s {
+                    $first_wire => Self::$first,
+                    $($wire => Self::$variant,)*
+                    other => Self::Other(other.to_string()),
+                }
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                Ok(Self::from(String::deserialize(d)?.as_str()))
+            }
+        }
+    };
 }
 
-pub use models::*;
-${maxima.length ? `\n${maxima.join("\n")}\n` : ""}
-impl GeneratedClient {
-${methods.join("\n\n")}
-}
-`;
+${sorted.join("\n\n")}
+${maxima.length ? `\n${maxima.join("\n")}\n` : ""}`;
 };

@@ -54,6 +54,17 @@ type RunParams struct {
 	Split Split
 	// MaxCostUSD is the spend cap (0 = none).
 	MaxCostUSD float64
+	// IdempotencyKey makes a retried Create (even from another process) return
+	// the run the first call created (default: a fresh key per call).
+	IdempotencyKey string
+}
+
+// idempotency returns the per-call Idempotency-Key option, if the caller set one.
+func idempotency(key string) []generated.RequestOption {
+	if key == "" {
+		return nil
+	}
+	return []generated.RequestOption{generated.WithIdempotencyKey(key)}
 }
 
 func (p RunParams) wire() (*generated.PlanRunRequest, error) {
@@ -142,7 +153,7 @@ func (s *RunsService) Create(ctx context.Context, p RunParams) *RunHandle {
 	if err != nil {
 		return &RunHandle{err: err}
 	}
-	r, err := api.CreateRun(ctx, req)
+	r, err := api.CreateRun(ctx, req, idempotency(p.IdempotencyKey)...)
 	if err != nil {
 		return &RunHandle{err: err}
 	}

@@ -1,24 +1,20 @@
 //! `grad models`, `grad datasets`, `grad import`, `grad imports`, `grad render`.
 
 use grad_sdk::{
-    recipes, Client, HfColumns, ImportFileOptions, ImportJob, ImportSource, PushOptions,
-    RenderRequest, WaitOptions,
+    recipes, Client, HfColumnMapping, ImportFileOptions, ImportJob, ImportSource, ImportSourceKind,
+    PushOptions, RenderDatasetRequest, WaitOptions,
 };
-use serde_json::Value;
 use std::time::Duration;
 
 use super::{more_hint, on_interrupt, page, Ctx};
 use crate::cli::{
     DatasetImportCmd, DatasetsCmd, ImportArgs, ImportWaitArgs, ImportsCmd, ModelsCmd, RenderArgs,
 };
-use crate::output::{thousands, when, CliError, CliResult, Out};
+use crate::output::{join, thousands, when, CliError, CliResult, Out};
 
 pub async fn models(ctx: &Ctx, action: ModelsCmd) -> CliResult {
     let c = ctx.client()?;
-    let ModelsCmd::List {
-        training: _,
-        recipe,
-    } = action;
+    let ModelsCmd::List { recipe } = action;
     let mut models = c.models().list().await?;
     if let Some(r) = recipe {
         let kind = recipes::parse_kind(&r).ok_or_else(|| {
@@ -44,13 +40,9 @@ pub async fn models(ctx: &Ctx, action: ModelsCmd) -> CliResult {
             .map(|m| {
                 vec![
                     m.id.clone(),
-                    m.family.clone(),
-                    m.adapters.join(","),
-                    m.recipes
-                        .iter()
-                        .map(|r| r.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
+                    m.family.to_string(),
+                    join(&m.adapters),
+                    join(&m.recipes),
                     thousands(m.max_context_tokens),
                     format!("{:.2}", m.price_per_million_tokens_usd),
                 ]
@@ -65,19 +57,14 @@ pub async fn render(ctx: &Ctx, a: RenderArgs) -> CliResult {
     if !(1..=20).contains(&a.limit) {
         return Err(CliError::usage("--limit must be between 1 and 20"));
     }
-    let thinking = a.thinking.as_deref().map(|t| match t {
-        "true" => Value::Bool(true),
-        "false" => Value::Bool(false),
-        other => Value::String(other.into()),
-    });
     let res = c
         .datasets()
         .render(
             &a.name,
-            &RenderRequest {
+            &RenderDatasetRequest {
                 model: a.model.clone(),
-                train_on: a.train_on.clone(),
-                thinking,
+                train_on: a.train_on.as_deref().map(Into::into),
+                thinking: a.thinking.as_deref().map(Into::into),
                 preserve_thinking: None,
                 limit: Some(a.limit),
             },
@@ -181,7 +168,7 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                     if !json_mode {
                         eprintln!(
                             "  pushed {} records ({} batches)",
-                            thousands(p.records_sent),
+                            thousands(p.records_sent as i64),
                             p.batches_sent
                         );
                     }
@@ -222,7 +209,6 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
             )?;
             out.done(&res)
         }
-        DatasetsCmd::Render(a) => render(ctx, a).await,
         DatasetsCmd::Import { source } => match source {
             DatasetImportCmd::Hf {
                 repo,
@@ -235,7 +221,7 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                 wait,
             } => {
                 let c = ctx.client()?;
-                let mut cols = HfColumns::default();
+                let mut cols = HfColumnMapping::default();
                 for spec in &columns {
                     let (k, v) = spec.split_once('=').ok_or_else(|| {
                         CliError::usage(format!("--column expects FIELD=COLUMN, got '{}'", spec))
@@ -253,13 +239,15 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                     .datasets()
                     .import_hf(
                         &name,
-                        ImportSource::Hf {
-                            repo: repo.clone(),
+                        ImportSource {
+                            kind: ImportSourceKind::Hf,
+                            repo: Some(repo.clone()),
                             split,
                             config,
                             revision,
                             columns: if cols.is_empty() { None } else { Some(cols) },
                             limit,
+                            ..Default::default()
                         },
                         None,
                     )
@@ -269,24 +257,6 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                     repo, name, job.id
                 ));
                 finish_import(ctx, &c, job, &wait).await
-            }
-            DatasetImportCmd::File {
-                path,
-                name,
-                format,
-                wait,
-            } => {
-                import(
-                    ctx,
-                    ImportArgs {
-                        file: path,
-                        dataset: name,
-                        format,
-                        connector: None,
-                        wait,
-                    },
-                )
-                .await
             }
         },
     }
@@ -326,7 +296,7 @@ pub async fn import(ctx: &Ctx, a: ImportArgs) -> CliResult {
     ctx.out.note(format!(
         "Uploading {} ({} bytes) to dataset {}",
         a.file.display(),
-        thousands(size),
+        thousands(size as i64),
         a.dataset
     ));
     let job = c

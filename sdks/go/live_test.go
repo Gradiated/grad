@@ -189,7 +189,7 @@ func TestLiveSelfHosted(t *testing.T) {
 			t.Fatalf("duplicate create: %v", err)
 		}
 
-		recipe := grad.SFTRecipe{Model: "test/tiny-qwen3", BatchSize: 8}
+		recipe := grad.SFTRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 8}}
 		plan := must(client.Runs.Plan(ctx, grad.RunParams{Dataset: dataset, Name: "support-sft", Recipe: recipe}))(t)
 		if plan.EstimatedSteps < 1 {
 			t.Fatalf("plan %+v", plan)
@@ -348,7 +348,7 @@ func TestLiveCloudRouterWithTorch(t *testing.T) {
 	run := must(client.Runs.Create(ctx, grad.RunParams{
 		Dataset: dataset,
 		Name:    "support-router",
-		Recipe:  grad.RouterRecipe{Model: "test/tiny-qwen3", Models: []string{"cheap/m", "strong/m"}, BatchSize: 8},
+		Recipe:  grad.RouterRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 8}, Models: []string{"cheap/m", "strong/m"}},
 	}).Wait(ctx))(t)
 	first := must(run.Deploy(ctx))(t)
 	if first.ActiveArtifactID != run.Artifact.ID {

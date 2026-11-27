@@ -4,7 +4,7 @@ import {
   APIUserAbortError,
   defaultSleep,
   type Sleep,
-} from "./generated/transport.js";
+} from "./transport.js";
 import { WaitTimeoutError } from "./errors.js";
 
 export interface WaitOptions {

@@ -46,8 +46,6 @@ describe("evals", () => {
       maxTokens: 1024,
       limit: 10,
       passThreshold: 0.5,
-      maxCostUsd: 2,
-      benchmarks: [],
     };
     const plan = await grad.evals.plan(params);
     expect(plan.localScorers).toEqual(["mentions_menu"]);
@@ -66,8 +64,6 @@ describe("evals", () => {
       max_tokens: 1024,
       limit: 10,
       pass_threshold: 0.5,
-      max_cost_usd: 2,
-      benchmarks: [],
     });
     const ev = await grad.evals.create(params);
     expect(ev).toBeInstanceOf(Eval);
@@ -132,9 +128,6 @@ describe("evals", () => {
     expect(err).toBeInstanceOf(EvalFailedError);
     expect((err as EvalFailedError).eval.status).toBe("failed");
     expect((err as Error).message).toContain("judge quota");
-
-    const capped = new FakeServer().on("GET", EVAL, json({ ...running, status: "stopped_budget" }));
-    expect((await makeGrad(capped).grad.evals.wait(awaiting.id)).status).toBe("stopped_budget");
 
     const slow = new FakeServer().on("GET", EVAL, json(running));
     await expect(makeGrad(slow).grad.evals.wait(awaiting.id, { timeoutMs: 3_000 })).rejects.toBeInstanceOf(WaitTimeoutError);

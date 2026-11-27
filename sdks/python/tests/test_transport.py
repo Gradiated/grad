@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import unittest
 
-from _fakes import BASE, FakeSender, Reply, fixture_reply, json_reply, make_async_client, make_client, problem, refused, reset, timed_out
+from _fakes import BASE, Reply, fixture_reply, json_reply, make_client, problem, refused, reset, timed_out
 
 import grad
 from grad._errors import error_from_response, parse_retry_after
@@ -226,30 +225,24 @@ class RetryTests(unittest.TestCase):
             client.runs.get("x")
         self.assertEqual(len(sender.sent), 1, "only keyed requests treat 409 as in progress")
 
-    def test_unkeyed_post_not_retried_on_5xx_or_after_send(self) -> None:
-        task = {"env_name": "e", "task": {}, "model_id": "m"}
-        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [problem(503, "busy"), json_reply({"id": "t"}, 202)]})
+    def test_unkeyed_post_retried_only_on_429_and_before_sending(self) -> None:
+        # Every public POST carries a key; the rule still guards raw transport calls.
+        def post(client: grad.Grad) -> object:
+            return client._transport.request("POST", "/v1/raw", json_body={})
+
+        client, sender, _ = make_client({"POST /v1/raw": [problem(503, "busy"), json_reply({"id": "t"})]})
         with self.assertRaises(grad.ServerError):
-            client._internal.dispatch_env_task(task)
+            post(client)
         self.assertEqual(len(sender.sent), 1)
         self.assertIsNone(sender.sent[0].header("Idempotency-Key"))
-        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [reset("receive"), json_reply({"id": "t"}, 202)]})
-        with self.assertRaises(grad.APIConnectionError):
-            client._internal.dispatch_env_task(task)
-        self.assertEqual(len(sender.sent), 1, "an unkeyed POST that may have been processed is never replayed")
-
-    def test_unkeyed_post_retried_on_429_connect_failure_and_stale_keepalive(self) -> None:
-        task = {"env_name": "e", "task": {}, "model_id": "m"}
-        ok = json_reply({"id": "t"}, 202)
-        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [problem(429, "slow"), refused(), ok]})
-        self.assertEqual(client._internal.dispatch_env_task(task), {"id": "t"})
+        for failure in (reset("receive"), reset("send")):
+            client, sender, _ = make_client({"POST /v1/raw": [failure, json_reply({"id": "t"})]})
+            with self.assertRaises(grad.APIConnectionError):
+                post(client)
+            self.assertEqual(len(sender.sent), 1, "an unkeyed POST that may have been processed is never replayed")
+        client, sender, _ = make_client({"POST /v1/raw": [problem(429, "slow"), refused(), json_reply({"id": "t"})]})
+        self.assertEqual(post(client), {"id": "t"})
         self.assertEqual(len(sender.sent), 3)
-        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [reset("send", reused=True), ok]})
-        client._internal.dispatch_env_task(task)
-        self.assertEqual(len(sender.sent), 2)
-        client, sender, _ = make_client({"POST /v1/env-workers/tasks": [reset("send", reused=False), ok]})
-        with self.assertRaises(grad.APIConnectionError):
-            client._internal.dispatch_env_task(task)
 
     def test_connection_errors_and_timeouts(self) -> None:
         client, sender, _ = make_client({"GET /v1/models": refused()})
@@ -274,41 +267,15 @@ class RetryTests(unittest.TestCase):
 
 
 class RedirectTests(unittest.TestCase):
-    def test_cross_origin_redirect_is_refused_without_sending_credentials(self) -> None:
-        client, sender, _ = make_client({"GET /v1/runs": Reply(302, b"", {"location": "http://evil.example/v1/runs"})})
-        with self.assertRaises(grad.UnexpectedRedirectError) as ctx:
-            client.wire.list_runs()
-        self.assertEqual(len(sender.sent), 1)
-        self.assertEqual(ctx.exception.location, "http://evil.example/v1/runs")
-        self.assertIn("another origin", str(ctx.exception))
-        self.assertTrue(all("evil" not in s.url for s in sender.sent))
-
-    def test_scheme_downgrade_is_refused(self) -> None:
-        client, sender, _ = make_client({"GET /v1/runs": Reply(301, b"", {"location": "http://api.test/v1/runs"})})
-        with self.assertRaises(grad.UnexpectedRedirectError):
-            client.wire.list_runs()
-        self.assertEqual(len(sender.sent), 1)
-
-    def test_post_redirect_is_never_replayed_as_get(self) -> None:
-        for status in (301, 302, 303, 307, 308):
-            client, sender, _ = make_client({"POST /v1/runs": Reply(status, b"", {"location": "/v1/runs-elsewhere"})})
-            with self.assertRaises(grad.UnexpectedRedirectError) as ctx:
-                client.runs.create("support", name="a", recipe={"kind": "sft"})
-            self.assertEqual(sender.paths(), ["POST /v1/runs"], status)
-            self.assertIn("never replayed", str(ctx.exception))
-
-    def test_same_origin_get_redirect_is_followed(self) -> None:
-        page = {"data": [], "next_cursor": None}
-        client, sender, _ = make_client({"GET /v1/runs": Reply(307, b"", {"location": "/v1/runs/"}), "GET /v1/runs/": json_reply(page)})
-        self.assertEqual(client.wire.list_runs(), page)
-        self.assertEqual(sender.paths(), ["GET /v1/runs", "GET /v1/runs/"])
-        self.assertEqual(sender.sent[1].header("Authorization"), "Bearer grad_test_key")
-
-    def test_redirect_loop_stops(self) -> None:
-        client, sender, _ = make_client({"GET /v1/runs": Reply(302, b"", {"location": "/v1/runs"})})
-        with self.assertRaises(grad.UnexpectedRedirectError):
-            client.wire.list_runs()
-        self.assertEqual(len(sender.sent), 6)
+    def test_no_redirect_is_followed_and_credentials_stay_home(self) -> None:
+        for method, status, location in (("GET", 302, "http://evil.example/v1/runs"), ("GET", 307, "/v1/runs/"), ("POST", 303, "/elsewhere")):
+            with self.subTest(method=method, status=status):
+                client, sender, _ = make_client({f"{method} /v1/runs": Reply(status, b"", {"location": location})})
+                with self.assertRaises(grad.UnexpectedRedirectError) as ctx:
+                    client.wire.list_runs() if method == "GET" else client.runs.create("support", name="a", recipe={"kind": "sft"})
+                self.assertEqual(sender.paths(), [f"{method} /v1/runs"])
+                self.assertEqual(ctx.exception.location, location)
+                self.assertIn("never redirects", str(ctx.exception))
 
 
 class UploadTests(unittest.TestCase):
@@ -316,8 +283,7 @@ class UploadTests(unittest.TestCase):
         import io
 
         client, sender, _ = make_client({"PUT /blobs/uploads/u1": json_reply({"upload_id": "u1"})})
-        result = client._transport.upload("/blobs/uploads/u1?sig=x", io.BytesIO(b"abc"), length=3, headers={"Content-Type": "application/octet-stream"})
-        self.assertEqual(result, {"upload_id": "u1"})
+        client._transport.upload("/blobs/uploads/u1?sig=x", io.BytesIO(b"abc"), length=3, headers={"Content-Type": "application/octet-stream"})
         sent = sender.sent[0]
         self.assertIsNone(sent.header("Authorization"))
         self.assertEqual(sent.url, f"{BASE}/blobs/uploads/u1?sig=x")
@@ -331,63 +297,18 @@ class UploadTests(unittest.TestCase):
         self.assertIsNone(client._transport.upload("https://s3.example/blobs/uploads/u1", io.BytesIO(b"abc"), length=3))
         self.assertEqual([s.body for s in sender.sent], [b"abc", b"abc"])
 
-    def test_upload_non_json_reply(self) -> None:
+    def test_upload_failure_is_typed(self) -> None:
         import io
 
-        client, _, _ = make_client({"PUT /x": Reply(200, b"not json", {"content-type": "application/json"})})
-        self.assertIsNone(client._transport.upload("/x", io.BytesIO(b"a"), length=1))
-
-
-class AsyncTransportTests(unittest.TestCase):
-    def test_async_retries_redirects_and_errors(self) -> None:
-        async def main() -> None:
-            client, sender, clock = make_async_client({"GET /v1/models": [problem(503, "busy"), json_reply({"data": []})]})
-            self.assertEqual(await client.models.list(), [])
-            self.assertEqual(clock.sleeps, [0.375])
-            client, sender, _ = make_async_client({"GET /v1/runs": Reply(302, b"", {"location": "https://evil.example/"})})
-            with self.assertRaises(grad.UnexpectedRedirectError):
-                await client.wire.list_runs()
-            client, sender, _ = make_async_client({"GET /v1/runs": Reply(302, b"", {"location": "/v1/runs/"}), "GET /v1/runs/": json_reply({"data": []})})
-            self.assertEqual(await client.wire.list_runs(), {"data": []})
-            client, sender, _ = make_async_client({"POST /v1/runs": reset("receive")})
-            with self.assertRaises(grad.APIConnectionError):
-                await client.wire.create_run({"dataset": "d", "name": "n", "recipe": {"kind": "sft"}})
-            self.assertEqual(len(sender.sent), 3)
-            self.assertEqual(len({s.header("Idempotency-Key") for s in sender.sent}), 1)
-            client, sender, _ = make_async_client({"POST /v1/env-workers/tasks": reset("receive")})
-            with self.assertRaises(grad.APIConnectionError):
-                await client._internal.dispatch_env_task({"env_name": "e", "task": {}, "model_id": "m"})
-            self.assertEqual(len(sender.sent), 1)
-            client, sender, _ = make_async_client({"GET /v1/runs/x": problem(404, "run_not_found")})
-            with self.assertRaises(grad.NotFoundError):
-                await client.runs.get("x")
-            client, _, _ = make_async_client({"GET /v1/models": Reply(200, b"<html>", {"content-type": "application/json"})})
-            with self.assertRaises(grad.InvalidResponseError):
-                await client.wire.list_models()
-            client, _, _ = make_async_client({"GET /v1/models": Reply(200, b"txt", {"content-type": "text/plain"})})
-            self.assertEqual(await client.wire.list_models(), b"txt")
-            client, _, _ = make_async_client({"GET /v1/models": Reply(200, chunks=[b"{"], error=ConnectionResetError())})
-            with self.assertRaises(grad.APIConnectionError):
-                await client.wire.list_models()
-            client, sender, _ = make_async_client({"PUT /u": [problem(500, "x"), json_reply({"ok": True})]})
-            import io
-
-            self.assertEqual(await client._transport.upload("/u", io.BytesIO(b"z"), length=1), {"ok": True})
-            client, _, _ = make_async_client({"PUT /u": Reply(200, b"nope", {"content-type": "application/json"})})
-            self.assertIsNone(await client._transport.upload("/u", io.BytesIO(b"z"), length=1))
-            client, _, _ = make_async_client({"GET /v1/models": refused()}, max_retries=0)
-            with self.assertRaises(grad.APIConnectionError):
-                await client.models.list()
-            await client.aclose()
-
-        asyncio.run(main())
+        client, _, _ = make_client({"PUT /x": problem(403, "signature_expired")})
+        with self.assertRaises(grad.PermissionDeniedError):
+            client._transport.upload("/x", io.BytesIO(b"a"), length=1)
 
 
 class SenderContractTests(unittest.TestCase):
     def test_fake_sender_reports_unknown_routes(self) -> None:
+        client, _, _ = make_client({})
         with self.assertRaises(AssertionError):
-            FakeSender().send.__call__  # noqa: B018
-            client, _, _ = make_client({})
             client.models.list()
 
     def test_json_body_rejects_nan(self) -> None:

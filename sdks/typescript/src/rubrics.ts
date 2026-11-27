@@ -192,6 +192,7 @@ export const toRubric = (input: RubricInput): { wire: EvalRubricItem[]; local: M
     const rubric = new Rubric([input]);
     return { wire: rubric.toWire(), local: rubric.localScorers() };
   }
+  if (!Array.isArray(input)) throw new GradUsageError("A rubric is a Rubric, a Scorer or Judge, or a list of them.", "invalid_rubric");
   if (input.every((item) => item instanceof Scorer || item instanceof Judge)) {
     const rubric = new Rubric(input as RubricItem[]);
     return { wire: rubric.toWire(), local: rubric.localScorers() };

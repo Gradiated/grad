@@ -1,5 +1,5 @@
 import type { ApiClient } from "./generated/client.js";
-import type { RawResponse, RequestOptions, TransportLike } from "./generated/transport.js";
+import type { RawResponse, RequestOptions, TransportLike } from "./transport.js";
 import type { PollContext } from "./polling.js";
 
 /** What every resource needs: the typed API, polling clock, and raw uploads. */

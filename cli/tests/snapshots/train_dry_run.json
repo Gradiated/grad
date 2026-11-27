@@ -25,6 +25,8 @@
       "reduction": "per_example",
       "select": "best",
       "checkpoint_every_steps": 50,
+      "eval_every_steps": 0,
+      "optimizer": {},
       "checkpoint_ttl_days": 30,
       "split": {
         "strategy": "by_session",
@@ -33,6 +35,8 @@
         "train_records": 4097,
         "eval_records": 723
       },
+      "label_eval_id": null,
+      "base_artifact": null,
       "recipe_params": {
         "models": [
           "qwen/qwen3-8b",
@@ -48,6 +52,7 @@
     "estimated_cost_usd": 0.165,
     "price_per_million_tokens": 0.15,
     "trained_token_fraction": 0.62,
+    "labeling": null,
     "warnings": [
       "3 records have no scores"
     ]

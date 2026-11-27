@@ -8,7 +8,7 @@ import type {
   RecordFeedbackResponse,
   RouteResponse,
 } from "../generated/models.js";
-import { GradError, type RawResponse, type RequestOptions, type StreamOptions } from "../generated/transport.js";
+import { GradError, type RawResponse, type RequestOptions, type StreamOptions } from "../transport.js";
 import { isNodeRuntime, type Core } from "../core.js";
 import { GradUsageError } from "../errors.js";
 import { Paginator } from "../pagination.js";

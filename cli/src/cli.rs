@@ -12,7 +12,7 @@ Exit codes:
   4    not found (404)
   5    conflict or validation error (409/422)
   6    capability unavailable on this server (deploy_unavailable, inference_unavailable)
-  7    run, eval or import finished unsuccessfully (failed, cancelled, stopped_budget)
+  7    run, eval or import finished unsuccessfully (failed, cancelled; runs also stopped_budget)
   130  interrupted (Ctrl-C); a started run keeps going on the server";
 
 const MAIN_AFTER: &str = "\
@@ -138,7 +138,7 @@ Imports run on a trainer worker; the command waits for it unless --no-wait.")]
         action: ImportsCmd,
     },
 
-    /// Preview chat-template rendering and loss masks (alias of `datasets render`)
+    /// Preview chat-template rendering and loss masks
     Render(RenderArgs),
 
     /// Plan (--dry-run) or start a training run
@@ -172,9 +172,8 @@ Examples:
   grad eval plan --models a,b --dataset holdout
   grad eval failures eval_01J... --model sql-agent@latest
 
---rubric takes a YAML/JSON list of rubric items (regex, validator, judge),
-or a Python file defining `rubric = Rubric([...])`, which runs through the
-Python SDK because code scorers execute on your machine."
+--rubric takes a YAML/JSON list of rubric items (regex, validator, judge).
+Code scorers run in your process: use the Python SDK for those."
     )]
     Eval(EvalTop),
 
@@ -201,12 +200,6 @@ on vLLM or SGLang instead.")]
         action: DeploymentsCmd,
     },
 
-    /// Roll a deployment back to its previous artifact
-    Rollback {
-        /// Deployment name
-        name: String,
-    },
-
     /// Ask a deployed router which model should answer a prompt
     Route(RouteArgs),
 
@@ -226,30 +219,10 @@ on vLLM or SGLang instead.")]
         action: KeysCmd,
     },
 
-    /// Serve a Python Environment to the server from this machine (outbound only)
-    Env {
-        #[command(subcommand)]
-        action: EnvCmd,
-    },
-
     /// Run a local grad stack with Docker Compose
     Local {
         #[command(subcommand)]
         action: LocalCmd,
-    },
-
-    /// Not available in v0
-    #[command(hide = true)]
-    Secrets {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
-
-    /// Not available in v0
-    #[command(hide = true)]
-    Sources {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
     },
 }
 
@@ -276,9 +249,6 @@ pub enum ConfigCmd {
 pub enum ModelsCmd {
     /// List the server's model catalog
     List {
-        /// Only trainable models (every catalog model today; kept for scripts)
-        #[arg(long)]
-        training: bool,
         /// Only models that support this recipe
         #[arg(long, value_name = "RECIPE")]
         recipe: Option<String>,
@@ -323,9 +293,7 @@ pub enum DatasetsCmd {
         #[command(flatten)]
         page: PageArgs,
     },
-    /// Preview chat-template rendering and loss masks
-    Render(RenderArgs),
-    /// Import into a dataset from Hugging Face or a local file
+    /// Import a Hugging Face dataset (local files: `grad import`)
     Import {
         #[command(subcommand)]
         source: DatasetImportCmd,
@@ -355,23 +323,10 @@ Example:
         revision: Option<String>,
         /// Import at most this many rows
         #[arg(long)]
-        limit: Option<u64>,
+        limit: Option<i64>,
         /// Map a field to a column, e.g. --column prompt=question (repeatable)
         #[arg(long = "column", value_name = "FIELD=COLUMN")]
         columns: Vec<String>,
-        #[command(flatten)]
-        wait: ImportWaitArgs,
-    },
-    /// Upload and import a local file (same as `grad import`)
-    File {
-        /// File to import
-        path: PathBuf,
-        /// Target dataset name
-        #[arg(long)]
-        name: String,
-        /// File format or parser (see `grad import --help`)
-        #[arg(long)]
-        format: Option<String>,
         #[command(flatten)]
         wait: ImportWaitArgs,
     },
@@ -437,11 +392,11 @@ pub struct RenderArgs {
     #[arg(long, value_parser = ["last", "all_assistant"])]
     pub train_on: Option<String>,
     /// Thinking mode
-    #[arg(long, value_parser = ["auto", "true", "false"])]
+    #[arg(long, value_parser = ["auto", "on", "off"])]
     pub thinking: Option<String>,
     /// Records to render (1-20)
     #[arg(long, default_value_t = 3)]
-    pub limit: u32,
+    pub limit: i64,
 }
 
 #[derive(Args, Debug, Default)]
@@ -483,7 +438,7 @@ pub struct TrainArgs {
     #[arg(long, value_parser = ["last", "all_assistant"])]
     pub train_on: Option<String>,
     /// Thinking mode for the chat template
-    #[arg(long, value_parser = ["auto", "true", "false"])]
+    #[arg(long, value_parser = ["auto", "on", "off"])]
     pub thinking: Option<String>,
     /// DPO beta
     #[arg(long)]
@@ -506,6 +461,9 @@ pub struct TrainArgs {
     /// Stop the run (status stopped_budget) once it has cost this much
     #[arg(long, value_name = "USD")]
     pub max_cost_usd: Option<f64>,
+    /// Idempotency-Key: rerunning with the same key returns the run it created
+    #[arg(long, value_name = "KEY")]
+    pub idempotency_key: Option<String>,
     /// Set any recipe parameter, e.g. --set warmup=0.05 (repeatable)
     #[arg(long = "set", value_name = "KEY=VALUE")]
     pub set: Vec<String>,
@@ -548,9 +506,6 @@ pub enum RunsCmd {
         /// Only steps after this one
         #[arg(long)]
         after_step: Option<i64>,
-        /// Print sampled completions (not available in v0)
-        #[arg(long, value_name = "N")]
-        samples: Option<u32>,
     },
     /// Wait for a run to finish
     Wait {
@@ -612,8 +567,8 @@ pub struct EvalRunArgs {
     pub dataset: Option<String>,
     /// Pin a dataset version
     #[arg(long)]
-    pub dataset_version: Option<u64>,
-    /// Rubric file: YAML/JSON list of items, or a Python file defining `rubric`
+    pub dataset_version: Option<i64>,
+    /// Rubric file: YAML/JSON list of items (regex, validator, judge)
     #[arg(long, value_name = "FILE")]
     pub rubric: Option<PathBuf>,
     /// Model to report deltas against
@@ -621,22 +576,19 @@ pub struct EvalRunArgs {
     pub baseline: Option<String>,
     /// Samples per task
     #[arg(long)]
-    pub samples: Option<u32>,
+    pub samples: Option<i64>,
     /// Sampling temperature
     #[arg(long)]
     pub temperature: Option<f64>,
     /// Max new tokens per sample
     #[arg(long)]
-    pub max_tokens: Option<u32>,
+    pub max_tokens: Option<i64>,
     /// Evaluate at most this many tasks
     #[arg(long)]
-    pub limit: Option<u32>,
+    pub limit: Option<i64>,
     /// Score at or above which a task passes
     #[arg(long)]
     pub pass_threshold: Option<f64>,
-    /// Cost cap in USD
-    #[arg(long, value_name = "USD")]
-    pub max_cost_usd: Option<f64>,
     /// Only estimate calls and cost
     #[arg(long)]
     pub dry_run: bool,
@@ -646,9 +598,9 @@ pub struct EvalRunArgs {
     /// Give up waiting after this many seconds
     #[arg(long, value_name = "SECS", default_value_t = 86_400)]
     pub timeout: u64,
-    /// Python interpreter for .py rubrics
-    #[arg(long, env = "GRAD_PYTHON", default_value = "python3")]
-    pub python: String,
+    /// Idempotency-Key: rerunning with the same key returns the eval it created
+    #[arg(long, value_name = "KEY")]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -755,6 +707,9 @@ pub struct DeployArgs {
     /// Fraction of router traffic explored (0.0-0.5)
     #[arg(long)]
     pub explore_rate: Option<f64>,
+    /// Idempotency-Key: rerunning with the same key replays the first deploy
+    #[arg(long, value_name = "KEY")]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -810,7 +765,7 @@ Examples:
   grad keys create --name inference-cd --scopes artifacts:read
 
 Scopes: admin, datasets:read, datasets:write, runs:read, runs:write,
-artifacts:read, artifacts:write, deployments:write, feedback:write, env:serve")]
+artifacts:read, artifacts:write, deployments:write, feedback:write")]
     Create {
         /// Key name
         #[arg(long)]
@@ -823,56 +778,6 @@ artifacts:read, artifacts:write, deployments:write, feedback:write, env:serve")]
     Revoke {
         /// Key id
         id: String,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum EnvCmd {
-    /// Run rollout workers for a Python Environment (needs the Python SDK)
-    #[command(after_help = "\
-Example:
-  # my_env.py defines `env = AppComposeEnv(rubric=...)` (an instance, a class or a factory)
-  grad env serve my_env:env --name support-app --concurrency 32 \\
-    --policy-url http://localhost:8000/v1        # your vLLM/SGLang serving the training model
-  grad env serve my_env:env --name support-app --policy my_agent:respond")]
-    Serve {
-        /// MODULE:ATTRIBUTE of the Environment (instance, class or factory)
-        target: String,
-        /// Environment name runs and evals refer to
-        #[arg(long)]
-        name: String,
-        /// Tasks handled at once
-        #[arg(long, default_value_t = 4)]
-        concurrency: u32,
-        /// Exit after this many tasks
-        #[arg(long)]
-        max_tasks: Option<u32>,
-        /// Long-poll wait per claim, in milliseconds
-        #[arg(long, default_value_t = 5000)]
-        wait_ms: u32,
-        /// Worker id (default: hostname and pid)
-        #[arg(long)]
-        worker_id: Option<String>,
-        /// MODULE:ATTRIBUTE of the policy producing the model's turns:
-        /// policy(messages, *, tools, model, task) -> str | message (a class is instantiated)
-        #[arg(long, value_name = "MODULE:ATTRIBUTE", conflicts_with = "policy_url")]
-        policy: Option<String>,
-        /// OpenAI-compatible base URL (e.g. your vLLM/SGLang `.../v1`) whose
-        /// /chat/completions produces the model's turns; key from GRAD_POLICY_API_KEY
-        #[arg(long, value_name = "URL")]
-        policy_url: Option<String>,
-        /// Model to call at --policy-url (default: the model each task names)
-        #[arg(long, requires = "policy_url")]
-        policy_model: Option<String>,
-        /// Python interpreter with the grad SDK installed
-        #[arg(long, env = "GRAD_PYTHON", default_value = "python3")]
-        python: String,
-    },
-    /// Check a verifiers Hub package (not available in v0)
-    #[command(hide = true)]
-    Check {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
     },
 }
 

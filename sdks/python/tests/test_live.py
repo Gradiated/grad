@@ -11,7 +11,6 @@ python3 -m unittest discover -s sdks/python/tests -p test_live.py``.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import io
 import json
@@ -27,7 +26,7 @@ from unittest import mock
 from _stack import Stack, live_skip_reason
 
 import grad
-from grad import AsyncGrad, Grad, Rubric, Scorer, validators
+from grad import Grad, Rubric, Scorer, validators
 from grad.recipes import RouterRecipe, SFTRecipe
 
 LLM = "test/tiny-qwen3"
@@ -118,15 +117,14 @@ class SelfHostedLiveTests(_LiveCase):
         cwd = os.getcwd()
         os.chdir(self.tmp)
         self.addCleanup(os.chdir, cwd)
-        outputs = []
-        for block in blocks:
-            code = block.replace('SFTRecipe(model="qwen/qwen3-8b")', f'SFTRecipe(model="{LLM}")').replace("SFTRecipe()", f'SFTRecipe(model="{LLM}")')
-            with contextlib.redirect_stdout(io.StringIO()) as out:
-                exec(compile(code, "README.md", "exec"), {"__name__": "readme"})
-            outputs.append(out.getvalue())
-        self.assertIn("Estimate", outputs[0])
-        self.assertIn("completed sql-helper@", outputs[0])
-        self.assertRegex(outputs[1], r"^1 ")
+        code = blocks[0].replace('SFTRecipe(model="qwen/qwen3-8b")', f'SFTRecipe(model="{LLM}")')
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            exec(compile(code, "README.md", "exec"), {"__name__": "readme"})
+        self.assertIn("Estimate", out.getvalue())
+        self.assertIn("completed sql-helper@", out.getvalue())
+        # The continued-training block needs a PEFT artifact (the torch worker): it is
+        # exercised by CloudTorchLiveTests.test_continued_training_and_caller_idempotency_key.
+        compile(blocks[1], "README.md", "exec")
         self.assertTrue((self.tmp / "sql-helper-bundle.grad.tar.gz").is_file())
 
     def test_import_file_render_and_records(self) -> None:
@@ -212,48 +210,6 @@ class SelfHostedLiveTests(_LiveCase):
         with self.assertRaises(grad.ConflictError):
             Grad().datasets.create("idempotent-create")  # a new logical call gets a new key
 
-    def test_async_parity(self) -> None:
-        async def main() -> None:
-            async with AsyncGrad() as client:
-                ds = await client.datasets.push("async-sql", SQL_RECORDS)
-                self.assertEqual(ds.record_count, 2)
-                names = [d.name async for d in client.datasets.list(limit=1)]
-                self.assertIn("async-sql", names)
-                plan = await client.runs.plan(dataset=ds, name="async-sft", recipe=SFTRecipe(model=LLM))
-                self.assertIn("async-sql", str(plan))
-                run = await (await client.runs.create(dataset=ds, name="async-sft", recipe=SFTRecipe(model=LLM), max_cost_usd=5)).wait(timeout=180)
-                self.assertEqual(run.status, "completed")
-                self.assertTrue([m async for m in client.runs.metrics(run.id)])
-                with self.assertRaises(grad.DeployUnavailableError):
-                    await run.deploy()
-
-        asyncio.run(main())
-
-    def test_serve_environment(self) -> None:
-        # docs: training/environments.mdx, with a user-supplied policy (no model fabricated)
-        from grad.environments import Action, Environment, Observation, Task, serve_environment
-
-        class Echo(Environment[dict]):
-            def setup(self, task: Task, rollout_id: str) -> dict:
-                return {}
-
-            def step(self, handle: dict, action: Action) -> Observation:
-                return Observation(done=True)
-
-            def evaluate(self, handle: dict, trajectory: Any) -> dict[str, float]:
-                return {"answered": 1.0 if trajectory.text else 0.0}
-
-        def policy(messages: list[dict[str, Any]], **_: Any) -> str:
-            return f"you said: {messages[-1]['content']}"
-
-        client = Grad()
-        task = client.environments.dispatch("support-app", {"prompt": "hello"}, model_id=LLM, timeout_s=60)
-        served = serve_environment(Echo, name="support-app", policy=policy, client=client, max_tasks=1, handle_signals=False, wait_ms=500)
-        self.assertEqual(served, 1)
-        result = client.environments.get_task(task["id"])
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["result"]["score"], 1.0)
-
 
 class CloudReferenceLiveTests(_LiveCase):
     """Cloud mode (fake Cloud API) with the reference worker: auth, billing-backed runs and feedback."""
@@ -330,6 +286,17 @@ class CloudTorchLiveTests(_LiveCase):
         self.assertEqual(rolled.active_artifact_id, first)
         status = rolled.status_summary()
         self.assertGreaterEqual(status.feedback_count, 1)
+
+    def test_continued_training_and_caller_idempotency_key(self) -> None:
+        # docs: recipes/dpo.mdx "start from an SFT artifact"; api-reference Idempotency-Key
+        client = Grad()
+        ds = client.datasets.push("sql-sft", SQL_RECORDS)
+        sft = client.runs.create(dataset=ds, name="sql-helper", recipe=SFTRecipe(model=LLM), idempotency_key="live-sft-1").wait(timeout=600)
+        self.assertEqual(sft.status, "completed")
+        again = client.runs.create(dataset=ds, name="sql-helper", recipe=SFTRecipe(model=LLM), idempotency_key="live-sft-1")
+        self.assertEqual(again.id, sft.id, "the same key replays the first create instead of starting a run")
+        plan = client.runs.plan(dataset=ds, name="sql-helper-2", recipe=SFTRecipe(model=sft.artifact))
+        self.assertEqual(plan.resolved_config["base_artifact"]["id"], sft.artifact.id)
 
 
 if __name__ == "__main__":

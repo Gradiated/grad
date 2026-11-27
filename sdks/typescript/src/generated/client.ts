@@ -10,7 +10,7 @@ import {
   type SSEOptions,
   type StreamOptions,
   type TransportLike,
-} from "./transport.js";
+} from "../transport.js";
 import type {
   ApiKey,
   Artifact,

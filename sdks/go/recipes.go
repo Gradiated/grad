@@ -120,55 +120,20 @@ func (c Context) apply(spec *RecipeSpec) error {
 	return nil
 }
 
-type common struct {
-	model             string
-	adapter           Adapter
-	lr                any
-	lrScale           float64
-	batchSize         int
-	epochs            int
-	schedule          string
-	warmup            float64
-	trainOn           string
-	thinking          string
-	preserveThinking  bool
-	reduction         string
-	selectCheckpoint  string
-	checkpointTTLDays int
+// AdamW sets the optimizer. Zero fields take the defaults (betas 0.9/0.95,
+// weight decay 0, grad clip 1); LR, when set, is the recipe's learning rate.
+type AdamW struct {
+	LR          float64
+	Betas       [2]float64
+	WeightDecay float64
+	GradClip    float64
 }
 
-func (c common) spec(kind generated.RecipeKind) RecipeSpec {
-	s := RecipeSpec{Kind: kind, Model: optString(c.model), LR: c.lr, LRScale: optFloat(c.lrScale), BatchSize: optInt(c.batchSize),
-		Epochs: optInt(c.epochs), Warmup: optFloat(c.warmup), CheckpointTTLDays: optInt(c.checkpointTTLDays)}
-	if c.adapter != nil {
-		a := c.adapter.adapterSpec()
-		s.Adapter = &a
-	}
-	if c.schedule != "" {
-		s.Schedule = ptr(generated.RecipeSpecSchedule(c.schedule))
-	}
-	if c.trainOn != "" {
-		s.TrainOn = ptr(generated.RecipeSpecTrainOn(c.trainOn))
-	}
-	if c.thinking != "" {
-		s.Thinking = ptr(generated.RecipeSpecThinking(c.thinking))
-	}
-	if c.preserveThinking {
-		s.PreserveThinking = ptr(true)
-	}
-	if c.reduction != "" {
-		s.Reduction = ptr(generated.RecipeSpecReduction(c.reduction))
-	}
-	if c.selectCheckpoint != "" {
-		s.Select = ptr(generated.RecipeSpecSelect(c.selectCheckpoint))
-	}
-	return s
-}
-
-// SFTRecipe is supervised fine-tuning on chat records.
-// Zero-valued fields are left to the server defaults.
-type SFTRecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
+// Common holds the settings every recipe accepts. Zero values are left unset,
+// so the server applies the documented defaults (shown by Runs.Plan).
+type Common struct {
+	// Model is a catalog model id, or an artifact reference ("name@version")
+	// to keep training its LoRA adapter (SFT and DPO); empty means the recipe default.
 	Model string
 	// Adapter defaults to LoRA{Rank: 32}.
 	Adapter Adapter
@@ -176,6 +141,7 @@ type SFTRecipe struct {
 	LR any
 	// LRScale multiplies the resolved learning rate (default 1).
 	LRScale   float64
+	Optimizer *AdamW
 	BatchSize int
 	Epochs    int
 	// Schedule is linear (default), cosine or constant.
@@ -192,336 +158,208 @@ type SFTRecipe struct {
 	Select string
 	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
 	CheckpointTTLDays int
+	// EvalEvery is optimizer steps between held-out evals (0: every 10% of steps).
+	EvalEvery int
+}
+
+func (c Common) spec(kind generated.RecipeKind) (RecipeSpec, error) {
+	s := RecipeSpec{Kind: kind, Model: optString(c.Model), LR: c.LR, LRScale: optFloat(c.LRScale), BatchSize: optInt(c.BatchSize),
+		Epochs: optInt(c.Epochs), Warmup: optFloat(c.Warmup), CheckpointTTLDays: optInt(c.CheckpointTTLDays)}
+	if c.EvalEvery > 0 {
+		s.EvalEvery = c.EvalEvery
+	}
+	if c.Adapter != nil {
+		a := c.Adapter.adapterSpec()
+		s.Adapter = &a
+	}
+	if o := c.Optimizer; o != nil {
+		if o.LR != 0 {
+			if c.LR != nil && c.LR != o.LR {
+				return s, fmt.Errorf("grad: LR %v conflicts with AdamW.LR %v", c.LR, o.LR)
+			}
+			s.LR = o.LR
+		}
+		betas := o.Betas
+		if betas == [2]float64{} {
+			betas = [2]float64{0.9, 0.95}
+		}
+		clip := o.GradClip
+		if clip == 0 {
+			clip = 1
+		}
+		s.Optimizer = &generated.OptimizerSpec{Kind: ptr(generated.OptimizerSpecKindAdamw), Betas: []any{betas[0], betas[1]},
+			WeightDecay: ptr(o.WeightDecay), GradClip: ptr(clip)}
+	}
+	if c.Schedule != "" {
+		s.Schedule = ptr(generated.RecipeSpecSchedule(c.Schedule))
+	}
+	if c.TrainOn != "" {
+		s.TrainOn = ptr(generated.RecipeSpecTrainOn(c.TrainOn))
+	}
+	if c.Thinking != "" {
+		s.Thinking = ptr(generated.RecipeSpecThinking(c.Thinking))
+	}
+	if c.PreserveThinking {
+		s.PreserveThinking = ptr(true)
+	}
+	if c.Reduction != "" {
+		s.Reduction = ptr(generated.RecipeSpecReduction(c.Reduction))
+	}
+	if c.Select != "" {
+		s.Select = ptr(generated.RecipeSpecSelect(c.Select))
+	}
+	return s, nil
+}
+
+// SFTRecipe is supervised fine-tuning on chat records.
+type SFTRecipe struct {
+	Common
 	// MergeOnExport exports a merged checkpoint instead of a LoRA adapter.
 	MergeOnExport bool
 }
 
 // RecipeSpec implements Recipe.
 func (r SFTRecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindSft)
-	if r.MergeOnExport {
-		lora := LoRA{MergeOnExport: true}
-		if l, ok := r.Adapter.(LoRA); ok {
-			lora = l
-			lora.MergeOnExport = true
-		} else if r.Adapter != nil {
-			return s, fmt.Errorf("grad: MergeOnExport needs a LoRA adapter, got %T", r.Adapter)
-		}
-		a := lora.adapterSpec()
-		s.Adapter = &a
+	s, err := r.spec(generated.RecipeKindSft)
+	if err != nil || !r.MergeOnExport {
+		return s, err
 	}
+	lora, ok := r.Adapter.(LoRA)
+	if !ok && r.Adapter != nil {
+		return s, fmt.Errorf("grad: MergeOnExport needs a LoRA adapter, got %T", r.Adapter)
+	}
+	lora.MergeOnExport = true
+	a := lora.adapterSpec()
+	s.Adapter = &a
 	return s, nil
 }
 
-// DPORecipe is direct preference optimization on chosen/rejected pairs.
-// Zero-valued fields are left to the server defaults.
+// DPORecipe is direct preference optimization on chosen/rejected pairs
+// (set Model to an SFT run's artifact to continue it).
 type DPORecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
+	Common
 	// Beta is the DPO loss beta (default 0.1).
 	Beta float64
 }
 
 // RecipeSpec implements Recipe.
 func (r DPORecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindDpo)
+	s, err := r.spec(generated.RecipeKindDpo)
 	s.Beta = optFloat(r.Beta)
-	return s, nil
+	return s, err
 }
 
-// RouterRecipe trains a router that picks the cheapest model meeting the quality bar; scores come from the records (scores, metadata.model).
-// Zero-valued fields are left to the server defaults.
+// RouterRecipe trains a router that picks the cheapest model meeting the quality bar.
 type RouterRecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
+	Common
 	// Models are the candidate models (default: those found in the records).
 	Models []string
 	// MaxQualityDrop is how much quality the router may trade for cost (default 0.02).
 	MaxQualityDrop float64
+	// Rubric is a score name on the records (string), or a Judge, validator or
+	// Rubric of them: the server then labels the prompts with an eval first.
+	Rubric any
+	// Pricing is USD per request for each candidate.
+	Pricing map[string]float64
+	// Fallback gets every request the router does not offload (default: the best candidate).
+	Fallback string
 }
 
 // RecipeSpec implements Recipe.
 func (r RouterRecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindRouter)
+	s, err := r.spec(generated.RecipeKindRouter)
+	if err != nil {
+		return s, err
+	}
 	s.Models = r.Models
 	s.MaxQualityDrop = optFloat(r.MaxQualityDrop)
+	s.Pricing = r.Pricing
+	s.Fallback = optString(r.Fallback)
+	switch rubric := r.Rubric.(type) {
+	case nil:
+	case string:
+		s.Rubric = rubric
+	default:
+		items, ok := rubric.(Rubric)
+		if !ok {
+			item, isItem := rubric.(RubricItem)
+			if !isItem {
+				return s, fmt.Errorf("grad: RouterRecipe.Rubric must be a score name, a RubricItem or a Rubric, got %T", r.Rubric)
+			}
+			items = Rubric{item}
+		}
+		wire, local, err := items.wire()
+		if err != nil {
+			return s, err
+		}
+		if len(local) > 0 {
+			return s, fmt.Errorf("grad: RouterRecipe.Rubric cannot run local scorer functions (that needs a sandbox, post-v0); use a Judge or validators")
+		}
+		if len(r.Models) == 0 {
+			return s, fmt.Errorf("grad: RouterRecipe.Rubric replays your prompts against the candidates: set Models")
+		}
+		s.Rubric = wire
+	}
 	return s, nil
 }
 
 // DecisionModelRecipe trains a decision model for choice, yes/no and score questions.
-// Zero-valued fields are left to the server defaults.
 type DecisionModelRecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
+	Common
 }
 
 // RecipeSpec implements Recipe.
 func (r DecisionModelRecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindDecision)
-	return s, nil
+	return r.spec(generated.RecipeKindDecision)
 }
 
 // CartridgeRecipe compresses a long context into a trained KV prefix.
-// Zero-valued fields are left to the server defaults.
 type CartridgeRecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
+	Common
 	// Context is required: ContextFromText, ContextFromFile or ContextFromURI.
 	Context Context
 	// NumTokens is the prefix size (default 256).
 	NumTokens int
+	// Teacher reads the full context (default: the base model).
+	Teacher string
+	// TopK is the top-k KL distillation loss's k (default 20).
+	TopK int
+	// MaxNewTokens is the teacher's answer length per prompt (default 256).
+	MaxNewTokens int
 }
 
 // RecipeSpec implements Recipe.
 func (r CartridgeRecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindCartridge)
-	s.NumTokens = optInt(r.NumTokens)
-	if err := r.Context.apply(&s); err != nil {
+	s, err := r.spec(generated.RecipeKindCartridge)
+	if err != nil {
 		return s, err
 	}
-	return s, nil
+	s.NumTokens = optInt(r.NumTokens)
+	s.Teacher = optString(r.Teacher)
+	s.MaxNewTokens = optInt(r.MaxNewTokens)
+	if r.TopK > 0 {
+		s.Loss = &generated.LossSpec{Kind: generated.LossSpecKindTopKKLDistill, TopK: ptr(r.TopK)}
+	}
+	return s, r.Context.apply(&s)
 }
 
 // EmbeddingRecipe fine-tunes an encoder on query/positive/negatives records.
-// Zero-valued fields are left to the server defaults.
 type EmbeddingRecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
+	Common
 	// Temp is the InfoNCE temperature (default 0.05).
 	Temp float64
+	// Pool is mean (default) or cls.
+	Pool string
 }
 
 // RecipeSpec implements Recipe.
 func (r EmbeddingRecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindEmbedding)
+	s, err := r.spec(generated.RecipeKindEmbedding)
 	s.Temp = optFloat(r.Temp)
-	return s, nil
-}
-
-// DistillRecipe distills a teacher model into the student.
-// Zero-valued fields are left to the server defaults.
-type DistillRecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
-	// Teacher is required.
-	Teacher string
-}
-
-// RecipeSpec implements Recipe.
-func (r DistillRecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindDistill)
-	if r.Teacher == "" {
-		return s, fmt.Errorf("grad: DistillRecipe needs a Teacher")
+	if r.Pool != "" {
+		s.Pool = &generated.PoolingSpec{Kind: generated.PoolingSpecKind(r.Pool)}
 	}
-	s.Teacher = &r.Teacher
-	return s, nil
-}
-
-// RewardModelRecipe trains a reward model on preference pairs.
-// Zero-valued fields are left to the server defaults.
-type RewardModelRecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
-}
-
-// RecipeSpec implements Recipe.
-func (r RewardModelRecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindReward)
-	return s, nil
-}
-
-// GRPORecipe is group-relative policy optimization against a served environment.
-// Zero-valued fields are left to the server defaults.
-type GRPORecipe struct {
-	// Model is a catalog model id or an artifact reference ("name@version"); empty means the recipe default.
-	Model string
-	// Adapter defaults to LoRA{Rank: 32}.
-	Adapter Adapter
-	// LR is "auto" (default) or a float64 learning rate.
-	LR any
-	// LRScale multiplies the resolved learning rate (default 1).
-	LRScale   float64
-	BatchSize int
-	Epochs    int
-	// Schedule is linear (default), cosine or constant.
-	Schedule string
-	Warmup   float64
-	// TrainOn is last (default) or all_assistant.
-	TrainOn string
-	// Thinking is auto (default), on or off.
-	Thinking         string
-	PreserveThinking bool
-	// Reduction is per_example (default) or per_token.
-	Reduction string
-	// Select is best (default) or last.
-	Select string
-	// CheckpointTTLDays keeps intermediate checkpoints this long (default 30).
-	CheckpointTTLDays int
-	EnvName           string
-	// GroupSize is attempts per prompt (default 8).
-	GroupSize int
-}
-
-// RecipeSpec implements Recipe.
-func (r GRPORecipe) RecipeSpec() (RecipeSpec, error) {
-	s := common{r.Model, r.Adapter, r.LR, r.LRScale, r.BatchSize, r.Epochs, r.Schedule, r.Warmup, r.TrainOn, r.Thinking, r.PreserveThinking, r.Reduction, r.Select, r.CheckpointTTLDays}.spec(generated.RecipeKindGrpo)
-	s.EnvName = optString(r.EnvName)
-	s.GroupSize = optInt(r.GroupSize)
-	return s, nil
+	return s, err
 }
 
 // RawRecipe sends a wire RecipeSpec unchanged.

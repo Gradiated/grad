@@ -1,4 +1,4 @@
-import { APIUserAbortError, type RequestOptions } from "./generated/transport.js";
+import { APIUserAbortError, type RequestOptions } from "./transport.js";
 import { GradUsageError, PaginationLoopError } from "./errors.js";
 
 export interface Page<T> {

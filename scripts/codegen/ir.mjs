@@ -469,6 +469,24 @@ const reachableSchemas = (schemas, operations) => {
   return seen;
 };
 
+/** `roots` plus every schema they reference (transitively). */
+export const schemaClosure = (schemas, roots) => {
+  const seen = new Set();
+  const pending = [];
+  const visit = (node) => {
+    if (node.k === "ref" && !seen.has(node.name)) {
+      seen.add(node.name);
+      pending.push(schemas[node.name]);
+    }
+  };
+  for (const name of roots) {
+    if (!(name in schemas)) throw new Error(`Schema '${name}' is not in the spec.`);
+    visit({ k: "ref", name });
+  }
+  while (pending.length > 0) walkType(pending.pop(), visit);
+  return seen;
+};
+
 /**
  * The IR without `x-internal` operations (worker protocols) and without the
  * schemas only they use: what the public SDK clients are generated from.

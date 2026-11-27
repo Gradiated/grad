@@ -12,13 +12,14 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from . import _helpers as h
 from ._errors import (
     APIConnectionError,
     EvalFailedError,
     GradAPIError,
     ImportFailedError,
-    NotAvailableInV0Error,
     NotFoundError,
     RateLimitError,
     RunFailedError,
@@ -26,7 +27,6 @@ from ._errors import (
     ValidationError,
     WaitTimeoutError,
 )
-from ._http import TransportFailure
 from ._models import (
     ApiKey,
     Artifact,
@@ -57,8 +57,8 @@ from ._models import (
 )
 from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX
 from ._transport import SSEDecoder, iter_sse, quote_path_param
+from .recipes import _thinking
 from .rubrics import model_ref
-from .specs import Unavailable
 
 if TYPE_CHECKING:
     from .client import Grad
@@ -293,20 +293,12 @@ class Datasets(_Resource):
         if train_on is not None:
             body["train_on"] = train_on
         if thinking is not None:
-            body["thinking"] = {"on": True, "off": False}.get(thinking, thinking) if isinstance(thinking, str) else thinking
+            body["thinking"] = _thinking(thinking)
         if preserve_thinking is not None:
             body["preserve_thinking"] = preserve_thinking
         if limit is not None:
             body["limit"] = limit
         return RenderPreview.from_api(self._wire.render_dataset(h.dataset_name(dataset), body), self._client)
-
-    def score(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise NotAvailableInV0Error(
-            "datasets.score()",
-            "server-side dataset scoring is deferred past v0.",
-            alternative="Evaluate with client.evals.create(...) and mine failures with ev.failures(...).to_dataset(name).",
-        )
 
 
 class Imports(_Resource):
@@ -365,17 +357,16 @@ class Runs(_Resource):
         recipe: Any,
         split: Any = None,
         max_cost_usd: float | None = None,
-        depends_on: Any = None,
+        idempotency_key: str | None = None,
     ) -> Run:
         """Create and enqueue a run (pins the dataset version). Chain ``.wait()``.
 
-        ``depends_on`` (a Run or run id) queues a chained run that starts from that run's
-        artifact once it completes (see ``Run.then``).
+        To keep training from a finished run, pass its artifact as the recipe's model:
+        ``SFTRecipe(model=run.artifact)``. ``idempotency_key`` makes a retried call (even from
+        another process) return the run the first call created instead of starting a second one.
         """
-        body = h.run_body(
-            dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd, depends_on=depends_on
-        )
-        return Run.from_api(self._wire.create_run(body), self._client)
+        body = h.run_body(dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd)
+        return Run.from_api(self._wire.create_run(body, idempotency_key=idempotency_key), self._client)
 
     def get(self, run_id: str) -> Run:
         """A run by id."""
@@ -462,7 +453,7 @@ class Runs(_Resource):
                     elif event.event == "status":
                         yield "status", Run.from_api(_json(event.data), self._client)
                         return
-            except (TransportFailure, APIConnectionError):
+            except (httpx.TransportError, APIConnectionError):
                 pass
             finally:
                 resp.close()
@@ -607,13 +598,13 @@ class Artifacts(_Resource):
         plan = h.plan_download(path, fmt=format, filename=filename, overwrite=overwrite)
         resp = self._wire.download_artifact(art.ref, timeout=timeout or max(self._client._transport.timeout, 120.0))
         writer = h.HashingWriter(plan.temp_dir, f".{art.name}.")
-        url = resp.url
+        url = str(resp.url)
         try:
             try:
                 for chunk in resp.iter_bytes():
                     writer.write(chunk)
-            except TransportFailure as failure:
-                raise self._client._transport.connection_error("GET", url, failure) from failure.cause
+            except httpx.TransportError as exc:
+                raise self._client._transport.connection_error("GET", url, exc) from exc
             digest = writer.finish()
             h.verify_digest(digest, h.expected_sha(resp.headers.get("x-artifact-sha256"), art.sha256, url), url)
             if plan.format == "bundle":
@@ -627,10 +618,6 @@ class Artifacts(_Resource):
             resp.close()
             if writer.path.exists() and plan.format != "bundle":
                 writer.discard()
-
-    def merge(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise NotAvailableInV0Error("artifacts.merge()", "artifact merging is deferred past v0.")
 
 
 def _extract(bundle: Path, plan: h.DownloadPlan, artifact_format: str | None, overwrite: bool) -> Path:
@@ -653,7 +640,9 @@ def _json(text: str) -> Any:
 class Deployments(_Resource):
     """``client.deployments``: stable model names pointing at artifact versions."""
 
-    def create(self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None) -> Deployment:
+    def create(
+        self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None, idempotency_key: str | None = None
+    ) -> Deployment:
         """Deploy (or update) an artifact under a stable name. Same as ``client.deploy``."""
         body: dict[str, Any] = {"artifact": _artifact_ref(artifact)}
         if name is not None:
@@ -662,7 +651,7 @@ class Deployments(_Resource):
             body["fallback"] = model_ref(fallback)
         if explore_rate is not None:
             body["explore_rate"] = explore_rate
-        return Deployment.from_api(self._wire.deploy_artifact(body), self._client)
+        return Deployment.from_api(self._wire.deploy_artifact(body, idempotency_key=idempotency_key), self._client)
 
     def get(self, name: str) -> DeploymentStatus:
         """A deployment with its feedback count and average score."""
@@ -758,13 +747,7 @@ class Evals(_Resource):
         max_tokens: int | None = None,
         limit: int | None = None,
         pass_threshold: float | None = None,
-        max_cost_usd: float | None = None,
-        benchmarks: Sequence[Any] | None = None,
-        env: Any = None,
-        tasks: Sequence[Any] | None = None,
         dataset_version: int | None = None,
-        max_turns: int | None = None,
-        max_concurrency: int | None = None,
     ) -> EvalPlan:
         """Estimate tasks, model/judge calls and cost ($0)."""
         body, _ = h.eval_body(**_eval_kwargs(locals()))
@@ -783,25 +766,21 @@ class Evals(_Resource):
         max_tokens: int | None = None,
         limit: int | None = None,
         pass_threshold: float | None = None,
-        max_cost_usd: float | None = None,
-        benchmarks: Sequence[Any] | None = None,
-        env: Any = None,
-        tasks: Sequence[Any] | None = None,
         dataset_version: int | None = None,
-        max_turns: int | None = None,
-        max_concurrency: int | None = None,
+        idempotency_key: str | None = None,
     ) -> Eval:
         """Queue an eval; chain ``.wait()`` (which also runs local ``Scorer`` functions).
 
         Local scorers are dry-run once on a sample record first, so a broken function fails
-        before any model is called.
+        before any model is called. The eval is billed (``ev.total_cost_usd``); ``evals.plan``
+        estimates the cost at $0.
         """
         body, local = h.eval_body(**_eval_kwargs(locals()))
         if local is not None and local.local_scorers and dataset is not None:
             sample = next(iter(self._client.datasets.records(dataset, limit=1)), None)
             if sample is not None:
                 local.dry_run(sample)
-        ev = Eval.from_api(self._wire.create_eval(body), self._client)
+        ev = Eval.from_api(self._wire.create_eval(body, idempotency_key=idempotency_key), self._client)
         ev._local_rubric = local
         return ev
 
@@ -897,10 +876,6 @@ class Evals(_Resource):
                 raise WaitTimeoutError(f"Eval {eval_id} is still {ev.status if ev else 'unknown'} after {timeout}s.", resource=ev)
             self._sleep(backoff.next(), deadline)
 
-    def from_inspect(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise NotAvailableInV0Error("evals.from_inspect()", "Inspect task imports are deferred past v0.")
-
 
 def _eval_kwargs(values: Mapping[str, Any]) -> dict[str, Any]:
     keys = (
@@ -915,50 +890,5 @@ def _eval_kwargs(values: Mapping[str, Any]) -> dict[str, Any]:
         "max_tokens",
         "limit",
         "pass_threshold",
-        "max_cost_usd",
-        "benchmarks",
-        "env",
-        "tasks",
-        "max_turns",
-        "max_concurrency",
     )
     return {k: values[k] for k in keys}
-
-
-class Environments(_Resource):
-    """``client.environments``: dispatch tasks to ``serve_environment`` workers."""
-
-    def dispatch(
-        self,
-        env_name: str,
-        task: Mapping[str, Any],
-        *,
-        model_id: str,
-        system_prompt: str | None = None,
-        timeout_s: int | None = None,
-    ) -> dict[str, Any]:
-        """Queue one task for workers serving ``env_name``."""
-        body: dict[str, Any] = {"env_name": h.check_slug(env_name, "environment name"), "task": dict(task), "model_id": model_id}
-        if system_prompt is not None:
-            body["system_prompt"] = system_prompt
-        if timeout_s is not None:
-            body["timeout_s"] = timeout_s
-        return dict(self._client._internal.dispatch_env_task(body))
-
-    def get_task(self, task_id: str) -> dict[str, Any]:
-        """A dispatched task with its status and result."""
-        return dict(self._client._internal.get_env_task(task_id))
-
-    def serve(self, env: Any, *, name: str, policy: Any, **kwargs: Any) -> int:
-        """Run an outbound worker for ``env`` (see :func:`grad.serve_environment`)."""
-        from .environments import serve_environment
-
-        return serve_environment(env, name=name, policy=policy, client=self._client, **kwargs)
-
-
-TRAINERS = Unavailable(
-    "client.trainers",
-    "the interactive Trainer API (forward_backward, optim_step, snapshots) is deferred to Wave 2.",
-    alternative="Use the managed recipes with client.runs.create(...).",
-)
-SECRETS = Unavailable("client.secrets", "workspace secrets are deferred past v0.")

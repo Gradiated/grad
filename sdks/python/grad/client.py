@@ -1,4 +1,4 @@
-"""The ``Grad`` (blocking) and ``AsyncGrad`` (asyncio) clients."""
+"""The ``Grad`` client."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import _async_resources as ar
+import httpx
+
 from . import _resources as r
 from ._config import ResolvedConfig, resolve_config
-from ._generated.client import AsyncGeneratedApiClient, AsyncGeneratedInternalApiClient, GeneratedApiClient, GeneratedInternalApiClient
+from ._generated.client import GeneratedApiClient
 from ._helpers import check_slug
-from ._http import AsyncSender, SyncSender
-from ._models import AsyncDeployment, AsyncRouteDecision, Deployment, RouteDecision
-from ._transport import AsyncTransport, Clock, RetryPolicy, SyncTransport
+from ._models import Deployment, RouteDecision
+from ._transport import Clock, RetryPolicy, Transport
 
-__all__ = ["AsyncGrad", "Grad"]
+__all__ = ["Grad"]
 
 
 def _route_body(deployment: Any, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]] | None, session_id: str | None) -> dict[str, Any]:
@@ -32,25 +32,8 @@ def _route_body(deployment: Any, messages: Sequence[Mapping[str, Any]], tools: S
     return body
 
 
-class _ClientBase:
-    _config: ResolvedConfig
-
-    @property
-    def base_url(self) -> str:
-        """The API base URL in use."""
-        return self._config.base_url
-
-    @property
-    def config(self) -> ResolvedConfig:
-        """The resolved configuration and where each value came from."""
-        return self._config
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}(base_url={self.base_url!r}, api_key={'set' if self._config.api_key else 'none'})"
-
-
-class Grad(_ClientBase):
-    """Blocking client for the Gradiated training platform.
+class Grad:
+    """Client for the Gradiated training platform.
 
     Configuration precedence: explicit arguments > ``GRADIATED_API_KEY`` /
     ``GRADIATED_BASE_URL`` > the ``grad login`` config file > ``https://api.gradiated.com``.
@@ -68,8 +51,6 @@ class Grad(_ClientBase):
     Use it as a context manager (or call :meth:`close`) to release pooled connections.
     """
 
-    _is_async = False
-
     def __init__(
         self,
         api_key: str | None = None,
@@ -80,22 +61,21 @@ class Grad(_ClientBase):
         max_retries: int = 2,
         default_headers: Mapping[str, str] | None = None,
         config_path: str | os.PathLike[str] | None = None,
-        _sender: SyncSender | None = None,
+        _http_transport: httpx.BaseTransport | None = None,
         _clock: Clock | None = None,
         _env: Mapping[str, str] | None = None,
     ) -> None:
         self._config = resolve_config(api_key=api_key, base_url=base_url, profile=profile, config_path=config_path, env=_env)
-        self._transport = SyncTransport(
+        self._transport = Transport(
             self._config,
             timeout=timeout,
             retry=RetryPolicy(max_retries=max_retries),
             clock=_clock,
-            sender=_sender,
+            http_transport=_http_transport,
             default_headers=default_headers,
         )
         self.wire = GeneratedApiClient(self._transport)
         """Low-level generated client: one method per API operation (an escape hatch)."""
-        self._internal = GeneratedInternalApiClient(self._transport)
         self.models = r.Models(self)
         self.datasets = r.Datasets(self)
         self.imports = r.Imports(self)
@@ -107,18 +87,30 @@ class Grad(_ClientBase):
         self.feedback = r.Feedback(self)
         self.evals = r.Evals(self)
         self.keys = r.Keys(self)
-        self.environments = r.Environments(self)
-        self.trainers = r.TRAINERS
-        self.secrets = r.SECRETS
 
-    def deploy(self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None) -> Deployment:
+    @property
+    def base_url(self) -> str:
+        """The API base URL in use."""
+        return self._config.base_url
+
+    @property
+    def config(self) -> ResolvedConfig:
+        """The resolved configuration and where each value came from."""
+        return self._config
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(base_url={self.base_url!r}, api_key={'set' if self._config.api_key else 'none'})"
+
+    def deploy(
+        self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None, idempotency_key: str | None = None
+    ) -> Deployment:
         """Deploy an artifact (``name@version``, an :class:`Artifact` or a finished :class:`Run`).
 
         Gradiated Cloud serves it as ``your-org/<name>``. Self-hosted servers raise
         :class:`grad.DeployUnavailableError` explaining how to serve the download on vLLM.
         Rolling back is deploying an earlier version (or ``deployments.rollback(name)``).
         """
-        return self.deployments.create(artifact, name=name, fallback=fallback, explore_rate=explore_rate)
+        return self.deployments.create(artifact, name=name, fallback=fallback, explore_rate=explore_rate, idempotency_key=idempotency_key)
 
     def route(
         self,
@@ -144,79 +136,3 @@ class Grad(_ClientBase):
 
     def __exit__(self, *exc: object) -> None:
         self.close()
-
-
-class AsyncGrad(_ClientBase):
-    """asyncio client with the same API as :class:`Grad` (coroutine methods).
-
-    Network I/O runs on the event loop (no worker threads), waits use ``asyncio.sleep``
-    and cancelling a task cancels its request. Use ``async with AsyncGrad() as client``.
-    """
-
-    _is_async = True
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        *,
-        base_url: str | None = None,
-        profile: str | None = None,
-        timeout: float = 60.0,
-        max_retries: int = 2,
-        default_headers: Mapping[str, str] | None = None,
-        config_path: str | os.PathLike[str] | None = None,
-        _sender: AsyncSender | None = None,
-        _clock: Clock | None = None,
-        _env: Mapping[str, str] | None = None,
-    ) -> None:
-        self._config = resolve_config(api_key=api_key, base_url=base_url, profile=profile, config_path=config_path, env=_env)
-        self._transport = AsyncTransport(
-            self._config,
-            timeout=timeout,
-            retry=RetryPolicy(max_retries=max_retries),
-            clock=_clock,
-            sender=_sender,
-            default_headers=default_headers,
-        )
-        self.wire = AsyncGeneratedApiClient(self._transport)
-        """Low-level generated client: one coroutine per API operation (an escape hatch)."""
-        self._internal = AsyncGeneratedInternalApiClient(self._transport)
-        self.models = ar.AsyncModels(self)
-        self.datasets = ar.AsyncDatasets(self)
-        self.imports = ar.AsyncImports(self)
-        self.runs = ar.AsyncRuns(self)
-        self.checkpoints = ar.AsyncCheckpoints(self)
-        self.artifacts = ar.AsyncArtifacts(self)
-        self.deployments = ar.AsyncDeployments(self)
-        self.embeddings = ar.AsyncEmbeddingsAPI(self)
-        self.feedback = ar.AsyncFeedback(self)
-        self.evals = ar.AsyncEvals(self)
-        self.keys = ar.AsyncKeys(self)
-        self.environments = ar.AsyncEnvironments(self)
-        self.trainers = r.TRAINERS
-        self.secrets = r.SECRETS
-
-    async def deploy(self, artifact: Any, *, name: str | None = None, fallback: Any = None, explore_rate: float | None = None) -> AsyncDeployment:
-        """Deploy an artifact (see :meth:`Grad.deploy`)."""
-        return await self.deployments.create(artifact, name=name, fallback=fallback, explore_rate=explore_rate)
-
-    async def route(
-        self,
-        deployment: Any,
-        messages: Sequence[Mapping[str, Any]],
-        *,
-        tools: Sequence[Mapping[str, Any]] | None = None,
-        session_id: str | None = None,
-    ) -> AsyncRouteDecision:
-        """Ask a deployed router which model should answer ``messages``."""
-        return AsyncRouteDecision.from_api(await self.wire.route_request(_route_body(deployment, messages, tools, session_id)), self)
-
-    async def aclose(self) -> None:
-        """Close pooled connections."""
-        await self._transport.aclose()
-
-    async def __aenter__(self) -> AsyncGrad:
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        await self.aclose()

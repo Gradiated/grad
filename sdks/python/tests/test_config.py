@@ -127,7 +127,6 @@ class ConfigTests(unittest.TestCase):
             with grad.Grad() as client:
                 self.assertEqual(client.config.api_key, "grad_from_env")
                 self.assertEqual(client.base_url, "http://localhost:8787")
-            self.assertEqual(grad.AsyncGrad().base_url, "http://localhost:8787")
         finally:
             os.environ.clear()
             os.environ.update(old)

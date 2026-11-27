@@ -6,7 +6,7 @@ import type {
   RenderDatasetRequest,
   RenderDatasetResponse,
 } from "../generated/models.js";
-import type { RequestOptions } from "../generated/transport.js";
+import type { RequestOptions } from "../transport.js";
 import { isNodeRuntime, type Core } from "../core.js";
 import { GradUsageError, ImportFailedError } from "../errors.js";
 import { Paginator } from "../pagination.js";

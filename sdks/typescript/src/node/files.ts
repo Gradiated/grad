@@ -6,7 +6,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import { ChecksumMismatchError, GradUsageError } from "../errors.js";
-import type { RawResponse } from "../generated/transport.js";
+import type { RawResponse } from "../transport.js";
 
 export interface LocalFile {
   path: string;

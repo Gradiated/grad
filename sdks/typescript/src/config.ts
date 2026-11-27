@@ -1,4 +1,4 @@
-import { GradError, readEnv } from "./generated/transport.js";
+import { GradError, readEnv } from "./transport.js";
 import { GradUsageError } from "./errors.js";
 
 export const DEFAULT_BASE_URL = "https://api.gradiated.com";

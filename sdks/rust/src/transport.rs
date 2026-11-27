@@ -87,15 +87,16 @@ impl Req {
     /// A POST with a fresh UUIDv4 `Idempotency-Key`, so it retries like a GET.
     pub fn post(path: impl Into<String>) -> Self {
         Req {
-            idempotency_key: Some(crate::generated::new_idempotency_key()),
+            idempotency_key: Some(crate::util::new_idempotency_key()),
             ..Self::new(Method::POST, path)
         }
     }
 
-    /// Drops the `Idempotency-Key` (internal worker endpoints ignore it): the
-    /// POST is then retried only when it never left the client.
-    pub fn unkeyed(mut self) -> Self {
-        self.idempotency_key = None;
+    /// Use the caller's `Idempotency-Key` (to retry a call across processes) when given.
+    pub fn key(mut self, key: Option<&str>) -> Self {
+        if let Some(k) = key {
+            self.idempotency_key = Some(k.to_string());
+        }
         self
     }
 
@@ -364,9 +365,6 @@ impl Transport {
         if status == 401 {
             if self.api_key.is_none() {
                 detail.push_str(" No API key was sent: set GRADIATED_API_KEY, pass --api-key, or run `grad login`.");
-                if std::env::var_os("GRAD_API_KEY").is_some() {
-                    detail.push_str(" (GRAD_API_KEY is set but no longer read; rename it to GRADIATED_API_KEY.)");
-                }
             }
             if let Some(h) = &self.auth_hint {
                 detail.push_str(&format!(" Note: {}.", h));
@@ -529,7 +527,8 @@ mod tests {
     fn retry_rules_follow_the_contract() {
         let get = Req::get("/v1/runs");
         let keyed = Req::post("/v1/runs");
-        let unkeyed = Req::post("/v1/env-workers/tasks").unkeyed();
+        let mut unkeyed = Req::post("/v1/raw");
+        unkeyed.idempotency_key = None;
         let hint = Some(Duration::from_secs(1));
         assert!(retryable_status(
             &get,
@@ -571,6 +570,12 @@ mod tests {
         assert_eq!(&a[14..15], "4");
         assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"));
         assert!(Req::get("/v1/runs").idempotency_key.is_none());
+        let mine = Req::post("/v1/runs").key(Some("mine")).idempotency_key;
+        assert_eq!(mine.as_deref(), Some("mine"));
+        assert_ne!(
+            Req::post("/v1/runs").key(None).idempotency_key.as_deref(),
+            Some("mine")
+        );
     }
 
     #[test]

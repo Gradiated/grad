@@ -2,14 +2,13 @@
 
 Every object is a dataclass with attribute access to the fields in ``spec/openapi.yaml``,
 ``.raw`` (the JSON the server sent, including any newer fields), ``obj["field"]`` and
-``to_dict()``. Objects returned by :class:`grad.Grad` have blocking methods; the
-``Async*`` twins returned by :class:`grad.AsyncGrad` have coroutine methods.
+``to_dict()``. Objects returned by :class:`grad.Grad` have blocking convenience methods.
 """
 
 from __future__ import annotations
 
 import builtins
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
@@ -25,18 +24,6 @@ __all__ = [
     "APIObject",
     "ApiKey",
     "Artifact",
-    "AsyncArtifact",
-    "AsyncCheckpoint",
-    "AsyncDataset",
-    "AsyncDeployment",
-    "AsyncDeploymentStatus",
-    "AsyncEval",
-    "AsyncEvalFailures",
-    "AsyncImportJob",
-    "AsyncPage",
-    "AsyncPager",
-    "AsyncRouteDecision",
-    "AsyncRun",
     "AttrDict",
     "Checkpoint",
     "CursorTrail",
@@ -161,10 +148,6 @@ class APIObject:
         return f"{type(self).__name__}({', '.join(parts)})"
 
 
-def _is_async(client: Any) -> bool:
-    return bool(getattr(client, "_is_async", False))
-
-
 # ------------------------------------------------------------------------------- pages
 
 
@@ -273,85 +256,6 @@ class Page(Generic[T]):
         return f"Page({len(self.data)} items, has_more={self.has_more})"
 
 
-class AsyncPage(Generic[T]):
-    """One page of a list endpoint (async). ``async for`` walks every following page.
-
-    Stops at an empty page and raises :class:`grad.PaginationLoopError` on a repeated cursor.
-    """
-
-    def __init__(
-        self,
-        data: list[T],
-        next_cursor: str | None,
-        fetch_next: Callable[[str], Awaitable[AsyncPage[T]]] | None = None,
-        *,
-        trail: CursorTrail | None = None,
-    ) -> None:
-        self.data = data
-        self.next_cursor = next_cursor
-        self._fetch_next = fetch_next
-        self._trail = trail or CursorTrail("list")
-        self._id = self._trail.register()
-
-    @property
-    def has_more(self) -> bool:
-        """True when another page exists (an empty page ends the list)."""
-        return bool(self.next_cursor) and bool(self.data)
-
-    async def next_page(self) -> AsyncPage[T] | None:
-        """Fetch the next page, or ``None`` at the end."""
-        if self._fetch_next is None:
-            return None
-        cursor = self._trail.follow(self.next_cursor, self.data, page_id=self._id)
-        if cursor is None:
-            return None
-        page = await self._fetch_next(cursor)
-        if page._trail is not self._trail:
-            page._trail = self._trail
-            page._id = self._trail.register()
-        return page
-
-    async def iter_pages(self) -> AsyncIterator[AsyncPage[T]]:
-        """Yield this page and every following page."""
-        page: AsyncPage[T] | None = self
-        while page is not None:
-            yield page
-            page = await page.next_page()
-
-    async def __aiter__(self) -> AsyncIterator[T]:
-        async for page in self.iter_pages():
-            for item in page.data:
-                yield item
-
-    def __repr__(self) -> str:
-        return f"AsyncPage({len(self.data)} items, has_more={self.has_more})"
-
-
-class AsyncPager(Generic[T]):
-    """``await pager`` gives the first :class:`AsyncPage`; ``async for item in pager`` walks all items."""
-
-    def __init__(self, first: Callable[[], Awaitable[AsyncPage[T]]]) -> None:
-        self._first = first
-
-    def __await__(self) -> Any:
-        return self._first().__await__()
-
-    async def __aiter__(self) -> AsyncIterator[T]:
-        page = await self._first()
-        async for item in page:
-            yield item
-
-    async def to_list(self, *, max_items: int = MAX_COLLECT_ITEMS) -> list[T]:
-        """Collect every item (raises :class:`grad.PaginationLoopError` past ``max_items``)."""
-        first = await self._first()
-        items: list[T] = []
-        async for page in first.iter_pages():
-            items.extend(page.data)
-            if len(items) > max_items:
-                raise _too_many(first._trail.endpoint, page.next_cursor, max_items)
-        return items
-
-
 # ------------------------------------------------------------------------------ models
 
 
@@ -378,7 +282,9 @@ class Model(APIObject):
 
 
 @dataclass(kw_only=True, repr=False, eq=False)
-class _DatasetData(APIObject):
+class Dataset(APIObject):
+    """A versioned dataset. Every push appends a new version; runs pin the version they used."""
+
     id: str
     name: str
     workspace_id: str | None = None
@@ -393,17 +299,6 @@ class _DatasetData(APIObject):
     def __str__(self) -> str:
         return self.name
 
-    def _unavailable(self, method: str) -> NotAvailableInV0Error:
-        return NotAvailableInV0Error(
-            f"Dataset.{method}()",
-            "server-side scoring and filtering of datasets is deferred past v0.",
-            alternative="Evaluate with client.evals.create(...) and mine failures with ev.failures(...).to_dataset(name), "
-            "or filter records locally and push them to a new dataset.",
-        )
-
-
-class Dataset(_DatasetData):
-    """A versioned dataset. Every push appends a new version; runs pin the version they used."""
 
     def refresh(self) -> Dataset:
         """Reload from the server (in place) and return ``self``."""
@@ -434,62 +329,11 @@ class Dataset(_DatasetData):
         records: Iterator[dict[str, Any]] = self._need_client().datasets.records(self.name, version=version, limit=limit)
         return records
 
-    def score(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise self._unavailable("score")
-
-    def filter(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise self._unavailable("filter")
-
-    def add_source(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise self._unavailable("add_source")
-
-
-class AsyncDataset(_DatasetData):
-    """A versioned dataset (async methods)."""
-
-    async def refresh(self) -> AsyncDataset:
-        """Reload from the server (in place) and return ``self``."""
-        self._update_from(await self._need_client().datasets.get(self.name))
-        return self
-
-    async def count(self) -> int:
-        """Current number of records (reloads the dataset)."""
-        return (await self.refresh()).record_count
-
-    async def push(self, records: Any, **kwargs: Any) -> AsyncDataset:
-        """Append records or a file; updates ``self``."""
-        self._update_from(await self._need_client().datasets.push(self.name, records, **kwargs))
-        return self
-
-    async def import_file(self, path: str | Path, *, connector: str = "auto", format: str = "auto") -> AsyncImportJob:
-        """Upload a file and start an import job; ``await job.wait()``."""
-        job: AsyncImportJob = await self._need_client().datasets.import_file(self.name, path, connector=connector, format=format)
-        return job
-
-    async def render(self, **kwargs: Any) -> RenderPreview:
-        """Preview chat-template rendering and loss masks."""
-        preview: RenderPreview = await self._need_client().datasets.render(self.name, **kwargs)
-        return preview
-
-    def records(self, *, version: int | None = None, limit: int | None = None) -> AsyncIterator[dict[str, Any]]:
-        """Iterate the records of a version (``async for``)."""
-        records: AsyncIterator[dict[str, Any]] = self._need_client().datasets.records(self.name, version=version, limit=limit)
-        return records
-
-    async def score(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise self._unavailable("score")
-
-    async def filter(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise self._unavailable("filter")
-
 
 @dataclass(kw_only=True, repr=False, eq=False)
-class _ImportData(APIObject):
+class ImportJob(APIObject):
+    """An asynchronous file or Hugging Face import into a dataset (run by a trainer worker)."""
+
     id: str
     dataset: str
     status: str
@@ -514,9 +358,6 @@ class _ImportData(APIObject):
         return self.status in TERMINAL_IMPORT_STATUSES
 
 
-class ImportJob(_ImportData):
-    """An asynchronous file or Hugging Face import into a dataset (run by a trainer worker)."""
-
     def refresh(self) -> ImportJob:
         """Reload from the server (in place)."""
         self._update_from(self._need_client().imports.get(self.id))
@@ -530,25 +371,6 @@ class ImportJob(_ImportData):
     def get_dataset(self) -> Dataset:
         """The dataset the records were imported into."""
         dataset: Dataset = self._need_client().datasets.get(self.dataset)
-        return dataset
-
-
-class AsyncImportJob(_ImportData):
-    """An asynchronous import (async methods)."""
-
-    async def refresh(self) -> AsyncImportJob:
-        """Reload from the server (in place)."""
-        self._update_from(await self._need_client().imports.get(self.id))
-        return self
-
-    async def wait(self, *, timeout: float | None = None, poll_interval: float = 0.5) -> AsyncImportJob:
-        """Wait until the import finishes; raises :class:`grad.ImportFailedError` if it failed."""
-        self._update_from(await self._need_client().imports.wait(self.id, timeout=timeout, poll_interval=poll_interval))
-        return self
-
-    async def get_dataset(self) -> AsyncDataset:
-        """The dataset the records were imported into."""
-        dataset: AsyncDataset = await self._need_client().datasets.get(self.dataset)
         return dataset
 
 
@@ -691,7 +513,9 @@ def _metric(value: Any, client: Any) -> Any:
 
 
 @dataclass(kw_only=True, repr=False, eq=False)
-class _RunData(APIObject):
+class Run(APIObject):
+    """A training run. ``wait()``, stream ``metrics(follow=True)``, then ``deploy()`` or download."""
+
     id: str
     name: str
     status: str
@@ -712,7 +536,6 @@ class _RunData(APIObject):
     latest_metric: MetricPoint | None = None
     eval_report: EvalReport | None = None
     artifact_id: str | None = None
-    depends_on: str | None = None
     error: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -739,20 +562,6 @@ class _RunData(APIObject):
         hint = "" if self.done else " It is still running: call run.wait() first."
         return RuntimeError(f"Run {self.id} ({self.status}) has no artifact.{hint}")
 
-
-
-class Run(_RunData):
-    """A training run. ``wait()``, stream ``metrics(follow=True)``, then ``deploy()`` or download."""
-
-    def then(
-        self, dataset: Any = None, *, recipe: Any, name: str | None = None, split: Any = None, max_cost_usd: float | None = None
-    ) -> Run:
-        """Queue the next stage (e.g. SFT then DPO): it starts from this run's artifact once this run
-        completes, and is cancelled if this run fails. Leave the recipe's ``model`` unset."""
-        run: Run = self._need_client().runs.create(
-            dataset, name=name or self.name, recipe=recipe, split=split, max_cost_usd=max_cost_usd, depends_on=self.id
-        )
-        return run
 
     def refresh(self) -> Run:
         """Reload from the server (in place)."""
@@ -815,85 +624,10 @@ class Run(_RunData):
         return target
 
 
-class AsyncRun(_RunData):
-    """A training run (async methods)."""
-
-    async def then(
-        self, dataset: Any = None, *, recipe: Any, name: str | None = None, split: Any = None, max_cost_usd: float | None = None
-    ) -> AsyncRun:
-        """Queue the next stage from this run's artifact (see ``Run.then``)."""
-        run: AsyncRun = await self._need_client().runs.create(
-            dataset, name=name or self.name, recipe=recipe, split=split, max_cost_usd=max_cost_usd, depends_on=self.id
-        )
-        return run
-
-    async def refresh(self) -> AsyncRun:
-        """Reload from the server (in place)."""
-        self._update_from(await self._need_client().runs.get(self.id))
-        return self
-
-    async def wait(
-        self,
-        *,
-        timeout: float | None = None,
-        on_metric: Callable[[MetricPoint], Any] | None = None,
-        on_status: Callable[[AsyncRun], Any] | None = None,
-        raise_on_failure: bool = True,
-    ) -> AsyncRun:
-        """Wait until the run finishes (in place)."""
-        final = await self._need_client().runs.wait(self.id, timeout=timeout, on_metric=on_metric, on_status=on_status, raise_on_failure=raise_on_failure)
-        self._update_from(final)
-        return self
-
-    def metrics(self, *, follow: bool = False) -> AsyncIterator[MetricPoint]:
-        """Metric points (``async for``); ``follow=True`` streams live until the run ends."""
-        stream: AsyncIterator[MetricPoint] = self._need_client().runs.metrics(self.id, follow=follow)
-        return stream
-
-    async def cancel(self) -> AsyncRun:
-        """Cancel the run."""
-        self._update_from(await self._need_client().runs.cancel(self.id))
-        return self
-
-    async def resume(self, *, max_cost_usd: float | None = None) -> AsyncRun:
-        """Resume from the latest checkpoint."""
-        self._update_from(await self._need_client().runs.resume(self.id, max_cost_usd=max_cost_usd))
-        return self
-
-    async def checkpoints(self) -> list[AsyncCheckpoint]:
-        """Unexpired checkpoints, oldest step first."""
-        checkpoints: list[AsyncCheckpoint] = await self._need_client().runs.checkpoints(self.id)
-        return checkpoints
-
-    async def get_artifact(self) -> AsyncArtifact | None:
-        """The run's artifact (fetched), or ``None`` until it has one."""
-        if not self.artifact_id:
-            return None
-        artifact: AsyncArtifact = await self._need_client().artifacts.get(self.artifact_id)
-        return artifact
-
-    @property
-    def artifact(self) -> Awaitable[AsyncArtifact | None]:
-        """``await run.artifact`` fetches the run's artifact (``None`` until it has one)."""
-        return self.get_artifact()
-
-    async def deploy(self, *, name: str | None = None, fallback: str | None = None, explore_rate: float | None = None) -> AsyncDeployment:
-        """Deploy the run's artifact."""
-        if not self.artifact_id:
-            raise self._no_artifact()
-        deployment: AsyncDeployment = await self._need_client().deploy(self.artifact_id, name=name, fallback=fallback, explore_rate=explore_rate)
-        return deployment
-
-    async def download(self, path: str | Path, *, format: str = "peft", overwrite: bool = False) -> Path:
-        """Download the run's artifact."""
-        if not self.artifact_id:
-            raise self._no_artifact()
-        target: Path = await self._need_client().artifacts.download(self.artifact_id, path, format=format, overwrite=overwrite)
-        return target
-
-
 @dataclass(kw_only=True, repr=False, eq=False)
-class _CheckpointData(APIObject):
+class Checkpoint(APIObject):
+    """A saved training checkpoint; ``promote(name=...)`` keeps it as an artifact."""
+
     id: str
     run_id: str
     step: int = 0
@@ -912,21 +646,9 @@ class _CheckpointData(APIObject):
     _repr_fields = ("id", "step", "eval_score", "best", "final")
 
 
-class Checkpoint(_CheckpointData):
-    """A saved training checkpoint; ``promote(name=...)`` keeps it as an artifact."""
-
     def promote(self, *, name: str | None = None) -> Artifact:
         """Copy this checkpoint into a new immutable artifact (``name@date-n``)."""
         artifact: Artifact = self._need_client().checkpoints.promote(self.id, name=name)
-        return artifact
-
-
-class AsyncCheckpoint(_CheckpointData):
-    """A saved training checkpoint (async)."""
-
-    async def promote(self, *, name: str | None = None) -> AsyncArtifact:
-        """Copy this checkpoint into a new immutable artifact."""
-        artifact: AsyncArtifact = await self._need_client().checkpoints.promote(self.id, name=name)
         return artifact
 
 
@@ -934,7 +656,9 @@ class AsyncCheckpoint(_CheckpointData):
 
 
 @dataclass(kw_only=True, repr=False, eq=False)
-class _ArtifactData(APIObject):
+class Artifact(APIObject):
+    """An immutable trained artifact (``name@YYYY-MM-DD-n``)."""
+
     id: str
     name: str
     version: str
@@ -961,16 +685,6 @@ class _ArtifactData(APIObject):
     def __str__(self) -> str:
         return self.ref
 
-    def _no_inference(self, method: str) -> NotAvailableInV0Error:
-        return NotAvailableInV0Error(
-            f"Artifact.{method}()",
-            "direct inference from an artifact handle is deferred past v0.",
-            alternative="Deploy it (Gradiated Cloud) and call it with the OpenAI SDK, or download it and serve it on vLLM/SGLang.",
-        )
-
-
-class Artifact(_ArtifactData):
-    """An immutable trained artifact (``name@YYYY-MM-DD-n``)."""
 
     def refresh(self) -> Artifact:
         """Reload from the server (in place)."""
@@ -987,43 +701,14 @@ class Artifact(_ArtifactData):
         target: Path = self._need_client().artifacts.download(self.ref, path, format=format, overwrite=overwrite)
         return target
 
-    def infer(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise self._no_inference("infer")
-
-    def infer_batch(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0."""
-        raise self._no_inference("infer_batch")
-
-    def embed(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0 (deploy and use client.embeddings.create)."""
-        raise self._no_inference("embed")
-
-
-class AsyncArtifact(_ArtifactData):
-    """An immutable trained artifact (async)."""
-
-    async def refresh(self) -> AsyncArtifact:
-        """Reload from the server (in place)."""
-        self._update_from(await self._need_client().artifacts.get(self.id))
-        return self
-
-    async def deploy(self, *, name: str | None = None, fallback: str | None = None, explore_rate: float | None = None) -> AsyncDeployment:
-        """Deploy under ``your-org/<name>``."""
-        deployment: AsyncDeployment = await self._need_client().deploy(self.ref, name=name, fallback=fallback, explore_rate=explore_rate)
-        return deployment
-
-    async def download(self, path: str | Path, *, format: str = "peft", overwrite: bool = False) -> Path:
-        """Download and verify; ``format="peft"`` extracts a vLLM-loadable directory."""
-        target: Path = await self._need_client().artifacts.download(self.ref, path, format=format, overwrite=overwrite)
-        return target
-
 
 # ------------------------------------------------------------------------- deployments
 
 
 @dataclass(kw_only=True, repr=False, eq=False)
-class _DeploymentData(APIObject):
+class Deployment(APIObject):
+    """A stable model name pointing at one artifact version."""
+
     id: str
     name: str
     model_id: str | None = None
@@ -1039,9 +724,6 @@ class _DeploymentData(APIObject):
     _repr_fields = ("name", "model_id", "active_artifact_id", "status")
 
 
-class Deployment(_DeploymentData):
-    """A stable model name pointing at one artifact version."""
-
     def rollback(self) -> Deployment:
         """Point back at the previous artifact (in place)."""
         self._update_from(self._need_client().deployments.rollback(self.name))
@@ -1053,23 +735,8 @@ class Deployment(_DeploymentData):
         return status
 
 
-class AsyncDeployment(_DeploymentData):
-    """A deployment (async)."""
-
-    async def rollback(self) -> AsyncDeployment:
-        """Point back at the previous artifact (in place)."""
-        self._update_from(await self._need_client().deployments.rollback(self.name))
-        return self
-
-    async def status_summary(self) -> AsyncDeploymentStatus:
-        """Feedback count and average score."""
-        status: AsyncDeploymentStatus = await self._need_client().deployments.get(self.name)
-        return status
-
-
 def _deployment(value: Any, client: Any) -> Any:
-    cls = AsyncDeployment if _is_async(client) else Deployment
-    return cls.from_api(value, client) if isinstance(value, Mapping) else value
+    return Deployment.from_api(value, client) if isinstance(value, Mapping) else value
 
 
 @dataclass(kw_only=True, repr=False, eq=False)
@@ -1084,12 +751,10 @@ class DeploymentStatus(APIObject):
     _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"deployment": _deployment}
 
 
-class AsyncDeploymentStatus(DeploymentStatus):
-    """A deployment with its feedback summary (``deployment`` is an :class:`AsyncDeployment`)."""
-
-
 @dataclass(kw_only=True, repr=False, eq=False)
-class _RouteData(APIObject):
+class RouteDecision(APIObject):
+    """Which model a router picked; call ``record_feedback(...)`` once you know the outcome."""
+
     inference_id: str
     model: str
     deployment: str | None = None
@@ -1111,9 +776,6 @@ class _RouteData(APIObject):
         }
 
 
-class RouteDecision(_RouteData):
-    """Which model a router picked; call ``record_feedback(...)`` once you know the outcome."""
-
     def record_feedback(
         self,
         *,
@@ -1124,22 +786,6 @@ class RouteDecision(_RouteData):
     ) -> FeedbackResult:
         """Log the outcome of this routed request (deduplicated by ``idempotency_key``)."""
         result: FeedbackResult = self._need_client().feedback.record(**self._feedback_kwargs(score, metrics, expected_output, idempotency_key))
-        return result
-
-
-class AsyncRouteDecision(_RouteData):
-    """A routing decision (async)."""
-
-    async def record_feedback(
-        self,
-        *,
-        score: float | None = None,
-        metrics: Mapping[str, float] | None = None,
-        expected_output: Any = None,
-        idempotency_key: str | None = None,
-    ) -> FeedbackResult:
-        """Log the outcome of this routed request."""
-        result: FeedbackResult = await self._need_client().feedback.record(**self._feedback_kwargs(score, metrics, expected_output, idempotency_key))
         return result
 
 
@@ -1322,7 +968,9 @@ class EvalResult(APIObject):
     _repr_fields = ("task_id", "model", "score", "passed")
 
 
-class _FailuresBase(Sequence[EvalResult]):
+class EvalFailures(Sequence[EvalResult]):
+    """Failing tasks of an eval; ``to_dataset(name)`` saves them for the next training round."""
+
     def __init__(self, eval_id: str, items: list[EvalResult], client: Any) -> None:
         self.eval_id = eval_id
         self.items = items
@@ -1351,26 +999,16 @@ class _FailuresBase(Sequence[EvalResult]):
         return f"{type(self).__name__}(eval_id={self.eval_id!r}, {len(self.items)} failures)"
 
 
-class EvalFailures(_FailuresBase):
-    """Failing tasks of an eval; ``to_dataset(name)`` saves them for the next training round."""
-
     def to_dataset(self, name: str, *, metadata: Mapping[str, Any] | None = None) -> Dataset:
         """Push the failing records into dataset ``name`` (tagged ``mined_from_eval``)."""
         dataset: Dataset = self._client.datasets.push(name, self._records_or_raise(), metadata={"mined_from_eval": self.eval_id, **(metadata or {})})
         return dataset
 
 
-class AsyncEvalFailures(_FailuresBase):
-    """Failing tasks of an eval (async ``to_dataset``)."""
-
-    async def to_dataset(self, name: str, *, metadata: Mapping[str, Any] | None = None) -> AsyncDataset:
-        """Push the failing records into dataset ``name``."""
-        dataset: AsyncDataset = await self._client.datasets.push(name, self._records_or_raise(), metadata={"mined_from_eval": self.eval_id, **(metadata or {})})
-        return dataset
-
-
 @dataclass(kw_only=True, repr=False, eq=False)
-class _EvalData(APIObject):
+class Eval(APIObject):
+    """A server-executed evaluation. ``wait()`` also runs your local Python scorers."""
+
     id: str
     name: str
     status: str
@@ -1422,9 +1060,6 @@ class _EvalData(APIObject):
             self._local_rubric = rubric
 
 
-class Eval(_EvalData):
-    """A server-executed evaluation. ``wait()`` also runs your local Python scorers."""
-
     def refresh(self) -> Eval:
         """Reload from the server (in place)."""
         self._update_from(self._need_client().evals.get(self.id))
@@ -1460,48 +1095,3 @@ class Eval(_EvalData):
         """Cancel the eval (in place)."""
         self._update_from(self._need_client().evals.cancel(self.id))
         return self
-
-
-class AsyncEval(_EvalData):
-    """A server-executed evaluation (async)."""
-
-    async def refresh(self) -> AsyncEval:
-        """Reload from the server (in place)."""
-        self._update_from(await self._need_client().evals.get(self.id))
-        return self
-
-    async def wait(self, *, timeout: float | None = None, rubric: Any = None, raise_on_failure: bool = True) -> AsyncEval:
-        """Wait until the eval completes, scoring local ``Scorer`` functions when it awaits them."""
-        final = await self._need_client().evals.wait(self.id, timeout=timeout, rubric=rubric or self._local_rubric, raise_on_failure=raise_on_failure)
-        self._update_from(final)
-        return self
-
-    async def score_pending(self, rubric: Any = None) -> int:
-        """Score every output still missing a local score once."""
-        posted: int = await self._need_client().evals.score_pending(self.id, rubric or self._local_rubric)
-        return posted
-
-    async def failures(self, *, model: Any = None, threshold: float | None = None) -> AsyncEvalFailures:
-        """Tasks scoring below ``threshold``."""
-        failures: AsyncEvalFailures = await self._need_client().evals.failures(self.id, model=model, threshold=threshold)
-        return failures
-
-    def results(self, *, model: Any = None) -> AsyncPager[EvalResult]:
-        """Per-task, per-model results."""
-        pager: AsyncPager[EvalResult] = self._need_client().evals.results(self.id, model=model)
-        return pager
-
-    def outputs(self, *, model: Any = None) -> AsyncPager[EvalOutput]:
-        """Generated outputs with their per-check scores."""
-        pager: AsyncPager[EvalOutput] = self._need_client().evals.outputs(self.id, model=model)
-        return pager
-
-    async def cancel(self) -> AsyncEval:
-        """Cancel the eval (in place)."""
-        self._update_from(await self._need_client().evals.cancel(self.id))
-        return self
-
-
-def variant(client: Any, sync_cls: type[T], async_cls: type[Any]) -> type[T]:
-    """Pick the sync or async class for ``client``."""
-    return async_cls if _is_async(client) else sync_cls

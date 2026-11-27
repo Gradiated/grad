@@ -1,32 +1,34 @@
 """Request policy shared by every grad-sdk call: auth, retries, redirects and error mapping.
 
+HTTP itself is ``httpx`` (pooling, proxies, streaming). This module adds the policy:
+
 * Retries (``max_retries``, default 2) use exponential backoff with jitter and honour
   ``Retry-After``. GET/HEAD/PUT/DELETE, and every request that carries an
   ``Idempotency-Key``, are retried on 408/429/500/502/503/504 and on connection
   failures. The generated client sends a fresh UUIDv4 key with every POST the server
-  accepts one for and reuses it across retries, so the server replays the first
-  response instead of starting (and billing) a second run. A keyed request that gets
-  409 with ``Retry-After`` (the first attempt still running) is retried too. Other
-  POSTs are retried only on 429 and when the connection failed before sending.
-* Redirects: same-origin redirects of GET/HEAD are followed (at most 5). Anything
-  else, in particular a redirect to another origin or a scheme downgrade, raises
-  :class:`grad.UnexpectedRedirectError` and the credentials are never sent there.
-  Non-GET requests are never replayed as GET.
+  accepts one for (or the caller's ``idempotency_key=``) and reuses it across retries,
+  so the server replays the first response instead of starting (and billing) a second
+  run. A keyed request that gets 409 with ``Retry-After`` (the first attempt still
+  running) is retried too. Other POSTs are retried only on 429 and when the
+  connection failed before anything was sent.
+* Redirects are never followed: grad-server does not redirect, so any 3xx raises
+  :class:`grad.UnexpectedRedirectError` and the credentials stay with the API origin.
 * Every request carries ``User-Agent: grad-python/<version>`` and an
   ``x-request-id`` (kept across retries); errors quote the id the server echoed.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import random
 import time
 import urllib.parse
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import IO, Any
+
+import httpx
 
 from ._config import ResolvedConfig
 from ._errors import (
@@ -37,23 +39,14 @@ from ._errors import (
     error_from_response,
     parse_retry_after,
 )
-from ._http import (
-    AsyncConnectionPool,
-    AsyncResponse,
-    AsyncSender,
-    ConnectionPool,
-    Request,
-    Response,
-    SyncSender,
-    TransportFailure,
-    same_origin,
-)
 from ._version import __version__
 
 USER_AGENT = f"grad-python/{__version__}"
 IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE", "OPTIONS"})
 RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
-MAX_REDIRECTS = 5
+# Failures before any byte of the request left: retrying is safe for every method.
+NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+_CHUNK = 64 * 1024
 
 
 @dataclass
@@ -63,7 +56,6 @@ class Clock:
     monotonic: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
     random: Callable[[], float] = random.random
-    async_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
 
 
 @dataclass(frozen=True)
@@ -98,10 +90,6 @@ def new_idempotency_key() -> str:
     return str(uuid.uuid4())
 
 
-def _keyed(headers: Mapping[str, str]) -> bool:
-    return any(name.lower() == "idempotency-key" for name in headers)
-
-
 def quote_path_param(value: Any, name: str) -> str:
     """Percent-encode one path segment; reject empty, ``.`` and ``..`` values."""
     text = str(value)
@@ -115,22 +103,45 @@ def _is_json(headers: Mapping[str, str]) -> bool:
     return not ctype or "json" in ctype
 
 
-class _Base:
+def _new_request_id() -> str:
+    return f"req_{uuid.uuid4().hex}"
+
+
+def _chunks(fileobj: IO[bytes]) -> Iterator[bytes]:
+    while block := fileobj.read(_CHUNK):
+        yield block
+
+
+class Transport:
+    """The policy layer over one pooled ``httpx.Client``."""
+
     def __init__(
         self,
         config: ResolvedConfig,
         *,
-        timeout: float,
-        retry: RetryPolicy,
-        clock: Clock,
-        default_headers: Mapping[str, str] | None,
+        timeout: float = 60.0,
+        retry: RetryPolicy | None = None,
+        clock: Clock | None = None,
+        http_transport: httpx.BaseTransport | None = None,
+        default_headers: Mapping[str, str] | None = None,
     ) -> None:
         self.config = config
         self.base_url = config.base_url
         self.timeout = timeout
-        self.retry = retry
-        self.clock = clock
+        self.retry = retry or RetryPolicy()
+        self.clock = clock or Clock()
         self._default_headers = dict(default_headers or {})
+        # Idle connections close after 4 s, below the 5 s keep-alive of grad-server (Node),
+        # so a pooled connection is never reused just as the server closes it.
+        self.http = httpx.Client(
+            transport=http_transport,
+            follow_redirects=False,
+            limits=httpx.Limits(keepalive_expiry=4.0),
+        )
+
+    def close(self) -> None:
+        """Close pooled connections."""
+        self.http.close()
 
     def url(self, path: str, query: Mapping[str, Any] | None = None) -> str:
         """Absolute URL for an API path (or pass an absolute URL through)."""
@@ -140,16 +151,8 @@ class _Base:
             return base
         return f"{base}{'&' if '?' in base else '?'}{encoded}"
 
-    def headers(
-        self,
-        *,
-        accept: str,
-        content_type: str | None,
-        extra: Mapping[str, str] | None,
-        auth: bool,
-        request_id: str,
-    ) -> dict[str, str]:
-        out = {"User-Agent": USER_AGENT, "Accept": accept, "Accept-Encoding": "identity", "x-request-id": request_id}
+    def _headers(self, *, accept: str, content_type: str | None, extra: Mapping[str, str] | None, auth: bool) -> dict[str, str]:
+        out = {"User-Agent": USER_AGENT, "Accept": accept, "Accept-Encoding": "identity", "x-request-id": _new_request_id()}
         out.update(self._default_headers)
         if content_type:
             out["Content-Type"] = content_type
@@ -159,7 +162,7 @@ class _Base:
             out.update(extra)
         return out
 
-    def should_retry_status(self, method: str, status: int, attempt: int, *, keyed: bool, retry_after: float | None) -> bool:
+    def _retry_status(self, method: str, status: int, attempt: int, *, keyed: bool, retry_after: float | None) -> bool:
         if attempt >= self.retry.max_retries:
             return False
         if status == 409:
@@ -169,148 +172,91 @@ class _Base:
             return False
         return keyed or method in IDEMPOTENT_METHODS or status == 429
 
-    def should_retry_failure(self, method: str, failure: TransportFailure, attempt: int, *, replayable: bool, keyed: bool) -> bool:
-        if attempt >= self.retry.max_retries or not replayable:
+    def _retry_failure(self, method: str, exc: httpx.TransportError, attempt: int, *, keyed: bool) -> bool:
+        if attempt >= self.retry.max_retries:
             return False
-        if failure.phase == "connect":
-            return True
-        if keyed or method in IDEMPOTENT_METHODS:
-            return True
-        # A pooled keep-alive connection the server had already closed fails while we are
-        # still writing: the request never reached the application, so it is safe to resend.
-        return failure.reused and failure.phase == "send"
+        return isinstance(exc, NOT_SENT) or keyed or method in IDEMPOTENT_METHODS
 
-    def backoff(self, attempt: int, retry_after: float | None) -> float:
+    def _backoff(self, attempt: int, retry_after: float | None) -> float:
         if retry_after is not None:
             return min(retry_after, self.retry.max_retry_after)
         base: float = min(self.retry.max_backoff, self.retry.initial_backoff * (2.0**attempt))
         return base * (0.5 + self.clock.random() / 2)
 
-    def connection_error(self, method: str, url: str, failure: TransportFailure) -> APIConnectionError:
-        cause = failure.cause
+    def connection_error(self, method: str, url: str, exc: BaseException) -> APIConnectionError:
+        """The typed error for a network failure of ``method url``."""
         where = f"{method} {url}"
-        if failure.timeout:
+        if isinstance(exc, httpx.TimeoutException):
             return APITimeoutError(
-                f"Request timed out ({where}): no response within the timeout. Pass timeout= to Grad(...) "
-                "for slower networks.",
+                f"Request timed out ({where}): no response within the timeout. Pass timeout= to Grad(...) for slower networks.",
                 method=method,
                 url=url,
-                cause=cause,
+                cause=exc,
             )
         return APIConnectionError(
-            f"Cannot reach grad-server at {self.base_url} ({where}): {failure}. Check GRADIATED_BASE_URL "
+            f"Cannot reach grad-server at {self.base_url} ({where}): {type(exc).__name__}: {exc}. Check GRADIATED_BASE_URL "
             "(or Grad(base_url=...)); for a local stack run `grad local up`.",
             method=method,
             url=url,
-            cause=cause,
+            cause=exc,
         )
 
-    def api_error(self, method: str, url: str, status: int, headers: Mapping[str, str], body: bytes) -> GradAPIError:
-        hint = None
-        if status == 401 and not self.config.api_key:
-            hint = "No API key was sent: set GRADIATED_API_KEY, pass Grad(api_key=...), or run `grad login`."
-        return error_from_response(status=status, headers=headers, body=body, method=method, url=url, hint=hint)
-
-    def redirect_error(self, method: str, url: str, status: int, headers: Mapping[str, str], target: str) -> GradAPIError:
-        if not same_origin(url, target):
-            why = (
-                f"it points to another origin ({target}); the SDK never sends your API key to a different "
-                "host or over a downgraded scheme. Set base_url to the final URL."
+    def _api_error(self, method: str, url: str, resp: httpx.Response, body: bytes) -> GradAPIError:
+        if 300 <= resp.status_code < 400:
+            target = resp.headers.get("location", "")
+            detail = (
+                f"Refusing to follow HTTP {resp.status_code} to {target or 'an unknown location'}: grad-server never redirects, "
+                "and the SDK does not send your API key anywhere else. Set base_url to the final URL."
             )
-        else:
-            why = f"{method} requests are never replayed on a redirect (to {target}). Set base_url to the final URL."
-        body = json.dumps({"code": "unexpected_redirect", "title": "Unexpected redirect", "detail": f"Refusing to follow HTTP {status}: {why}"})
-        return error_from_response(status=status, headers=headers, body=body.encode(), method=method, url=url)
+            body = json.dumps({"code": "unexpected_redirect", "title": "Unexpected redirect", "detail": detail}).encode()
+        hint = None
+        if resp.status_code == 401 and not self.config.api_key:
+            hint = "No API key was sent: set GRADIATED_API_KEY, pass Grad(api_key=...), or run `grad login`."
+        return error_from_response(status=resp.status_code, headers=resp.headers, body=body, method=method, url=url, hint=hint)
 
-    def decode_json(self, method: str, url: str, status: int, headers: Mapping[str, str], body: bytes) -> Any:
-        if status in (204, 205) or not body.strip():
-            return None
-        try:
-            return json.loads(body.decode("utf-8"))
-        except ValueError:
-            snippet = " ".join(body.decode("utf-8", errors="replace").split())[:200]
-            raise InvalidResponseError(
-                f"Expected JSON from {method} {url} (HTTP {status}, content-type "
-                f"{headers.get('content-type', 'unknown')!r}) but got: {snippet!r}. Is base_url pointing at grad-server?",
-                method=method,
-                url=url,
-                status=status,
-                request_id=headers.get("x-request-id"),
-            ) from None
-
-
-def _new_request_id() -> str:
-    return f"req_{uuid.uuid4().hex}"
-
-
-class SyncTransport(_Base):
-    """Blocking transport used by :class:`grad.Grad`."""
-
-    def __init__(
-        self,
-        config: ResolvedConfig,
-        *,
-        timeout: float = 60.0,
-        retry: RetryPolicy | None = None,
-        clock: Clock | None = None,
-        sender: SyncSender | None = None,
-        default_headers: Mapping[str, str] | None = None,
-    ) -> None:
-        super().__init__(config, timeout=timeout, retry=retry or RetryPolicy(), clock=clock or Clock(), default_headers=default_headers)
-        self.sender: SyncSender = sender or ConnectionPool()
-
-    def close(self) -> None:
-        """Close pooled connections."""
-        self.sender.close()
-
-    def _execute(
-        self,
-        method: str,
-        url: str,
-        *,
-        body: bytes | IO[bytes] | None,
-        body_length: int | None,
-        headers: dict[str, str],
-        timeout: float,
-    ) -> Response:
+    def _execute(self, method: str, url: str, *, headers: dict[str, str], timeout: float, body: bytes | None = None, fileobj: IO[bytes] | None = None) -> httpx.Response:
+        """Send with retries; return the streaming 2xx response (the caller reads or closes it)."""
+        keyed = any(name.lower() == "idempotency-key" for name in headers)
+        start = fileobj.tell() if fileobj is not None and fileobj.seekable() else None
         attempt = 0
-        hops = 0
-        current = url
-        keyed = _keyed(headers)
-        start_pos = body.tell() if body is not None and not isinstance(body, bytes) and body.seekable() else None
         while True:
-            if start_pos is not None and body is not None and not isinstance(body, bytes):
-                body.seek(start_pos)
-            replayable = body is None or isinstance(body, bytes) or start_pos is not None
+            content: bytes | Iterator[bytes] | None = body
+            if fileobj is not None:
+                if start is not None:
+                    fileobj.seek(start)
+                content = _chunks(fileobj)
+            replayable = fileobj is None or start is not None
+            request = self.http.build_request(method, url, headers=headers, content=content, timeout=httpx.Timeout(timeout))
             try:
-                resp = self.sender.send(Request(method, current, headers, body, body_length), timeout=timeout)
-            except TransportFailure as failure:
-                if self.should_retry_failure(method, failure, attempt, replayable=replayable, keyed=keyed):
-                    self.clock.sleep(self.backoff(attempt, None))
+                resp = self.http.send(request, stream=True)
+            except httpx.TransportError as exc:
+                if replayable and self._retry_failure(method, exc, attempt, keyed=keyed):
+                    self.clock.sleep(self._backoff(attempt, None))
                     attempt += 1
                     continue
-                raise self.connection_error(method, current, failure) from failure.cause
-            status = resp.status
-            if 300 <= status < 400 and status != 304 and "location" in resp.headers:
-                target = urllib.parse.urljoin(current, resp.headers["location"])
-                resp.close()
-                if method in ("GET", "HEAD") and same_origin(current, target) and hops < MAX_REDIRECTS:
-                    hops += 1
-                    current = target
-                    continue
-                raise self.redirect_error(method, current, status, resp.headers, target)
-            if 200 <= status < 300:
+                raise self.connection_error(method, url, exc) from exc
+            if resp.is_success:
                 return resp
             try:
                 data = resp.read()
-            except TransportFailure:
+            except httpx.TransportError:
                 data = b""
+            finally:
+                resp.close()
             retry_after = parse_retry_after(resp.headers.get("retry-after"))
-            if replayable and self.should_retry_status(method, status, attempt, keyed=keyed, retry_after=retry_after):
-                self.clock.sleep(self.backoff(attempt, retry_after))
+            if replayable and self._retry_status(method, resp.status_code, attempt, keyed=keyed, retry_after=retry_after):
+                self.clock.sleep(self._backoff(attempt, retry_after))
                 attempt += 1
                 continue
-            raise self.api_error(method, current, status, resp.headers, data)
+            raise self._api_error(method, url, resp, data)
+
+    def _read(self, method: str, url: str, resp: httpx.Response) -> bytes:
+        try:
+            return resp.read()
+        except httpx.TransportError as exc:
+            raise self.connection_error(method, url, exc) from exc
+        finally:
+            resp.close()
 
     def request(
         self,
@@ -325,21 +271,25 @@ class SyncTransport(_Base):
         """Send a JSON request and return the decoded JSON body (``None`` when empty)."""
         url = self.url(path, query)
         body = None if json_body is None else json.dumps(json_body, separators=(",", ":"), allow_nan=False).encode()
-        hdrs = self.headers(
-            accept="application/json",
-            content_type="application/json" if body is not None else None,
-            extra=headers,
-            auth=True,
-            request_id=_new_request_id(),
-        )
-        resp = self._execute(method, url, body=body, body_length=None, headers=hdrs, timeout=timeout or self.timeout)
-        try:
-            data = resp.read()
-        except TransportFailure as failure:
-            raise self.connection_error(method, url, failure) from failure.cause
-        if not _is_json(resp.headers) and data.strip():
+        hdrs = self._headers(accept="application/json", content_type="application/json" if body is not None else None, extra=headers, auth=True)
+        resp = self._execute(method, url, headers=hdrs, timeout=timeout or self.timeout, body=body)
+        data = self._read(method, url, resp)
+        if not data.strip() or resp.status_code in (204, 205):
+            return None
+        if not _is_json(resp.headers):
             return data
-        return self.decode_json(method, url, resp.status, resp.headers, data)
+        try:
+            return json.loads(data.decode("utf-8"))
+        except ValueError:
+            snippet = " ".join(data.decode("utf-8", errors="replace").split())[:200]
+            raise InvalidResponseError(
+                f"Expected JSON from {method} {url} (HTTP {resp.status_code}, content-type "
+                f"{resp.headers.get('content-type', 'unknown')!r}) but got: {snippet!r}. Is base_url pointing at grad-server?",
+                method=method,
+                url=url,
+                status=resp.status_code,
+                request_id=resp.headers.get("x-request-id"),
+            ) from None
 
     def stream(
         self,
@@ -350,11 +300,11 @@ class SyncTransport(_Base):
         accept: str = "application/octet-stream",
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
-    ) -> Response:
+    ) -> httpx.Response:
         """Open a streaming response (2xx only). The caller must read or close it."""
         url = self.url(path, query)
-        hdrs = self.headers(accept=accept, content_type=None, extra=headers, auth=True, request_id=_new_request_id())
-        return self._execute(method, url, body=None, body_length=None, headers=hdrs, timeout=timeout or self.timeout)
+        hdrs = self._headers(accept=accept, content_type=None, extra=headers, auth=True)
+        return self._execute(method, url, headers=hdrs, timeout=timeout or self.timeout)
 
     def upload(
         self,
@@ -365,158 +315,12 @@ class SyncTransport(_Base):
         headers: Mapping[str, str] | None = None,
         method: str = "PUT",
         timeout: float | None = None,
-    ) -> Any:
-        """Stream a file to a (pre)signed upload URL. No API key is sent: the URL is the credential."""
-        target = self.url(url)
-        hdrs = {"User-Agent": USER_AGENT, "Content-Type": "application/octet-stream", "x-request-id": _new_request_id()}
-        hdrs.update(dict(headers or {}))
-        hdrs["Content-Length"] = str(length)
-        resp = self._execute(method, target, body=fileobj, body_length=length, headers=hdrs, timeout=timeout or self.timeout)
-        data = resp.read()
-        if _is_json(resp.headers) and data.strip():
-            try:
-                return json.loads(data.decode("utf-8"))
-            except ValueError:
-                return None
-        return None
-
-
-class AsyncTransport(_Base):
-    """asyncio transport used by :class:`grad.AsyncGrad` (no threads for network I/O)."""
-
-    def __init__(
-        self,
-        config: ResolvedConfig,
-        *,
-        timeout: float = 60.0,
-        retry: RetryPolicy | None = None,
-        clock: Clock | None = None,
-        sender: AsyncSender | None = None,
-        default_headers: Mapping[str, str] | None = None,
     ) -> None:
-        super().__init__(config, timeout=timeout, retry=retry or RetryPolicy(), clock=clock or Clock(), default_headers=default_headers)
-        self.sender: AsyncSender = sender or AsyncConnectionPool()
-
-    async def aclose(self) -> None:
-        """Close pooled connections."""
-        await self.sender.aclose()
-
-    async def _execute(
-        self,
-        method: str,
-        url: str,
-        *,
-        body: bytes | IO[bytes] | None,
-        body_length: int | None,
-        headers: dict[str, str],
-        timeout: float,
-    ) -> AsyncResponse:
-        attempt = 0
-        hops = 0
-        current = url
-        keyed = _keyed(headers)
-        start_pos = body.tell() if body is not None and not isinstance(body, bytes) and body.seekable() else None
-        while True:
-            if start_pos is not None and body is not None and not isinstance(body, bytes):
-                body.seek(start_pos)
-            replayable = body is None or isinstance(body, bytes) or start_pos is not None
-            try:
-                resp = await self.sender.send(Request(method, current, headers, body, body_length), timeout=timeout)
-            except TransportFailure as failure:
-                if self.should_retry_failure(method, failure, attempt, replayable=replayable, keyed=keyed):
-                    await self.clock.async_sleep(self.backoff(attempt, None))
-                    attempt += 1
-                    continue
-                raise self.connection_error(method, current, failure) from failure.cause
-            status = resp.status
-            if 300 <= status < 400 and status != 304 and "location" in resp.headers:
-                target = urllib.parse.urljoin(current, resp.headers["location"])
-                await resp.aclose()
-                if method in ("GET", "HEAD") and same_origin(current, target) and hops < MAX_REDIRECTS:
-                    hops += 1
-                    current = target
-                    continue
-                raise self.redirect_error(method, current, status, resp.headers, target)
-            if 200 <= status < 300:
-                return resp
-            try:
-                data = await resp.read()
-            except TransportFailure:
-                data = b""
-            retry_after = parse_retry_after(resp.headers.get("retry-after"))
-            if replayable and self.should_retry_status(method, status, attempt, keyed=keyed, retry_after=retry_after):
-                await self.clock.async_sleep(self.backoff(attempt, retry_after))
-                attempt += 1
-                continue
-            raise self.api_error(method, current, status, resp.headers, data)
-
-    async def request(
-        self,
-        method: str,
-        path: str,
-        *,
-        query: Mapping[str, Any] | None = None,
-        json_body: Any = None,
-        headers: Mapping[str, str] | None = None,
-        timeout: float | None = None,
-    ) -> Any:
-        """Send a JSON request and return the decoded JSON body (``None`` when empty)."""
-        url = self.url(path, query)
-        body = None if json_body is None else json.dumps(json_body, separators=(",", ":"), allow_nan=False).encode()
-        hdrs = self.headers(
-            accept="application/json",
-            content_type="application/json" if body is not None else None,
-            extra=headers,
-            auth=True,
-            request_id=_new_request_id(),
-        )
-        resp = await self._execute(method, url, body=body, body_length=None, headers=hdrs, timeout=timeout or self.timeout)
-        try:
-            data = await resp.read()
-        except TransportFailure as failure:
-            raise self.connection_error(method, url, failure) from failure.cause
-        if not _is_json(resp.headers) and data.strip():
-            return data
-        return self.decode_json(method, url, resp.status, resp.headers, data)
-
-    async def stream(
-        self,
-        method: str,
-        path: str,
-        *,
-        query: Mapping[str, Any] | None = None,
-        accept: str = "application/octet-stream",
-        headers: Mapping[str, str] | None = None,
-        timeout: float | None = None,
-    ) -> AsyncResponse:
-        """Open a streaming response (2xx only). The caller must read or close it."""
-        url = self.url(path, query)
-        hdrs = self.headers(accept=accept, content_type=None, extra=headers, auth=True, request_id=_new_request_id())
-        return await self._execute(method, url, body=None, body_length=None, headers=hdrs, timeout=timeout or self.timeout)
-
-    async def upload(
-        self,
-        url: str,
-        fileobj: IO[bytes],
-        *,
-        length: int,
-        headers: Mapping[str, str] | None = None,
-        method: str = "PUT",
-        timeout: float | None = None,
-    ) -> Any:
         """Stream a file to a (pre)signed upload URL. No API key is sent: the URL is the credential."""
         target = self.url(url)
-        hdrs = {"User-Agent": USER_AGENT, "Content-Type": "application/octet-stream", "x-request-id": _new_request_id()}
-        hdrs.update(dict(headers or {}))
+        hdrs = self._headers(accept="*/*", content_type="application/octet-stream", extra=headers, auth=False)
         hdrs["Content-Length"] = str(length)
-        resp = await self._execute(method, target, body=fileobj, body_length=length, headers=hdrs, timeout=timeout or self.timeout)
-        data = await resp.read()
-        if _is_json(resp.headers) and data.strip():
-            try:
-                return json.loads(data.decode("utf-8"))
-            except ValueError:
-                return None
-        return None
+        self._read(method, target, self._execute(method, target, headers=hdrs, timeout=timeout or self.timeout, fileobj=fileobj))
 
 
 # --------------------------------------------------------------------------------------
@@ -577,15 +381,6 @@ def iter_sse(lines: Iterator[str], decoder: SSEDecoder | None = None) -> Iterato
     """Decode an iterator of lines into events."""
     dec = decoder or SSEDecoder()
     for line in lines:
-        event = dec.feed(line)
-        if event is not None:
-            yield event
-
-
-async def aiter_sse(lines: AsyncIterator[str], decoder: SSEDecoder | None = None) -> AsyncIterator[ServerSentEvent]:
-    """Decode an async iterator of lines into events."""
-    dec = decoder or SSEDecoder()
-    async for line in lines:
         event = dec.feed(line)
         if event is not None:
             yield event

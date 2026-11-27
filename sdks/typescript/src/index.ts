@@ -4,7 +4,7 @@ export { DEFAULT_BASE_URL } from "./config.js";
 export { Paginator, type Page } from "./pagination.js";
 export { Pending } from "./pending.js";
 export type { WaitOptions } from "./polling.js";
-export { adapters, Context, losses, Recipe, recipes, splits, type CommonRecipeOptions, type ModelRef } from "./recipes.js";
+export { adapters, Context, losses, optim, pooling, Recipe, recipes, splits, type CommonRecipeOptions, type ModelRef } from "./recipes.js";
 export { Judge, Rubric, Scorer, validators, type BuiltinValidator, type RubricInput, type RubricItem, type ScoreFn, type ScoreInput } from "./rubrics.js";
 export { Trajectory } from "./trajectory.js";
 export {
@@ -64,7 +64,7 @@ export {
   LIST_RUN_METRICS_LIMIT_MAX,
   LIST_RUNS_LIMIT_MAX,
 } from "./generated/client.js";
-export { newIdempotencyKey, SDK_VERSION, type RawResponse, type RequestOptions, type ServerSentEvent, type SSEOptions, type StreamOptions } from "./generated/transport.js";
+export { newIdempotencyKey, SDK_VERSION, type RawResponse, type RequestOptions, type ServerSentEvent, type SSEOptions, type StreamOptions } from "./transport.js";
 export type * as models from "./generated/models.js";
 export type {
   AdapterSpec,

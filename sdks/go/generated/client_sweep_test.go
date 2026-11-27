@@ -88,7 +88,7 @@ func TestEveryOperation(t *testing.T) {
 			t.Errorf("%s: %v", m.Name, errV.Interface())
 		}
 	}
-	if methods < 50 || len(seen) != methods {
+	if methods < 40 || len(seen) != methods {
 		t.Fatalf("%d methods, %d requests", methods, len(seen))
 	}
 }

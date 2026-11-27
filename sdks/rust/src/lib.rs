@@ -2,13 +2,13 @@
 //!
 //! ```no_run
 //! # async fn demo() -> grad_sdk::Result<()> {
-//! use grad_sdk::{Client, RecipeKind, RecipeSpec, RunRequest};
+//! use grad_sdk::{Client, PlanRunRequest, RecipeKind, RecipeSpec};
 //!
 //! // Reads GRADIATED_API_KEY / GRADIATED_BASE_URL, then the `grad login` config file.
 //! let client = Client::new();
 //! let plan = client
 //!     .runs()
-//!     .plan(&RunRequest::new("support-prod", "support-router", RecipeSpec::new(RecipeKind::Router)))
+//!     .plan(&PlanRunRequest::new("support-prod", "support-router", RecipeSpec::new(RecipeKind::Router)))
 //!     .await?;
 //! println!("~${:.2} for {} steps", plan.estimated_cost_usd, plan.estimated_steps);
 //! # Ok(()) }
@@ -16,12 +16,13 @@
 //!
 //! Resources hang off [`Client`]: [`Client::datasets`], [`Client::runs`],
 //! [`Client::artifacts`], [`Client::deployments`], [`Client::evals`], ...
-//! Every call returns [`Result`] with a typed [`Error`]. `generated` is the
-//! OpenAPI-generated low-level transport, kept as an unstable escape hatch.
+//! Every call returns [`Result`] with a typed [`Error`]. The request and
+//! response models are generated from `spec/openapi.yaml` (`generated`).
 
 pub mod config;
 pub mod download;
 pub mod error;
+#[rustfmt::skip]
 pub mod generated;
 pub mod models;
 pub mod recipes;
@@ -286,15 +287,6 @@ impl Client {
         &self.resolved
     }
 
-    /// Low-level generated client sharing this client's base URL and key.
-    /// Unstable: it follows the OpenAPI spec 1:1 and has no retries.
-    pub fn wire(&self) -> generated::GeneratedClient {
-        generated::GeneratedClient::new(
-            self.transport.base_url.clone(),
-            self.transport.api_key.clone(),
-        )
-    }
-
     pub(crate) fn t(&self) -> &transport::Transport {
         &self.transport
     }
@@ -336,19 +328,16 @@ impl Client {
     pub fn feedback(&self) -> Feedback<'_> {
         Feedback { c: self }
     }
-    pub fn env_workers(&self) -> EnvWorkers<'_> {
-        EnvWorkers { c: self }
-    }
 
     /// Ask a deployed router which model should answer (`POST /v1/route`).
-    pub async fn route(&self, req: &RouteRequest) -> Result<RouteDecision> {
+    pub async fn route(&self, req: &RouteRequest) -> Result<RouteResponse> {
         self.transport
             .json(transport::Req::post("/v1/route").json(serde_json::to_value(req).map_err(enc)?))
             .await
     }
 
     /// Embed text with a deployed embedding artifact (`POST /v1/embeddings`).
-    pub async fn embeddings(&self, model: &str, input: Vec<String>) -> Result<EmbeddingsResponse> {
+    pub async fn embeddings(&self, model: &str, input: Vec<String>) -> Result<EmbedResponse> {
         self.transport
             .json(
                 transport::Req::post("/v1/embeddings")

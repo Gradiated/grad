@@ -15,10 +15,11 @@ from .._errors import GradAPIError as GradApiError
 from .._transport import new_idempotency_key, quote_path_param
 
 if TYPE_CHECKING:
-    from .._http import AsyncResponse, Response
-    from .._transport import AsyncTransport, SyncTransport
+    from httpx import Response
 
-__all__ = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+    from .._transport import Transport
+
+__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -1275,9 +1276,9 @@ LIST_RUNS_LIMIT_MAX = 200
 
 
 class GeneratedApiClient:
-    """Blocking wire client: one method per public operation in spec/openapi.yaml."""
+    """Wire client: one method per public operation in spec/openapi.yaml."""
 
-    def __init__(self, transport: SyncTransport) -> None:
+    def __init__(self, transport: Transport) -> None:
         self._t = transport
 
     def cancel_eval(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
@@ -1451,182 +1452,3 @@ class GeneratedApiClient:
     def route_request(self, body: RouteRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RouteResponse:
         """Ask a deployed model router which model to call."""
         return cast("RouteResponse", self._t.request("POST", "/v1/route", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-
-class AsyncGeneratedApiClient:
-    """asyncio wire client: one coroutine per public operation in spec/openapi.yaml."""
-
-    def __init__(self, transport: AsyncTransport) -> None:
-        self._t = transport
-
-    async def cancel_eval(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
-        """Cancel a queued, running or awaiting_scores evaluation."""
-        return cast("EvalRun", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/cancel", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def cancel_run(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
-        """Cancel a training run (a running attempt is stopped and billed)."""
-        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> CreatedApiKey:
-        """Create a scoped workspace API key (trainer worker keys are platform config, not keys)."""
-        return cast("CreatedApiKey", await self._t.request("POST", "/v1/keys", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def create_dataset(self, body: CreateDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
-        """Create an empty dataset."""
-        return cast("Dataset", await self._t.request("POST", "/v1/datasets", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def create_dataset_import(self, name: str, body: CreateImportRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> ImportJob:
-        """Import an uploaded file or a Hugging Face dataset into a dataset (async job)."""
-        return cast("ImportJob", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EmbedResponse:
-        """Generate embeddings from a deployed embedding artifact."""
-        return cast("EmbedResponse", await self._t.request("POST", "/v1/embeddings", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def create_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
-        """Queue an evaluation across models on a pinned dataset version (executed by the server)."""
-        return cast("EvalRun", await self._t.request("POST", "/v1/evals", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def create_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
-        """Create and enqueue a training run (pins the dataset version)."""
-        return cast("Run", await self._t.request("POST", "/v1/runs", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> UploadTicket:
-        """Get an upload URL for a file to import (PUT the bytes, then create an import)."""
-        return cast("UploadTicket", await self._t.request("POST", "/v1/uploads", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
-        """Deploy or update an artifact under a stable model name."""
-        return cast("Deployment", await self._t.request("POST", "/v1/deployments", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def download_artifact(self, id: str, *, timeout: float | None = None) -> AsyncResponse:
-        """Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 (streams `application/octet-stream`; read or close the response)."""
-        return await self._t.stream("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}/download", accept="application/octet-stream", timeout=timeout)
-
-    async def get_artifact(self, id: str, *, timeout: float | None = None) -> Artifact:
-        """Get an artifact by id or name@latest."""
-        return cast("Artifact", await self._t.request("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    async def get_dataset(self, name: str, *, timeout: float | None = None) -> Dataset:
-        """Get a dataset by name."""
-        return cast("Dataset", await self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}", timeout=timeout))
-
-    async def get_deployment(self, name: str, *, timeout: float | None = None) -> DeploymentStatus:
-        """Get deployment status and feedback summary."""
-        return cast("DeploymentStatus", await self._t.request("GET", f"/v1/deployments/{quote_path_param(name, 'name')}", timeout=timeout))
-
-    async def get_eval(self, id: str, *, timeout: float | None = None) -> EvalRun:
-        """Get an evaluation run by ID."""
-        return cast("EvalRun", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    async def get_import(self, id: str, *, timeout: float | None = None) -> ImportJob:
-        """Get a dataset import job."""
-        return cast("ImportJob", await self._t.request("GET", f"/v1/imports/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    async def get_run(self, id: str, *, timeout: float | None = None) -> Run:
-        """Get a training run."""
-        return cast("Run", await self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    async def list_api_keys(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListApiKeysResponse:
-        """List workspace API keys."""
-        return cast("ListApiKeysResponse", await self._t.request("GET", "/v1/keys", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def list_artifacts(self, *, limit: int | None = None, cursor: str | None = None, name: str | None = None, timeout: float | None = None) -> ListArtifactsResponse:
-        """List immutable artifacts (newest first)."""
-        return cast("ListArtifactsResponse", await self._t.request("GET", "/v1/artifacts", query={"limit": limit, "cursor": cursor, "name": name}, timeout=timeout))
-
-    async def list_dataset_records(self, name: str, *, version: int | None = None, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> DatasetRecordsPage:
-        """Read records of a dataset version."""
-        return cast("DatasetRecordsPage", await self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}/records", query={"version": version, "limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def list_datasets(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDatasetsResponse:
-        """List datasets (newest first)."""
-        return cast("ListDatasetsResponse", await self._t.request("GET", "/v1/datasets", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def list_deployments(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDeploymentsResponse:
-        """List deployments."""
-        return cast("ListDeploymentsResponse", await self._t.request("GET", "/v1/deployments", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def list_eval_failures(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, threshold: float | None = None, timeout: float | None = None) -> ListEvalFailuresResponse:
-        """List failing task records from an evaluation run for mining."""
-        return cast("ListEvalFailuresResponse", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/failures", query={"limit": limit, "cursor": cursor, "model": model, "threshold": threshold}, timeout=timeout))
-
-    async def list_eval_outputs(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, missing_scorer: str | None = None, timeout: float | None = None) -> ListEvalOutputsResponse:
-        """Page through generated model outputs (filter by model or by a code scorer that still needs a score)."""
-        return cast("ListEvalOutputsResponse", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/outputs", query={"limit": limit, "cursor": cursor, "model": model, "missing_scorer": missing_scorer}, timeout=timeout))
-
-    async def list_eval_results(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, timeout: float | None = None) -> ListEvalResultsResponse:
-        """Per-task, per-model results of a completed evaluation."""
-        return cast("ListEvalResultsResponse", await self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/results", query={"limit": limit, "cursor": cursor, "model": model}, timeout=timeout))
-
-    async def list_evals(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListEvalsResponse:
-        """List evaluation runs."""
-        return cast("ListEvalsResponse", await self._t.request("GET", "/v1/evals", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def list_imports(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListImportsResponse:
-        """List dataset import jobs (newest first)."""
-        return cast("ListImportsResponse", await self._t.request("GET", "/v1/imports", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def list_models(self, *, timeout: float | None = None) -> ListModelsResponse:
-        """List trainable base models (the server catalog and price source)."""
-        return cast("ListModelsResponse", await self._t.request("GET", "/v1/models", timeout=timeout))
-
-    async def list_run_checkpoints(self, id: str, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunCheckpointsResponse:
-        """List unexpired checkpoints of a run (best and final never expire)."""
-        return cast("ListRunCheckpointsResponse", await self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/checkpoints", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def list_run_metrics(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> MetricsPage:
-        """Training step metrics as JSON pages, or a live SSE stream."""
-        return cast("MetricsPage", await self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, timeout=timeout))
-
-    async def list_run_metrics_stream(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> AsyncResponse:
-        """Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events stream; read or close the response)."""
-        return await self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, accept="text/event-stream", timeout=timeout)
-
-    async def list_runs(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunsResponse:
-        """List training runs (newest first)."""
-        return cast("ListRunsResponse", await self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
-
-    async def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanEvalResponse:
-        """Estimate tasks, model/judge calls, and cost before running an eval."""
-        return cast("PlanEvalResponse", await self._t.request("POST", "/v1/evals/plan", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def plan_run(self, body: PlanRunRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanRunResponse:
-        """Dry-run a training recipe at zero cost."""
-        return cast("PlanRunResponse", await self._t.request("POST", "/v1/runs/plan", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def post_eval_scores(self, id: str, body: PostEvalScoresRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PostEvalScoresResponse:
-        """Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing."""
-        return cast("PostEvalScoresResponse", await self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> Artifact:
-        """Copy an exportable checkpoint into a new immutable artifact."""
-        return cast("Artifact", await self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:
-        """Append records as a new dataset version (creates the dataset if needed)."""
-        return cast("Dataset", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/records", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def record_feedback(self, body: RecordFeedbackRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RecordFeedbackResponse:
-        """Record deduplicated outcome scores and gold corrections."""
-        return cast("RecordFeedbackResponse", await self._t.request("POST", "/v1/feedback", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def render_dataset(self, name: str, body: RenderDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RenderDatasetResponse:
-        """Preview chat-template rendering and loss masks (estimated token counts)."""
-        return cast("RenderDatasetResponse", await self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/render", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def resume_run(self, id: str, body: ResumeRunRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
-        """Resume a stopped, failed or cancelled run from its latest checkpoint."""
-        return cast("Run", await self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/resume", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def revoke_api_key(self, id: str, *, timeout: float | None = None) -> ApiKey:
-        """Revoke a workspace API key."""
-        return cast("ApiKey", await self._t.request("DELETE", f"/v1/keys/{quote_path_param(id, 'id')}", timeout=timeout))
-
-    async def rollback_deployment(self, name: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
-        """Roll a deployment back to its previous artifact."""
-        return cast("Deployment", await self._t.request("POST", f"/v1/deployments/{quote_path_param(name, 'name')}/rollback", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
-
-    async def route_request(self, body: RouteRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> RouteResponse:
-        """Ask a deployed model router which model to call."""
-        return cast("RouteResponse", await self._t.request("POST", "/v1/route", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))

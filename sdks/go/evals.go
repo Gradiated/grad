@@ -181,12 +181,6 @@ func NumericMatch(field string) ScorerFunc {
 	}
 }
 
-// Benchmark adds a standard benchmark to an eval.
-type Benchmark struct {
-	Name  string
-	Limit int
-}
-
 // EvalParams describes an evaluation.
 type EvalParams struct {
 	Name     string
@@ -196,14 +190,14 @@ type EvalParams struct {
 	Dataset        DatasetRef
 	DatasetVersion int
 	Rubric         Rubric
-	Benchmarks     []Benchmark
 	Samples        int
 	Temperature    *float64
 	MaxTokens      int
 	Limit          int
 	// PassThreshold defaults to 1.0 for binary checks, 0.5 otherwise (server-resolved).
 	PassThreshold *float64
-	MaxCostUSD    float64
+	// IdempotencyKey makes a retried Create return the eval the first call created.
+	IdempotencyKey string
 }
 
 func (p EvalParams) wire() (*generated.PlanEvalRequest, map[string]ScorerFunc, error) {
@@ -213,12 +207,9 @@ func (p EvalParams) wire() (*generated.PlanEvalRequest, map[string]ScorerFunc, e
 	}
 	req := &generated.PlanEvalRequest{Name: optString(p.Name), Models: p.Models, Baseline: optString(p.Baseline), DatasetVersion: optInt(p.DatasetVersion),
 		Rubric: items, Samples: optInt(p.Samples), Temperature: p.Temperature, MaxTokens: optInt(p.MaxTokens), Limit: optInt(p.Limit),
-		PassThreshold: p.PassThreshold, MaxCostUSD: optFloat(p.MaxCostUSD)}
+		PassThreshold: p.PassThreshold}
 	if p.Dataset != nil {
 		req.Dataset = optString(p.Dataset.datasetName())
-	}
-	for _, b := range p.Benchmarks {
-		req.Benchmarks = append(req.Benchmarks, generated.BenchmarkSpec{Name: generated.BenchmarkSpecName(b.Name), Limit: optInt(b.Limit)})
 	}
 	return req, local, nil
 }
@@ -277,7 +268,7 @@ func (s *EvalsService) Create(ctx context.Context, p EvalParams) *EvalHandle {
 	if err != nil {
 		return &EvalHandle{err: err}
 	}
-	e, err := api.CreateEval(ctx, req)
+	e, err := api.CreateEval(ctx, req, idempotency(p.IdempotencyKey)...)
 	if err != nil {
 		return &EvalHandle{err: err}
 	}
@@ -427,7 +418,7 @@ func (e *Eval) Wait(ctx context.Context, opts ...WaitOption) error {
 		}
 		e.EvalRun = *fresh
 		switch e.Status {
-		case generated.EvalStatusCompleted, generated.EvalStatusStoppedBudget:
+		case generated.EvalStatusCompleted:
 			return string(e.Status), true, nil
 		case generated.EvalStatusFailed, generated.EvalStatusCancelled:
 			return string(e.Status), true, nil
@@ -441,7 +432,7 @@ func (e *Eval) Wait(ctx context.Context, opts ...WaitOption) error {
 	if err != nil {
 		return err
 	}
-	if e.Status != generated.EvalStatusCompleted && e.Status != generated.EvalStatusStoppedBudget {
+	if e.Status != generated.EvalStatusCompleted {
 		msg := deref(e.Error)
 		if msg == "" {
 			msg = "no error reported"
