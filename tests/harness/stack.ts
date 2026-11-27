@@ -247,6 +247,8 @@ const main = async () => {
       TRAINER_API_KEY: TRAINER_KEY,
       MAINTENANCE_INTERVAL_MS: "500",
       GRAD_SECRETS_KEY: randomBytes(32).toString("base64"),
+      // Live tests sync a source several times in a row.
+      SOURCE_SYNC_INTERVAL_SECONDS: "0",
       DEFAULT_WORKSPACE_ID: WORKSPACE_ID,
       DATABASE_URL: databaseUrl,
     };

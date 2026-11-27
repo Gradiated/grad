@@ -253,9 +253,11 @@ export const createSourceService = (
       return { job: current, retryAfter: null };
     }
     if (current && !force) {
+      const interval =
+        settings.sourceSyncIntervalSeconds ?? MIN_SYNC_INTERVAL_SECONDS;
       const wait =
         Date.parse(current.created_at) +
-        MIN_SYNC_INTERVAL_SECONDS * 1000 -
+        interval * 1000 -
         clock.now().getTime();
       if (wait > 0) return { job: current, retryAfter: Math.ceil(wait / 1000) };
     }

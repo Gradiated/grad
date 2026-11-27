@@ -22,6 +22,8 @@ export interface AppSettings {
   usageFlushSeconds?: number;
   /** Cloud usage export lag (default 60 s; tests use 0). */
   usageExportLagSeconds?: number;
+  /** A source starts at most one sync per this long (default 60 s; live tests use 0). */
+  sourceSyncIntervalSeconds?: number;
   /** Job events (metrics) older than this are deleted (default 90 days). */
   jobEventRetentionDays?: number;
 }

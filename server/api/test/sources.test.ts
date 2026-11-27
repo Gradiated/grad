@@ -659,6 +659,34 @@ describe("sources", () => {
     });
   });
 
+  it("lets operators lower the interval (live tests sync back to back)", async () => {
+    await t.close();
+    t = await makeTestApp({
+      secrets: createSecretsCipher({ key: randomBytes(32).toString("base64") }),
+      settings: {
+        maxAttempts: 3,
+        evalConcurrency: 4,
+        sourceSyncIntervalSeconds: 0,
+      },
+    });
+    worker = new FakeWorker(t);
+    await t.json("/v1/secrets", {
+      body: { name: "langfuse-prod", value: KEY },
+    });
+    const source = (await addSource()).body;
+    const first = await t.json<{ id: string }>(
+      `/v1/sources/${source.id}/sync`,
+      { body: {} },
+    );
+    await finish(await claimImport(), [], null);
+    const second = await t.json<{ id: string }>(
+      `/v1/sources/${source.id}/sync`,
+      { body: {} },
+    );
+    expect(second.body.id).not.toBe(first.body.id);
+    expect(second.headers.get("retry-after")).toBeNull();
+  });
+
   it("fails a queued sync whose source was removed", async () => {
     const source = (await addSource()).body;
     const sync = await t.json<{ id: string }>(`/v1/sources/${source.id}/sync`, {

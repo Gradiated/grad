@@ -52,6 +52,13 @@ const EnvironmentSchema = z.object({
   USAGE_FLUSH_SECONDS: z.coerce.number().int().min(1).default(300),
   /** Cloud: usage rows younger than this are not exported yet. */
   USAGE_EXPORT_LAG_SECONDS: z.coerce.number().int().min(0).default(60),
+  /** A source starts at most one sync per this many seconds (live tests: 0). */
+  SOURCE_SYNC_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(3600)
+    .default(60),
   /** Days job events (metrics) are kept. */
   JOB_EVENT_RETENTION_DAYS: z.coerce
     .number()

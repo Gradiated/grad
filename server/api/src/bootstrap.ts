@@ -134,6 +134,7 @@ export const buildDependencies = async (
       usageFlushTokens: env.USAGE_FLUSH_TOKENS,
       usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
       usageExportLagSeconds: env.USAGE_EXPORT_LAG_SECONDS,
+      sourceSyncIntervalSeconds: env.SOURCE_SYNC_INTERVAL_SECONDS,
     },
   };
 };
