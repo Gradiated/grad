@@ -262,14 +262,15 @@ pub fn build_request(rf: RunFile) -> CliResult<PlanRunRequest> {
     })
 }
 
-/// Export a run's resolved configuration as a run file (round-trips through `parse`).
+/// Export a run's resolved configuration as a run file (round-trips through `parse`:
+/// planning the file again resolves the same config).
 pub fn export(run: &Run) -> CliResult<String> {
     let rc = &run.resolved_config;
     let resolved = serde_json::to_value(rc).unwrap_or(Value::Null);
     let mut m = serde_norway::Mapping::new();
+    // Only nulls and empty strings are unset; a zero or false is a real value (`warmup: 0`).
     let mut put = |k: &str, v: Value| {
-        let empty = v.is_null() || v.as_str() == Some("") || v.as_f64() == Some(0.0);
-        if !empty {
+        if !(v.is_null() || v.as_str() == Some("")) {
             if let Ok(y) = serde_norway::to_value(&v) {
                 m.insert(serde_norway::Value::String(k.into()), y);
             }
@@ -278,30 +279,34 @@ pub fn export(run: &Run) -> CliResult<String> {
     let or = |a: &str, b: &str| Value::String(if a.is_empty() { b } else { a }.to_string());
     put("dataset", or(&rc.dataset, &run.dataset_name));
     put("name", or(&rc.name, &run.name));
-    let kind = if rc.rule_version.is_empty() {
-        &run.recipe_kind
-    } else {
-        &rc.recipe_kind
-    };
-    put("recipe", Value::String(kind.to_string()));
-    for k in [
-        "model",
-        "adapter",
-        "lr",
-        "batch_size",
-        "epochs",
-        "schedule",
-        "warmup",
-        "train_on",
-        "thinking",
-        "preserve_thinking",
-        "reduction",
-        "select",
-        "checkpoint_ttl_days",
-    ] {
-        put(k, resolved.get(k).cloned().unwrap_or(Value::Null));
+    put("recipe", Value::String(rc.recipe_kind.to_string()));
+    for k in recipe_keys() {
+        let v = match k {
+            // Continued training starts from an artifact: name it (the version the run
+            // used), not its base model.
+            "model" => match &rc.base_artifact {
+                Some(base) => Value::String(base.id.clone()),
+                None => Value::String(rc.model.clone()),
+            },
+            // `auto` resolves to the checkpoint interval; only a chosen value is kept.
+            "eval_every" if rc.eval_every_steps != rc.checkpoint_every_steps => {
+                serde_json::json!(rc.eval_every_steps)
+            }
+            "eval_every" => Value::Null,
+            // Resolved as the pooling kind; the recipe takes {kind: ...}.
+            "pool" => match rc.recipe_params.get(k) {
+                Some(Value::String(kind)) => serde_json::json!({ "kind": kind }),
+                other => other.cloned().unwrap_or(Value::Null),
+            },
+            _ => resolved
+                .get(k)
+                .or_else(|| rc.recipe_params.get(k))
+                .cloned()
+                .unwrap_or(Value::Null),
+        };
+        put(k, v);
     }
-    if !rc.split.strategy.as_str().is_empty() && !rc.rule_version.is_empty() {
+    if !rc.split.strategy.as_str().is_empty() {
         put(
             "split",
             serde_json::json!({
@@ -311,25 +316,14 @@ pub fn export(run: &Run) -> CliResult<String> {
             }),
         );
     }
-    for (k, v) in &rc.recipe_params {
-        if is_recipe_key(k) {
-            put(k, v.clone());
-        }
-    }
     if let Some(c) = run.max_cost_usd {
         put("max_cost_usd", serde_json::json!(c));
     }
     let body = serde_norway::to_string(&serde_norway::Value::Mapping(m))
         .map_err(|e| CliError::general("encode_error", e.to_string()))?;
     Ok(format!(
-        "# grad train -f <this file>  (exported from run {}{})\n{}",
-        run.id,
-        if rc.rule_version.is_empty() {
-            String::new()
-        } else {
-            format!(", defaults rule {}", rc.rule_version)
-        },
-        body
+        "# grad train -f <this file>  (exported from run {}, defaults rule {})\n{}",
+        run.id, rc.rule_version, body
     ))
 }
 
@@ -439,6 +433,40 @@ mod tests {
         assert_eq!(req.recipe.lr, Some(json!(0.0005)));
         assert_eq!(req.max_cost_usd, Some(20.0));
         assert_eq!(req.split.unwrap().eval_fraction, Some(0.15));
+    }
+
+    #[test]
+    fn export_keeps_zero_values_and_the_starting_artifact() {
+        // r8 code-quality P1: `warmup: 0` was dropped (the re-plan used the default) and a
+        // continued-training run re-planned from its base model, losing the adapter.
+        let run: Run = serde_json::from_value(json!({
+            "id": "run_2", "name": "support-sft-2", "recipe_kind": "sft", "max_cost_usd": 0.0,
+            "resolved_config": {
+                "rule_version": "auto@1", "dataset": "support-prod", "name": "support-sft-2",
+                "recipe_kind": "sft", "model": "qwen/qwen3-0.6b",
+                "adapter": {"kind": "lora", "rank": 16, "alpha": 32, "merge_on_export": false},
+                "lr": 0.0002, "batch_size": 8, "epochs": 1, "schedule": "constant", "warmup": 0.0,
+                "train_on": "all", "thinking": "auto", "preserve_thinking": false,
+                "reduction": "per_example", "select": "last", "checkpoint_ttl_days": 0,
+                "split": {"strategy": "random", "eval_fraction": 0.1, "seed": 0, "train_records": 9, "eval_records": 1},
+                "base_artifact": {"id": "support-sft@2026-11-27-1", "recipe_kind": "sft", "format": "peft_lora", "sha256": "ab"},
+                "recipe_params": {}
+            }
+        }))
+        .unwrap();
+        let yaml = export(&run).unwrap();
+        let req = build_request(parse_str(Path::new("x.yaml"), &yaml).unwrap()).unwrap();
+        assert_eq!(
+            req.recipe.model.as_deref(),
+            Some("support-sft@2026-11-27-1"),
+            "{}",
+            yaml
+        );
+        assert_eq!(req.recipe.warmup, Some(0.0), "{}", yaml);
+        assert_eq!(req.recipe.checkpoint_ttl_days, Some(0));
+        assert_eq!(req.recipe.preserve_thinking, Some(false));
+        assert_eq!(req.max_cost_usd, Some(0.0));
+        assert_eq!(req.split.unwrap().seed, Some(0));
     }
 
     #[test]

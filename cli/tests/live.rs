@@ -301,6 +301,8 @@ fn live_self_hosted_quickstart() {
             "test/tiny-qwen3",
             "--batch-size",
             "8",
+            "--set",
+            "warmup=0",
             "--wait",
         ],
         &[],
@@ -317,15 +319,27 @@ fn live_self_hosted_quickstart() {
         o.stdout
     );
 
-    // Round-trip the run config.
+    // Round-trip the run config: re-planning the exported file resolves exactly
+    // the same config (zero values such as warmup=0 included).
     let o = grad(&home, &["runs", "inspect", "support-sft", "--yaml"], &[]);
     ok(&o);
     std::fs::write(home.dir.join("recipe.yaml"), &o.stdout).unwrap();
-    ok(&grad(
+    let replanned = grad(
         &home,
-        &["train", "-f", "recipe.yaml", "--dry-run"],
+        &["--json", "train", "-f", "recipe.yaml", "--dry-run"],
         &[],
-    ));
+    );
+    ok(&replanned);
+    let o = grad(&home, &["--json", "runs", "inspect", "support-sft"], &[]);
+    ok(&o);
+    let mut original = o.json()["data"]["resolved_config"].clone();
+    let mut again = replanned.json()["data"]["resolved_config"].clone();
+    assert_eq!(original["warmup"], 0.0);
+    // The file pins the auto-resolved lr as a number, so only its provenance differs.
+    assert_eq!(again["lr_source"], "explicit");
+    original["lr_source"] = Value::Null;
+    again["lr_source"] = Value::Null;
+    assert_eq!(again, original);
     let o = grad(&home, &["runs", "logs", "support-sft"], &[]);
     ok(&o);
     assert!(o.stdout.contains("STEP"));
