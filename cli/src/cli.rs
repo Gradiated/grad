@@ -84,6 +84,16 @@ pub struct Global {
     /// Print one JSON envelope on stdout (errors as JSON on stderr)
     #[arg(long, global = true, help_heading = "Global options")]
     pub json: bool,
+
+    /// Follow runs with plain lines instead of the full-screen view
+    #[arg(
+        long,
+        global = true,
+        env = "GRAD_NO_TUI",
+        value_parser = clap::builder::FalseyValueParser::new(),
+        help_heading = "Global options"
+    )]
+    pub plain: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -635,6 +645,17 @@ pub enum RunsCmd {
         /// Only steps after this one
         #[arg(long)]
         after_step: Option<i64>,
+    },
+    /// Follow a run live: full-screen on a terminal, plain lines otherwise
+    #[command(after_help = "\
+Keys: q detach (the run keeps going), c cancel, l event log, ? help.
+Use --plain or GRAD_NO_TUI=1 for line output.")]
+    Watch {
+        /// Run id or run name
+        run: String,
+        /// Give up after this many seconds
+        #[arg(long, value_name = "SECS", default_value_t = 86_400)]
+        timeout: u64,
     },
     /// Wait for a run to finish
     Wait {

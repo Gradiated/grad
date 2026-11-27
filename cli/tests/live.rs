@@ -491,6 +491,159 @@ fn live_self_hosted_quickstart() {
     ok(&grad(&home, &["--api-key", &secret, "runs", "list"], &[]));
 }
 
+/// Run `grad` on a pseudo-terminal (util-linux `script`, 100x30), typing
+/// `keys` after the given delays. Returns the exit code and the raw output.
+fn grad_pty(
+    home: &Home,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    keys: &[(u64, &str)],
+) -> Option<(i32, String)> {
+    if Command::new("script").arg("--version").output().is_err() {
+        eprintln!("skipping pty check: util-linux `script` not found");
+        return None;
+    }
+    let quoted: Vec<String> = args.iter().map(|a| format!("'{}'", a)).collect();
+    let cmd = format!(
+        "stty rows 30 cols 100; exec '{}' {}",
+        assert_cmd::cargo::cargo_bin("grad").display(),
+        quoted.join(" ")
+    );
+    let log = home.dir.join("pty.log");
+    let mut c = Command::new("timeout");
+    c.arg("120")
+        .args(["script", "-qfec", &cmd])
+        .arg(&log)
+        .current_dir(&home.dir)
+        .env("HOME", &home.dir)
+        .env("XDG_CONFIG_HOME", home.dir.join("xdg"))
+        .env("TERM", "xterm-256color")
+        .env_remove("GRADIATED_API_KEY")
+        .env_remove("GRADIATED_BASE_URL")
+        .env_remove("GRAD_NO_TUI")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null());
+    for (k, v) in extra_env {
+        c.env(k, v);
+    }
+    let mut child = c.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for (delay, k) in keys {
+        std::thread::sleep(Duration::from_millis(*delay));
+        use std::io::Write;
+        let _ = stdin.write_all(k.as_bytes());
+        let _ = stdin.flush();
+    }
+    // Keep stdin open until grad exits: EOF would end the session early.
+    let code = child.wait().unwrap().code().unwrap_or(-1);
+    drop(stdin);
+    let out = String::from_utf8_lossy(&std::fs::read(&log).unwrap()).into_owned();
+    Some((code, out))
+}
+
+/// The part of a pty transcript printed after the TUI left the alternate screen.
+fn after_tui(out: &str) -> &str {
+    out.rfind("\x1b[?1049l").map_or("", |i| &out[i..])
+}
+
+#[test]
+fn live_tui_follows_detaches_and_cancels_a_run() {
+    let Some(stack) = start(&["--worker", "reference"]) else {
+        return;
+    };
+    let home = Home::new("tui");
+    let url = stack.url();
+    let key = stack.key();
+    let env = [
+        ("GRADIATED_BASE_URL", url.as_str()),
+        ("GRADIATED_API_KEY", key.as_str()),
+    ];
+    write_sft(&home.dir.join("traces.jsonl"), 200);
+    ok(&grad(
+        &home,
+        &["import", "./traces.jsonl", "--dataset", "support-prod"],
+        &env,
+    ));
+    let train = |name: &'static str, epochs: &'static str| {
+        vec![
+            "train",
+            "--dataset",
+            "support-prod",
+            "--name",
+            name,
+            "--recipe",
+            "sft",
+            "--model",
+            "test/tiny-qwen3",
+            "--batch-size",
+            "1",
+            "--epochs",
+            epochs,
+            "--wait",
+        ]
+    };
+
+    // Followed to the end: full screen, then the usual report on the main screen.
+    let Some((code, out)) = grad_pty(&home, &train("tui-short", "1"), &env, &[]) else {
+        return;
+    };
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("\x1b[?1049h"), "entered the alternate screen");
+    assert!(
+        out.contains("\x1b[?2026h"),
+        "frames use synchronized updates"
+    );
+    assert!(out.contains("tui-short"), "the header names the run");
+    let tail = after_tui(&out);
+    assert!(tail.contains("✓ Trained test/tiny-qwen3 sft"), "{}", tail);
+    assert!(tail.contains("✓ Exported artifact tui-short@"), "{}", tail);
+    assert!(!tail.contains("\x1b[?1049h"), "the TUI did not come back");
+
+    // q detaches; the run keeps going and the reattach command is printed.
+    let (code, out) = grad_pty(&home, &train("tui-long", "20"), &env, &[(3000, "q")]).unwrap();
+    assert_eq!(code, 130, "{}", out);
+    let tail = after_tui(&out);
+    assert!(tail.contains("keeps going on the server"), "{}", tail);
+    let id = tail
+        .split("grad runs watch ")
+        .nth(1)
+        .and_then(|s| s.split('`').next())
+        .expect("reattach hint")
+        .to_string();
+    let o = grad(&home, &["--json", "runs", "inspect", &id], &env);
+    ok(&o);
+    assert_ne!(o.json()["data"]["status"], "cancelled");
+
+    // Reattach with `runs watch`, then cancel with confirmation.
+    let (code, out) = grad_pty(
+        &home,
+        &["runs", "watch", &id],
+        &env,
+        &[(2000, "c"), (500, "y")],
+    )
+    .unwrap();
+    assert_eq!(code, 7, "{}", out);
+    assert!(out.contains("Cancelling"), "{}", out);
+    assert!(after_tui(&out).contains("status cancelled"), "{}", out);
+
+    // --plain and GRAD_NO_TUI=1 keep the line output on a terminal.
+    for (flag, extra) in [("--plain", None), ("", Some(("GRAD_NO_TUI", "1")))] {
+        let mut a = vec!["runs", "watch", id.as_str()];
+        if !flag.is_empty() {
+            a.insert(0, flag);
+        }
+        let mut e = env.to_vec();
+        e.extend(extra);
+        let (code, out) = grad_pty(&home, &a, &e, &[]).unwrap();
+        assert_eq!(code, 7, "{}", out);
+        assert!(
+            !out.contains("\x1b[?1049h"),
+            "{} must not open the TUI",
+            flag
+        );
+    }
+}
+
 fn torch_python() -> Option<String> {
     let py = std::env::var("GRAD_TRAINER_PYTHON").ok()?;
     let ok = Command::new(&py)

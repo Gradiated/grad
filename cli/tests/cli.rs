@@ -1153,6 +1153,17 @@ fn runs_commands() {
     let r = run(sb.grad(u), &["runs", "wait", "run_1"]);
     expect(&r, 0);
     assert!(r.stdout.contains("Next: grad deploy"));
+    // Off a terminal `runs watch` is `runs wait`; GRAD_NO_TUI takes 1/0/true/false.
+    for v in ["1", "0", "true", ""] {
+        let mut c = sb.grad(u);
+        c.env("GRAD_NO_TUI", v);
+        let w = run(c, &["runs", "watch", "run_1"]);
+        expect(&w, 0);
+        assert_eq!(w.stdout, r.stdout, "GRAD_NO_TUI={}", v);
+    }
+    let w = run(sb.grad(u), &["--plain", "runs", "watch", "run_1"]);
+    expect(&w, 0);
+    assert_eq!(w.stdout, r.stdout);
     let r = run(sb.grad(u), &["runs", "cancel", "run_1"]);
     expect(&r, 0);
     assert!(r.stdout.contains("cancelled"));

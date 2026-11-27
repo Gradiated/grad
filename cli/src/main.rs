@@ -6,6 +6,7 @@ mod commands;
 mod local;
 mod output;
 mod trainfile;
+mod tui;
 
 use clap::Parser;
 use std::process::ExitCode;

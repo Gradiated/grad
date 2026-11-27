@@ -14,6 +14,7 @@ use super::{
 use crate::cli::{RunsCmd, TrainArgs};
 use crate::output::{compact, num, opt, pct, thousands, usd, when, CliError, CliResult, Out};
 use crate::trainfile::{self, RunFile};
+use crate::tui;
 
 /// Merge `-f FILE` with flags (flags win) into a typed request.
 pub fn build_request(a: &TrainArgs) -> CliResult<PlanRunRequest> {
@@ -318,8 +319,62 @@ impl Live {
     }
 }
 
-/// Stream a run's metrics until it finishes; returns the terminal run or a typed error.
+/// Follow a run until it finishes: the full-screen view on a terminal, metric
+/// lines otherwise. Returns the terminal run or a typed error.
 async fn follow_run(ctx: &Ctx, c: &Client, run: &Run, timeout: Duration) -> CliResult<Run> {
+    let res = if tui::enabled(ctx.out.json, ctx.global.plain) {
+        match tui::follow(c, run, timeout).await? {
+            tui::Outcome::Finished(r) if r.status == RunStatus::Completed => Ok(r),
+            tui::Outcome::Finished(r) => Err(SdkError::RunFailed(Box::new(r))),
+            tui::Outcome::Detached(r) => {
+                return Err(CliError::interrupted(format!(
+                    "detached; run {} keeps going on the server",
+                    r.id
+                ))
+                .hint(format!(
+                    "Reattach with `grad runs watch {}`; stop it with `grad runs cancel {}`",
+                    r.id, r.id
+                )))
+            }
+            tui::Outcome::TimedOut(r) => Err(SdkError::WaitTimeout {
+                what: "run".into(),
+                id: r.id.clone(),
+                status: r.status.to_string(),
+                after: timeout,
+            }),
+        }
+    } else {
+        follow_lines(ctx, c, run, timeout).await
+    };
+    match res {
+        Ok(r) => Ok(r),
+        Err(SdkError::RunFailed(r)) => {
+            let mut err = CliError::from(SdkError::RunFailed(r.clone()));
+            err.hint = Some(match r.status {
+                RunStatus::StoppedBudget => format!(
+                    "The run hit its cost cap ({} spent). Raise it and continue: grad runs resume {} --max-cost-usd <USD>",
+                    usd(r.cost_usd),
+                    r.id
+                ),
+                RunStatus::Cancelled => format!("Resume it with: grad runs resume {}", r.id),
+                _ => format!(
+                    "Inspect it with `grad runs inspect {}`; resume from the last checkpoint with `grad runs resume {}`",
+                    r.id, r.id
+                ),
+            });
+            Err(err)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The plain readout: one line per metric (rewritten in place on a TTY).
+async fn follow_lines(
+    ctx: &Ctx,
+    c: &Client,
+    run: &Run,
+    timeout: Duration,
+) -> Result<Run, SdkError> {
     let out = &ctx.out;
     on_interrupt(format!(
         "stopped following; run {} keeps going on the server (`grad runs logs {} --follow` to watch, `grad runs cancel {}` to stop)",
@@ -351,26 +406,7 @@ async fn follow_run(ctx: &Ctx, c: &Client, run: &Run, timeout: Duration) -> CliR
         .wait_with_metrics(&run.id, &opts, |m| live.metric(m))
         .await;
     live.end();
-    match res {
-        Ok(r) => Ok(r),
-        Err(SdkError::RunFailed(r)) => {
-            let mut err = CliError::from(SdkError::RunFailed(r.clone()));
-            err.hint = Some(match r.status {
-                RunStatus::StoppedBudget => format!(
-                    "The run hit its cost cap ({} spent). Raise it and continue: grad runs resume {} --max-cost-usd <USD>",
-                    usd(r.cost_usd),
-                    r.id
-                ),
-                RunStatus::Cancelled => format!("Resume it with: grad runs resume {}", r.id),
-                _ => format!(
-                    "Inspect it with `grad runs inspect {}`; resume from the last checkpoint with `grad runs resume {}`",
-                    r.id, r.id
-                ),
-            });
-            Err(err)
-        }
-        Err(e) => Err(e.into()),
-    }
+    res
 }
 
 /// Print the trained/eval/artifact readout; returns the artifact when there is one.
@@ -472,7 +508,7 @@ fn print_report(out: &Out, report: &EvalReport) {
     out.line("");
 }
 
-fn parse_ts(ts: &str) -> Option<i64> {
+pub(crate) fn parse_ts(ts: &str) -> Option<i64> {
     // RFC 3339 "YYYY-MM-DDTHH:MM:SS(.sss)Z" -> seconds since epoch (UTC only).
     let b = ts.as_bytes();
     if b.len() < 19 {
@@ -503,7 +539,7 @@ fn elapsed_secs(start: &str, end: Option<&str>) -> Option<i64> {
     Some((e - s).max(0))
 }
 
-fn fmt_duration(s: i64) -> String {
+pub(crate) fn fmt_duration(s: i64) -> String {
     if s < 60 {
         format!("{}s", s)
     } else if s < 3600 {
@@ -695,7 +731,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             }
             out.done(&json!({ "metrics": collected }))
         }
-        RunsCmd::Wait { run, timeout } => {
+        RunsCmd::Wait { run, timeout } | RunsCmd::Watch { run, timeout } => {
             let r = resolve_run(&c, &run).await?;
             if r.status.is_terminal() {
                 if r.status != RunStatus::Completed {

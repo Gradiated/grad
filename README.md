@@ -259,6 +259,8 @@ All four SDKs cover the same surface: datasets, runs, checkpoints, artifacts, ev
 
 The CLI is built for scripts and coding agents: `--json` on any command prints one machine-readable envelope on stdout, and `grad --help` lists every command, the configuration precedence and the exit codes.
 
+On a terminal, `grad train --wait` and `grad runs watch RUN` follow the run full-screen: phase and attempt, step and cost bars, a loss chart, checkpoints and an event log. `q` detaches and leaves the run going. See [docs/CLI_TUI.md](docs/CLI_TUI.md) for a capture.
+
 <details>
 <summary><b>Repository layout</b></summary>
 
