@@ -542,3 +542,45 @@ class HostileUploadTests(TempDirCase):
         ), self.assertRaises(SourceUnavailableError) as ctx:
             artifact_import.hf_snapshot("acme/lora", None, None, self.tmpdir(), ("*.json",))
         self.assertIn("more than 1 files", str(ctx.exception))
+
+
+class StaleJobDirTests(TempDirCase):
+    def test_a_restarted_worker_removes_the_job_dirs_a_killed_one_left(self) -> None:
+        # A worker SIGKILLed mid-import (an OOM kill, say) never cleans its job
+        # directory, and the workdir (a Helm emptyDir) survives the restart.
+        import subprocess
+        import sys
+
+        from grad_trainer import worker as worker_mod
+
+        workdir = self.tmpdir() / "work"
+        dead = workdir / "job_dead-abc"
+        dead.mkdir(parents=True)
+        (dead / "download.safetensors").write_bytes(b"x" * 1024)
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys, time; from pathlib import Path; from grad_trainer.worker import _hold_job_dir;"
+                "lock = _hold_job_dir(Path(sys.argv[1])); print('held', flush=True); time.sleep(60)",
+                str(dead),
+            ],
+            cwd=Path(worker_mod.__file__).parents[1],
+            stdout=subprocess.PIPE,
+        )
+        self.assertEqual(child.stdout.readline().strip(), b"held")  # type: ignore[union-attr]
+        child.kill()
+        child.wait(10)
+        child.stdout.close()  # type: ignore[union-attr]
+
+        live = workdir / "job_live-def"
+        live.mkdir()
+        held = worker_mod._hold_job_dir(live)
+        self.addCleanup(held.close)
+        unlocked = workdir / "not-a-job"
+        unlocked.mkdir()
+
+        self.assertEqual(worker_mod.sweep_stale_job_dirs(workdir), 1)
+        self.assertFalse(dead.exists())
+        self.assertTrue(live.exists())
+        self.assertTrue(unlocked.exists())

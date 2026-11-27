@@ -13,6 +13,7 @@ timeout, 5xx): the replay is stored once.
 
 from __future__ import annotations
 
+import fcntl
 import gzip
 import hashlib
 import http.client
@@ -58,6 +59,39 @@ _CHUNK = 1024 * 1024
 
 def _log(message: str, level: str = "info", **fields: Any) -> None:
     logs.log(level, message, **fields)
+
+
+_JOB_LOCK = ".grad-job.lock"
+
+
+def _hold_job_dir(job_dir: Path) -> BinaryIO:
+    """Locks ``job_dir`` for this process's lifetime (the OS drops it when the process dies)."""
+    lock = (job_dir / _JOB_LOCK).open("wb")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    return lock
+
+
+def sweep_stale_job_dirs(workdir: Path) -> int:
+    """Deletes job directories a killed worker left behind; returns how many.
+
+    The workdir (an emptyDir in Helm) outlives a container restart, and a
+    worker killed mid-job (an OOM kill, SIGKILL after the grace period) never
+    reaches its cleanup, so a crash loop would fill the node's disk with
+    downloads and bundles. A live job holds its directory's lock; any other
+    worker sharing the workdir keeps its own.
+    """
+    removed = 0
+    for lock_path in workdir.glob(f"*/{_JOB_LOCK}"):
+        try:
+            with lock_path.open("rb") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                shutil.rmtree(lock_path.parent, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue  # held by a live job (or already gone)
+    if removed:
+        _log(f"removed {removed} job directories left by a killed worker in {workdir}")
+    return removed
 
 
 def _log_traceback(what: str, level: str = "error", **fields: Any) -> None:
@@ -684,6 +718,7 @@ class TrainerWorker:
         self._current = state
         self.workdir.mkdir(parents=True, exist_ok=True)
         job_dir = Path(tempfile.mkdtemp(prefix=f"{state.job_id}-", dir=self.workdir))
+        job_lock = _hold_job_dir(job_dir)
         heartbeat = _Heartbeat(self, state, self.heartbeat_interval_s)
         heartbeat.start()
         try:
@@ -719,6 +754,7 @@ class TrainerWorker:
             self.client.traceparent = None
             self._current = None
             shutil.rmtree(job_dir, ignore_errors=True)
+            job_lock.close()
             # The runner, its model and outputs are out of scope now: give the GPU back.
             release_gpu_memory()
             if state.auth_error is not None:
@@ -736,6 +772,7 @@ class TrainerWorker:
 
         signal.signal(signal.SIGTERM, _handle)
         signal.signal(signal.SIGINT, _handle)
+        sweep_stale_job_dirs(self.workdir)
         if self.termination_notice == "aws":
             threading.Thread(target=self._watch_aws_notice, name="termination-notice", daemon=True).start()
         delays = backoff_delays(max(self.poll_interval_s, 0.5), 30.0)
