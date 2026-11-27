@@ -93,8 +93,13 @@ export interface SyncPayload {
 export const isSyncPayload = (source: Record<string, unknown>): boolean =>
   source.kind === "provider" && typeof source.source_id === "string";
 
-/** Sources due per tick and replica; the rest wait for the next tick. */
+/** Sources due per transaction; a tick takes up to TICK_BATCHES of them. */
 const TICK_BATCH = 50;
+/**
+ * Batches per tick and replica (1,000 sources per 15 s tick), so a cron
+ * minute that many sources share starts them all within a tick or two.
+ */
+const TICK_BATCHES = 20;
 
 const ACTIVE = new Set(["queued", "running"]);
 
@@ -368,6 +373,37 @@ export const createSourceService = (
    * one starts at most a minute after the last one did, unless `force` (a
    * pending full sync, queued when the one before it ends).
    */
+  /** One transaction's worth of due sources: each enqueued (or skipped) and rescheduled. */
+  const tickBatch = (now: Date): Promise<number> =>
+    store.transaction(async (tx) => {
+      const due = await tx.sources.lockDue(now.toISOString(), TICK_BATCH);
+      for (const source of due) {
+        // One source that can't enqueue (its workspace suspended under it,
+        // say) rolls back only its own savepoint, never the whole batch.
+        await store
+          .transaction(async (one) => {
+            // Queued, running or started under a minute ago: this firing is skipped.
+            await enqueue(one, source, false, false, true);
+          })
+          .catch((error: unknown) => {
+            log("warn", "scheduled source sync not started", {
+              source_id: source.id,
+              workspace_id: source.workspace_id,
+              error: errorMessage(error),
+            });
+          });
+        await tx.sources.update(source.id, {
+          next_sync_at: nextScheduledSync(
+            source.schedule,
+            now,
+            source.consecutive_failures,
+          ),
+        });
+      }
+
+      return due.length;
+    });
+
   const enqueue = async (
     repos: Repositories,
     source: SourceRecord,
@@ -727,23 +763,16 @@ export const createSourceService = (
       return { job: toPublicImport(job), retryAfter };
     },
 
-    tick: async (now) =>
-      store.transaction(async (tx) => {
-        const due = await tx.sources.lockDue(now.toISOString(), TICK_BATCH);
-        for (const source of due) {
-          // Queued, running or started under a minute ago: this firing is skipped.
-          await enqueue(tx, source, false, false, true);
-          await tx.sources.update(source.id, {
-            next_sync_at: nextScheduledSync(
-              source.schedule,
-              now,
-              source.consecutive_failures,
-            ),
-          });
-        }
+    tick: async (now) => {
+      let started = 0;
+      for (let i = 0; i < TICK_BATCHES; i += 1) {
+        const due = await tickBatch(now);
+        started += due;
+        if (due < TICK_BATCH) break;
+      }
 
-        return due.length;
-      }),
+      return started;
+    },
 
     claimPayload: async (job) => {
       const payload = job.source as unknown as SyncPayload;
