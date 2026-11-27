@@ -161,6 +161,7 @@ describe("buildDependencies", () => {
       const before = await counterValues();
       const request = {
         model: "m",
+        workspace: "ws",
         messages: [{ role: "user" as const, content: "hi" }],
         temperature: 0,
         max_tokens: 1,
