@@ -4,20 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grad-trainer"
-version = "0.1.0"
-description = "Gradiated training runtime, v0 recipes, and Tier-1 trace connectors"
+version = "0.2.0"
+description = "Gradiated training runtime: torch/transformers/peft recipes, artifact bundles and trace connectors"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
-dependencies = []
+# Exact pins; requirements-{gpu,cpu}.lock pin the full transitive set.
+dependencies = [
+  "torch==2.15.0",
+  "transformers==5.23.0",
+  "peft==0.21.3",
+  "tokenizers==0.23.3",
+  "safetensors==0.8.0",
+  "huggingface_hub==2.4.0",
+  "accelerate==1.15.0",
+  "datasets==5.1.0",
+  "numpy==2.5.4",
+  "jinja2==3.1.6",
+  "boto3==1.44.12",
+]
 
 [project.optional-dependencies]
-gpu = [
-  "torch>=2.4",
-  "transformers>=4.48",
-  "peft>=0.14",
-  "safetensors>=0.4",
-]
+dev = ["coverage==7.17.4"]
 
 [project.scripts]
 grad-trainer = "grad_trainer.worker:main"
@@ -25,3 +33,12 @@ grad-trainer = "grad_trainer.worker:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["grad_trainer*"]
+
+[tool.coverage.run]
+branch = true
+source = ["grad_trainer"]
+omit = ["grad_trainer/worker.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
