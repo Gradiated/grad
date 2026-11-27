@@ -4,6 +4,8 @@ A bundle is a gzip'd tar of regular files with ``manifest.json`` at the root. Th
 (``schema: grad.artifact/1``) maps every payload file to its SHA-256 in ``files`` and records
 ``eval_report_sha256``, so a tampered ``eval_report.json`` fails verification. ``manifest.json``
 and ``eval_report.json`` are reserved names. Checksums give integrity, not authenticity.
+The layout and every format are specified in ``docs/ARTIFACT_FORMATS.md``; ``bundle_directory``
+stamps ``format_version`` and ``created_by`` and validates the bundle against the JSON Schemas.
 
 Bundles are byte-for-byte reproducible for the same inputs and zlib build: sorted entries,
 ``mtime=0``, uid/gid 0, empty owner names, an empty gzip filename and fixed compression.
@@ -24,6 +26,8 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, Iterator
+
+from . import artifact_formats
 
 SCHEMA = "grad.artifact/1"
 RESERVED = ("manifest.json", "eval_report.json")
@@ -69,7 +73,7 @@ def _encode_json(value: Any) -> bytes:
 def _enrich(manifest: dict[str, Any], checksums: dict[str, str], report: bytes | None) -> dict[str, Any]:
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be an object")
-    enriched = {**manifest, "schema": SCHEMA, "files": dict(sorted(checksums.items()))}
+    enriched = {**artifact_formats.stamp(manifest), "schema": SCHEMA, "files": dict(sorted(checksums.items()))}
     if report is not None:
         enriched["eval_report_sha256"] = hashlib.sha256(report).hexdigest()
     else:
@@ -134,13 +138,20 @@ def bundle_directory(
     manifest: dict[str, Any],
     eval_report: dict[str, Any] | None = None,
     compresslevel: int = 1,
+    validate: bool = True,
 ) -> BundleInfo:
-    """Stream every regular file under ``src_dir`` into a deterministic bundle at ``out_path``."""
+    """Stream every regular file under ``src_dir`` into a deterministic bundle at ``out_path``.
+
+    ``validate`` checks the manifest and the format's config file against the JSON Schemas
+    first; only tests that build arbitrary bundles turn it off.
+    """
     src_dir, out_path = Path(src_dir), Path(out_path)
     files = _directory_files(src_dir)
     report = _encode_json(eval_report) if eval_report is not None else None
     checksums = {name: _sha256_file(path) for name, path in files}
     enriched = _enrich(manifest, checksums, report)
+    if validate:
+        artifact_formats.validate_bundle(enriched, src_dir)
     entries: list[tuple[str, Path | bytes]] = [("manifest.json", _encode_json(enriched))]
     if report is not None:
         entries.append(("eval_report.json", report))

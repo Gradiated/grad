@@ -71,7 +71,7 @@ class RecipeRunner:
         task = self.build_task(spec, train, held_out, workdir, base)
 
         common = {
-            "recipe": self.kind,
+            "recipe_kind": self.kind,
             "backend": self.backend,
             "lr": spec.lr,
             "lr_source": spec.lr_source,
@@ -113,6 +113,7 @@ class RecipeRunner:
         manifest = {
             **common,
             **task.manifest(),
+            "kind": "final",
             "format": task.artifact_format,
             "status": loop.status,
             "select": loop.select,

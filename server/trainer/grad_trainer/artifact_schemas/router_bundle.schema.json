@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gradiated/grad/blob/main/spec/artifacts/router_bundle.schema.json",
+  "title": "router_bundle router_config.json",
+  "description": "Router runtime config: candidates, head layout, calibration, threshold and pricing.",
+  "type": "object",
+  "required": [
+    "format",
+    "format_version",
+    "candidates",
+    "route_order",
+    "fallback_model",
+    "pricing",
+    "threshold",
+    "temperature",
+    "calibrated",
+    "max_quality_drop",
+    "head_file",
+    "adapter",
+    "pooling",
+    "hidden_size",
+    "max_seq_len",
+    "chat_template_kwargs",
+    "truncation_side",
+    "template_revision",
+    "base_model",
+    "base_model_repo",
+    "base_model_revision"
+  ],
+  "properties": {
+    "format": {
+      "const": "router_bundle"
+    },
+    "format_version": {
+      "const": 1
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 2
+    },
+    "route_order": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "fallback_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pricing": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "threshold": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "temperature": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "calibrated": {
+      "type": "boolean"
+    },
+    "max_quality_drop": {
+      "type": "number",
+      "minimum": 0
+    },
+    "head_file": {
+      "const": "router_head.safetensors"
+    },
+    "adapter": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "lora",
+            "frozen_head"
+          ]
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "alpha": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "target_modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "lora"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rank",
+          "alpha",
+          "target_modules"
+        ]
+      }
+    },
+    "pooling": {
+      "const": "last_token"
+    },
+    "hidden_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_seq_len": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "chat_template_kwargs": {
+      "type": "object",
+      "required": [
+        "add_generation_prompt",
+        "enable_thinking"
+      ],
+      "properties": {
+        "add_generation_prompt": {
+          "const": true
+        },
+        "enable_thinking": {
+          "type": "boolean"
+        }
+      }
+    },
+    "truncation_side": {
+      "const": "left"
+    },
+    "template_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "preserve_thinking": {
+      "type": "boolean"
+    },
+    "base_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_model_repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_model_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    }
+  }
+}

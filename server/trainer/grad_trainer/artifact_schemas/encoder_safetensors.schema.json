@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gradiated/grad/blob/main/spec/artifacts/encoder_safetensors.schema.json",
+  "title": "encoder_safetensors grad_embedding.json",
+  "description": "How to turn the encoder's token states into an embedding.",
+  "type": "object",
+  "required": [
+    "format",
+    "format_version",
+    "pooling",
+    "normalize",
+    "dimensions",
+    "max_seq_length",
+    "base_model",
+    "base_model_repo",
+    "base_model_revision"
+  ],
+  "properties": {
+    "format": {
+      "const": "encoder_safetensors"
+    },
+    "format_version": {
+      "const": 1
+    },
+    "pooling": {
+      "enum": [
+        "mean",
+        "cls"
+      ]
+    },
+    "normalize": {
+      "const": true
+    },
+    "dimensions": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_seq_length": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "temp": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "base_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_model_repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_model_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    }
+  }
+}

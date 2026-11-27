@@ -11,7 +11,7 @@ includes the same metrics for the starting encoder. With no held-out pairs they 
 
 The artifact is a standard transformers model directory (``config.json``,
 ``model.safetensors``, tokenizer files) plus sentence-transformers pooling files
-(``modules.json``, ``1_Pooling/config.json``) and ``grad_embedding.json``.
+(``modules.json``, ``sentence_bert_config.json``, ``1_Pooling/config.json``) and ``grad_embedding.json``.
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ from ..backends import torch_common as tc
 from ..backends.torch_task import TorchTask
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
+from ..artifact_formats import FORMAT_VERSIONS
+from ..models import describe_model
 from ..trainer import EvalResult
 from .base import RecipeRunner
 
@@ -188,10 +190,22 @@ class EmbeddingTask(TorchTask):
         dim = int(self.model.config.hidden_size)
         (directory / "grad_embedding.json").write_text(
             json.dumps(
-                {"pooling": self.pooling, "normalize": True, "dimensions": dim, "max_seq_length": self.max_len, "temp": self.temp},
+                {
+                    "format": self.artifact_format,
+                    "format_version": FORMAT_VERSIONS[self.artifact_format],
+                    "pooling": self.pooling,
+                    "normalize": True,
+                    "dimensions": dim,
+                    "max_seq_length": self.max_len,
+                    "temp": self.temp,
+                    **describe_model(self.resolved),
+                },
                 indent=2,
                 sort_keys=True,
             )
+        )
+        (directory / "sentence_bert_config.json").write_text(
+            json.dumps({"max_seq_length": self.max_len, "do_lower_case": False}, indent=2)
         )
         (directory / "modules.json").write_text(
             json.dumps(
@@ -220,8 +234,6 @@ class EmbeddingTask(TorchTask):
         (directory / "2_Normalize" / ".keep").write_text("")
 
     def manifest(self) -> dict[str, Any]:
-        from ..models import describe_model
-
         return {
             **describe_model(self.resolved),
             "template_revision": self.resolved.template_revision,

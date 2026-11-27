@@ -1,0 +1,318 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gradiated/grad/blob/main/spec/artifacts/manifest.schema.json",
+  "title": "grad.artifact/1 manifest.json",
+  "description": "The manifest at the root of every .grad.tar.gz bundle. See docs/ARTIFACT_FORMATS.md. Fields not listed here are training metadata and may change.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kind",
+    "format",
+    "format_version",
+    "recipe_kind",
+    "base_model",
+    "base_model_repo",
+    "base_model_revision",
+    "deployable",
+    "created_by",
+    "files"
+  ],
+  "properties": {
+    "schema": {
+      "const": "grad.artifact/1"
+    },
+    "kind": {
+      "enum": [
+        "final",
+        "checkpoint"
+      ]
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "format": {
+      "enum": [
+        "peft_lora",
+        "merged_safetensors",
+        "cartridge",
+        "encoder_safetensors",
+        "router_bundle",
+        "decision_bundle",
+        "reference"
+      ]
+    },
+    "format_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "recipe_kind": {
+      "enum": [
+        "sft",
+        "dpo",
+        "router",
+        "decision",
+        "cartridge",
+        "embedding"
+      ]
+    },
+    "base_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_model_repo": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "base_model_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "deployable": {
+      "type": "boolean"
+    },
+    "created_by": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "grad-trainer"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "description": "A relative POSIX path: no leading or trailing '/', no '.' or '..' segments, no empty segments, no backslash or NUL. manifest.json and eval_report.json are reserved.",
+        "minLength": 1,
+        "not": {
+          "anyOf": [
+            {
+              "enum": [
+                "manifest.json",
+                "eval_report.json"
+              ]
+            },
+            {
+              "pattern": "^/|/$|//|(^|/)\\.\\.?(/|$)|\\\\|\u0000"
+            }
+          ]
+        }
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "eval_report_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "checkpoint"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "step"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "reference"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deployable": {
+            "const": false
+          },
+          "files": {
+            "required": [
+              "reference_model.json"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "base_model_repo": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "peft_lora"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipe_kind": {
+            "enum": [
+              "sft",
+              "dpo"
+            ]
+          },
+          "files": {
+            "required": [
+              "adapter_config.json",
+              "adapter_model.safetensors"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "merged_safetensors"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipe_kind": {
+            "const": "sft"
+          },
+          "files": {
+            "required": [
+              "config.json",
+              "tokenizer_config.json"
+            ],
+            "anyOf": [
+              {
+                "required": [
+                  "model.safetensors"
+                ]
+              },
+              {
+                "required": [
+                  "model.safetensors.index.json"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "cartridge"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipe_kind": {
+            "const": "cartridge"
+          },
+          "files": {
+            "required": [
+              "cartridge.safetensors"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "encoder_safetensors"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipe_kind": {
+            "const": "embedding"
+          },
+          "files": {
+            "required": [
+              "grad_embedding.json",
+              "config.json",
+              "model.safetensors",
+              "tokenizer_config.json"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "router_bundle"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipe_kind": {
+            "const": "router"
+          },
+          "files": {
+            "required": [
+              "router_config.json",
+              "router_head.safetensors"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "decision_bundle"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipe_kind": {
+            "const": "decision"
+          },
+          "files": {
+            "required": [
+              "decision_config.json",
+              "decision_head.safetensors"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

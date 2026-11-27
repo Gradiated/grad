@@ -141,5 +141,5 @@ class RouterTrainingTests(TorchCase):
             records,
             self.tmpdir(),
         )
-        self.assertEqual(json.loads((priced.artifact_dir / "router_config.json").read_text())["costs"], {"cheap/m": 1.0, "strong/m": 5.0})
+        self.assertEqual(json.loads((priced.artifact_dir / "router_config.json").read_text())["pricing"], {"cheap/m": 1.0, "strong/m": 5.0})
         self.assertFalse(math.isnan(priced.eval_report["pareto_summary"]["offload_rate"]))

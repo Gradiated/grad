@@ -74,6 +74,10 @@ class PooledLMTask(TorchTask):
             "adapter": adapter,
             "pooling": "last_token",
             "input_format": "chat_template + assistant generation header",
+            # How the prompt is rendered and cut: the base model's chat template with these
+            # arguments, tokenized without special tokens, keeping the last max_seq_len tokens.
+            "chat_template_kwargs": {"add_generation_prompt": True, "enable_thinking": True},
+            "truncation_side": "left",
             "hidden_size": self.hidden_size,
             "max_seq_len": self.max_len,
         }

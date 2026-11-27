@@ -24,6 +24,7 @@ import torch.nn.functional as F
 
 from ..config import TrainSpec
 from ..errors import RecipeDataError
+from ..artifact_formats import FORMAT_VERSIONS
 from ..metrics import expected_calibration_error, fit_temperature, per_class_report, sigmoid, softmax
 from ..backends.torch_common import chunk_by_tokens
 from ..splits import two_folds
@@ -138,6 +139,7 @@ class DecisionTask(PooledLMTask):
                 heads[name] = OrdinalHead(self.hidden_size, len(q["options"]))
         self.build_backbone(heads)
         self.temperatures = {name: 1.0 for name in self.questions}
+        self.calibrated = False
 
     def _encode_all(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out = []
@@ -281,6 +283,7 @@ class DecisionTask(PooledLMTask):
         warnings: list[str] = []
         if self.select_fold:
             self._fit_temperatures()
+            self.calibrated = True
         else:
             warnings.append("No held-out selection fold: temperatures were not calibrated (1.0).")
         heads: dict[str, Any] = {}
@@ -301,8 +304,11 @@ class DecisionTask(PooledLMTask):
 
     def decision_config(self) -> dict[str, Any]:
         return {
+            "format": self.artifact_format,
+            "format_version": FORMAT_VERSIONS[self.artifact_format],
             "questions": self.questions,
             "temperatures": self.temperatures,
+            "calibrated": self.calibrated,
             "losses": {
                 name: {"choice": "cross_entropy", "noul": "bce_with_logits", "score": "ordinal_bce"}[q["type"]]
                 for name, q in self.questions.items()

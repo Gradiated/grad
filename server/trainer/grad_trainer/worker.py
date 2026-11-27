@@ -651,15 +651,24 @@ class TrainerWorker:
         artifact_dir = Path(output.artifact_dir)
         if artifact_dir.is_dir() and any(artifact_dir.iterdir()):
             bundle = job_dir / "artifact.grad.tar.gz"
-            info = bundle_directory(
-                artifact_dir,
-                bundle,
-                manifest={**output.manifest, "format": output.artifact_format},
-                eval_report=output.eval_report or None,
-            )
+            try:
+                info = bundle_directory(
+                    artifact_dir,
+                    bundle,
+                    manifest={**output.manifest, "format": output.artifact_format},
+                    eval_report=output.eval_report or None,
+                )
+            except ValueError as exc:
+                # A bundle that breaks its format spec won't pass on a retry either.
+                return self._complete(
+                    state,
+                    {"status": "failed", "error": f"invalid artifact bundle: {exc}"[:4000], "tokens_processed": tokens},
+                )
             payload["upload_id"] = self._upload(
                 state, "artifact", bundle, info.sha256, info.size_bytes
             )
+            # The server stores the bundle's own manifest: files, format_version, created_by.
+            payload["manifest"] = info.manifest
         return self._complete(state, payload)
 
     def _load_dataset(self, job: dict[str, Any], job_dir: Path) -> list[dict[str, Any]]:

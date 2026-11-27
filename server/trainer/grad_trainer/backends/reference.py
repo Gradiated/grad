@@ -126,13 +126,19 @@ class ReferenceTask:
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "reference_model.json").write_text(
             json.dumps(
-                {"format": "reference", "deployable": False, "recipe": self.kind, "weights": self.w, "bias": self.b},
+                {"format": "reference", "deployable": False, "recipe_kind": self.kind, "weights": self.w, "bias": self.b},
                 sort_keys=True,
             )
         )
 
     def manifest(self) -> dict[str, Any]:
-        return {"base_model": self.spec.model, "deployable": False, "backend": "reference"}
+        return {
+            "base_model": self.spec.model,
+            "base_model_repo": None,
+            "base_model_revision": None,
+            "deployable": False,
+            "backend": "reference",
+        }
 
     def final_report(self) -> dict[str, Any]:
         result = self.evaluate()

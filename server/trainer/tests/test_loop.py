@@ -12,6 +12,7 @@ from unittest import mock
 
 from helpers import Recorder, TempDirCase, run_recipe
 
+from grad_trainer.bundles import bundle_directory
 from grad_trainer.config import parse_train_spec
 from grad_trainer.errors import BackendUnavailableError, RecipeDataError, ResumeMismatchError
 from grad_trainer.recipes import backend_name, get_recipe_runner
@@ -79,7 +80,7 @@ def loop(task, workdir, *, budget=None, recorder=None, resume=None, **config):
     spec = parse_train_spec("sft", {"batch_size": 2, "epochs": 2, "lr": 0.1, "warmup": 0.0, **config})
     return TrainingLoop(
         task, spec, budget=budget or Budget(None, 1e6), callbacks=recorder.callbacks() if recorder else None,
-        resume=resume, workdir=workdir, checkpoint_metadata={"manifest": {"recipe": "sft"}},
+        resume=resume, workdir=workdir, checkpoint_metadata={"manifest": {"recipe_kind": "sft"}},
     )
 
 
@@ -225,8 +226,15 @@ class ReferenceBackendTests(TempDirCase):
         self.assertEqual((out.manifest["format"], out.manifest["deployable"], out.manifest["backend"]), ("reference", False, "reference"))
         self.assertTrue((out.artifact_dir / "reference_model.json").is_file())
         self.assertIn("not deployable", out.eval_report["warnings"][0])
-        for kind in ("dpo", "router", "decision", "cartridge", "embedding"):
-            self.assertEqual(run_recipe(kind, {**CONFIG, "epochs": 1}, RECORDS, self.tmpdir()).artifact_format, "reference")
+        for kind in ("sft", "dpo", "router", "decision", "cartridge", "embedding"):
+            rec = Recorder(self.tmpdir())
+            out = run_recipe(kind, {**CONFIG, "epochs": 1}, RECORDS, self.tmpdir(), recorder=rec)
+            self.assertEqual(out.artifact_format, "reference")
+            # Final and checkpoint bundles pass the artifact schemas, as the worker writes them.
+            info = bundle_directory(out.artifact_dir, self.tmpdir() / "a", manifest={**out.manifest, "format": "reference"})
+            self.assertEqual((info.manifest["recipe_kind"], info.manifest["deployable"]), (kind, False))
+            step, _, directory, metadata = rec.checkpoints[-1]
+            bundle_directory(directory, self.tmpdir() / "c", manifest={**metadata["manifest"], "kind": "checkpoint", "step": step})
         with self.assertRaises(RecipeDataError):
             run_recipe("sft", CONFIG, [{"id": "x"}], self.tmpdir())
 

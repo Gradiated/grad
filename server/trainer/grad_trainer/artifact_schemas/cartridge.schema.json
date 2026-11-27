@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gradiated/grad/blob/main/spec/artifacts/cartridge.schema.json",
+  "title": "cartridge cartridge.safetensors header",
+  "description": "The safetensors header (JSON) of cartridge.safetensors in the gradiated.cartridge/1 format: exactly two tensors plus text metadata. embeddings is [num_tokens, hidden_size] BF16; slot_token_ids is [num_tokens] I64.",
+  "type": "object",
+  "required": [
+    "__metadata__",
+    "embeddings",
+    "slot_token_ids"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "__metadata__": {
+      "type": "object",
+      "required": [
+        "format",
+        "placement",
+        "separator",
+        "base_model",
+        "num_tokens",
+        "hidden_size",
+        "slot_token"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      },
+      "properties": {
+        "format": {
+          "const": "gradiated.cartridge/1"
+        },
+        "placement": {
+          "const": "system_prompt_start"
+        },
+        "separator": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "base_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "num_tokens": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "hidden_size": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "slot_token": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "embeddings": {
+      "type": "object",
+      "required": [
+        "dtype",
+        "shape",
+        "data_offsets"
+      ],
+      "properties": {
+        "dtype": {
+          "const": "BF16"
+        },
+        "shape": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "data_offsets": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "slot_token_ids": {
+      "type": "object",
+      "required": [
+        "dtype",
+        "shape",
+        "data_offsets"
+      ],
+      "properties": {
+        "dtype": {
+          "const": "I64"
+        },
+        "shape": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "data_offsets": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    }
+  }
+}

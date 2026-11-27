@@ -171,13 +171,24 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(manifest["format"], "peft_lora")
         self.assertIn("adapter_model.safetensors", manifest["files"])
         self.assertIn("eval_report_sha256", manifest)
+        self.assertEqual((manifest["kind"], manifest["format_version"]), ("final", 1))
+        # The server gets the bundle's own manifest, file map included.
+        self.assertEqual(complete["manifest"], manifest)
+
+    def test_bundle_that_breaks_its_format_spec_fails_the_job(self) -> None:
+        srv = self.server(jobs=[train_job()])
+        self.worker(srv, StubRunner(checkpoint_at=None, manifest={"kind": "final"})).run_once()
+        complete = srv.bodies("complete")[0]
+        self.assertEqual(complete["status"], "failed")
+        self.assertIn("manifest.json does not match manifest.schema.json", complete["error"])
+        self.assertEqual(srv.bodies("uploads"), [])
 
     def test_resume_downloads_and_extracts_checkpoint(self) -> None:
         src = Path(self.tmp.name) / "ckpt"
         src.mkdir()
         (src / "optimizer.pt").write_bytes(b"opt")
         archive = Path(self.tmp.name) / "ckpt.tgz"
-        bundle_directory(src, archive, manifest={"kind": "checkpoint"})
+        bundle_directory(src, archive, manifest={"kind": "checkpoint"}, validate=False)
         srv = self.server(
             jobs=[
                 train_job(
@@ -204,7 +215,7 @@ class WorkerProtocolTests(unittest.TestCase):
         src.mkdir()
         (src / "adapter_config.json").write_text("{}")
         archive = Path(self.tmp.name) / "sft.tgz"
-        info = bundle_directory(src, archive, manifest={"format": "peft_lora"})
+        info = bundle_directory(src, archive, manifest={"format": "peft_lora"}, validate=False)
         base = {"artifact_id": "sft@2026-11-27-1", "sha256": info.sha256, "download_url": "/blobs/base"}
         srv = self.server(jobs=[train_job(base=base), train_job("run_2", base={**base, "sha256": "0" * 64})])
         srv.blobs["/blobs/base"] = archive.read_bytes()

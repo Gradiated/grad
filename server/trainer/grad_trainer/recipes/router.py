@@ -34,6 +34,7 @@ import torch.nn.functional as F
 from ..backends.torch_common import chunk_by_tokens
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
+from ..artifact_formats import FORMAT_VERSIONS
 from ..metrics import binary_nll, bootstrap_ci, expected_calibration_error, fit_temperature, sigmoid
 from ..splits import two_folds
 from ..trainer import EvalResult
@@ -371,10 +372,12 @@ class RouterTask(PooledLMTask):
 
     def router_config(self) -> dict[str, Any]:
         return {
+            "format": self.artifact_format,
+            "format_version": FORMAT_VERSIONS[self.artifact_format],
             "candidates": self.candidates,
             "route_order": self.order,
             "fallback_model": self.fallback,
-            "costs": self.costs,
+            "pricing": self.costs,
             "max_quality_drop": self.max_quality_drop,
             "rule": "route to the first model in route_order whose calibrated success probability "
             "sigmoid(logit / temperature) >= threshold, else fallback_model; threshold null = never offload",

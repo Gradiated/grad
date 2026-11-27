@@ -45,8 +45,8 @@ class BundleTests(TempDirCase):
     def test_directory_bundle_is_deterministic_and_verifies(self) -> None:
         src = self.make_dir()
         out = self.tmpdir()
-        a = bundle_directory(src, out / "a.grad.tar.gz", manifest={"recipe": "sft"}, eval_report={"eval_loss": 1.0})
-        b = bundle_directory(src, out / "b.grad.tar.gz", manifest={"recipe": "sft"}, eval_report={"eval_loss": 1.0})
+        a = bundle_directory(src, out / "a.grad.tar.gz", manifest={"recipe_kind": "sft"}, eval_report={"eval_loss": 1.0}, validate=False)
+        b = bundle_directory(src, out / "b.grad.tar.gz", manifest={"recipe_kind": "sft"}, eval_report={"eval_loss": 1.0}, validate=False)
         self.assertEqual(a.sha256, b.sha256)
         self.assertEqual((out / "a.grad.tar.gz").read_bytes(), (out / "b.grad.tar.gz").read_bytes())
         manifest, files = read_artifact_bundle(a.path)
@@ -54,7 +54,7 @@ class BundleTests(TempDirCase):
         self.assertEqual(manifest["files"]["sub/w.bin"], hashlib.sha256((src / "sub" / "w.bin").read_bytes()).hexdigest())
         dest = self.tmpdir() / "x"
         extracted = extract_bundle(a.path, dest)
-        self.assertEqual(extracted["recipe"], "sft")
+        self.assertEqual(extracted["recipe_kind"], "sft")
         self.assertEqual((dest / "sub" / "w.bin").read_bytes(), (src / "sub" / "w.bin").read_bytes())
         with self.assertRaisesRegex(ValueError, "not empty"):
             extract_bundle(a.path, dest)

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gradiated/grad/blob/main/spec/artifacts/peft_lora.schema.json",
+  "title": "peft_lora adapter_config.json",
+  "description": "The PEFT LoRA config of a peft_lora bundle (also present in LoRA-backed router and decision bundles). Only the listed keys are guaranteed; PEFT writes others.",
+  "type": "object",
+  "required": [
+    "peft_type",
+    "task_type",
+    "r",
+    "lora_alpha",
+    "target_modules",
+    "base_model_name_or_path",
+    "revision",
+    "bias"
+  ],
+  "properties": {
+    "peft_type": {
+      "const": "LORA"
+    },
+    "task_type": {
+      "const": "CAUSAL_LM"
+    },
+    "r": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "lora_alpha": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "target_modules": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "base_model_name_or_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "bias": {
+      "const": "none"
+    },
+    "lora_dropout": {
+      "type": "number",
+      "minimum": 0
+    },
+    "use_dora": {
+      "const": false
+    },
+    "use_rslora": {
+      "const": false
+    },
+    "modules_to_save": {
+      "type": "null"
+    }
+  }
+}

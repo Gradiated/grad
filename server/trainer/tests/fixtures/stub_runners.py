@@ -2,11 +2,38 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
 
 from grad_trainer.runner_types import ImportSummary, RunOutput
+
+#: The stable manifest fields of a peft_lora bundle (docs/ARTIFACT_FORMATS.md).
+STUB_MANIFEST = {
+    "recipe_kind": "sft",
+    "base_model": "qwen/qwen3-0.6b",
+    "base_model_repo": "Qwen/Qwen3-0.6B",
+    "base_model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "deployable": True,
+}
+
+
+def write_lora(directory: Path) -> None:
+    """A fake PEFT LoRA adapter whose adapter_config.json matches peft_lora.schema.json."""
+    directory.mkdir(parents=True, exist_ok=True)
+    config = {
+        "peft_type": "LORA",
+        "task_type": "CAUSAL_LM",
+        "r": 8,
+        "lora_alpha": 16,
+        "target_modules": ["q_proj", "v_proj"],
+        "base_model_name_or_path": STUB_MANIFEST["base_model_repo"],
+        "revision": STUB_MANIFEST["base_model_revision"],
+        "bias": "none",
+    }
+    (directory / "adapter_config.json").write_text(json.dumps(config))
+    (directory / "adapter_model.safetensors").write_bytes(b"weights")
 
 
 class StubRunner:
@@ -22,12 +49,14 @@ class StubRunner:
         raise_at: int | None = None,
         step_sleep: float = 0.0,
         status: str = "completed",
+        manifest: dict[str, Any] | None = None,
     ) -> None:
         self.steps = steps
         self.checkpoint_at = checkpoint_at
         self.raise_at = raise_at
         self.step_sleep = step_sleep
         self.status = status
+        self.manifest = manifest if manifest is not None else {**STUB_MANIFEST, "kind": "final"}
         self.calls: list[dict[str, Any]] = []
 
     def run(self, config, records, *, budget, callbacks, resume, workdir, base=None):  # type: ignore[no-untyped-def]
@@ -59,21 +88,18 @@ class StubRunner:
                 break
             if self.checkpoint_at == step:
                 ckpt = Path(workdir) / f"ckpt-{step}"
-                ckpt.mkdir()
-                (ckpt / "adapter_model.safetensors").write_bytes(b"state" * 10)
+                write_lora(ckpt)
                 callbacks.on_checkpoint(
-                    step, 0.5, ckpt, {"artifact_format": "peft_lora"}
+                    step, 0.5, ckpt, {"artifact_format": "peft_lora", "manifest": STUB_MANIFEST}
                 )
             time.sleep(self.step_sleep)
         out = Path(workdir) / "artifact"
-        out.mkdir(exist_ok=True)
-        (out / "adapter_config.json").write_text('{"r": 8}')
-        (out / "adapter_model.safetensors").write_bytes(b"weights")
+        write_lora(out)
         return RunOutput(
             status=status,
             artifact_dir=out,
             artifact_format="peft_lora",
-            manifest={"recipe": "sft"},
+            manifest=self.manifest,
             # Shaped like RecipeRunner's report: the server validates its core fields.
             eval_report={
                 "metric_name": "eval_loss",

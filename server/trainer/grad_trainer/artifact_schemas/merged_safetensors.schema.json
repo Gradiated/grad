@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gradiated/grad/blob/main/spec/artifacts/merged_safetensors.schema.json",
+  "title": "merged_safetensors config.json",
+  "description": "The Hugging Face transformers config.json of a merged_safetensors bundle (a standalone causal LM).",
+  "type": "object",
+  "required": [
+    "model_type",
+    "architectures"
+  ],
+  "properties": {
+    "model_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "architectures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  }
+}
