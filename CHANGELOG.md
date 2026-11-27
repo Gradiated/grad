@@ -28,6 +28,28 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   A running stack's own ports are not a clash. The choice is saved, so later runs keep the
   same URLs, the `local` profile follows it, and `grad local status` prints the API, UI,
   Grafana and Prometheus URLs. The Helm NOTES port-forward to `18787` too.
+- The default `batch_size` is a quarter of the training examples (at least 8) when that's
+  under 128 (embedding keeps 128), so a 40-record run takes several optimizer steps; the
+  few-steps warning names the count ("40 training examples at batch 128 is 1 step per epoch").
+- `runs.plan` has `cost_breakdown` (`train_usd`, `teacher_usd`, `eval_usd`), and
+  `estimated_cost_usd` includes `recipe.evals` on every checkpoint. `print(plan)`, Go's
+  `fmt.Println(plan)` and `grad train --dry-run` show the breakdown.
+
+### Fixed
+
+- Plans estimate what runs bill: text tokens use each base model's tokenizer density (the dev
+  models' was off by 2.3x), DPO and reward plans count both sides of every pair (they counted
+  one), and steps are whole batches per epoch, so plan and run report the same step count.
+- A second run under a queued or running run's name warns in the plan and on `runs.create`
+  (`run.warnings` in every SDK; Python `warnings.warn`, TypeScript `console.warn`), and
+  `grad train` prints it. CLI commands given a name several runs share show the newest and say
+  so on stderr (`--json`: `warnings`).
+- `grad runs watch` and a re-attached `grad train --wait` show the whole run: the view replays
+  the event stream from its first event (it dropped every point before the run's latest), the
+  phase clock starts at the server's `phase_since`, and the chart spans 0 to `total_steps` with
+  min/max downsampling and a 1st-99th percentile y axis. Before the first step the chart says
+  what the run is doing ("Waiting for a GPU (2 workers online, all busy)…"). The web UI's phase
+  clock no longer restarts after each eval.
 
 ## [0.2.0-alpha.3] - 2026-11-27
 
