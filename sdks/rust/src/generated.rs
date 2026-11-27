@@ -3587,10 +3587,6 @@ pub mod models {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub teacher: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub env_name: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub group_size: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         pub optimizer: Option<OptimizerSpec>,
         /// Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
         #[serde(default, skip_serializing_if = "Option::is_none")]

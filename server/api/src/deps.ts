@@ -15,7 +15,6 @@ import type { ObjectStore } from "./storage/types.js";
 import type { Store } from "./store/types.js";
 
 export interface AppSettings {
-  allowWave2Recipes: boolean;
   /** Lease expiries tolerated before a job fails (default 3). */
   maxAttempts: number;
   evalConcurrency: number;

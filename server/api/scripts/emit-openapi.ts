@@ -38,7 +38,7 @@ const run = async () => {
     clock: systemClock,
     inference: null,
     regex,
-    settings: { allowWave2Recipes: false, maxAttempts: 3, evalConcurrency: 1 },
+    settings: { maxAttempts: 3, evalConcurrency: 1 },
   });
 
   const rendered = YAML.stringify(buildOpenApiDocument(app), {

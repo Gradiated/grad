@@ -96,7 +96,7 @@ export const makeTestApp = async (
     clock,
     inference: null,
     regex: createRegexEvaluator(),
-    settings: { allowWave2Recipes: false, maxAttempts: 3, evalConcurrency: 4 },
+    settings: { maxAttempts: 3, evalConcurrency: 4 },
     ...overrides,
   };
   const { app, services } = createGradApp(deps);

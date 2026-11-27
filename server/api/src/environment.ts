@@ -29,11 +29,10 @@ const EnvironmentSchema = z.object({
   TRAINER_API_KEY_HASH: optionalString,
   TRAINER_API_KEY: optionalString,
   DEFAULT_WORKSPACE_ID: z.string().min(1).max(64).default("local"),
-  DEPLOY_MODE: z.enum(["disabled", "cloud", "local"]).default("disabled"),
+  DEPLOY_MODE: z.enum(["disabled", "cloud"]).default("disabled"),
   BILLING_MODE: z.enum(["noop", "cloud"]).default("noop"),
   CLOUD_INTERNAL_API_URL: optionalString,
   CLOUD_SERVICE_TOKEN: optionalString,
-  ALLOW_WAVE2_RECIPES: booleanFlag("false"),
   INFERENCE_BASE_URL: optionalString,
   INFERENCE_API_KEY: optionalString,
   JUDGE_BASE_URL: optionalString,
@@ -49,8 +48,7 @@ const EnvironmentSchema = z.object({
 
 export type RawEnvironment = z.infer<typeof EnvironmentSchema>;
 
-export interface ServerEnvironment extends Omit<RawEnvironment, "DEPLOY_MODE"> {
-  DEPLOY_MODE: "disabled" | "cloud";
+export interface ServerEnvironment extends RawEnvironment {
   /** Effective judge endpoint (JUDGE_BASE_URL, GRAD_JUDGE_BASE_URL, then inference). */
   judgeBaseUrl: string | undefined;
   judgeApiKey: string | undefined;
@@ -77,12 +75,6 @@ export const parseServerEnvironment = (
 
   const env = parsed.data;
   const warnings: string[] = [];
-
-  if (env.DEPLOY_MODE === "local") {
-    throw new Error(
-      "DEPLOY_MODE=local was removed: it pretended to deploy without serving anything. Use DEPLOY_MODE=disabled (self-hosted: download artifacts and serve them on vLLM/SGLang) or DEPLOY_MODE=cloud.",
-    );
-  }
 
   if (env.AUTH_MODE === "api_key" && !env.ADMIN_API_KEY_HASH) {
     throw new Error(
@@ -127,7 +119,6 @@ export const parseServerEnvironment = (
 
   return {
     ...env,
-    DEPLOY_MODE: env.DEPLOY_MODE,
     judgeBaseUrl,
     judgeApiKey,
     warnings,

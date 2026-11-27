@@ -631,8 +631,6 @@ export interface RecipeSpec {
   numTokens?: number | undefined;
   temp?: number | undefined;
   teacher?: string | undefined;
-  envName?: string | undefined;
-  groupSize?: number | undefined;
   optimizer?: OptimizerSpec | undefined;
   /** Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval). */
   evalEvery?: "auto" | number | undefined;

@@ -316,10 +316,6 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       });
       expect(await store.imports.get("ws_b", a.id)).toBeNull();
       expect((await store.imports.getById(a.id))?.dataset).toBe("ds");
-      expect(await store.imports.countActive()).toEqual({
-        queued: 2,
-        running: 0,
-      });
 
       const onlyB = await store.imports.claimNext({
         workerId: "w1",
@@ -350,10 +346,6 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           now: clock.now(),
         }),
       ).toBeNull();
-      expect(await store.imports.countActive()).toEqual({
-        queued: 0,
-        running: 2,
-      });
 
       expect(
         await store.imports.update(
@@ -553,7 +545,6 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(
         (await store.runs.listWaitingOn("eval_1")).map((r) => r.id),
       ).toEqual([waiting.id]);
-      expect(await store.runs.countActive()).toEqual({ queued: 1, running: 0 });
 
       const claim = () =>
         store.runs.claimNext({
@@ -599,18 +590,15 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const running = await makeRun();
       await store.runs.update(running.id, { status: "queued" });
       await store.runs.update(queued.id, { status: "completed" });
-      expect(await store.runs.countActive()).toEqual({ queued: 1, running: 0 });
       const claimed = await store.runs.claimNext({
         workerId: "w",
         leaseSeconds: 60,
         now: clock.now(),
       });
       expect(claimed?.id).toBe(running.id);
-      expect(await store.runs.countActive()).toEqual({ queued: 0, running: 1 });
 
-      // A cancelled run whose attempt is still open counts as running.
+      // A cancelled run whose attempt is still open keeps its lease.
       await store.runs.update(running.id, { status: "cancelled" });
-      expect(await store.runs.countActive()).toEqual({ queued: 0, running: 1 });
 
       expect(await store.runs.listExpiredLeases(clock.now(), 10)).toEqual([]);
       clock.advanceSeconds(60);

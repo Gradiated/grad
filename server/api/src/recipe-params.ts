@@ -19,18 +19,16 @@ const RECIPE_FIELDS = {
   num_tokens: ["cartridge"],
   max_new_tokens: ["cartridge"],
   slot_token: ["cartridge"],
-  teacher: ["cartridge", "distill"],
+  teacher: ["cartridge"],
   temp: ["embedding"],
   pool: ["embedding"],
-  env_name: ["grpo"],
-  group_size: ["grpo"],
 } as const satisfies Partial<Record<keyof RecipeSpec, readonly RecipeKind[]>>;
 
 const LOSS_RECIPES: Record<LossSpec["kind"], readonly RecipeKind[]> = {
   cross_entropy: ["sft"],
   dpo: ["dpo"],
   infonce: ["embedding"],
-  top_k_kl_distill: ["cartridge", "distill"],
+  top_k_kl_distill: ["cartridge"],
 };
 
 const DEFAULT_OPTIMIZER: OptimizerSpec = {
@@ -112,7 +110,6 @@ const CARTRIDGE_KEYS = [
   "max_new_tokens",
   "slot_token",
 ];
-const WAVE2_KEYS = ["teacher", "env_name", "group_size"];
 
 /**
  * Validates the recipe-specific parameters of a RecipeSpec and maps them to the
@@ -175,8 +172,8 @@ export const resolveRecipeParams = (
       }
       break;
     default:
-      copy(WAVE2_KEYS);
-      if (loss && recipe.kind !== "sft") params.loss = loss;
+      // sft and decision: cross_entropy (reduction above); Wave 2 kinds never get here.
+      break;
   }
 
   return {

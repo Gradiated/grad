@@ -237,16 +237,4 @@ export const CompleteJobResponseSchema = z
 
 export const RegisterCheckpointResponseSchema = CheckpointSchema;
 
-export const QueueStatsSchema = z
-  .object({
-    queued: z.number().int().min(0),
-    running: z.number().int().min(0),
-    total: z.number().int().min(0),
-    by_kind: z.object({
-      train: z.object({ queued: z.number().int(), running: z.number().int() }),
-      import: z.object({ queued: z.number().int(), running: z.number().int() }),
-    }),
-  })
-  .openapi("TrainerQueueStats");
-
 export const ImportRecordsSchema = z.array(DatasetRecordSchema);

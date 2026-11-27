@@ -11,7 +11,6 @@ data:
   DEPLOY_MODE: {{ .Values.api.deployMode | quote }}
   BILLING_MODE: {{ .Values.api.billingMode | quote }}
   DEFAULT_WORKSPACE_ID: {{ .Values.api.defaultWorkspaceId | quote }}
-  ALLOW_WAVE2_RECIPES: {{ .Values.api.allowWave2Recipes | quote }}
   STORAGE_DIR: "/var/lib/grad"
   {{- if .Values.storage.s3Bucket }}
   S3_BUCKET: {{ .Values.storage.s3Bucket | quote }}

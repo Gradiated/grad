@@ -41,7 +41,7 @@ describe("parseServerEnvironment", () => {
         AUTH_MODE: "none",
         DEPLOY_MODE: "local",
       }),
-    ).toThrow(/DEPLOY_MODE=local was removed/);
+    ).toThrow(/DEPLOY_MODE/);
     expect(() => parseServerEnvironment({ ...DB, AUTH_MODE: "cloud" })).toThrow(
       /CLOUD_INTERNAL_API_URL/,
     );

@@ -346,7 +346,6 @@ describe("Idempotency-Key: bounded wait", () => {
     const t = await makeTestApp({
       billing: billing.adapter,
       settings: {
-        allowWave2Recipes: false,
         maxAttempts: 3,
         evalConcurrency: 1,
         idempotencyWaitMs: 50,

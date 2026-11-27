@@ -152,20 +152,6 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
         [now.toISOString(), limit],
       )
     ).map(toRun),
-  countActive: async () => {
-    const row = first(
-      await db.query(
-        `SELECT COUNT(*) FILTER (WHERE status = 'queued' AND waiting_on IS NULL) AS queued,
-                COUNT(*) FILTER (WHERE worker_id IS NOT NULL) AS running
-         FROM grad_runs WHERE status = 'queued' OR worker_id IS NOT NULL`,
-      ),
-    );
-
-    return {
-      queued: Number(row?.queued ?? 0),
-      running: Number(row?.running ?? 0),
-    };
-  },
 });
 
 export const createMetricsRepository = (db: Db): MetricsRepository => ({

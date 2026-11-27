@@ -140,8 +140,6 @@ export const RecipeSpecSchema = z
     num_tokens: z.number().int().min(16).max(4096).optional(),
     temp: z.number().positive().optional(),
     teacher: ModelIdSchema.optional(),
-    env_name: SlugSchema.optional(),
-    group_size: z.number().int().min(2).max(64).optional(),
     optimizer: OptimizerSpecSchema.optional(),
     eval_every: z
       .union([z.literal("auto"), z.number().int().min(1)])

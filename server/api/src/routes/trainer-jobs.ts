@@ -10,7 +10,6 @@ import {
   HeartbeatResponseSchema,
   PostImportRecordsRequestSchema,
   PostImportRecordsResponseSchema,
-  QueueStatsSchema,
   RegisterCheckpointRequestSchema,
   ReportProgressRequestSchema,
   ReportProgressResponseSchema,
@@ -82,41 +81,6 @@ export const registerTrainerJobRoutes = (
         {
           protocol: TRAINER_PROTOCOL_VERSION as typeof TRAINER_PROTOCOL_VERSION,
           job,
-        },
-        200,
-      );
-    },
-  );
-
-  app.openapi(
-    createRoute({
-      method: "get",
-      path: "/v1/trainer-jobs/queue",
-      operationId: "getTrainerQueueStats",
-      summary:
-        "Queue depth for autoscaling: queued plus running jobs (trainer:worker)",
-      tags,
-      "x-internal": true,
-      responses: {
-        200: jsonResponse(QueueStatsSchema, "Queue depth."),
-        ...defaultErrors,
-      },
-    }),
-    async (c) => {
-      requireScope(c, "trainer:worker");
-      const [train, imports] = await Promise.all([
-        _deps.store.runs.countActive(),
-        _deps.store.imports.countActive(),
-      ]);
-      const queued = train.queued + imports.queued;
-      const running = train.running + imports.running;
-
-      return c.json(
-        {
-          queued,
-          running,
-          total: queued + running,
-          by_kind: { train, import: imports },
         },
         200,
       );

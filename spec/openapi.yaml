@@ -1251,15 +1251,6 @@ components:
           type: string
           minLength: 1
           maxLength: 160
-        env_name:
-          type: string
-          minLength: 1
-          maxLength: 64
-          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
-        group_size:
-          type: integer
-          minimum: 2
-          maximum: 64
         optimizer:
           $ref: "#/components/schemas/OptimizerSpec"
         eval_every:
@@ -2373,49 +2364,6 @@ components:
           description: Recipe kinds this worker can run; train jobs for other recipes are left queued.
       required:
         - worker_id
-    TrainerQueueStats:
-      type: object
-      properties:
-        queued:
-          type: integer
-          minimum: 0
-        running:
-          type: integer
-          minimum: 0
-        total:
-          type: integer
-          minimum: 0
-        by_kind:
-          type: object
-          properties:
-            train:
-              type: object
-              properties:
-                queued:
-                  type: integer
-                running:
-                  type: integer
-              required:
-                - queued
-                - running
-            import:
-              type: object
-              properties:
-                queued:
-                  type: integer
-                running:
-                  type: integer
-              required:
-                - queued
-                - running
-          required:
-            - train
-            - import
-      required:
-        - queued
-        - running
-        - total
-        - by_kind
     TrainerHeartbeatResponse:
       type: object
       properties:
@@ -5331,67 +5279,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ClaimJobResponse"
-        "400":
-          description: Malformed request.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "401":
-          description: Authentication required.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "403":
-          description: Insufficient scope.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "404":
-          description: Resource not found.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "409":
-          description: Conflict.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "422":
-          description: Validation failed.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "500":
-          description: Internal error.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "503":
-          description: Dependency unavailable.
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-  /v1/trainer-jobs/queue:
-    get:
-      operationId: getTrainerQueueStats
-      summary: "Queue depth for autoscaling: queued plus running jobs (trainer:worker)"
-      tags: *a4
-      x-internal: true
-      responses:
-        "200":
-          description: Queue depth.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TrainerQueueStats"
         "400":
           description: Malformed request.
           content:

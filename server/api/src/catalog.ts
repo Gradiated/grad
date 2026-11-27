@@ -17,15 +17,6 @@ const QWEN_LRS = {
   "qwen/qwen3-32b": { sft: 3e-4, dpo: 1e-5, cartridge: 1e-2 },
 } as const;
 
-const WAVE2_LRS = {
-  "qwen/qwen3-0.6b": { grpo: 8e-5, distill: 3e-4, reward: 2e-4 },
-  "qwen/qwen3-1.7b": { grpo: 7e-5, distill: 2.5e-4, reward: 1.5e-4 },
-  "qwen/qwen3-4b": { grpo: 6e-5, distill: 2.2e-4, reward: 1.2e-4 },
-  "qwen/qwen3-8b": { grpo: 5e-5, distill: 2e-4, reward: 1e-4 },
-  "qwen/qwen3-14b": { grpo: 4e-5, distill: 1.8e-4, reward: 8e-5 },
-  "qwen/qwen3-32b": { grpo: 3e-5, distill: 1.5e-4, reward: 6e-5 },
-} as const;
-
 const qwen = (
   id: keyof typeof QWEN_LRS,
   hfRepo: string,
@@ -41,7 +32,7 @@ const qwen = (
   price_per_million_tokens_usd: price,
   max_context_tokens: 32_768,
   template_revision: "qwen3@3",
-  calibrated_lrs: { ...QWEN_LRS[id], ...WAVE2_LRS[id] },
+  calibrated_lrs: QWEN_LRS[id],
 });
 
 export const BUILTIN_MODELS: readonly CatalogEntry[] = [
@@ -53,7 +44,7 @@ export const BUILTIN_MODELS: readonly CatalogEntry[] = [
     "Qwen/Qwen3-8B",
     0.4,
     ["lora", "prefix_kv"],
-    ["sft", "dpo", "cartridge", "distill", "reward", "grpo"],
+    ["sft", "dpo", "cartridge"],
   ),
   qwen("qwen/qwen3-14b", "Qwen/Qwen3-14B", 0.7, ["lora", "prefix_kv"], []),
   qwen("qwen/qwen3-32b", "Qwen/Qwen3-32B", 1.2, ["lora", "prefix_kv"], []),

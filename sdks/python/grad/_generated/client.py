@@ -734,8 +734,6 @@ RecipeSpec = TypedDict(
         "num_tokens": "NotRequired[int]",
         "temp": "NotRequired[float]",
         "teacher": "NotRequired[str]",
-        "env_name": "NotRequired[str]",
-        "group_size": "NotRequired[int]",
         "optimizer": "NotRequired[OptimizerSpec]",
         "eval_every": "NotRequired[Literal['auto'] | int]",
         "loss": "NotRequired[LossSpec]",
@@ -990,16 +988,6 @@ TrainerJob = TypedDict(
     },
 )
 
-TrainerQueueStats = TypedDict(
-    "TrainerQueueStats",
-    {
-        "queued": "int",
-        "running": "int",
-        "total": "int",
-        "by_kind": "dict[str, Any]",
-    },
-)
-
 TrainerUploadRequest = TypedDict(
     "TrainerUploadRequest",
     {
@@ -1187,7 +1175,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
-    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "env_name", "epochs", "eval_every", "fallback", "group_size", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
+    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "epochs", "eval_every", "fallback", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
     "RecordFeedbackRequest": frozenset({"events"}),
     "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
@@ -1206,7 +1194,6 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
     "TrainerJob": frozenset({"attempt", "base", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "max_cost_usd", "price_per_million_tokens", "resume", "run"}),
-    "TrainerQueueStats": frozenset({"by_kind", "queued", "running", "total"}),
     "TrainerUploadRequest": frozenset({"attempt", "kind", "sha256", "size_bytes", "worker_id"}),
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
     "TrajectoryOutput": frozenset({"payload", "turns"}),

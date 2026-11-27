@@ -42,7 +42,7 @@ export GRAD_TRAINER_API_KEY=$(openssl rand -hex 32)   # shared by grad-server an
 | `DATABASE_URL` | required | Postgres connection string. Migrations run at boot, versioned in `grad_schema_migrations` under an advisory lock, so several replicas can start at once. |
 | `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT` | none (local `STORAGE_DIR`) | Workers and SDKs upload and download through presigned URLs. Objects are written once under unique keys and never overwritten. |
 | `STORAGE_DIR`, `BLOB_SIGNING_SECRET` | `.grad-data`, random | Local storage uses HMAC-signed `/blobs/*` URLs proxied by the server. Set the secret when replicas share a volume. |
-| `DEPLOY_MODE` | `disabled` | `disabled` or `cloud`. The old `local` mode was removed. |
+| `DEPLOY_MODE` | `disabled` | `disabled` or `cloud`. |
 | `BILLING_MODE` | `noop` | `cloud` sends per-attempt usage (`run-usage:{run}:{attempt}`) from a retried outbox. |
 | `INFERENCE_BASE_URL`, `INFERENCE_API_KEY` | none | OpenAI-compatible endpoint used by evals (your vLLM/SGLang with LoRA modules named by artifact id). Without it `POST /v1/evals` returns `501 inference_unavailable`. |
 | `JUDGE_BASE_URL`, `JUDGE_API_KEY` | inference endpoint | Endpoint for `Judge` rubric items (`GRAD_JUDGE_BASE_URL` is accepted as an alias). |

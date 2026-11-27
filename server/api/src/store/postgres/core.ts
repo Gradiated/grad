@@ -334,20 +334,6 @@ export const createImportJobRepository = (
         [importId, attempt],
       )
     ).map((r) => r.part as never),
-  countActive: async () => {
-    const row = first(
-      await db.query(
-        `SELECT COUNT(*) FILTER (WHERE status = 'queued') AS queued,
-                COUNT(*) FILTER (WHERE worker_id IS NOT NULL) AS running
-         FROM grad_import_jobs WHERE status = 'queued' OR worker_id IS NOT NULL`,
-      ),
-    );
-
-    return {
-      queued: Number(row?.queued ?? 0),
-      running: Number(row?.running ?? 0),
-    };
-  },
 });
 
 export const createUploadRepository = (

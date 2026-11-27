@@ -40,7 +40,6 @@ describe("run lifecycle and worker protocol", () => {
     t = await makeTestApp({
       billing: billing.adapter,
       settings: {
-        allowWave2Recipes: false,
         maxAttempts: 3,
         evalConcurrency: 2,
         ssePollMs: 5,
@@ -762,26 +761,6 @@ describe("run lifecycle and worker protocol", () => {
       headers: { Accept: "text/event-stream" },
     });
     expect(missing.status).toBe(404);
-  });
-
-  it("reports KEDA-friendly queue depth including running jobs", async () => {
-    await createSftRun(t);
-    await createSftRun(t, { name: "two" });
-    const before = await worker.call<{
-      queued: number;
-      running: number;
-      total: number;
-    }>("/v1/trainer-jobs/queue", undefined, "GET");
-    expect(before.body).toMatchObject({ queued: 2, running: 0, total: 2 });
-    await worker.claim();
-    const after = await worker.call<{
-      queued: number;
-      running: number;
-      total: number;
-    }>("/v1/trainer-jobs/queue", undefined, "GET");
-    expect(after.body).toMatchObject({ queued: 1, running: 1, total: 2 });
-    const asAdmin = await t.json("/v1/trainer-jobs/queue");
-    expect(asAdmin.status).toBe(403);
   });
 
   it("only claims recipes the worker supports and respects job kinds", async () => {

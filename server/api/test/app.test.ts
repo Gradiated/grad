@@ -273,7 +273,7 @@ describe("grad-server HTTP API", () => {
     ).toEqual(["embedding"]);
   });
 
-  it("gates run creation on billing and wave 2 recipes", async () => {
+  it("gates run creation on billing and rejects wave 2 recipes", async () => {
     const denied = await makeTestApp({
       billing: {
         checkCanStartRun: async () => ({

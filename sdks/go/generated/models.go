@@ -1345,8 +1345,6 @@ type RecipeSpec struct {
 	NumTokens         *int                 `json:"num_tokens,omitempty"`
 	Temp              *float64             `json:"temp,omitempty"`
 	Teacher           *string              `json:"teacher,omitempty"`
-	EnvName           *string              `json:"env_name,omitempty"`
-	GroupSize         *int                 `json:"group_size,omitempty"`
 	Optimizer         *OptimizerSpec       `json:"optimizer,omitempty"`
 	// EvalEvery Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
 	EvalEvery any          `json:"eval_every,omitempty"`

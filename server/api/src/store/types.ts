@@ -169,7 +169,6 @@ export interface ImportJobRepository {
   listExpiredLeases(now: Date, limit: number): Promise<ImportJobRecord[]>;
   addPart(importId: string, attempt: number, part: DatasetPart): Promise<void>;
   listParts(importId: string, attempt: number): Promise<DatasetPart[]>;
-  countActive(): Promise<{ queued: number; running: number }>;
 }
 
 // --- Runs --------------------------------------------------------------------
@@ -267,7 +266,6 @@ export interface RunRepository {
   /** Runs with an open attempt (worker set) whose lease has expired. */
   listExpiredLeases(now: Date, limit: number): Promise<RunRecord[]>;
   /** Queue depth for autoscaling: queued + running (open attempts). */
-  countActive(): Promise<{ queued: number; running: number }>;
 }
 
 export interface MetricsRepository {

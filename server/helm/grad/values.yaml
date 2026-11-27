@@ -10,7 +10,6 @@ api:
   authMode: api_key
   deployMode: disabled
   billingMode: noop
-  allowWave2Recipes: false
   defaultWorkspaceId: default
   resources:
     requests:

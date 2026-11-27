@@ -301,7 +301,6 @@ export const createRunLifecycle = (
     const plan = planRun(request, records, {
       catalog,
       datasetVersion: resolved.version.version,
-      allowWave2: settings.allowWave2Recipes,
       baseArtifact: baseArtifact && toPublicArtifact(baseArtifact),
       labeling,
     });

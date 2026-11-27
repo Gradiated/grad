@@ -36,13 +36,7 @@ const plan = (
   recipe: Record<string, unknown>,
   records: DatasetRecord[],
   extra: Record<string, unknown> = {},
-  allowWave2 = false,
-) =>
-  planRun(request(recipe, extra), records, {
-    catalog,
-    datasetVersion: 3,
-    allowWave2,
-  });
+) => planRun(request(recipe, extra), records, { catalog, datasetVersion: 3 });
 
 const expectCode = (fn: () => unknown, code: string, message?: RegExp) => {
   try {
@@ -307,11 +301,10 @@ describe("planRun", () => {
     );
   });
 
-  it("gates Wave 2 recipes", () => {
-    expectCode(() => plan({ kind: "grpo" }, records), "recipe_deferred");
-    expect(
-      plan({ kind: "grpo" }, records, {}, true).resolved_config.batch_size,
-    ).toBe(32);
+  it("rejects Wave 2 recipes", () => {
+    for (const kind of ["grpo", "distill", "reward"]) {
+      expectCode(() => plan({ kind }, records), "recipe_deferred");
+    }
   });
 
   it("scales lr, warns on few steps, empty eval split and budget, and supports explicit lr", () => {

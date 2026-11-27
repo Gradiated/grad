@@ -344,7 +344,6 @@ export interface PlanContext {
   labeling?: LabelingPlan | null;
   catalog: ModelCatalog;
   datasetVersion: number;
-  allowWave2?: boolean;
   /** The artifact `recipe.model` names (continued training). */
   baseArtifact?: Artifact | null;
 }
@@ -382,10 +381,10 @@ export const planRun = (
   const { recipe } = request;
   const warnings: string[] = [];
 
-  if (!isV0Recipe(recipe.kind) && !context.allowWave2) {
+  if (!isV0Recipe(recipe.kind)) {
     throw invalid(
       "recipe_deferred",
-      `Recipe '${recipe.kind}' is deferred past v0 on this server; supported v0 recipes are ${V0_RECIPE_KINDS.join(", ")}.`,
+      `Recipe '${recipe.kind}' is deferred past v0; supported v0 recipes are ${V0_RECIPE_KINDS.join(", ")}.`,
     );
   }
 
@@ -455,7 +454,7 @@ export const planRun = (
     );
   }
 
-  const defaultBatch = recipe.kind === "grpo" ? 32 : 128;
+  const defaultBatch = 128;
   const batchSize = recipe.batch_size ?? defaultBatch;
   const evalFraction =
     request.split?.eval_fraction ??

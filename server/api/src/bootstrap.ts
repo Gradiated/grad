@@ -122,7 +122,6 @@ export const buildDependencies = async (
     inference: buildInference(env),
     regex: createRegexEvaluator(),
     settings: {
-      allowWave2Recipes: env.ALLOW_WAVE2_RECIPES,
       maxAttempts: env.MAX_ATTEMPTS,
       evalConcurrency: env.EVAL_CONCURRENCY,
     },

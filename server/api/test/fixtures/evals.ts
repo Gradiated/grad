@@ -25,7 +25,6 @@ export const makeEvalHarness = async (
     ...(options.billing ? { billing: options.billing } : {}),
     inference: { models: client, judge: client },
     settings: {
-      allowWave2Recipes: false,
       maxAttempts: options.maxAttempts ?? 3,
       evalConcurrency: 3,
     },
