@@ -36,7 +36,7 @@ export interface Artifact {
   checkpointId: string | null;
   baseModel: string;
   recipeKind: RecipeKind;
-  format: ArtifactFormat;
+  format: ArtifactFormat | null;
   sha256: string;
   sizeBytes: number;
   manifest: Record<string, unknown>;
@@ -45,7 +45,7 @@ export interface Artifact {
 }
 
 /** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
-export type ArtifactFormat = ("peft_lora" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference") | null;
+export type ArtifactFormat = "peft_lora" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference";
 
 export const ArtifactFormatValues = ["peft_lora", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference"] as const;
 
@@ -71,7 +71,7 @@ export interface Checkpoint {
   attempt: number;
   step: number;
   evalScore: number | null;
-  format: ArtifactFormat;
+  format: ArtifactFormat | null;
   sha256: string;
   sizeBytes: number;
   metadata: Record<string, unknown>;
@@ -91,7 +91,7 @@ export interface ClaimJobRequest {
 
 export interface ClaimJobResponse {
   protocol: "grad.trainer-protocol/1";
-  job: TrainerJob;
+  job: TrainerJob | null;
 }
 
 export interface CompleteTrainerJobRequest {
@@ -100,7 +100,7 @@ export interface CompleteTrainerJobRequest {
   /** `abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure. */
   status: "completed" | "stopped_budget" | "failed" | "cancelled" | "abandoned";
   uploadId?: string | undefined;
-  format?: ArtifactFormat | undefined;
+  format?: ArtifactFormat | null | undefined;
   manifest?: Record<string, unknown> | undefined;
   evalReport?: Record<string, unknown> | null | undefined;
   tokensProcessed?: number | undefined;
@@ -170,7 +170,7 @@ export interface DatasetRecord {
   messages?: Array<ChatMessage> | undefined;
   tools?: Array<Record<string, unknown>> | undefined;
   input?: TrajectoryInput | undefined;
-  output?: TrajectoryOutput | undefined;
+  output?: TrajectoryOutput | null | undefined;
   prompt?: string | Array<ChatMessage> | undefined;
   completion?: string | Array<ChatMessage> | undefined;
   chosen?: string | Array<ChatMessage> | undefined;
@@ -430,7 +430,7 @@ export type JobKind = "train" | "import";
 
 export const JobKindValues = ["train", "import"] as const;
 
-export type MetricPoint = {
+export interface MetricPoint {
   seq: number;
   attempt: number;
   step: number;
@@ -444,7 +444,7 @@ export type MetricPoint = {
   costUsd: number;
   timestamp: string;
   [key: string]: unknown;
-} | null;
+}
 
 export interface MetricPointInput {
   step: number;
@@ -463,7 +463,7 @@ export interface MetricPointInput {
 export interface MetricsPage {
   runId: string;
   status: RunStatus;
-  data: Array<MetricPoint>;
+  data: Array<MetricPoint | null>;
   nextCursor: string | null;
 }
 
@@ -615,7 +615,7 @@ export interface RegisterTrainerCheckpointRequest {
   step: number;
   evalScore?: number | null | undefined;
   uploadId: string;
-  format?: ArtifactFormat | undefined;
+  format?: ArtifactFormat | null | undefined;
   metadata?: Record<string, unknown> | undefined;
 }
 
@@ -742,7 +742,7 @@ export interface Run {
   totalSteps: number;
   attempt: number;
   maxAttempts: number;
-  latestMetric: MetricPoint;
+  latestMetric: MetricPoint | null;
   evalReport: Record<string, unknown> | null;
   artifactId: string | null;
   error: string | null;
@@ -787,7 +787,7 @@ export interface TrainerHeartbeatResponse {
   leaseExpiresAt: string;
 }
 
-export type TrainerJob = {
+export interface TrainerJob {
   id: string;
   kind: JobKind;
   attempt: number;
@@ -821,7 +821,7 @@ export type TrainerJob = {
     step: number;
     downloadUrl: string;
   } | null;
-} | null;
+}
 
 export interface TrainerQueueStats {
   queued: number;
@@ -856,11 +856,11 @@ export interface TrajectoryInput {
   [key: string]: unknown;
 }
 
-export type TrajectoryOutput = {
+export interface TrajectoryOutput {
   turns?: Array<ChatMessage> | undefined;
   payload?: unknown | undefined;
   [key: string]: unknown;
-} | null;
+}
 
 export interface UploadTicket {
   uploadId: string;

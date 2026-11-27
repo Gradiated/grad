@@ -157,6 +157,13 @@ components:
         format: { $ref: "#/components/schemas/Format" }
         metadata: { type: object, additionalProperties: {} }
         scores: { type: object, additionalProperties: { type: number } }
+        heartbeat: { $ref: "#/components/schemas/Heartbeat" }
+    Heartbeat:
+      description: A top-level nullable object (OpenAPI 3.1 `type` list).
+      type: [object, "null"]
+      required: [at]
+      properties:
+        at: { type: string }
     Format:
       type: [string, "null"]
       enum: [peft_lora, prefix-kv, "2bit", null]

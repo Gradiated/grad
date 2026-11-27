@@ -336,6 +336,8 @@ export interface RequestSpec {
   headers?: Array<[string, unknown]> | undefined;
   /** JSON-serializable body (already in wire casing). */
   json?: unknown;
+  /** Raw, replayable body (for uploads); ignored when `json` is set. */
+  body?: Blob | Uint8Array | string | undefined;
   accept?: string | undefined;
 }
 
@@ -443,7 +445,14 @@ export const defaultUserAgent = (): string | undefined => {
   return version ? `grad-typescript/${SDK_VERSION} node/${version}` : undefined;
 };
 
-export class Transport {
+/** What generated clients need from a transport (lets callers resolve configuration lazily). */
+export interface TransportLike {
+  json(spec: RequestSpec, options?: RequestOptions): Promise<unknown>;
+  raw(spec: RequestSpec, options?: StreamOptions): Promise<RawResponse>;
+  sse(spec: RequestSpec, options?: SSEOptions): AsyncGenerator<ServerSentEvent, void, undefined>;
+}
+
+export class Transport implements TransportLike {
   readonly baseURL: string;
   private readonly origin: string;
   private readonly apiKey: TransportOptions["apiKey"];
@@ -465,7 +474,7 @@ export class Transport {
       });
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new GradError(`Invalid base URL '${options.baseURL}': only http and https are supported.`, {
+      throw new GradError(`Invalid base URL '${options.baseURL}': only http and https are supported (include the scheme, e.g. http://localhost:8787).`, {
         code: "invalid_base_url",
       });
     }
@@ -543,7 +552,7 @@ export class Transport {
     const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
     const userSignal = options?.signal;
     const { headers, keyed } = await this.headersFor(spec, options);
-    const body = spec.json === undefined ? undefined : JSON.stringify(spec.json);
+    const body: BodyInit | undefined = spec.json === undefined ? (spec.body as BodyInit | undefined) : JSON.stringify(spec.json);
     let url = this.buildURL(spec);
     let redirects = 0;
 
@@ -728,9 +737,10 @@ export class Transport {
           }
         }
       },
-      cancel: async (reason) => {
+      cancel: (reason) => {
         finish();
-        await reader?.cancel(reason).catch(() => undefined);
+        // Not awaited: cancelling a tee'd body resolves only once every branch is cancelled.
+        void reader?.cancel(reason).catch(() => undefined);
       },
     });
     return {

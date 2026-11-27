@@ -23,7 +23,7 @@ const RESERVED_LOCALS = new Set(["body", "params", "options", "path", "query", "
 
 const RESERVED_TYPE_NAMES = new Set(
   (
-    "Record Array Promise Date Error Map Set Object String Number Boolean Symbol Function Uint8Array ReadableStream Response Request Headers Blob URL AbortSignal Partial Required Readonly Pick Omit Exclude Extract NonNullable ReturnType Iterable AsyncIterable AsyncGenerator JSON Math Transport ApiClient RequestOptions StreamOptions SSEOptions RawResponse ServerSentEvent CodecNode CodecTable ResponseInfo GradError APIError"
+    "Record Array Promise Date Error Map Set Object String Number Boolean Symbol Function Uint8Array ReadableStream Response Request Headers Blob URL AbortSignal Partial Required Readonly Pick Omit Exclude Extract NonNullable ReturnType Iterable AsyncIterable AsyncGenerator JSON Math Transport ApiClient RequestOptions StreamOptions SSEOptions RawResponse ServerSentEvent CodecNode CodecTable ResponseInfo GradError APIError TransportLike RequestSpec TransportOptions Sleep FieldError GradErrorInit APIErrorInit ErrorContext BadRequestError AuthenticationError PermissionDeniedError NotFoundError ConflictError ValidationError RateLimitError ServerError DeployUnavailableError InferenceUnavailableError APIConnectionError APITimeoutError APIUserAbortError RedirectError ResponseDecodeError CODEC"
   ).split(" "),
 );
 
@@ -70,7 +70,7 @@ export const tsType = (node, names, where, indent = "") => {
     case "null":
       return "null";
     case "ref":
-      return names.get(node.name);
+      return names.nullable?.has(node.name) ? `${names.get(node.name)} | null` : names.get(node.name);
     case "prim":
       if (node.t === "integer" || node.t === "number") return "number";
       if (node.t === "boolean") return "boolean";
@@ -79,6 +79,7 @@ export const tsType = (node, names, where, indent = "") => {
       return node.values.map(literal).join(" | ");
     case "nullable": {
       const inner = tsType(node.inner, names, where, indent);
+      if (node.inner.k === "ref" && names.nullable?.has(node.inner.name)) return inner;
       return `${node.inner.k === "union" || node.inner.k === "enum" ? `(${inner})` : inner} | null`;
     }
     case "array": {
@@ -206,10 +207,13 @@ export const generateTypeScriptFiles = async (ir, { sdkVersion = "0.0.0" } = {})
     names.set(name, tsName);
   }
   const needs = computeNeeds(ir.schemas);
+  // A top-level nullable schema (`type: [object, "null"]`) is emitted without null; uses add `| null`.
+  names.nullable = new Set(Object.entries(ir.schemas).filter(([, n]) => n.k === "nullable").map(([name]) => name));
 
   const modelBlocks = [];
-  for (const [name, node] of Object.entries(ir.schemas)) {
+  for (const [name, rawNode] of Object.entries(ir.schemas)) {
     const tsName = names.get(name);
+    const node = rawNode.k === "nullable" ? { ...rawNode.inner, description: rawNode.description ?? rawNode.inner.description } : rawNode;
     const doc = comment(node.description);
     if (node.k === "object" && node.props.length > 0) {
       modelBlocks.push(`${doc}export interface ${tsName} ${tsType(node, names, name)}`);
@@ -347,7 +351,8 @@ export const generateTypeScriptFiles = async (ir, { sdkVersion = "0.0.0" } = {})
     }
   }
 
-  const usedModels = [...names.values()].sort(compareStrings);
+  const methodText = methods.join("\n") + clientTypes.join("\n");
+  const usedModels = [...names.values()].filter((n) => new RegExp(`\\b${n}\\b`).test(methodText)).sort(compareStrings);
 
   const models = `${HEADER}/* eslint-disable */\n\n${modelBlocks.join("\n\n")}\n`;
 
@@ -361,7 +366,7 @@ import {
   type ServerSentEvent,
   type SSEOptions,
   type StreamOptions,
-  type Transport,
+  type TransportLike,
 } from "./transport.js";
 ${usedModels.length > 0 ? `import type {\n${usedModels.map((n) => `  ${n},`).join("\n")}\n} from "./models.js";\n` : ""}
 /** Which wire keys are renamed to camelCase, per schema (user-keyed maps are left verbatim). */
@@ -373,7 +378,7 @@ ${clientTypes.join("\n\n")}
 
 /** Low-level client: one typed method per OpenAPI operation. */
 export class ApiClient {
-  constructor(readonly transport: Transport) {}
+  constructor(readonly transport: TransportLike) {}
 
 ${methods.join("\n\n")}
 }

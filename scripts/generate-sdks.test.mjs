@@ -162,6 +162,14 @@ test("output is deterministic across path order and locale", async () => {
   assert.equal(new Set(hashes).size, 1);
 });
 
+test("a top-level nullable object schema is an interface, and its uses add | null", async () => {
+  const { files } = await fixture();
+  const models = files["sdks/typescript/src/generated/models.ts"];
+  assert.match(models, /\/\*\* A top-level nullable object[^*]*\*\/\nexport interface Heartbeat \{\n  at: string;\n\}/);
+  assert.match(models, /heartbeat\?: Heartbeat \| null \| undefined;/);
+  assert.doesNotMatch(models, /Heartbeat \| null \| null/);
+});
+
 test("fixture spec: generated TypeScript type-checks under strict settings and builds correct requests", async (t) => {
   const { files } = await fixture();
   const dir = scratch("codegen-ts-");

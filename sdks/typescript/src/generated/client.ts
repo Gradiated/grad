@@ -9,16 +9,11 @@ import {
   type ServerSentEvent,
   type SSEOptions,
   type StreamOptions,
-  type Transport,
+  type TransportLike,
 } from "./transport.js";
 import type {
-  AdapterSpec,
   ApiKey,
-  ApiKeyScope,
   Artifact,
-  ArtifactFormat,
-  BenchmarkSpec,
-  ChatMessage,
   Checkpoint,
   ClaimJobRequest,
   ClaimJobResponse,
@@ -30,7 +25,6 @@ import type {
   CreateUploadRequest,
   CreatedApiKey,
   Dataset,
-  DatasetRecord,
   DatasetRecordsPage,
   DeployArtifactRequest,
   Deployment,
@@ -40,21 +34,10 @@ import type {
   EnvTaskDispatch,
   EnvTaskResult,
   EnvWorkerRegister,
-  EvalModelSummary,
   EvalOutput,
-  EvalRubricItem,
   EvalRun,
-  EvalStatus,
   EvalTaskOutcome,
-  FeedbackEventInput,
-  FeedbackRecord,
-  HfColumnMapping,
   ImportJob,
-  ImportSource,
-  ImportStatus,
-  JobKind,
-  MetricPoint,
-  MetricPointInput,
   MetricsPage,
   PlanEvalRequest,
   PlanEvalResponse,
@@ -64,11 +47,8 @@ import type {
   PostEvalScoresResponse,
   PostImportRecordsRequest,
   PostImportRecordsResponse,
-  Problem,
   PromoteCheckpointRequest,
   PushDatasetRequest,
-  RecipeKind,
-  RecipeSpec,
   RecordFeedbackRequest,
   RecordFeedbackResponse,
   RegisterTrainerCheckpointRequest,
@@ -76,21 +56,15 @@ import type {
   RenderDatasetResponse,
   ReportTrainerProgressRequest,
   ReportTrainerProgressResponse,
-  ResolvedRunConfig,
   ResumeRunRequest,
   RouteRequest,
   RouteResponse,
   Run,
-  RunStatus,
-  SplitSpec,
   TrainableModel,
   TrainerHeartbeatRequest,
   TrainerHeartbeatResponse,
-  TrainerJob,
   TrainerQueueStats,
   TrainerUploadRequest,
-  TrajectoryInput,
-  TrajectoryOutput,
   UploadTicket,
 } from "./models.js";
 
@@ -329,7 +303,7 @@ export type RegisterEnvWorkerResponse = {
 
 /** Low-level client: one typed method per OpenAPI operation. */
 export class ApiClient {
-  constructor(readonly transport: Transport) {}
+  constructor(readonly transport: TransportLike) {}
 
   /**
    * Cancel a queued, running or awaiting_scores evaluation
