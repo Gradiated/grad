@@ -299,10 +299,13 @@ describe("buildDependencies", () => {
           TRAINER_API_KEY_HASH: hashApiKey("w"),
         }),
       );
-      // Billing is down at boot: the server starts, unpriced (no models).
+      // Billing is down at boot: the server starts, unpriced (model
+      // lookups answer 503 billing_unavailable until a list is fetched).
       expect(cloud.billing.pushUsage).toBeDefined();
       expect(cloud.prices?.fresh()).toBe(false);
-      expect(cloud.catalog.list()).toEqual([]);
+      expect(() => cloud.catalog.list()).toThrow(
+        expect.objectContaining({ code: "billing_unavailable" }),
+      );
       expect(cloud.traces).toBeNull();
       expect(cloud.inferenceConfigured).toBe(false);
       expect(await cloud.auth.authenticate("w")).toMatchObject({
