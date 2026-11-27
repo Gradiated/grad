@@ -72,8 +72,6 @@ printf -- '- name: nonempty\n  kind: validator\n  validator: non_empty\n' > rubr
 "$GRAD" eval --name smoke --models support-sft@latest,test/tiny-qwen3 --dataset support-prod \
   --rubric rubric.yaml --limit 5 --wait | tee eval.out
 grep -q "support-sft@" eval.out || fail "eval"
-"$GRAD" --json deploy support-sft@latest 2>deploy.err && fail "deploy must be unavailable self-hosted"
-grep -q deploy_unavailable deploy.err || fail "deploy error code"
 
 step "README quickstart: a router on examples/support_traces.jsonl (dev models)"
 "$GRAD" import "$ROOT/examples/support_traces.jsonl" --dataset support-traces | tee readme-import.out

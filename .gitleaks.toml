@@ -13,3 +13,6 @@ paths = [
 ]
 # Fake keys in tests spell out 0123456789 (sk-test-0123456789, wandb-live-0123456789).
 stopwords = ["0123456789"]
+# generic-api-key reads `secret="hf-token", idempotency_key="..."` as a key
+# assignment and reports the argument name itself as the secret.
+regexes = ['''^idempotency_key=?$''']
