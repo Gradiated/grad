@@ -1,145 +1,287 @@
-"""Direct Preference Optimization (DPO) recipe runner (LoRA)."""
+"""DPO: LoRA policy against the frozen base (adapter disabled) as the reference.
+
+Loss (``losses.DPO(beta)``, sigmoid form)::
+
+    margin = beta * ((logp_policy(chosen) - logp_ref(chosen)) - (logp_policy(rejected) - logp_ref(rejected)))
+    loss   = -log(sigmoid(margin))
+
+where ``logp`` sums log-probabilities over the completion tokens. Accepted records:
+
+- ``{"prompt": str | messages, "chosen": str | messages, "rejected": str | messages}``;
+  with no ``prompt``, the shared leading messages of ``chosen``/``rejected`` are the prompt
+  (the ``trl`` implicit-prompt format, e.g. ``trl-lib/ultrafeedback_binarized``).
+- ``grad.trajectory/1`` records sharing a ``group_id`` with ``role: "chosen" | "rejected"``.
+
+Pairs always stay on the same side of the split (``by_session`` is applied ``by_group``).
+"""
 
 from __future__ import annotations
 
-import json
-from typing import Any, Sequence
+import math
+from pathlib import Path
+from typing import Any
 
-from ..bundles import build_artifact_bundle
-from ..templates import estimate_text_tokens
-from ..trainer import CpuReferenceBackend, Trainer, TrainingExample
-from .base import (
-    RunCallbacks,
-    RunOutput,
-    price_for_model,
-    run_training_loop,
-    split_records,
-)
+import torch
+import torch.nn.functional as F
+
+from ..backends import torch_common as tc
+from ..backends.torch_task import TorchTask
+from ..config import TrainSpec
+from ..errors import RecipeConfigError, RecipeDataError
+from ..trainer import EvalResult
+from .base import RecipeRunner
+from .data import TRAJECTORY_SCHEMA, as_messages, common_prefix, record_id, trajectory_messages
+
+Pair = tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str]
 
 
-def _flatten_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')}"
-            for m in value
-            if isinstance(m, dict)
+def dpo_loss(
+    policy_chosen: torch.Tensor,
+    policy_rejected: torch.Tensor,
+    ref_chosen: torch.Tensor,
+    ref_rejected: torch.Tensor,
+    beta: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-pair sigmoid DPO loss and reward margin."""
+    margin = beta * ((policy_chosen - ref_chosen) - (policy_rejected - ref_rejected))
+    return -F.logsigmoid(margin), margin
+
+
+def resolve_beta(params: dict[str, Any]) -> float:
+    loss = params.get("loss")
+    beta = params.get("beta")
+    if isinstance(loss, dict):
+        kind = str(loss.get("kind", loss.get("type", "dpo"))).lower()
+        beta = loss.get("beta", beta)
+    else:
+        kind = str(loss or "dpo").lower()
+    if kind not in ("dpo", "sigmoid"):
+        raise RecipeConfigError(
+            f"DPORecipe supports loss=losses.DPO(beta=...) in v0; '{kind}' needs a custom loop."
         )
-    return json.dumps(value) if value is not None else ""
+    beta = 0.1 if beta is None else float(beta)
+    if not math.isfinite(beta) or beta <= 0:
+        raise RecipeConfigError("DPO beta must be a positive number.")
+    return beta
 
 
-def _records_to_dpo_examples(records: Sequence[dict[str, Any]]) -> list[TrainingExample]:
-    examples: list[TrainingExample] = []
-    for rec in records:
-        prompt = _flatten_text(rec.get("prompt") or rec.get("messages") or "")
-        chosen = _flatten_text(rec.get("chosen") or rec.get("expected_output") or "")
-        rejected = _flatten_text(rec.get("rejected") or "")
-        if not chosen and not rejected:
+def _completion(value: Any) -> list[dict[str, Any]]:
+    turns = as_messages(value, "assistant")
+    for turn in turns:
+        if turn.get("role") != "assistant":
+            raise RecipeDataError("DPO completions must be assistant turns.")
+    return turns
+
+
+def extract_pairs(records: list[dict[str, Any]]) -> tuple[list[Pair], int]:
+    """Build (prompt, chosen, rejected, id) pairs. Returns pairs and the count of dropped rows."""
+    pairs: list[Pair] = []
+    dropped = 0
+    groups: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for index, rec in enumerate(records):
+        rid = record_id(rec, index)
+        if rec.get("schema") == TRAJECTORY_SCHEMA:
+            role = rec.get("role")
+            group = rec.get("group_id")
+            if role not in ("chosen", "rejected") or group is None:
+                dropped += 1
+                continue
+            groups.setdefault(str(group), {"chosen": [], "rejected": []})[role].append(rec)
             continue
-        chosen_full = f"{prompt}\n{chosen}".strip()
-        rejected_full = f"{prompt}\n{rejected}".strip()
-        tokens = max(
-            16, estimate_text_tokens(chosen_full) + estimate_text_tokens(rejected_full)
-        )
-        examples.append(
-            TrainingExample(
-                text=chosen_full,
-                aux_text=rejected_full,
-                target=1.0,
-                tokens=tokens,
+        if rec.get("chosen") is None or rec.get("rejected") is None:
+            dropped += 1
+            continue
+        chosen = as_messages(rec["chosen"], "assistant")
+        rejected = as_messages(rec["rejected"], "assistant")
+        if rec.get("prompt") is not None:
+            prompt = as_messages(rec["prompt"], "user")
+        elif rec.get("messages"):
+            prompt = as_messages(rec["messages"], "user")
+        else:
+            shared = common_prefix(chosen, rejected)
+            prompt, chosen, rejected = chosen[:shared], chosen[shared:], rejected[shared:]
+        pairs.append((prompt, _completion(chosen), _completion(rejected), rid))
+
+    for group_id, sides in sorted(groups.items()):
+        if len(sides["chosen"]) != 1 or not sides["rejected"]:
+            dropped += len(sides["chosen"]) + len(sides["rejected"])
+            continue
+        prompt, chosen = trajectory_messages(sides["chosen"][0])
+        for rej in sides["rejected"]:
+            rej_prompt, rejected = trajectory_messages(rej)
+            if rej_prompt != prompt:
+                raise RecipeDataError(f"Preference group '{group_id}' has different prompts on each side.")
+            pairs.append((prompt, _completion(chosen), _completion(rejected), group_id))
+
+    valid: list[Pair] = []
+    for prompt, chosen, rejected, rid in pairs:
+        if not prompt or not chosen or not rejected or chosen == rejected:
+            dropped += 1
+            continue
+        valid.append((prompt, chosen, rejected, rid))
+    return valid, dropped
+
+
+class DPOTask(TorchTask):
+    kind = "dpo"
+    metric_name = "preference_accuracy"
+    metric_mode = "max"
+    artifact_format = "peft_lora"
+
+    def __init__(self, spec: TrainSpec, train: list[dict[str, Any]], held_out: list[dict[str, Any]], workdir: Path) -> None:
+        super().__init__(spec, workdir)
+        self.beta = resolve_beta(spec.params)
+        self.resolved = self.resolve(spec.model, "causal_lm")
+        self._template = self.template_revision(self.resolved)
+        self.tokenizer = tc.load_tokenizer(self.resolved)
+        base = tc.load_causal_lm(self.resolved, self.device)
+        self.max_len = tc.model_max_len(base, spec)
+        self.truncated = 0
+        train_pairs, dropped_train = extract_pairs(train)
+        eval_pairs, dropped_eval = extract_pairs(held_out)
+        self.dropped = dropped_train + dropped_eval
+        self.train_pairs = [p for p in (self._encode(pair) for pair in train_pairs) if p]
+        self.eval_pairs = [p for p in (self._encode(pair) for pair in eval_pairs) if p]
+        if not self.train_pairs:
+            raise RecipeDataError(
+                "DPO needs preference pairs: records with non-empty, different 'chosen' and 'rejected' "
+                "(or grad.trajectory/1 records sharing a group_id with role chosen/rejected)."
             )
+        if self.dropped:
+            self.warnings.append(f"{self.dropped} records were not usable as preference pairs and were dropped.")
+        self.lora = tc.lora_settings(spec.adapter)
+        torch.manual_seed(spec.seed)
+        self.model = tc.apply_lora(base, spec.adapter, tc.use_gradient_checkpointing(spec, self.device))
+        self.lm = tc.base_causal_lm(self.model)
+        self.init_optimizer(self.model)
+        self.pad_id = int(self.tokenizer.pad_token_id)
+        self._ref_cache: dict[tuple[str, int], tuple[float, float]] = {}
+
+    def _encode_side(self, prompt: list[dict[str, Any]], completion: list[dict[str, Any]], rid: str) -> tuple[tuple[int, ...], tuple[bool, ...]] | None:
+        messages = [{**m, "train": False} if m.get("role") == "assistant" else dict(m) for m in prompt]
+        messages += [{**m, "train": True} for m in completion]
+        tok = self.tokenize(self.render(messages, rid), self.max_len)
+        self.truncated += int(tok.truncated)
+        if sum(tok.trained[1:]) == 0:
+            return None
+        return tok.input_ids, tok.trained
+
+    def _encode(self, pair: Pair) -> tuple[Any, Any] | None:
+        prompt, chosen, rejected, rid = pair
+        c = self._encode_side(prompt, chosen, rid)
+        r = self._encode_side(prompt, rejected, rid)
+        if c is None or r is None:
+            self.dropped += 1
+            return None
+        return c, r
+
+    def num_train_items(self) -> int:
+        return len(self.train_pairs)
+
+    def item_tokens(self, index: int) -> int:
+        c, r = self.train_pairs[index]
+        return len(c[0]) + len(r[0])
+
+    def _sequence_logps(self, sequences: list[tuple[tuple[int, ...], tuple[bool, ...]]]) -> torch.Tensor:
+        ids, mask = tc.padded_batch([s[0] for s in sequences], self.pad_id, self.device)
+        trained = torch.zeros_like(ids, dtype=torch.bool)
+        for i, (_, t) in enumerate(sequences):
+            trained[i, : len(t)] = torch.tensor(t, dtype=torch.bool)
+        hidden = self.lm.model(input_ids=ids, attention_mask=mask).last_hidden_state
+        target = trained[:, 1:]
+        logits = self.lm.lm_head(hidden[:, :-1][target]).float()
+        token_logp = torch.log_softmax(logits, -1).gather(1, ids[:, 1:][target][:, None])[:, 0]
+        rows = torch.arange(ids.shape[0], device=self.device)[:, None].expand_as(target)[target]
+        return torch.zeros(ids.shape[0], device=self.device).index_add(0, rows, token_logp)
+
+    def _reference(self, split: str, indices: list[int], pairs: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
+        missing = [i for i in indices if (split, i) not in self._ref_cache]
+        if missing:
+            seqs = [s for i in missing for s in pairs[i]]
+            with torch.no_grad(), self.model.disable_adapter():
+                logps = self._sequence_logps(seqs).tolist()
+            for k, i in enumerate(missing):
+                self._ref_cache[(split, i)] = (logps[2 * k], logps[2 * k + 1])
+        ref = [self._ref_cache[(split, i)] for i in indices]
+        return (
+            torch.tensor([r[0] for r in ref], device=self.device),
+            torch.tensor([r[1] for r in ref], device=self.device),
         )
-    return examples
+
+    def _run(self, split: str, indices: list[int], *, grad: bool) -> dict[str, float]:
+        pairs = self.train_pairs if split == "train" else self.eval_pairs
+        lengths = [max(len(pairs[i][0][0]), len(pairs[i][1][0])) for i in range(len(pairs))]
+        n = len(indices)
+        totals = {"loss": 0.0, "margin": 0.0, "accuracy": 0.0, "chosen_reward": 0.0, "rejected_reward": 0.0}
+        for chunk in tc.chunk_by_tokens(indices, lengths, max(1, self.spec.micro_batch_tokens // 2)):
+            ref_c, ref_r = self._reference(split, chunk, pairs)
+            with torch.set_grad_enabled(grad):
+                logps = self._sequence_logps([s for i in chunk for s in pairs[i]])
+                pol_c, pol_r = logps[0::2], logps[1::2]
+                losses, margins = dpo_loss(pol_c, pol_r, ref_c, ref_r, self.beta)
+                loss = losses.sum() / n
+                if grad:
+                    loss.backward()
+            totals["loss"] += float(loss.detach())
+            totals["margin"] += float(margins.detach().sum()) / n
+            totals["accuracy"] += float((margins.detach() > 0).float().sum()) / n
+            totals["chosen_reward"] += float((self.beta * (pol_c - ref_c)).detach().sum()) / n
+            totals["rejected_reward"] += float((self.beta * (pol_r - ref_r)).detach().sum()) / n
+        return totals
+
+    def accumulate(self, indices: list[int]) -> dict[str, float]:
+        t = self._run("train", indices, grad=True)
+        return {
+            "loss": t["loss"],
+            "reward_margin": t["margin"],
+            "reward_accuracy": t["accuracy"],
+            "chosen_reward": t["chosen_reward"],
+            "rejected_reward": t["rejected_reward"],
+        }
+
+    def evaluate(self) -> EvalResult | None:
+        if not self.eval_pairs:
+            return None
+        t = self._run("eval", list(range(len(self.eval_pairs))), grad=False)
+        return EvalResult(
+            score=t["accuracy"],
+            metrics={"eval_loss": t["loss"], "eval_reward_margin": t["margin"]},
+        )
+
+    def export(self, directory: Path) -> None:
+        tc.export_peft_adapter(self.model, directory, self.resolved)
+
+    def manifest(self) -> dict[str, Any]:
+        return {
+            **self.base_manifest(self.resolved),
+            "loss": {"kind": "dpo", "beta": self.beta},
+            "reference_model": "base model (adapter disabled)",
+            "max_seq_len": self.max_len,
+            "adapter": {**self.lora, "kind": "lora"},
+        }
+
+    def final_report(self) -> dict[str, Any]:
+        result = self.evaluate()
+        report: dict[str, Any] = {
+            "preference_accuracy": None if result is None else result.score,
+            "eval_loss": None if result is None else result.metrics["eval_loss"],
+            "reward_margin": None if result is None else result.metrics["eval_reward_margin"],
+            "beta": self.beta,
+            "train_pairs": len(self.train_pairs),
+            "eval_pairs": len(self.eval_pairs),
+            "dropped_records": self.dropped,
+            "truncated": self.truncated,
+            "warnings": [] if result else ["No held-out pairs: preference_accuracy is null."],
+        }
+        return report
 
 
-class DPORunner:
+class DPORunner(RecipeRunner):
     kind = "dpo"
 
-    def run(
-        self,
-        config: dict[str, Any],
-        records: Sequence[dict[str, Any]],
-        *,
-        max_cost_usd: float | None = None,
-        callbacks: RunCallbacks | None = None,
-    ) -> RunOutput:
-        split_cfg = config.get("split", {})
-        train_raw, eval_raw = split_records(
-            records,
-            strategy=split_cfg.get("strategy", "by_session"),
-            eval_fraction=float(split_cfg.get("eval_fraction", 0.1)),
-            seed=int(split_cfg.get("seed", 42)),
-        )
-        train_examples = _records_to_dpo_examples(train_raw)
-        eval_examples = _records_to_dpo_examples(eval_raw)
-        if not train_examples:
-            raise ValueError("DPORunner requires preference pairs with chosen/rejected.")
+    def split_strategy(self, spec: TrainSpec) -> str:
+        # Keep both sides of a pair together: by_group falls back to session_id, then id.
+        return "by_group" if spec.split.strategy == "by_session" else spec.split.strategy
 
-        params = config.get("recipe_params", {})
-        beta = float(params.get("beta", 0.1))
-        adapter_cfg = config.get("adapter", {"kind": "lora", "rank": 32, "alpha": 32})
-        rank = int(adapter_cfg.get("rank", 32))
-        alpha = int(adapter_cfg.get("alpha", 32))
-
-        backend = CpuReferenceBackend(dim=64, rank=min(16, rank))
-        trainer = Trainer(
-            model=config["model"],
-            price_per_million_tokens_usd=price_for_model(config["model"]),
-            backend=backend,
-        )
-        loop = run_training_loop(
-            trainer=trainer,
-            train_examples=train_examples,
-            eval_examples=eval_examples,
-            config={**config, "lr": config.get("lr", 2e-5)},
-            loss_kind="dpo",
-            beta=beta,
-            max_cost_usd=max_cost_usd,
-            callbacks=callbacks,
-        )
-
-        eval_report = {
-            "eval_loss": round(loop.final_eval_loss, 6),
-            "preference_accuracy": round(loop.final_eval_metric, 4),
-            "beta": beta,
-            "train_pairs": len(train_examples),
-            "eval_pairs": len(eval_examples),
-        }
-        adapter_config = {
-            "peft_type": "LORA",
-            "base_model_name_or_path": config["model"],
-            "r": rank,
-            "lora_alpha": alpha,
-            "beta": beta,
-        }
-        manifest = {
-            "recipe": "dpo",
-            "format": "peft_lora",
-            "base_model": config["model"],
-            "beta": beta,
-            "template_revision": config.get("template_revision", "qwen3@3"),
-            "rule_version": config.get("rule_version", "auto@1"),
-        }
-        bundle = build_artifact_bundle(
-            manifest=manifest,
-            eval_report=eval_report,
-            files={
-                "adapter_config.json": json.dumps(
-                    adapter_config, indent=2, sort_keys=True
-                ).encode("utf-8"),
-                "adapter_model.safetensors": backend.export_weights_safetensors(
-                    metadata={"format": "peft_lora", "recipe": "dpo"}
-                ),
-            },
-        )
-        return RunOutput(
-            status=loop.status,
-            artifact_format="peft_lora",
-            artifact_bytes=bundle,
-            manifest=manifest,
-            eval_report=eval_report,
-            tokens_processed=trainer.tokens_processed,
-            cost_usd=trainer.cost_usd,
-            metrics=loop.metrics,
-        )
+    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+        return DPOTask(spec, train, held_out, workdir)

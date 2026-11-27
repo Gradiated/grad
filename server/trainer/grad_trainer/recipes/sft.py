@@ -1,154 +1,169 @@
-"""Supervised Fine-Tuning (SFT) recipe runner (LoRA)."""
+"""SFT: LoRA on a causal LM with assistant-only, thinking-aware loss masks and packing.
+
+Examples in an optimizer batch are packed into rows of up to ``max_seq_len`` tokens. Each
+example gets its own position ids and a block-diagonal causal mask, so no token attends
+across examples. ``reduction="per_example"`` averages the loss within each example and then
+over the batch; ``"per_token"`` averages over every trained token in the batch. Both are
+normalized over the whole optimizer batch, so micro-batching (gradient accumulation) gives
+the same gradient as one big batch.
+"""
 
 from __future__ import annotations
 
-import json
-from typing import Any, Sequence
+from pathlib import Path
+from typing import Any
 
-from ..bundles import build_artifact_bundle
-from ..templates import estimate_text_tokens, render_messages
-from ..trainer import CpuReferenceBackend, Trainer, TrainingExample
-from .base import (
-    RunCallbacks,
-    RunOutput,
-    price_for_model,
-    run_training_loop,
-    split_records,
-)
+import torch
+
+from ..backends import torch_common as tc
+from ..backends.torch_task import TorchTask
+from ..config import TrainSpec
+from ..errors import RecipeDataError
+from ..trainer import EvalResult
+from .base import RecipeRunner
+from .data import record_id, record_messages
 
 
-def _records_to_sft_examples(
-    records: Sequence[dict[str, Any]], config: dict[str, Any]
-) -> list[TrainingExample]:
-    examples: list[TrainingExample] = []
-    for idx, rec in enumerate(records):
-        rec_id = str(rec.get("id") or f"rec_{idx + 1}")
-        messages = rec.get("messages")
-        if messages:
-            rendered = render_messages(
-                rec_id,
-                messages,
-                model=config["model"],
-                train_on=config.get("train_on", "last"),
-                thinking=config.get("thinking", "auto"),
-                preserve_thinking=bool(config.get("preserve_thinking", False)),
-            )
-            if rendered.trained_tokens <= 0:
+class SFTTask(TorchTask):
+    kind = "sft"
+    metric_name = "eval_loss"
+    metric_mode = "min"
+
+    def __init__(self, spec: TrainSpec, train: list[dict[str, Any]], held_out: list[dict[str, Any]], workdir: Path) -> None:
+        super().__init__(spec, workdir)
+        self.resolved = self.resolve(spec.model, "causal_lm")
+        self._template = self.template_revision(self.resolved)
+        self.tokenizer = tc.load_tokenizer(self.resolved)
+        base = tc.load_causal_lm(self.resolved, self.device)
+        self.max_len = tc.model_max_len(base, spec)
+        self.stats = {"skipped_no_messages": 0, "skipped_no_trained_tokens": 0, "truncated": 0}
+        self.train_examples = self._encode(train)
+        self.eval_examples = self._encode(held_out)
+        if not self.train_examples:
+            raise RecipeDataError("SFT needs at least one training record with a trained assistant turn.")
+        self.merge = bool(spec.adapter.get("merge_on_export", False))
+        self.lora = tc.lora_settings(spec.adapter)
+        torch.manual_seed(spec.seed)
+        self.model = tc.apply_lora(base, spec.adapter, tc.use_gradient_checkpointing(spec, self.device))
+        self.lm = tc.base_causal_lm(self.model)
+        self.init_optimizer(self.model)
+        self.artifact_format = "peft_lora"
+        self.pad_id = int(self.tokenizer.pad_token_id)
+
+    def _encode(self, records: list[dict[str, Any]]) -> list[tuple[tuple[int, ...], tuple[bool, ...]]]:
+        out = []
+        for index, rec in enumerate(records):
+            messages = record_messages(rec)
+            if not messages:
+                self.stats["skipped_no_messages"] += 1
                 continue
-            examples.append(
-                TrainingExample(
-                    text=rendered.full_text,
-                    target=1.0,
-                    tokens=rendered.total_tokens,
-                )
-            )
+            rendered = self.render(messages, record_id(rec, index), tools=rec.get("tools"))
+            tok = self.tokenize(rendered, self.max_len)
+            self.stats["truncated"] += int(tok.truncated)
+            if sum(tok.trained[1:]) == 0:
+                self.stats["skipped_no_trained_tokens"] += 1
+                continue
+            out.append((tok.input_ids, tok.trained))
+        return out
+
+    def num_train_items(self) -> int:
+        return len(self.train_examples)
+
+    def item_tokens(self, index: int) -> int:
+        return len(self.train_examples[index][0])
+
+    def _losses(self, examples: list[tuple[tuple[int, ...], tuple[bool, ...]]], *, grad: bool) -> tuple[float, float, int]:
+        """Batch loss under the configured reduction (backward when ``grad``)."""
+        lengths = [len(e[0]) for e in examples]
+        counts = torch.tensor([sum(e[1][1:]) for e in examples], dtype=torch.float32, device=self.device)
+        total_trained = float(counts.sum())
+        n = len(examples)
+        loss_sum = 0.0
+        correct_sum = 0.0
+        rows = tc.pack_rows(lengths, self.max_len)
+        for group in tc.group_rows(rows, lengths, self.spec.micro_batch_tokens):
+            batch = tc.collate_packed(group, examples, self.pad_id, self.device)
+            with torch.set_grad_enabled(grad):
+                losses, seg, correct = tc.packed_token_losses(self.lm, batch)
+                if self.spec.reduction == "per_example":
+                    loss = (losses / (counts[seg] * n)).sum()
+                else:
+                    loss = losses.sum() / total_trained
+                if grad:
+                    loss.backward()
+            loss_sum += float(loss.detach())
+            correct_sum += float(correct.sum())
+        return loss_sum, correct_sum / max(total_trained, 1.0), int(total_trained)
+
+    def accumulate(self, indices: list[int]) -> dict[str, float]:
+        loss, accuracy, trained = self._losses([self.train_examples[i] for i in indices], grad=True)
+        return {"loss": loss, "token_accuracy": accuracy, "trained_tokens": float(trained)}
+
+    def evaluate(self) -> EvalResult | None:
+        if not self.eval_examples:
+            return None
+        loss_sum = 0.0
+        acc_weighted = 0.0
+        total = 0
+        # Evaluate in chunks of the training batch size; weight chunks so the result is the
+        # same per-example (or per-token) mean over the whole eval set.
+        chunk = self.spec.batch_size
+        for start in range(0, len(self.eval_examples), chunk):
+            part = self.eval_examples[start : start + chunk]
+            loss, acc, trained = self._losses(part, grad=False)
+            weight = len(part) if self.spec.reduction == "per_example" else trained
+            loss_sum += loss * weight
+            acc_weighted += acc * trained
+            total += trained
+        denom = len(self.eval_examples) if self.spec.reduction == "per_example" else total
+        return EvalResult(
+            score=loss_sum / denom,
+            metrics={"eval_token_accuracy": acc_weighted / max(total, 1)},
+        )
+
+    def export(self, directory: Path) -> None:
+        tc.export_peft_adapter(self.model, directory, self.resolved)
+
+    def export_final(self, directory: Path) -> None:
+        if self.merge:
+            tc.export_merged(self.model, self.tokenizer, directory, self.resolved)
+            self.artifact_format = "merged_safetensors"
         else:
-            text = f"{rec.get('prompt', '')}\n{rec.get('expected_output', '')}"
-            examples.append(
-                TrainingExample(
-                    text=text,
-                    target=1.0,
-                    tokens=max(16, estimate_text_tokens(text)),
-                )
+            self.export(directory)
+
+    def manifest(self) -> dict[str, Any]:
+        return {
+            **self.base_manifest(self.resolved),
+            "reduction": self.spec.reduction,
+            "max_seq_len": self.max_len,
+            "adapter": {**self.lora, "kind": "lora", "merge_on_export": self.merge},
+            "packing": "block_diagonal",
+        }
+
+    def final_report(self) -> dict[str, Any]:
+        result = self.evaluate()
+        total = sum(len(e[0]) for e in self.train_examples)
+        trained = sum(sum(e[1][1:]) for e in self.train_examples)
+        report: dict[str, Any] = {
+            "eval_loss": None if result is None else result.score,
+            "eval_token_accuracy": None if result is None else result.metrics["eval_token_accuracy"],
+            "train_examples": len(self.train_examples),
+            "eval_examples": len(self.eval_examples),
+            "trained_token_fraction": trained / total if total else 0.0,
+            **self.stats,
+            "warnings": [],
+        }
+        if result is None:
+            report["warnings"].append("No held-out examples: eval_loss is null.")
+        if self.stats["truncated"]:
+            report["warnings"].append(
+                f"{self.stats['truncated']} records were longer than {self.max_len} tokens and were truncated."
             )
-    return examples
+        return report
 
 
-class SFTRunner:
+class SFTRunner(RecipeRunner):
     kind = "sft"
 
-    def run(
-        self,
-        config: dict[str, Any],
-        records: Sequence[dict[str, Any]],
-        *,
-        max_cost_usd: float | None = None,
-        callbacks: RunCallbacks | None = None,
-    ) -> RunOutput:
-        split_cfg = config.get("split", {})
-        train_raw, eval_raw = split_records(
-            records,
-            strategy=split_cfg.get("strategy", "by_session"),
-            eval_fraction=float(split_cfg.get("eval_fraction", 0.1)),
-            seed=int(split_cfg.get("seed", 42)),
-        )
-        train_examples = _records_to_sft_examples(train_raw, config)
-        eval_examples = _records_to_sft_examples(eval_raw, config)
-        if not train_examples:
-            raise ValueError("SFTRunner received zero trainable examples after masking.")
-
-        adapter_cfg = config.get("adapter", {"kind": "lora", "rank": 32, "alpha": 32})
-        rank = int(adapter_cfg.get("rank", 32))
-        alpha = int(adapter_cfg.get("alpha", 32))
-
-        backend = CpuReferenceBackend(dim=64, rank=min(16, rank))
-        trainer = Trainer(
-            model=config["model"],
-            price_per_million_tokens_usd=price_for_model(config["model"]),
-            backend=backend,
-        )
-        loop = run_training_loop(
-            trainer=trainer,
-            train_examples=train_examples,
-            eval_examples=eval_examples,
-            config=config,
-            loss_kind="cross_entropy",
-            max_cost_usd=max_cost_usd,
-            callbacks=callbacks,
-        )
-
-        eval_report = {
-            "eval_loss": round(loop.final_eval_loss, 6),
-            "eval_accuracy": round(loop.final_eval_metric, 4),
-            "best_eval_loss": round(loop.best_eval_loss, 6),
-            "train_examples": len(train_examples),
-            "eval_examples": len(eval_examples),
-            "steps": len(loop.metrics),
-        }
-        adapter_config = {
-            "peft_type": "LORA",
-            "base_model_name_or_path": config["model"],
-            "r": rank,
-            "lora_alpha": alpha,
-            "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
-            "merge_on_export": bool(adapter_cfg.get("merge_on_export", False)),
-        }
-        manifest = {
-            "recipe": "sft",
-            "format": "peft_lora",
-            "base_model": config["model"],
-            "template_revision": config.get("template_revision", "qwen3@3"),
-            "thinking": config.get("thinking", "auto"),
-            "lr": float(config.get("lr", 5e-4)),
-            "rule_version": config.get("rule_version", "auto@1"),
-            "adapter": adapter_config,
-        }
-        bundle = build_artifact_bundle(
-            manifest=manifest,
-            eval_report=eval_report,
-            files={
-                "adapter_config.json": json.dumps(
-                    adapter_config, indent=2, sort_keys=True
-                ).encode("utf-8"),
-                "adapter_model.safetensors": backend.export_weights_safetensors(
-                    metadata={
-                        "format": "peft_lora",
-                        "base_model": config["model"],
-                        "template_revision": str(
-                            config.get("template_revision", "qwen3@3")
-                        ),
-                        "rule_version": str(config.get("rule_version", "auto@1")),
-                    }
-                ),
-            },
-        )
-        return RunOutput(
-            status=loop.status,
-            artifact_format="peft_lora",
-            artifact_bytes=bundle,
-            manifest=manifest,
-            eval_report=eval_report,
-            tokens_processed=trainer.tokens_processed,
-            cost_usd=trainer.cost_usd,
-            metrics=loop.metrics,
-        )
+    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+        return SFTTask(spec, train, held_out, workdir)

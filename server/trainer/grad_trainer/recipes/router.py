@@ -1,232 +1,405 @@
-"""Model Router recipe runner with temperature calibration & Pareto threshold solver."""
+"""Model router: predict each candidate model's quality on a prompt, then route to the cheapest
+candidate that is predicted to succeed.
+
+Training data are recorded per-model scores in ``[0, 1]``, in either shape:
+
+- one record per (prompt, model) response: ``metadata.model`` names the model and
+  ``scores[rubric]`` (or the record's only score) is its quality; records for the same prompt
+  are joined by ``group_id`` or, without one, by the exact prompt;
+- one record per prompt with ``scores`` keyed by candidate model id.
+
+Records without scores are an error: the trainer never invents labels. Replaying prompts
+against other models or judging them needs the inference service, which the trainer
+doesn't have.
+
+The router is a LoRA'd backbone (``qwen/qwen3-0.6b`` by default) with a linear head giving one
+success logit per candidate, trained with masked BCE on the observed scores. The held-out
+split is divided into two folds by group: the *selection* fold picks the best checkpoint,
+fits a temperature and picks the routing threshold; the *report* fold, never used for any
+choice, gives ``pareto_summary`` (quality drop with a 95% bootstrap CI, offload rate, cost
+savings, ECE).
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-from typing import Any, Sequence
+from pathlib import Path
+from typing import Any
 
-from ..bundles import build_artifact_bundle
-from ..templates import estimate_text_tokens
-from ..trainer import CpuReferenceBackend, Trainer, TrainingExample, sigmoid
-from .base import (
-    RunCallbacks,
-    RunOutput,
-    price_for_model,
-    run_training_loop,
-    split_records,
-)
+import torch
+import torch.nn.functional as F
 
+from ..backends.torch_common import chunk_by_tokens
+from ..config import TrainSpec
+from ..errors import RecipeConfigError, RecipeDataError
+from ..metrics import binary_nll, bootstrap_ci, expected_calibration_error, fit_temperature, sigmoid
+from ..splits import two_folds
+from ..trainer import EvalResult
+from .base import RecipeRunner
+from .classifier import PooledLMTask
+from .data import prompt_messages, record_id
 
-def _extract_prompt(rec: dict[str, Any]) -> str:
-    if isinstance(rec.get("messages"), list):
-        return "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')}"
-            for m in rec["messages"]
-            if isinstance(m, dict)
-        )
-    return str(rec.get("prompt") or rec.get("query") or json.dumps(rec))
+NEVER = math.inf
 
 
-def _apply_temperature(prob: float, temperature: float) -> float:
-    t = max(0.05, temperature)
-    p = max(1e-6, min(1.0 - 1e-6, prob))
-    logit = math.log(p / (1.0 - p))
-    return sigmoid(logit / t)
+def prompt_key(rec: dict[str, Any]) -> str:
+    if rec.get("group_id") is not None:
+        return str(rec["group_id"])
+    canonical = json.dumps(prompt_messages(rec), sort_keys=True, ensure_ascii=False)
+    return "prompt:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
 
 
-def _calibrate_temperature(probs: Sequence[float], labels: Sequence[float]) -> float:
-    """Grid-search scalar temperature T > 0 minimizing NLL on held-out split."""
-    if not probs:
-        return 1.0
-    best_t = 1.0
-    best_nll = float("inf")
-    for idx in range(5, 31):
-        t = idx / 10.0
-        nll = 0.0
-        for p, y in zip(probs, labels):
-            cal_p = _apply_temperature(p, t)
-            nll += -(
-                y * math.log(max(cal_p, 1e-7))
-                + (1.0 - y) * math.log(max(1.0 - cal_p, 1e-7))
-            )
-        if nll < best_nll:
-            best_nll = nll
-            best_t = t
-    return round(best_t, 3)
+def _rubric(params: dict[str, Any]) -> str | None:
+    rubric = params.get("rubric")
+    if rubric is None or isinstance(rubric, str):
+        return rubric
+    raise RecipeConfigError(
+        "RouterRecipe rubric must name a score already on your records. Judges, rubrics and "
+        "replaying prompts against other models need the inference service; score the dataset "
+        "first (dataset.score(judge)) and pass the score name."
+    )
 
 
-def _solve_pareto_threshold(
-    eval_pairs: Sequence[tuple[float, float, float]],
-    *,
-    max_quality_drop: float,
-    cheap_cost: float,
-    strong_cost: float,
-) -> tuple[float, float, float]:
-    """Select the lowest calibrated probability threshold keeping quality drop <= max_quality_drop."""
-    if not eval_pairs:
-        return 0.65, 0.5, 0.0
-
-    baseline_quality = sum(strong_q for _, _, strong_q in eval_pairs) / len(eval_pairs)
-    best_threshold = 0.95
-    best_savings = 0.0
-    best_drop = 0.0
-
-    for step in range(5, 96, 5):
-        thresh = step / 100.0
-        routed_quality = 0.0
-        routed_cost = 0.0
-        for cal_prob, cheap_q, strong_q in eval_pairs:
-            if cal_prob >= thresh:
-                routed_quality += cheap_q
-                routed_cost += cheap_cost
+def collect_groups(
+    records: list[dict[str, Any]], candidates: list[str] | None, rubric: str | None
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    """Join observations into prompt groups: {key, prompt, scores{model: q}, costs{model: usd}}."""
+    groups: dict[str, dict[str, Any]] = {}
+    unscored = 0
+    wanted = set(candidates) if candidates else None
+    for index, rec in enumerate(records):
+        prompt = prompt_messages(rec)
+        if not prompt:
+            unscored += 1
+            continue
+        scores = rec.get("scores") or {}
+        metadata = rec.get("metadata") or {}
+        model = metadata.get("model")
+        observed: dict[str, float] = {}
+        if model:
+            if rubric is not None:
+                value = scores.get(rubric)
+            elif len(scores) == 1:
+                value = next(iter(scores.values()))
+            elif scores:
+                raise RecipeConfigError(
+                    f"Record '{record_id(rec, index)}' has several scores {sorted(scores)}; pass rubric=<score name>."
+                )
             else:
-                routed_quality += strong_q
-                routed_cost += strong_cost
+                value = None
+            if value is not None:
+                observed[str(model).strip().lower()] = value
+        else:
+            observed = {str(k).strip().lower(): v for k, v in scores.items()}
+        if wanted is not None:
+            observed = {m: v for m, v in observed.items() if m in wanted}
+        if not observed:
+            unscored += 1
+            continue
+        group = groups.setdefault(prompt_key(rec), {"key": prompt_key(rec), "prompt": prompt, "obs": {}, "cost": {}})
+        for m, v in observed.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0.0 <= v <= 1.0:
+                raise RecipeDataError(
+                    f"Record '{record_id(rec, index)}': router scores must be numbers in [0, 1], got {v!r} for {m}."
+                )
+            group["obs"].setdefault(m, []).append(float(v))
+        cost = (rec.get("metrics") or {}).get("cost_usd")
+        if model and isinstance(cost, (int, float)):
+            group["cost"].setdefault(str(model).strip().lower(), []).append(float(cost))
 
-        avg_quality = routed_quality / len(eval_pairs)
-        avg_cost = routed_cost / len(eval_pairs)
-        drop = max(0.0, baseline_quality - avg_quality)
-        savings = max(0.0, 1.0 - (avg_cost / strong_cost)) if strong_cost > 0 else 0.0
-        if drop <= max_quality_drop and savings >= best_savings:
-            best_threshold = thresh
-            best_savings = savings
-            best_drop = drop
+    out = []
+    for group in groups.values():
+        out.append(
+            {
+                "key": group["key"],
+                "prompt": group["prompt"],
+                "scores": {m: sum(v) / len(v) for m, v in group["obs"].items()},
+                "costs": {m: sum(v) / len(v) for m, v in group["cost"].items()},
+            }
+        )
+    seen = sorted({m for g in out for m in g["scores"]})
+    return out, (list(candidates) if candidates else seen), unscored
 
-    return round(best_threshold, 4), round(best_savings, 4), round(best_drop, 4)
+
+def route(probs: dict[str, float], order: list[str], fallback: str, threshold: float) -> str:
+    for model in order:
+        if probs[model] >= threshold:
+            return model
+    return fallback
 
 
-class RouterRunner:
+def evaluate_policy(
+    rows: list[tuple[dict[str, float], dict[str, float]]],
+    order: list[str],
+    fallback: str,
+    threshold: float,
+    costs: dict[str, float] | None,
+) -> dict[str, Any]:
+    """Routing metrics on complete rows of (calibrated probs, observed scores)."""
+    deltas, routed_q, fallback_q, offloaded, routed_cost = [], [], [], 0, 0.0
+    for probs, scores in rows:
+        chosen = route(probs, order, fallback, threshold)
+        routed_q.append(scores[chosen])
+        fallback_q.append(scores[fallback])
+        deltas.append(scores[fallback] - scores[chosen])
+        offloaded += int(chosen != fallback)
+        if costs:
+            routed_cost += costs[chosen]
+    n = len(rows)
+    savings = None
+    if costs and costs[fallback] > 0:
+        savings = 1.0 - (routed_cost / n) / costs[fallback]
+    return {
+        "routed_quality": sum(routed_q) / n,
+        "fallback_quality": sum(fallback_q) / n,
+        "quality_drop": sum(deltas) / n,
+        "offload_rate": offloaded / n,
+        "cost_savings_pct": savings,
+        "deltas": deltas,
+    }
+
+
+def choose_threshold(
+    rows: list[tuple[dict[str, float], dict[str, float]]],
+    order: list[str],
+    fallback: str,
+    max_quality_drop: float,
+    costs: dict[str, float] | None,
+) -> float:
+    """Most savings (or offload, without prices) with quality drop <= target; ties -> higher."""
+    if not rows:
+        return NEVER
+    candidates = sorted({p[m] for p, _ in rows for m in order} | {NEVER}, reverse=True)
+    best, best_value = NEVER, 0.0
+    for threshold in candidates:
+        result = evaluate_policy(rows, order, fallback, threshold, costs)
+        if result["quality_drop"] > max_quality_drop + 1e-12:
+            continue
+        value = result["cost_savings_pct"] if costs else result["offload_rate"]
+        if value is not None and value > best_value + 1e-12:
+            best, best_value = threshold, value
+    return best
+
+
+class RouterTask(PooledLMTask):
+    kind = "router"
+    artifact_format = "router_bundle"
+    metric_name = "eval_loss"
+    metric_mode = "min"
+    head_file = "router_head.safetensors"
+
+    def __init__(self, spec: TrainSpec, train: list[dict[str, Any]], held_out: list[dict[str, Any]], workdir: Path) -> None:
+        params = spec.params
+        rubric = _rubric(params)
+        given = [str(m).strip().lower() for m in params.get("models") or []] or None
+        train_groups, candidates, unscored_train = collect_groups(train, given, rubric)
+        eval_groups, _, unscored_eval = collect_groups(held_out, candidates, rubric)
+        if not train_groups:
+            raise RecipeDataError(
+                "RouterRecipe needs recorded per-model scores (scores keyed by model id, or "
+                "metadata.model + a score per response); none of the training records have any."
+            )
+        if len(candidates) < 2:
+            raise RecipeDataError(
+                f"RouterRecipe needs scores for at least two candidate models; found {candidates}. "
+                "Replaying prompts against other models is not available in the trainer."
+            )
+        super().__init__(spec, workdir)
+        self.candidates = candidates
+        self.unscored = unscored_train + unscored_eval
+        if self.unscored:
+            self.warnings.append(f"{self.unscored} records had no usable scores and were skipped.")
+        self.max_quality_drop = float(params.get("max_quality_drop", 0.02))
+        self.costs = self._costs(params.get("pricing"), train_groups + eval_groups)
+        self.fallback = self._fallback(params.get("fallback"), train_groups)
+        others = [m for m in candidates if m != self.fallback]
+        self.order = sorted(others, key=lambda m: self.costs[m]) if self.costs else others
+
+        self.train = [self._encode(g) for g in train_groups]
+        keys = [g["key"] for g in eval_groups]
+        select, report = two_folds([self._encode(g) for g in eval_groups], keys, spec.split.seed)
+        self.select_fold, self.report_fold = select, report
+        self.build_backbone(torch.nn.Linear(self.hidden_size, len(candidates)))
+        self.calibration: dict[str, Any] = {"threshold": None, "temperature": 1.0, "calibrated": False}
+
+    def _costs(self, pricing: Any, groups: list[dict[str, Any]]) -> dict[str, float] | None:
+        costs: dict[str, float] = {}
+        if isinstance(pricing, dict):
+            costs = {str(k).strip().lower(): float(v) for k, v in pricing.items()}
+        for model in self.candidates:
+            if model not in costs:
+                seen = [g["costs"][model] for g in groups if model in g["costs"]]
+                if seen:
+                    costs[model] = sum(seen) / len(seen)
+        if all(m in costs for m in self.candidates):
+            return {m: costs[m] for m in self.candidates}
+        self.warnings.append(
+            "No price for every candidate (pass pricing= or log metrics.cost_usd): cost_savings_pct is null "
+            "and the threshold maximizes offload rate."
+        )
+        return None
+
+    def _fallback(self, requested: Any, groups: list[dict[str, Any]]) -> str:
+        if requested:
+            name = str(requested).strip().lower()
+            if name not in self.candidates:
+                raise RecipeConfigError(f"fallback '{name}' is not one of the candidates {self.candidates}.")
+            return name
+
+        def mean_quality(m: str) -> float:
+            seen = [g["scores"][m] for g in groups if m in g["scores"]]
+            return sum(seen) / len(seen) if seen else -1.0
+
+        return max(self.candidates, key=lambda m: (mean_quality(m), m))
+
+    def _encode(self, group: dict[str, Any]) -> dict[str, Any]:
+        ids = self.encode_prompt(group["prompt"], group["key"], self.max_len)
+        target = torch.tensor([group["scores"].get(m, 0.0) for m in self.candidates])
+        observed = torch.tensor([m in group["scores"] for m in self.candidates])
+        return {"ids": ids, "target": target, "observed": observed, "scores": group["scores"]}
+
+    def num_train_items(self) -> int:
+        return len(self.train)
+
+    def item_tokens(self, index: int) -> int:
+        return len(self.train[index]["ids"])
+
+    def _batch_loss(self, items: list[dict[str, Any]], n: int, *, grad: bool) -> tuple[torch.Tensor, torch.Tensor]:
+        logits = self.heads(self.pooled([it["ids"] for it in items], grad=grad))
+        target = torch.stack([it["target"] for it in items]).to(self.device)
+        observed = torch.stack([it["observed"] for it in items]).to(self.device).float()
+        per = F.binary_cross_entropy_with_logits(logits, target, reduction="none") * observed
+        per_group = per.sum(1) / observed.sum(1).clamp(min=1)
+        return per_group.sum() / n, logits
+
+    def accumulate(self, indices: list[int]) -> dict[str, float]:
+        lengths = [len(it["ids"]) for it in self.train]
+        total = 0.0
+        for chunk in chunk_by_tokens(indices, lengths, self.spec.micro_batch_tokens):
+            loss, _ = self._batch_loss([self.train[i] for i in chunk], len(indices), grad=True)
+            loss.backward()
+            total += float(loss.detach())
+        return {"loss": total}
+
+    def _logits(self, items: list[dict[str, Any]]) -> list[list[float]]:
+        out: list[list[float]] = []
+        with torch.no_grad():
+            for start in range(0, len(items), 32):
+                part = items[start : start + 32]
+                out.extend(self.heads(self.pooled([it["ids"] for it in part], grad=False)).cpu().tolist())
+        return out
+
+    def _fold_loss(self, items: list[dict[str, Any]]) -> float:
+        with torch.no_grad():
+            total = 0.0
+            for start in range(0, len(items), 32):
+                loss, _ = self._batch_loss(items[start : start + 32], len(items), grad=False)
+                total += float(loss)
+        return total
+
+    def evaluate(self) -> EvalResult | None:
+        if not self.select_fold:
+            return None
+        return EvalResult(score=self._fold_loss(self.select_fold), metrics={})
+
+    def _calibrated_rows(self, items: list[dict[str, Any]], temperature: float) -> list[tuple[dict[str, float], dict[str, float]]]:
+        rows = []
+        for logits, item in zip(self._logits(items), items):
+            probs = {m: sigmoid(z / temperature) for m, z in zip(self.candidates, logits)}
+            rows.append((probs, item["scores"]))
+        return rows
+
+    def final_report(self) -> dict[str, Any]:
+        warnings: list[str] = []
+        temperature = 1.0
+        if self.select_fold:
+            pairs = [
+                (z, item["scores"][m])
+                for logits, item in zip(self._logits(self.select_fold), self.select_fold)
+                for m, z in zip(self.candidates, logits)
+                if m in item["scores"]
+            ]
+            temperature = fit_temperature(lambda t: binary_nll([p[0] for p in pairs], [p[1] for p in pairs], t))
+        complete = lambda rows: [r for r in rows if all(m in r[1] for m in self.candidates)]  # noqa: E731
+        select_rows = complete(self._calibrated_rows(self.select_fold, temperature))
+        threshold = choose_threshold(select_rows, self.order, self.fallback, self.max_quality_drop, self.costs)
+        if not select_rows:
+            warnings.append("No held-out prompts with scores for every candidate: the router never offloads.")
+        self.calibration = {
+            "threshold": None if threshold == NEVER else threshold,
+            "temperature": temperature,
+            "calibrated": bool(self.select_fold),
+        }
+
+        report_rows_all = self._calibrated_rows(self.report_fold, temperature)
+        report_rows = complete(report_rows_all)
+        summary: dict[str, Any] = {
+            "target_max_drop": self.max_quality_drop,
+            "routed_quality": None,
+            "quality_drop": None,
+            "quality_drop_ci95": None,
+            "offload_rate": None,
+            "cost_savings_pct": None,
+            "ece": None,
+            "threshold": self.calibration["threshold"],
+            "temperature": temperature,
+        }
+        fallback_quality = None
+        if report_rows:
+            result = evaluate_policy(report_rows, self.order, self.fallback, threshold, self.costs)
+            ci = bootstrap_ci(result.pop("deltas"), seed=self.spec.seed)
+            fallback_quality = result.pop("fallback_quality")
+            summary.update(result)
+            summary["quality_drop_ci95"] = list(ci) if ci else None
+        else:
+            warnings.append("The report fold has no prompts scored for every candidate: pareto_summary is null.")
+        observed = [(p[m], s[m]) for p, s in report_rows_all for m in self.candidates if m in s]
+        summary["ece"] = expected_calibration_error([o[0] for o in observed], [o[1] for o in observed])
+        return {
+            "eval_examples": len(report_rows),
+            "selection_examples": len(self.select_fold),
+            "candidates": self.candidates,
+            "fallback_model": self.fallback,
+            "fallback_quality": fallback_quality,
+            "routes_any_traffic": threshold != NEVER,
+            "eval_loss": self._fold_loss(self.report_fold) if self.report_fold else None,
+            "pareto_summary": summary,
+            "warnings": warnings,
+        }
+
+    def router_config(self) -> dict[str, Any]:
+        return {
+            "candidates": self.candidates,
+            "route_order": self.order,
+            "fallback_model": self.fallback,
+            "costs": self.costs,
+            "max_quality_drop": self.max_quality_drop,
+            "rule": "route to the first model in route_order whose calibrated success probability "
+            "sigmoid(logit / temperature) >= threshold, else fallback_model; threshold null = never offload",
+            **self.calibration,
+            **self.backbone_manifest(),
+            "head_file": self.head_file,
+        }
+
+    def export(self, directory: Path) -> None:
+        self.export_backbone(directory)
+        (directory / "router_config.json").write_text(json.dumps(self.router_config(), indent=2, sort_keys=True))
+
+    def manifest(self) -> dict[str, Any]:
+        return {**self.backbone_manifest(), "candidates": self.candidates, "fallback_model": self.fallback}
+
+
+class RouterRunner(RecipeRunner):
     kind = "router"
 
-    def run(
-        self,
-        config: dict[str, Any],
-        records: Sequence[dict[str, Any]],
-        *,
-        max_cost_usd: float | None = None,
-        callbacks: RunCallbacks | None = None,
-    ) -> RunOutput:
-        params = config.get("recipe_params", {})
-        candidates = list(params.get("models") or ["qwen/qwen3-8b", "qwen/qwen3-32b"])
-        if len(candidates) < 2:
-            candidates.append("qwen/qwen3-32b")
-        cheap_model, strong_model = candidates[0], candidates[-1]
-        max_quality_drop = float(params.get("max_quality_drop", 0.02))
+    def split_strategy(self, spec: TrainSpec) -> str:
+        return "by_group" if spec.split.strategy == "by_session" else spec.split.strategy
 
-        split_cfg = config.get("split", {})
-        train_raw, eval_raw = split_records(
-            records,
-            strategy=split_cfg.get("strategy", "by_session"),
-            eval_fraction=float(split_cfg.get("eval_fraction", 0.15)),
-            seed=int(split_cfg.get("seed", 42)),
-        )
+    def prepare_records(self, spec: TrainSpec, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Responses to the same prompt from different models must land on the same side.
+        return [rec if rec.get("group_id") is not None else {**rec, "group_id": prompt_key(rec)} for rec in records]
 
-        def to_examples(rows: Sequence[dict[str, Any]]) -> list[TrainingExample]:
-            out: list[TrainingExample] = []
-            for rec in rows:
-                prompt = _extract_prompt(rec)
-                scores = rec.get("scores") or {}
-                cheap_score = float(scores.get(cheap_model, scores.get("cheap", 0.85)))
-                strong_score = float(
-                    scores.get(strong_model, scores.get("strong", 0.95))
-                )
-                label = 1.0 if cheap_score >= strong_score - 0.05 else 0.0
-                out.append(
-                    TrainingExample(
-                        text=prompt,
-                        target=label,
-                        tokens=max(16, estimate_text_tokens(prompt)),
-                    )
-                )
-            return out
-
-        train_examples = to_examples(train_raw)
-        eval_examples = to_examples(eval_raw)
-        if not train_examples:
-            raise ValueError("RouterRunner requires at least one training record.")
-
-        backend = CpuReferenceBackend(dim=64, rank=8)
-        trainer = Trainer(
-            model=config["model"],
-            price_per_million_tokens_usd=price_for_model(config["model"]),
-            backend=backend,
-        )
-        loop = run_training_loop(
-            trainer=trainer,
-            train_examples=train_examples,
-            eval_examples=eval_examples,
-            config={**config, "epochs": config.get("epochs", 2)},
-            loss_kind="cross_entropy",
-            max_cost_usd=max_cost_usd,
-            callbacks=callbacks,
-        )
-
-        cal_source = eval_raw if eval_raw else train_raw
-        raw_probs: list[float] = []
-        labels: list[float] = []
-        raw_qualities: list[tuple[float, float]] = []
-        for rec in cal_source:
-            prompt = _extract_prompt(rec)
-            scores = rec.get("scores") or {}
-            cheap_q = float(scores.get(cheap_model, scores.get("cheap", 0.85)))
-            strong_q = float(scores.get(strong_model, scores.get("strong", 0.95)))
-            raw_probs.append(backend.predict(prompt))
-            labels.append(1.0 if cheap_q >= strong_q - 0.05 else 0.0)
-            raw_qualities.append((cheap_q, strong_q))
-
-        temperature = _calibrate_temperature(raw_probs, labels)
-        calibrated_rows = [
-            (_apply_temperature(p, temperature), cheap_q, strong_q)
-            for p, (cheap_q, strong_q) in zip(raw_probs, raw_qualities)
-        ]
-        threshold, cost_savings, quality_drop = _solve_pareto_threshold(
-            calibrated_rows,
-            max_quality_drop=max_quality_drop,
-            cheap_cost=price_for_model(cheap_model),
-            strong_cost=price_for_model(strong_model),
-        )
-
-        router_config = {
-            "candidates": candidates,
-            "fallback_model": strong_model,
-            "threshold": threshold,
-            "temperature": temperature,
-            "max_quality_drop": max_quality_drop,
-        }
-        eval_report = {
-            "threshold": threshold,
-            "temperature": temperature,
-            "expected_cost_savings": cost_savings,
-            "expected_quality_drop": quality_drop,
-            "eval_records": len(cal_source),
-        }
-        manifest = {
-            "recipe": "router",
-            "format": "router_bundle",
-            "base_model": config["model"],
-            "router_config": router_config,
-            "rule_version": config.get("rule_version", "auto@1"),
-        }
-        bundle = build_artifact_bundle(
-            manifest=manifest,
-            eval_report=eval_report,
-            files={
-                "router_config.json": json.dumps(
-                    router_config, indent=2, sort_keys=True
-                ).encode("utf-8"),
-                "router_head.safetensors": backend.export_weights_safetensors(
-                    metadata={"format": "router_bundle", "base_model": config["model"]}
-                ),
-            },
-        )
-        return RunOutput(
-            status=loop.status,
-            artifact_format="router_bundle",
-            artifact_bytes=bundle,
-            manifest=manifest,
-            eval_report=eval_report,
-            tokens_processed=trainer.tokens_processed,
-            cost_usd=trainer.cost_usd,
-            metrics=loop.metrics,
-        )
+    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+        return RouterTask(spec, train, held_out, workdir)

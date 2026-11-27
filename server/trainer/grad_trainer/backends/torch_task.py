@@ -1,0 +1,109 @@
+"""Base class for torch recipe tasks: optimizer, weight/state persistence, LM encoding."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Sequence
+
+import torch
+
+from ..config import TrainSpec
+from ..errors import RecipeConfigError, RecipeDataError
+from ..models import ResolvedModel, describe_model, resolve_model
+from ..templates import RenderedChat, TokenizedExample, render_chat, tokenize_rendered
+from . import torch_common as tc
+
+
+class TorchTask:
+    kind = ""
+    artifact_format = ""
+    metric_name = "eval_loss"
+    metric_mode = "min"
+
+    def __init__(self, spec: TrainSpec, workdir: Path) -> None:
+        self.spec = spec
+        self.workdir = workdir
+        self.warnings: list[str] = []
+        tc.setup_torch(spec.seed)
+        self.device = tc.pick_device()
+        self.params: dict[str, torch.nn.Parameter] = {}
+        self.optimizer: torch.optim.Optimizer | None = None
+
+    # -- model setup ----------------------------------------------------------------------
+    def resolve(self, model_id: str, family: str) -> ResolvedModel:
+        resolved = resolve_model(model_id)
+        if resolved.family != family:
+            raise RecipeConfigError(
+                f"Model '{model_id}' is a {resolved.family} model; the {self.kind} recipe needs a {family} model."
+            )
+        return resolved
+
+    def init_optimizer(self, module: torch.nn.Module) -> None:
+        self.params = tc.trainable_named(module)
+        if not self.params:
+            raise RecipeConfigError("Nothing to train: the model has no trainable parameters.")
+        self.optimizer = tc.make_optimizer(self.params.values(), self.spec)
+
+    def template_revision(self, resolved: ResolvedModel) -> str:
+        return str(self.spec.template_revision or resolved.template_revision)
+
+    # -- encoding ---------------------------------------------------------------------------
+    def render(self, messages: Sequence[dict[str, Any]], record_id: str, **kwargs: Any) -> RenderedChat:
+        options: dict[str, Any] = {
+            "record_id": record_id,
+            "train_on": self.spec.train_on,
+            "thinking": self.spec.thinking,
+            "preserve_thinking": self.spec.preserve_thinking,
+            "template_revision": self._template,
+        }
+        options.update(kwargs)
+        return render_chat(messages, **options)
+
+    def tokenize(self, rendered: RenderedChat, max_len: int | None) -> TokenizedExample:
+        return tokenize_rendered(rendered, self.tokenizer, max_len=max_len)
+
+    def encode_prompt(self, messages: Sequence[dict[str, Any]], record_id: str, max_len: int) -> list[int]:
+        """Prompt tokens ending with the assistant generation header (for classifiers)."""
+        if not messages:
+            raise RecipeDataError(f"Record '{record_id}' has no prompt messages.")
+        rendered = self.render(messages, record_id, add_generation_prompt=True, train_on="last")
+        ids = list(self.tokenize(rendered, None).input_ids)
+        # Keep the end of long prompts: the generation header carries the pooled state.
+        return ids[-max_len:]
+
+    # -- loop protocol ----------------------------------------------------------------------
+    def accumulate(self, indices: list[int]) -> dict[str, float]:  # pragma: no cover - abstract
+        raise NotImplementedError
+
+    def train_step(self, indices: list[int], lr: float) -> dict[str, float]:
+        assert self.optimizer is not None
+        stats = self.accumulate(indices)
+        stats["grad_norm"] = tc.optimizer_step(
+            self.optimizer, list(self.params.values()), lr, self.spec.optimizer.grad_clip
+        )
+        return stats
+
+    def save_weights(self, directory: Path) -> None:
+        tc.save_named(dict(self.params), directory)
+
+    def load_weights(self, directory: Path) -> None:
+        tc.load_named(self.params, directory)
+
+    def save_state(self, directory: Path) -> None:
+        assert self.optimizer is not None
+        tc.save_optimizer_state(self.optimizer, directory)
+
+    def load_state(self, directory: Path) -> None:
+        assert self.optimizer is not None
+        tc.load_optimizer_state(self.optimizer, directory)
+
+    def base_manifest(self, resolved: ResolvedModel) -> dict[str, Any]:
+        return {
+            **describe_model(resolved),
+            "template_revision": self.template_revision(resolved),
+            "thinking": self.spec.thinking,
+            "train_on": self.spec.train_on,
+            "preserve_thinking": self.spec.preserve_thinking,
+            "versions": tc.library_versions(),
+            "deployable": True,
+        }
