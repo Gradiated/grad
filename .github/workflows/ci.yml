@@ -127,7 +127,8 @@ jobs:
       - name: Install pinned CPU torch stack
         run: |
           python3 -m venv /tmp/trainer-venv
-          /tmp/trainer-venv/bin/pip install --no-cache-dir -r server/trainer/requirements-cpu.lock -r server/trainer/requirements-dev.txt
+          /tmp/trainer-venv/bin/pip install --no-cache-dir --require-hashes --no-deps -r server/trainer/requirements-cpu.lock
+          /tmp/trainer-venv/bin/pip install --no-cache-dir -r server/trainer/requirements-dev.txt
 
       - name: Train every recipe on tiny models with coverage
         working-directory: server/trainer

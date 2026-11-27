@@ -30,7 +30,8 @@ pnpm -C server/api check                 # typecheck + tests
 
 # grad-trainer (Python, CPU torch)
 python3 -m venv .venv-trainer
-.venv-trainer/bin/pip install -r server/trainer/requirements-cpu.lock -r server/trainer/requirements-dev.txt
+.venv-trainer/bin/pip install --require-hashes --no-deps -r server/trainer/requirements-cpu.lock
+.venv-trainer/bin/pip install -r server/trainer/requirements-dev.txt
 (cd server/trainer && PYTHONPATH=. ../../.venv-trainer/bin/python -m unittest discover -s tests)
 
 # Python SDK

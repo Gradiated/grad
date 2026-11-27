@@ -13,7 +13,7 @@ RUN useradd --create-home --uid 10001 grad \
     && install -d -o 10001 -g 10001 /home/grad/.cache/huggingface
 WORKDIR /app
 COPY requirements-cpu.lock ./
-RUN pip install --no-cache-dir -r requirements-cpu.lock
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements-cpu.lock
 COPY pyproject.toml README.md ./
 COPY grad_trainer ./grad_trainer
 RUN pip install --no-cache-dir --no-deps .
@@ -35,7 +35,7 @@ RUN apt-get update \
     && install -d -o 10001 -g 10001 /home/grad/.cache/huggingface
 WORKDIR /app
 COPY requirements-gpu.lock ./
-RUN pip install --no-cache-dir -r requirements-gpu.lock
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements-gpu.lock
 COPY pyproject.toml README.md ./
 COPY grad_trainer ./grad_trainer
 RUN pip install --no-cache-dir --no-deps .

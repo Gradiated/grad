@@ -1,1 +1,2 @@
-torch==2.15.0+cpu
+# CPU torch, pinned to its one wheel on the PyTorch index (the only package not from PyPI).
+torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl

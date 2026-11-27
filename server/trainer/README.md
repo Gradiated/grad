@@ -89,7 +89,8 @@ over a hashed bag-of-words model. Its artifacts are `format: reference`, `deploy
 ```bash
 cd server/trainer
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-cpu.lock -r requirements-dev.txt   # CPU torch; use requirements-gpu.lock on CUDA hosts
+pip install --require-hashes --no-deps -r requirements-cpu.lock   # CPU torch; use requirements-gpu.lock on CUDA hosts
+pip install -r requirements-dev.txt
 PYTHONPATH=. python -m coverage run -m unittest discover -s tests && python -m coverage report
 ```
 
@@ -99,12 +100,18 @@ skip when torch is not installed, so `PYTHONPATH=server/trainer python3 -m unitt
 still runs the other tests anywhere `jsonschema` is installed. The split-parity test also runs `planner.ts` when
 `server/api/node_modules` is installed.
 
-Regenerate the locks after changing `requirements.txt`:
+Both locks are hash-pinned and resolve from PyPI only; installs use `--require-hashes`, so
+a package with the same name and version on another index can't be substituted. The one
+exception, CPU torch, is pinned in `requirements-cpu-override.txt` to its exact wheel on
+download.pytorch.org (and hashed like the rest). Regenerate the locks after changing
+`requirements.txt`:
 
 ```bash
-uv pip compile requirements.txt --python-version 3.12 --python-platform x86_64-manylinux_2_28 --no-header --annotation-style line -o requirements-gpu.lock
-uv pip compile requirements.txt --python-version 3.13 --python-platform x86_64-manylinux_2_28 --no-header --annotation-style line --override requirements-cpu-override.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match --emit-index-url -o requirements-cpu.lock
+uv pip compile requirements.txt --python-version 3.12 --python-platform x86_64-manylinux_2_28 --no-header --annotation-style line --index-url https://pypi.org/simple --generate-hashes --emit-index-url -o requirements-gpu.lock
+uv pip compile requirements.txt --python-version 3.13 --python-platform x86_64-manylinux_2_28 --no-header --annotation-style line --override requirements-cpu-override.txt --index-url https://pypi.org/simple --generate-hashes --emit-index-url -o requirements-cpu.lock
 ```
+
+A torch upgrade also updates the wheel URL in `requirements-cpu-override.txt`.
 
 `docker build --target gpu` (default) builds the CUDA 13 image; `--target cpu` the CPU one.
 Both run as uid 10001.
