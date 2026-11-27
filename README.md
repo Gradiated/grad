@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/Gradiated/grad/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Gradiated/grad/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <a href="https://gradiated.com/docs/training/"><img alt="Docs" src="https://img.shields.io/badge/docs-gradiated.com-bb5b16.svg"></a>
   <a href="#sdks-and-cli"><img alt="SDKs: Python, TypeScript, Go, Rust" src="https://img.shields.io/badge/SDKs-Python%20%C2%B7%20TypeScript%20%C2%B7%20Go%20%C2%B7%20Rust-211d17.svg"></a>
   <a href="#self-hosting"><img alt="Self-host: Postgres + S3" src="https://img.shields.io/badge/self--host-Postgres%20%2B%20S3-336791.svg"></a>
@@ -226,6 +226,8 @@ grad local up --gpu           # add the CUDA trainer (NVIDIA Container Toolkit)
 export GRADIATED_PROFILE=local
 ```
 
+The CPU trainer is for trying the workflow on small data; real training uses `grad local up --gpu` or GPU nodes.
+
 The first run generates an admin key and a trainer key and saves them to a `local` CLI profile. `grad local status`, `grad local logs` and `grad local down` manage the stack.
 
 For production, create the database and auth secrets described in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md), then install the Helm chart against your own Postgres and bucket. It supports KEDA scale-to-zero for GPU trainers and an air-gapped judge endpoint:
@@ -291,7 +293,7 @@ cargo test --workspace                       # Rust SDK + CLI
 grad local up --build                        # run the stack from this checkout
 ```
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs all of this, plus the server on real Postgres and S3, every recipe on tiny models on CPU, the codegen drift check, and every SDK and the CLI against a live stack. Pull requests are welcome; please keep the self-hosted path free of Cloud-only dependencies.
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs all of this, plus the server on real Postgres and S3, every recipe on tiny models on CPU, the codegen drift check, and every SDK and the CLI against a live stack. Pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), and please keep the self-hosted path free of Cloud-only dependencies.
 
 ## Roadmap
 
@@ -307,4 +309,4 @@ v0 ships the six recipes above. Next, in rough order:
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://gradiated.com/docs/training/
+    about: Guides for every recipe, the SDKs, the CLI and self-hosting.
+  - name: Report a security vulnerability
+    url: https://github.com/Gradiated/grad/security/advisories/new
+    about: Please report security problems privately, not as an issue.

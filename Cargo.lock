@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "grad-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "grad-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "getrandom 0.2.17",

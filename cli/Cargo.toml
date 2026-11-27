@@ -1,10 +1,14 @@
 [package]
 name = "grad-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 description = "CLI for the Gradiated training and serving platform"
 rust-version = "1.82"
+repository = "https://github.com/Gradiated/grad"
+homepage = "https://gradiated.com/docs/training/"
+keywords = ["llm", "fine-tuning", "lora", "cli", "gradiated"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "grad"
@@ -13,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.5", features = ["derive", "env"] }
 getrandom = "0.2"
-grad-sdk = { path = "../sdks/rust" }
+grad-sdk = { path = "../sdks/rust", version = "=0.2.0" }
 hex = "0.4"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,407 @@
+name: Release
+
+# Pushing a tag like v0.3.0 builds everything, then waits in the `release` environment for a
+# maintainer to approve before anything is published. See "Releasing" in CONTRIBUTING.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check versions and release notes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every version field matches the tag, and CHANGELOG.md has notes for it
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          scripts/bump-version --check "$version"
+          scripts/bump-version --notes "$version" > release-notes.md
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  python-build:
+    name: Build the Python SDK
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the sdist and wheel
+        run: |
+          cp LICENSE sdks/python/
+          python3 -m venv /tmp/build-venv
+          /tmp/build-venv/bin/pip install "build==1.6.1" "twine==7.0.0"
+          /tmp/build-venv/bin/python -m build --outdir dist sdks/python
+          /tmp/build-venv/bin/twine check --strict dist/*
+
+      - name: Upload the distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dist
+          path: dist/
+
+  cli-build:
+    name: Build the CLI (${{ matrix.target }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: macos-15, target: aarch64-apple-darwin }
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: rust
+
+      # Static musl binaries run on any Linux; ring needs a musl C compiler.
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          rustup target add "$TARGET"
+          cargo build --release --locked --bin grad --target "$TARGET"
+
+      - name: Package
+        run: |
+          dir="grad-$TARGET"
+          mkdir "$dir"
+          cp "target/$TARGET/release/grad" LICENSE README.md "$dir/"
+          "$dir/grad" --version
+          tar czf "$dir.tar.gz" "$dir"
+          shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-${{ matrix.target }}
+          path: grad-${{ matrix.target }}.tar.gz*
+
+  # Everything below publishes. Each job runs in the `release` environment, which requires a
+  # maintainer's approval, and starts only after every build above has passed.
+
+  pypi:
+    name: Publish grad-sdk to PyPI
+    needs: [prepare, python-build, cli-build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://pypi.org/project/grad-sdk/${{ needs.prepare.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-dist
+          path: dist/
+
+      # Trusted Publishing: PyPI trusts this workflow and environment, no token involved.
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  npm:
+    name: Publish @gradiated/grad to npm
+    needs: [prepare, python-build, cli-build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://www.npmjs.com/package/@gradiated/grad/v/${{ needs.prepare.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Only for the very first publish, before npm knows the package; Trusted Publishing after.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      DIST_TAG: ${{ needs.prepare.outputs.prerelease == 'true' && 'next' || 'latest' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: node pnpm
+
+      - name: Build
+        run: |
+          cp LICENSE sdks/typescript/
+          pnpm -C sdks/typescript install --frozen-lockfile
+          pnpm -C sdks/typescript build
+
+      # npm 11.5.1+ publishes with Trusted Publishing (OIDC); provenance comes from publishConfig.
+      - name: Publish
+        working-directory: sdks/typescript
+        run: |
+          npm install -g npm@11.21.3
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > "$HOME/.npmrc"
+          fi
+          npm publish --tag "$DIST_TAG"
+
+  crates:
+    name: Publish grad-sdk and grad-cli to crates.io
+    needs: [prepare, python-build, cli-build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://crates.io/crates/grad-cli/${{ needs.prepare.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Only for the very first publish, before crates.io knows the crates; Trusted Publishing after.
+      BOOTSTRAP_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: rust
+
+      - name: Get a short-lived crates.io token (Trusted Publishing)
+        id: auth
+        if: env.BOOTSTRAP_TOKEN == ''
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+
+      # The CLI depends on the exact grad-sdk version, so grad-sdk goes first. cargo waits for
+      # each crate to reach the index before returning. --allow-dirty is for the copied LICENSE.
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || env.BOOTSTRAP_TOKEN }}
+        run: |
+          cp LICENSE sdks/rust/
+          cp LICENSE cli/
+          cargo publish --locked --allow-dirty -p grad-sdk
+          cargo publish --locked --allow-dirty -p grad-cli
+
+  go:
+    name: Tag the Go module
+    needs: [prepare, python-build, cli-build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://pkg.go.dev/github.com/Gradiated/grad/sdks/go@v${{ needs.prepare.outputs.version }}
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Go modules in a subdirectory are versioned by a tag with that prefix.
+      - name: Push the sdks/go/vX.Y.Z tag
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/sdks/go/v$VERSION" -f sha="$GITHUB_SHA"
+
+      - name: Ask the Go module proxy to fetch it
+        run: |
+          curl -sSf --retry 5 --retry-all-errors \
+            "https://proxy.golang.org/github.com/!gradiated/grad/sdks/go/@v/v$VERSION.info"
+
+  docker:
+    name: Publish ${{ matrix.image }}${{ matrix.suffix }} to GHCR
+    needs: [prepare, python-build, cli-build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/Gradiated/grad/pkgs/container/${{ matrix.image }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: grad-server
+            context: server/api
+            target: ""
+            platforms: linux/amd64,linux/arm64
+            suffix: ""
+          # The trainer locks pin x86_64 wheels, so the trainer images are amd64 only.
+          - image: grad-trainer
+            context: server/trainer
+            target: cpu
+            platforms: linux/amd64
+            suffix: ""
+          - image: grad-trainer
+            context: server/trainer
+            target: gpu
+            platforms: linux/amd64
+            suffix: -gpu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The CUDA torch image does not fit on a stock runner disk.
+      - name: Free disk space
+        if: matrix.target == 'gpu'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Set up QEMU
+        if: contains(matrix.platforms, 'arm64')
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Tags: 0.3.0 and latest, or 0.3.0-gpu and latest-gpu. Prereleases never move latest.
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ghcr.io/gradiated/${{ matrix.image }}
+          flavor: |
+            latest=auto
+            suffix=${{ matrix.suffix }},onlatest=true
+          tags: |
+            type=semver,pattern={{version}}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+
+  helm:
+    name: Publish the Helm chart
+    needs: [prepare, python-build, cli-build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/Gradiated/grad/pkgs/container/charts%2Fgrad
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install helm via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: helm
+
+      - name: Package and push to oci://ghcr.io/gradiated/charts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          helm lint server/helm/grad --strict
+          helm package server/helm/grad --destination dist
+          echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          helm push "dist/grad-$VERSION.tgz" oci://ghcr.io/gradiated/charts
+
+      - name: Upload the chart
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: helm-chart
+          path: dist/grad-${{ needs.prepare.outputs.version }}.tgz
+
+  github-release:
+    name: Create the GitHub Release
+    needs: [prepare, pypi, npm, crates, go, docker, helm]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/Gradiated/grad/releases/tag/${{ github.ref_name }}
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    steps:
+      - name: Download the CLI archives, Python distributions, chart and notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: assets/
+          merge-multiple: true
+
+      - name: Create the release
+        run: |
+          mv assets/release-notes.md .
+          (cd assets && shasum -a 256 -- *.tar.gz *.whl *.tgz > sha256sums.txt)
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md "${flags[@]}"

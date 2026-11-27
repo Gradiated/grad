@@ -7,7 +7,7 @@ name = "grad-trainer"
 version = "0.2.0"
 description = "Gradiated training runtime: torch/transformers/peft recipes, artifact bundles and trace connectors"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = { text = "MIT" }
 requires-python = ">=3.11"
 # Exact pins; requirements-{gpu,cpu}.lock pin the full transitive set.
 dependencies = [

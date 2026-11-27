@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Set or check the single version shared by every package in this repo.
+
+    scripts/bump-version 0.3.0       write 0.3.0 everywhere and open its CHANGELOG section
+    scripts/bump-version --check     fail unless every version field agrees
+    scripts/bump-version --check 0.3.0   ...and equals 0.3.0 (the release workflow runs this)
+    scripts/bump-version --notes 0.3.0   print the CHANGELOG section for 0.3.0
+"""
+
+import datetime
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SEMVER = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"
+
+# (file, pattern). Each pattern must match exactly once; group 1 is the text before the
+# version, group 2 the version, group 3 the text after it.
+FIELDS = [
+    ("sdks/python/grad/_version.py", rf'^(__version__ = ")({SEMVER})(")'),
+    ("sdks/typescript/package.json", rf'\A(\{{\s*"name": "@gradiated/grad",\s*"version": ")({SEMVER})(")'),
+    ("sdks/typescript/src/transport.ts", rf'^(export const SDK_VERSION = ")({SEMVER})(";)'),
+    ("sdks/go/generated/transport.go", rf'^(const SDKVersion = ")({SEMVER})(")'),
+    ("sdks/rust/Cargo.toml", rf'\A(\[package\]\nname = "grad-sdk"\nversion = ")({SEMVER})(")'),
+    ("cli/Cargo.toml", rf'\A(\[package\]\nname = "grad-cli"\nversion = ")({SEMVER})(")'),
+    ("cli/Cargo.toml", rf'^(grad-sdk = \{{ path = "\.\./sdks/rust", version = "=)({SEMVER})(" \}})'),
+    ("Cargo.lock", rf'^(name = "grad-sdk"\nversion = ")({SEMVER})(")'),
+    ("Cargo.lock", rf'^(name = "grad-cli"\nversion = ")({SEMVER})(")'),
+    ("server/api/package.json", rf'\A(\{{\s*"name": "@gradiated/grad-server",\s*"version": ")({SEMVER})(")'),
+    ("server/api/src/app.ts", rf'^(export const API_VERSION = ")({SEMVER})(";)'),
+    ("spec/openapi.yaml", rf'\A(openapi: [^\n]+\ninfo:\n(?:  [^\n]*\n)*?  version: )({SEMVER})($)'),
+    ("server/trainer/pyproject.toml", rf'^(\[project\]\nname = "grad-trainer"\nversion = ")({SEMVER})(")'),
+    ("server/trainer/grad_trainer/__init__.py", rf'^(__version__ = ")({SEMVER})(")'),
+    ("server/helm/grad/Chart.yaml", rf"^(version: )({SEMVER})($)"),
+    ("server/helm/grad/Chart.yaml", rf'^(appVersion: ")({SEMVER})(")'),
+    ("server/helm/grad/values.yaml", rf'(repository: ghcr\.io/gradiated/grad-server\n\s+tag: ")({SEMVER})(")'),
+    ("server/helm/grad/values.yaml", rf'(repository: ghcr\.io/gradiated/grad-trainer\n\s+tag: ")({SEMVER})(-gpu")'),
+]
+
+
+def read_fields():
+    found = []
+    for path, pattern in FIELDS:
+        text = (ROOT / path).read_text()
+        matches = list(re.finditer(pattern, text, re.MULTILINE))
+        if len(matches) != 1:
+            sys.exit(f"bump-version: expected one version field in {path} matching {pattern!r}, found {len(matches)}")
+        found.append((path, pattern, matches[0].group(2)))
+    return found
+
+
+def check(want):
+    found = read_fields()
+    versions = {version for _, _, version in found}
+    target = want or found[0][2]
+    if versions == {target}:
+        print(f"All {len(found)} version fields are {target}.")
+        return
+    for path, _, version in found:
+        print(f"{'ok ' if version == target else 'BAD'} {version:<12} {path}")
+    sys.exit(f"bump-version: version fields disagree (want {target})")
+
+
+def notes(version):
+    text = (ROOT / "CHANGELOG.md").read_text()
+    match = re.search(rf"^## \[?{re.escape(version)}\]?[^\n]*\n(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    if not match or not match.group(1).strip():
+        sys.exit(f"bump-version: CHANGELOG.md has no notes for {version}")
+    print(match.group(1).strip())
+
+
+def bump(version):
+    for path, pattern, _ in read_fields():
+        file = ROOT / path
+        text = re.sub(pattern, rf"\g<1>{version}\g<3>", file.read_text(), count=1, flags=re.MULTILINE)
+        file.write_text(text)
+
+    changelog = ROOT / "CHANGELOG.md"
+    text = changelog.read_text()
+    if f"## [{version}]" not in text:
+        today = datetime.date.today().isoformat()
+        text = text.replace("## Unreleased\n", f"## Unreleased\n\n## [{version}] - {today}\n", 1)
+        changelog.write_text(text)
+
+    check(version)
+    print(f"Review CHANGELOG.md, then commit: git commit -am 'chore: release v{version}'")
+
+
+def main(args):
+    if len(args) == 1 and re.fullmatch(SEMVER, args[0]):
+        bump(args[0])
+    elif args[:1] == ["--check"] and len(args) <= 2 and all(re.fullmatch(SEMVER, a) for a in args[1:]):
+        check(args[1] if len(args) == 2 else None)
+    elif args[:1] == ["--notes"] and len(args) == 2:
+        notes(args[1])
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

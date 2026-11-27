@@ -240,6 +240,18 @@ jobs:
             --set cloud.internalApiUrl=https://api.gradiated.com \
             --set cloud.existingSecret=grad-cloud > /dev/null
 
+  versions:
+    name: One version across the repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every package has the same version
+        run: scripts/bump-version --check
+
   secrets:
     name: Secret Scan
     runs-on: ubuntu-latest
