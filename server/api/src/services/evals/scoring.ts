@@ -5,6 +5,7 @@ import {
 } from "../../contracts.js";
 import { errorMessage } from "../../errors.js";
 import { choiceMatches, finalNumberMatches } from "./answers.js";
+import { InferenceOutage } from "./inference.js";
 import type { ChatCompletionClient, RegexEvaluator } from "./types.js";
 
 export const MAX_SCORED_CHARS = 16_384;
@@ -193,6 +194,8 @@ export const scoreOutput = async (
         result.failed.pop();
       }
     } catch (error) {
+      // An outage says nothing about the output: never score it 0.
+      if (error instanceof InferenceOutage) throw error;
       result.errors.push(`judge '${item.name}': ${errorMessage(error)}`);
     }
   }

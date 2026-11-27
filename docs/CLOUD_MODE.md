@@ -173,7 +173,13 @@ X-Gradiated-Eval-Id: ev_…
 - The gateway authorizes and bills the call as that workspace in its
   low-priority eval lane (its own rate limit, never autoscaling demand, shed
   first with 429). The worker retries 408, 425, 429 and 5xx six times with
-  backoff from 1 s.
+  backoff from 1 s. If the gateway is still down after that (an outage,
+  `capacity_unavailable`, a full lane), the call waits and retries in place
+  (2 s doubling to 30 s) while the worker keeps its lease: an outage is never
+  stored as an output error or a zero judge score. After 10 minutes down the
+  worker hands the attempt back (`abandoned`, counted against `MAX_ATTEMPTS`);
+  the next attempt resumes after the outputs already stored, and an eval whose
+  gateway stays down through every attempt fails with the outage as its error.
 - Models: catalog ids as they are (`qwen/qwen3-8b`, judges such as
   `anthropic/claude-sonnet-5-5`). An artifact target (`name@version`) is
   published as an eval-only Version when the eval is created:

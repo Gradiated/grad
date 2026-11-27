@@ -47,6 +47,8 @@ export const startEvalWorker = (
     batchSize?: number;
     concurrency?: number;
     fetch?: typeof fetch;
+    outageRetryMs?: number;
+    outageMaxMs?: number;
   } = {},
 ): TestEvalWorker => {
   const regex = createRegexEvaluator();
@@ -63,6 +65,10 @@ export const startEvalWorker = (
     regex,
     concurrency: options.concurrency ?? 3,
     batchSize: options.batchSize ?? 2,
+    // Tests: an endpoint down past the client's retries gives up at once
+    // (the attempt is handed back) unless the test waits it out.
+    outageRetryMs: options.outageRetryMs ?? 1,
+    outageMaxMs: options.outageMaxMs ?? 0,
   });
 
   return {

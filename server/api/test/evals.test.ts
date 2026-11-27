@@ -428,6 +428,7 @@ describe("OpenAI-compatible client", () => {
       retryDelayMs: 1,
       maxAttempts: 2,
     });
+    // 5xx through every retry: a transient outage (503), not a model error.
     fake.failNext(5, 500);
     await expect(
       flaky.complete({
@@ -437,7 +438,7 @@ describe("OpenAI-compatible client", () => {
         temperature: 0,
         max_tokens: 4,
       }),
-    ).rejects.toMatchObject({ code: "inference_error" });
+    ).rejects.toMatchObject({ status: 503, code: "inference_unavailable" });
     fake.failNext(0);
 
     const down = createOpenAICompatibleClient({

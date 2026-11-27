@@ -12,6 +12,10 @@ import {
   recordPromptAndReference,
   recordPromptAndResponse,
 } from "../records.js";
+import {
+  InferenceOutage,
+  isInferenceUnavailable,
+} from "../services/evals/inference.js";
 import { buildTasks } from "../services/evals/planner.js";
 import { scoreOutput, type ScoringContext } from "../services/evals/scoring.js";
 import type {
@@ -53,6 +57,14 @@ export interface EvalWorkerOptions {
   batchSize?: number;
   /** A batch is sent after this long even when not full. */
   batchMaxAgeMs?: number;
+  /**
+   * An endpoint outage (5xx, 429, unreachable past the client's own
+   * retries): the call waits from this delay (doubling, at most 30 s) and
+   * retries in place. Default 2 s.
+   */
+  outageRetryMs?: number;
+  /** After this long down, the attempt is handed back (default 10 min). */
+  outageMaxMs?: number;
 }
 
 export interface EvalWorker {
@@ -66,6 +78,40 @@ export interface EvalWorker {
 
 const TASK_PAGE = 200;
 const DEFAULT_LEASE_SECONDS = 180;
+const OUTAGE_RETRY_MAX_MS = 30_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Waits out an inference outage: a call that failed only because the
+ * endpoint was down retries in place, so an outage never becomes a stored
+ * error or a zero judge score. Gives up (InferenceOutage) when `halted()` or
+ * after `maxMs` down.
+ */
+const patient = (
+  client: ChatCompletionClient,
+  halted: () => boolean,
+  retryMs: number,
+  maxMs: number,
+): ChatCompletionClient => ({
+  complete: async (input) => {
+    const since = Date.now();
+    for (let i = 0; ; i += 1) {
+      try {
+        return await client.complete(input);
+      } catch (error) {
+        if (!isInferenceUnavailable(error)) throw error;
+        if (halted() || Date.now() - since >= maxMs) {
+          throw new InferenceOutage(
+            `inference unavailable for ${Math.round((Date.now() - since) / 1000)} s: ${errorMessage(error)}`,
+          );
+        }
+        await sleep(Math.min(OUTAGE_RETRY_MAX_MS, retryMs * 2 ** i));
+      }
+    }
+  },
+});
 
 const doneKey = (model: string, index: number) => `${model}\u0000${index}`;
 
@@ -183,11 +229,20 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
   const batchSize = Math.min(200, options.batchSize ?? 25);
   const batchMaxAgeMs = options.batchMaxAgeMs ?? 5_000;
   let counts = emptyCounts();
-  const inference: InferenceClients = {
-    models: counted(options.inference.models, () => counts, "model"),
-    judge: counted(options.inference.judge, () => counts, "judge"),
-  };
   let stopping = false;
+  // The attempt in progress halted (cancelled, lease lost) or the worker stopping.
+  let halted = () => stopping;
+  const wait = (client: ChatCompletionClient) =>
+    patient(
+      client,
+      () => halted(),
+      options.outageRetryMs ?? 2_000,
+      options.outageMaxMs ?? 600_000,
+    );
+  const inference: InferenceClients = {
+    models: counted(wait(options.inference.models), () => counts, "model"),
+    judge: counted(wait(options.inference.judge), () => counts, "judge"),
+  };
   let running: Promise<unknown> | null = null;
 
   const scoreOne = async (
@@ -287,6 +342,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
         tools: task.record.tools ?? task.record.input?.tools,
       });
     } catch (error) {
+      if (error instanceof InferenceOutage) throw error;
       return { ...base, error: errorMessage(error).slice(0, 2000) };
     }
 
@@ -344,6 +400,9 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     // lost: the lease is gone, drop everything; cancelled: post what is in
     // flight, then close the attempt.
     let halt: "lost" | "cancelled" | null = null;
+    // The endpoint stayed down past outageMaxMs: hand the attempt back.
+    let outage = null as InferenceOutage | null;
+    halted = () => halt !== null || stopping || outage !== null;
     const beat = async () => {
       try {
         const res = await client.heartbeat(ref, { phase: "evaluating" });
@@ -425,15 +484,31 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
           }
         }
         await runPool(work, options.concurrency, async (item) => {
-          if (halt !== null || stopping) return;
-          await add(
-            await generateOne(ev, item.task, item.model, item.sample, ctx),
-          );
+          if (halted()) return;
+          try {
+            await add(
+              await generateOne(ev, item.task, item.model, item.sample, ctx),
+            );
+          } catch (error) {
+            if (!(error instanceof InferenceOutage)) throw error;
+            // Not stored: the next attempt (or this one, resumed) redoes it.
+            outage ??= error;
+          }
         });
         await send();
-        if (halt !== null || stopping) break;
+        if (halted()) break;
       }
       if (halt === "lost") return "lease_lost";
+      if (outage && halt === null && !stopping) {
+        // Counted against MAX_ATTEMPTS; the next attempt resumes after the
+        // outputs already stored.
+        await client.complete(ref, {
+          status: "abandoned",
+          reason: "worker_error",
+          error: outage.message.slice(0, 4000),
+        });
+        return "handed_back";
+      }
 
       // A graceful stop (deploy, scale-down) hands the eval back: the next
       // attempt resumes after the outputs already stored.
@@ -472,6 +547,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       return error instanceof ServerUnavailable ? "handed_back" : "failed";
     } finally {
       clearInterval(heartbeat);
+      halted = () => stopping;
     }
   };
 

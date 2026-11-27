@@ -54,19 +54,38 @@ const reasonOfStatus = (status: number, body: string): InferenceErrorReason =>
           ? "server_error"
           : "rejected";
 
-/** An eval inference call that failed after its retries. */
+/**
+ * An eval inference call that failed after its retries: `503
+ * inference_unavailable` when every try was transient (unreachable, 429,
+ * 5xx), else `502 inference_error`.
+ */
 export class InferenceError extends ApiError {
   constructor(
     detail: string,
     readonly reason: InferenceErrorReason,
+    transient = false,
   ) {
-    super(502, "inference_error", "Inference endpoint failed", detail);
+    super(
+      transient ? 503 : 502,
+      transient ? "inference_unavailable" : "inference_error",
+      transient
+        ? "Inference endpoint unavailable"
+        : "Inference endpoint failed",
+      detail,
+    );
   }
 }
 
 /** The reason of a failed call (`server_error` for anything unclassified). */
 export const inferenceErrorReason = (error: unknown): InferenceErrorReason =>
   error instanceof InferenceError ? error.reason : "server_error";
+
+/** The endpoint stayed unreachable, overloaded or 5xx through every retry: a transient outage, not the model's answer. */
+export const isInferenceUnavailable = (error: unknown): boolean =>
+  error instanceof ApiError && error.code === "inference_unavailable";
+
+/** A call given up during an inference outage (or a stop): nothing about the task is known. */
+export class InferenceOutage extends Error {}
 
 const parseCompletion = (body: unknown): ChatCompletionResult => {
   const payload = (body ?? {}) as {
@@ -101,7 +120,8 @@ const parseCompletion = (body: unknown): ChatCompletionResult => {
 /**
  * Client for any OpenAI-compatible `/chat/completions` endpoint (vLLM,
  * SGLang, the Gradiated gateway). Retries 429/5xx/network errors with
- * exponential backoff; failures surface as ApiError(502, inference_error).
+ * exponential backoff; when they persist, ApiError(503,
+ * inference_unavailable); any other failure is ApiError(502, inference_error).
  */
 export const createOpenAICompatibleClient = (
   options: OpenAICompatibleOptions,
@@ -188,6 +208,7 @@ export const createOpenAICompatibleClient = (
       throw new InferenceError(
         `Model '${request.model}' at ${baseUrl}: ${errorMessage(lastError)}`,
         lastError instanceof CallError ? lastError.reason : "server_error",
+        lastError instanceof CallError && lastError.retryable,
       );
     },
   };

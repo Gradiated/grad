@@ -406,7 +406,7 @@ describe("eval service", () => {
     );
   });
 
-  it("fails the eval with the inference error when every model call fails", async () => {
+  it("fails the eval with the outage once a model's endpoint stays down through MAX_ATTEMPTS", async () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(2));
@@ -419,7 +419,12 @@ describe("eval service", () => {
     await h.worker.drain();
     const failed = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(failed.status).toBe("failed");
-    expect(failed.error).toMatch(/Every model call failed.*HTTP 500/);
+    expect(failed.error).toMatch(/inference unavailable.*HTTP 500/);
+    // Nothing was stored for the outage: a rerun after it starts clean.
+    expect(
+      (await t.deps.store.evals.listOutputs(created.id, {}, { limit: 10 }))
+        .data,
+    ).toEqual([]);
   });
 
   it("keeps partial generation errors per output and counts them in the summary", async () => {
