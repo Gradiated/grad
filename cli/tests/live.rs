@@ -569,6 +569,15 @@ fn live_cloud_quickstart_with_torch_worker() {
     );
     ok(&o);
     assert!(o.json()["data"]["inference_id"].as_str().is_some());
+    // The fake Cloud routes between the candidates the trainer recorded in the manifest.
+    let model = o.json()["data"]["model"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        model == "cheap/m" || model == "strong/m",
+        "routed to {model:?}, not a trained candidate"
+    );
 
     // A second version (promoted checkpoint), then roll back to the first.
     let o = grad(

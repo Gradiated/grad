@@ -74,9 +74,9 @@ describe.skipIf(skipTorch !== undefined)("live: cloud router with the torch work
 
     const messages = [{ role: "user" as const, content: "hard SQL join query 3" }];
     const decision = await grad.route("support-router", { messages });
-    // The fake Cloud picks from the artifact manifest's router_config.candidates; torch router bundles do not
-    // carry it yet (r4 backlog), so it falls back to the deployment's model id.
-    expect(decision.model).toMatch(/\S/);
+    // The fake Cloud routes between the candidates the trainer recorded in the artifact manifest.
+    expect(run.artifact.manifest.candidates).toEqual(["cheap/m", "strong/m"]);
+    expect(["cheap/m", "strong/m"]).toContain(decision.model);
     expect(decision.deployment).toBe("support-router");
     expect(decision.artifactId).toBe(run.artifact.id);
     const recorded = await decision.recordFeedback({ score: 1.0, metrics: { latency_ms: 12, output_tokens: 0 } });

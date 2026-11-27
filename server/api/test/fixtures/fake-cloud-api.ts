@@ -137,17 +137,20 @@ export const startFakeCloudApi = async (
       case "/api/internal/v1/serving/route": {
         const dep = deployments.get(`${ws}:${String(body.deployment)}`);
         if (!dep) return [404, { detail: "deployment not serving" }];
+        // The router recipe's manifest names its candidates and fallback model
+        // (server/trainer/grad_trainer/recipes/router.py `manifest()`).
         const manifest = (artifacts.get(`${ws}:${dep.artifact_id}`)?.manifest ??
-          {}) as { router_config?: { candidates?: string[] } };
-        const candidates = manifest.router_config?.candidates ?? [];
-        const fallback =
-          typeof body.fallback_model === "string" ? body.fallback_model : null;
+          {}) as { candidates?: string[]; fallback_model?: string };
+        const candidates = manifest.candidates ?? [];
+        if (candidates.length < 2) {
+          return [422, { detail: "artifact is not a trained router" }];
+        }
+        const strong = manifest.fallback_model ?? candidates.at(-1) ?? "";
+        const cheap = candidates.find((m) => m !== strong) ?? strong;
         const messages = (body.messages ?? []) as Array<{ content?: unknown }>;
         const length = messages
           .map((m) => (typeof m.content === "string" ? m.content : ""))
           .join("").length;
-        const cheap = candidates[0] ?? fallback ?? dep.model_id;
-        const strong = fallback ?? candidates[candidates.length - 1] ?? cheap;
         const model = length > 200 ? strong : cheap;
         return [
           200,

@@ -296,9 +296,9 @@ class CloudTorchLiveTests(_LiveCase):
         messages = [{"role": "user", "content": "Where is invoice #9941?"}]
         # docs: training/index.mdx "route and record feedback"
         decision = client.route("support-router", messages=messages)
-        # The fake Cloud API picks from manifest.router_config.candidates and otherwise falls back to
-        # the deployment's model id (the trainer does not put router_config in the manifest yet).
-        self.assertIn(decision.model, {"cheap/m", "strong/m", dep.model_id})
+        # The fake Cloud API routes between the candidates the trainer recorded in the manifest.
+        self.assertEqual(run.artifact.manifest["candidates"], ["cheap/m", "strong/m"])
+        self.assertIn(decision.model, {"cheap/m", "strong/m"})
         self.assertTrue(decision.inference_id)
         result = decision.record_feedback(score=1.0, metrics={"latency_ms": 12.0, "output_tokens": 3})
         self.assertEqual(result.accepted, 1)
