@@ -90,6 +90,11 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
         return false;
       }
     },
+    dbNow: async () => {
+      const rows = await db.query<{ now: Date }>("SELECT now() AS now");
+
+      return new Date(rows[0]?.now ?? Date.now());
+    },
     close: () => pool.end(),
   };
 };

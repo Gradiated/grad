@@ -442,7 +442,7 @@ describe("eval service", () => {
       leaseSeconds: 30,
       now: t.clock.now(),
     });
-    t.clock.advanceSeconds(31);
+    t.clock.advanceSeconds(41);
     expect(await t.services.evals.recoverExpired(t.clock.now())).toBe(1);
     const failed = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(failed.status).toBe("failed");

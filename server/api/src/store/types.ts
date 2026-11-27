@@ -133,6 +133,8 @@ export type ImportJobPatch = Partial<
 >;
 
 export interface JobExpectation<S extends string> {
+  /** Only a lease that expired before this instant (the reaper's re-check). */
+  leaseExpiredBefore?: string;
   status?: readonly S[];
   workerId?: string | null;
   attempt?: number;
@@ -775,5 +777,7 @@ export interface Store extends Repositories {
   transaction<T>(fn: (tx: Repositories) => Promise<T>): Promise<T>;
   migrate(): Promise<void>;
   ping(): Promise<boolean>;
+  /** The database clock (`SELECT now()`). */
+  dbNow(): Promise<Date>;
   close(): Promise<void>;
 }

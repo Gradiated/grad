@@ -387,7 +387,7 @@ describe("datasets, uploads and imports", () => {
         seq: 0,
         records: sftRecords(2),
       });
-      t.clock.advanceSeconds(61);
+      t.clock.advanceSeconds(81);
       await t.services.maintenance.tick();
     }
     const failed = await t.json(`/v1/imports/${imp.body.id}`);

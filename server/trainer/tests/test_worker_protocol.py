@@ -10,6 +10,7 @@ import signal
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any
 
@@ -304,6 +305,38 @@ class WorkerProtocolTests(unittest.TestCase):
         result = self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
         self.assertEqual(result["status"], "completed")
         self.assertEqual(len(srv.calls("complete")), 3)
+
+    def test_complete_outlasts_a_server_outage_and_keeps_the_bundle(self) -> None:
+        # More consecutive failures than one retry round (complete_attempts=2).
+        srv = self.server(jobs=[train_job()], fail_next={"complete": [503] * 5})
+        worker = self.worker(srv, StubRunner(checkpoint_at=None), complete_attempts=2)
+        result = worker.run_once()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(srv.calls("complete")), 6)
+        self.assertEqual(len(set(b["upload_id"] for b in srv.bodies("complete"))), 1)
+
+    def test_complete_stops_retrying_when_the_lease_is_lost(self) -> None:
+        srv = self.server(jobs=[train_job()], fail_next={"complete": [503, 409]})
+        result = self.worker(srv, StubRunner(checkpoint_at=None), complete_attempts=1).run_once()
+        self.assertEqual(result["status"], "lease_lost")
+
+    def test_unexpected_error_abandons_instead_of_dropping_the_job(self) -> None:
+        # The artifact upload ticket keeps failing: the job is handed back.
+        srv = self.server(jobs=[train_job()], fail_next={"uploads": [400]})
+        result = self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
+        complete = srv.bodies("complete")[-1]
+        self.assertEqual(complete["status"], "abandoned")
+        self.assertEqual(complete["tokens_processed"], 300)  # the attempt is still billed
+        self.assertEqual(result["status"], "abandoned")
+
+    def test_heartbeat_retries_fast_after_a_failure(self) -> None:
+        srv = self.server(jobs=[train_job()], fail_next={"heartbeat": [503]})
+        worker = self.worker(
+            srv, StubRunner(steps=150, checkpoint_at=None, step_sleep=0.01), heartbeat_interval_s=0.2
+        )
+        with mock.patch("grad_trainer.worker.random.uniform", return_value=0.05):
+            worker.run_once()
+        self.assertGreaterEqual(len(srv.calls("heartbeat")), 3)
 
     def test_sigterm_abandons_running_job(self) -> None:
         srv = self.server(jobs=[train_job()])

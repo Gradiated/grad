@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 
-import { addSeconds } from "../../clock.js";
+import { addSeconds, leaseGraceCutoff } from "../../clock.js";
 import type {
   EvalOutput,
   EvalRun,
@@ -471,7 +471,12 @@ export const createEvalService = (
               completed_at: now.toISOString(),
             }
           : { status: "queued", worker_id: null, lease_expires_at: null },
-        { status: ["running"], workerId: e.worker_id, attempt: e.attempt },
+        {
+          status: ["running"],
+          workerId: e.worker_id,
+          attempt: e.attempt,
+          leaseExpiredBefore: leaseGraceCutoff(now, e.lease_seconds),
+        },
       );
       if (updated) recovered += 1;
       if (updated?.status === "failed") await onFinished(updated);

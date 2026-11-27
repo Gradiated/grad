@@ -263,7 +263,11 @@ class _Heartbeat(threading.Thread):
         self.done = threading.Event()
 
     def run(self) -> None:
-        while not self.done.wait(self.interval_s):
+        wait = self.interval_s
+        while not self.done.wait(wait):
+            # After a failure, retry fast (1-5 s) instead of a full interval, so
+            # the lease is renewed as soon as the server is back.
+            wait = min(self.interval_s, random.uniform(1.0, 5.0))
             try:
                 resp = self.worker.client.post_json(
                     f"/v1/trainer-jobs/{self.state.job_id}/heartbeat",
@@ -288,6 +292,7 @@ class _Heartbeat(threading.Thread):
             except ServerUnreachable as exc:
                 _log(f"heartbeat failed ({exc}); retrying")
                 continue
+            wait = self.interval_s
             if resp.get("should_stop"):
                 self.state.request_stop(str(resp.get("stop_reason") or "cancelled"))
 
@@ -383,6 +388,18 @@ class TrainerWorker:
             return self._run_train(job, state, job_dir)
         except LeaseLost:
             return {"job_id": state.job_id, "status": "lease_lost"}
+        except (WorkerAuthError, SystemExit, KeyboardInterrupt):
+            raise
+        except Exception as exc:
+            # Never silently drop a job (it would sit leased until expiry):
+            # hand it back so another attempt runs it now.
+            _log(f"job {state.job_id} attempt {state.attempt} crashed ({exc}); abandoning it")
+            try:
+                return self._complete(
+                    state, {"status": "abandoned", "tokens_processed": state.max_tokens}
+                )
+            except LeaseLost:
+                return {"job_id": state.job_id, "status": "lease_lost"}
         finally:
             heartbeat.done.set()
             heartbeat.join(timeout=5)
@@ -479,7 +496,23 @@ class TrainerWorker:
         return str(ticket["upload_id"])
 
     def _complete(self, state: _JobState, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._post(state, "complete", payload, attempts=self.complete_attempts)
+        """Retries until the server answers: completion is idempotent per attempt,
+        and the bundle stays on disk meanwhile. Gives up only when the lease is
+        lost (409/404) or the worker is shutting down."""
+        while True:
+            try:
+                return self._post(
+                    state, "complete", payload, attempts=self.complete_attempts
+                )
+            except ServerUnreachable as exc:
+                error: Exception = exc
+            except ServerError as exc:
+                if not exc.transient:
+                    raise
+                error = exc
+            _log(f"complete failed ({error}); retrying until the server answers")
+            if self._shutdown.wait(self.client.retry_cap_s):
+                raise error
 
     # -- train jobs -----------------------------------------------------------
 

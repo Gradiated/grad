@@ -382,7 +382,12 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(await store.imports.listExpiredLeases(clock.now(), 10)).toEqual(
         [],
       );
-      clock.advanceSeconds(61);
+      // Reaped one heartbeat interval (lease/3) after expiry.
+      clock.advanceSeconds(79);
+      expect(await store.imports.listExpiredLeases(clock.now(), 10)).toEqual(
+        [],
+      );
+      clock.advanceSeconds(2);
       const expired = await store.imports.listExpiredLeases(clock.now(), 10);
       expect(expired.map((j) => j.id).sort()).toEqual([a.id, b.id].sort());
 
@@ -612,7 +617,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       await store.runs.update(running.id, { status: "cancelled" });
 
       expect(await store.runs.listExpiredLeases(clock.now(), 10)).toEqual([]);
-      clock.advanceSeconds(60);
+      // Expired, but within the grace of one heartbeat interval (lease/3).
+      clock.advanceSeconds(80);
       expect(await store.runs.listExpiredLeases(clock.now(), 10)).toEqual([]);
       clock.advance(1);
       const expired = await store.runs.listExpiredLeases(clock.now(), 10);
@@ -1211,7 +1217,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         leaseSeconds: 30,
         now: clock.now(),
       });
-      clock.advanceSeconds(31);
+      clock.advanceSeconds(41);
       expect(
         (await store.evals.listExpiredLeases(clock.now(), 10))
           .map((e) => e.id)

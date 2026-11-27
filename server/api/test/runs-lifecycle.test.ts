@@ -544,7 +544,7 @@ describe("run lifecycle and worker protocol", () => {
       const job = await worker.claim();
       expect(job?.attempt).toBe(attempt);
       await worker.progress(job!, 1, 100_000);
-      t.clock.advanceSeconds(61);
+      t.clock.advanceSeconds(81);
       await t.services.maintenance.tick();
     }
 
@@ -564,6 +564,36 @@ describe("run lifecycle and worker protocol", () => {
     // A resumed run gets a fresh attempt budget.
     await t.json(`/v1/runs/${run.id}/resume`, { method: "POST", body: {} });
     expect((await worker.claim())?.attempt).toBe(4);
+  });
+
+  it("survives a database outage longer than the lease: the reaper's grace lets the worker renew first", async () => {
+    const run = await createSftRun(t);
+    const job = await worker.claim();
+    // 70 s with no heartbeat (lease 60 s): expired, but inside lease/3 grace.
+    t.clock.advanceSeconds(70);
+    expect(await t.services.runs.expireLeases(t.clock.now())).toBe(0);
+    expect((await worker.heartbeat(job!)).status).toBe(200);
+    t.clock.advanceSeconds(30);
+    await t.services.maintenance.tick();
+    expect((await t.json(`/v1/runs/${run.id}`)).body).toMatchObject({
+      status: "running",
+      attempt: 1,
+    });
+  });
+
+  it("does not reap a lease renewed between the reaper's read and its update", async () => {
+    const run = await createSftRun(t);
+    await worker.claim();
+    t.clock.advanceSeconds(81);
+    const [stale] = await t.deps.store.runs.listExpiredLeases(t.clock.now(), 1);
+    await t.deps.store.runs.update(run.id, {
+      lease_expires_at: new Date(
+        t.clock.now().getTime() + 60_000,
+      ).toISOString(),
+    });
+    // The guarded update re-checks expiry, so the renewed lease survives.
+    expect(stale?.id).toBe(run.id);
+    expect(await t.services.runs.expireLeases(t.clock.now())).toBe(0);
   });
 
   it("keeps a lease alive through heartbeats during long exports", async () => {

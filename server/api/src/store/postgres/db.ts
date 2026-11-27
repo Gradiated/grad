@@ -114,6 +114,7 @@ export const expectClause = (
         status?: readonly string[];
         workerId?: string | null;
         attempt?: number;
+        leaseExpiredBefore?: string;
       }
     | undefined,
   params: Params,
@@ -130,6 +131,11 @@ export const expectClause = (
   }
   if (expect.attempt !== undefined) {
     parts.push(`attempt = ${params.add(expect.attempt)}`);
+  }
+  if (expect.leaseExpiredBefore !== undefined) {
+    parts.push(
+      `lease_expires_at < ${params.add(expect.leaseExpiredBefore)}::timestamptz`,
+    );
   }
 
   return parts.map((p) => ` AND ${p}`).join("");

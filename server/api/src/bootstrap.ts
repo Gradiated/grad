@@ -14,7 +14,7 @@ import {
   type CloudAdapterConfig,
 } from "./adapters-cloud.js";
 import { createModelCatalog } from "./catalog.js";
-import { systemClock } from "./clock.js";
+import { createDbAnchoredClock } from "./clock.js";
 import type { AppDependencies } from "./deps.js";
 import type { ServerEnvironment } from "./environment.js";
 import { createOpenAICompatibleClient } from "./services/evals/inference.js";
@@ -57,12 +57,17 @@ const buildInference = (env: ServerEnvironment): InferenceClients | null => {
 export const buildDependencies = async (
   env: ServerEnvironment,
 ): Promise<AppDependencies> => {
-  const clock = systemClock;
+  const clock = createDbAnchoredClock();
   const store = createPostgresStore({
     connectionString: env.DATABASE_URL,
     clock,
   });
   await store.migrate();
+  // Lease times follow the database clock: sync now and every minute.
+  await clock.sync(store.dbNow);
+  setInterval(() => {
+    clock.sync(store.dbNow).catch(() => undefined);
+  }, 60_000).unref();
 
   const storage = env.S3_BUCKET
     ? new S3ObjectStore({

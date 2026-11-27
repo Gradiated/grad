@@ -133,7 +133,8 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => ({
     (
       await db.query(
         `SELECT * FROM grad_evals
-         WHERE worker_id IS NOT NULL AND lease_expires_at < $1::timestamptz
+         WHERE worker_id IS NOT NULL
+           AND lease_expires_at + make_interval(secs => lease_seconds / 3.0) < $1::timestamptz
          ORDER BY lease_expires_at LIMIT $2`,
         [now.toISOString(), limit],
       )

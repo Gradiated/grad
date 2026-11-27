@@ -1,6 +1,6 @@
 import type { AuthPrincipal } from "../adapters.js";
 import { costForTokens } from "../catalog.js";
-import { addDays, addSeconds } from "../clock.js";
+import { addDays, addSeconds, leaseGraceCutoff } from "../clock.js";
 import {
   ArtifactFormatSchema,
   type Artifact,
@@ -395,6 +395,7 @@ export const createRunLifecycle = (
     run: RunRecord,
     tokens: number,
     patch: RunPatch,
+    leaseExpiredBefore?: string,
   ): Promise<RunRecord> => {
     const now = clock.now();
     const attemptCost = costForTokens(tokens, run.price_per_million_tokens);
@@ -412,6 +413,7 @@ export const createRunLifecycle = (
         workerId: run.worker_id,
         attempt: run.attempt,
         status: ["running", "cancelled"],
+        ...(leaseExpiredBefore ? { leaseExpiredBefore } : {}),
       },
     );
     if (!updated) throw leaseLost(run.id);
@@ -505,7 +507,14 @@ export const createRunLifecycle = (
 
       try {
         await store.transaction((tx) =>
-          closeAttempt(tx, run, run.attempt_tokens, patch),
+          // Re-checks expiry: a heartbeat that landed after the SELECT wins.
+          closeAttempt(
+            tx,
+            run,
+            run.attempt_tokens,
+            patch,
+            leaseGraceCutoff(now, run.lease_seconds),
+          ),
         );
         closed += 1;
       } catch (error) {

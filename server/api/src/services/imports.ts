@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { z } from "@hono/zod-openapi";
 
 import type { AuthPrincipal } from "../adapters.js";
-import { addSeconds } from "../clock.js";
+import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import {
   DatasetRecordSchema,
   type CreateImportRequestSchema,
@@ -468,6 +468,7 @@ export const createImportService = (
         const updated = await store.imports.update(job.id, release(patch), {
           workerId: job.worker_id,
           attempt: job.attempt,
+          leaseExpiredBefore: leaseGraceCutoff(now, job.lease_seconds),
         });
         if (updated) closed += 1;
       }
