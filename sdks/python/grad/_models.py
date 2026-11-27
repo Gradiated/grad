@@ -13,7 +13,7 @@ from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypeVar
 
-from ._errors import NotAvailableInV0Error, PaginationLoopError
+from ._errors import NotAvailableInV0Error, PaginationLoopError, RunFailedError
 from ._format import format_eval_plan, format_eval_summary, format_plan, format_render
 from .records import Trajectory
 
@@ -653,8 +653,15 @@ class Run(APIObject):
         on_status: Callable[[Run], Any] | None = None,
         raise_on_failure: bool = True,
     ) -> Run:
-        """Block until the run finishes (in place). See ``client.runs.wait``."""
-        final = self._need_client().runs.wait(self.id, timeout=timeout, on_metric=on_metric, on_status=on_status, raise_on_failure=raise_on_failure)
+        """Block until the run finishes (in place). See ``client.runs.wait``.
+
+        Raises :class:`grad.RunFailedError` unless the run completed; this run is updated first.
+        """
+        try:
+            final = self._need_client().runs.wait(self.id, timeout=timeout, on_metric=on_metric, on_status=on_status, raise_on_failure=raise_on_failure)
+        except RunFailedError as exc:
+            self._update_from(exc.run)
+            raise
         self._update_from(final)
         return self
 

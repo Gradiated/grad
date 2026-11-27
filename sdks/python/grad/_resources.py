@@ -7,6 +7,7 @@ import typing
 import json
 import os
 import shutil
+import sys
 import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
@@ -692,9 +693,38 @@ class Runs(_Resource):
 
         ``on_metric`` receives each :class:`grad.MetricPoint` live (SSE with reconnect);
         ``on_status`` each status change. Transient errors are retried. Raises
-        :class:`grad.RunFailedError` for ``failed`` runs (unless ``raise_on_failure=False``)
-        and :class:`grad.WaitTimeoutError` after ``timeout`` seconds (the run keeps going).
+        :class:`grad.RunFailedError` for ``failed``, ``cancelled`` and ``stopped_budget`` runs,
+        as every SDK does (unless ``raise_on_failure=False``), and
+        :class:`grad.WaitTimeoutError` after ``timeout`` seconds (the run keeps going).
+        Ctrl-C stops waiting, not the run.
         """
+        try:
+            run = self._wait_terminal(run_id, timeout, poll_interval, on_metric, on_status)
+        except KeyboardInterrupt:
+            print(
+                f"\nStopped waiting; run {run_id} keeps going on the server. "
+                f"Call wait() again to follow it, or cancel() to stop it.",
+                file=sys.stderr,
+            )
+            raise
+        if run.status != "completed" and raise_on_failure:
+            hint = " Raise the cap and continue with run.resume(max_cost_usd=...)." if run.status == "stopped_budget" else ""
+            raise RunFailedError(
+                f"Run {run.id} ({run.name}) ended {run.status}: {run.error or 'no error reported'}.{hint}",
+                resource=run,
+                error=run.error,
+                code=f"run_{run.status}",
+            )
+        return run
+
+    def _wait_terminal(
+        self,
+        run_id: str,
+        timeout: float | None,
+        poll_interval: float,
+        on_metric: Callable[[MetricPoint], Any] | None,
+        on_status: Callable[[Run], Any] | None,
+    ) -> Run:
         deadline = self._deadline(timeout)
         run: Run | None = None
         last_status: str | None = None
@@ -727,8 +757,6 @@ class Runs(_Resource):
             self._sleep(backoff.next(), deadline)
         if on_status is not None and run.status != last_status:
             on_status(run)
-        if run.status == "failed" and raise_on_failure:
-            raise RunFailedError(f"Run {run.id} ({run.name}) failed: {run.error or 'no error reported'}", resource=run, error=run.error)
         return run
 
 

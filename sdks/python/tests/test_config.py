@@ -74,6 +74,40 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(grad.GradConfigError):
             resolve_config(profile="staging", env=self.env)
 
+    def test_gradiated_profile_env_selects_a_profile(self) -> None:
+        self.write({"profiles": {"default": {"api_key": "a"}, "local": {"base_url": "http://127.0.0.1:8787", "api_key": "grad_local"}}})
+        env = {**self.env, "GRADIATED_PROFILE": "local", "GRADIATED_API_KEY": "grad_env", "GRADIATED_BASE_URL": "https://env.example"}
+        cfg = resolve_config(env=env)
+        # A profile selected by name wins over the environment variables.
+        self.assertEqual((cfg.base_url, cfg.api_key, cfg.profile), ("http://127.0.0.1:8787", "grad_local", "local"))
+        # Arguments still win over the selected profile.
+        self.assertEqual(resolve_config(api_key="grad_arg", env=env).api_key, "grad_arg")
+        with self.assertRaises(grad.GradConfigError) as ctx:
+            resolve_config(env={**self.env, "GRADIATED_PROFILE": "nope"})
+        self.assertIn("nope", str(ctx.exception))
+
+    def test_profile_key_only_goes_to_its_server(self) -> None:
+        self.write({"profiles": {"default": {"base_url": "https://cloud.example", "api_key": "grad_saved"}}})
+        cfg = resolve_config(env={**self.env, "GRADIATED_BASE_URL": "http://localhost:9"})
+        self.assertIsNone(cfg.api_key)
+        with self.assertRaises(grad.GradConfigError) as ctx:
+            resolve_config(env={**self.env, "GRADIATED_BASE_URL": "https://other.example"})
+        self.assertIn("belongs to https://cloud.example", str(ctx.exception))
+
+    def test_missing_key_message_is_shared(self) -> None:
+        with self.assertRaises(grad.GradConfigError) as ctx:
+            resolve_config(env=self.env)
+        self.assertEqual(
+            str(ctx.exception),
+            "No API key for https://api.gradiated.com: run `grad login`, set GRADIATED_API_KEY, "
+            "or export GRADIATED_PROFILE=local to use a `grad local up` stack.",
+        )
+
+    def test_trailing_v1_is_dropped(self) -> None:
+        with self.assertWarns(UserWarning):
+            cfg = resolve_config(base_url="http://localhost:8787/v1/", env=self.env)
+        self.assertEqual(cfg.base_url, "http://localhost:8787")
+
     def test_malformed_files(self) -> None:
         self.cfg.write_text("{nope")
         with self.assertRaises(grad.GradConfigError):

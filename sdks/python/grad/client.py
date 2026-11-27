@@ -20,13 +20,17 @@ __all__ = ["Grad"]
 class Grad:
     """Client for the Gradiated training platform.
 
-    Configuration precedence: explicit arguments > ``GRADIATED_API_KEY`` /
-    ``GRADIATED_BASE_URL`` > the ``grad login`` config file > ``https://api.gradiated.com``.
+    Configuration precedence (the same in every SDK and the CLI): explicit arguments >
+    the selected profile (``profile=`` or ``GRADIATED_PROFILE``) > ``GRADIATED_API_KEY`` /
+    ``GRADIATED_BASE_URL`` > the ``default`` profile of the ``grad login`` config file >
+    ``https://api.gradiated.com``. Without a key for a remote server it raises
+    :class:`GradConfigError` before sending anything.
 
     Args:
         api_key: API key (``""`` for servers without authentication).
         base_url: e.g. ``http://localhost:8787`` for a local stack.
-        profile: Profile in ``~/.config/gradiated/config.json`` (``"default"``).
+        profile: Profile in ``~/.config/gradiated/config.json`` (default ``GRADIATED_PROFILE``,
+            then ``"default"``), e.g. ``"local"`` after ``grad local up``.
         timeout: Per-request timeout in seconds (connect and each read). Downloads and
             event streams use their own longer read timeouts.
         max_retries: Retries for transient failures (see ``grad._transport``).

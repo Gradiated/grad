@@ -483,9 +483,19 @@ class RunTests(unittest.TestCase):
         self.assertEqual(fctx.exception.error, "DPORunner requires preference pairs")
         self.assertEqual(fctx.exception.run.status, "failed")
         self.assertEqual(client.runs.wait(RUN_ID, raise_on_failure=False).status, "failed")
+        # Like every SDK: cancelled and stopped_budget raise too (a partial run never deploys silently).
         for status in ("cancelled", "stopped_budget"):
             client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}": json_reply(with_status(RUN_Q, status))})
-            self.assertEqual(client.runs.wait(RUN_ID).status, status)
+            with self.assertRaises(grad.RunFailedError) as sctx:
+                client.runs.wait(RUN_ID)
+            self.assertEqual((sctx.exception.run.status, sctx.exception.code), (status, f"run_{status}"))
+            self.assertEqual(client.runs.wait(RUN_ID, raise_on_failure=False).status, status)
+            run = client.runs.get(RUN_ID)
+            run.status = "running"
+            with self.assertRaises(grad.RunFailedError):
+                run.wait()
+            self.assertEqual(run.status, status)
+        self.assertIn("run.resume(max_cost_usd=", str(sctx.exception))
         client, _, _ = make_client({f"GET /v1/runs/{RUN_ID}": problem(404, "run_not_found")})
         with self.assertRaises(grad.NotFoundError):
             client.runs.wait(RUN_ID)

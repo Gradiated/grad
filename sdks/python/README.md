@@ -51,13 +51,19 @@ directory (`adapter_config.json` + `adapter_model.safetensors`) that `vllm serve
 
 ## Configuration
 
-| Setting  | Explicit argument       | Environment          | Config file (`grad login`)                          |
-| -------- | ----------------------- | -------------------- | --------------------------------------------------- |
-| API key  | `Grad(api_key=...)`     | `GRADIATED_API_KEY`  | `$XDG_CONFIG_HOME/gradiated/config.json` (profiles) |
-| Base URL | `Grad(base_url=...)`    | `GRADIATED_BASE_URL` | same file; default `https://api.gradiated.com`      |
+Every SDK and the CLI resolve configuration the same way (highest first):
 
-Explicit arguments win over the environment, which wins over the config file. `Grad(profile=...)`
-selects a profile from the file. Also: `timeout=` (per request), `max_retries=` (default 2).
+1. explicit arguments: `Grad(api_key=..., base_url=...)`;
+2. the selected profile: `Grad(profile=...)` or `GRADIATED_PROFILE` (e.g. `local` after `grad local up`);
+3. `GRADIATED_API_KEY` / `GRADIATED_BASE_URL`;
+4. the `default` profile in `$XDG_CONFIG_HOME/gradiated/config.json` (written by `grad login`);
+5. `https://api.gradiated.com`.
+
+A key saved in a profile is only sent to that profile's base URL, and a selected profile that
+doesn't exist is an error. Without a key for a non-loopback server, `Grad()` raises
+`GradConfigError` before sending anything (`api_key=""` talks to a server without
+authentication). A trailing `/v1` on the base URL is dropped with a warning. Also: `timeout=`
+(per request), `max_retries=` (default 2).
 
 ## Errors
 
@@ -66,7 +72,8 @@ Every error subclasses `grad.GradError`. HTTP errors are `grad.GradAPIError` sub
 `PermissionDeniedError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationError`
 (422, with field `errors`), `RateLimitError` (429), `DeployUnavailableError` and
 `InferenceUnavailableError` (501), `ServerError` (5xx). Network failures raise
-`APIConnectionError` / `APITimeoutError`; `wait()` raises `RunFailedError`, `EvalFailedError`,
+`APIConnectionError` / `APITimeoutError`; `wait()` raises `RunFailedError` (code `run_failed`,
+`run_cancelled` or `run_stopped_budget`: anything but `completed`), `EvalFailedError`,
 `ImportFailedError` or `WaitTimeoutError`; a list endpoint that repeats its cursor raises
 `PaginationLoopError` instead of looping. Features documented for later waves raise
 `NotAvailableInV0Error` with an alternative.

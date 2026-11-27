@@ -149,16 +149,20 @@ class ScorerError(GradError):
 
 
 class JobFailedError(GradError):
-    """A server-side job (run, import or eval) finished with status ``failed``."""
+    """A server-side job (run, import or eval) finished without a result (``failed``, ...)."""
 
-    def __init__(self, message: str, *, resource: Any, error: str | None) -> None:
-        super().__init__(message, code="job_failed")
+    def __init__(self, message: str, *, resource: Any, error: str | None, code: str = "job_failed") -> None:
+        super().__init__(message, code=code)
         self.resource = resource
         self.error = error
 
 
 class RunFailedError(JobFailedError):
-    """A training run failed. ``run`` is the final :class:`grad.Run`; ``error`` the server's reason."""
+    """A run ended ``failed``, ``cancelled`` or ``stopped_budget`` (code ``run_<status>``).
+
+    ``run`` is the final :class:`grad.Run`; ``error`` the server's reason. A ``stopped_budget``
+    run keeps its checkpoints: resume it with ``run.resume(max_cost_usd=...)``.
+    """
 
     @property
     def run(self) -> Any:
