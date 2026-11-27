@@ -203,6 +203,23 @@ describe("retries", () => {
     expect(server.calls).toHaveLength(1);
   });
 
+  it("redacts a presigned URL's signature and credentials in errors (security review 2026-11-28)", async () => {
+    const query = "X-Amz-Credential=AKIAEXAMPLE%2F20261128&X-Amz-Security-Token=tok_secret&X-Amz-Signature=sig_secret";
+    const server = new FakeServer().on("PUT", "/bucket/uploads/ws/abc", json({ code: "AccessDenied" }, 403));
+    const e = await transport(server, new FakeClock(), { apiKey: undefined })
+      .raw({ method: "PUT", path: `/bucket/uploads/ws/abc?${query}`, body: "x" })
+      .catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(APIError);
+    for (const field of [(e as APIError).message, (e as APIError).url]) {
+      expect(field).toContain("/bucket/uploads/ws/abc?<redacted>");
+      expect(field).not.toMatch(/tok_secret|sig_secret|AKIAEXAMPLE/);
+    }
+    // An API query is not a credential: it stays for debugging.
+    const plain = new FakeServer().on("GET", "/v1/runs", json({}, 400));
+    const p = await transport(plain).json({ method: "GET", path: "/v1/runs", query: [["limit", 5]] }).catch((x: unknown) => x);
+    expect((p as APIError).message).toContain("/v1/runs?limit=5");
+  });
+
   it("gives up when Retry-After exceeds the cap", async () => {
     const server = new FakeServer().on("GET", "/v1/runs", json({}, 429, { "retry-after": "3600" }), json({}));
     const e = await transport(server).json({ method: "GET", path: "/v1/runs" }).catch((x: unknown) => x);

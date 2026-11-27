@@ -16,6 +16,13 @@ export const readEnv = (name: string): string | undefined => {
   return value === undefined || value === "" ? undefined : value;
 };
 
+/** A URL for error messages: a presigned URL's query (its signature and credentials) is redacted. */
+export const redactURL = (url: string): string => {
+  const q = url.indexOf("?");
+  if (q < 0) return url;
+  return /(^|&)sig=|Signature|X-Amz-/i.test(url.slice(q + 1)) ? `${url.slice(0, q)}?<redacted>` : url;
+};
+
 // ---------------------------------------------------------------- errors
 
 export interface FieldError {
@@ -614,9 +621,9 @@ export class Transport implements TransportLike {
         const timedOut = controller.signal.reason === TIMEOUT;
         const neverSent = errorCodes(error).some((code) => NEVER_SENT_CODES.has(code));
         const wrapped = timedOut
-          ? new APITimeoutError(`${method} ${url} timed out after ${timeoutMs} ms.`, { code: "timeout", cause: error })
+          ? new APITimeoutError(`${method} ${redactURL(url)} timed out after ${timeoutMs} ms.`, { code: "timeout", cause: error })
           : new APIConnectionError(
-              `${method} ${url} failed: could not reach ${this.origin} (${describeCause(error)}). Is the server running? Check GRADIATED_BASE_URL or \`baseURL\`.`,
+              `${method} ${redactURL(url)} failed: could not reach ${this.origin} (${describeCause(error)}). Is the server running? Check GRADIATED_BASE_URL or \`baseURL\`.`,
               { code: "connection_error", cause: error },
             );
         if (attempt < maxRetries && (idempotent || (neverSent && !timedOut))) {
@@ -638,7 +645,7 @@ export class Transport implements TransportLike {
           continue;
         }
         throw new RedirectError(
-          `${method} ${url} was redirected (${response.status || "opaque"}) to ${target?.toString() ?? "an unknown location"}; refusing to follow a redirect that leaves ${this.origin} or changes a ${method} request, so credentials are never sent elsewhere. Point GRADIATED_BASE_URL at the final URL.`,
+          `${method} ${redactURL(url)} was redirected (${response.status || "opaque"}) to ${target ? redactURL(target.toString()) : "an unknown location"}; refusing to follow a redirect that leaves ${this.origin} or changes a ${method} request, so credentials are never sent elsewhere. Point GRADIATED_BASE_URL at the final URL.`,
           { status: response.status || undefined, code: "redirect_refused", requestId: response.headers.get("x-request-id") ?? undefined },
         );
       }
@@ -651,7 +658,7 @@ export class Transport implements TransportLike {
           // Body unreadable; the status alone still classifies the error.
         }
         done();
-        const error = makeAPIError(response.status, response.headers, text, { method, url, apiKeyConfigured: authed });
+        const error = makeAPIError(response.status, response.headers, text, { method, url: redactURL(url), apiKeyConfigured: authed });
         // 409 + Retry-After on a keyed request: the first attempt is still running server-side.
         const inProgress = response.status === 409 && keyed && error.retryAfterMs !== undefined;
         // 429 queue_limit is the workspace's queued-jobs cap, not rate limiting: never retried.
@@ -691,7 +698,7 @@ export class Transport implements TransportLike {
   }
 
   private abortError(method: string, url: string, reason: unknown): APIUserAbortError {
-    return new APIUserAbortError(`${method} ${url} was aborted.`, { code: "aborted", cause: reason });
+    return new APIUserAbortError(`${method} ${redactURL(url)} was aborted.`, { code: "aborted", cause: reason });
   }
 
   /** JSON request; resolves to the parsed body (undefined for empty bodies). */
@@ -704,9 +711,9 @@ export class Transport implements TransportLike {
     } catch (error) {
       if (options?.signal?.aborted) throw this.abortError(method, url, options.signal.reason);
       if (signal.reason === TIMEOUT) {
-        throw new APITimeoutError(`${method} ${url} timed out reading the response body.`, { code: "timeout", cause: error });
+        throw new APITimeoutError(`${method} ${redactURL(url)} timed out reading the response body.`, { code: "timeout", cause: error });
       }
-      throw new APIConnectionError(`${method} ${url} failed while reading the response: ${describeCause(error)}`, {
+      throw new APIConnectionError(`${method} ${redactURL(url)} failed while reading the response: ${describeCause(error)}`, {
         code: "connection_error",
         cause: error,
       });
@@ -718,7 +725,7 @@ export class Transport implements TransportLike {
       return JSON.parse(text) as unknown;
     } catch (error) {
       throw new ResponseDecodeError(
-        `${method} ${url} returned ${response.status} with a body that is not JSON: ${text.slice(0, 200)}`,
+        `${method} ${redactURL(url)} returned ${response.status} with a body that is not JSON: ${text.slice(0, 200)}`,
         { status: response.status, code: "invalid_json", requestId: response.headers.get("x-request-id") ?? undefined, cause: error },
       );
     }
@@ -763,9 +770,9 @@ export class Transport implements TransportLike {
           finish();
           if (userSignal?.aborted) controller.error(this.abortError(method, url, userSignal.reason));
           else if (signal.reason === TIMEOUT) {
-            controller.error(new APITimeoutError(`${method} ${url}: the stream sent nothing for ${idleMs} ms.`, { code: "timeout", cause: error }));
+            controller.error(new APITimeoutError(`${method} ${redactURL(url)}: the stream sent nothing for ${idleMs} ms.`, { code: "timeout", cause: error }));
           } else {
-            controller.error(new APIConnectionError(`${method} ${url}: the stream broke: ${describeCause(error)}`, { code: "connection_error", cause: error }));
+            controller.error(new APIConnectionError(`${method} ${redactURL(url)}: the stream broke: ${describeCause(error)}`, { code: "connection_error", cause: error }));
           }
         }
       },
