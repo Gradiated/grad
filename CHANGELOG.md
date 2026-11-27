@@ -7,6 +7,8 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+## [0.2.0-alpha.1] - 2026-11-27
+
 First public release.
 
 ### Added

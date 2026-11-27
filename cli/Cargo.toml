@@ -1,6 +1,6 @@
 [package]
 name = "grad-cli"
-version = "0.2.0"
+version = "0.2.0-alpha.1"
 edition = "2021"
 license = "MIT"
 description = "CLI for the Gradiated training and serving platform"
@@ -19,7 +19,7 @@ base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
 crossterm = "=0.28.1"
 getrandom = "0.2"
-grad-sdk = { path = "../sdks/rust", version = "=0.2.0" }
+grad-sdk = { path = "../sdks/rust", version = "=0.2.0-alpha.1" }
 hex = "0.4"
 ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm"] }
 rpassword = "7"
