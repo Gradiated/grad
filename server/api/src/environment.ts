@@ -8,10 +8,13 @@ const EnvironmentSchema = z.object({
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().optional(),
   S3_ENDPOINT: z.string().optional(),
-  AUTH_MODE: z.enum(["none", "api_key"]).default("none"),
+  AUTH_MODE: z.enum(["none", "api_key", "cloud"]).default("none"),
   ADMIN_API_KEY_HASH: z.string().optional(),
   DEFAULT_WORKSPACE_ID: z.string().default("local"),
-  DEPLOY_MODE: z.enum(["disabled", "local"]).default("local"),
+  DEPLOY_MODE: z.enum(["disabled", "local", "cloud"]).default("local"),
+  BILLING_MODE: z.enum(["noop", "cloud"]).default("noop"),
+  CLOUD_INTERNAL_API_URL: z.string().optional(),
+  CLOUD_SERVICE_TOKEN: z.string().optional(),
   ALLOW_WAVE2_RECIPES: z
     .enum(["true", "false"])
     .default("false")

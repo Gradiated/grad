@@ -1,0 +1,6 @@
+apiVersion: v2
+name: grad
+description: Self-hosted and cloud Helm chart for the Gradiated training platform (grad-server + grad-trainer)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

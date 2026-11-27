@@ -1,0 +1,80 @@
+name: grad-local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: grad
+      POSTGRES_PASSWORD: ${GRAD_POSTGRES_PASSWORD:-grad_local_dev_only}
+      POSTGRES_DB: grad
+    ports:
+      - "127.0.0.1:${GRAD_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - grad-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grad -d grad"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  grad-server:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      DATABASE_URL: "postgres://grad:${GRAD_POSTGRES_PASSWORD:-grad_local_dev_only}@postgres:5432/grad"
+      AUTH_MODE: "${GRAD_AUTH_MODE:-none}"
+      DEPLOY_MODE: "${GRAD_DEPLOY_MODE:-local}"
+      STORAGE_DIR: "/var/lib/grad"
+    ports:
+      - "${GRAD_PORT:-8080}:8080"
+    volumes:
+      - grad-storage:/var/lib/grad
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  grad-trainer:
+    build:
+      context: ./trainer
+      dockerfile: Dockerfile
+      target: cpu
+    depends_on:
+      grad-server:
+        condition: service_healthy
+    environment:
+      GRAD_SERVER_URL: "http://grad-server:8080"
+      GRAD_WORKER_ID: "local-cpu-trainer"
+      GRAD_POLL_INTERVAL_S: "1.0"
+
+  grad-trainer-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ./trainer
+      dockerfile: Dockerfile
+      target: gpu
+    depends_on:
+      grad-server:
+        condition: service_healthy
+    environment:
+      GRAD_SERVER_URL: "http://grad-server:8080"
+      GRAD_WORKER_ID: "local-gpu-trainer"
+      GRAD_POLL_INTERVAL_S: "1.0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  grad-pgdata:
+  grad-storage:

@@ -1,0 +1,86 @@
+api:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/gradiated/grad-server
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  authMode: api_key
+  deployMode: disabled
+  billingMode: noop
+  allowWave2Recipes: false
+  defaultWorkspaceId: default
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+trainer:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/gradiated/grad-trainer
+    tag: "0.1.0-gpu"
+    pullPolicy: IfNotPresent
+  gpuCount: 1
+  pollIntervalSeconds: "1.0"
+  terminationGracePeriodSeconds: 300
+  nodeSelector: {}
+  tolerations: []
+  resources:
+    requests:
+      cpu: "2"
+      memory: 8Gi
+    limits:
+      cpu: "8"
+      memory: 32Gi
+
+database:
+  existingSecret: grad-postgres
+  secretKey: database-url
+
+storage:
+  s3Bucket: ""
+  s3Region: us-east-1
+  s3Endpoint: ""
+
+auth:
+  existingSecret: grad-auth
+  adminKeyHashKey: admin-api-key-hash
+  trainerApiKeyKey: trainer-api-key
+
+cloud:
+  internalApiUrl: ""
+  existingSecret: ""
+  serviceTokenKey: service-token
+
+models:
+  # Set to an internal S3/OCI mirror URI for air-gapped VPC deployments
+  mirrorUri: ""
+
+judge:
+  # Optional OpenAI-compatible base URL for private/air-gapped LLM judges
+  baseUrl: ""
+
+keda:
+  enabled: false
+  minReplicaCount: 0
+  maxReplicaCount: 8
+  pollingInterval: 15
+  cooldownPeriod: 300
+  targetQueuedRuns: "1"
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: grad.internal.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

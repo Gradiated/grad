@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "grad.fullname" . }}-trainer
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+    app.kubernetes.io/component: trainer
+spec:
+  {{- if not .Values.keda.enabled }}
+  replicas: {{ .Values.trainer.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: trainer
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "grad.labels" . | nindent 8 }}
+        app.kubernetes.io/component: trainer
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.trainer.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.trainer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trainer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: grad-trainer
+          image: "{{ .Values.trainer.image.repository }}:{{ .Values.trainer.image.tag }}"
+          imagePullPolicy: {{ .Values.trainer.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "grad.fullname" . }}-config
+          env:
+            - name: GRAD_SERVER_URL
+              value: "http://{{ include "grad.fullname" . }}-api:{{ .Values.api.service.port }}"
+            - name: GRAD_POLL_INTERVAL_S
+              value: {{ .Values.trainer.pollIntervalSeconds | quote }}
+            - name: GRAD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.trainerApiKeyKey }}
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              {{- toYaml .Values.trainer.resources.requests | nindent 14 }}
+              {{- if gt (int .Values.trainer.gpuCount) 0 }}
+              nvidia.com/gpu: {{ .Values.trainer.gpuCount }}
+              {{- end }}
+            limits:
+              {{- toYaml .Values.trainer.resources.limits | nindent 14 }}
+              {{- if gt (int .Values.trainer.gpuCount) 0 }}
+              nvidia.com/gpu: {{ .Values.trainer.gpuCount }}
+              {{- end }}

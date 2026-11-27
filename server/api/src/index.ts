@@ -1,4 +1,5 @@
 export * from "./adapters.js";
+export * from "./adapters-cloud.js";
 export * from "./app.js";
 export * from "./contracts.js";
 export * from "./env-hub.js";

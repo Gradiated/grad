@@ -133,6 +133,38 @@ jobs:
       - name: Run full cross-language E2E contract suite (Python + TS + Go + Rust CLI)
         run: python3 tests/contract/run_e2e.py
 
+  packaging:
+    name: Docker Compose & Helm Packaging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install helm via mise
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          install_args: helm
+
+      - name: Validate Docker Compose configuration
+        run: docker compose -f server/docker-compose.yml config --quiet
+
+      - name: Lint and template Helm chart (default and air-gapped/KEDA profiles)
+        run: |
+          helm lint server/helm/grad --strict
+          helm template grad server/helm/grad > /dev/null
+          helm template grad server/helm/grad \
+            --set keda.enabled=true \
+            --set ingress.enabled=true \
+            --set storage.s3Bucket=airgap-artifacts \
+            --set models.mirrorUri=s3://airgap/models \
+            --set judge.baseUrl=https://vllm.internal/v1 > /dev/null
+          helm template grad server/helm/grad \
+            --set api.authMode=cloud \
+            --set api.billingMode=cloud \
+            --set api.deployMode=cloud \
+            --set cloud.internalApiUrl=https://api.gradiated.com \
+            --set cloud.existingSecret=grad-cloud > /dev/null
+
   secrets:
     name: Secret Scan
     runs-on: ubuntu-latest

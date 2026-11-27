@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "grad.fullname" . }}-config
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+data:
+  HOST: "0.0.0.0"
+  PORT: {{ .Values.api.service.port | quote }}
+  AUTH_MODE: {{ .Values.api.authMode | quote }}
+  DEPLOY_MODE: {{ .Values.api.deployMode | quote }}
+  BILLING_MODE: {{ .Values.api.billingMode | quote }}
+  DEFAULT_WORKSPACE_ID: {{ .Values.api.defaultWorkspaceId | quote }}
+  ALLOW_WAVE2_RECIPES: {{ .Values.api.allowWave2Recipes | quote }}
+  STORAGE_DIR: "/var/lib/grad"
+  {{- if .Values.storage.s3Bucket }}
+  S3_BUCKET: {{ .Values.storage.s3Bucket | quote }}
+  S3_REGION: {{ .Values.storage.s3Region | quote }}
+  {{- end }}
+  {{- if .Values.storage.s3Endpoint }}
+  S3_ENDPOINT: {{ .Values.storage.s3Endpoint | quote }}
+  {{- end }}
+  {{- if .Values.cloud.internalApiUrl }}
+  CLOUD_INTERNAL_API_URL: {{ .Values.cloud.internalApiUrl | quote }}
+  {{- end }}
+  {{- if .Values.models.mirrorUri }}
+  GRAD_MODELS_MIRROR_URI: {{ .Values.models.mirrorUri | quote }}
+  {{- end }}
+  {{- if .Values.judge.baseUrl }}
+  GRAD_JUDGE_BASE_URL: {{ .Values.judge.baseUrl | quote }}
+  {{- end }}

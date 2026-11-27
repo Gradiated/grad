@@ -1,0 +1,8 @@
+Gradiated training platform deployed!
+
+API Service:
+  http://{{ include "grad.fullname" . }}-api.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.api.service.port }}
+
+Verify readiness:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "grad.fullname" . }}-api 8080:{{ .Values.api.service.port }}
+  curl http://127.0.0.1:8080/health/ready
