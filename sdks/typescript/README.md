@@ -76,7 +76,8 @@ map to `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`,
 `RateLimitError`, `ServerError`, `InferenceUnavailableError`; waits throw
 `RunFailedError`, `EvalFailedError`, `ImportFailedError`, `ArtifactImportFailedError` or
 `WaitTimeoutError`. Requests retry twice on 408/429/5xx with jittered
-backoff that honours `Retry-After`; every POST carries one `Idempotency-Key`
+backoff that honours `Retry-After`, except a 429 `queue_limit` (the workspace's
+queued-jobs cap), which throws `QueueLimitError` (a `RateLimitError`) at once; every POST carries one `Idempotency-Key`
 (a UUIDv4, or `{ idempotencyKey }`) across its retries, so the server replays
 the first response instead of running it twice. Redirects that leave the API
 origin are refused, so the key is never sent elsewhere. `timeoutMs` (default
