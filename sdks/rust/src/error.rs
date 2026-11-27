@@ -151,6 +151,12 @@ pub enum Error {
         status: String,
         after: Duration,
     },
+    /// The server handed back a cursor this listing already followed; paging
+    /// stopped instead of looping forever.
+    PaginationLoop { path: String, cursor: String },
+    /// A collect-all listing exceeded its page budget; paging stopped instead
+    /// of buffering an unbounded result.
+    PaginationLimit { path: String, pages: usize },
     /// Invalid client configuration (base URL, config file, missing key).
     Config(String),
     /// Invalid argument passed to an SDK call.
@@ -201,6 +207,8 @@ impl Error {
             Error::EvalFailed(ev) => format!("eval_{}", ev.status.as_str()),
             Error::ImportFailed(_) => "import_failed".into(),
             Error::WaitTimeout { .. } => "wait_timeout".into(),
+            Error::PaginationLoop { .. } => "pagination_loop".into(),
+            Error::PaginationLimit { .. } => "pagination_limit".into(),
             Error::Config(_) => "config_error".into(),
             Error::InvalidInput(_) => "invalid_input".into(),
             Error::Io { .. } => "io_error".into(),
@@ -340,6 +348,16 @@ impl fmt::Display for Error {
                 f,
                 "gave up waiting for {} {} after {:.0?} (still {}); it keeps going on the server",
                 what, id, after, status
+            ),
+            Error::PaginationLoop { path, cursor } => write!(
+                f,
+                "GET {} repeated cursor {:?}; stopped paging to avoid an endless loop (server pagination bug)",
+                path, cursor
+            ),
+            Error::PaginationLimit { path, pages } => write!(
+                f,
+                "GET {} still had more results after {} pages; stopped paging (narrow the listing or page with --cursor)",
+                path, pages
             ),
             Error::Config(msg) => write!(f, "{}", msg),
             Error::InvalidInput(msg) => write!(f, "{}", msg),

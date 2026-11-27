@@ -133,7 +133,72 @@ fn body<T: serde::Serialize>(v: &T) -> Result<Value> {
     serde_json::to_value(v).map_err(enc)
 }
 
-/// Follow `next_cursor` until exhausted (bounded to `max_pages`).
+/// Tracks the cursors one listing has followed so a server that repeats a
+/// cursor (or hands out cursors with empty pages) cannot make a pager loop.
+#[derive(Debug, Default)]
+pub struct CursorTrail {
+    path: String,
+    seen: std::collections::HashSet<String>,
+    pages: usize,
+}
+
+impl CursorTrail {
+    pub fn new(path: impl Into<String>) -> Self {
+        CursorTrail {
+            path: path.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Record a page that was fetched with `sent` and returned `items` rows and
+    /// `next`. Returns the cursor to fetch next, `None` when paging is done
+    /// (no cursor, or an empty page), or `Error::PaginationLoop` when `next`
+    /// was already followed (or equals the cursor that produced this page).
+    pub fn advance(
+        &mut self,
+        sent: Option<&str>,
+        items: usize,
+        next: Option<&str>,
+    ) -> Result<Option<String>> {
+        self.pages += 1;
+        if let Some(s) = sent {
+            self.seen.insert(s.to_string());
+        }
+        let next = match next {
+            Some(n) if !n.is_empty() => n,
+            _ => return Ok(None),
+        };
+        if self.seen.contains(next) {
+            return Err(Error::PaginationLoop {
+                path: self.path.clone(),
+                cursor: next.to_string(),
+            });
+        }
+        if items == 0 {
+            return Ok(None);
+        }
+        Ok(Some(next.to_string()))
+    }
+
+    /// Pages recorded so far.
+    pub fn pages(&self) -> usize {
+        self.pages
+    }
+
+    fn limit_error(&self) -> Error {
+        Error::PaginationLimit {
+            path: self.path.clone(),
+            pages: self.pages,
+        }
+    }
+}
+
+/// Page budget for collect-all helpers (200 rows per page).
+const MAX_COLLECT_PAGES: usize = 500;
+
+/// Follow `next_cursor` until exhausted. Stops on an empty page, fails with
+/// `PaginationLoop` on a repeated cursor and `PaginationLimit` past
+/// `MAX_COLLECT_PAGES` pages, so the result is always bounded.
 async fn collect_all<T: DeserializeOwned>(
     c: &Client,
     path: &str,
@@ -141,19 +206,23 @@ async fn collect_all<T: DeserializeOwned>(
 ) -> Result<Vec<T>> {
     let mut out = Vec::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..10_000 {
+    let mut trail = CursorTrail::new(path);
+    loop {
+        if trail.pages() >= MAX_COLLECT_PAGES {
+            return Err(trail.limit_error());
+        }
         let req = Req::get(path)
             .query(extra.clone())
             .param("limit", 200)
             .opt_param("cursor", cursor.clone());
         let page: Page<T> = c.t().json(req).await?;
+        let n = page.data.len();
         out.extend(page.data);
-        match page.next_cursor {
-            Some(n) if !n.is_empty() => cursor = Some(n),
-            _ => return Ok(out),
+        match trail.advance(cursor.as_deref(), n, page.next_cursor.as_deref())? {
+            Some(next) => cursor = Some(next),
+            None => return Ok(out),
         }
     }
-    Ok(out)
 }
 
 impl Models<'_> {
@@ -571,23 +640,27 @@ impl Runs<'_> {
 
     /// Find the newest run with this `name` (runs are addressed by id on the wire).
     pub async fn find_by_name(&self, name: &str) -> Result<Option<Run>> {
-        let mut cursor = None;
-        for _ in 0..100 {
+        let mut cursor: Option<String> = None;
+        let mut trail = CursorTrail::new("/v1/runs");
+        loop {
+            if trail.pages() >= MAX_COLLECT_PAGES {
+                return Err(trail.limit_error());
+            }
             let page = self
                 .list(&ListParams {
                     limit: Some(200),
-                    cursor,
+                    cursor: cursor.clone(),
                 })
                 .await?;
+            let n = page.data.len();
             if let Some(r) = page.data.into_iter().find(|r| r.name == name) {
                 return Ok(Some(r));
             }
-            match page.next_cursor {
-                Some(c) if !c.is_empty() => cursor = Some(c),
-                _ => return Ok(None),
+            match trail.advance(cursor.as_deref(), n, page.next_cursor.as_deref())? {
+                Some(next) => cursor = Some(next),
+                None => return Ok(None),
             }
         }
-        Ok(None)
     }
 
     pub async fn cancel(&self, id: &str) -> Result<Run> {
@@ -725,8 +798,16 @@ impl Runs<'_> {
                             on_metric(p);
                         }
                     }
-                    if page.next_cursor.is_some() {
-                        cursor = page.next_cursor.clone();
+                    // Tail semantics: an empty page echoes the cursor back (no
+                    // new points yet), but a non-empty page must advance it.
+                    if let Some(next) = page.next_cursor.as_deref().filter(|n| !n.is_empty()) {
+                        if !page.data.is_empty() && cursor.as_deref() == Some(next) {
+                            return Err(Error::PaginationLoop {
+                                path: format!("/v1/runs/{}/metrics", id),
+                                cursor: next.to_string(),
+                            });
+                        }
+                        cursor = Some(next.to_string());
                     }
                     if page.status.is_terminal() {
                         let run = self.get(id).await?;

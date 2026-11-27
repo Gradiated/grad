@@ -478,13 +478,13 @@ async fn wait_with_metrics_falls_back_to_polling() {
             "/v1/runs/r1/metrics" if sse_req => Reply::json(200, json!({"data": []})),
             "/v1/runs/r1/metrics" => {
                 let i = p2.fetch_add(1, Ordering::SeqCst);
-                let (data, status) = match i {
-                    0 => (vec![metric(1, 1), metric(2, 2)], "running"),
-                    _ => (vec![metric(2, 2), metric(3, 3)], "completed"),
+                let (data, status, next) = match i {
+                    0 => (vec![metric(1, 1), metric(2, 2)], "running", "c2"),
+                    _ => (vec![metric(2, 2), metric(3, 3)], "completed", "c3"),
                 };
                 Reply::json(
                     200,
-                    json!({"run_id": "r1", "status": status, "data": data, "next_cursor": "c1"}),
+                    json!({"run_id": "r1", "status": status, "data": data, "next_cursor": next}),
                 )
             }
             "/v1/runs/r1" => Reply::json(200, run_json("r1", "completed")),
@@ -508,7 +508,7 @@ async fn wait_with_metrics_falls_back_to_polling() {
     assert!(srv
         .requests()
         .iter()
-        .any(|r| r.query().contains("cursor=c1")));
+        .any(|r| r.query().contains("cursor=c2")));
 
     let e = c
         .runs()
@@ -1228,4 +1228,143 @@ async fn resources_send_documented_wire_shapes() {
         .unwrap()
         .header("authorization")
         .is_none());
+}
+
+fn is_loop(e: &Error, cursor: &str) -> bool {
+    matches!(e, Error::PaginationLoop { cursor: c, .. } if c == cursor)
+}
+
+/// Regression for the OOM incident: a fake that always returns the same
+/// `next_cursor` must end every pager with a typed error after two pages.
+#[tokio::test]
+async fn pagers_stop_on_a_repeated_cursor() {
+    let srv = MockServer::start(|r| match r.path() {
+        "/v1/runs/r1/metrics" => Reply::json(
+            200,
+            json!({"run_id": "r1", "status": "running", "data": [metric(1, 1)], "next_cursor": "same"}),
+        ),
+        "/v1/runs/r1" => Reply::json(200, run_json("r1", "running")),
+        "/v1/runs" | "/v1/datasets" | "/v1/keys" => Reply::json(
+            200,
+            json!({"data": [{"id": "r1", "name": "a", "version": 1, "record_count": 1,
+                             "prefix": "grad_x", "scopes": []}], "next_cursor": "same"}),
+        ),
+        _ => Reply::problem(404, "nf", "nf"),
+    });
+    let c = client(&srv.url);
+
+    let e = c.runs().list_all().await.unwrap_err();
+    assert!(is_loop(&e, "same"), "{:?}", e);
+    assert_eq!(e.code(), "pagination_loop");
+    assert!(
+        e.to_string().contains("/v1/runs") && e.to_string().contains("same"),
+        "{}",
+        e
+    );
+    assert_eq!(srv.requests().len(), 2, "stops after the cursor repeats");
+
+    let e = c.runs().find_by_name("zzz").await.unwrap_err();
+    assert!(is_loop(&e, "same"), "{:?}", e);
+    let e = c.datasets().list_all().await.unwrap_err();
+    assert!(is_loop(&e, "same"), "{:?}", e);
+    let e = c.keys().list_all().await.unwrap_err();
+    assert!(is_loop(&e, "same"), "{:?}", e);
+
+    // The metrics tail: a non-empty page that does not advance the cursor.
+    let before = srv.requests().len();
+    let e = c
+        .runs()
+        .wait_with_metrics("r1", &fast_wait(), |_| {})
+        .await
+        .unwrap_err();
+    assert!(is_loop(&e, "same"), "{:?}", e);
+    let polls = srv.requests()[before..]
+        .iter()
+        .filter(|r| r.path() == "/v1/runs/r1/metrics")
+        .count();
+    assert!(polls <= 3, "metrics polls: {}", polls);
+}
+
+#[tokio::test]
+async fn pagers_stop_on_an_empty_page_and_tail_tolerates_an_echoed_cursor() {
+    let n = Arc::new(AtomicUsize::new(0));
+    let n2 = n.clone();
+    let srv = MockServer::start(move |r| match r.path() {
+        // Always hands out a fresh cursor, but with no rows.
+        "/v1/runs" => {
+            let i = n2.fetch_add(1, Ordering::SeqCst);
+            Reply::json(200, json!({"data": [], "next_cursor": format!("c{}", i)}))
+        }
+        // Tail: empty pages echo the cursor until the run completes.
+        "/v1/runs/r1/metrics" => {
+            let i = n2.fetch_add(1, Ordering::SeqCst);
+            if i < 4 {
+                Reply::json(
+                    200,
+                    json!({"run_id": "r1", "status": "running", "data": [], "next_cursor": "t1"}),
+                )
+            } else {
+                Reply::json(
+                    200,
+                    json!({"run_id": "r1", "status": "completed", "data": [metric(1, 1)], "next_cursor": "t2"}),
+                )
+            }
+        }
+        "/v1/runs/r1" => Reply::json(200, run_json("r1", "completed")),
+        _ => Reply::problem(404, "nf", "nf"),
+    });
+    let c = client(&srv.url);
+    assert!(c.runs().list_all().await.unwrap().is_empty());
+    assert_eq!(srv.requests().len(), 1);
+    assert!(c.runs().find_by_name("x").await.unwrap().is_none());
+    assert_eq!(srv.requests().len(), 2);
+    let run = c
+        .runs()
+        .wait_with_metrics("r1", &fast_wait(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+}
+
+#[tokio::test]
+async fn collect_all_is_bounded_by_a_page_budget() {
+    let n = Arc::new(AtomicUsize::new(0));
+    let n2 = n.clone();
+    // Finite: the client is asserted to stop at its page budget.
+    let srv = MockServer::start(move |_| {
+        let i = n2.fetch_add(1, Ordering::SeqCst);
+        Reply::json(
+            200,
+            json!({"data": [{"id": format!("r{}", i), "name": "a"}], "next_cursor": format!("c{}", i)}),
+        )
+    });
+    let c = client(&srv.url);
+    let e = c.runs().list_all().await.unwrap_err();
+    match &e {
+        Error::PaginationLimit { path, pages } => {
+            assert_eq!(path, "/v1/runs");
+            assert_eq!(*pages, 500);
+        }
+        other => panic!("{:?}", other),
+    }
+    assert_eq!(e.code(), "pagination_limit");
+    assert!(e.to_string().contains("500 pages"), "{}", e);
+    assert_eq!(n.load(Ordering::SeqCst), 500);
+}
+
+#[test]
+fn cursor_trail_rules() {
+    let mut t = CursorTrail::new("/v1/x");
+    assert_eq!(t.advance(None, 3, Some("a")).unwrap().as_deref(), Some("a"));
+    assert_eq!(
+        t.advance(Some("a"), 3, Some("b")).unwrap().as_deref(),
+        Some("b")
+    );
+    assert!(t.advance(Some("b"), 3, Some("a")).is_err(), "older cursor");
+    let mut t = CursorTrail::new("/v1/x");
+    assert!(t.advance(Some("a"), 1, Some("a")).is_err(), "echoed cursor");
+    assert_eq!(t.advance(None, 0, Some("z")).unwrap(), None, "empty page");
+    assert_eq!(t.advance(None, 5, Some("")).unwrap(), None);
+    assert_eq!(t.advance(None, 5, None).unwrap(), None);
+    assert_eq!(t.pages(), 4);
 }
