@@ -1,5 +1,5 @@
 import type { AuthPrincipal } from "../adapters.js";
-import { costForTokens } from "../catalog.js";
+import { costMicroUsd, toMicroUsd, usd } from "../catalog.js";
 import { addDays, addSeconds } from "../clock.js";
 import {
   ArtifactFormatSchema,
@@ -88,13 +88,16 @@ export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
   }
 };
 
-const runCost = (run: RunRecord, attemptTokens = run.attempt_tokens): number =>
-  Number(
-    (
-      run.billed_cost_usd +
-      costForTokens(attemptTokens, run.price_per_million_tokens)
-    ).toFixed(6),
-  );
+/** Micro-USD spent so far: billed attempts plus the open attempt's tokens. */
+const runCostMicro = (
+  run: RunRecord,
+  attemptTokens = run.attempt_tokens,
+): number =>
+  run.billed_micro_usd +
+  costMicroUsd(attemptTokens, run.price_per_million_tokens);
+
+const maxCostUsd = (run: RunRecord): number | null =>
+  run.max_cost_micro_usd === null ? null : usd(run.max_cost_micro_usd);
 
 export const toPublicRun = (run: RunRecord): Run => ({
   id: run.id,
@@ -106,10 +109,10 @@ export const toPublicRun = (run: RunRecord): Run => ({
   recipe_kind: run.recipe_kind,
   status: run.status,
   resolved_config: run.resolved_config,
-  max_cost_usd: run.max_cost_usd,
+  max_cost_usd: maxCostUsd(run),
   price_per_million_tokens: run.price_per_million_tokens,
   tokens_processed: run.billed_tokens + run.attempt_tokens,
-  cost_usd: runCost(run),
+  cost_usd: usd(runCostMicro(run)),
   current_step: run.current_step,
   total_steps: run.total_steps,
   attempt: run.attempt,
@@ -135,7 +138,10 @@ export const toPublicCheckpoint = ({
 
 const stopReason = (run: RunRecord): StopReason => {
   if (run.status === "cancelled") return "cancelled";
-  if (run.max_cost_usd !== null && runCost(run) >= run.max_cost_usd)
+  if (
+    run.max_cost_micro_usd !== null &&
+    runCostMicro(run) >= run.max_cost_micro_usd
+  )
     return "budget";
 
   return null;
@@ -374,13 +380,13 @@ export const createRunLifecycle = (
     patch: RunPatch,
   ): Promise<RunRecord> => {
     const now = clock.now();
-    const attemptCost = costForTokens(tokens, run.price_per_million_tokens);
+    const attemptMicro = costMicroUsd(tokens, run.price_per_million_tokens);
     const updated = await tx.runs.update(
       run.id,
       {
         ...patch,
         billed_tokens: run.billed_tokens + tokens,
-        billed_cost_usd: Number((run.billed_cost_usd + attemptCost).toFixed(6)),
+        billed_micro_usd: run.billed_micro_usd + attemptMicro,
         attempt_tokens: 0,
         worker_id: null,
         lease_expires_at: null,
@@ -399,7 +405,7 @@ export const createRunLifecycle = (
       runId: run.id,
       attempt: run.attempt,
       tokens,
-      costUsd: attemptCost,
+      costMicroUsd: attemptMicro,
     });
     if (TERMINAL.includes(updated.status)) {
       await pinCheckpoints(tx, updated, now);
@@ -439,11 +445,9 @@ export const createRunLifecycle = (
       import: null,
       price_per_million_tokens: run.price_per_million_tokens,
       max_cost_usd:
-        run.max_cost_usd === null
+        run.max_cost_micro_usd === null
           ? null
-          : Number(
-              Math.max(0, run.max_cost_usd - run.billed_cost_usd).toFixed(6),
-            ),
+          : usd(Math.max(0, run.max_cost_micro_usd - run.billed_micro_usd)),
       dataset: {
         version: run.dataset_version,
         record_count:
@@ -543,7 +547,10 @@ export const createRunLifecycle = (
         resolvedConfig: labels
           ? { ...plan.resolved_config, label_eval_id: labels.id }
           : plan.resolved_config,
-        maxCostUsd: request.max_cost_usd ?? null,
+        maxCostMicroUsd:
+          request.max_cost_usd === undefined
+            ? null
+            : toMicroUsd(request.max_cost_usd),
         pricePerMillionTokens: plan.price_per_million_tokens,
         totalSteps: plan.estimated_steps,
         maxAttempts: settings.maxAttempts,
@@ -633,7 +640,7 @@ export const createRunLifecycle = (
       return toPublicRun(updated);
     },
 
-    resume: async (workspaceId, id, maxCostUsd) => {
+    resume: async (workspaceId, id, newCapUsd) => {
       const run = await loadRun(workspaceId, id);
       if (
         !["stopped_budget", "failed", "cancelled"].includes(run.status) ||
@@ -645,22 +652,25 @@ export const createRunLifecycle = (
         );
       }
 
-      const cap = maxCostUsd ?? run.max_cost_usd;
-      const spent = run.billed_cost_usd;
+      const cap =
+        newCapUsd === undefined
+          ? run.max_cost_micro_usd
+          : toMicroUsd(newCapUsd);
+      const spent = run.billed_micro_usd;
       if (
         cap !== null &&
         (spent >= cap ||
-          (run.status === "stopped_budget" && maxCostUsd === undefined))
+          (run.status === "stopped_budget" && newCapUsd === undefined))
       ) {
         throw conflict(
           "budget_exhausted",
-          `Run '${id}' has spent $${spent.toFixed(4)} of its $${(run.max_cost_usd ?? cap).toFixed(4)} cap; resume with a higher max_cost_usd.`,
+          `Run '${id}' has spent $${usd(spent).toFixed(4)} of its $${usd(run.max_cost_micro_usd ?? cap).toFixed(4)} cap; resume with a higher max_cost_usd.`,
         );
       }
 
       const check = await deps.billing.checkCanStartRun(
         workspaceId,
-        cap === null ? 0 : Math.max(0, cap - spent),
+        cap === null ? 0 : usd(Math.max(0, cap - spent)),
       );
       if (!check.allowed) {
         throw forbidden(
@@ -673,7 +683,7 @@ export const createRunLifecycle = (
         id,
         {
           status: "queued",
-          max_cost_usd: cap,
+          max_cost_micro_usd: cap,
           error: null,
           failed_attempts: 0,
           finished_at: null,
@@ -772,8 +782,8 @@ export const createRunLifecycle = (
         if (!run) return null;
 
         if (
-          run.max_cost_usd !== null &&
-          run.billed_cost_usd >= run.max_cost_usd
+          run.max_cost_micro_usd !== null &&
+          run.billed_micro_usd >= run.max_cost_micro_usd
         ) {
           await store.transaction((tx) =>
             closeAttempt(tx, run, 0, {
@@ -830,7 +840,7 @@ export const createRunLifecycle = (
     progress: async (principal, id, body) => {
       const run = await loadLeased(principal, id, body.worker_id, body.attempt);
       const attemptTokens = Math.max(run.attempt_tokens, body.metric.tokens);
-      const cost = runCost(run, attemptTokens);
+      const cost = usd(runCostMicro(run, attemptTokens));
       const point = await store.metrics.append(run.id, run.attempt, {
         ...body.metric,
         tokens: run.billed_tokens + attemptTokens,

@@ -413,7 +413,7 @@ describe("eval service", () => {
       error: null,
       prompt_tokens: 1,
       completion_tokens: 1,
-      cost_usd: 0,
+      cost_micro_usd: 0,
       created_at: t.clock.now().toISOString(),
     });
 

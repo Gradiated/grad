@@ -2482,6 +2482,8 @@ components:
         tokens:
           type: integer
           minimum: 0
+          description: "Tokens processed by this attempt so far (not the run total): a resumed attempt starts at 0, so tokens
+            restored from a checkpoint are never billed twice."
         cost_usd:
           type: number
           minimum: 0

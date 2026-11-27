@@ -431,7 +431,7 @@ describe("aggregation", () => {
     error: score === null ? "boom" : null,
     prompt_tokens: 10,
     completion_tokens: 10,
-    cost_usd: 0.001,
+    cost_micro_usd: 1000,
     created_at: "2026-11-27T00:00:00.000Z",
   });
 
@@ -480,6 +480,6 @@ describe("aggregation", () => {
     expect(
       agg.results.find((r) => r.model === "base" && r.task_index === 1)?.passed,
     ).toBe(false);
-    expect(agg.totalCostUsd).toBeCloseTo(0.008, 6);
+    expect(agg.totalCostMicroUsd).toBe(8000);
   });
 });

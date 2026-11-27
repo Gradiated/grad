@@ -138,7 +138,21 @@ export const createModelCatalog = (extraModelsJson?: string): ModelCatalog => {
   };
 };
 
+/**
+ * The one place cost is computed. Money is stored as integer micro-USD; a
+ * price in USD per million tokens is exactly micro-USD per token.
+ */
+export const costMicroUsd = (tokens: number, pricePerMillion: number): number =>
+  Math.round(tokens * pricePerMillion);
+
+/** Micro-USD → USD for the wire (the API and the Cloud speak dollars). */
+export const usd = (microUsd: number): number => microUsd / 1_000_000;
+
+/** USD from the wire → micro-USD; a positive amount never rounds to 0. */
+export const toMicroUsd = (amountUsd: number): number =>
+  amountUsd > 0 ? Math.max(1, Math.round(amountUsd * 1_000_000)) : 0;
+
 export const costForTokens = (
   tokens: number,
   pricePerMillion: number,
-): number => Number(((tokens / 1_000_000) * pricePerMillion).toFixed(6));
+): number => usd(costMicroUsd(tokens, pricePerMillion));

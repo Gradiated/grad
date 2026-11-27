@@ -95,7 +95,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         datasetVersion: 0,
         recipeKind: overrides.recipe ?? "sft",
         resolvedConfig: config,
-        maxCostUsd: 10,
+        maxCostMicroUsd: 10_000_000,
         pricePerMillionTokens: 0.4,
         totalSteps: 100,
         maxAttempts: 3,
@@ -414,12 +414,12 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         attempt: 0,
         failed_attempts: 0,
         billed_tokens: 0,
-        billed_cost_usd: 0,
+        billed_micro_usd: 0,
         attempt_tokens: 0,
         lease_seconds: 0,
         worker_id: null,
         latest_metric: null,
-        max_cost_usd: 10,
+        max_cost_micro_usd: 10_000_000,
         price_per_million_tokens: 0.4,
         max_attempts: 3,
         resolved_config: config,
@@ -437,7 +437,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           current_step: 4,
           latest_metric: point as never,
           eval_report: evalReport({ acc: 0.9 }),
-          billed_cost_usd: 1.25,
+          billed_micro_usd: 1_250_000,
           billed_tokens: 12345678901,
           finished_at: clock.now().toISOString(),
         },
@@ -446,7 +446,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(updated).toMatchObject({
         current_step: 4,
         eval_report: evalReport({ acc: 0.9 }),
-        billed_cost_usd: 1.25,
+        billed_micro_usd: 1_250_000,
         billed_tokens: 12345678901,
         updated_at: clock.now().toISOString(),
         finished_at: clock.now().toISOString(),
@@ -1124,7 +1124,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         total_outputs: 0,
         generated: 0,
         summary: [],
-        total_cost_usd: 0,
+        total_cost_micro_usd: 0,
         error: null,
         completed_at: null,
         limit: null,
@@ -1259,7 +1259,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         error: extra.error ?? null,
         prompt_tokens: 5,
         completion_tokens: 7,
-        cost_usd: 0.001,
+        cost_micro_usd: 1000,
         created_at: clock.now().toISOString(),
       });
       const o1 = output("m1", 0, 0);
@@ -1399,7 +1399,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         runId: "run_1",
         attempt: 1,
         tokens: 1000,
-        costUsd: 0.0004,
+        costMicroUsd: 400,
       };
       const first = await store.billing.enqueue(input);
       const again = await store.billing.enqueue({ ...input, tokens: 5 });
@@ -1408,7 +1408,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         status: "pending",
         attempts: 0,
         tokens: 1000,
-        cost_usd: 0.0004,
+        cost_micro_usd: 400,
       });
       clock.advance(1);
       const second = await store.billing.enqueue({
@@ -1604,7 +1604,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
               runId: committed!.id,
               attempt: 1,
               tokens: 1,
-              costUsd: 0,
+              costMicroUsd: 0,
             });
           });
           throw new Error("boom");
@@ -1624,7 +1624,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
             runId: committed!.id,
             attempt: 1,
             tokens: 1,
-            costUsd: 0,
+            costMicroUsd: 0,
           });
           return "ok";
         }),

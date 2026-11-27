@@ -333,6 +333,29 @@ describe("run lifecycle and worker protocol", () => {
     expect(final.body.tokens_processed).toBe(2_050_000);
   });
 
+  it("stores money as integer micro-USD: run cost equals the sum of billed attempts exactly", async () => {
+    const run = await createSftRun(t);
+    for (let i = 0; i < 3; i += 1) {
+      const job = await worker.claim();
+      await worker.complete(job!, {
+        status: "abandoned",
+        tokens_processed: 333_333,
+      });
+    }
+    await settle();
+    const entries = await t.deps.store.billing.listByRun(run.id);
+    expect(entries.map((e) => e.cost_micro_usd)).toEqual([
+      333_333, 333_333, 333_333,
+    ]);
+    const stored = await t.deps.store.runs.getById(run.id);
+    expect(stored?.billed_micro_usd).toBe(999_999);
+    const final = await t.json<{ cost_usd: number }>(`/v1/runs/${run.id}`);
+    expect(final.body.cost_usd).toBe(0.999999);
+    expect(billing.calls.map((c) => c.costUsd)).toEqual([
+      0.333333, 0.333333, 0.333333,
+    ]);
+  });
+
   it("marks a run stopped_budget at claim when a lowered cap is already spent", async () => {
     const run = await createSftRun(t, { maxCostUsd: 5 });
     const job = await worker.claim();
@@ -343,7 +366,7 @@ describe("run lifecycle and worker protocol", () => {
     });
     await t.deps.store.runs.update(run.id, {
       status: "queued",
-      max_cost_usd: 2,
+      max_cost_micro_usd: 2_000_000,
       finished_at: null,
     });
 

@@ -171,14 +171,14 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => ({
     await db.query(
       `INSERT INTO grad_eval_outputs
          (id, eval_id, task_index, task_id, model, sample_index, input, output, expected_output,
-          scores, error, prompt_tokens, completion_tokens, cost_usd, created_at)
+          scores, error, prompt_tokens, completion_tokens, cost_micro_usd, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14,
                $15::timestamptz)
        ON CONFLICT (eval_id, model, task_index, sample_index) DO UPDATE SET
          task_id = EXCLUDED.task_id, input = EXCLUDED.input, output = EXCLUDED.output,
          expected_output = EXCLUDED.expected_output, scores = EXCLUDED.scores,
          error = EXCLUDED.error, prompt_tokens = EXCLUDED.prompt_tokens,
-         completion_tokens = EXCLUDED.completion_tokens, cost_usd = EXCLUDED.cost_usd,
+         completion_tokens = EXCLUDED.completion_tokens, cost_micro_usd = EXCLUDED.cost_micro_usd,
          created_at = EXCLUDED.created_at`,
       [
         o.id,
@@ -194,7 +194,7 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => ({
         o.error,
         o.prompt_tokens,
         o.completion_tokens,
-        o.cost_usd,
+        o.cost_micro_usd,
         o.created_at,
       ],
     );

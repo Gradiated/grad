@@ -319,7 +319,10 @@ export const MetricPointInputSchema = z
     grad_norm: z.number().nullable().optional(),
     lr: z.number().nullable().optional(),
     tokens_per_sec: z.number().nullable().optional(),
-    tokens: z.number().int().min(0),
+    tokens: z.number().int().min(0).openapi({
+      description:
+        "Tokens processed by this attempt so far (not the run total): a resumed attempt starts at 0, so tokens restored from a checkpoint are never billed twice.",
+    }),
     cost_usd: z.number().min(0).optional(),
     timestamp: IsoTimestampSchema,
   })

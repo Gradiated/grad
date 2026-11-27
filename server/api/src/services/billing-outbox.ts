@@ -1,3 +1,4 @@
+import { usd } from "../catalog.js";
 import { addSeconds } from "../clock.js";
 import type { AppDependencies } from "../deps.js";
 import { errorMessage } from "../errors.js";
@@ -18,7 +19,7 @@ export interface BillingOutbox {
       runId: string;
       attempt: number;
       tokens: number;
-      costUsd: number;
+      costMicroUsd: number;
     },
   ): Promise<void>;
   /** Records a finished eval's total usage (once per eval). */
@@ -28,7 +29,7 @@ export interface BillingOutbox {
       workspaceId: string;
       evalId: string;
       tokens: number;
-      costUsd: number;
+      costMicroUsd: number;
     },
   ): Promise<void>;
   /** Sends due usage records; failures are retried with exponential backoff. */
@@ -59,7 +60,7 @@ export const createBillingOutbox = (deps: AppDependencies): BillingOutbox => {
           const usage = {
             workspaceId: entry.workspace_id,
             tokensProcessed: entry.tokens,
-            costUsd: entry.cost_usd,
+            costUsd: usd(entry.cost_micro_usd),
             idempotencyKey: entry.idempotency_key,
           };
           await (entry.kind === "eval"
@@ -92,7 +93,7 @@ export const createBillingOutbox = (deps: AppDependencies): BillingOutbox => {
 
   return {
     enqueueUsage: async (tx, input) => {
-      if (input.tokens <= 0 && input.costUsd <= 0) return;
+      if (input.tokens <= 0 && input.costMicroUsd <= 0) return;
 
       await tx.billing.enqueue({
         idempotencyKey: usageIdempotencyKey(input.runId, input.attempt),
@@ -101,11 +102,11 @@ export const createBillingOutbox = (deps: AppDependencies): BillingOutbox => {
         runId: input.runId,
         attempt: input.attempt,
         tokens: input.tokens,
-        costUsd: input.costUsd,
+        costMicroUsd: input.costMicroUsd,
       });
     },
     enqueueEvalUsage: async (repos, input) => {
-      if (input.tokens <= 0 && input.costUsd <= 0) return;
+      if (input.tokens <= 0 && input.costMicroUsd <= 0) return;
 
       await repos.billing.enqueue({
         idempotencyKey: evalUsageIdempotencyKey(input.evalId),
@@ -114,7 +115,7 @@ export const createBillingOutbox = (deps: AppDependencies): BillingOutbox => {
         runId: input.evalId,
         attempt: 1,
         tokens: input.tokens,
-        costUsd: input.costUsd,
+        costMicroUsd: input.costMicroUsd,
       });
     },
     drain,

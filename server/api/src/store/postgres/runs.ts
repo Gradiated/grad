@@ -36,7 +36,7 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
     const rows = await db.query(
       `INSERT INTO grad_runs
          (id, workspace_id, name, dataset_id, dataset_name, dataset_version, recipe_kind, status,
-          resolved_config, max_cost_usd, price_per_million_tokens, total_steps, max_attempts,
+          resolved_config, max_cost_micro_usd, price_per_million_tokens, total_steps, max_attempts,
           created_at, updated_at, waiting_on)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8::jsonb, $9, $10, $11, $12,
                $13::timestamptz, $13::timestamptz, $14)
@@ -50,7 +50,7 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
         input.datasetVersion,
         input.recipeKind,
         JSON.stringify(input.resolvedConfig),
-        input.maxCostUsd,
+        input.maxCostMicroUsd,
         input.pricePerMillionTokens,
         input.totalSteps,
         input.maxAttempts,
@@ -389,7 +389,7 @@ export const createBillingOutboxRepository = (
     const inserted = first(
       await db.query(
         `INSERT INTO grad_billing_outbox
-           (id, idempotency_key, workspace_id, run_id, attempt, tokens, cost_usd, status,
+           (id, idempotency_key, workspace_id, run_id, attempt, tokens, cost_micro_usd, status,
             next_attempt_at, created_at, kind)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8::timestamptz, $8::timestamptz, $9)
          ON CONFLICT (idempotency_key) DO NOTHING
@@ -401,7 +401,7 @@ export const createBillingOutboxRepository = (
           input.runId,
           input.attempt,
           input.tokens,
-          input.costUsd,
+          input.costMicroUsd,
           ts,
           input.kind,
         ],
