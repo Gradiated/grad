@@ -9,4 +9,5 @@ paths = [
   '''^server/trainer/tests/fixtures/providers/''',
   '''^tests/fixtures/wire/''',
   '''^sdks/typescript/test/''',
+  '''^server/ui/test/''',
 ]
