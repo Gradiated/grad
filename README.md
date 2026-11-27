@@ -144,7 +144,7 @@ New to it? The [training overview](https://gradiated.com/docs/training/) walks t
 
 ## What you can train
 
-Six recipes. Each one has calibrated defaults (learning rate, batch size, schedule, split) that `runs.plan` prints before you spend anything.
+Eight recipes. Each one has calibrated defaults (learning rate, batch size, schedule, split) that `runs.plan` prints before you spend anything.
 
 | Recipe | What you get | Data | Default base |
 | --- | --- | --- | --- |
@@ -154,6 +154,8 @@ Six recipes. Each one has calibrated defaults (learning rate, batch size, schedu
 | [`DecisionModelRecipe`](https://gradiated.com/docs/training/recipes/decision-model/) | A calibrated multi-head model for `choice`, `noul` and `score` questions | State + questions + `expected_output` | `gradiated/linden-1` |
 | [`CartridgeRecipe`](https://gradiated.com/docs/training/recipes/cartridges/) | A PrefixKV cartridge that stands in for a long, repeated prompt | A static `Context` (text or file) | `qwen/qwen3-8b` |
 | [`EmbeddingRecipe`](https://gradiated.com/docs/training/recipes/embeddings/) | An encoder tuned for search over your docs and code | `query` + `positive` (+ `negatives`) | `baai/bge-small-en-v1.5` |
+| [`DistillRecipe`](https://gradiated.com/docs/training/recipes/distillation/) | A small LoRA student that copies a larger teacher on your prompts | Prompts only, plus a `teacher` | `qwen/qwen3-4b` |
+| [`RewardModelRecipe`](https://gradiated.com/docs/training/recipes/reward-models/) | A model that scores answers in `[0, 1]`, for gating and best-of-N | `prompt` + `chosen` + `rejected` (and/or scored answers) | `qwen/qwen3-8b` |
 
 What every run gives you:
 
@@ -308,10 +310,9 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs all of this, pl
 
 ## Roadmap
 
-v0 ships the six recipes above. Next, in rough order:
+v0 ships the eight recipes above. Next, in rough order:
 
 - [ ] `GRPORecipe` for multi-turn agents, with environments served from your machine by `grad env serve`
-- [ ] `DistillRecipe` (teacher to student) and `RewardModelRecipe`
 - [ ] Chained runs (`run.then(...)`, e.g. SFT then DPO) and an async Python client
 - [ ] Interactive `Trainer` API: `forward_backward()`, `optim_step()`, custom losses
 - [ ] Canary and shadow deploys with automatic rollback on a quality drop

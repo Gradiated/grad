@@ -39,6 +39,7 @@
         "encoder_safetensors",
         "router_bundle",
         "decision_bundle",
+        "reward_bundle",
         "reference"
       ]
     },
@@ -53,7 +54,9 @@
         "router",
         "decision",
         "cartridge",
-        "embedding"
+        "embedding",
+        "distill",
+        "reward"
       ]
     },
     "base_model": {
@@ -179,7 +182,8 @@
           "recipe_kind": {
             "enum": [
               "sft",
-              "dpo"
+              "dpo",
+              "distill"
             ]
           },
           "files": {
@@ -202,7 +206,10 @@
       "then": {
         "properties": {
           "recipe_kind": {
-            "const": "sft"
+            "enum": [
+              "sft",
+              "distill"
+            ]
           },
           "files": {
             "required": [
@@ -309,6 +316,28 @@
             "required": [
               "decision_config.json",
               "decision_head.safetensors"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "format": {
+            "const": "reward_bundle"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recipe_kind": {
+            "const": "reward"
+          },
+          "files": {
+            "required": [
+              "reward_config.json",
+              "reward_head.safetensors"
             ]
           }
         }

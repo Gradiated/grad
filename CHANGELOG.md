@@ -13,7 +13,8 @@ First public release.
 
 - `grad-server`: datasets, runs, checkpoints, artifacts, evals and API keys on PostgreSQL and
   S3-compatible storage, described by one OpenAPI 3.1 contract (`spec/openapi.yaml`).
-- `grad-trainer`: six recipes (SFT, DPO, router, decision model, cartridge and embedding) with
+- `grad-trainer`: eight recipes (SFT, DPO, router, decision model, cartridge, embedding,
+  distillation and reward model) with
   calibrated defaults, cost plans before compute, hard spend caps, checkpoints and resume.
 - SDKs for Python (`grad-sdk`), TypeScript (`@gradiated/grad`), Go
   (`github.com/Gradiated/grad/sdks/go`) and Rust (`grad-sdk`), with transports generated from

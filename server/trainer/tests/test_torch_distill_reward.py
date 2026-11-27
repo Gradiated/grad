@@ -142,7 +142,7 @@ class RewardModelTests(TorchCase):
         files = sorted(p.name for p in out.artifact_dir.iterdir())
         self.assertEqual(files, ["adapter_config.json", "adapter_model.safetensors", "reward_config.json", "reward_head.safetensors"])
         config = json.loads((out.artifact_dir / "reward_config.json").read_text())
-        self.assertEqual((config["format"], config["format_version"], config["objectives"]), ("reward_bundle", 1, ["pairwise"]))
+        self.assertEqual((config["format"], config["format_version"], config["objectives"], config["score"]), ("reward_bundle", 1, ["pairwise"], "sigmoid"))
         self.assertEqual((config["pooling"], config["head_file"], config["hidden_size"]), ("last_token", "reward_head.safetensors", 32))
 
         report = out.eval_report

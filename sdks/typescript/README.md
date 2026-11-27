@@ -43,7 +43,7 @@ real `grad-server` started by `tests/harness/stack.ts`.
 | --- | --- |
 | Datasets | `grad.datasets.create/get/list/push/records/render/fromHf`, `dataset.importFile(path).wait()` |
 | Runs | `grad.runs.plan/create/get/list/cancel/resume`, `run.wait()`, `run.metrics({ follow: true })` (SSE with reconnect), `run.checkpoints()`, `checkpoint.promote()` |
-| Recipes | `recipes.sft/dpo/router/decisionModel/cartridge/embedding/distill/rewardModel/grpo`, `adapters`, `splits`, `Context` |
+| Recipes | `recipes.sft/dpo/router/decisionModel/cartridge/embedding/distill/rewardModel`, `rollouts`, `adapters`, `splits`, `Context` |
 | Artifacts | `grad.artifacts.get/list/stream`, `artifact.download(dest)` (streams to disk, verifies SHA-256) |
 | Serving | `grad.deployments.create/get/list/rollback`, `grad.route()`, `decision.recordFeedback()`, `grad.feedback.record()`, `grad.embeddings.create()` |
 | Evals | `grad.evals.plan/create/get/list`, `ev.wait()` (runs local scorers), `ev.summaryTable()`, `ev.failures().toDataset()`; `Rubric`, `Scorer`, `Judge`, `validators` |

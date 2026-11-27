@@ -1,18 +1,19 @@
 # Artifact bundle formats
 
-Every grad training run produces one artifact bundle: a `.grad.tar.gz` file holding the trained weights, the config needed to serve them, and a manifest. This document specifies the bundle envelope (`grad.artifact/1`) and the six formats inside it, so a serving stack can load any artifact without reading the trainer's code.
+Every grad training run produces one artifact bundle: a `.grad.tar.gz` file holding the trained weights, the config needed to serve them, and a manifest. This document specifies the bundle envelope (`grad.artifact/1`) and the seven formats inside it, so a serving stack can load any artifact without reading the trainer's code.
 
 - JSON Schemas: [`spec/artifacts/`](../spec/artifacts/). [`manifest.schema.json`](../spec/artifacts/manifest.schema.json) covers `manifest.json`, and `<format>.schema.json` covers each format's config file. The trainer checks every bundle it writes against them (`grad_trainer/artifact_formats.py`) and refuses to upload one that fails.
 - Reference loaders: the Python blocks marked `# loader: <name>` below are the reference loaders. `server/trainer/tests/test_artifact_formats.py` runs them exactly as written. They use only the files this document lists, plus `torch`, `transformers`, `peft` and `safetensors`. They never import the trainer. The tests compare their outputs with the trainer's own inference code for every recipe.
 
 | `format` | Recipe (`recipe_kind`) | Config file | Needs the base model | Gradiated Cloud v0 |
 | --- | --- | --- | --- | --- |
-| [`peft_lora`](#peft_lora) | `sft`, `dpo` | `adapter_config.json` | yes | deploy |
-| [`merged_safetensors`](#merged_safetensors) | `sft` with `merge_on_export` | `config.json` | no | download only |
+| [`peft_lora`](#peft_lora) | `sft`, `dpo`, `distill` | `adapter_config.json` | yes | deploy |
+| [`merged_safetensors`](#merged_safetensors) | `sft` or `distill` with `merge_on_export` | `config.json` | no | download only |
 | [`cartridge`](#cartridge) | `cartridge` | `cartridge.safetensors` header | yes | deploy |
 | [`encoder_safetensors`](#encoder_safetensors) | `embedding` | `grad_embedding.json` | no | deploy |
 | [`router_bundle`](#router_bundle) | `router` | `router_config.json` | yes | deploy |
 | [`decision_bundle`](#decision_bundle) | `decision` | `decision_config.json` | yes | deploy |
+| [`reward_bundle`](#reward_bundle) | `reward` | `reward_config.json` | yes | deploy |
 | [`reference`](#reference-test-only) | any | none | no | never (test double) |
 
 ## Versioning
@@ -48,7 +49,7 @@ The stable fields are below. [`manifest.schema.json`](../spec/artifacts/manifest
 | `step` | integer | Checkpoints only: the optimizer step. |
 | `format` | string | One of the formats in the table above. |
 | `format_version` | integer | Version of that format (see [Versioning](#versioning)). |
-| `recipe_kind` | string | `sft`, `dpo`, `router`, `decision`, `cartridge` or `embedding`. |
+| `recipe_kind` | string | `sft`, `dpo`, `router`, `decision`, `cartridge`, `embedding`, `distill` or `reward`. |
 | `base_model` | string | The grad catalog id the run trained on, such as `qwen/qwen3-8b`. |
 | `base_model_repo` | string | The Hugging Face repo (or local path) to load the base weights from, such as `Qwen/Qwen3-8B`. Only `reference` bundles have `null`. |
 | `base_model_revision` | string \| null | The 40-hex Hugging Face commit of those weights. It is `null` when the trainer loaded weights from a path or mirror with no revision marker (`.grad_revision`). Cloud serving requires it to equal the pool's revision, so it refuses `null`. |
@@ -63,7 +64,7 @@ grad-server stores the final bundle's manifest as the artifact's `manifest` and 
 
 ### `eval_report.json`
 
-`eval_report.json` holds the held-out evaluation report, which the API serves as the artifact's `eval_report`. It has `metric_name`, `selected_step`, `best_step`, `final_step`, `train_records`, `eval_records` and `warnings`, plus the recipe's metrics: `eval_loss` for SFT, `preference_accuracy` for DPO, `pareto_summary` for the router, per-question `heads` for decision models, `recall_at_k` and `mrr` for embeddings, and `eval_kl` for cartridges. Serving doesn't need it. It is there to show users and to gate promotion.
+`eval_report.json` holds the held-out evaluation report, which the API serves as the artifact's `eval_report`. It has `metric_name`, `selected_step`, `best_step`, `final_step`, `train_records`, `eval_records` and `warnings`, plus the recipe's metrics: `eval_loss` for SFT and off-policy distillation, `preference_accuracy` for DPO and reward models, `eval_kl` and `base_kl` for on-policy distillation, `pareto_summary` for the router, per-question `heads` for decision models, `recall_at_k` and `mrr` for embeddings, and `eval_kl` for cartridges. Serving doesn't need it. It is there to show users and to gate promotion.
 
 ### Checkpoint bundles
 
@@ -85,6 +86,7 @@ FORMAT_VERSIONS = {
     "encoder_safetensors": 1,
     "router_bundle": 1,
     "decision_bundle": 1,
+    "reward_bundle": 1,
 }
 RESERVED = {"manifest.json", "eval_report.json"}
 
@@ -137,7 +139,7 @@ The loaders below take the extracted directory (`dest`). `load_base` accepts the
 
 ## Prompts and chat templates
 
-The causal-LM formats (`peft_lora`, `cartridge`, `router_bundle` and `decision_bundle`) were trained on prompts rendered with the base model's chat template. For Qwen3, grad's pinned renderer (`template_revision: "qwen3@3"`) reproduces the Hugging Face Qwen3 `chat_template` byte for byte, and a test checks this. Serving therefore renders with the base model's tokenizer (`apply_chat_template`) and tokenizes the result with `add_special_tokens=False`. `thinking` and `preserve_thinking` in the manifest record how the run handled reasoning:
+The causal-LM formats (`peft_lora`, `cartridge`, `router_bundle`, `decision_bundle` and `reward_bundle`) were trained on prompts rendered with the base model's chat template. For Qwen3, grad's pinned renderer (`template_revision: "qwen3@3"`) reproduces the Hugging Face Qwen3 `chat_template` byte for byte, and a test checks this. Serving therefore renders with the base model's tokenizer (`apply_chat_template`) and tokenizes the result with `add_special_tokens=False`. `thinking` and `preserve_thinking` in the manifest record how the run handled reasoning:
 
 - `thinking: "off"` trains answers behind the empty `<think>\n\n</think>\n\n` block, which is what Qwen3's generation prompt contains with `enable_thinking=False`.
 - `preserve_thinking: true` kept the reasoning of earlier assistant turns, which the stock template drops. Serve such an artifact with conversations whose earlier reasoning is removed, or accept a small train/serve mismatch.
@@ -189,7 +191,7 @@ vllm serve Qwen/Qwen3-8B --revision <base_model_revision> --enable-lora --max-lo
   --lora-modules fast-diff-merge=./fast-diff-merge
 ```
 
-SFT and DPO runs can continue from a `peft_lora` artifact. The new run loads this adapter onto the same `base_model_repo` with the same rank and alpha.
+A distillation run (`recipe_kind: "distill"`) exports the same adapter for the student, with `teacher`, `rollout` and `loss` in the manifest as training metadata. SFT and DPO runs can continue from a `peft_lora` artifact. The new run loads this adapter onto the same `base_model_repo` with the same rank and alpha.
 
 ## `merged_safetensors`
 
@@ -356,13 +358,13 @@ class Encoder:
 
 ## Router and decision backbones
 
-`router_bundle` and `decision_bundle` share one backbone: the base causal LM, with a LoRA adapter when `adapter.kind` is `"lora"` or frozen when it is `"frozen_head"`. The feature is the final hidden state of the prompt's last token, taken from the base transformer's `last_hidden_state` (after the final norm, before the LM head). Small float32 linear heads map that feature to scores. Both configs carry the backbone fields:
+`router_bundle`, `decision_bundle` and `reward_bundle` share one backbone: the base causal LM, with a LoRA adapter when `adapter.kind` is `"lora"` or frozen when it is `"frozen_head"`. The feature is the final hidden state of the prompt's last token, taken from the base transformer's `last_hidden_state` (after the final norm, before the LM head). Small float32 linear heads map that feature to scores. Both configs carry the backbone fields:
 
 | Field | Meaning |
 | --- | --- |
 | `adapter` | `{"kind": "lora", "rank", "alpha", "target_modules"}` or `{"kind": "frozen_head"}`. With `lora`, the bundle also has `adapter_config.json` and `adapter_model.safetensors`, exactly as in [`peft_lora`](#peft_lora). |
 | `base_model`, `base_model_repo`, `base_model_revision` | The base model to load. |
-| `chat_template_kwargs` | `{"add_generation_prompt": true, "enable_thinking": true}`: arguments for `apply_chat_template`. The prompt ends with the assistant generation header `<|im_start|>assistant\n`. |
+| `chat_template_kwargs` | `{"add_generation_prompt": true, "enable_thinking": true}`: arguments for `apply_chat_template`. The prompt ends with the assistant generation header `<|im_start|>assistant\n`. A `reward_bundle` reads the whole conversation instead, answer included, so its `add_generation_prompt` is `false`. |
 | `truncation_side` | `"left"`: when the rendered prompt is longer than `max_seq_len` tokens, keep the last `max_seq_len`. The generation header carries the pooled state. |
 | `max_seq_len` | The token limit described above. |
 | `pooling` | `"last_token"`. |
@@ -523,6 +525,47 @@ class DecisionModel:
             else:
                 out[name] = question["options"][max(range(len(probs)), key=probs.__getitem__)]
         return out
+```
+
+## `reward_bundle`
+
+A reward model scores an answer to a conversation with a single number in `[0, 1]`, higher is better. It is trained Bradley-Terry on chosen/rejected pairs and, optionally, pointwise on scores in `[0, 1]`, on the shared backbone.
+
+| File | Contents |
+| --- | --- |
+| `reward_config.json` | Runtime config ([`reward_bundle.schema.json`](../spec/artifacts/reward_bundle.schema.json)). |
+| `reward_head.safetensors` | `weight` F32 `[1, hidden_size]` and `bias` F32 `[1]`. |
+| `adapter_config.json`, `adapter_model.safetensors` | Only when `adapter.kind` is `"lora"`. |
+
+Runtime config, from `reward_config.json`, in addition to the backbone fields:
+
+| Field | Meaning |
+| --- | --- |
+| `score` | `"sigmoid"`: the score is `sigmoid(weight @ h + bias)`. |
+| `objectives` | `["pairwise"]`, `["pointwise"]` or both: what the head was trained on. With pairs only, scores rank answers to the same prompt; they are not calibrated probabilities. |
+| `score_name` | The record score trained pointwise, or `null` (informational). |
+| `chat_template_kwargs` | `{"add_generation_prompt": false, "enable_thinking": true}`. |
+
+Scoring an answer: render the whole conversation, ending with the assistant turn to score, as described in [Router and decision backbones](#router-and-decision-backbones) (with this bundle's `chat_template_kwargs`, so there is no generation header and the last token is the newline after the answer's `<|im_end|>`). Then compute the feature `h` and the score.
+
+```python
+# loader: reward_bundle
+import torch
+from safetensors.torch import load_file
+
+
+class RewardModel:
+    def __init__(self, bundle_dir, dtype=torch.bfloat16):
+        bundle_dir = Path(bundle_dir)
+        self.config = json.loads((bundle_dir / "reward_config.json").read_text())
+        self.tokenizer, self.backbone = load_backbone(bundle_dir, self.config, dtype)
+        head = load_file(str(bundle_dir / self.config["head_file"]))
+        self.weight, self.bias = head["weight"][0].double(), head["bias"][0].double()
+
+    def score(self, messages):
+        """The answer's score in [0, 1]; `messages` ends with the assistant turn to score."""
+        h = pooled_state(self.tokenizer, self.backbone, self.config, messages).double()
+        return float(torch.sigmoid(self.weight @ h + self.bias))
 ```
 
 ## `reference` (test only)

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Gradiated/grad/blob/main/spec/artifacts/reward_bundle.schema.json",
+  "title": "reward_bundle reward_config.json",
+  "description": "Reward model runtime config: the backbone, the scalar head and how a score is computed.",
+  "type": "object",
+  "required": [
+    "format",
+    "format_version",
+    "score",
+    "objectives",
+    "head_file",
+    "adapter",
+    "pooling",
+    "hidden_size",
+    "max_seq_len",
+    "chat_template_kwargs",
+    "truncation_side",
+    "template_revision",
+    "base_model",
+    "base_model_repo",
+    "base_model_revision"
+  ],
+  "properties": {
+    "format": {
+      "const": "reward_bundle"
+    },
+    "format_version": {
+      "const": 1
+    },
+    "score": {
+      "const": "sigmoid",
+      "description": "score = sigmoid(weight @ h + bias), where h is the last token's final hidden state."
+    },
+    "objectives": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "pairwise",
+          "pointwise"
+        ]
+      }
+    },
+    "score_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The record score trained pointwise, if any (informational)."
+    },
+    "head_file": {
+      "const": "reward_head.safetensors"
+    },
+    "adapter": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "lora",
+            "frozen_head"
+          ]
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "alpha": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "target_modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "lora"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rank",
+          "alpha",
+          "target_modules"
+        ]
+      }
+    },
+    "pooling": {
+      "const": "last_token"
+    },
+    "hidden_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_seq_len": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "chat_template_kwargs": {
+      "type": "object",
+      "required": [
+        "add_generation_prompt",
+        "enable_thinking"
+      ],
+      "properties": {
+        "add_generation_prompt": {
+          "const": false
+        },
+        "enable_thinking": {
+          "type": "boolean"
+        }
+      }
+    },
+    "truncation_side": {
+      "const": "left"
+    },
+    "template_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "preserve_thinking": {
+      "type": "boolean"
+    },
+    "base_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_model_repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_model_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    }
+  }
+}

@@ -38,6 +38,7 @@ DOCUMENTED_FILES = {
     | TOKENIZER,
     "router_bundle": {"router_config.json", "router_head.safetensors"} | LORA,
     "decision_bundle": {"decision_config.json", "decision_head.safetensors"} | LORA,
+    "reward_bundle": {"reward_config.json", "reward_head.safetensors"} | LORA,
 }
 
 
@@ -347,6 +348,32 @@ class RecipeBundleTests(TorchCase):
                     self.assertEqual(answers[name], expected[0] >= 0.5)
                 else:
                     self.assertEqual(answers[name], question["options"][max(range(len(expected)), key=expected.__getitem__)])
+
+    def test_reward_bundle_and_distilled_peft_lora(self) -> None:
+        import torch
+        from test_torch_distill_reward import DISTILL, PAIRS, POINTS, PROMPTS, REWARD
+
+        ns = loaders("backbone", "reward_bundle")
+        out, task = self.run_captured("reward", {**REWARD, "recipe_params": {"rubric": "ok"}}, PAIRS + POINTS)
+        bundle_dir, manifest = self.bundle(out, ns)
+        self.assertEqual(manifest["recipe_kind"], "reward")
+        model = ns["RewardModel"](bundle_dir, dtype=torch.float32)
+        self.assertEqual((model.config["objectives"], model.config["score_name"]), (["pairwise", "pointwise"], "ok"))
+        conversations = [
+            [{"role": "user", "content": "Merge diff 1"}, {"role": "assistant", "content": "clean merged code"}],
+            [{"role": "system", "content": "Be terse."}, {"role": "user", "content": "Count users 3"}, {"role": "assistant", "content": "SELECT 1"}],
+        ]
+        for index, messages in enumerate(conversations):
+            ids = task._ids(messages, f"r{index}")
+            self.assertEqual(ns["prompt_ids"](model.tokenizer, model.config, messages), ids)
+            with torch.no_grad():
+                expected = torch.sigmoid(task._rewards([{"kind": "point", "ids": ids}], grad=False))[0]
+            self.assertClose(model.score(messages), expected)
+
+        # A distilled student is a plain peft_lora adapter.
+        distilled, student = self.run_captured("distill", {**DISTILL, "epochs": 1}, PROMPTS)
+        _, lora_manifest = self.bundle(distilled, loaders("peft_lora"))
+        self.assertEqual((lora_manifest["recipe_kind"], lora_manifest["teacher"]), ("distill", student.teacher_id))
 
     def test_open_bundle_rejects_tampering_and_unknown_versions(self) -> None:
         import tarfile

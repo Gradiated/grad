@@ -15,6 +15,8 @@ validated by `grad_trainer/artifact_formats.py` against the JSON Schemas in
 | `decision`  | LoRA (or frozen) backbone + one head per question               | adapter + `decision_head.safetensors` + `decision_config.json`              |
 | `cartridge` | Input embeddings distilled from the model reading the context   | `cartridge.safetensors`, `gradiated.cartridge/1` (`cartridge`)              |
 | `embedding` | Full encoder fine-tune with in-batch-negative InfoNCE           | transformers + sentence-transformers directory (`encoder_safetensors`)      |
+| `distill`   | LoRA student: on-policy top-k KL to a local teacher, or SFT on its answers | PEFT adapter (`peft_lora`), or merged safetensors (`merged_safetensors`)    |
+| `reward`    | LoRA (or frozen) backbone + scalar head, Bradley-Terry and pointwise | adapter + `reward_head.safetensors` + `reward_config.json` (`reward_bundle`) |
 
 Each module docstring in `grad_trainer/recipes/` describes the data it accepts, the loss and
 the eval report. All recipes share one loop (`grad_trainer/trainer.py`) for batching, LR

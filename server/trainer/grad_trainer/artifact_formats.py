@@ -27,6 +27,7 @@ FORMAT_VERSIONS: dict[str, int] = {
     "encoder_safetensors": 1,
     "router_bundle": 1,
     "decision_bundle": 1,
+    "reward_bundle": 1,
     "reference": 1,
 }
 #: The file each format's ``<format>.schema.json`` validates (for a cartridge, the safetensors header).
@@ -37,6 +38,7 @@ CONFIG_FILES: dict[str, str] = {
     "encoder_safetensors": "grad_embedding.json",
     "router_bundle": "router_config.json",
     "decision_bundle": "decision_config.json",
+    "reward_bundle": "reward_config.json",
 }
 ADAPTER_FILES = ("adapter_config.json", "adapter_model.safetensors")
 MAX_SAFETENSORS_HEADER = 1024 * 1024
@@ -90,7 +92,7 @@ def validate_bundle(manifest: dict[str, Any], root: Path) -> None:
         return
     config = read_config(fmt, root)
     check(fmt, config, CONFIG_FILES[fmt])
-    if fmt in ("router_bundle", "decision_bundle"):
+    if fmt in ("router_bundle", "decision_bundle", "reward_bundle"):
         needed = [config["head_file"]] + (list(ADAPTER_FILES) if config["adapter"]["kind"] == "lora" else [])
         missing = [name for name in needed if name not in manifest["files"]]
         if missing:

@@ -30,6 +30,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from ..artifact_formats import FORMAT_VERSIONS
 from ..backends.torch_common import chunk_by_tokens
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
@@ -38,9 +39,6 @@ from .base import RecipeRunner
 from .classifier import PooledLMTask
 from .data import TRAJECTORY_SCHEMA, record_id, record_messages
 from .dpo import extract_pairs
-
-REWARD_FORMAT_VERSION = 1
-
 
 def split_pointwise(records: list[dict[str, Any]], score: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(records for pairs, records scored pointwise under ``score``)."""
@@ -186,12 +184,14 @@ class RewardTask(PooledLMTask):
     def reward_config(self) -> dict[str, Any]:
         objectives = sorted({"pairwise" if it["kind"] == "pair" else "pointwise" for it in self.train})
         return {
-            "format": "reward_bundle",
-            "format_version": REWARD_FORMAT_VERSION,
+            "format": self.artifact_format,
+            "format_version": FORMAT_VERSIONS[self.artifact_format],
             **self.backbone_manifest(),
-            "input_format": "chat template over the whole conversation (prompt + answer), no generation header",
+            # The input is the whole conversation, answer included: no generation header.
+            "chat_template_kwargs": {"add_generation_prompt": False, "enable_thinking": True},
+            "input_format": "chat template over the whole conversation (prompt + the answer to score)",
             "head_file": self.head_file,
-            "score": "sigmoid(head(last_token_hidden_state))",
+            "score": "sigmoid",
             "objectives": objectives,
             "score_name": self.score_name,
         }
@@ -201,8 +201,8 @@ class RewardTask(PooledLMTask):
         (directory / "reward_config.json").write_text(json.dumps(self.reward_config(), indent=2, sort_keys=True))
 
     def manifest(self) -> dict[str, Any]:
-        config = self.reward_config()
-        return {**self.backbone_manifest(), "objectives": config["objectives"], "score_name": self.score_name}
+        objectives = self.reward_config()["objectives"]
+        return {**self.backbone_manifest(), "objectives": objectives, "score_name": self.score_name}
 
     def final_report(self) -> dict[str, Any]:
         metrics = self._held_out() if self.held_out else {}

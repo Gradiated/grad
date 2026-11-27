@@ -69,7 +69,8 @@ compiles every Go snippet of the public docs.
   `Deployments`, `Feedback`, `Embeddings`, `Evals`, `Keys`, `Models`, plus
   `client.Route`. `client.API` is the generated client (one method per operation).
 - Recipes implement `grad.Recipe`: `SFTRecipe`, `DPORecipe`, `RouterRecipe`,
-  `DecisionModelRecipe`, `CartridgeRecipe`, `EmbeddingRecipe` and `RawRecipe`.
+  `DecisionModelRecipe`, `CartridgeRecipe`, `EmbeddingRecipe`, `DistillRecipe`,
+  `RewardModelRecipe` and `RawRecipe`.
   Shared settings live in the embedded `grad.Common`
   (`grad.DPORecipe{Common: grad.Common{Model: sft.Artifact.Ref()}, Beta: 0.3}`).
 - `RunParams.IdempotencyKey`, `EvalParams.IdempotencyKey` and
