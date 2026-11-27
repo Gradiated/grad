@@ -39,7 +39,7 @@ The CPU image is built for linux/amd64 and linux/arm64, the CUDA image for linux
 | --- | --- | --- |
 | `GRAD_SERVER_URL` | `http://127.0.0.1:8787` | The grad-server URL, e.g. `http://grad-server:8787`. |
 | `TRAINER_API_KEY` | required | The worker key the server was given. |
-| `GRAD_WORKER_ID` | hostname, PID and a random suffix | A stable name for this worker. |
+| `GRAD_WORKER_ID` | hostname and PID | A name prefix for this worker. Each process appends a random suffix, so a restarted worker takes a new attempt instead of re-entering its old one. |
 | `GRAD_WORKER_KINDS` | `train,import` | Job kinds to claim; `import` jobs are the only ones that carry workspace secrets. |
 | `GRAD_POLL_INTERVAL_S` | `1.0` | Seconds between polls for work. |
 | `GRAD_WORKER_METRICS_PORT` | off | Serve Prometheus worker metrics on this port. |

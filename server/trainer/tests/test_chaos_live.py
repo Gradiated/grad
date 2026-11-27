@@ -56,7 +56,7 @@ class ChaosLiveTest(unittest.TestCase):
                 proc.kill()
                 proc.wait(10)
 
-    def start_worker(self, tag: str) -> subprocess.Popen[bytes]:
+    def start_worker(self, tag: str, worker_id: str | None = None) -> subprocess.Popen[bytes]:
         log = (self.server.dir / f"worker-{tag}.log").open("wb")
         self.addCleanup(log.close)
         proc = subprocess.Popen(
@@ -69,7 +69,7 @@ class ChaosLiveTest(unittest.TestCase):
                 "GRAD_TRAINER_BACKEND": "reference",
                 "GRAD_LEASE_SECONDS": "30",
                 "GRAD_POLL_INTERVAL_S": "0.2",
-                "GRAD_WORKER_ID": f"chaos-{tag}",
+                "GRAD_WORKER_ID": worker_id or f"chaos-{tag}",
                 "GRAD_WORKDIR": str(self.server.dir / f"work-{tag}"),
                 "HF_HUB_OFFLINE": "1",
             },
@@ -162,6 +162,29 @@ class ChaosLiveTest(unittest.TestCase):
         stats = http_json(f"{self.server.info['worker_url']}/__fault/stats")
         self.assertGreater(stats["droppedWorkerAcks"], 0)
         self.assertGreater(stats["failovers"], 0)
+
+    def test_restart_with_the_same_worker_id_takes_a_new_billed_attempt(self) -> None:
+        # r8 B6: Helm names a worker after its pod and compose hard-codes one, so a
+        # restarted process keeps GRAD_WORKER_ID. It must not re-enter its old
+        # attempt (that dropped the checkpoint prefix from the bill, -17.5%).
+        http(f"{self.api}/v1/datasets/chaos/records", "POST", {"records": records(60)})
+        worker = self.start_worker("a", worker_id="chaos-fixed")
+        control = self.wait_run(self.new_run("control"))
+        run_id = self.new_run("restart")
+        deadline = time.time() + 60
+        while len(self.get(f"/v1/runs/{run_id}/checkpoints")["data"]) < 2 and time.time() < deadline:
+            time.sleep(0.05)
+        worker.send_signal(signal.SIGKILL)
+        worker.wait(10)
+        time.sleep(1)
+        at_kill = self.get(f"/v1/runs/{run_id}")
+        resume_step = max(c["step"] for c in self.get(f"/v1/runs/{run_id}/checkpoints?limit=100")["data"])
+        tokens_at_resume = next(m["tokens"] for m in self.all_metrics(run_id) if m["step"] == resume_step)
+
+        self.start_worker("b", worker_id="chaos-fixed")
+        final = self.wait_run(run_id)
+        self.assertEqual((final["status"], final["attempt"]), ("completed", 2), final)
+        self.assertEqual(final["tokens_processed"], at_kill["tokens_processed"] + control["tokens_processed"] - tokens_at_resume)
 
 
 if __name__ == "__main__":

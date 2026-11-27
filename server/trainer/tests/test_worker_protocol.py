@@ -130,10 +130,10 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("claimed train job run_1 attempt 1", err.getvalue())
 
         claim = srv.bodies("claim")[0]
+        self.assertRegex(claim.pop("worker_id"), r"^w-test-[0-9a-f]{6}$")
         self.assertEqual(
             claim,
             {
-                "worker_id": "w-test",
                 "lease_seconds": 180,
                 "kinds": ["train", "import"],
                 "recipes": ["sft"],
@@ -685,7 +685,7 @@ class WorkerProtocolTests(unittest.TestCase):
         result = self.worker(srv, importer=import_runner).run_once()
         self.assertEqual(result["status"], "completed")
         self.assertEqual([b["cursor"] for b in srv.bodies("source-page")], ["c0", "c0"])
-        self.assertTrue(all(b["attempt"] == 1 and b["worker_id"] == "w-test" for b in srv.bodies("source-page")))
+        self.assertTrue(all(b["attempt"] == 1 and b["worker_id"].startswith("w-test-") for b in srv.bodies("source-page")))
         records = [r for b in srv.bodies("records") for r in b["records"]]
         self.assertEqual([r["id"] for r in records], ["t1", "t1"])
         self.assertEqual(srv.bodies("complete")[0]["import_summary"]["watermark"], {"traces": "c1", "scores": "c1"})
@@ -736,10 +736,18 @@ class WorkerProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "subset of train, import"):
             worker_from_env({"GRAD_WORKER_KINDS": "train,eval"})
 
+    def test_two_processes_with_one_configured_id_hold_distinct_leases(self) -> None:
+        # r8 B7: twins (or a restart) sharing GRAD_WORKER_ID must not share a lease.
+        a = worker_from_env({"GRAD_SERVER_URL": "http://x", "GRAD_WORKER_ID": "pod-0"})
+        b = worker_from_env({"GRAD_SERVER_URL": "http://x", "GRAD_WORKER_ID": "pod-0"})
+        self.assertNotEqual(a.worker_id, b.worker_id)
+        self.assertTrue(a.worker_id.startswith("pod-0-") and b.worker_id.startswith("pod-0-"))
+        self.assertLessEqual(len(worker_from_env({"GRAD_SERVER_URL": "http://x", "GRAD_WORKER_ID": "p" * 160}).worker_id), 160)
+
     def test_idle_claim_returns_none(self) -> None:
         srv = self.server()
         self.assertIsNone(self.worker(srv).run_once())
-        self.assertEqual(json.loads(srv.calls("claim")[0].body)["worker_id"], "w-test")
+        self.assertRegex(json.loads(srv.calls("claim")[0].body)["worker_id"], r"^w-test-[0-9a-f]{6}$")
 
 
 if __name__ == "__main__":

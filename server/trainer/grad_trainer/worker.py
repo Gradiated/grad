@@ -380,9 +380,11 @@ class TrainerWorker:
             )
         self.kinds = [k for k in JOB_KINDS if k in kinds]
         self.client = client or ProtocolClient(server_url, api_key)
-        self.worker_id = worker_id or (
-            f"trainer-{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(3)}"
-        )
+        # The lease belongs to this process, not to the configured name: a
+        # restarted container keeps its GRAD_WORKER_ID (a pod name), and must
+        # take a new, billed attempt instead of re-entering its own (r8 B6/B7).
+        base = worker_id or f"trainer-{socket.gethostname()}-{os.getpid()}"
+        self.worker_id = f"{base[:150]}-{secrets.token_hex(3)}"
         self.lease_seconds = lease_seconds
         self.poll_interval_s = poll_interval_s
         self.workdir = (

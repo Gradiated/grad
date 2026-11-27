@@ -62,7 +62,8 @@ spec:
             {{- if gt (int $.Values.metrics.workerPort) 0 }}
             - {name: GRAD_WORKER_METRICS_PORT, value: {{ $.Values.metrics.workerPort | quote }}}
             {{- end }}
-            # Pod name: unique per replica, readable in leases and logs.
+            # Pod name, readable in leases and logs; the worker appends a per-process
+            # suffix, so a restarted container takes a new attempt.
             - name: GRAD_WORKER_ID
               valueFrom:
                 fieldRef:
