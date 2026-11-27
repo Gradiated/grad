@@ -92,11 +92,12 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # On main only the newest commit matters, so a newer push cancels the CPU builds in flight.
-    # The GPU build is never cancelled: the next push may not rebuild it.
+    # One build per image at a time. On main only the newest commit matters: a newer push
+    # replaces the build still waiting, never the one running (main gets pushes every few
+    # minutes, so cancelling would starve the slow arm64 builds).
     concurrency:
       group: images-${{ github.ref }}-${{ matrix.image }}${{ matrix.suffix }}
-      cancel-in-progress: ${{ inputs.version == '' && matrix.target != 'gpu' }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
