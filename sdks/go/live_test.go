@@ -389,6 +389,6 @@ func TestLiveCloudDistillAndRewardWithTorch(t *testing.T) {
 	verifier := must(client.Runs.Create(ctx, grad.RunParams{Dataset: pairsDS, Name: "sql-verifier",
 		Recipe: grad.RewardModelRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 4}}}).Wait(ctx))(t)
 	if verifier.Artifact == nil || *verifier.Artifact.Format != "reward_bundle" || verifier.EvalReport.MetricName != "preference_accuracy" {
-		t.Fatalf("reward run %+v", verifier.Run)
+		t.Fatalf("reward run %+v artifact %+v report %+v", verifier.Run, verifier.Artifact, verifier.EvalReport)
 	}
 }
