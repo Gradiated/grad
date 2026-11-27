@@ -533,18 +533,16 @@ class TrainerWorker:
                 return
             bundle = job_dir / f"checkpoint-{step}.grad.tar.gz"
             try:
-                fmt = metadata.get("artifact_format")
-                sha, size = bundle_directory(
+                inner = dict(metadata.get("manifest") or {})
+                fmt = metadata.get("artifact_format") or inner.get("format")
+                info = bundle_directory(
                     checkpoint_dir,
                     bundle,
-                    manifest={
-                        "kind": "checkpoint",
-                        "step": step,
-                        "format": fmt,
-                        "metadata": metadata,
-                    },
+                    manifest={**inner, "kind": "checkpoint", "step": step, "format": fmt},
                 )
-                upload_id = self._upload(state, "checkpoint", bundle, sha, size)
+                upload_id = self._upload(
+                    state, "checkpoint", bundle, info.sha256, info.size_bytes
+                )
                 self._post(
                     state,
                     "checkpoints",
@@ -621,13 +619,15 @@ class TrainerWorker:
         artifact_dir = Path(output.artifact_dir)
         if artifact_dir.is_dir() and any(artifact_dir.iterdir()):
             bundle = job_dir / "artifact.grad.tar.gz"
-            sha, size = bundle_directory(
+            info = bundle_directory(
                 artifact_dir,
                 bundle,
                 manifest={**output.manifest, "format": output.artifact_format},
                 eval_report=output.eval_report or None,
             )
-            payload["upload_id"] = self._upload(state, "artifact", bundle, sha, size)
+            payload["upload_id"] = self._upload(
+                state, "artifact", bundle, info.sha256, info.size_bytes
+            )
         return self._complete(state, payload)
 
     def _load_dataset(self, job: dict[str, Any], job_dir: Path) -> list[dict[str, Any]]:
@@ -667,7 +667,7 @@ class TrainerWorker:
                 state,
                 {
                     "status": "failed",
-                    "error": "This trainer image has no dataset import runner (grad_trainer.imports); upgrade the trainer.",
+                    "error": "This trainer image has no dataset import runner (grad_trainer.import_runner); upgrade the trainer.",
                 },
             )
         source = dict(spec.get("source") or {})
@@ -723,8 +723,8 @@ class TrainerWorker:
             {
                 "status": "completed",
                 "import_summary": {
-                    "dropped_count": int(summary.dropped_count),
-                    "detected_scores": [str(s) for s in summary.detected_scores],
+                    "dropped_count": int(summary.skipped),
+                    "drop_reasons": [str(e)[:1000] for e in summary.errors[:101]],
                 },
             },
         )

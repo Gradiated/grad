@@ -57,10 +57,13 @@ class SplitParityTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(result.stdout), self._python())
 
-    def test_empty_session_id_is_a_key_and_two_folds(self) -> None:
+    def test_empty_session_id_falls_back_to_record_id_and_two_folds(self) -> None:
         recs = [{"id": f"r{i}", "session_id": ""} for i in range(20)]
         train, held = split_records(recs, eval_fraction=0.5, seed=3)
-        self.assertTrue(len(train) == 20 or len(held) == 19)  # all on one side
+        by_id, by_id_held = split_records([{"id": f"r{i}"} for i in range(20)], eval_fraction=0.5, seed=3)
+        self.assertEqual([r["id"] for r in train], [r["id"] for r in by_id])
+        self.assertEqual([r["id"] for r in held], [r["id"] for r in by_id_held])
+        self.assertTrue(train and held)  # keyed per record, so both sides are populated
         a, b = two_folds(list(range(10)), [str(i) for i in range(10)], 0)
         self.assertEqual(sorted(a + b), list(range(10)))
         a, b = two_folds([1], ["x"], 0)

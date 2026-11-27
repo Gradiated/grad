@@ -39,7 +39,7 @@ def run(
     if kind == "file":
         if not source.get("path"):
             raise SourceUnavailableError("File source needs a local 'path'.")
-        rows = file_rows(Path(source["path"]))
+        rows = file_rows(Path(source["path"]), str(source.get("format") or "auto"))
     elif kind in ("hf", "huggingface"):
         rows = hf_rows(source)
     else:

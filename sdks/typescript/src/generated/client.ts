@@ -100,6 +100,7 @@ export type CompleteTrainerJobRequest = {
   import_summary?: {
   dropped_count?: number;
   detected_scores?: Array<string>;
+  drop_reasons?: Array<string>;
 };
 };
 
@@ -387,6 +388,7 @@ export type ImportJob = {
   imported_count: number;
   dropped_count: number;
   detected_scores: Array<string>;
+  drop_reasons: Array<string>;
   dataset_version: number | null;
   error: string | null;
   created_at: string;

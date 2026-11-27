@@ -37,7 +37,6 @@ include = ["grad_trainer*"]
 [tool.coverage.run]
 branch = true
 source = ["grad_trainer"]
-omit = ["grad_trainer/worker.py"]
 
 [tool.coverage.report]
 show_missing = true

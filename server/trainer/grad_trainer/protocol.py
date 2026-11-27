@@ -8,50 +8,24 @@ recipes implement :class:`RecipeRunner` and import connectors implement
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
-RunStatus = Literal["completed", "stopped_budget", "cancelled", "failed"]
+from .runner_types import Budget, ImportSummary, ResumeState, RunCallbacks, RunOutput, RunStatus
 
-
-@dataclass(frozen=True)
-class Budget:
-    """Spend cap for one attempt: ``max_cost_usd`` is the remaining budget (None = uncapped)."""
-
-    max_cost_usd: float | None
-    price_per_million_tokens: float
-
-
-@dataclass
-class RunCallbacks:
-    """``on_step`` returns True to request a stop; ``on_checkpoint`` persists a checkpoint dir."""
-
-    on_step: Callable[[dict[str, Any]], bool]
-    on_checkpoint: Callable[[int, float | None, Path, dict[str, Any]], None]
-
-
-@dataclass(frozen=True)
-class ResumeState:
-    step: int
-    checkpoint_dir: Path
-
-
-@dataclass
-class RunOutput:
-    status: RunStatus
-    artifact_dir: Path
-    artifact_format: str
-    manifest: dict[str, Any] = field(default_factory=dict)
-    eval_report: dict[str, Any] = field(default_factory=dict)
-    tokens_processed: int = 0
-
-
-@dataclass
-class ImportSummary:
-    imported_count: int
-    dropped_count: int
-    detected_scores: list[str] = field(default_factory=list)
+__all__ = [
+    "Budget",
+    "ImportRunner",
+    "ImportSummary",
+    "RecipeRunner",
+    "ResumeState",
+    "RunCallbacks",
+    "RunOutput",
+    "RunStatus",
+    "resolve_import_runner",
+    "resolve_recipe_runner",
+    "supported_recipe_kinds",
+]
 
 
 class RecipeRunner(Protocol):
@@ -91,20 +65,20 @@ def supported_recipe_kinds() -> list[str] | None:
         from . import recipes
     except Exception:  # pragma: no cover - registry import failure
         return None
-    registry = getattr(recipes, "RECIPE_REGISTRY", None)
+    registry = getattr(recipes, "V0_RECIPES", None)
     if isinstance(registry, dict) and registry:
         return sorted(str(k) for k in registry)
     return None
 
 
-IMPORT_RUNNER_MODULES = ("grad_trainer.imports", "grad_trainer.connectors")
+IMPORT_RUNNER_MODULES = ("grad_trainer.import_runner",)
 
 
 def resolve_import_runner() -> ImportRunner | None:
     """Find the connector-backed import runner, or None when none is installed.
 
-    Looks in ``grad_trainer.imports`` then ``grad_trainer.connectors`` for a
-    ``get_import_runner()`` factory or an ``import_runner`` object with ``run``.
+    Looks in ``grad_trainer.import_runner`` for a ``get_import_runner()``
+    factory, an ``import_runner`` object with ``run``, or a module-level ``run``.
     """
     for module_name in IMPORT_RUNNER_MODULES:
         try:
@@ -119,4 +93,6 @@ def resolve_import_runner() -> ImportRunner | None:
         runner = getattr(module, "import_runner", None)
         if runner is not None and callable(getattr(runner, "run", None)):
             return runner
+        if callable(getattr(module, "run", None)):
+            return module  # type: ignore[return-value]
     return None

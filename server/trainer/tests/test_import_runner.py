@@ -105,3 +105,58 @@ class ImportRunnerTests(TempDirCase):
         with mock.patch.dict(sys.modules, {"datasets": None}), mock.patch.dict(os.environ, {"GRAD_OFFLINE": "", "HF_HUB_OFFLINE": ""}):
             with self.assertRaisesRegex(SourceUnavailableError, "datasets"):
                 self.run_import({"type": "hf", "repo": "org/chats"})
+
+
+class FileFormatDetectionTests(TempDirCase):
+    """Uploads reach the worker without an extension, so formats are detected by content."""
+
+    RECORD = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]}
+
+    def run_import(self, path, fmt=None):
+        batches: list[list[dict]] = []
+        source = {"kind": "file", "path": str(path)}
+        if fmt is not None:
+            source["format"] = fmt
+        summary = import_runner.run(source, None, emit_batch=batches.append, workdir=self.tmpdir())
+        return summary, [r for b in batches for r in b]
+
+    def test_gzip_without_suffix_is_detected_by_magic_bytes(self) -> None:
+        path = self.tmpdir() / "import-input"
+        path.write_bytes(gzip.compress((json.dumps(self.RECORD) + "\n").encode()))
+        summary, records = self.run_import(path)
+        self.assertEqual((summary.records, summary.skipped), (1, 0))
+        self.assertEqual(records[0]["messages"][1]["content"], "a")
+
+    def test_parquet_is_detected_by_magic_bytes(self) -> None:
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+        except ImportError:
+            self.skipTest("pyarrow not installed")
+        path = self.tmpdir() / "import-input"
+        pq.write_table(pa.Table.from_pylist([self.RECORD, self.RECORD]), path)
+        summary, records = self.run_import(path)
+        self.assertEqual(summary.records, 2)
+        self.assertEqual(records[0]["messages"][0]["role"], "user")
+
+    def test_explicit_json_format_requires_an_array(self) -> None:
+        path = self.tmpdir() / "import-input"
+        path.write_text(json.dumps(self.RECORD))
+        with self.assertRaises(SourceUnavailableError):
+            self.run_import(path, "json")
+
+    def test_unknown_format_is_rejected(self) -> None:
+        path = self.tmpdir() / "import-input"
+        path.write_text("{}")
+        with self.assertRaisesRegex(SourceUnavailableError, "Unknown import file format"):
+            self.run_import(path, "csv")
+
+    def test_invalid_parquet_reports_a_clear_error(self) -> None:
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError:
+            self.skipTest("pyarrow not installed")
+        path = self.tmpdir() / "import-input"
+        path.write_bytes(b"PAR1garbage")
+        with self.assertRaisesRegex(SourceUnavailableError, "not a valid Parquet file"):
+            self.run_import(path)

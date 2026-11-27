@@ -12,10 +12,10 @@ def hash_fraction(key: str, seed: int) -> float:
 
 
 def _first_present(rec: dict[str, Any], *fields: str) -> Any:
-    # Mirrors TypeScript `??`: only null/undefined fall through, "" does not.
+    # Mirrors planner.ts splitKey: missing, null and empty-string ids all fall through.
     for name in fields:
         value = rec.get(name)
-        if value is not None:
+        if value is not None and value != "":
             return value
     return None
 

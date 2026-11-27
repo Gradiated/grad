@@ -33,6 +33,8 @@ type HeartbeatBody = z.infer<typeof HeartbeatRequestSchema>;
 type RecordsBody = z.infer<typeof PostImportRecordsRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
 
+const MAX_DROP_REASONS = 101;
+
 export const toPublicImport = ({
   dataset_id: _d,
   upload_key: _u,
@@ -197,7 +199,12 @@ export const createImportService = (
 
       const reset = await store.imports.update(
         job.id,
-        { imported_count: 0, dropped_count: 0, detected_scores: [] },
+        {
+          imported_count: 0,
+          dropped_count: 0,
+          detected_scores: [],
+          drop_reasons: [],
+        },
         { workerId: job.worker_id, attempt: job.attempt },
       );
       const claimed = reset ?? job;
@@ -333,6 +340,7 @@ export const createImportService = (
       const summary = body.import_summary ?? {
         dropped_count: 0,
         detected_scores: [],
+        drop_reasons: [],
       };
       const expect = {
         workerId: body.worker_id,
@@ -370,6 +378,10 @@ export const createImportService = (
             detected_scores: [
               ...new Set([...job.detected_scores, ...summary.detected_scores]),
             ].sort(),
+            drop_reasons: [...job.drop_reasons, ...summary.drop_reasons].slice(
+              0,
+              MAX_DROP_REASONS,
+            ),
             dataset_version: version.version,
             error: null,
           }),

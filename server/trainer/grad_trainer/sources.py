@@ -15,23 +15,57 @@ from .models import is_offline
 Row = tuple[str, Any, str | None]
 
 
+_GZIP_MAGIC = b"\x1f\x8b"
+_PARQUET_MAGIC = b"PAR1"
+
+
+def _sniff(path: Path) -> bytes:
+    with open(path, "rb") as fh:
+        return fh.read(4)
+
+
 def _open(path: Path) -> IO[str]:
-    if path.suffix == ".gz":
+    if _sniff(path)[:2] == _GZIP_MAGIC:
         return gzip.open(path, "rt", encoding="utf-8")
     return open(path, "r", encoding="utf-8")
 
 
-def file_rows(path: Path) -> Iterator[Row]:
+def _parquet_rows(path: Path) -> Iterator[Row]:
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise SourceUnavailableError("Parquet imports need the 'pyarrow' package in the trainer image.") from exc
+    try:
+        table = pq.ParquetFile(path)
+    except Exception as exc:
+        raise SourceUnavailableError(f"{path.name} is not a valid Parquet file: {exc}") from exc
+    index = 0
+    for batch in table.iter_batches(batch_size=1024):
+        for row in batch.to_pylist():
+            yield f"row {index}", row, None
+            index += 1
+
+
+def file_rows(path: Path, fmt: str = "auto") -> Iterator[Row]:
+    """Rows of a JSONL, JSON-array or Parquet file; gzip is detected by content, not name."""
     if not path.is_file():
         raise SourceUnavailableError(f"Import file {path} does not exist.")
+    fmt = (fmt or "auto").lower()
+    if fmt not in ("auto", "jsonl", "json", "parquet"):
+        raise SourceUnavailableError(f"Unknown import file format '{fmt}' (auto, jsonl, json or parquet).")
+    if fmt == "parquet" or (fmt == "auto" and _sniff(path) == _PARQUET_MAGIC):
+        yield from _parquet_rows(path)
+        return
     with _open(path) as fh:
         head = fh.read(4096)
         fh.seek(0)
-        if head.lstrip().startswith("["):
+        if fmt == "json" or (fmt == "auto" and head.lstrip().startswith("[")):
             try:
                 rows = json.load(fh)
             except ValueError as exc:
                 raise SourceUnavailableError(f"{path.name} is not a valid JSON array: {exc}") from exc
+            if not isinstance(rows, list):
+                raise SourceUnavailableError(f"{path.name} must contain a JSON array of records.")
             for index, row in enumerate(rows):
                 yield f"item {index}", row, None
             return

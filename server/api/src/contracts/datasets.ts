@@ -258,6 +258,10 @@ export const ImportJobSchema = z
     imported_count: z.number().int().min(0),
     dropped_count: z.number().int().min(0),
     detected_scores: z.array(z.string()),
+    drop_reasons: z.array(z.string()).openapi({
+      description:
+        "Why rows were dropped, one line per row (`line 12: invalid JSON`), capped at 100 entries.",
+    }),
     dataset_version: z.number().int().min(0).nullable(),
     error: z.string().nullable(),
     created_at: IsoTimestampSchema,

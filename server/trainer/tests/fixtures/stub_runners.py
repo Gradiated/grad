@@ -101,7 +101,7 @@ class StubImporter:
                 ]
             )
         return ImportSummary(
-            imported_count=self.batches * self.batch_size,
-            dropped_count=1,
-            detected_scores=["tests_passed"],
+            records=self.batches * self.batch_size,
+            skipped=1,
+            errors=["line 4: invalid JSON (Expecting value)"],
         )

@@ -52,6 +52,7 @@ CREATE TABLE grad_import_jobs (
   imported_count BIGINT NOT NULL DEFAULT 0,
   dropped_count BIGINT NOT NULL DEFAULT 0,
   detected_scores JSONB NOT NULL DEFAULT '[]'::jsonb,
+  drop_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
   dataset_version INTEGER,
   error TEXT,
   upload_key TEXT,

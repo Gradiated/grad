@@ -120,6 +120,7 @@ export type ImportJobPatch = Partial<
     | "imported_count"
     | "dropped_count"
     | "detected_scores"
+    | "drop_reasons"
     | "dataset_version"
     | "error"
     | "worker_id"

@@ -212,7 +212,7 @@ export const createDatasetRepository = (
 };
 
 const IMPORT_COLUMNS: ColumnTypes = {
-  json: new Set(["detected_scores", "source"]),
+  json: new Set(["detected_scores", "drop_reasons", "source"]),
   timestamps: new Set(["lease_expires_at", "updated_at"]),
 };
 

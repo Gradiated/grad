@@ -167,7 +167,7 @@ class WorkerProtocolTests(unittest.TestCase):
         manifest = extract_bundle(bundle, Path(self.tmp.name) / "x")
         self.assertEqual(manifest["format"], "peft_lora")
         self.assertIn("adapter_model.safetensors", manifest["files"])
-        self.assertIn("eval_report.json", manifest["files"])
+        self.assertIn("eval_report_sha256", manifest)
 
     def test_resume_downloads_and_extracts_checkpoint(self) -> None:
         src = Path(self.tmp.name) / "ckpt"
@@ -378,7 +378,10 @@ class WorkerProtocolTests(unittest.TestCase):
         complete = srv.bodies("complete")[0]
         self.assertEqual(
             complete["import_summary"],
-            {"dropped_count": 1, "detected_scores": ["tests_passed"]},
+            {
+                "dropped_count": 1,
+                "drop_reasons": ["line 4: invalid JSON (Expecting value)"],
+            },
         )
 
     def test_import_hf_source_passes_through_and_chunks(self) -> None:

@@ -77,6 +77,7 @@ export const toImportJob = (r: Row): ImportJobRecord => ({
   imported_count: n(r.imported_count),
   dropped_count: n(r.dropped_count),
   detected_scores: j(r.detected_scores, []),
+  drop_reasons: j(r.drop_reasons, []),
   dataset_version: nn(r.dataset_version),
   error: sn(r.error),
   upload_key: sn(r.upload_key),

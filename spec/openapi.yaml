@@ -638,6 +638,11 @@ components:
           type: array
           items:
             type: string
+        drop_reasons:
+          type: array
+          items:
+            type: string
+          description: "Why rows were dropped, one line per row (`line 12: invalid JSON`), capped at 100 entries."
         dataset_version:
           type:
             - integer
@@ -664,6 +669,7 @@ components:
         - imported_count
         - dropped_count
         - detected_scores
+        - drop_reasons
         - dataset_version
         - error
         - created_at
@@ -2107,6 +2113,13 @@ components:
                 type: string
                 maxLength: 160
               maxItems: 1000
+              default: []
+            drop_reasons:
+              type: array
+              items:
+                type: string
+                maxLength: 1000
+              maxItems: 101
               default: []
       required:
         - worker_id

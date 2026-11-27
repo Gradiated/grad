@@ -313,6 +313,7 @@ const buildRepositories = (
           imported_count: 0,
           dropped_count: 0,
           detected_scores: [],
+          drop_reasons: [],
           dataset_version: null,
           error: null,
           upload_key: input.uploadKey,

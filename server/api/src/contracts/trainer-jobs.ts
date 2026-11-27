@@ -206,6 +206,7 @@ export const CompleteJobRequestSchema = z
       .object({
         dropped_count: z.number().int().min(0).default(0),
         detected_scores: z.array(z.string().max(160)).max(1000).default([]),
+        drop_reasons: z.array(z.string().max(1000)).max(101).default([]),
       })
       .optional(),
   })
