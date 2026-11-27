@@ -55,6 +55,26 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 	if plan.ResolvedRecipe.Model != "test/tiny-qwen3" || plan.EstimatedTokens == 0 || plan.ResolvedRecipe.RuleVersion != plan.ResolvedConfig.RuleVersion {
 		t.Fatalf("plan %+v", plan)
 	}
+	// fmt.Println(plan) prints the same readout as Python's print(plan) and the CLI.
+	text := fmt.Sprint(plan)
+	for _, want := range []string{"Dataset     support-prod v2", "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=", "Estimate    ~", "Warnings    2", "  ! 6 steps are below"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("plan readout lacks %q:\n%s", want, text)
+		}
+	}
+	labeled := &grad.RunPlan{}
+	labeled.ResolvedConfig.RecipeParams = map[string]any{"context_text": "abcd", "max_quality_drop": 0.02, "models": []any{"a", "b"}}
+	labeled.Labeling = &generated.PlanRunResponseLabeling{EstimatedModelCalls: 1200, EstimatedJudgeCalls: 3, EstimatedCostUSD: 0.004}
+	labeled.Teacher = &generated.PlanRunResponseTeacher{Model: "big", EstimatedTokens: 25_000_000, EstimatedCostUSD: 1234.5}
+	text = labeled.String()
+	for _, want := range []string{"Params      context_text=<4 chars>, max_quality_drop=0.02, models=[\"a\",\"b\"]", "Labeling    1,200 model · 3 judge calls, ~$0.0040", "Teacher     big: ~25.0M tokens, ~$1,234.50"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("plan readout lacks %q:\n%s", want, text)
+		}
+	}
+	if (*grad.RunPlan)(nil).String() != "<nil plan>" {
+		t.Fatal("nil plan")
+	}
 	body := f.last("POST", "/v1/runs/plan").JSON(t)
 	recipe := body["recipe"].(map[string]any)
 	if body["dataset"] != "support-prod" || body["max_cost_usd"] != 5.0 || recipe["kind"] != "sft" || recipe["batch_size"] != 1.0 || len(recipe) != 3 {
