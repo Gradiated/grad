@@ -102,6 +102,29 @@ describe("eval billing", () => {
     expect(listed.body.data.map((u) => u.ref_id)).toEqual([created.id]);
   });
 
+  it("bills outputs still in flight when the eval was cancelled (r8 P2-7)", async () => {
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(3));
+    fake.setModel("qwen/qwen3-8b", () => ({ ...EXPENSIVE(), delayMs: 200 }));
+    const evals = t.services.evals;
+    const created = await createEval(evals, WORKSPACE_A, request({}));
+    const running = evals.drain();
+    // Cancel while all three calls are in flight; they land after it.
+    for (let i = 0; i < 100 && fake.requests.length < 3; i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await evals.cancel(WORKSPACE_A, created.id);
+    await running;
+    const billed = (await t.deps.store.usage.listByRef(created.id)).reduce(
+      (sum, u) => sum + u.tokens,
+      0,
+    );
+    const spent = await t.deps.store.evals.attemptUsage(created.id, 1);
+    expect(spent.tokens).toBe(300_000);
+    expect(billed).toBe(spent.tokens);
+  });
+
   it("bills after local scores and skips failed and cancelled evals that ran nothing", async () => {
     h = await makeEvalHarness();
     const { t, fake } = h;

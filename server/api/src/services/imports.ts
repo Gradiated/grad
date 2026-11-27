@@ -156,18 +156,23 @@ export const createImportService = (
     patch: ImportJobPatch,
     extra: { leaseExpiredBefore?: string } = {},
   ): Promise<ImportJobRecord> => {
-    const updated = await store.imports.update(
-      job.id,
-      { ...RELEASE, ...patch },
-      { ...fenceOf(job, ["running"]), ...extra },
-    );
-    if (!updated) throw leaseLost(job.id);
-    if (updated.status === "failed") {
-      await deleteObjects(await store.datasets.discardStaged(job.id));
-      if (isSyncPayload(updated.source)) {
-        await collaborators.sources.failSync(updated);
+    // The status, the discarded rows and the source's failure count commit
+    // together; the objects go after (the orphaned-blob sweep backs it up).
+    const { updated, discarded } = await store.transaction(async () => {
+      const closed = await store.imports.update(
+        job.id,
+        { ...RELEASE, ...patch },
+        { ...fenceOf(job, ["running"]), ...extra },
+      );
+      if (!closed) throw leaseLost(job.id);
+      if (closed.status !== "failed") return { updated: closed, discarded: [] };
+      const keys = await store.datasets.discardStaged(job.id);
+      if (isSyncPayload(closed.source)) {
+        await collaborators.sources.failSync(closed);
       }
-    }
+      return { updated: closed, discarded: keys };
+    });
+    await deleteObjects(discarded);
 
     return updated;
   };

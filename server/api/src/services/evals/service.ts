@@ -589,17 +589,15 @@ export const createEvalService = (
     fence: Parameters<typeof store.evals.update>[2],
     now: string,
   ): Promise<void> => {
-    const updated = await store.transaction(async (tx) => {
+    await store.transaction(async (tx) => {
       const closed = await tx.evals.update(
         row.id,
         requeuePatch(row, what, now) as Parameters<typeof tx.evals.update>[1],
         fence,
       );
       if (closed) await billAttempt(tx, { ...closed, attempt: row.attempt });
-
-      return closed;
+      if (closed?.status === "failed") await onFinished(closed);
     });
-    if (updated?.status === "failed") await onFinished(updated);
   };
 
   const runJob = async (job: EvalRecord): Promise<void> => {
@@ -645,7 +643,11 @@ export const createEvalService = (
         await runPool(work, deps.settings.evalConcurrency, generate);
 
         await extend();
-        if (lost) return;
+        if (lost) {
+          // Cancelled or reaped: outputs that were in flight still bill.
+          await billAttempt(store, job).catch(() => undefined);
+          return;
+        }
         if (stopping) break;
         await store.transaction(async (tx) => {
           const progressed = await tx.evals.update(
@@ -734,17 +736,20 @@ export const createEvalService = (
         }
       }
     } catch (error) {
-      const failed = await store.evals.update(
-        job.id,
-        {
-          ...RELEASE,
-          status: "failed",
-          error: errorMessage(error).slice(0, 4000),
-          finished_at: clock.now().toISOString(),
-        },
-        expect,
-      );
-      if (failed) await onFinished(failed);
+      // The status and its bill commit together.
+      await store.transaction(async () => {
+        const failed = await store.evals.update(
+          job.id,
+          {
+            ...RELEASE,
+            status: "failed",
+            error: errorMessage(error).slice(0, 4000),
+            finished_at: clock.now().toISOString(),
+          },
+          expect,
+        );
+        if (failed) await onFinished(failed);
+      });
     } finally {
       clearInterval(heartbeat);
     }
@@ -1126,15 +1131,20 @@ export const createEvalService = (
       const record = await load(workspaceId, id);
       // A replayed cancel (lost response, SDK retry) gets the current state.
       if (record.status === "cancelled") return toPublic(record);
-      const updated = await store.evals.update(
-        id,
-        {
-          status: "cancelled",
-          ...RELEASE,
-          finished_at: clock.now().toISOString(),
-        },
-        { status: ACTIVE },
-      );
+      // The status and its bill commit together.
+      const updated = await store.transaction(async () => {
+        const cancelled = await store.evals.update(
+          id,
+          {
+            status: "cancelled",
+            ...RELEASE,
+            finished_at: clock.now().toISOString(),
+          },
+          { status: ACTIVE },
+        );
+        if (cancelled) await onFinished(cancelled);
+        return cancelled;
+      });
       if (!updated) {
         throw new ApiError(
           409,
@@ -1143,7 +1153,6 @@ export const createEvalService = (
           `Eval '${id}' is already ${record.status}.`,
         );
       }
-      await onFinished(updated);
 
       return toPublic(updated);
     },
