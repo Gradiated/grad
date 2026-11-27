@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import tarfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,6 +46,13 @@ _HF_REPO = re.compile(r"[A-Za-z0-9][\w.-]*(/[A-Za-z0-9][\w.-]*)?")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 #: Upload and Hub size cap (the server's single-PUT upload cap).
 MAX_IMPORT_BYTES = 5 * 1024**3
+#: An upload's uncompressed cap: a tar of safetensors barely compresses, so twice the upload cap
+#: leaves room for gzip and tar padding while refusing a small archive that inflates to fill the disk.
+MAX_UPLOAD_EXTRACT_BYTES = 2 * MAX_IMPORT_BYTES
+#: A JSON config file's size cap (config.json, adapter_config.json, tokenizer configs are KBs).
+MAX_JSON_BYTES = 16 * 1024 * 1024
+#: An HF import's wall-clock cap, on top of the 60 s per-read socket timeout.
+HF_DEADLINE_SECONDS = 3600
 
 #: The files each format keeps (everything else in an upload or repo is left out of the bundle).
 FORMAT_FILES: dict[str, tuple[str, ...]] = {
@@ -108,6 +116,11 @@ class InvalidArtifact(ValueError):
         self.file = file
 
 
+def matches(name: str, pattern: str) -> bool:
+    """Whether ``name`` is one of the format's files: ``*`` never crosses a directory."""
+    return name.count("/") == pattern.count("/") and fnmatch.fnmatchcase(name, pattern)
+
+
 # --------------------------------------------------------------------------- sources
 
 
@@ -131,22 +144,22 @@ def extract_upload(archive: Path, dest: Path) -> None:
             name = member.name[2:] if member.name.startswith("./") else member.name
             if member.isdir() or name in ("", "."):
                 continue
-            if not member.isfile():
-                raise InvalidArtifact(name, "links and special files are not allowed in an upload")
+            if not member.isfile() or member.issparse():
+                raise InvalidArtifact(name, "links, sparse and special files are not allowed in an upload")
             if name.startswith("/") or "\\" in name or "\x00" in name or any(p in ("", ".", "..") for p in name.split("/")):
                 raise InvalidArtifact(name, "unsafe path in the upload")
             total += member.size
-            if total > MAX_EXTRACT_BYTES:
-                raise InvalidArtifact("upload", f"more than {MAX_EXTRACT_BYTES} bytes uncompressed")
+            if total > min(MAX_EXTRACT_BYTES, MAX_UPLOAD_EXTRACT_BYTES):
+                raise InvalidArtifact("upload", f"more than {MAX_UPLOAD_EXTRACT_BYTES} bytes uncompressed")
             target = dest / name
-            target.parent.mkdir(parents=True, exist_ok=True)
             source = tar.extractfile(member)
             assert source is not None
             try:
+                target.parent.mkdir(parents=True, exist_ok=True)
                 with open(target, "xb") as out:
                     shutil.copyfileobj(source, out, _CHUNK)
-            except FileExistsError as exc:
-                raise InvalidArtifact(name, "appears twice in the upload") from exc
+            except (FileExistsError, NotADirectoryError) as exc:
+                raise InvalidArtifact(name, "appears twice in the upload, or as both a file and a directory") from exc
             names.append(name)
     if not names:
         raise InvalidArtifact("upload", "the archive holds no files")
@@ -160,11 +173,16 @@ def extract_upload(archive: Path, dest: Path) -> None:
 
 
 class _NoAuthOnRedirect(urllib.request.HTTPRedirectHandler):
-    """Follow the Hub's redirects (to its CDN) without forwarding the token to another host."""
+    """Follow the Hub's redirects (to its CDN) without forwarding the token to another origin.
+
+    A redirect leaves http(s) never, and https never for plain http."""
 
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        old, new_url = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if new_url.scheme not in ("http", "https") or (old.scheme == "https" and new_url.scheme != "https"):
+            raise urllib.error.HTTPError(req.full_url, code, f"refused redirect to a {new_url.scheme or 'relative'}:// URL", headers, fp)
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
+        if new is not None and (new_url.scheme, new_url.netloc) != (old.scheme, old.netloc):
             new.remove_header("Authorization")
         return new
 
@@ -173,7 +191,8 @@ def _hub_open(url: str, token: str | None) -> IO[bytes]:
     request = urllib.request.Request(url, headers={"User-Agent": "grad-trainer"})
     if token:
         request.add_header("Authorization", f"Bearer {token}")
-    opener = urllib.request.build_opener(_NoAuthOnRedirect)
+    # No proxy handler: HTTP(S)_PROXY from the worker's environment would bypass the egress rules.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoAuthOnRedirect)
     return opener.open(request, timeout=60)  # noqa: S310 - the Hub endpoint only
 
 
@@ -197,10 +216,11 @@ def hf_snapshot(repo: str, revision: str | None, token: str | None, dest: Path, 
         files = [str(s.get("rfilename")) for s in info.get("siblings") or [] if isinstance(s, dict)]
         if not _COMMIT.fullmatch(commit):
             raise SourceUnavailableError(f"The Hub did not report a commit for '{repo}' at '{revision or 'main'}'.")
-        total = 0
-        for name in files:
-            if not any(fnmatch.fnmatchcase(name, pattern) for pattern in keep):
-                continue
+        wanted = [name for name in files if any(matches(name, pattern) for pattern in keep)]
+        if len(wanted) > MAX_BUNDLE_MEMBERS:
+            raise SourceUnavailableError(f"'{repo}' lists more than {MAX_BUNDLE_MEMBERS} files for this format.")
+        total, deadline = 0, time.monotonic() + HF_DEADLINE_SECONDS
+        for name in wanted:
             if name.startswith("/") or any(p in ("", ".", "..") for p in name.split("/")):
                 raise SourceUnavailableError(f"The Hub listed an unsafe file name {name!r} in '{repo}'.")
             target = dest / name
@@ -210,6 +230,8 @@ def hf_snapshot(repo: str, revision: str | None, token: str | None, dest: Path, 
                     total += len(chunk)
                     if total > MAX_IMPORT_BYTES:
                         raise SourceUnavailableError(f"'{repo}' is larger than {MAX_IMPORT_BYTES} bytes.")
+                    if time.monotonic() > deadline:
+                        raise SourceUnavailableError(f"'{repo}' took longer than {HF_DEADLINE_SECONDS} s to download.")
                     out.write(chunk)
     except urllib.error.HTTPError as exc:
         # The Hub answers 401 for a repo that doesn't exist too, so say both.
@@ -231,14 +253,24 @@ def hf_snapshot(repo: str, revision: str | None, token: str | None, dest: Path, 
 
 def _json(root: Path, name: str) -> dict[str, Any]:
     try:
+        if (root / name).stat().st_size > MAX_JSON_BYTES:
+            raise InvalidArtifact(name, f"larger than {MAX_JSON_BYTES} bytes")
         value = json.loads((root / name).read_text())
     except FileNotFoundError as exc:
         raise InvalidArtifact(name, "missing") from exc
+    except RecursionError as exc:
+        raise InvalidArtifact(name, "nested too deeply") from exc
     except (OSError, ValueError) as exc:
+        if isinstance(exc, InvalidArtifact):
+            raise
         raise InvalidArtifact(name, f"not valid JSON ({exc})") from exc
     if not isinstance(value, dict):
         raise InvalidArtifact(name, "must be a JSON object")
     return value
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def safetensors(root: Path, name: str) -> dict[str, Any]:
@@ -259,7 +291,9 @@ def safetensors(root: Path, name: str) -> dict[str, Any]:
             continue
         try:
             dtype, shape, (begin, end) = info["dtype"], info["shape"], info["data_offsets"]
-            expected = math.prod(int(d) for d in shape) * _DTYPE_BYTES[dtype]
+            if not isinstance(shape, list) or not all(_is_int(v) for v in (*shape, begin, end)):
+                raise TypeError("shape and data_offsets must be integers")
+            expected = math.prod(shape) * _DTYPE_BYTES[dtype]
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidArtifact(name, f"tensor {tensor!r} has a malformed header entry") from exc
         if not 0 <= begin <= end <= data or end - begin != expected:
@@ -421,6 +455,9 @@ def check_format(fmt: str, root: Path, base: ResolvedModel, config: dict[str, An
     cfg = _check_base_fields(root, file, base)
     _hidden_size(file, cfg.get("hidden_size"), config, base)
     head_file = str(cfg.get("head_file") or "")
+    expected_head = next(f for f in FORMAT_FILES[fmt] if f.endswith("_head.safetensors"))
+    if head_file != expected_head:
+        raise InvalidArtifact(file, f"head_file must be {expected_head!r}, not {head_file!r}")
     for tensor, info in safetensors(root, head_file).items():
         if tensor != "__metadata__" and len(info["shape"]) == 2 and info["shape"][1] != cfg["hidden_size"]:
             raise InvalidArtifact(head_file, f"{tensor} has width {info['shape'][1]}, expected hidden_size {cfg['hidden_size']}")
@@ -456,7 +493,7 @@ def _keep_files(root: Path, fmt: str) -> None:
             if not any(path.iterdir()):
                 path.rmdir()
             continue
-        if rel in RESERVED or not any(fnmatch.fnmatchcase(rel, p) for p in patterns):
+        if rel in RESERVED or not any(matches(rel, p) for p in patterns):
             path.unlink()
 
 
@@ -488,7 +525,11 @@ def run(spec: dict[str, Any], *, workdir: Path, download: Callable[[str, Path], 
     except ModelUnavailableError as exc:
         raise SourceUnavailableError(str(exc)) from exc
     _keep_files(payload, fmt)
-    extra = check_format(fmt, payload, base, config)
+    try:
+        extra = check_format(fmt, payload, base, config)
+    except (KeyError, TypeError, AttributeError, IndexError, RecursionError) as exc:
+        # A value of the wrong type somewhere in the tenant's files: their 422, not a worker crash.
+        raise InvalidArtifact(artifact_formats.CONFIG_FILES.get(fmt, "upload"), f"malformed ({type(exc).__name__}: {exc})") from exc
     manifest = {
         "kind": "final",
         "format": fmt,

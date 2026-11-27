@@ -401,3 +401,144 @@ class ExtractUploadTests(TempDirCase):
         self.assertIn("unsafe path", str(ctx.exception))
         with self.assertRaises(InvalidArtifact):
             artifact_import.run({"format": "onnx", "source": {}}, workdir=self.tmpdir(), download=lambda *_: None)
+
+
+def _tar_bytes(files: dict[str, bytes], out: Path) -> Path:
+    with tarfile.open(out, "w:gz") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return out
+
+
+def _safetensors(header: dict[str, Any], data: bytes = b"\0" * 16) -> bytes:
+    raw = json.dumps(header).encode()
+    return len(raw).to_bytes(8, "little") + raw + data
+
+
+class HostileUploadTests(TempDirCase):
+    """Exploit-style uploads and Hub responses (security review, 2026-11-28): each must be the tenant's
+    422 (InvalidArtifact) or a source error, never a worker crash, a full disk or a read outside the payload."""
+
+    def test_a_sparse_member_is_refused_before_it_inflates(self) -> None:
+        # 242 bytes of PAX sparse-1.0 tar that declares 400 GiB of zeros.
+        archive = self.tmpdir() / "bomb.tar.gz"
+        sparse_map = b"1\n0\n1\n".ljust(512, b"\0")
+        info = tarfile.TarInfo("GNUSparseFile.0/adapter_model.safetensors")
+        info.size = len(sparse_map) + 1
+        info.pax_headers = {
+            "GNU.sparse.major": "1",
+            "GNU.sparse.minor": "0",
+            "GNU.sparse.name": "adapter_model.safetensors",
+            "GNU.sparse.realsize": str(400 * 1024**3),
+        }
+        with tarfile.open(archive, "w:gz", format=tarfile.PAX_FORMAT) as tar:
+            tar.addfile(info, io.BytesIO(sparse_map + b"A"))
+        out = self.tmpdir() / "out"
+        with self.assertRaises(InvalidArtifact) as ctx:
+            artifact_import.extract_upload(archive, out)
+        self.assertIn("sparse", str(ctx.exception))
+        self.assertEqual([p for p in out.rglob("*") if p.is_file()], [])
+
+    def test_the_uncompressed_size_is_capped(self) -> None:
+        archive = _tar_bytes({"a.json": b"x" * 600, "b.json": b"y" * 600}, self.tmpdir() / "big.tar.gz")
+        with mock.patch.object(artifact_import, "MAX_UPLOAD_EXTRACT_BYTES", 1000), self.assertRaises(InvalidArtifact) as ctx:
+            artifact_import.extract_upload(archive, self.tmpdir() / "out")
+        self.assertIn("bytes uncompressed", str(ctx.exception))
+
+    def test_a_file_and_a_directory_of_one_name_is_invalid(self) -> None:
+        archive = _tar_bytes({"a": b"x", "a/b": b"y"}, self.tmpdir() / "clash.tar.gz")
+        with self.assertRaises(InvalidArtifact) as ctx:
+            artifact_import.extract_upload(archive, self.tmpdir() / "out")
+        self.assertTrue(str(ctx.exception).startswith("a/b: appears twice"), str(ctx.exception))
+
+    def test_malformed_safetensors_headers_are_invalid(self) -> None:
+        root = self.tmpdir()
+        for label, entry in (
+            ("string offsets", {"dtype": "F32", "shape": [2], "data_offsets": ["0", "8"]}),
+            ("bool shape", {"dtype": "F32", "shape": [True, 2], "data_offsets": [0, 8]}),
+            ("negative offsets", {"dtype": "F32", "shape": [2], "data_offsets": [-8, 0]}),
+            ("a list entry", ["F32", [2], [0, 8]]),
+            ("a string entry", "F32"),
+        ):
+            with self.subTest(label):
+                (root / "w.safetensors").write_bytes(_safetensors({"t": entry}))
+                with self.assertRaises(InvalidArtifact) as ctx:
+                    artifact_import.safetensors(root, "w.safetensors")
+                self.assertIn("malformed header entry", str(ctx.exception))
+
+    def test_deep_and_huge_json_configs_are_invalid(self) -> None:
+        root = self.tmpdir()
+        (root / "adapter_config.json").write_text("[" * 200_000 + "]" * 200_000)
+        with self.assertRaises(InvalidArtifact) as ctx:
+            artifact_import._json(root, "adapter_config.json")
+        self.assertTrue(str(ctx.exception).startswith("adapter_config.json: "), str(ctx.exception))
+        (root / "config.json").write_text(json.dumps({"pad": "x" * 2048}))
+        with mock.patch.object(artifact_import, "MAX_JSON_BYTES", 1024), self.assertRaises(InvalidArtifact) as ctx:
+            artifact_import._json(root, "config.json")
+        self.assertIn("larger than 1024 bytes", str(ctx.exception))
+
+    def test_a_head_file_outside_the_bundle_is_never_read(self) -> None:
+        tmp = self.tmpdir()
+        other = tmp / "other-tenant" / "secret_head.safetensors"
+        other.parent.mkdir()
+        other.write_bytes(_safetensors({"other_tenant_tensor": {"dtype": "F32", "shape": [2, 2], "data_offsets": [0, 16]}}))
+        root = tmp / "payload"
+        root.mkdir()
+        base = artifact_import.ResolvedModel(model_id="m", path=tmp, repo="org/m", revision="r", family="qwen3", template_revision=None, source="hub")
+        for head in (str(other), "../other-tenant/secret_head.safetensors"):
+            with self.subTest(head):
+                (root / "router_config.json").write_text(json.dumps({"hidden_size": 4, "head_file": head}))
+                with self.assertRaises(InvalidArtifact) as ctx:
+                    artifact_import.check_format("router_bundle", root, base, {"hidden_size": 4})
+                self.assertIn("head_file must be 'router_head.safetensors'", str(ctx.exception))
+                self.assertNotIn("other_tenant_tensor", str(ctx.exception))
+
+    def test_wrongly_typed_config_values_are_invalid_not_a_crash(self) -> None:
+        tmp = self.tmpdir()
+        lora = tmp / "lora"
+        lora.mkdir()
+        (lora / "cartridge.safetensors").write_bytes(_safetensors({"__metadata__": ["not", "a", "dict"]}))
+        archive = tar_of(lora, tmp / "c.tar.gz")
+        spec = {"format": "cartridge", "base_model": QWEN_ID, "source": {"kind": "upload", "download_url": "u"}}
+        base = artifact_import.ResolvedModel(model_id=QWEN_ID, path=tmp, repo="org/m", revision="r", family="qwen3", template_revision=None, source="hub")
+        with mock.patch.object(artifact_import, "resolve_config", return_value=(base, {"hidden_size": 4})), self.assertRaises(InvalidArtifact):
+            artifact_import.run(spec, workdir=self.tmpdir(), download=lambda _u, dest: shutil.copyfile(archive, dest))
+
+    def test_nested_copies_of_format_files_are_dropped(self) -> None:
+        self.assertTrue(artifact_import.matches("model-00001-of-00002.safetensors", "model-*-of-*.safetensors"))
+        self.assertFalse(artifact_import.matches("x/model-00001-of-00002.safetensors", "model-*-of-*.safetensors"))
+        self.assertTrue(artifact_import.matches("1_Pooling/config.json", "1_Pooling/config.json"))
+        root = self.tmpdir()
+        (root / "sub").mkdir()
+        (root / "sub" / "model-00001-of-00002.safetensors").write_bytes(b"unchecked")
+        (root / "config.json").write_text("{}")
+        artifact_import._keep_files(root, "merged_safetensors")
+        self.assertEqual(sorted(p.relative_to(root).as_posix() for p in root.rglob("*")), ["config.json"])
+
+    def test_hub_redirects_never_downgrade_or_carry_the_token_across_origins(self) -> None:
+        import urllib.error
+        import urllib.request
+
+        handler = artifact_import._NoAuthOnRedirect()
+
+        def follow(old: str, new: str) -> Any:
+            req = urllib.request.Request(old, headers={"Authorization": "Bearer hf_secret"})
+            return handler.redirect_request(req, io.BytesIO(), 302, "Found", {}, new)
+
+        self.assertEqual(follow("https://hub.example/a", "https://hub.example/b").get_header("Authorization"), "Bearer hf_secret")
+        self.assertIsNone(follow("https://hub.example/a", "https://cdn.example/b").get_header("Authorization"))
+        self.assertIsNone(follow("http://hub.example:1/a", "http://hub.example:2/b").get_header("Authorization"))
+        for target in ("http://hub.example/b", "ftp://hub.example/b", "file:///etc/passwd"):
+            with self.subTest(target), self.assertRaises(urllib.error.HTTPError):
+                follow("https://hub.example/a", target)
+
+    def test_a_repo_listing_too_many_files_is_refused(self) -> None:
+        hub = FakeHub({"a.json": b"{}", "b.json": b"{}"})
+        self.addCleanup(hub.close)
+        with mock.patch.dict("os.environ", {"HF_ENDPOINT": hub.url, "GRAD_OFFLINE": "", "HF_HUB_OFFLINE": ""}), mock.patch.object(
+            artifact_import, "MAX_BUNDLE_MEMBERS", 1
+        ), self.assertRaises(SourceUnavailableError) as ctx:
+            artifact_import.hf_snapshot("acme/lora", None, None, self.tmpdir(), ("*.json",))
+        self.assertIn("more than 1 files", str(ctx.exception))
