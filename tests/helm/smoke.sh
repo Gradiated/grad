@@ -68,7 +68,7 @@ GENERATED=$(kubectl -n "$NS" get secret "$SECRET" -o jsonpath='{.data}')
 # KEDA's metrics-api trigger (keda.trigger=metrics-api) reads each pool's queue
 # depth from grad-server's metrics port; the prometheus trigger reads
 # grad_jobs_open from /metrics. Both must answer from inside the cluster.
-helm template "$RELEASE" "$CHART" -f "$CHART/ci/kind-values.yaml" --set keda.enabled=true --set keda.trigger=metrics-api \
+helm template "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" --set keda.enabled=true --set keda.trigger=metrics-api \
   | python3 -c 'import json,re,sys; [print(json.loads(u)) for u in re.findall(r"^ +url: (\".*\")$", sys.stdin.read(), re.M)]' \
   | while read -r url; do
       body=$(kubectl -n "$NS" exec deploy/"$RELEASE-grad-api" -- node -e "fetch(process.argv[1]).then(r=>r.text()).then(t=>console.log(t))" "$url")
