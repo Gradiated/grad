@@ -30,7 +30,7 @@ export default defineConfig({
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/main.tsx"],
-      reporter: ["text-summary"],
+      reporter: ["text-summary", "lcov"],
       thresholds: { lines: 90, branches: 75 },
     },
   },
