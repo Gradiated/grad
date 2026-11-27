@@ -1,4 +1,4 @@
-"""Artifact formats: versions, the files each format must contain, and schema validation.
+"""Artifact bundle formats: versions, the files each format must contain, and schema validation.
 
 The formats are specified in ``docs/ARTIFACT_FORMATS.md``. Their JSON Schemas live in
 ``grad_trainer/artifact_schemas/`` (the repository's ``spec/artifacts/`` points there):

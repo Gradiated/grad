@@ -3,6 +3,9 @@
 Training runtime for `grad-server`: the six v0 recipes on torch + transformers + peft, the
 `.grad.tar.gz` artifact bundle format, the import runner, file formats (`grad_trainer/formats.py`)
 and the observability source providers (`grad_trainer/providers/`, see its README).
+Every artifact bundle format is specified in [`docs/ARTIFACT_FORMATS.md`](../../docs/ARTIFACT_FORMATS.md),
+validated by `grad_trainer/artifact_formats.py` against the JSON Schemas in
+`grad_trainer/artifact_schemas/` (linked as `spec/artifacts/`).
 
 | Recipe      | Trains                                                          | Artifact (`format`)                                                         |
 | ----------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -40,9 +43,11 @@ summary = import_runner.run(source, connector, emit_batch=post_records, workdir=
   Held-out evaluation is not metered.
 - `on_checkpoint(step, eval_score, checkpoint_dir, metadata)`: the directory holds the
   artifact files plus `trainer_state/` and is valid only during the call. Bundle it with
-  `bundles.bundle_directory(checkpoint_dir, out, manifest=metadata["manifest"])`. To resume,
+  `bundles.bundle_directory(checkpoint_dir, out, manifest={**metadata["manifest"], "kind": "checkpoint", "step": step})`. To resume,
   `bundles.extract_bundle(downloaded, dir)` and pass `ResumeState(step, dir)`.
 - The final artifact is `bundles.bundle_directory(out.artifact_dir, path, manifest=out.manifest, eval_report=out.eval_report)`.
+  `bundle_directory` stamps `format_version` and `created_by`, and raises `ValueError` when the
+  manifest or the format's config file breaks its schema; the worker then fails the job.
 
 ## Models
 
@@ -71,7 +76,7 @@ PYTHONPATH=. python -m coverage run -m unittest discover -s tests && python -m c
 The suite trains every recipe on tiny randomly initialised models built locally (no network);
 it takes about 20 seconds on 4 CPU threads. `tests/test_torch_*.py` and the parity checks
 skip when torch is not installed, so `PYTHONPATH=server/trainer python3 -m unittest discover -s server/trainer/tests`
-still runs the stdlib tests anywhere. The split-parity test also runs `planner.ts` when
+still runs the other tests anywhere `jsonschema` is installed. The split-parity test also runs `planner.ts` when
 `server/api/node_modules` is installed.
 
 Regenerate the locks after changing `requirements.txt`:
