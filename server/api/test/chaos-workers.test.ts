@@ -1,0 +1,167 @@
+/**
+ * Chaos round 2, workers and queue: what happens when a worker's credential,
+ * its authenticator or its compute goes away mid-job, and whether the fair
+ * queue starves anyone under load.
+ */
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import type { ResolvedRunConfig } from "../src/contracts.js";
+import { PlanEvalRequestSchema } from "../src/contracts.js";
+import { ApiError } from "../src/errors.js";
+import type { JobRow, Store } from "../src/store/types.js";
+import { createWorkerClient, type WorkerClient } from "../src/worker/client.js";
+import { createEvalWorker } from "../src/worker/eval-worker.js";
+import { createRegexEvaluator } from "../src/services/evals/regex.js";
+import { createKubernetesWorkerAuth } from "../src/worker-auth/kubernetes.js";
+import {
+  makeTestApp,
+  TRAINER_KEY,
+  WORKSPACE_A,
+  type TestApp,
+} from "./fixtures/app.js";
+import { ManualClock } from "./fixtures/clock.js";
+import {
+  appFetch,
+  createEval,
+  fakeInference,
+  makeEvalHarness,
+  qaRecords,
+  seedDataset,
+  type EvalHarness,
+} from "./fixtures/evals.js";
+import { createTestStore } from "./fixtures/postgres.js";
+import { createSftRun, FakeWorker } from "./fixtures/worker.js";
+
+const config = { model: "test/tiny" } as unknown as ResolvedRunConfig;
+
+describe("queue under load (store)", () => {
+  let clock: ManualClock;
+  let store: Store;
+  let dispose: () => Promise<void>;
+  const datasets = new Map<string, string>();
+
+  beforeEach(async () => {
+    clock = new ManualClock();
+    ({ store, dispose } = await createTestStore(clock));
+    datasets.clear();
+  });
+
+  afterEach(async () => {
+    await dispose();
+  });
+
+  const queueRun = async (
+    s: Store,
+    ws: string,
+    extra: { minGpuMemoryGb?: number; maxQueued?: number } = {},
+  ) => {
+    let datasetId = datasets.get(ws);
+    if (!datasetId) {
+      datasetId = (
+        await s.datasets.getOrCreate({
+          workspaceId: ws,
+          name: "ds",
+          metadata: {},
+        })
+      ).id;
+      datasets.set(ws, datasetId);
+    }
+    clock.advanceSeconds(1);
+
+    return s.runs.create({
+      workspaceId: ws,
+      name: "run",
+      datasetId,
+      datasetName: "ds",
+      datasetVersion: 0,
+      recipeKind: "sft",
+      resolvedConfig: config,
+      maxCostUsd: null,
+      pricePerMillionTokens: 0.4,
+      totalSteps: 10,
+      maxAttempts: 3,
+      ...extra,
+    });
+  };
+
+  const claim = async (workerId: string, gpuMemoryGb: number) => {
+    await store.jobs.seeWorker({
+      id: workerId,
+      kinds: ["train"],
+      device: "gpu",
+      gpuMemoryGb,
+      now: clock.now(),
+    });
+
+    return store.jobs.claimNext({
+      workerId,
+      workerKey: "k",
+      leaseSeconds: 60,
+      now: clock.now(),
+      kinds: ["train"],
+      gpuMemoryGb,
+      maxRunning: { train: 8, import: 8, eval: 8 },
+    });
+  };
+
+  const finish = (job: JobRow) =>
+    store.jobs.update(job.id, {
+      status: "completed",
+      worker_id: null,
+      lease_expires_at: null,
+      finished_at: clock.now().toISOString(),
+    });
+
+  it("a run only the big GPU fits is not starved by a quieter workspace's stream of small runs", async () => {
+    // ws_a keeps three small runs going on 24 GB workers and waits for its
+    // 70 GB run; ws_b feeds one small run at a time. Fair share alone hands
+    // the 80 GB worker to ws_b (fewer running) every time.
+    for (let i = 0; i < 3; i += 1) await queueRun(store, "ws_a");
+    for (const w of ["s1", "s2", "s3"])
+      expect(await claim(w, 24)).not.toBeNull();
+    const big = await queueRun(store, "ws_a", { minGpuMemoryGb: 70 });
+
+    let bigClaimed = false;
+    for (let round = 0; round < 10 && !bigClaimed; round += 1) {
+      await queueRun(store, "ws_b");
+      const job = await claim("big", 80);
+      expect(job).not.toBeNull();
+      bigClaimed = job?.id === big.id;
+      await finish(job as JobRow);
+    }
+    expect(bigClaimed).toBe(true);
+  });
+
+  it("homogeneous GPUs keep plain fair share: a big run doesn't jump the queue", async () => {
+    const a = await queueRun(store, "ws_a");
+    const b = await queueRun(store, "ws_b", { minGpuMemoryGb: 70 });
+    // Every online worker fits both: oldest first.
+    expect((await claim("g1", 80))?.id).toBe(a.id);
+    expect((await claim("g2", 80))?.id).toBe(b.id);
+  });
+
+  it("holds queue_limit for concurrent creates on two replicas", async () => {
+    const other = await createTestStore(clock);
+    try {
+      for (let i = 0; i < 3; i += 1) await queueRun(store, "ws_cap");
+      const results = await Promise.allSettled(
+        Array.from({ length: 12 }, (_, i) =>
+          queueRun(i % 2 === 0 ? store : other.store, "ws_cap", {
+            maxQueued: 5,
+          }),
+        ),
+      );
+      const ok = results.filter((r) => r.status === "fulfilled");
+      const refused = results.filter(
+        (r) =>
+          r.status === "rejected" &&
+          r.reason instanceof ApiError &&
+          r.reason.code === "queue_limit",
+      );
+      expect(ok).toHaveLength(2);
+      expect(refused).toHaveLength(10);
+    } finally {
+      await other.dispose();
+    }
+  });
+});

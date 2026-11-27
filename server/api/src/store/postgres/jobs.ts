@@ -333,10 +333,12 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
 
     // Fair share: among workspaces below their running cap for the kind,
     // the one with the fewest running jobs (ties: its oldest job this worker
-    // can run), then that job. Claims of a kind take one advisory lock (in
-    // kind order, so multi-kind claims cannot deadlock), which makes the
-    // running counts and caps exact across replicas; SKIP LOCKED leaves rows
-    // another writer (a cancel) holds.
+    // can run), then that job. A GPU worker first takes runs no smaller
+    // online GPU fits (fair share among those), so a big run is never
+    // starved by small runs that any worker could take. Claims of a kind take
+    // one advisory lock (in kind order, so multi-kind claims cannot
+    // deadlock), which makes the running counts and caps exact across
+    // replicas; SKIP LOCKED leaves rows another writer (a cancel) holds.
     return db.atomic(async () => {
       for (const kind of [...kinds].sort()) {
         await db.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [
@@ -363,10 +365,14 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
                  AND ($2::text IS NULL OR workspace_id = $2)
              )
              FROM spaces s WHERE s.workspace_id IS NOT NULL
+           ), smallest AS (
+             -- The smallest GPU an online train worker has.
+             SELECT min(w.gpu_memory_gb) AS gb FROM ${onlineWorkers("'train'", "$10")}
+               AND w.gpu_memory_gb IS NOT NULL
            ), heads AS (
              -- Each workspace's oldest job this worker can run.
              SELECT h.* FROM spaces s CROSS JOIN LATERAL (
-               SELECT j.id, j.kind, j.workspace_id, j.created_at FROM grad_jobs j
+               SELECT j.id, j.kind, j.workspace_id, j.created_at, j.min_gpu_memory_gb FROM grad_jobs j
                WHERE j.kind = s.kind AND j.workspace_id = s.workspace_id AND ${claimable}
                ORDER BY j.created_at, j.id COLLATE "C" LIMIT 1
              ) h
@@ -375,7 +381,9 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
              SELECT h.id FROM heads h
              LEFT JOIN running r ON r.workspace_id = h.workspace_id AND r.kind = h.kind
              WHERE coalesce(r.n, 0) < coalesce(($5::jsonb ->> h.kind)::int, 1000000000)
-             ORDER BY coalesce(r.n, 0), h.created_at, h.id COLLATE "C"
+             ORDER BY ($4::float8 IS NOT NULL
+                       AND coalesce(h.min_gpu_memory_gb > (SELECT gb FROM smallest), false)) DESC,
+                      coalesce(r.n, 0), h.created_at, h.id COLLATE "C"
              LIMIT 1
            ), locked AS (
              SELECT id FROM grad_jobs
