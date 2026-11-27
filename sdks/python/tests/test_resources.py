@@ -509,16 +509,17 @@ class RunTests(unittest.TestCase):
         self.assertIs(run.refresh(), run)
 
     def test_wait_with_on_metric_streams_sse(self) -> None:
-        stream = fixture("python-metrics-stream.sse")
-        client, sender, _ = make_client({f"GET /v1/runs/{RUN_ID}/metrics": Reply(200, stream, {"content-type": "text/event-stream"})})
+        stream = fixture("run-events.sse")
+        rid = fixture("run-events-page.json")["run_id"]
+        client, sender, _ = make_client({f"GET /v1/runs/{rid}/events": Reply(200, stream, {"content-type": "text/event-stream"})})
         seen: list[grad.MetricPoint] = []
-        run = client.runs.wait(RUN_ID, on_metric=seen.append)
-        self.assertEqual([m.step for m in seen], [1])
+        run = client.runs.wait(rid, on_metric=seen.append)
+        self.assertEqual([m.step for m in seen], [1, 2, 3])
         self.assertEqual(run.status, "completed")
         self.assertEqual(sender.sent[0].header("Accept"), "text/event-stream")
         self.assertGreater(seen[0].loss or 0, 0)
         self.assertIsNone(seen[0].eval_metrics)
-        self.assertEqual(seen[0].epoch, 0)  # raw fallback for fields newer than the SDK
+        self.assertEqual(seen[1].eval_metrics, {"eval_loss": 0.52})
 
     def test_sse_reconnects_with_last_event_id_and_dedupes(self) -> None:
         def metric(seq: int, step: int) -> str:
@@ -551,28 +552,30 @@ class RunTests(unittest.TestCase):
         self.assertIn("Lost the metrics stream", str(ctx.exception))
 
     def test_sse_falls_back_to_polling_when_a_proxy_strips_the_stream(self) -> None:
-        page = fixture("python-metrics-page.json")
+        page = fixture("run-events-page.json")
+        rid, data = page["run_id"], page["data"]
+        half = {**page, "data": data[:9], "status": "running", "tail_cursor": "tail-9"}
         client, sender, _ = make_client(
             {
-                f"GET /v1/runs/{RUN_ID}/metrics": [
-                    json_reply({"data": [], "next_cursor": None, "status": "running", "run_id": RUN_ID}),
-                    json_reply({**page, "status": "running"}),
+                f"GET /v1/runs/{rid}/events": [
+                    json_reply({"data": [], "next_cursor": None, "tail_cursor": "tail-0", "status": "queued", "run_id": rid}),
+                    json_reply(half),
+                    json_reply(half),  # a repeat: deduplicated by seq
                     refused(),
-                    json_reply({**page, "data": [], "status": "completed"}),
+                    json_reply({**page, "data": data[5:]}),
                 ],
-                f"GET /v1/runs/{RUN_ID}": json_reply(RUN_C),
             },
             max_retries=0,
         )
         seen: list[int] = []
-        run = client.runs.wait(RUN_ID, on_metric=lambda m: seen.append(m.step))
-        self.assertEqual(seen, [1])
+        run = client.runs.wait(rid, on_metric=lambda m: seen.append(m.step))
+        self.assertEqual(seen, [1, 2, 3])
         self.assertEqual(run.status, "completed")
-        cursors = [s.query.get("cursor") for s in sender.sent if s.path.endswith("/metrics")]
-        self.assertIn([page["tail_cursor"]], cursors, "polling tails with tail_cursor")
+        cursors = [s.query.get("cursor") for s in sender.sent if s.path.endswith("/events")]
+        self.assertIn(["tail-9"], cursors, "polling tails with tail_cursor")
 
     def test_wait_timeout_while_streaming(self) -> None:
-        client, _, clock = make_client({f"GET /v1/runs/{RUN_ID}/metrics": Reply(200, ": ping\n\n", {"content-type": "text/event-stream"}), f"GET /v1/runs/{RUN_ID}": json_reply(RUN_Q)})
+        client, _, clock = make_client({f"GET /v1/runs/{RUN_ID}/events": Reply(200, ": ping\n\n", {"content-type": "text/event-stream"}), f"GET /v1/runs/{RUN_ID}": json_reply(RUN_Q)})
         with self.assertRaises(grad.WaitTimeoutError):
             client.runs.wait(RUN_ID, timeout=5, on_metric=lambda m: None)
         self.assertGreaterEqual(clock.now, 1005)

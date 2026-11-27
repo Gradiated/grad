@@ -337,6 +337,13 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             })
             .await
             .map(drop),
+        "list_run_events" => {
+            let id = fixture()["responses"]["run_events"]["run_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            c.runs().events_page(&id, None, Some(100)).await.map(drop)
+        }
         other => panic!("no Rust call for parity case {}", other),
     }
 }
@@ -404,6 +411,26 @@ fn typed_responses() {
     let secret: SecretRef = serde_json::from_value(fx["responses"]["secret"].clone()).unwrap();
     let usage: UsageRecord =
         serde_json::from_value(fx["responses"]["usage_page"]["data"][0].clone()).unwrap();
+    let events: RunEventsPage =
+        serde_json::from_value(fx["responses"]["run_events"].clone()).unwrap();
+    let phase = |i: usize| match &events.data[i] {
+        RunEvent::Phase(p) => p.clone(),
+        other => panic!("event {} is {}", i, other.type_name()),
+    };
+    let attempt = |i: usize| match &events.data[i] {
+        RunEvent::Attempt(a) => a.clone(),
+        other => panic!("event {} is {}", i, other.type_name()),
+    };
+    let RunEvent::Metric(metric7) = &events.data[7] else {
+        panic!("metric")
+    };
+    let RunEvent::Checkpoint(ckpt11) = &events.data[11] else {
+        panic!("checkpoint")
+    };
+    let RunEvent::Completed(done) = &events.data[24] else {
+        panic!("completed")
+    };
+    let interruption = run.last_interruption.clone().unwrap();
     let last = source.last_sync.clone().unwrap();
     let report = run.eval_report.unwrap();
     let pareto = report.pareto_summary.clone().unwrap();
@@ -434,7 +461,21 @@ fn typed_responses() {
         "usage[0].kind": usage.kind,
         "usage[0].tokens_through": usage.tokens_through,
         "usage[0].cost_usd": usage.cost_usd,
+        "run.phase": run.phase.as_ref().unwrap().as_str(),
+        "run.last_interruption.reason": interruption.reason.as_str(),
+        "run.last_interruption.resume_step": interruption.resume_step,
+        "run_events.data[2].phase": phase(2).phase.as_str(),
+        "run_events.data[2].workers_online": phase(2).workers_online,
+        "run_events.data[4].gpu.name": phase(4).gpu.unwrap().name,
+        "run_events.data[7].metric.step": metric7.metric.step,
+        "run_events.data[11].checkpoint_id": ckpt11.checkpoint_id,
+        "run_events.data[12].event": "interrupted",
+        "run_events.data[12].reason": attempt(12).reason.unwrap().as_str(),
+        "run_events.data[14].resume_step": attempt(14).resume_step,
+        "run_events.data[24].status": done.status.as_str(),
+        "run_events.data[24].run.last_interruption.reason": done.run.last_interruption.clone().unwrap().reason.as_str(),
     });
+    assert_eq!(attempt(12).event, AttemptKind::Interrupted);
     assert_eq!(norm(&got), norm(&fx["expect"]));
     assert_eq!(report.metric(), Some(0.41));
 }

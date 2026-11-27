@@ -411,7 +411,7 @@ describe("request building", () => {
     expect(call.headers.get("authorization")).toBe("Bearer lazy_key");
     expect(call.headers.get("content-type")).toBe("application/json");
     expect(call.headers.get("accept")).toBe("application/json");
-    expect(call.headers.get("user-agent")).toMatch(/^grad-typescript\/[\d.]+ node\/v\d+/);
+    expect(call.headers.get("user-agent")).toMatch(/^grad-typescript\/[\d.]+(-[\w.]+)? node\/v\d+/);
     expect(call.headers.get("x-extra")).toBe("1");
     expect(call.headers.get("x-call")).toBe("y");
     expect(call.headers.get("x-h")).toBe("5");

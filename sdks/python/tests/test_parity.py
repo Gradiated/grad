@@ -139,6 +139,7 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         ),
         "sync_source_full": lambda: source.sync(full=True),
         "list_usage": lambda: client.usage.list(limit=10),
+        "list_run_events": lambda: list(client.runs.events(PARITY["responses"]["run_events"]["run_id"])),
     }
 
 
@@ -172,6 +173,8 @@ class ParityTests(unittest.TestCase):
         source = grad.Source.from_api(responses["source"])
         secret = grad.SecretRef.from_api(responses["secret"])
         usage = grad.UsageRecord.from_api(responses["usage_page"]["data"][0])
+        events: list[Any] = [grad._models.run_event_from_api(e) for e in responses["run_events"]["data"]]
+        assert run.last_interruption is not None
         assert source.last_sync is not None
         assert run.eval_report is not None and run.eval_report.pareto_summary is not None and run.latest_metric is not None
         got = {
@@ -201,11 +204,31 @@ class ParityTests(unittest.TestCase):
             "usage[0].kind": usage.kind,
             "usage[0].tokens_through": usage.tokens_through,
             "usage[0].cost_usd": usage.cost_usd,
+            "run.phase": run.phase,
+            "run.last_interruption.reason": run.last_interruption.reason,
+            "run.last_interruption.resume_step": run.last_interruption.resume_step,
+            "run_events.data[2].phase": events[2].phase,
+            "run_events.data[2].workers_online": events[2].workers_online,
+            "run_events.data[4].gpu.name": events[4].gpu["name"],
+            "run_events.data[7].metric.step": events[7].metric.step,
+            "run_events.data[11].checkpoint_id": events[11].checkpoint_id,
+            "run_events.data[12].event": events[12].event,
+            "run_events.data[12].reason": events[12].reason,
+            "run_events.data[14].resume_step": events[14].resume_step,
+            "run_events.data[24].status": events[24].status,
+            "run_events.data[24].run.last_interruption.reason": events[24].run.last_interruption.reason,
         }
         self.assertEqual(got, want)
         self.assertIsInstance(run.eval_report, grad.EvalReport)
         self.assertIsInstance(run.eval_report.pareto_summary, grad.RouterParetoSummary)
         self.assertEqual(run.eval_report.metric, 0.41)
+        self.assertIsInstance(run.last_interruption, grad.RunInterruption)
+        kinds = [type(e).__name__ for e in events]
+        self.assertEqual(
+            sorted(set(kinds)),
+            ["AttemptEvent", "CheckpointEvent", "CompletedEvent", "LogEvent", "MetricEvent", "PhaseEvent", "WarningEvent"],
+        )
+        self.assertIsInstance(events[24].run, grad.Run)
 
 
 if __name__ == "__main__":

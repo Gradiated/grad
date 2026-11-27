@@ -151,8 +151,8 @@ describe("runs", () => {
     const { grad, clock } = makeGrad(server, { maxRetries: 0 });
     const run = await grad.runs.get(completed.id);
     const steps: number[] = [];
-    const done = await run.wait({ onMetric: (m) => void steps.push(m.step) });
-    expect(done.status).toBe("completed");
+    for await (const m of run.metrics({ follow: true })) steps.push(m.step);
+    expect(run.status).toBe("completed");
     expect(steps).toEqual([...Array(steps.length).keys()].map((i) => i + 1));
     const metricCalls = server.callsTo("GET", `${RUN}/metrics`);
     expect(metricCalls).toHaveLength(3);
@@ -190,7 +190,7 @@ describe("runs", () => {
   });
 
   it("times out a metric-following wait", async () => {
-    const hang = new FakeServer().on("GET", `${RUN}/metrics`, (call) => new Promise<Response>((_r, reject) => {
+    const hang = new FakeServer().on("GET", `${RUN}/events`, (call) => new Promise<Response>((_r, reject) => {
       const signal = (call as unknown as { signal?: AbortSignal }).signal;
       void signal;
       setTimeout(() => reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } })), 5);

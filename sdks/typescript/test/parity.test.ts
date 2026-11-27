@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { adapters, Context, Judge, loggers, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
-import type { EvalRun, PlanEvalResponse, Run, Secret, Source, UsageRecord } from "../src/generated/models.js";
+import type { EvalRun, PlanEvalResponse, Run, RunEventsPage, Secret, Source, UsageRecord } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
 import { FakeServer, json, makeGrad, wire } from "./helpers.js";
@@ -9,7 +9,7 @@ import { FakeServer, json, makeGrad, wire } from "./helpers.js";
 /** tests/fixtures/wire/sdk-parity.json: every SDK and the CLI send these requests for the same calls. */
 interface Parity {
   requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown; query?: Record<string, string> }[];
-  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] } };
+  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] }; run_events: { run_id: string } };
   expect: Record<string, unknown>;
 }
 const parity = wire<Parity>("sdk-parity.json");
@@ -145,6 +145,7 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
     grad.sources.create("support-prod", { provider: sources.gradiated({ models: ["acme/support"] }), schedule: "0 * * * *" }),
   sync_source_full: async () => grad.sources.sync("src_01J9X", { full: true }),
   list_usage: () => grad.usage.list({ limit: 10 }).pages().next(),
+  list_run_events: () => grad.runs.events(parity.responses.run_events.run_id, { limit: 100 }).next(),
 });
 
 describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
@@ -152,6 +153,7 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const server = new FakeServer();
     for (const c of parity.requests) server.on(c.method, c.path, () => json({ id: "x", status: "queued" }));
     server.on("GET", "/v1/usage", () => json({ data: [], next_cursor: null }));
+    server.on("GET", `/v1/runs/${parity.responses.run_events.run_id}/events`, () => json({ data: [], next_cursor: null }));
     // fromBenchmark reads the dataset back.
     server.on("GET", "/v1/datasets/gsm8k-test-200", () => json({ id: "x", name: "gsm8k-test-200" }));
     const { grad } = makeGrad(server);
@@ -181,6 +183,12 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const source = decode<Source>("Source", parity.responses.source);
     const secret = decode<Secret>("Secret", parity.responses.secret);
     const usage = decode<UsageRecord>("UsageRecord", parity.responses.usage_page.data[0]);
+    const events = decode<RunEventsPage>("RunEventsPage", parity.responses.run_events).data;
+    const at = <T extends RunEventsPage["data"][number]["type"]>(i: number, type: T) => {
+      const event = events[i];
+      if (event?.type !== type) throw new Error(`event ${i} is ${event?.type}, not ${type}`);
+      return event as Extract<RunEventsPage["data"][number], { type: T }>;
+    };
     expect({
       "run.eval_report.metric_name": run.evalReport?.metricName,
       "run.eval_report.selected_step": run.evalReport?.selectedStep,
@@ -208,6 +216,19 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "usage[0].kind": usage.kind,
       "usage[0].tokens_through": usage.tokensThrough,
       "usage[0].cost_usd": usage.costUsd,
+      "run.phase": run.phase,
+      "run.last_interruption.reason": run.lastInterruption?.reason,
+      "run.last_interruption.resume_step": run.lastInterruption?.resumeStep,
+      "run_events.data[2].phase": at(2, "phase").phase,
+      "run_events.data[2].workers_online": at(2, "phase").workersOnline,
+      "run_events.data[4].gpu.name": at(4, "phase").gpu?.name,
+      "run_events.data[7].metric.step": at(7, "metric").metric?.step,
+      "run_events.data[11].checkpoint_id": at(11, "checkpoint").checkpointId,
+      "run_events.data[12].event": at(12, "attempt").event,
+      "run_events.data[12].reason": at(12, "attempt").reason,
+      "run_events.data[14].resume_step": at(14, "attempt").resumeStep,
+      "run_events.data[24].status": at(24, "completed").status,
+      "run_events.data[24].run.last_interruption.reason": at(24, "completed").run.lastInterruption?.reason,
     }).toEqual(parity.expect);
   });
 });

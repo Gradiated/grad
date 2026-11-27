@@ -28,6 +28,18 @@ await run.deploy(); // Cloud; a self-hosted server raises DeployUnavailableError
 await grad.deployments.rollback("support-router"); // back to the previous artifact
 ```
 
+Follow a run's lifecycle as typed events (narrow on `ev.type`; reconnects are
+invisible, the stream ends after `completed`):
+
+```ts
+for await (const ev of grad.runs.events(run.id, { follow: true })) {
+  if (ev.type === "phase") console.log(ev.phase, ev.workersOnline ?? "");
+  else if (ev.type === "metric") console.log(ev.step, ev.metric?.loss);
+  else if (ev.type === "attempt") console.log(ev.message); // "attempt 1 interrupted at step 120: the GPU was reclaimed; resuming from step 120 on a new worker"
+}
+// or: await run.wait({ onEvent: (ev) => ..., onStatus: (status, run) => console.log(status, run.phase) })
+```
+
 Self-hosted servers do not serve models: `artifact.download(dest)` and serve
 the bundle yourself (vLLM, SGLang). Production feedback reaches training
 through your observability tool and `grad sources`, not through this SDK.
@@ -43,7 +55,7 @@ real `grad-server` started by `tests/harness/stack.ts`.
 | Area | API |
 | --- | --- |
 | Datasets | `grad.datasets.create/get/list/push/records/render/fromHf`, `dataset.importFile(path).wait()` |
-| Runs | `grad.runs.plan/create/get/list/cancel/resume`, `run.wait()`, `run.metrics({ follow: true })` (SSE with reconnect), `run.checkpoints()`, `checkpoint.promote()` |
+| Runs | `grad.runs.plan/create/get/list/cancel/resume`, `run.wait({ onEvent, onMetric, onStatus })`, `run.events({ follow: true })` (typed lifecycle events: phase, metric, checkpoint, attempt, warning, log, completed), `run.metrics({ follow: true })` (SSE with reconnect), `run.checkpoints()`, `checkpoint.promote()` |
 | Recipes | `recipes.sft/dpo/router/decisionModel/cartridge/embedding/distill/rewardModel`, `rollouts`, `adapters`, `splits`, `Context` |
 | Artifacts | `grad.artifacts.get/list/stream`, `artifact.download(dest)` (streams to disk, verifies SHA-256) |
 | Deploy (Cloud) | `grad.deploy()` / `run.deploy()` / `artifact.deploy()` (= `grad.deployments.create`), `grad.deployments.get/list/rollback` |

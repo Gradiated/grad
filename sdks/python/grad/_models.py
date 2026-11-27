@@ -46,6 +46,15 @@ __all__ = [
     "RenderPreview",
     "RouterParetoSummary",
     "Run",
+    "RunInterruption",
+    "RunEvent",
+    "PhaseEvent",
+    "MetricEvent",
+    "CheckpointEvent",
+    "AttemptEvent",
+    "WarningEvent",
+    "LogEvent",
+    "CompletedEvent",
 ]
 
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "stopped_budget", "stopped_balance"})
@@ -534,6 +543,25 @@ class MetricPoint(APIObject):
 
 
 @dataclass(kw_only=True, repr=False, eq=False)
+class RunInterruption(APIObject):
+    """A run's latest attempt that ended without a result (``run.last_interruption``)."""
+
+    attempt: int = 0
+    reason: str = ""
+    """``lease_lost``, ``compute_reclaimed``, ``worker_error`` or ``oom``."""
+    step: int = 0
+    resume_step: int | None = None
+    at: str | None = None
+    message: str = ""
+
+    _repr_fields = ("attempt", "reason", "step", "resume_step")
+
+
+def _interruption(value: Any, client: Any) -> Any:
+    return RunInterruption.from_api(value, client) if isinstance(value, Mapping) else value
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
 class RouterParetoSummary(APIObject):
     """Router quality vs. cost on the held-out report fold, against the fallback model."""
 
@@ -624,6 +652,15 @@ class Run(APIObject):
     total_steps: int = 0
     attempt: int = 0
     max_attempts: int | None = None
+    phase: str | None = None
+    """The latest lifecycle phase (``queued``, ``waiting_for_compute``, ``starting``, ``loading_model``,
+    ``training``, ``evaluating``, ``checkpointing``, ``uploading``, ``completing``)."""
+    phase_since: str | None = None
+    last_interruption: RunInterruption | None = None
+    workers_online: int | None = None
+    """While queued: workers of this kind holding a lease (all busy); ``None`` otherwise."""
+    autoscaling: bool | None = None
+    """While queued: ``True`` when workers scale from zero, so one is starting."""
     latest_metric: MetricPoint | None = None
     eval_report: EvalReport | None = None
     checkpoint_evals: list[dict[str, Any]] = field(default_factory=list)
@@ -638,6 +675,7 @@ class Run(APIObject):
         "resolved_config": _attrdict,
         "eval_report": _eval_report,
         "latest_metric": _metric,
+        "last_interruption": _interruption,
     }
 
     @property
@@ -666,6 +704,8 @@ class Run(APIObject):
         timeout: float | None = None,
         on_metric: Callable[[MetricPoint], Any] | None = None,
         on_status: Callable[[Run], Any] | None = None,
+        on_event: Callable[[RunEvent], Any] | None = None,
+        progress: bool | None = None,
         raise_on_failure: bool = True,
     ) -> Run:
         """Block until the run finishes (in place). See ``client.runs.wait``.
@@ -673,12 +713,25 @@ class Run(APIObject):
         Raises :class:`grad.RunFailedError` unless the run completed; this run is updated first.
         """
         try:
-            final = self._need_client().runs.wait(self.id, timeout=timeout, on_metric=on_metric, on_status=on_status, raise_on_failure=raise_on_failure)
+            final = self._need_client().runs.wait(
+                self.id,
+                timeout=timeout,
+                on_metric=on_metric,
+                on_status=on_status,
+                on_event=on_event,
+                progress=progress,
+                raise_on_failure=raise_on_failure,
+            )
         except RunFailedError as exc:
             self._update_from(exc.run)
             raise
         self._update_from(final)
         return self
+
+    def events(self, *, follow: bool = False, timeout: float | None = None) -> Iterator[RunEvent]:
+        """The run's typed lifecycle events (see ``client.runs.events``)."""
+        stream: Iterator[RunEvent] = self._need_client().runs.events(self.id, follow=follow, timeout=timeout)
+        return stream
 
     def metrics(self, *, follow: bool = False) -> Iterator[MetricPoint]:
         """All metric points so far, or (``follow=True``) a live SSE stream until the run ends."""
@@ -1159,3 +1212,129 @@ class DatasetScoring:
         self.eval.wait(timeout=timeout)
         dataset: Dataset = self.eval._need_client().datasets.get(str(self.eval.task_source.get("dataset")))
         return dataset
+
+
+# --------------------------------------------------------------------------------------
+# Run events (GET /v1/runs/{id}/events): one typed object per ``type``
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class _RunEventBase(APIObject):
+    type: str = ""
+    run_id: str = ""
+    seq: int = 0
+    """Position in the run's event sequence (the SSE event id)."""
+    attempt: int = 1
+    timestamp: str | None = None
+
+    _repr_fields: ClassVar[tuple[str, ...]] = ("seq", "attempt")
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class PhaseEvent(_RunEventBase):
+    """The run entered ``phase`` (``queued`` ... ``completing``)."""
+
+    phase: str = ""
+    step: int = 0
+    workers_online: int | None = None
+    autoscaling: bool | None = None
+    gpu: dict[str, Any] | None = None
+    """``starting``: the worker's GPU, ``{"name", "memory_gb"}`` (``None`` without one)."""
+
+    _repr_fields = ("seq", "attempt", "phase", "step")
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class MetricEvent(_RunEventBase):
+    """One training step's metrics (``event.metric``)."""
+
+    step: int = 0
+    metric: MetricPoint = field(default_factory=MetricPoint)
+
+    _repr_fields = ("seq", "step", "metric")
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"metric": _metric}
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class CheckpointEvent(_RunEventBase):
+    """A checkpoint was stored."""
+
+    step: int = 0
+    checkpoint_id: str = ""
+    eval_score: float | None = None
+    format: str | None = None
+
+    _repr_fields = ("seq", "step", "checkpoint_id", "eval_score")
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class AttemptEvent(_RunEventBase):
+    """An attempt ``started``, was ``interrupted`` (``reason``), or the run ``gave_up``."""
+
+    event: str = ""
+    reason: str | None = None
+    step: int | None = None
+    resume_step: int | None = None
+    max_attempts: int = 1
+    message: str = ""
+
+    _repr_fields = ("seq", "attempt", "event", "reason", "step", "resume_step")
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class WarningEvent(_RunEventBase):
+    """A warning from the planner, the worker or the eval report."""
+
+    step: int | None = None
+    message: str = ""
+
+    _repr_fields = ("seq", "step", "message")
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class LogEvent(_RunEventBase):
+    """An informational line from the worker."""
+
+    step: int | None = None
+    message: str = ""
+
+    _repr_fields = ("seq", "step", "message")
+
+
+def _run(value: Any, client: Any) -> Any:
+    return Run.from_api(value, client) if isinstance(value, Mapping) else value
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class CompletedEvent(_RunEventBase):
+    """The run finished: always the last event, with the final ``run``."""
+
+    status: str = ""
+    run: Run | None = None
+
+    _repr_fields = ("seq", "status")
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"run": _run}
+
+
+RunEvent = PhaseEvent | MetricEvent | CheckpointEvent | AttemptEvent | WarningEvent | LogEvent | CompletedEvent
+"""One event of ``run.events()``; switch on ``event.type`` or ``isinstance``."""
+
+EVENT_TYPES: dict[str, builtins.type[_RunEventBase]] = {
+    "phase": PhaseEvent,
+    "metric": MetricEvent,
+    "checkpoint": CheckpointEvent,
+    "attempt": AttemptEvent,
+    "warning": WarningEvent,
+    "log": LogEvent,
+    "completed": CompletedEvent,
+}
+
+
+def run_event_from_api(data: Mapping[str, Any], client: Any = None) -> RunEvent | None:
+    """The typed event for one RunEvent JSON object; ``None`` for a type this SDK doesn't know."""
+    cls = EVENT_TYPES.get(str(data.get("type")))
+    if cls is None:
+        return None
+    event: RunEvent = cls.from_api(data, client)  # type: ignore[assignment]
+    return event

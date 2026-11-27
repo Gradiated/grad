@@ -34,6 +34,7 @@ type parityFixture struct {
 		Usage    struct {
 			Data []json.RawMessage `json:"data"`
 		} `json:"usage_page"`
+		RunEvents json.RawMessage `json:"run_events"`
 	} `json:"responses"`
 	Expect map[string]any `json:"expect"`
 }
@@ -55,6 +56,11 @@ func TestParityRequests(t *testing.T) {
 		routes[c.Method+" "+c.Path] = jsonValue(200, map[string]any{"id": "x", "status": "queued"})
 	}
 	routes["GET /v1/usage"] = jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil})
+	var events generated.RunEventsPage
+	if err := json.Unmarshal(p.Responses.RunEvents, &events); err != nil {
+		t.Fatal(err)
+	}
+	routes["GET /v1/runs/"+events.RunID+"/events"] = jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil})
 	f := newFake(t, routes)
 	c, _ := f.client()
 	judge := grad.Judge{Name: "quality", Model: "judge/m", Prompt: "Is the answer correct?", Weight: 1}
@@ -182,6 +188,12 @@ func TestParityRequests(t *testing.T) {
 			}
 			return nil
 		},
+		"list_run_events": func() error {
+			for _, err := range c.Runs.Events(ctx, events.RunID, grad.EventsOptions{Limit: 100}) {
+				return err
+			}
+			return nil
+		},
 		"sync_source_full": func() error {
 			_, err := c.Sources.Sync(ctx, "src_01J9X", grad.FullSync()).Result()
 			return err
@@ -246,8 +258,26 @@ func TestParityTypedResponses(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var events generated.RunEventsPage
+	if err := json.Unmarshal(p.Responses.RunEvents, &events); err != nil {
+		t.Fatal(err)
+	}
+	ev2, ev4, ev7, ev11, ev12, ev14, ev24 := events.Data[2], events.Data[4], events.Data[7], events.Data[11], events.Data[12], events.Data[14], events.Data[24]
 	report := run.EvalReport
 	got := map[string]any{
+		"run.phase":                                        string(*run.Phase),
+		"run.last_interruption.reason":                     string(run.LastInterruption.Reason),
+		"run.last_interruption.resume_step":                float64(*run.LastInterruption.ResumeStep),
+		"run_events.data[2].phase":                         string(*ev2.Phase),
+		"run_events.data[2].workers_online":                float64(*ev2.WorkersOnline),
+		"run_events.data[4].gpu.name":                      ev4.GPU.Name,
+		"run_events.data[7].metric.step":                   float64(ev7.Metric.Step),
+		"run_events.data[11].checkpoint_id":                *ev11.CheckpointID,
+		"run_events.data[12].event":                        string(*ev12.Event),
+		"run_events.data[12].reason":                       string(*ev12.Reason),
+		"run_events.data[14].resume_step":                  float64(*ev14.ResumeStep),
+		"run_events.data[24].status":                       string(*ev24.Status),
+		"run_events.data[24].run.last_interruption.reason": string(ev24.Run.LastInterruption.Reason),
 		"run.eval_report.metric_name":                      report.MetricName,
 		"run.eval_report.selected_step":                    float64(report.SelectedStep),
 		"run.eval_report.eval_loss":                        *report.EvalLoss,

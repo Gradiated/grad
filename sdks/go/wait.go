@@ -11,6 +11,7 @@ type waitConfig struct {
 	maxInterval time.Duration
 	onStatus    func(status string)
 	onMetric    func(MetricPoint)
+	onEvent     func(RunEvent)
 	rubric      Rubric
 }
 
@@ -29,11 +30,17 @@ func WithPollInterval(min, max time.Duration) WaitOption {
 	return func(w *waitConfig) { w.minInterval, w.maxInterval = min, max }
 }
 
-// WithOnStatus is called whenever the observed status changes.
+// WithOnStatus is called whenever the observed status changes (for runs: the
+// status or the phase; read Run.Phase).
 func WithOnStatus(fn func(status string)) WaitOption { return func(w *waitConfig) { w.onStatus = fn } }
 
 // WithOnMetric is called with each new training metric while a run is waited on.
 func WithOnMetric(fn func(MetricPoint)) WaitOption { return func(w *waitConfig) { w.onMetric = fn } }
+
+// WithOnEvent makes Run.Wait follow the run's event stream (see Run.Events),
+// calling fn with every event: phases, metrics, checkpoints, attempts,
+// warnings, logs and the final completed event.
+func WithOnEvent(fn func(RunEvent)) WaitOption { return func(w *waitConfig) { w.onEvent = fn } }
 
 // WithRubric supplies the local scorers an eval needs when it was not created by this handle.
 func WithRubric(r Rubric) WaitOption { return func(w *waitConfig) { w.rubric = r } }

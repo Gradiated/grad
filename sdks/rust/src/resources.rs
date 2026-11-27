@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::download::{self, DownloadOptions, DownloadedArtifact, TempDir, TempFile};
 use crate::error::{Error, Result};
+use crate::events::{RunEvent, RunEventStream, RunEventsPage};
 use crate::models::*;
 use crate::sse::{MetricEvent, MetricStream};
 use crate::transport::{Body, Deadline, Req};
@@ -1015,6 +1016,85 @@ impl Runs<'_> {
             Req::get(format!("/v1/runs/{}/checkpoints", seg(id))).query(p.query()),
         )
         .await
+    }
+
+    /// The run's lifecycle events (phase, metric, checkpoint, attempt, warning,
+    /// log, completed). With `follow` they stream live over SSE, reconnecting
+    /// with `Last-Event-ID` (never repeating an event) until `completed`;
+    /// without, the stream pages the events recorded so far.
+    ///
+    /// ```no_run
+    /// # async fn f(c: &grad_sdk::Client) -> grad_sdk::Result<()> {
+    /// let mut events = c.runs().events("run_123", true);
+    /// while let Some(ev) = events.next().await {
+    ///     match ev? {
+    ///         grad_sdk::RunEvent::Phase(p) => println!("{}", p.phase.as_str()),
+    ///         grad_sdk::RunEvent::Attempt(a) => println!("{}", a.message),
+    ///         _ => {}
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn events(&self, id: &str, follow: bool) -> RunEventStream {
+        RunEventStream::new(self.c.t().clone(), id.to_string(), follow)
+    }
+
+    /// One JSON page of the run's events.
+    pub async fn events_page(
+        &self,
+        id: &str,
+        cursor: Option<String>,
+        limit: Option<i64>,
+    ) -> Result<RunEventsPage> {
+        check_path_param("run id", id)?;
+        get(
+            self.c,
+            Req::get(format!("/v1/runs/{}/events", seg(id)))
+                .opt_param("cursor", cursor)
+                .opt_param("limit", limit),
+        )
+        .await
+    }
+
+    /// Wait for a run while calling `on_event` with every lifecycle event
+    /// (follows the event stream; the timeout in `opts` applies).
+    /// `completed` returns the run; other terminal statuses return
+    /// [`Error::RunFailed`].
+    pub async fn wait_with_events(
+        &self,
+        id: &str,
+        opts: &WaitOptions,
+        mut on_event: impl FnMut(&RunEvent),
+    ) -> Result<Run> {
+        check_path_param("run id", id)?;
+        let poll = Poller::new(opts);
+        let mut stream = self.events(id, true);
+        loop {
+            let next = match poll.remaining() {
+                Some(r) => match tokio::time::timeout(r, stream.next()).await {
+                    Ok(n) => n,
+                    Err(_) => {
+                        let status = self.get(id).await.map(|r| r.status.as_str().to_string());
+                        return Err(poll.timeout_error(
+                            "run",
+                            id,
+                            &status.unwrap_or_else(|_| "unknown".into()),
+                        ));
+                    }
+                },
+                None => stream.next().await,
+            };
+            match next {
+                Some(Ok(ev)) => {
+                    on_event(&ev);
+                    if let RunEvent::Completed(done) = ev {
+                        return finish_run(done.run);
+                    }
+                }
+                Some(Err(e)) => return Err(e),
+                None => return finish_run(self.get(id).await?),
+            }
+        }
     }
 
     /// Live SSE metrics, resuming after `last_event_id` (a metric `seq`).

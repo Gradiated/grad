@@ -128,18 +128,24 @@ class SelfHostedLiveTests(_LiveCase):
         # The SDK README's Python blocks, run as written with only the model swapped.
         readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
         blocks = re.findall(r"```python\n(.*?)```", readme, flags=re.S)
-        self.assertEqual(len(blocks), 2)
+        self.assertEqual(len(blocks), 3)
         cwd = os.getcwd()
         os.chdir(self.tmp)
         self.addCleanup(os.chdir, cwd)
         code = blocks[0].replace('SFTRecipe(model="qwen/qwen3-8b")', f'SFTRecipe(model="{LLM}")')
+        scope: dict[str, Any] = {"__name__": "readme"}
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            exec(compile(code, "README.md", "exec"), {"__name__": "readme"})
+            exec(compile(code, "README.md", "exec"), scope)
         self.assertIn("Estimate", out.getvalue())
         self.assertIn("completed sql-helper@", out.getvalue())
+        # The events block follows the finished run: its stored events, then `completed`.
+        with contextlib.redirect_stdout(io.StringIO()) as events_out:
+            exec(compile(blocks[1], "README.md", "exec"), scope)
+        self.assertIn("queued", events_out.getvalue())
+        self.assertIn("completed", events_out.getvalue().splitlines()[-1])
         # The continued-training block needs a PEFT artifact (the torch worker): it is
         # exercised by CloudTorchLiveTests.test_continued_training_and_caller_idempotency_key.
-        compile(blocks[1], "README.md", "exec")
+        compile(blocks[2], "README.md", "exec")
         self.assertTrue((self.tmp / "sql-helper-bundle.grad.tar.gz").is_file())
 
     def test_import_file_render_and_records(self) -> None:

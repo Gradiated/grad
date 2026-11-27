@@ -18,10 +18,17 @@
 //! [`Client::artifacts`], [`Client::deployments`], [`Client::evals`], ...
 //! Every call returns [`Result`] with a typed [`Error`]. The request and
 //! response models are generated from `spec/openapi.yaml` (`generated`).
+//!
+//! A run's lifecycle streams as typed [`RunEvent`]s (phase, metric,
+//! checkpoint, attempt, warning, log, completed): `client.runs().events(id,
+//! true)` returns a [`RunEventStream`] whose `next().await` reconnects with
+//! `Last-Event-ID` invisibly and ends after `completed`; `wait_with_events`
+//! waits with a callback.
 
 pub mod config;
 pub mod download;
 pub mod error;
+pub mod events;
 #[rustfmt::skip]
 pub mod generated;
 pub mod models;
@@ -36,6 +43,10 @@ use std::time::Duration;
 pub use config::{ConfigFile, ConfigInputs, Profile, ResolvedConfig, Source as ConfigSource};
 pub use download::{DownloadOptions, DownloadedArtifact, ExtractLimits};
 pub use error::{ApiErrorBody, Error, Result};
+pub use events::{
+    AttemptEvent, AttemptKind, CheckpointEvent, CompletedEvent, EventMeta, GpuInfo, MessageEvent,
+    PhaseEvent, RunEvent, RunEventStream, RunEventsPage, RunMetricEvent,
+};
 pub use models::*;
 pub use resources::*;
 pub use sse::{MetricEvent, MetricStream, SseEvent, SseParser};

@@ -8,6 +8,7 @@ import type {
   RecipeSpec,
   ResolvedRunConfig,
   Run as RunData,
+  RunEvent,
   RunStatus,
   SplitSpec,
 } from "../generated/models.js";
@@ -34,11 +35,23 @@ export interface RunParams {
 }
 
 export interface RunWaitOptions extends WaitOptions {
-  /** Streams each metric point while waiting (uses the SSE metrics stream). */
+  /** Every lifecycle event while waiting (phases, metrics, checkpoints, attempts, warnings, logs, completed). */
+  onEvent?: (event: RunEvent) => void | Promise<void>;
+  /** Streams each metric point while waiting (from the run's event stream). */
   onMetric?: (metric: MetricPoint) => void | Promise<void>;
-  /** Called with every status change. */
+  /** Called with every status or phase change. */
   onStatus?: (status: RunStatus, run: Run) => void | Promise<void>;
 }
+
+export interface EventsOptions extends RequestOptions {
+  /** Keep the stream open until the run finishes (SSE; reconnects with Last-Event-ID). */
+  follow?: boolean;
+  /** Page size of the JSON pages (without `follow`). */
+  limit?: number;
+}
+
+const RUN_EVENT_TYPES = new Set<string>(["phase", "metric", "checkpoint", "attempt", "warning", "log", "completed"]);
+const WAITING_PHASES = new Set<string>(["queued", "waiting_for_compute"]);
 
 export interface MetricsOptions extends RequestOptions {
   /** Keep the stream open until the run finishes (SSE with automatic reconnect). */
@@ -74,6 +87,8 @@ const buildRunBody = async (params: RunParams) => {
 const decodeMetric = (data: string): MetricPoint => convertKeys(CODEC, "MetricPoint", JSON.parse(data), "decode") as MetricPoint;
 
 const decodeRun = (data: string): RunData => convertKeys(CODEC, "Run", JSON.parse(data), "decode") as RunData;
+
+const decodeEvent = (data: string): RunEvent => convertKeys(CODEC, "RunEvent", JSON.parse(data), "decode") as RunEvent;
 
 /** A checkpoint saved during a run; `promote()` turns it into a kept artifact. */
 export interface Checkpoint extends CheckpointData {}
@@ -123,14 +138,15 @@ export class Run {
    * `stopped_budget` (resume with a raised cap) and `stopped_balance` (top up, then resume).
    */
   async wait(options: RunWaitOptions = {}): Promise<CompletedRun> {
-    let lastStatus: RunStatus | undefined;
+    let last: string | undefined;
     const notify = async () => {
-      if (this.status !== lastStatus) {
-        lastStatus = this.status;
+      const key = `${this.status}/${this.phase ?? ""}`;
+      if (key !== last) {
+        last = key;
         await options.onStatus?.(this.status, this);
       }
     };
-    if (options.onMetric) {
+    if (options.onMetric || options.onEvent) {
       await this.followUntilDone(options, notify);
     } else {
       await pollUntil(
@@ -162,10 +178,12 @@ export class Run {
     const timer =
       options.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(new WaitTimeoutError(`run ${this.id}`, options.timeoutMs ?? 0)), options.timeoutMs);
     try {
-      for await (const metric of this.metrics({ follow: true, signal: controller.signal })) {
-        await options.onMetric?.(metric);
+      for await (const event of this.events({ follow: true, signal: controller.signal })) {
+        await options.onEvent?.(event);
+        if (event.type === "metric" && event.metric) await options.onMetric?.(event.metric);
+        if (event.type === "phase") await notify();
       }
-      // metrics({ follow }) only returns after the final `status` event, which updated this run.
+      // events({ follow }) only returns after the final `completed` event, which updated this run.
       await notify();
     } catch (error) {
       if (controller.signal.reason instanceof WaitTimeoutError) throw controller.signal.reason;
@@ -212,6 +230,72 @@ export class Run {
       }
       failures += 1;
       await this.#core.poll.sleep(Math.min(500 * 2 ** Math.min(failures - 1, 4), 5_000), request.signal);
+    }
+  }
+
+  /**
+   * The run's lifecycle events, typed by `type` (phase, metric, checkpoint,
+   * attempt, warning, log, completed). With `follow: true` this streams live
+   * over SSE, reconnects with `Last-Event-ID` after drops (never repeating an
+   * event) and ends after `completed`, which also refreshes this run.
+   */
+  async *events(options: EventsOptions = {}): AsyncGenerator<RunEvent, void, undefined> {
+    const { follow = false, limit, ...request } = options;
+    if (!follow) {
+      const fetchPage = (cursor: string | undefined) =>
+        this.#core.api.listRunEvents(this.id, { ...(cursor ? { cursor } : {}), ...(limit !== undefined ? { limit } : {}) }, request);
+      for await (const page of pages(fetchPage, request.signal)) {
+        for (const event of page.data) {
+          this.observe(event);
+          yield event;
+        }
+      }
+      return;
+    }
+    let lastEventId: string | undefined;
+    let lastSeq = 0;
+    let failures = 0;
+    while (true) {
+      try {
+        for await (const sse of this.#core.api.listRunEventsStream(this.id, {}, { ...request, ...(lastEventId !== undefined ? { lastEventId } : {}) })) {
+          failures = 0;
+          if (!RUN_EVENT_TYPES.has(sse.event)) continue;
+          const event = decodeEvent(sse.data);
+          if (event.type !== "completed") {
+            if (sse.id !== undefined) lastEventId = sse.id;
+            if (event.seq <= lastSeq) continue;
+            lastSeq = event.seq;
+          }
+          this.observe(event);
+          yield event;
+          if (event.type === "completed") return;
+        }
+        // The stream closed without `completed` (proxy timeout, deploy): reconnect.
+      } catch (error) {
+        if (request.signal?.aborted || !isTransient(error)) throw error;
+      }
+      failures += 1;
+      await this.#core.poll.sleep(Math.min(500 * 2 ** Math.min(failures - 1, 4), 5_000), request.signal);
+    }
+  }
+
+  /** Keeps this run's phase and status in step with the events it streams. */
+  private observe(event: RunEvent): void {
+    if (event.type === "completed") {
+      this.update(event.run);
+    } else if (event.type === "phase") {
+      this.phase = event.phase;
+      this.phaseSince = event.timestamp;
+      if (!isTerminal(this.status)) this.status = WAITING_PHASES.has(event.phase) ? "queued" : "running";
+    } else if (event.type === "attempt" && event.event === "interrupted" && event.reason !== null) {
+      this.lastInterruption = {
+        attempt: event.attempt,
+        reason: event.reason,
+        step: event.step ?? 0,
+        resumeStep: event.resumeStep,
+        at: event.timestamp,
+        message: event.message,
+      };
     }
   }
 
@@ -306,6 +390,11 @@ export class RunsResource {
 
   checkpoints(id: string, options?: RequestOptions): Promise<Checkpoint[]> {
     return new Run(this.core, { id } as RunData).checkpoints(options);
+  }
+
+  /** A run's lifecycle events; `for await (const ev of grad.runs.events(id, { follow: true }))`. */
+  events(id: string, options?: EventsOptions): AsyncGenerator<RunEvent, void, undefined> {
+    return new Run(this.core, { id } as RunData).events(options);
   }
 }
 

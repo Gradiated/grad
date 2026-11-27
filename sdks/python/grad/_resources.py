@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from . import _helpers as h
+from . import _progress
 from ._errors import (
     APIConnectionError,
     EvalFailedError,
@@ -44,12 +45,17 @@ from ._models import (
     EvalPlan,
     EvalResult,
     ImportJob,
+    CompletedEvent,
+    MetricEvent,
     MetricPoint,
     Model,
     Page,
+    PhaseEvent,
     Plan,
     RenderPreview,
     Run,
+    RunEvent,
+    run_event_from_api,
     SecretRef,
     Source,
     UsageRecord,
@@ -70,6 +76,8 @@ if TYPE_CHECKING:
 TRANSIENT = (APIConnectionError, ServerError, RateLimitError)
 SSE_READ_TIMEOUT = 45.0
 MAX_SSE_RECONNECTS = 20
+#: Page size of ``runs.events()`` JSON pages.
+EVENTS_PAGE_LIMIT = 100
 
 
 #: ``wait()`` gives up after this long when no ``timeout`` is passed (as the Rust SDK).
@@ -593,6 +601,113 @@ class Runs(_Resource):
             return (event for kind, event in self._follow(run_id, None) if kind == "metric" and (after_step is None or event.step > after_step))
         return self._metric_pages(run_id, after_step)
 
+    def events(self, run_id: str, *, follow: bool = False, timeout: float | None = None) -> Iterator[RunEvent]:
+        """The run's typed lifecycle events, oldest first.
+
+        ``follow=False`` returns the events stored so far (a terminal run's end with
+        :class:`grad.CompletedEvent`). ``follow=True`` streams live (SSE) until the run finishes,
+        reconnecting with ``Last-Event-ID`` behind the scenes; ``timeout`` bounds the stream.
+        """
+        if follow:
+            return self._follow_events(run_id, self._deadline(timeout))
+        return self._event_pages(run_id)
+
+    def _event_pages(self, run_id: str) -> Iterator[RunEvent]:
+        trail = CursorTrail(f"GET /v1/runs/{run_id}/events")
+        cursor: str | None = None
+        while True:
+            page = self._wire.list_run_events(run_id, cursor=cursor, limit=EVENTS_PAGE_LIMIT)
+            data = page.get("data") or []
+            for raw in data:
+                event = run_event_from_api(raw, self._client)
+                if event is not None:
+                    yield event
+            nxt = trail.follow(page.get("next_cursor"), data)
+            if nxt is None:
+                return
+            cursor = nxt
+
+    def _follow_events(self, run_id: str, deadline: float | None) -> Iterator[RunEvent]:
+        """Live events until ``completed`` (or the deadline); reconnects resume after the last seq."""
+        last_seq: int | None = None
+        failures = 0
+        retry_ms = 1000
+        path = f"/v1/runs/{quote_path_param(run_id, 'id')}/events"
+        while True:
+            headers = {"Last-Event-ID": str(last_seq)} if last_seq is not None else None
+            try:
+                resp = self._client._transport.stream("GET", path, accept="text/event-stream", headers=headers, timeout=SSE_READ_TIMEOUT)
+            except TRANSIENT as exc:
+                failures += 1
+                if failures > MAX_SSE_RECONNECTS:
+                    raise exc
+                if self._expired(deadline):
+                    return
+                self._sleep(min(10.0, retry_ms / 1000 * failures), deadline)
+                continue
+            if "text/event-stream" not in resp.headers.get("content-type", ""):
+                resp.close()
+                yield from self._poll_events(run_id, deadline, last_seq)
+                return
+            try:
+                for sse in iter_sse(self._lines_until(resp, deadline), SSEDecoder()):
+                    if sse.retry is not None:
+                        retry_ms = sse.retry
+                    event = run_event_from_api(_json(sse.data), self._client) if sse.data else None
+                    if event is None:
+                        continue
+                    if isinstance(event, CompletedEvent):
+                        yield event
+                        return
+                    if last_seq is not None and event.seq <= last_seq:
+                        continue
+                    last_seq = event.seq
+                    failures = 0
+                    yield event
+            except (httpx.TransportError, APIConnectionError):
+                pass
+            finally:
+                resp.close()
+            if self._expired(deadline):
+                return
+            failures += 1
+            if failures > MAX_SSE_RECONNECTS:
+                raise APIConnectionError(
+                    f"Lost the event stream for run {run_id} {failures} times in a row.",
+                    method="GET",
+                    url=self._client._transport.url(path),
+                )
+            self._sleep(min(10.0, retry_ms / 1000 * failures), deadline)
+
+    def _poll_events(self, run_id: str, deadline: float | None, last_seq: int | None) -> Iterator[RunEvent]:
+        # Fallback when a proxy strips the event stream: poll JSON pages with backoff.
+        cursor: str | None = None
+        backoff = h.Backoff()
+        while True:
+            try:
+                page = self._wire.list_run_events(run_id, cursor=cursor, limit=EVENTS_PAGE_LIMIT)
+            except TRANSIENT:
+                page = None
+            if page is not None:
+                fresh = False
+                for raw in page.get("data") or []:
+                    event = run_event_from_api(raw, self._client)
+                    if event is None:
+                        continue
+                    if isinstance(event, CompletedEvent):
+                        yield event
+                        return
+                    if last_seq is None or event.seq > last_seq:
+                        last_seq = event.seq
+                        fresh = True
+                        yield event
+                cursor = page.get("tail_cursor") or cursor
+                if fresh:
+                    backoff.reset()
+            if self._expired(deadline):
+                return
+            self._sleep(backoff.next(), deadline)
+
     def _metric_pages(self, run_id: str, after_step: int | None) -> Iterator[MetricPoint]:
         trail = CursorTrail(f"GET /v1/runs/{run_id}/metrics")
         cursor: str | None = None
@@ -704,20 +819,25 @@ class Runs(_Resource):
         timeout: float | None = None,
         on_metric: Callable[[MetricPoint], Any] | None = None,
         on_status: Callable[[Run], Any] | None = None,
+        on_event: Callable[[RunEvent], Any] | None = None,
+        progress: bool | None = None,
         raise_on_failure: bool = True,
         poll_interval: float = 0.5,
     ) -> Run:
         """Block until the run reaches a terminal status and return it.
 
-        ``on_metric`` receives each :class:`grad.MetricPoint` live (SSE with reconnect);
-        ``on_status`` each status change. Transient errors are retried. Raises
-        :class:`grad.RunFailedError` for ``failed``, ``cancelled``, ``stopped_budget`` and ``stopped_balance`` runs,
-        as every SDK does (unless ``raise_on_failure=False``), and
-        :class:`grad.WaitTimeoutError` after ``timeout`` seconds (the run keeps going).
-        Ctrl-C stops waiting, not the run.
+        ``on_event`` receives every typed event (:class:`grad.PhaseEvent`, ``MetricEvent``,
+        ``CheckpointEvent``, ``AttemptEvent``, ``WarningEvent``, ``LogEvent``, then
+        ``CompletedEvent``) live; ``on_metric`` each :class:`grad.MetricPoint`; ``on_status``
+        each status or phase change. ``progress`` draws a live progress line in a terminal (an
+        auto-updating display in Jupyter): ``None`` (default) only when interactive, ``False``
+        never. Transient errors are retried. Raises :class:`grad.RunFailedError` for ``failed``,
+        ``cancelled``, ``stopped_budget`` and ``stopped_balance`` runs, as every SDK does
+        (unless ``raise_on_failure=False``), and :class:`grad.WaitTimeoutError` after
+        ``timeout`` seconds (the run keeps going). Ctrl-C stops waiting, not the run.
         """
         try:
-            run = self._wait_terminal(run_id, timeout, poll_interval, on_metric, on_status)
+            run = self._wait_terminal(run_id, timeout, poll_interval, on_metric, on_status, on_event, progress)
         except KeyboardInterrupt:
             print(
                 f"\nStopped waiting; run {run_id} keeps going on the server. "
@@ -745,16 +865,49 @@ class Runs(_Resource):
         poll_interval: float,
         on_metric: Callable[[MetricPoint], Any] | None,
         on_status: Callable[[Run], Any] | None,
+        on_event: Callable[[RunEvent], Any] | None,
+        progress: bool | None,
     ) -> Run:
         deadline = self._deadline(timeout)
         run: Run | None = None
-        last_status: str | None = None
-        if on_metric is not None:
-            for kind, event in self._follow(run_id, deadline):
-                if kind == "metric":
-                    on_metric(event)
-                else:
-                    run = event
+        last: tuple[str, str | None] | None = None
+
+        def status_changed(current: Run) -> None:
+            nonlocal last
+            key = (current.status, current.phase)
+            if key != last:
+                last = key
+                if on_status is not None:
+                    on_status(current)
+
+        reporter = _progress.create(progress)
+        if on_event is not None or on_metric is not None or reporter is not None:
+            try:
+                if reporter is not None or on_status is not None:
+                    try:
+                        start = self.get(run_id)
+                        status_changed(start)
+                        if reporter is not None:
+                            reporter.start(start)
+                    except TRANSIENT:
+                        pass
+                for event in self._follow_events(run_id, deadline):
+                    if reporter is not None:
+                        reporter.event(event)
+                    if on_event is not None:
+                        on_event(event)
+                    if on_metric is not None and isinstance(event, MetricEvent):
+                        on_metric(event.metric)
+                    if isinstance(event, CompletedEvent) and event.run is not None:
+                        run = event.run
+                    elif isinstance(event, PhaseEvent) and on_status is not None:
+                        try:
+                            status_changed(self.get(run_id))
+                        except TRANSIENT:
+                            pass
+            finally:
+                if reporter is not None:
+                    reporter.close()
             if run is None or run.status not in TERMINAL_RUN_STATUSES:
                 run = None
         backoff = h.Backoff(poll_interval)
@@ -763,10 +916,8 @@ class Runs(_Resource):
                 run = self.get(run_id)
             except TRANSIENT:
                 pass
-            if run is not None and run.status != last_status:
-                last_status = run.status
-                if on_status is not None:
-                    on_status(run)
+            if run is not None:
+                status_changed(run)
             if run is not None and run.status in TERMINAL_RUN_STATUSES:
                 break
             if self._expired(deadline):
@@ -776,8 +927,7 @@ class Runs(_Resource):
                     resource=run,
                 )
             self._sleep(backoff.next(), deadline)
-        if on_status is not None and run.status != last_status:
-            on_status(run)
+        status_changed(run)
         return run
 
 

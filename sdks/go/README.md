@@ -74,7 +74,14 @@ compiles every Go snippet of the public docs.
 - `RunParams.IdempotencyKey`, `EvalParams.IdempotencyKey` and
   `grad.WithDeployIdempotencyKey` make a retried create return the first result.
 - Waiting: `Wait(ctx, opts...)` on runs, imports and evals, with
-  `WithWaitTimeout`, `WithOnStatus`, `WithOnMetric`, `WithRubric`.
+  `WithWaitTimeout`, `WithOnStatus` (status or phase changes), `WithOnMetric`,
+  `WithOnEvent` (follows the run's event stream), `WithRubric`.
+- `run.Events(ctx, grad.EventsOptions{Follow: true})` (or
+  `c.Runs.Events(ctx, id, ...)`) is an `iter.Seq2[grad.RunEvent, error]` of
+  typed lifecycle events: switch on `ev.Type` (`grad.EventPhase`,
+  `EventMetric`, `EventCheckpoint`, `EventAttempt`, `EventWarning`, `EventLog`,
+  `EventCompleted`). Reconnects with `Last-Event-ID` are invisible; the
+  iterator ends after `completed`.
 - Lists are `iter.Seq2[T, error]`; `grad.Collect` drains one. A repeated cursor
   ends the listing with `grad.ErrPaginationLoop`.
 - `run.Metrics(ctx, true)` streams Server-Sent Events and reconnects with

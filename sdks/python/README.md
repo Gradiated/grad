@@ -49,6 +49,43 @@ run.artifact.download("./sql-helper-bundle.grad.tar.gz", format="bundle")
 directory (`adapter_config.json` + `adapter_model.safetensors`) that `vllm serve <base>
 --enable-lora --lora-modules sql-helper=./sql-helper` loads directly.
 
+## Following a run
+
+`run.wait()` blocks until the run ends. In a terminal it draws one live line on stderr (phase,
+step/total, loss, ETA, cost against `max_cost_usd`; "Waiting for a GPU (0 workers online) — 2m 10s"
+while queued), with interruptions and warnings printed above it as they happen:
+
+```text
+⚠ attempt 1 interrupted at step 120: the GPU was reclaimed; resuming from step 120 on a new worker
+Training  attempt 2  180/400 [█████       ] 45%  loss 0.412  ETA 3m 20s  $0.42/$5.00
+```
+
+In Jupyter it is a small display updated in place, with a loss sparkline. It is silent when
+nothing is watching (not a TTY, `CI`, `TERM=dumb`); `wait(progress=False)` or `GRAD_NO_PROGRESS=1`
+turns it off, `progress=True` forces it.
+
+Every lifecycle event is typed. Iterate them (a plain sync iterator; reconnects with
+`Last-Event-ID` are invisible), or pass a callback:
+
+```python
+import grad
+
+for ev in run.events(follow=True):            # stops after the CompletedEvent
+    if isinstance(ev, grad.PhaseEvent):
+        print(ev.phase, ev.workers_online, ev.gpu)
+    elif isinstance(ev, grad.MetricEvent):
+        print(ev.step, ev.metric.loss)
+    elif isinstance(ev, grad.AttemptEvent):     # started | interrupted | gave_up
+        print(ev.message)
+
+run.wait(on_event=lambda ev: print(ev.type, ev.seq), progress=False)
+```
+
+Events are `PhaseEvent`, `MetricEvent`, `CheckpointEvent`, `AttemptEvent`, `WarningEvent`,
+`LogEvent` and `CompletedEvent` (the final `run`), each with `type`, `run_id`, `seq`, `attempt` and
+`timestamp`. `run.events()` without `follow` returns the events stored so far. The run itself
+carries `phase`, `phase_since`, `last_interruption`, and `workers_online`/`autoscaling` while queued.
+
 ## Configuration
 
 Every SDK and the CLI resolve configuration the same way (highest first):

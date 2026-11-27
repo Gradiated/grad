@@ -271,8 +271,26 @@ func (r *Run) Refresh(ctx context.Context) error {
 // stopped_budget (and stopped_balance) return *RunFailedError carrying the run.
 func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 	w := newWaitConfig(opts)
+	var err error
+	if w.onEvent != nil {
+		err = r.followEvents(ctx, w)
+	} else {
+		err = r.pollUntilDone(ctx, w)
+	}
+	if err != nil {
+		return err
+	}
+	return r.finish(ctx)
+}
+
+// pollUntilDone polls the run (and, with WithOnMetric, its metric pages).
+func (r *Run) pollUntilDone(ctx context.Context, w *waitConfig) error {
 	var cursor *string
-	err := r.c.poll(ctx, w, "run "+r.ID, func(ctx context.Context) (string, bool, error) {
+	onStatus := w.onStatus
+	polled := *w
+	polled.onStatus = nil
+	last := ""
+	return r.c.poll(ctx, &polled, "run "+r.ID, func(ctx context.Context) (string, bool, error) {
 		api, err := r.c.api()
 		if err != nil {
 			return "", false, err
@@ -282,6 +300,10 @@ func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 			return "", false, err
 		}
 		r.Run = *fresh
+		if key := r.statusKey(); key != last && onStatus != nil {
+			last = key
+			onStatus(string(r.Status))
+		}
 		if w.onMetric != nil {
 			page, err := api.ListRunMetrics(ctx, r.ID, &generated.ListRunMetricsParams{Cursor: cursor})
 			if err != nil {
@@ -300,9 +322,10 @@ func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 		}
 		return string(r.Status), IsTerminal(r.Status), nil
 	})
-	if err != nil {
-		return err
-	}
+}
+
+// finish loads the artifact of a completed run, or reports why it ended.
+func (r *Run) finish(ctx context.Context) error {
 	if r.ArtifactID != nil && *r.ArtifactID != "" {
 		a, err := r.c.Artifacts.Get(ctx, *r.ArtifactID)
 		if err != nil {
