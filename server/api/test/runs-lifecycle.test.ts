@@ -326,6 +326,10 @@ describe("run lifecycle and worker protocol", () => {
     const queued = `run support-sft is already queued (${first.id}); this starts a second one.`;
     expect(plan.body.warnings[0]).toBe(queued);
 
+    // The warning lists same-name runs newest first (created_at DESC, then
+    // id). On the frozen ManualClock both runs would share created_at and the
+    // order would fall to their random ids: the "(second, first)" check below
+    // failed about half the time. A second run is created later, so say so.
     t.clock.advanceSeconds(1);
     const second = await createSftRun(t);
     expect(second.id).not.toBe(first.id);
