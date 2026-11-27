@@ -88,8 +88,7 @@ class Recipe:
         adapter: ``adapters.LoRA(rank=32)`` by default.
         lr: ``"auto"`` (calibrated per model and objective) or a float.
         lr_scale: Multiplies the resolved ``lr``.
-        optimizer: ``optim.AdamW(...)``; v0 trains with AdamW at its defaults, so only
-            ``lr`` may differ from them.
+        optimizer: ``optim.AdamW(lr=, betas=, weight_decay=, grad_clip=)``.
         batch_size, epochs, schedule, warmup: Optimisation schedule.
         train_on: ``"last"`` or ``"all_assistant"``.
         thinking: ``"auto"``, ``"on"``/``True`` or ``"off"``/``False``.
@@ -98,7 +97,8 @@ class Recipe:
         select: ``"best"`` or ``"last"`` checkpoint becomes ``run.artifact``.
         checkpoint_ttl_days: Retention of intermediate checkpoints.
         split: Train/eval split (``splits.BySession(0.10)`` by default); sent with the run.
-        evals, loggers, eval_every: Documented, not available in v0 (raise if set).
+        eval_every: ``"auto"`` (every 10% of steps) or a number of optimizer steps.
+        evals, loggers: Documented, not available in v0 (raise if set).
     """
 
     kind: ClassVar[str] = ""
@@ -134,8 +134,10 @@ class Recipe:
             )
         if self.loggers:
             raise _unsupported(name, "loggers=", "the v0 server does not forward metrics to experiment trackers.", "Stream run.metrics(follow=True) into your tracker.")
-        if self.eval_every not in (None, "auto"):
-            raise _unsupported(name, "eval_every=", "the held-out split is evaluated at every checkpoint (every 10% of steps).")
+        if self.eval_every not in (None, "auto") and (
+            isinstance(self.eval_every, bool) or not isinstance(self.eval_every, int) or self.eval_every < 1
+        ):
+            raise ValueError(f'{name}: eval_every must be "auto" or a positive number of steps, got {self.eval_every!r}.')
         self.thinking = _thinking(self.thinking)
         if self.optimizer is not None:
             opt = self.optimizer
@@ -149,13 +151,6 @@ class Recipe:
                 )
             if not isinstance(opt, AdamWSpec) or opt.kind != "adamw":
                 raise _unsupported(name, "optimizer=", "v0 recipes train with AdamW.")
-            if not opt.is_default:
-                raise _unsupported(
-                    name,
-                    "optimizer=optim.AdamW(betas=/weight_decay=/grad_clip=)",
-                    "the v0 server always trains with AdamW(betas=(0.9, 0.95), weight_decay=0.0, grad_clip=1.0).",
-                    "Only lr= (or lr_scale=) can be changed.",
-                )
             if opt.lr != "auto":
                 if self.lr is not None and self.lr != opt.lr:
                     raise ValueError(f"{name}: lr={self.lr!r} conflicts with optimizer=AdamW(lr={opt.lr!r}).")
@@ -170,6 +165,11 @@ class Recipe:
             out["model"] = model_ref(self.model)
         if self.adapter is not None:
             out["adapter"] = _dict_of(self.adapter, "adapter")
+        if isinstance(self.optimizer, AdamWSpec) and not self.optimizer.is_default:
+            opt = self.optimizer
+            out["optimizer"] = {"kind": "adamw", "betas": list(opt.betas), "weight_decay": opt.weight_decay, "grad_clip": opt.grad_clip}
+        if self.eval_every not in (None, "auto"):
+            out["eval_every"] = self.eval_every
         for key in (
             "lr",
             "lr_scale",
@@ -273,8 +273,11 @@ class RouterRecipe(Recipe):
         model: Router backbone, ``"qwen/qwen3-0.6b"`` by default.
         models: Candidate models; by default the models scored in your records.
         max_quality_drop: Quality the router may trade for cost (``0.02``).
-        rubric, pricing: Documented, not available in v0. Routers train from per-model
-            scores already on your records (``scores``) and the catalog's prices.
+        rubric: The score name on your records that measures quality (``"task_success"``).
+            Judges, rubrics and functions are not available for routers in v0.
+        pricing: USD per request for each candidate (overrides ``metrics.cost_usd``).
+        fallback: The candidate that gets every request the router doesn't offload
+            (default: the best-scoring candidate).
     """
 
     kind: ClassVar[str] = "router"
@@ -282,25 +285,25 @@ class RouterRecipe(Recipe):
     rubric: Any = None
     max_quality_drop: float | None = None
     pricing: Mapping[str, Any] | None = None
+    fallback: Any = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.rubric is not None:
+        if self.rubric is not None and not isinstance(self.rubric, str):
             raise _unsupported(
                 "RouterRecipe",
-                "rubric=",
+                "rubric=Judge/Rubric/function",
                 "the v0 server trains routers from per-model scores already present on your records; it cannot "
                 "score candidates with a Judge yet, and Python scorers in training recipes need a managed "
                 "sandbox, which is deferred past v0.",
-                "Score your logs first (e.g. with client.evals.create) and push records carrying scores per model.",
+                'Score your logs first (e.g. with client.evals.create) and pass the score name: rubric="resolved".',
             )
         if self.pricing is not None:
-            raise _unsupported(
-                "RouterRecipe",
-                "pricing=",
-                "the v0 server prices candidates from its model catalog.",
-                "Put negotiated per-request costs on your records as metrics.cost_usd.",
-            )
+            self.pricing = {model_ref(m): float(v) for m, v in self.pricing.items()}
+            if any(v < 0 for v in self.pricing.values()):
+                raise ValueError("RouterRecipe(pricing=...) needs non-negative USD per request.")
+        if self.fallback is not None:
+            self.fallback = model_ref(self.fallback)
         if self.models is not None:
             self.models = [model_ref(m) for m in self.models]
             if len(self.models) < 2:
@@ -312,8 +315,10 @@ class RouterRecipe(Recipe):
         out: dict[str, Any] = {}
         if self.models is not None:
             out["models"] = list(self.models)
-        if self.max_quality_drop is not None:
-            out["max_quality_drop"] = self.max_quality_drop
+        for key in ("max_quality_drop", "rubric", "pricing", "fallback"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
         return out
 
 
@@ -345,7 +350,8 @@ class CartridgeRecipe(Recipe):
             ``Context.from_uri("s3://...")`` (a plain string is read as text).
         num_tokens: Size of the prefix (``256``).
         teacher: The model reading the full context (the base model by default).
-        loss: ``losses.TopKKLDistill(top_k=20)``; other ``top_k`` values are not available in v0.
+        loss: ``losses.TopKKLDistill(top_k=20)`` by default.
+        max_new_tokens: Teacher answer length per prompt during distillation (``256``).
     """
 
     kind: ClassVar[str] = "cartridge"
@@ -353,6 +359,7 @@ class CartridgeRecipe(Recipe):
     num_tokens: int | None = None
     teacher: Any = None
     loss: LossSpec | Mapping[str, Any] | None = None
+    max_new_tokens: int | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -364,8 +371,8 @@ class CartridgeRecipe(Recipe):
             raise TypeError(f"CartridgeRecipe context must be a Context or str, got {type(self.context).__name__}.")
         if self.loss is not None:
             loss = _dict_of(self.loss, "loss")
-            if loss.get("kind") != "top_k_kl_distill" or loss.get("top_k", 20) != 20:
-                raise _unsupported("CartridgeRecipe", "loss=", "the v0 cartridge recipe trains with losses.TopKKLDistill(top_k=20).")
+            if loss.get("kind") != "top_k_kl_distill":
+                raise _unsupported("CartridgeRecipe", "loss=", f"the v0 cartridge recipe trains with losses.TopKKLDistill, got {loss.get('kind')!r}.")
         if self.num_tokens is not None and not 16 <= self.num_tokens <= 4096:
             raise ValueError(f"num_tokens must be between 16 and 4096, got {self.num_tokens}.")
 
@@ -376,6 +383,10 @@ class CartridgeRecipe(Recipe):
             out["num_tokens"] = self.num_tokens
         if self.teacher is not None:
             out["teacher"] = model_ref(self.teacher)
+        if self.loss is not None:
+            out["loss"] = _dict_of(self.loss, "loss")
+        if self.max_new_tokens is not None:
+            out["max_new_tokens"] = self.max_new_tokens
         return out
 
 
@@ -385,7 +396,7 @@ class EmbeddingRecipe(Recipe):
 
     Attributes:
         model: ``baai/bge-small-en-v1.5``, chosen by the recipe.
-        pool: ``pooling.Mean()`` (the only pooling the v0 server trains with).
+        pool: ``pooling.Mean()`` (default) or ``pooling.CLS()``.
         loss: ``losses.InfoNCE(temp=0.05)``.
         temp: Shorthand for ``loss=losses.InfoNCE(temp=...)``.
     """
@@ -397,8 +408,8 @@ class EmbeddingRecipe(Recipe):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.pool is not None and _dict_of(self.pool, "pool").get("kind") != "mean":
-            raise _unsupported("EmbeddingRecipe", "pool=", "the v0 server trains embeddings with mean pooling.", "Use pooling.Mean().")
+        if self._pool_kind() not in (None, "mean", "cls"):
+            raise _unsupported("EmbeddingRecipe", "pool=", "the v0 server trains embeddings with mean or CLS pooling.", "Use pooling.Mean() or pooling.CLS().")
         if self.loss is not None:
             loss = _dict_of(self.loss, "loss")
             if loss.get("kind") != "infonce":
@@ -411,7 +422,13 @@ class EmbeddingRecipe(Recipe):
             raise ValueError(f"InfoNCE temp must be positive, got {self.temp}.")
 
     def _extra_spec(self) -> dict[str, Any]:
-        return {} if self.temp is None else {"temp": self.temp}
+        out: dict[str, Any] = {} if self.temp is None else {"temp": self.temp}
+        if self._pool_kind() == "cls":
+            out["pool"] = {"kind": "cls"}
+        return out
+
+    def _pool_kind(self) -> str | None:
+        return None if self.pool is None else _dict_of(self.pool, "pool").get("kind")
 
 
 # ----------------------------------------------------------------------------- Wave 2
