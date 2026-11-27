@@ -313,6 +313,29 @@ export const metrics = {
     "grad_db_query_errors_total",
     "Postgres queries that failed.",
   ),
+  sseStreams: gauge(
+    "grad_sse_streams",
+    "Open SSE event streams (run events and metrics) on this replica.",
+  ),
+  sseHubFetches: counter(
+    "grad_sse_hub_fetches_total",
+    "Event hub fetches (one state and one events query per 100 jobs), by reason: notify (a LISTEN notification or a new stream) or poll (the safety poll).",
+    ["reason"],
+  ),
+  sseHubNotifications: counter(
+    "grad_sse_hub_notifications_total",
+    "grad_job_events notifications the event hub received.",
+  ),
+  sseHubListening: gauge(
+    "grad_sse_hub_listening",
+    "1 while the event hub's LISTEN connection is up (0: streams rely on the safety poll).",
+  ),
+  sseDispatchLatency: histogram(
+    "grad_sse_dispatch_latency_seconds",
+    "Time from an event's write to the event hub handing it to this replica's streams.",
+    [],
+    BUCKETS.fast,
+  ),
   storageDuration: histogram(
     "grad_storage_operation_duration_seconds",
     "Object storage operation duration, by operation.",

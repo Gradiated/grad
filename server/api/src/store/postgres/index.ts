@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 
 import type { Clock } from "../../clock.js";
 import { migrate } from "../migrate.js";
@@ -118,6 +118,40 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
               [[...keys]],
             )
           ).map((r) => r.key),
+    listen: async (channel, onPayload, onLost) => {
+      if (!/^[a-z_][a-z0-9_]*$/.test(channel)) {
+        throw new Error(`Invalid channel name '${channel}'.`);
+      }
+      const client = new Client({
+        connectionString: options.connectionString,
+        ...POOL_TIMEOUTS,
+      });
+      let open = true;
+      const lost = (error: Error) => {
+        if (!open) return;
+        open = false;
+        onLost(error);
+        void client.end().catch(() => undefined);
+      };
+      client.on("notification", (message) => {
+        if (message.channel === channel) onPayload(message.payload ?? "");
+      });
+      client.on("error", lost);
+      client.on("end", () => lost(new Error("LISTEN connection ended")));
+      try {
+        await client.connect();
+        await client.query(`LISTEN ${channel}`);
+      } catch (error) {
+        open = false;
+        await client.end().catch(() => undefined);
+        throw error;
+      }
+
+      return async () => {
+        open = false;
+        await client.end().catch(() => undefined);
+      };
+    },
     close: () => {
       unwatch();
 

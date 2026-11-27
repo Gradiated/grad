@@ -2,15 +2,17 @@ import type { Context } from "hono";
 import type { SSEStreamingApi } from "hono/streaming";
 
 import { ApiError } from "../errors.js";
+import { metrics } from "../telemetry/metrics.js";
 import type { AppEnv } from "./helpers.js";
 
 type StreamBody = (stream: SSEStreamingApi) => Promise<void>;
 
 /**
- * Caps the event streams one API key holds open on this replica: each one polls
- * Postgres for as long as it stays open, so an unbounded number per key is a
- * cheap way to load the database for every tenant. `reserve(c, body)` answers
- * 429 `too_many_streams` at the cap, else returns `body` holding a slot until it ends.
+ * Caps the event streams one API key holds open on this replica: streams share
+ * the replica's event hub, but each holds a socket, a subscription and its
+ * queue, so an unbounded number per key is a cheap way to load the replica for
+ * every tenant. `reserve(c, body)` answers 429 `too_many_streams` at the cap,
+ * else returns `body` holding a slot (counted on grad_sse_streams) until it ends.
  */
 export const createSseLimits = (perKey: number) => {
   const open = new Map<string, number>();
@@ -30,9 +32,11 @@ export const createSseLimits = (perKey: number) => {
     open.set(key, count + 1);
 
     return async (stream) => {
+      metrics.sseStreams.inc();
       try {
         await body(stream);
       } finally {
+        metrics.sseStreams.dec();
         const left = (open.get(key) ?? 1) - 1;
         if (left > 0) open.set(key, left);
         else open.delete(key);

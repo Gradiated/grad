@@ -368,6 +368,20 @@ export interface JobRepository {
     afterSeq: number,
     limit: number,
   ): Promise<JobEvent[]>;
+  /**
+   * Events of every type after each job's cursor, ascending by seq, at most
+   * `limitPerJob` per job (the SSE hub's one query for all its streams).
+   */
+  listEventsSince(
+    cursors: ReadonlyArray<{ jobId: string; afterSeq: number }>,
+    limitPerJob: number,
+  ): Promise<Array<JobEvent & { job_id: string }>>;
+  /** Status and holder of each existing job (missing ids are left out). */
+  jobStates(
+    ids: readonly string[],
+  ): Promise<
+    Array<{ id: string; status: JobStatus; worker_id: string | null }>
+  >;
   /** Distinct workers holding an unexpired lease on a job of `kind`. */
   countLeasedWorkers(kind: JobKind, now: Date): Promise<number>;
   /**
@@ -1025,5 +1039,15 @@ export interface Store extends Repositories {
   dbNow(): Promise<Date>;
   /** The storage keys no artifact or dataset part references. */
   unreferencedKeys(keys: readonly string[]): Promise<string[]>;
+  /**
+   * LISTENs on `channel` on a connection of its own: `onPayload` gets each
+   * notification's payload, `onLost` fires once if the connection fails.
+   * Resolves (after LISTEN succeeded) with the call that closes it.
+   */
+  listen(
+    channel: string,
+    onPayload: (payload: string) => void,
+    onLost: (error: Error) => void,
+  ): Promise<() => Promise<void>>;
   close(): Promise<void>;
 }

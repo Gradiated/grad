@@ -37,6 +37,11 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_source_syncs_total` | counter | `provider`, `status` | Source syncs finished, by provider and status. |
 | `grad_sources` | gauge | `provider` | Sources by provider. |
 | `grad_sources_paused` | gauge | `provider` | Sources paused after repeated failed syncs, by provider. |
+| `grad_sse_dispatch_latency_seconds` | histogram |  | Time from an event's write to the event hub handing it to this replica's streams. |
+| `grad_sse_hub_fetches_total` | counter | `reason` | Event hub fetches (one state and one events query per 100 jobs), by reason: notify (a LISTEN notification or a new stream) or poll (the safety poll). |
+| `grad_sse_hub_listening` | gauge |  | 1 while the event hub's LISTEN connection is up (0: streams rely on the safety poll). |
+| `grad_sse_hub_notifications_total` | counter |  | grad_job_events notifications the event hub received. |
+| `grad_sse_streams` | gauge |  | Open SSE event streams (run events and metrics) on this replica. |
 | `grad_storage_operation_duration_seconds` | histogram | `op` | Object storage operation duration, by operation. |
 | `grad_storage_operation_errors_total` | counter | `op` | Object storage operations that failed, by operation. |
 | `grad_training_tokens_total` | counter | `recipe_kind`, `model_family` | Tokens processed by training attempts, by recipe and model family. |

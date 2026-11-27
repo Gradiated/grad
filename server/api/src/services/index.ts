@@ -5,6 +5,7 @@ import {
 } from "../telemetry/sampler.js";
 import { createDatasetService, type DatasetService } from "./datasets.js";
 import { createEvalService, type EvalService } from "./evals/service.js";
+import { createEventHub, type EventHub } from "./event-hub.js";
 import { createImportService, type ImportService } from "./imports.js";
 import { createJobQueue, type JobQueue } from "./jobs.js";
 import { createMaintenance, type Maintenance } from "./maintenance.js";
@@ -24,6 +25,8 @@ export interface Services {
   sources: SourceService;
   telemetry: TelemetrySampler;
   maintenance: Maintenance;
+  /** The replica's SSE fan-out (one LISTEN + safety poll for every stream). */
+  events: EventHub;
 }
 
 export const createServices = (deps: AppDependencies): Services => {
@@ -82,5 +85,9 @@ export const createServices = (deps: AppDependencies): Services => {
     sources,
     telemetry,
     maintenance,
+    events: createEventHub(deps.store, {
+      pollMs: deps.settings.ssePollMs ?? 2000,
+      clock: deps.clock,
+    }),
   };
 };

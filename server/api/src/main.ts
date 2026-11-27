@@ -62,6 +62,8 @@ const main = async () => {
       stopBackground: async () => {
         await services.maintenance.stop();
         await services.evals.stop();
+        // Ends every SSE stream now; clients resume on another replica with Last-Event-ID.
+        await services.events.close();
       },
       closeResources: async () => {
         metricsServer?.close();

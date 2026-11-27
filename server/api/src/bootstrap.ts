@@ -163,6 +163,7 @@ export const buildDependencies = async (
       waitingForComputeSeconds: env.WAITING_FOR_COMPUTE_SECONDS,
       workerAutoscaling: env.GRAD_WORKER_AUTOSCALING,
       evalConcurrency: env.EVAL_CONCURRENCY,
+      ssePollMs: env.SSE_POLL_MS,
       jobEventRetentionDays: env.JOB_EVENT_RETENTION_DAYS,
       orphanBlobDays: env.ORPHAN_BLOB_DAYS,
       usageFlushTokens: env.USAGE_FLUSH_TOKENS,

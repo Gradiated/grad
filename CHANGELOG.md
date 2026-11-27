@@ -9,6 +9,18 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Changed
 
+- **Event streams share one reader per API replica.** SSE streams of run events and metrics no
+  longer poll Postgres each (two queries a second per open stream). Each replica LISTENs on
+  `grad_job_events` (migration 0004 adds NOTIFY triggers on event inserts and job status
+  changes), fetches new events for all its streams in one bounded query, and re-reads every
+  followed run every `SSE_POLL_MS` (default 2000) in case a notification was missed. With 1,000
+  streams over 50 running jobs, the streams' queries fell from about 2,000/s to about 40/s and
+  write-to-client latency from about 0.5 s to under 0.1 s (p50). Resume with `Last-Event-ID`,
+  full backfill, pings and the 20-streams-per-key cap are unchanged; SIGTERM now ends open
+  streams at once so clients resume on another replica. New metrics: `grad_sse_streams`,
+  `grad_sse_hub_fetches_total`, `grad_sse_hub_notifications_total`, `grad_sse_hub_listening`
+  and `grad_sse_dispatch_latency_seconds`.
+
 - **Usage reports.** `grad usage` prints a period's total cost and tokens, a breakdown by kind
   (training, eval, scoring, labeling, teacher) and the top runs and evals; `--by
   day|week|month|model|recipe|kind` prints one grouped table, and `--from`/`--to` set the period

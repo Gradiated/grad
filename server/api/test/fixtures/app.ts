@@ -166,6 +166,7 @@ export const makeTestApp = async (
       return secret;
     },
     close: async () => {
+      await services.events.close();
       await deps.regex.close();
       await dispose();
       s3.close();

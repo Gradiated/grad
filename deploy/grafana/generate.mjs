@@ -199,6 +199,9 @@ const overview = dashboard({
         { title: "p95 latency by route", unit: "s", targets: [q(`topk(10, ${p95("grad_http_request_duration_seconds", "route")})`, "{{route}}")] },
         { title: "5xx by route", unit: "reqps", targets: [q(`sum by (route) (rate(grad_http_requests_total${sel('status_class="5xx"')}[${RATE}])) > 0`, "{{route}}")] },
         { title: "Requests in flight", targets: [q(`sum by (instance) (grad_http_requests_in_flight${sel()})`, "{{instance}}")] },
+        { title: "Open event streams (SSE)", targets: [q(`sum by (instance) (grad_sse_streams${sel()})`, "{{instance}}"), q(`sum by (instance) (1 - grad_sse_hub_listening${sel()})`, "not listening {{instance}}")] },
+        { title: "Event hub fetches and notifications/s", unit: "ops", targets: [q(`sum by (reason) (rate(grad_sse_hub_fetches_total${sel()}[${RATE}]))`, "fetches {{reason}}"), q(`sum(rate(grad_sse_hub_notifications_total${sel()}[${RATE}]))`, "notifications")] },
+        { title: "Event dispatch latency (p50, p95)", unit: "s", targets: [q(p50("grad_sse_dispatch_latency_seconds"), "p50"), q(p95("grad_sse_dispatch_latency_seconds"), "p95")] },
       ],
     },
     {

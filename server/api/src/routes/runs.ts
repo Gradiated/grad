@@ -1,5 +1,5 @@
 import { createRoute, type OpenAPIHono, z } from "@hono/zod-openapi";
-import { streamSSE } from "hono/streaming";
+import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 
 import {
   MetricsPageSchema,
@@ -15,6 +15,7 @@ import {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { notFound } from "../errors.js";
+import type { JobEvent } from "../store/types.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
 import { toRunEvent } from "../services/run-events.js";
@@ -36,8 +37,16 @@ const TERMINAL = new Set([
   "stopped_budget",
   "stopped_balance",
 ]);
-const SSE_BATCH = 500;
 const SSE_PING_MS = 15_000;
+
+/** Where a reconnecting client resumes (its Last-Event-ID; 0: from the start). */
+const lastEventIdOf = (c: {
+  req: { header: (name: string) => string | undefined };
+}): number => {
+  const id = Number(c.req.header("last-event-id"));
+
+  return Number.isInteger(id) && id > 0 ? id : 0;
+};
 
 const jsonBody = <T extends z.ZodType>(schema: T, required = true) => ({
   body: { required, content: { "application/json": { schema } } },
@@ -50,6 +59,44 @@ export const registerRunRoutes = (
 ): void => {
   const tags = ["Runs"];
   const reserveStream = createSseLimits(deps.settings.sseStreamsPerKey ?? 20);
+
+  /**
+   * Streams a job's events from the replica's event hub: its history after
+   * `afterSeq` first, then live events. When the hub reports the job settled,
+   * `finish` reads the final state, writes the closing event and returns true
+   * (false: it was resumed meanwhile, keep following). An idle stream gets a
+   * comment ping every SSE_PING_MS; the hub closing (SIGTERM) ends it, and the
+   * client resumes on another replica with Last-Event-ID.
+   */
+  const follow = async (
+    stream: SSEStreamingApi,
+    jobId: string,
+    afterSeq: number,
+    on: {
+      write: (row: JobEvent) => Promise<void>;
+      finish: (lastSeq: number) => Promise<boolean>;
+    },
+  ): Promise<void> => {
+    const sub = services.events.subscribe(jobId, afterSeq);
+    stream.onAbort(() => sub.close());
+    let lastSeq = afterSeq;
+    try {
+      while (!stream.aborted) {
+        const batch = await sub.next(SSE_PING_MS);
+        if (!batch) break;
+        for (const row of batch.events) {
+          lastSeq = row.seq;
+          await on.write(row);
+        }
+        if (batch.settled && (await on.finish(lastSeq))) break;
+        if (batch.events.length === 0 && !batch.settled) {
+          await stream.write(": ping\n\n");
+        }
+      }
+    } finally {
+      sub.close();
+    }
+  };
 
   app.openapi(
     createRoute({
@@ -208,56 +255,33 @@ export const registerRunRoutes = (
       const run = await deps.store.runs.get(workspaceId, id);
       if (!run) throw notFound("run", id);
 
-      const lastEventId = Number(c.req.header("last-event-id"));
-      let afterSeq =
-        Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : 0;
-      const pollMs = deps.settings.ssePollMs ?? 1000;
-
       return streamSSE(
         c,
-        reserveStream(c, async (stream) => {
-          let sincePing = 0;
-          while (!stream.aborted) {
-            const points = (
-              await deps.store.jobs.listEvents(
-                id,
-                "metric",
-                afterSeq,
-                SSE_BATCH,
-              )
-            ).map(toMetricPoint);
-            for (const point of points) {
+        reserveStream(c, (stream) =>
+          follow(stream, id, lastEventIdOf(c), {
+            write: async (row) => {
+              if (row.type !== "metric") return;
+              const point = toMetricPoint(row);
               await stream.writeSSE({
                 event: "metric",
                 id: String(point.seq),
                 data: JSON.stringify(point),
               });
-              afterSeq = point.seq;
-            }
-            if (points.length === SSE_BATCH) continue;
+            },
+            finish: async () => {
+              const current = await deps.store.runs.get(workspaceId, id);
+              if (!current) return true;
+              if (!TERMINAL.has(current.status) || current.worker_id !== null)
+                return false;
+              await stream.writeSSE({
+                event: "status",
+                data: JSON.stringify(toPublicRun(current)),
+              });
 
-            const current = await deps.store.runs.get(workspaceId, id);
-            if (
-              !current ||
-              (TERMINAL.has(current.status) && current.worker_id === null)
-            ) {
-              if (current) {
-                await stream.writeSSE({
-                  event: "status",
-                  data: JSON.stringify(toPublicRun(current)),
-                });
-              }
-              break;
-            }
-
-            await stream.sleep(pollMs);
-            sincePing += pollMs;
-            if (sincePing >= SSE_PING_MS) {
-              sincePing = 0;
-              await stream.write(": ping\n\n");
-            }
-          }
-        }),
+              return true;
+            },
+          }),
+        ),
       ) as never;
     },
   );
@@ -313,56 +337,36 @@ export const registerRunRoutes = (
       const run = await deps.store.runs.get(workspaceId, id);
       if (!run) throw notFound("run", id);
 
-      const lastEventId = Number(c.req.header("last-event-id"));
-      let afterSeq =
-        Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : 0;
-      const pollMs = deps.settings.ssePollMs ?? 1000;
-
       return streamSSE(
         c,
-        reserveStream(c, async (stream) => {
-          let sincePing = 0;
-          while (!stream.aborted) {
-            const rows = await deps.store.jobs.listEvents(
-              id,
-              RUN_EVENT_TYPES,
-              afterSeq,
-              SSE_BATCH,
-            );
-            for (const row of rows) {
-              afterSeq = row.seq;
+        reserveStream(c, (stream) =>
+          follow(stream, id, lastEventIdOf(c), {
+            write: async (row) => {
               const event = toRunEvent(id, row);
-              if (!event) continue;
+              if (!event) return;
               await stream.writeSSE({
                 event: event.type,
                 id: String(event.seq),
                 data: JSON.stringify(event),
               });
-            }
-            if (rows.length === SSE_BATCH) continue;
-
-            const current = await deps.store.runs.get(workspaceId, id);
-            const done = current
-              ? await services.runs.completedEvent(current, afterSeq)
-              : null;
-            if (!current || done) {
+            },
+            finish: async (lastSeq) => {
+              const current = await deps.store.runs.get(workspaceId, id);
+              const done = current
+                ? await services.runs.completedEvent(current, lastSeq)
+                : null;
+              if (current && !done) return false;
               if (done) {
                 await stream.writeSSE({
                   event: done.type,
                   data: JSON.stringify(done),
                 });
               }
-              break;
-            }
 
-            await stream.sleep(pollMs);
-            sincePing += pollMs;
-            if (sincePing >= SSE_PING_MS) {
-              sincePing = 0;
-              await stream.write(": ping\n\n");
-            }
-          }
-        }),
+              return true;
+            },
+          }),
+        ),
       ) as never;
     },
   );

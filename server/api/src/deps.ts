@@ -20,7 +20,7 @@ export interface AppSettings {
   /** Workers scale from zero (KEDA): waiting runs say a worker is starting. */
   workerAutoscaling?: boolean;
   evalConcurrency: number;
-  /** SSE metrics stream poll interval (default 1000 ms). */
+  /** The SSE event hub's safety poll interval (SSE_POLL_MS, default 2000 ms). */
   ssePollMs?: number;
   /** Event streams one API key may hold open per replica (default 20). */
   sseStreamsPerKey?: number;

@@ -9,6 +9,7 @@ import type {
   JobKind,
   JobPatch,
   JobRepository,
+  JobStatus,
   Page,
   PageRequest,
 } from "../types.js";
@@ -330,6 +331,37 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
         ],
       )
     ).map(toEvent),
+  listEventsSince: async (cursors, limitPerJob) =>
+    cursors.length === 0
+      ? []
+      : (
+          await db.query(
+            `SELECT e.* FROM unnest($1::text[], $2::bigint[]) AS c(job_id, after_seq)
+             CROSS JOIN LATERAL (
+               SELECT * FROM grad_job_events
+               WHERE job_id = c.job_id AND seq > c.after_seq ORDER BY seq LIMIT $3
+             ) e
+             ORDER BY e.seq`,
+            [
+              cursors.map((c) => c.jobId),
+              cursors.map((c) => c.afterSeq),
+              limitPerJob,
+            ],
+          )
+        ).map((r) => ({ ...toEvent(r), job_id: String(r.job_id) })),
+  jobStates: async (ids) =>
+    ids.length === 0
+      ? []
+      : (
+          await db.query<{
+            id: string;
+            status: JobStatus;
+            worker_id: string | null;
+          }>(
+            "SELECT id, status, worker_id FROM grad_jobs WHERE id = ANY($1::text[])",
+            [[...ids]],
+          )
+        ).map((r) => ({ id: r.id, status: r.status, worker_id: r.worker_id })),
   countLeasedWorkers: async (kind, now) =>
     Number(
       first(
