@@ -49,9 +49,6 @@ export const labelingEvalRequest = (
     rubric: items,
     samples: 1,
     temperature: 0,
-    ...(request.max_cost_usd !== undefined
-      ? { max_cost_usd: request.max_cost_usd }
-      : {}),
   });
 };
 
@@ -125,11 +122,7 @@ export const settleLabelledRuns = async (
       : {
           status: "cancelled" as const,
           finished_at: now,
-          error: `Cancelled because its labeling eval '${evalRecord.id}' ${
-            evalRecord.status === "stopped_budget"
-              ? "stopped at max_cost_usd"
-              : `ended ${evalRecord.status}${evalRecord.error ? `: ${evalRecord.error}` : ""}`
-          }.`,
+          error: `Cancelled because its labeling eval '${evalRecord.id}' ended ${evalRecord.status}${evalRecord.error ? `: ${evalRecord.error}` : ""}.`,
         };
   for (const run of await repos.runs.listWaitingOn(evalRecord.id)) {
     await repos.runs.update(

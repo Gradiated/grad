@@ -36,7 +36,7 @@ const request = (raw: Record<string, unknown>) =>
     ...raw,
   });
 
-describe("eval max_cost_usd", () => {
+describe("eval billing", () => {
   let h: EvalHarness | undefined;
 
   afterEach(async () => {
@@ -44,53 +44,22 @@ describe("eval max_cost_usd", () => {
     h = undefined;
   });
 
-  it("plan shows the estimate and create rejects plans over the cap", async () => {
-    h = await makeEvalHarness();
-    await seedDataset(h.t, "qa", qaRecords(20));
-    const evals = h.t.services.evals;
-
-    const plan = await evals.plan(
-      WORKSPACE_A,
-      request({ max_cost_usd: 0.000001 }),
-    );
-    expect(plan.estimated_cost_usd).toBeGreaterThan(0.000001);
-    expect(plan.warnings.join(" ")).toMatch(/evals.create rejects it/);
-    await expect(
-      evals.create(WORKSPACE_A, request({ max_cost_usd: 0.000001 })),
-    ).rejects.toMatchObject({ status: 422, code: "eval_budget_exceeded" });
-
-    const ok = await evals.create(WORKSPACE_A, request({ max_cost_usd: 10 }));
-    expect(ok.max_cost_usd).toBe(10);
-    const unlimited = await evals.create(WORKSPACE_A, request({}));
-    expect(unlimited.max_cost_usd).toBeNull();
-  });
-
-  it("stops generating at the cap with partial results and bills what ran", async () => {
+  it("plans an estimate and bills a finished eval once for what ran", async () => {
     const billing = recordingBilling();
     h = await makeEvalHarness({ billing: billing.adapter });
     const { t, fake } = h;
-    await seedDataset(t, "qa", qaRecords(20));
+    await seedDataset(t, "qa", qaRecords(3));
     fake.setModel("qwen/qwen3-8b", EXPENSIVE);
     const evals = t.services.evals;
 
-    const created = await evals.create(
-      WORKSPACE_A,
-      request({ max_cost_usd: 0.1 }),
-    );
-    await evals.drain();
-    const stopped = await evals.get(WORKSPACE_A, created.id);
-    expect(stopped.status).toBe("stopped_budget");
-    expect(stopped.progress.generated).toBe(2);
-    expect(stopped.progress.total_outputs).toBe(20);
-    expect(stopped.total_cost_usd).toBeCloseTo(0.08, 6);
-    expect(stopped.total_cost_usd).toBeLessThanOrEqual(0.1);
-    expect(fake.requests).toHaveLength(2);
-    expect(stopped.summary[0]?.tasks).toBe(2);
+    const plan = await evals.plan(WORKSPACE_A, request({}));
+    expect(plan.estimated_cost_usd).toBeGreaterThan(0);
 
-    const results = await evals.listResults(WORKSPACE_A, created.id, {
-      limit: 50,
-    });
-    expect(results.data).toHaveLength(2);
+    const created = await evals.create(WORKSPACE_A, request({}));
+    await evals.drain();
+    const done = await evals.get(WORKSPACE_A, created.id);
+    expect(done.status).toBe("completed");
+    expect(done.total_cost_usd).toBeCloseTo(0.12, 6);
 
     await t.services.billing.idle();
     await t.services.billing.drain();
@@ -98,27 +67,24 @@ describe("eval max_cost_usd", () => {
       {
         workspaceId: WORKSPACE_A,
         evalId: created.id,
-        tokensProcessed: 200_000,
-        costUsd: 0.08,
+        tokensProcessed: 300_000,
+        costUsd: 0.12,
         idempotencyKey: `eval-usage:${created.id}`,
       },
     ]);
   });
 
-  it("finishes stopped_budget after local scores and bills failed and cancelled evals", async () => {
+  it("bills after local scores and skips failed and cancelled evals that ran nothing", async () => {
     const billing = recordingBilling();
     h = await makeEvalHarness({ billing: billing.adapter });
     const { t, fake } = h;
-    await seedDataset(t, "qa", qaRecords(10));
+    await seedDataset(t, "qa", qaRecords(1));
     fake.setModel("qwen/qwen3-8b", EXPENSIVE);
     const evals = t.services.evals;
 
     const local = await evals.create(
       WORKSPACE_A,
-      request({
-        max_cost_usd: 0.05,
-        rubric: [{ name: "fn", kind: "code", runtime: "local" }],
-      }),
+      request({ rubric: [{ name: "fn", kind: "code", runtime: "local" }] }),
     );
     await evals.drain();
     const waiting = await evals.get(WORKSPACE_A, local.id);
@@ -135,7 +101,7 @@ describe("eval max_cost_usd", () => {
     const posted = await evals.postScores(WORKSPACE_A, local.id, [
       { output_id: output!.id, scorer: "fn", score: 1 },
     ]);
-    expect(posted.status).toBe("stopped_budget");
+    expect(posted.status).toBe("completed");
 
     const cancelled = await evals.create(WORKSPACE_A, request({}));
     await evals.cancel(WORKSPACE_A, cancelled.id);
@@ -147,7 +113,7 @@ describe("eval max_cost_usd", () => {
 
     await t.services.billing.idle();
     await t.services.billing.drain();
-    // Nothing ran for the cancelled and failed evals, so only the capped one bills.
+    // Nothing ran for the cancelled and failed evals, so only the scored one bills.
     expect(billing.evals.map((e) => e.evalId)).toEqual([local.id]);
   });
 });

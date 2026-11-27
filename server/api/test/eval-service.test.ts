@@ -115,7 +115,6 @@ describe("eval service", () => {
         dataset_version: 1,
         samples: 2,
         limit: 3,
-        max_cost_usd: 0.0000001,
         rubric: [
           { name: "j", kind: "judge", model: "qwen/qwen3-32b" },
           { name: "fn", kind: "code" },
@@ -130,7 +129,6 @@ describe("eval service", () => {
     expect(plan.judge_models).toEqual(["qwen/qwen3-32b"]);
     expect(plan.local_scorers).toEqual(["fn"]);
     expect(plan.pass_threshold).toBe(0.5);
-    expect(plan.warnings.join("\n")).toMatch(/exceeds max_cost_usd/);
     expect(plan.warnings.join("\n")).toMatch(/baseline/);
     expect(plan.warnings.join("\n")).toMatch(/awaiting_scores/);
 

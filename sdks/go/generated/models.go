@@ -725,12 +725,10 @@ type EvalRun struct {
 	Progress      EvalRunProgress    `json:"progress"`
 	Summary       []EvalModelSummary `json:"summary"`
 	TotalCostUSD  float64            `json:"total_cost_usd"`
-	// MaxCostUSD Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial results.
-	MaxCostUSD  *float64 `json:"max_cost_usd"`
-	Error       *string  `json:"error"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
-	CompletedAt *string  `json:"completed_at"`
+	Error         *string            `json:"error"`
+	CreatedAt     string             `json:"created_at"`
+	UpdatedAt     string             `json:"updated_at"`
+	CompletedAt   *string            `json:"completed_at"`
 }
 
 // EvalRunProgress is generated from the OpenAPI schema.
@@ -764,7 +762,6 @@ const (
 	EvalStatusRunning        EvalStatus = "running"
 	EvalStatusAwaitingScores EvalStatus = "awaiting_scores"
 	EvalStatusCompleted      EvalStatus = "completed"
-	EvalStatusStoppedBudget  EvalStatus = "stopped_budget"
 	EvalStatusFailed         EvalStatus = "failed"
 	EvalStatusCancelled      EvalStatus = "cancelled"
 )
@@ -1206,8 +1203,6 @@ type PlanEvalRequest struct {
 	Limit          *int             `json:"limit,omitempty"`
 	// PassThreshold Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.
 	PassThreshold *float64 `json:"pass_threshold,omitempty"`
-	// MaxCostUSD Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget).
-	MaxCostUSD *float64 `json:"max_cost_usd,omitempty"`
 }
 
 // PlanEvalResponse is generated from the OpenAPI schema.

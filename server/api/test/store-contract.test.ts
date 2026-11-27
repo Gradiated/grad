@@ -126,8 +126,6 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         pass_threshold: 0.5,
         judge_models: [],
         local_scorers: ["local_fn"],
-        max_cost_usd: 5,
-        estimated_cost_usd: 1.5,
       });
     };
 

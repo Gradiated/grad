@@ -2233,9 +2233,6 @@ pub mod models {
         pub progress: EvalRunProgress,
         pub summary: Vec<EvalModelSummary>,
         pub total_cost_usd: f64,
-        /// Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial results.
-        #[serde(default)]
-        pub max_cost_usd: Option<f64>,
         #[serde(default)]
         pub error: Option<String>,
         pub created_at: String,
@@ -2323,8 +2320,6 @@ pub mod models {
         AwaitingScores,
         /// `"completed"`
         Completed,
-        /// `"stopped_budget"`
-        StoppedBudget,
         /// `"failed"`
         Failed,
         /// `"cancelled"`
@@ -2346,7 +2341,6 @@ pub mod models {
                 Self::Running => "running",
                 Self::AwaitingScores => "awaiting_scores",
                 Self::Completed => "completed",
-                Self::StoppedBudget => "stopped_budget",
                 Self::Failed => "failed",
                 Self::Cancelled => "cancelled",
                 Self::Other(s) => s.as_str(),
@@ -2361,7 +2355,6 @@ pub mod models {
                 "running" => Self::Running,
                 "awaiting_scores" => Self::AwaitingScores,
                 "completed" => Self::Completed,
-                "stopped_budget" => Self::StoppedBudget,
                 "failed" => Self::Failed,
                 "cancelled" => Self::Cancelled,
                 other => Self::Other(other.to_string()),
@@ -3254,9 +3247,6 @@ pub mod models {
         /// Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub pass_threshold: Option<f64>,
-        /// Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub max_cost_usd: Option<f64>,
     }
 
     /// Generated from the OpenAPI schema `PlanEvalResponse`.

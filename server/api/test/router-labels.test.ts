@@ -137,7 +137,7 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
     expect(strong.scores).toEqual({ rubric: 0.9 });
   });
 
-  it("cancels the run when labeling fails, stops at the cap or is cancelled", async () => {
+  it("cancels the run when labeling fails or is cancelled", async () => {
     const { t, fake } = await harness();
     const getRun = async (id: string) =>
       (await t.json<Record<string, any>>(`/v1/runs/${id}`)).body;
@@ -151,19 +151,6 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
     expect(failedRun.status).toBe("cancelled");
     expect(failedRun.error).toMatch(/labeling eval .* ended failed/);
     fake.failNext(0);
-
-    fake.setModel("qwen/qwen3-8b", () => ({
-      content: "answer",
-      usage: { prompt_tokens: 1_000_000, completion_tokens: 0 },
-    }));
-    const capped = await t.json<{ id: string }>("/v1/runs", {
-      body: { ...routerRequest(), max_cost_usd: 1 },
-    });
-    expect(capped.status).toBe(202);
-    await t.services.evals.drain();
-    expect((await getRun(capped.body.id)).error).toMatch(
-      /stopped at max_cost_usd/,
-    );
 
     const cancelled = await t.json<Record<string, any>>("/v1/runs", {
       body: routerRequest(),

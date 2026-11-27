@@ -202,14 +202,6 @@ export const planEvalRequest = async (
     );
   }
   if (
-    request.max_cost_usd !== undefined &&
-    estimatedCost > request.max_cost_usd
-  ) {
-    warnings.push(
-      `Estimated eval cost ($${estimatedCost.toFixed(4)}) exceeds max_cost_usd ($${request.max_cost_usd.toFixed(4)}); evals.create rejects it. Raise max_cost_usd or lower limit, samples or models.`,
-    );
-  }
-  if (
     request.baseline !== undefined &&
     !request.models.includes(request.baseline)
   ) {

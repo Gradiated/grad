@@ -62,7 +62,6 @@ export type StopReason = "cancelled" | "budget" | null;
 
 const EVAL_TERMINAL: readonly EvalStatus[] = [
   "completed",
-  "stopped_budget",
   "failed",
   "cancelled",
 ];

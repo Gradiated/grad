@@ -482,12 +482,6 @@ export interface EvalRecord {
   pass_threshold: number;
   judge_models: string[];
   local_scorers: string[];
-  /** Spend cap: generation stops once outputs cost this much (`stopped_budget`). */
-  max_cost_usd: number | null;
-  /** The plan's estimate, used to price calls before any output has a cost. */
-  estimated_cost_usd: number;
-  /** True once generation stopped at `max_cost_usd`; finalizes as `stopped_budget`. */
-  budget_stopped: boolean;
   total_outputs: number;
   generated: number;
   summary: EvalModelSummary[];
@@ -515,7 +509,6 @@ export type EvalPatch = Partial<
     | "worker_id"
     | "lease_expires_at"
     | "lease_seconds"
-    | "budget_stopped"
     | "updated_at"
     | "completed_at"
   >
@@ -563,7 +556,6 @@ export interface EvalRepository {
       EvalRecord,
       | "id"
       | "status"
-      | "budget_stopped"
       | "total_outputs"
       | "generated"
       | "summary"
