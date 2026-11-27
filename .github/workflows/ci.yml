@@ -59,6 +59,14 @@ jobs:
       - name: Install server/api dependencies
         run: pnpm -C server/api install --frozen-lockfile
 
+      # The web UI: typecheck, component tests with a coverage gate, and a build,
+      # so the server's UI smoke test below runs against the real bundle.
+      - name: Web UI (typecheck, tests with coverage, build)
+        run: |
+          pnpm -C server/ui install --frozen-lockfile
+          pnpm -C server/ui check
+          pnpm -C server/ui exec vite build
+
       - name: Check formatting
         run: pnpm -C server/api format:check
 

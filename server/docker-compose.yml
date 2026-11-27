@@ -20,8 +20,9 @@ services:
 
   grad-server:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      # The repository root: the image also builds the web UI (server/ui).
+      context: ..
+      dockerfile: server/api/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

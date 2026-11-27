@@ -184,6 +184,12 @@ networkPolicy:
       ports:
         - {protocol: TCP, port: 443}
 
+# The web UI (runs, datasets, evals, usage, worker health), served by grad-server
+# at / on the API Service and so behind the ingress below. It calls only the
+# public /v1 API with the viewer's API key, kept in the browser tab.
+ui:
+  enabled: true
+
 ingress:
   enabled: false
   className: ""

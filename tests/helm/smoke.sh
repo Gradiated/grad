@@ -37,7 +37,7 @@ trap cleanup EXIT
 
 step "images"
 if [ -n "${GRAD_SERVER_IMAGE:-}" ]; then docker tag "$GRAD_SERVER_IMAGE" grad-server:dev
-else docker build -q -t grad-server:dev "$ROOT/server/api"; fi
+else docker build -q -f "$ROOT/server/api/Dockerfile" -t grad-server:dev "$ROOT"; fi
 if [ -n "${GRAD_TRAINER_IMAGE:-}" ]; then docker tag "$GRAD_TRAINER_IMAGE" grad-trainer:dev
 else docker build -q --target cpu -t grad-trainer:dev "$ROOT/server/trainer"; fi
 

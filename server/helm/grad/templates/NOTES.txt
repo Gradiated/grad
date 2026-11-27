@@ -7,6 +7,11 @@ Check readiness:
   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "grad.fullname" . }}-api
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "grad.fullname" . }}-api 8787:{{ .Values.api.service.port }}
   curl http://127.0.0.1:8787/health/ready
+{{- if .Values.ui.enabled }}
+
+Web UI: http://127.0.0.1:8787/ while port-forwarding{{ with .Values.ingress }}{{ if .enabled }}{{ range .hosts }}, or http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/{{ end }}{{ end }}{{ end }}
+Sign in with an API key, or run `grad ui` to open it signed in.
+{{- end }}
 {{- if not .Values.evals.inferenceBaseUrl }}
 
 Evals are off: set evals.inferenceBaseUrl to an OpenAI-compatible endpoint.
