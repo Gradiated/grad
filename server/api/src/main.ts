@@ -1,8 +1,11 @@
+import type { Server } from "node:http";
+
 import { serve } from "@hono/node-server";
 
 import { createGradApp } from "./app.js";
 import { buildDependencies, log } from "./bootstrap.js";
 import { parseServerEnvironment } from "./environment.js";
+import { gracefulShutdown } from "./shutdown.js";
 
 // A stray rejection is a bug to log, not a reason to take the replica down.
 process.on("unhandledRejection", (reason: unknown) => {
@@ -39,11 +42,17 @@ const main = async () => {
     if (stopping) return;
     stopping = true;
     log("info", "grad-server shutting down", { signal });
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await services.maintenance.stop();
-    await services.evals.stop();
-    await deps.regex.close();
-    await deps.store.close();
+    await gracefulShutdown({
+      server: server as Server,
+      stopBackground: async () => {
+        await services.maintenance.stop();
+        await services.evals.stop();
+      },
+      closeResources: async () => {
+        await deps.regex.close();
+        await deps.store.close();
+      },
+    });
     process.exit(0);
   };
 
