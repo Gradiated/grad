@@ -95,7 +95,7 @@ class StubImporter:
         self.batch_size = batch_size
         self.sources: list[dict[str, Any]] = []
 
-    def run(self, source, connector, *, emit_batch, workdir):  # type: ignore[no-untyped-def]
+    def run(self, source, connector, *, emit_batch, workdir, source_page=None):  # type: ignore[no-untyped-def]
         self.sources.append(
             {
                 **source,

@@ -463,6 +463,33 @@ class WorkerProtocolTests(unittest.TestCase):
         )
         self.assertEqual([b["seq"] for b in srv.bodies("records")], [0, 1])
 
+    def test_gradiated_source_sync_pages_through_the_server_and_reports_the_watermark(self) -> None:
+        from grad_trainer import import_runner
+
+        trace = {"type": "trace", "trace_id": "t1", "messages": [{"role": "user", "content": "q"}], "metadata": {"model": "m"}}
+        score = {"type": "score", "trace_id": "t1", "name": "thumbs", "value": 1, "updated_at": "2026-11-27T10:00:00Z"}
+        srv = self.server(jobs=[import_job({"kind": "provider", "provider": "gradiated", "watermark": {"traces": "c0", "scores": "c0"}})])
+        page = {"records": [trace, score], "cursor": "c1", "has_more": False}
+        srv.source_pages = [page, page]  # one pass for traces, one for scores
+        result = self.worker(srv, importer=import_runner).run_once()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual([b["cursor"] for b in srv.bodies("source-page")], ["c0", "c0"])
+        self.assertTrue(all(b["attempt"] == 1 and b["worker_id"] == "w-test" for b in srv.bodies("source-page")))
+        records = [r for b in srv.bodies("records") for r in b["records"]]
+        self.assertEqual([r["id"] for r in records], ["t1", "t1"])
+        self.assertEqual(srv.bodies("complete")[0]["import_summary"]["watermark"], {"traces": "c1", "scores": "c1"})
+
+    def test_training_merges_score_updates_into_their_records(self) -> None:
+        storage_lines = [
+            {"id": "t1", "messages": [{"role": "user", "content": "q"}], "scores": {"thumbs": 0.0}},
+            {"id": "t1", "scores": {"thumbs": 1.0}, "metadata": {"score_update": True}},
+        ]
+        srv = self.server(jobs=[train_job(dataset_url="/blobs/data")])
+        srv.blobs["/blobs/data"] = "\n".join(json.dumps(r) for r in storage_lines).encode()
+        runner = StubRunner(checkpoint_at=None)
+        self.worker(srv, runner).run_once()
+        self.assertEqual(runner.calls[0]["records"], [{"id": "t1", "messages": [{"role": "user", "content": "q"}], "scores": {"thumbs": 1.0}}])
+
     def test_idle_claim_returns_none(self) -> None:
         srv = self.server()
         self.assertIsNone(self.worker(srv).run_once())

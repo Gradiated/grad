@@ -72,3 +72,5 @@ class ImportSummary:
     records: int
     skipped: int
     errors: list[str] = field(default_factory=list)
+    # Source syncs only: the provider watermark to store when the job completes.
+    watermark: dict[str, Any] | None = None

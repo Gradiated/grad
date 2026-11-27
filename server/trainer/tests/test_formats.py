@@ -1,10 +1,10 @@
-"""Tests for all 7 Tier-1 trace connectors and auto-detection."""
+"""File formats and provider file rows: parsing and auto-detection."""
 
 from __future__ import annotations
 
 import unittest
 
-from grad_trainer.connectors import detect_source, normalize_traces, normalize_traces_with_stats, parse_row
+from grad_trainer.import_runner import detect_source, normalize_traces, normalize_traces_with_stats, parse_row
 
 
 class ConnectorTests(unittest.TestCase):
@@ -195,6 +195,8 @@ class ConnectorEdgeCaseTests(unittest.TestCase):
         records, skipped = normalize_traces_with_stats(["text", {"messages": []}, {"inputs": {}, "outputs": {}}])
         self.assertEqual(records, [])
         self.assertEqual(skipped, {"not_an_object": 1, "grad_trajectories:no_messages": 1, "langsmith:no_messages": 1})
+        openai = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}], "tools": [{"type": "function"}]}
+        self.assertEqual(parse_row(openai, "openai_chat")[0], openai)
         with self.assertRaisesRegex(ValueError, "Unknown trace connector"):
             parse_row({}, "splunk")
         deep: dict = {"role": "user", "content": "x"}

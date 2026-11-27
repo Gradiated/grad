@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
 PROTOCOL = "grad.trainer-protocol/1"
-JOB_RE = re.compile(r"^/v1/trainer-jobs/([^/]+)/([a-z]+)$")
+JOB_RE = re.compile(r"^/v1/trainer-jobs/([^/]+)/([a-z-]+)$")
 
 
 @dataclass
@@ -37,6 +37,8 @@ class FakeProtocolServer:
     jobs: list[dict[str, Any]] = field(default_factory=list)
     blobs: dict[str, bytes] = field(default_factory=dict)
     fail_next: dict[str, list[int]] = field(default_factory=dict)
+    # Replies to source-page calls (a gradiated source sync), handed out in order.
+    source_pages: list[dict[str, Any]] = field(default_factory=list)
     progress_reply: Callable[[int], dict[str, Any]] | None = None
     heartbeat_reply: Callable[[int], tuple[int, dict[str, Any]]] | None = None
     checkpoint_status: int = 201
@@ -247,6 +249,8 @@ class FakeProtocolServer:
                 None,
                 None,
             )
+        if action == "source-page":
+            return 200, self.source_pages.pop(0), None, None
         if action == "complete":
             body = rec.json() or {}
             return (

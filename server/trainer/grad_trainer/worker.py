@@ -36,6 +36,7 @@ from typing import Any, BinaryIO, Callable
 from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
 from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
+from .records import merge_records
 from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
@@ -477,6 +478,7 @@ class TrainerWorker:
                 "records",
                 "complete",
                 "uploads",
+                "source-page",
             ):
                 state.lease_lost = True
                 state.request_stop("lease_lost")
@@ -665,7 +667,7 @@ class TrainerWorker:
             return []
         path = job_dir / "dataset.jsonl"
         self.client.download(str(dataset["download_url"]), path)
-        return _parse_jsonl(path)
+        return merge_records(_parse_jsonl(path))
 
     def _load_resume(self, job: dict[str, Any], job_dir: Path) -> ResumeState | None:
         resume = job.get("resume")
@@ -736,6 +738,11 @@ class TrainerWorker:
                 )
                 state.batches += 1
 
+        def source_page(cursor: str | None) -> dict[str, Any]:
+            if state.stop.is_set():
+                raise _StopImport()
+            return self._post(state, "source-page", {"cursor": cursor}, attempts=5)
+
         work = job_dir / "work"
         work.mkdir()
         try:
@@ -744,6 +751,7 @@ class TrainerWorker:
                 None if connector in (None, "auto") else str(connector),
                 emit_batch=emit_batch,
                 workdir=work,
+                source_page=source_page,
             )
         except (LeaseLost, WorkerAuthError):
             raise
@@ -763,6 +771,7 @@ class TrainerWorker:
                 "import_summary": {
                     "dropped_count": int(summary.skipped),
                     "drop_reasons": [str(e)[:1000] for e in summary.errors[:101]],
+                    **({"watermark": summary.watermark} if summary.watermark is not None else {}),
                 },
             },
         )

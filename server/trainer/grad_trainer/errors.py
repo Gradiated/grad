@@ -41,3 +41,33 @@ class ResumeMismatchError(TrainerError, ValueError):
     """A checkpoint does not belong to this run configuration."""
 
     code = "resume_mismatch"
+
+
+class SourceAuthError(SourceUnavailableError):
+    """The provider rejected the source's secret (HTTP 401/403, or a malformed key)."""
+
+    code = "source_auth_failed"
+
+
+class SourceUnreachableError(SourceUnavailableError):
+    """The provider host could not be reached, kept failing, or redirected somewhere unsafe."""
+
+    code = "source_unreachable"
+
+
+class SourceHostBlockedError(SourceUnavailableError):
+    """The source host is not allowed: wrong scheme, or it resolves to a blocked address."""
+
+    code = "source_host_blocked"
+
+
+class SourceAPIChangedError(SourceUnavailableError):
+    """The provider answered with a status or shape this connector does not understand."""
+
+    code = "source_api_changed"
+
+
+class PaginationLoopError(SourceAPIChangedError):
+    """The provider returned a cursor it already returned, or too many pages."""
+
+    code = "source_pagination_loop"

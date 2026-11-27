@@ -1,7 +1,8 @@
 # grad-trainer
 
 Training runtime for `grad-server`: the six v0 recipes on torch + transformers + peft, the
-`.grad.tar.gz` artifact bundle format, the import runner and the Tier-1 trace connectors.
+`.grad.tar.gz` artifact bundle format, the import runner, file formats (`grad_trainer/formats.py`)
+and the observability source providers (`grad_trainer/providers/`, see its README).
 
 | Recipe      | Trains                                                          | Artifact (`format`)                                                         |
 | ----------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -25,8 +26,12 @@ from grad_trainer import import_runner
 from grad_trainer.runner_types import Budget, ResumeState, RunCallbacks
 
 out = get_recipe_runner(kind).run(config, records, budget=Budget(max_cost_usd, price), callbacks=RunCallbacks(on_step, on_checkpoint), resume=ResumeState(step, dir) | None, workdir=path)
-summary = import_runner.run(source, connector, emit_batch=post_records, workdir=path)
+summary = import_runner.run(source, connector, emit_batch=post_records, workdir=path, source_page=page_fn)
 ```
+
+- Import `source` kinds: `file`, `hf` and `provider` (a source sync; `summary.watermark` is the
+  watermark to store when the job completes). Records are dataset parts; the worker folds them
+  with `records.merge_records` (one record per id, score updates applied) before training.
 
 - `RunOutput.tokens_processed` counts tokens metered during this call; metrics carry the
   run's cumulative `tokens` and `cost_usd` (a resume continues the checkpoint's meter).
