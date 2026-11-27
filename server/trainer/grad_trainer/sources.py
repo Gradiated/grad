@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import IO, Any, Iterator
 
+from . import benchmarks
 from .records import NATIVE_FIELDS
 from .errors import SourceUnavailableError
 from .models import is_offline
@@ -117,10 +118,14 @@ def hf_rows(source: dict[str, Any]) -> Iterator[Row]:
         detail = redact(str(exc), source.get("token"))
         raise SourceUnavailableError(f"Can't load Hugging Face dataset '{repo}' split '{split}': {detail}") from exc
 
+    benchmark = source.get("benchmark")
     checked = False
     for index, row in enumerate(ds):
         if limit is not None and index >= int(limit):
             return
+        if benchmark:
+            yield f"row {index}", benchmarks.to_record(str(benchmark), row, index), None
+            continue
         if not checked:
             missing = sorted(c for c in columns.values() if c not in row)
             if missing:
