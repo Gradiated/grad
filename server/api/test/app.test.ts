@@ -144,6 +144,7 @@ describe("grad-server HTTP API", () => {
       err("canceling statement due to statement timeout", "57014"),
       err("timeout exceeded when trying to connect"),
       err("Connection terminated unexpectedly"),
+      err("Client has encountered a connection error and is not queryable"),
     ]) {
       expect(isDatabaseUnavailable(e), e.message).toBe(true);
     }

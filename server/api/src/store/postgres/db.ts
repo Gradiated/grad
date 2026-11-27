@@ -112,7 +112,7 @@ export const isDatabaseUnavailable = (error: unknown): boolean => {
     if (code === "53300" || code === "57014") return true;
   }
 
-  return /timeout exceeded when trying to connect|Connection terminated/i.test(
+  return /timeout exceeded when trying to connect|Connection terminated|connection error and is not queryable/i.test(
     error.message,
   );
 };

@@ -54,15 +54,22 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
       ...(options.schema ? [`-c search_path=${options.schema}`] : []),
     ].join(" "),
   });
-  pool.on("error", (error) => {
+  const logLost = (error: Error) => {
     console.error(
       JSON.stringify({
         level: "error",
-        msg: "postgres pool error",
+        msg: "postgres connection lost",
         error: error.message,
       }),
     );
-  });
+  };
+  // The pool listens for 'error' on idle clients only. A backend that dies
+  // while a client is checked out (a transaction between two queries, during
+  // a Postgres restart or failover) would emit an unhandled 'error' and exit
+  // the process (r8 P1-2). With a listener, the query in flight or the next
+  // one rejects instead, the request answers 503 and the pool drops the client.
+  pool.on("error", logLost);
+  pool.on("connect", (client) => client.on("error", logLost));
 
   const unwatch = watchPool(pool);
   const db = createDb(pool);
