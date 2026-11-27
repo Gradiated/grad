@@ -175,6 +175,7 @@ describe("web UI", () => {
 describe("UI configuration", () => {
   const base = {
     DATABASE_URL: "postgres://x",
+    S3_BUCKET: "grad",
     ADMIN_API_KEY_HASH: "a".repeat(64),
   };
 

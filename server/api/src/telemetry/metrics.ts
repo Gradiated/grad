@@ -15,7 +15,6 @@ import {
 
 /** Every label a grad_ metric may carry (the cardinality guard's allowlist). */
 export const LABELS = [
-  "backend",
   "form",
   "kind",
   "method",
@@ -316,14 +315,14 @@ export const metrics = {
   ),
   storageDuration: histogram(
     "grad_storage_operation_duration_seconds",
-    "Object storage operation duration, by backend and operation.",
-    ["backend", "op"],
+    "Object storage operation duration, by operation.",
+    ["op"],
     BUCKETS.fast,
   ),
   storageErrors: counter(
     "grad_storage_operation_errors_total",
-    "Object storage operations that failed, by backend and operation.",
-    ["backend", "op"],
+    "Object storage operations that failed, by operation.",
+    ["op"],
   ),
   workspaceJobs: gauge(
     "grad_workspace_jobs",

@@ -395,7 +395,7 @@ describe("datasets, uploads and imports", () => {
       },
     });
     expect(ticket.status).toBe(201);
-    expect(ticket.body.url.startsWith("/blobs/uploads?")).toBe(true);
+    expect(ticket.body.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
     // Uploads are content-addressed: the ticket's id is the file's sha256.
     expect(ticket.body.upload_id).toBe(sha256Hex(file));
 
@@ -407,7 +407,7 @@ describe("datasets, uploads and imports", () => {
 
     expect(
       (
-        await t.app.request(ticket.body.url, {
+        await t.request(ticket.body.url, {
           method: "PUT",
           headers: ticket.body.headers,
           body: file,
@@ -451,7 +451,7 @@ describe("datasets, uploads and imports", () => {
       download_url: string;
     };
     expect(source.kind).toBe("upload");
-    const downloaded = await t.request(source.download_url, { token: null });
+    const downloaded = await t.request(source.download_url);
     expect(Buffer.from(await downloaded.arrayBuffer()).equals(file)).toBe(true);
     expect((await worker.heartbeat(job!)).body).toMatchObject({
       should_stop: false,
@@ -609,18 +609,23 @@ describe("datasets, uploads and imports", () => {
     ).toBe(404);
 
     const file = Buffer.from("x");
-    const ticket = await t.json<{ upload_id: string; url: string }>(
-      "/v1/uploads",
-      {
-        body: {
-          purpose: "dataset_import",
-          filename: "f",
-          size_bytes: 1,
-          sha256: sha256Hex(file),
-        },
+    const ticket = await t.json<{
+      upload_id: string;
+      url: string;
+      headers: Record<string, string>;
+    }>("/v1/uploads", {
+      body: {
+        purpose: "dataset_import",
+        filename: "f",
+        size_bytes: 1,
+        sha256: sha256Hex(file),
       },
-    );
-    await t.app.request(ticket.body.url, { method: "PUT", body: file });
+    });
+    await t.request(ticket.body.url, {
+      method: "PUT",
+      headers: ticket.body.headers,
+      body: file,
+    });
     const stolen = await t.json("/v1/datasets/x/imports", {
       token: other,
       body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
@@ -632,18 +637,5 @@ describe("datasets, uploads and imports", () => {
       body: { source: { kind: "upload", upload_id: "../../etc" } },
     });
     expect(malformed.body).toMatchObject({ code: "unknown_upload" });
-  });
-
-  it("serves signed blob downloads only with a valid signature", async () => {
-    const res = await t.request("/blobs/objects?key=uploads/x&exp=1&sig=bad", {
-      token: null,
-    });
-    expect(res.status).toBe(403);
-    const path = t.deps.signer.downloadPath(
-      "uploads/missing",
-      new Date(t.clock.now().getTime() + 60_000),
-    );
-    const missing = await t.request(path, { token: null });
-    expect(missing.status).toBe(404);
   });
 });

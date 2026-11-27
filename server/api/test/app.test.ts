@@ -115,7 +115,6 @@ describe("grad-server HTTP API", () => {
     ]) {
       expect(doc.paths).toHaveProperty(path);
     }
-    expect(JSON.stringify(doc.paths)).not.toContain("/blobs/");
     expect((await t.request("/openapi.json")).status).toBe(200);
   });
 

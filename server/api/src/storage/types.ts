@@ -43,12 +43,19 @@ export interface PresignedUpload {
   headers: Record<string, string>;
 }
 
+export interface PresignUploadInput {
+  sha256: string;
+  sizeBytes: number;
+  expiresInSeconds: number;
+  /** Sign for the endpoint SDK clients reach (S3_PUBLIC_ENDPOINT), not the workers' one. */
+  forClient?: boolean;
+}
+
 /**
- * Immutable object storage. Server writes never overwrite an existing object
- * (writes to an existing key throw ObjectExistsError).
+ * Immutable S3-compatible object storage. Server writes never overwrite an
+ * existing object (writes to an existing key throw ObjectExistsError).
  */
 export interface ObjectStore {
-  readonly kind: "local" | "s3";
   put(key: string, data: Uint8Array): Promise<StoredObject>;
   putStream(
     key: string,
@@ -76,18 +83,14 @@ export interface ObjectStore {
    * Direct-to-storage presigned PUT whose Content-Length and
    * x-amz-checksum-sha256 are signed, so the store rejects any other body.
    * Keys are content-addressed (the sha256 is their last segment), so a
-   * re-upload writes identical bytes. Null when the backend has no presigning
-   * (local FS: use the server proxy, which verifies the bytes itself).
+   * re-upload writes identical bytes.
    */
   presignUpload(
     key: string,
-    input: { sha256: string; sizeBytes: number; expiresInSeconds: number },
-  ): Promise<PresignedUpload | null>;
-  /** Presigned GET, or null when the backend has no presigning. */
-  presignDownload(
-    key: string,
-    expiresInSeconds: number,
-  ): Promise<string | null>;
+    input: PresignUploadInput,
+  ): Promise<PresignedUpload>;
+  /** Presigned GET (for workers). */
+  presignDownload(key: string, expiresInSeconds: number): Promise<string>;
 }
 
 export const validateObjectKey = (key: string): string => {

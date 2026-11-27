@@ -8,7 +8,6 @@ import type { AppDependencies } from "./deps.js";
 import { ApiError } from "./errors.js";
 import { documentIdempotencyHeader } from "./idempotency.js";
 import { registerArtifactRoutes } from "./routes/artifacts.js";
-import { registerBlobRoutes } from "./routes/blobs.js";
 import { registerCheckpointRoutes } from "./routes/checkpoints.js";
 import { registerDatasetRoutes } from "./routes/datasets.js";
 import { registerDeploymentRoutes } from "./routes/deployments.js";
@@ -212,8 +211,6 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
 
     return c.json({ status: "ready" }, 200);
   });
-
-  registerBlobRoutes(app, deps, services);
 
   app.use("/v1/*", async (c, next) => {
     const principal = await deps.auth.authenticate(

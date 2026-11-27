@@ -6,7 +6,7 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     globalSetup: [
       "test/fixtures/postgres-global.ts",
-      "test/fixtures/minio-global.ts",
+      "test/fixtures/s3-global.ts",
     ],
     setupFiles: ["test/fixtures/setup.ts"],
     testTimeout: 30_000,

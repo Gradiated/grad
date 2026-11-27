@@ -1,7 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
 import {
   createLocalApiKeyAuth,
   createNoopBillingAdapter,
@@ -11,10 +7,9 @@ import { createGradApp } from "../../src/app.js";
 import { createModelCatalog } from "../../src/catalog.js";
 import type { AppDependencies } from "../../src/deps.js";
 import { createRegexEvaluator } from "../../src/services/evals/regex.js";
-import { LocalObjectStore } from "../../src/storage/local.js";
-import { createBlobSigner } from "../../src/storage/signer.js";
 import { ManualClock } from "./clock.js";
 import { createTestStore } from "./postgres.js";
+import { testObjectStore } from "./s3.js";
 
 export const ADMIN_KEY = "grad_test_bootstrap_admin_key";
 export const TRAINER_KEY = "grad_test_platform_trainer_key";
@@ -63,7 +58,7 @@ export interface TestApp {
   services: ReturnType<typeof createGradApp>["services"];
   deps: AppDependencies;
   clock: ManualClock;
-  storageDir: string;
+  /** An API path (bearer `token`, default the admin key) or an absolute presigned URL (no token). */
   request: (
     pathname: string,
     init?: {
@@ -87,7 +82,7 @@ export interface TestApp {
   close: () => Promise<void>;
 }
 
-/** Builds an app over this test file's (emptied) Postgres schema, a temp local object store and a manual clock. */
+/** Builds an app over this test file's (emptied) Postgres schema, its own prefix in the run's S3 bucket and a manual clock. */
 export const makeTestApp = async (
   overrides: Partial<AppDependencies> = {},
 ): Promise<TestApp> => {
@@ -95,16 +90,13 @@ export const makeTestApp = async (
     overrides.clock instanceof ManualClock
       ? overrides.clock
       : new ManualClock();
-  const storageDir = await mkdtemp(
-    path.join(process.env.TMPDIR ?? os.tmpdir(), "grad-api-test-"),
-  );
+  const s3 = testObjectStore();
   const { store, dispose } = overrides.store
     ? { store: overrides.store, dispose: async () => undefined }
     : await createTestStore(clock);
   const deps: AppDependencies = {
     store,
-    storage: new LocalObjectStore(storageDir),
-    signer: createBlobSigner("test-signing-secret"),
+    storage: s3.storage,
     auth: createLocalApiKeyAuth({
       adminKeyHash: hashApiKey(ADMIN_KEY),
       trainerKeyHash: hashApiKey(TRAINER_KEY),
@@ -122,8 +114,10 @@ export const makeTestApp = async (
   const { app, services } = createGradApp(deps);
 
   const request: TestApp["request"] = (pathname, init = {}) => {
+    const presigned = /^https?:\/\//.test(pathname);
     const headers: Record<string, string> = { ...(init.headers ?? {}) };
-    const token = init.token === undefined ? ADMIN_KEY : init.token;
+    const token =
+      init.token === undefined && !presigned ? ADMIN_KEY : init.token;
     if (token) headers.Authorization = `Bearer ${token}`;
     let body: BodyInit | undefined;
     if (init.body !== undefined) {
@@ -135,13 +129,15 @@ export const makeTestApp = async (
       }
     }
 
-    return Promise.resolve(
-      app.request(pathname, {
-        method: init.method ?? (init.body === undefined ? "GET" : "POST"),
-        headers,
-        ...(body !== undefined ? { body } : {}),
-      }),
-    );
+    const requestInit = {
+      method: init.method ?? (init.body === undefined ? "GET" : "POST"),
+      headers,
+      ...(body !== undefined ? { body } : {}),
+    };
+
+    return presigned
+      ? fetch(pathname, requestInit)
+      : Promise.resolve(app.request(pathname, requestInit));
   };
 
   return {
@@ -149,7 +145,6 @@ export const makeTestApp = async (
     services,
     deps,
     clock,
-    storageDir,
     request,
     json: async (pathname, init) => {
       const res = await request(pathname, init);
@@ -173,7 +168,7 @@ export const makeTestApp = async (
     close: async () => {
       await deps.regex.close();
       await dispose();
-      await rm(storageDir, { recursive: true, force: true });
+      s3.close();
     },
   };
 };

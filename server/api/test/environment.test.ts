@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { hashApiKey } from "../src/adapters.js";
@@ -8,6 +5,7 @@ import { buildDependencies } from "../src/bootstrap.js";
 import { isLoopbackHost, parseServerEnvironment } from "../src/environment.js";
 import { metrics } from "../src/telemetry/metrics.js";
 import { postgresUrl } from "./fixtures/postgres.js";
+import { s3Target } from "./fixtures/s3.js";
 
 const errorCount = async (counter: {
   get(): Promise<{ values: Array<{ labels: object; value: number }> }>;
@@ -22,7 +20,7 @@ const counterValues = async () => ({
 });
 
 const ADMIN_HASH = hashApiKey("admin");
-const DB = { DATABASE_URL: "postgres://x" };
+const DB = { DATABASE_URL: "postgres://x", S3_BUCKET: "grad" };
 
 describe("parseServerEnvironment", () => {
   it("defaults to loopback, api_key auth and noop billing", () => {
@@ -47,6 +45,13 @@ describe("parseServerEnvironment", () => {
       /DATABASE_URL is required/,
     );
     expect(() => parseServerEnvironment(DB)).toThrow(/ADMIN_API_KEY_HASH/);
+    // Storage is S3-compatible only: there is no local-disk mode.
+    expect(() =>
+      parseServerEnvironment({
+        DATABASE_URL: "postgres://x",
+        AUTH_MODE: "none",
+      }),
+    ).toThrow(/S3_BUCKET is required/);
     expect(() =>
       parseServerEnvironment({
         ...DB,
@@ -73,7 +78,7 @@ describe("parseServerEnvironment", () => {
   it("warns loudly about AUTH_MODE=none, louder on non-loopback hosts", () => {
     const local = parseServerEnvironment({
       AUTH_MODE: "none",
-      DATABASE_URL: "postgres://x",
+      ...DB,
     });
     expect(local.warnings).toHaveLength(1);
     expect(local.warnings[0]).toMatch(/DISABLED/);
@@ -82,14 +87,14 @@ describe("parseServerEnvironment", () => {
       parseServerEnvironment({
         AUTH_MODE: "none",
         HOST: "0.0.0.0",
-        DATABASE_URL: "postgres://x",
+        ...DB,
       }),
     ).toThrow(/refuses to listen on non-loopback HOST=0.0.0.0/);
     const exposed = parseServerEnvironment({
       AUTH_MODE: "none",
       AUTH_MODE_NONE_ALLOW_REMOTE: "true",
       HOST: "0.0.0.0",
-      DATABASE_URL: "postgres://x",
+      ...DB,
     });
     expect(exposed.warnings.join(" ")).toMatch(
       /anyone who can reach this port/,
@@ -149,23 +154,50 @@ describe("parseServerEnvironment", () => {
 
 describe("buildDependencies", () => {
   it("wires local adapters, the trainer key and inference clients", async () => {
-    const dir = await mkdtemp(
-      path.join(process.env.TMPDIR ?? os.tmpdir(), "grad-boot-"),
-    );
+    const s3 = s3Target();
+    const storage = {
+      S3_BUCKET: s3.bucket,
+      S3_ENDPOINT: s3.endpoint,
+      S3_PUBLIC_ENDPOINT: "http://s3.example.test:9999",
+    };
+    // The AWS SDK's default credential chain reads the key from the process.
+    const saved = { ...process.env };
+    Object.assign(process.env, {
+      AWS_ACCESS_KEY_ID: s3.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: s3.secretAccessKey,
+      AWS_REGION: s3.region,
+    });
     try {
       const deps = await buildDependencies(
         parseServerEnvironment({
           DATABASE_URL: postgresUrl(),
           ADMIN_API_KEY_HASH: ADMIN_HASH,
           TRAINER_API_KEY: "worker-secret",
-          STORAGE_DIR: dir,
+          ...storage,
           GRAD_INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
           GRAD_JUDGE_BASE_URL: "http://127.0.0.1:10/v1",
           GRAD_EXTRA_MODELS_JSON:
             '[{"id":"t/x","family":"llm","adapters":["lora"],"price_per_million_tokens_usd":1,"calibrated_lrs":{"sft":1e-4}}]',
         }),
       );
-      expect(deps.storage.kind).toBe("local");
+      // S3_PUBLIC_ENDPOINT signs client upload tickets; workers keep S3_ENDPOINT.
+      const sha = "0".repeat(64);
+      const ticket = { sha256: sha, sizeBytes: 1, expiresInSeconds: 60 };
+      expect(
+        (
+          await deps.storage.presignUpload(`a/${sha}`, {
+            ...ticket,
+            forClient: true,
+          })
+        ).url,
+      ).toMatch(/^http:\/\/s3\.example\.test:9999\//);
+      expect(
+        (await deps.storage.presignUpload(`a/${sha}`, ticket)).url,
+      ).toMatch(new RegExp(`^${s3.endpoint}/`));
+      await deps.storage.put("boot/check", Buffer.from("ok"));
+      expect(await deps.storage.head("boot/check")).toMatchObject({
+        sizeBytes: 2,
+      });
       expect(deps.billing.usageExport).toBeUndefined();
       expect(deps.settings.jobEventRetentionDays).toBe(90);
       expect(deps.inference).not.toBeNull();
@@ -184,7 +216,7 @@ describe("buildDependencies", () => {
         parseServerEnvironment({
           DATABASE_URL: postgresUrl(),
           AUTH_MODE: "none",
-          STORAGE_DIR: dir,
+          ...storage,
           INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
         }),
       );
@@ -219,10 +251,8 @@ describe("buildDependencies", () => {
           S3_ENDPOINT: "http://127.0.0.1:9",
           S3_REGION: "us-east-1",
           TRAINER_API_KEY_HASH: hashApiKey("w"),
-          BLOB_SIGNING_SECRET: "s",
         }),
       );
-      expect(cloud.storage.kind).toBe("s3");
       expect(cloud.billing.usageExport).toBeDefined();
       expect(cloud.inference).toBeNull();
       expect(await cloud.auth.authenticate("w")).toMatchObject({
@@ -231,7 +261,7 @@ describe("buildDependencies", () => {
       await cloud.regex.close();
       await cloud.store.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      process.env = saved;
     }
   });
 });

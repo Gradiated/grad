@@ -933,7 +933,7 @@ components:
         url:
           type: string
           minLength: 1
-          description: Absolute presigned URL, or a path relative to the API base URL (local storage).
+          description: Presigned S3 PUT URL; send exactly `headers` (they bind the length and sha256).
         headers:
           type: object
           additionalProperties:

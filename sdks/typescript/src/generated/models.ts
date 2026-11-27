@@ -1213,7 +1213,7 @@ export interface UploadTicket {
   /** The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless. */
   uploadId: string;
   method: "PUT";
-  /** Absolute presigned URL, or a path relative to the API base URL (local storage). */
+  /** Presigned S3 PUT URL; send exactly `headers` (they bind the length and sha256). */
   url: string;
   headers: Record<string, string>;
   expiresAt: string;

@@ -6,7 +6,6 @@ import type {
   InferenceClients,
   RegexEvaluator,
 } from "./services/evals/types.js";
-import type { BlobSigner } from "./storage/signer.js";
 import type { ObjectStore } from "./storage/types.js";
 import type { Store } from "./store/types.js";
 import type { UiBundle } from "./ui.js";
@@ -52,7 +51,6 @@ export interface MetricsSettings {
 export interface AppDependencies {
   store: Store;
   storage: ObjectStore;
-  signer: BlobSigner;
   auth: AuthAdapter;
   billing: BillingAdapter;
   catalog: ModelCatalog;

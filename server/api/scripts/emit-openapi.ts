@@ -1,5 +1,4 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
@@ -12,8 +11,7 @@ import { buildOpenApiDocument, createApp } from "../src/app.js";
 import { createModelCatalog } from "../src/catalog.js";
 import { systemClock } from "../src/clock.js";
 import { createRegexEvaluator } from "../src/services/evals/regex.js";
-import { LocalObjectStore } from "../src/storage/local.js";
-import { createBlobSigner } from "../src/storage/signer.js";
+import { S3ObjectStore } from "../src/storage/s3.js";
 import type { Store } from "../src/store/types.js";
 
 const run = async () => {
@@ -24,10 +22,8 @@ const run = async () => {
 
   const app = createApp({
     store: {} as Store,
-    storage: new LocalObjectStore(
-      path.join(os.tmpdir(), "grad-openapi-unused"),
-    ),
-    signer: createBlobSigner("openapi"),
+    // Never called: emitting the document makes no storage requests.
+    storage: new S3ObjectStore({ bucket: "grad-openapi-unused" }),
     auth: createLocalNoneAuth(),
     billing: createNoopBillingAdapter(),
     catalog: createModelCatalog(),

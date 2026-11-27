@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { stagingKey } from "../src/services/uploads.js";
-import { S3ObjectStore } from "../src/storage/s3.js";
 import { makeTestApp, WORKSPACE_A, type TestApp } from "./fixtures/app.js";
 import { ManualClock } from "./fixtures/clock.js";
-import { s3Target } from "./fixtures/minio.js";
 import {
   createSftRun,
   FakeWorker,
@@ -12,35 +10,22 @@ import {
   sha256Hex,
 } from "./fixtures/worker.js";
 
-const target = s3Target();
-
 /**
- * The self-hosted deployment mode end to end: Postgres store + S3 (MinIO)
- * object storage with presigned uploads/downloads and no in-process state.
+ * The self-hosted deployment mode end to end: Postgres store + S3
+ * (SeaweedFS) object storage with presigned uploads/downloads and no
+ * in-process state.
  */
-describe.skipIf(!target)("self-hosted stack (Postgres + S3)", () => {
+describe("self-hosted stack (Postgres + S3)", () => {
   let t: TestApp;
-  let storage: S3ObjectStore;
   let worker: FakeWorker;
 
   beforeEach(async () => {
-    const clock = new ManualClock(new Date());
-    storage = new S3ObjectStore({
-      bucket: target!.bucket,
-      region: target!.region,
-      endpoint: target!.endpoint,
-      credentials: {
-        accessKeyId: target!.accessKeyId,
-        secretAccessKey: target!.secretAccessKey,
-      },
-    });
-    t = await makeTestApp({ storage, clock });
+    t = await makeTestApp({ clock: new ManualClock(new Date()) });
     worker = new FakeWorker(t);
   });
 
   afterEach(async () => {
     await t.close();
-    storage.close();
   });
 
   it("trains, checkpoints, resumes and publishes through presigned S3 URLs", async () => {
@@ -181,8 +166,8 @@ describe.skipIf(!target)("self-hosted stack (Postgres + S3)", () => {
         sha256: sha256Hex("abc"),
       },
     });
-    // Bytes that S3 never checksummed (a direct put) fail the commit check.
-    await storage.put(
+    // Other bytes stored at the upload's key (a direct put) fail the commit check.
+    await t.deps.storage.put(
       stagingKey(WORKSPACE_A, small.body.upload_id),
       Buffer.from("abcd"),
     );
@@ -191,5 +176,33 @@ describe.skipIf(!target)("self-hosted stack (Postgres + S3)", () => {
     });
     expect(mismatch.status).toBe(422);
     expect(mismatch.body).toMatchObject({ code: "upload_integrity_error" });
+  });
+
+  it("hashes the object itself when the backend reports no checksum", async () => {
+    const file = Buffer.from(
+      sftRecords(1)
+        .map((r) => JSON.stringify(r))
+        .join("\n"),
+    );
+    const sha = sha256Hex(file);
+    // A store whose HEAD has no checksum, holding other bytes at the key.
+    const head = t.deps.storage.head;
+    t.deps.storage.head = async (key) => {
+      const found = await head(key);
+      return found && { ...found, sha256: null };
+    };
+    await t.deps.storage.put(stagingKey(WORKSPACE_A, sha), Buffer.from("x"));
+    const bad = await t.json("/v1/datasets/nochecksum/imports", {
+      body: { source: { kind: "upload", upload_id: sha } },
+    });
+    expect(bad.status).toBe(422);
+    expect(bad.body).toMatchObject({ code: "upload_integrity_error" });
+
+    const good = sha256Hex("y");
+    await t.deps.storage.put(stagingKey(WORKSPACE_A, good), Buffer.from("y"));
+    const imp = await t.json("/v1/datasets/nochecksum/imports", {
+      body: { source: { kind: "upload", upload_id: good } },
+    });
+    expect(imp.status).toBe(202);
   });
 });

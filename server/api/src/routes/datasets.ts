@@ -326,6 +326,7 @@ export const registerDatasetRoutes = (
       const ticket = await services.uploads.ticket(
         stagingKey(workspaceOf(c, "datasets:write"), input.sha256),
         input.size_bytes,
+        { forClient: true },
       );
 
       return c.json(ticket, 201);

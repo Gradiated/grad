@@ -24,9 +24,7 @@ import type {
 } from "./services/evals/types.js";
 import { assertMigrated } from "./migrations.js";
 import { resolveUiBundle, type UiBundle } from "./ui.js";
-import { LocalObjectStore } from "./storage/local.js";
 import { S3ObjectStore } from "./storage/s3.js";
-import { createBlobSigner } from "./storage/signer.js";
 import { createSecretsCipher } from "./secrets.js";
 import { createPostgresStore } from "./store/postgres.js";
 import { log } from "./telemetry/log.js";
@@ -94,13 +92,12 @@ export const buildDependencies = async (
   }, 60_000).unref();
 
   const storage = instrumentObjectStore(
-    env.S3_BUCKET
-      ? new S3ObjectStore({
-          bucket: env.S3_BUCKET,
-          region: env.S3_REGION,
-          endpoint: env.S3_ENDPOINT,
-        })
-      : new LocalObjectStore(env.STORAGE_DIR),
+    new S3ObjectStore({
+      bucket: env.S3_BUCKET,
+      region: env.S3_REGION,
+      endpoint: env.S3_ENDPOINT,
+      publicEndpoint: env.S3_PUBLIC_ENDPOINT,
+    }),
   );
 
   const trainerKeyHash =
@@ -126,13 +123,6 @@ export const buildDependencies = async (
           })
         : createLocalNoneAuth(env.DEFAULT_WORKSPACE_ID);
 
-  if (!env.BLOB_SIGNING_SECRET && storage.kind === "local") {
-    log(
-      "warn",
-      "BLOB_SIGNING_SECRET is not set: signed upload/download URLs are valid only on this process (set it when running more than one replica).",
-    );
-  }
-
   let ui: UiBundle | null = null;
   if (env.uiEnabled) {
     ui = resolveUiBundle(env.UI_DIR);
@@ -148,7 +138,6 @@ export const buildDependencies = async (
     store,
     storage,
     ui,
-    signer: createBlobSigner(env.BLOB_SIGNING_SECRET),
     auth,
     billing:
       env.BILLING_MODE === "cloud"

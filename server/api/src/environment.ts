@@ -11,6 +11,9 @@ const optionalString = z
   .optional()
   .transform((v) => (v && v.trim() ? v.trim() : undefined));
 
+const S3_BUCKET_REQUIRED =
+  "S3_BUCKET is required: grad-server keeps datasets, checkpoints and artifacts in S3-compatible storage (AWS S3, SeaweedFS, MinIO, R2); set S3_ENDPOINT for a store other than AWS S3";
+
 const EnvironmentSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
@@ -20,10 +23,15 @@ const EnvironmentSchema = z.object({
     })
     .trim()
     .min(1, "DATABASE_URL is required (a Postgres connection string)"),
-  STORAGE_DIR: z.string().default(".grad-data"),
-  S3_BUCKET: optionalString,
+  S3_BUCKET: z
+    .string({ error: S3_BUCKET_REQUIRED })
+    .trim()
+    .min(1, S3_BUCKET_REQUIRED),
   S3_REGION: optionalString,
+  /** An S3-compatible endpoint (SeaweedFS, MinIO, R2...); unset: AWS S3. */
   S3_ENDPOINT: optionalString,
+  /** The endpoint SDK clients reach for file uploads, when it is not S3_ENDPOINT. */
+  S3_PUBLIC_ENDPOINT: optionalString,
   AUTH_MODE: z.enum(["none", "api_key", "cloud"]).default("api_key"),
   ADMIN_API_KEY_HASH: optionalString,
   TRAINER_API_KEY_HASH: optionalString,
@@ -48,7 +56,6 @@ const EnvironmentSchema = z.object({
   EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
   GRAD_EXTRA_MODELS_JSON: optionalString,
   GRAD_JUDGE_MODELS_JSON: optionalString,
-  BLOB_SIGNING_SECRET: optionalString,
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
   /** Preempted attempts (SIGTERM, a cloud termination notice) a job survives; separate from MAX_ATTEMPTS. */
   MAX_PREEMPTIONS: z.coerce.number().int().min(1).max(1000).default(20),

@@ -886,15 +886,16 @@ describe("run lifecycle and worker protocol", () => {
     expect(missing.status).toBe(422);
     expect(missing.body).toMatchObject({ code: "artifact_required" } as never);
 
-    const ticket = await worker.call<{ upload_id: string; url: string }>(
-      `/v1/trainer-jobs/${job!.id}/uploads`,
-      {
-        ...worker.ref(job!),
-        kind: "artifact",
-        sha256: sha256Hex("good"),
-        size_bytes: 4,
-      },
-    );
+    const ticket = await worker.call<{
+      upload_id: string;
+      url: string;
+      headers: Record<string, string>;
+    }>(`/v1/trainer-jobs/${job!.id}/uploads`, {
+      ...worker.ref(job!),
+      kind: "artifact",
+      sha256: sha256Hex("good"),
+      size_bytes: 4,
+    });
     const notUploaded = await worker.call(
       `/v1/trainer-jobs/${job!.id}/complete`,
       {
@@ -906,27 +907,16 @@ describe("run lifecycle and worker protocol", () => {
     expect(notUploaded.status).toBe(409);
     expect(notUploaded.body).toMatchObject({ code: "upload_incomplete" });
 
-    const badBytes = await t.app.request(ticket.body.url, {
-      method: "PUT",
-      body: "evil",
-    });
-    expect(badBytes.status).toBe(422);
-    const badSig = await t.app.request(
-      ticket.body.url.replace(/sig=[^&]+/, "sig=forged"),
-      { method: "PUT", body: "good" },
-    );
-    expect(badSig.status).toBe(403);
-    const ok = await t.app.request(ticket.body.url, {
-      method: "PUT",
-      body: "good",
-    });
-    expect(ok.status).toBe(200);
+    // The presigned PUT binds the length and sha256: S3 refuses other bytes.
+    const put = (url: string, body: string) =>
+      t.request(url, { method: "PUT", headers: ticket.body.headers, body });
+    expect((await put(ticket.body.url, "evil")).status).toBe(400);
+    const forged = new URL(ticket.body.url);
+    forged.searchParams.set("X-Amz-Signature", "0".repeat(64));
+    expect((await put(forged.toString(), "good")).status).toBe(403);
+    expect((await put(ticket.body.url, "good")).status).toBe(200);
     // Content-addressed: a retried PUT of the same bytes is a no-op.
-    const twice = await t.app.request(ticket.body.url, {
-      method: "PUT",
-      body: "good",
-    });
-    expect(twice.status).toBe(200);
+    expect((await put(ticket.body.url, "good")).status).toBe(200);
 
     // An upload id names a blob in this attempt's own prefix only.
     const notAnId = await worker.call(
@@ -941,14 +931,6 @@ describe("run lifecycle and worker protocol", () => {
     );
     expect(otherBlob.status).toBe(409);
 
-    // Upload URLs expire; the received blob does not.
-    t.clock.advanceSeconds(7 * 3600);
-    await worker.heartbeat(job!);
-    const late = await t.app.request(ticket.body.url, {
-      method: "PUT",
-      body: "good",
-    });
-    expect(late.status).toBe(403);
     const done = await worker.call(`/v1/trainer-jobs/${job!.id}/complete`, {
       ...worker.ref(job!),
       status: "completed",

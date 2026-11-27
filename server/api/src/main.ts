@@ -43,7 +43,7 @@ const main = async () => {
   log("info", "grad-server listening", {
     url: `http://${env.HOST}:${env.PORT}`,
     auth_mode: env.AUTH_MODE,
-    storage: deps.storage.kind,
+    storage: env.S3_ENDPOINT ? `s3 ${env.S3_ENDPOINT}` : "s3",
     inference: deps.inference ? "configured" : "unavailable",
     metrics: env.METRICS_ENABLED
       ? `:${env.METRICS_PORT ?? env.PORT}/metrics`

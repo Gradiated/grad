@@ -18,6 +18,7 @@ import {
   validateObjectKey,
   type ObjectHead,
   type ObjectStore,
+  type PresignUploadInput,
   type PresignedUpload,
   type PutStreamOptions,
   type StoredObject,
@@ -27,7 +28,13 @@ export interface S3ObjectStoreOptions {
   bucket: string;
   region?: string | undefined;
   endpoint?: string | undefined;
-  /** Defaults to true when a custom endpoint (MinIO, Ceph, R2...) is set. */
+  /**
+   * The endpoint SDK clients reach, when it differs from `endpoint` (compose:
+   * workers use http://seaweedfs:8333, the host uses 127.0.0.1). Only client
+   * upload tickets are signed for it.
+   */
+  publicEndpoint?: string | undefined;
+  /** Defaults to true when a custom endpoint (SeaweedFS, MinIO, R2...) is set. */
   forcePathStyle?: boolean | undefined;
   credentials?: S3ClientConfig["credentials"];
   /** Injected client (tests); other connection options are then ignored. */
@@ -93,25 +100,30 @@ const uploadHeaders = (
  * front and multipart upload (`@aws-sdk/lib-storage`) is not a dependency.
  */
 export class S3ObjectStore implements ObjectStore {
-  readonly kind = "s3" as const;
   private readonly client: S3Client;
+  /** Signs client upload tickets (S3_PUBLIC_ENDPOINT); `client` otherwise. */
+  private readonly publicClient: S3Client;
   private readonly bucket: string;
   private readonly timeoutMs: number;
 
   constructor(options: S3ObjectStoreOptions) {
     this.bucket = options.bucket;
     this.timeoutMs = options.requestTimeoutMs ?? 120_000;
-    this.client =
-      options.client ??
+    const connect = (endpoint: string | undefined): S3Client =>
       new S3Client({
         ...(options.region ? { region: options.region } : {}),
-        ...(options.endpoint ? { endpoint: options.endpoint } : {}),
-        forcePathStyle: options.forcePathStyle ?? Boolean(options.endpoint),
+        ...(endpoint ? { endpoint } : {}),
+        forcePathStyle: options.forcePathStyle ?? Boolean(endpoint),
         ...(options.credentials ? { credentials: options.credentials } : {}),
         maxAttempts: 3,
         requestChecksumCalculation: "WHEN_REQUIRED",
         responseChecksumValidation: "WHEN_REQUIRED",
       });
+    this.client = options.client ?? connect(options.endpoint);
+    this.publicClient =
+      options.publicEndpoint && options.publicEndpoint !== options.endpoint
+        ? connect(options.publicEndpoint)
+        : this.client;
   }
 
   private signal = (ms = this.timeoutMs): AbortSignal =>
@@ -337,12 +349,12 @@ export class S3ObjectStore implements ObjectStore {
 
   presignUpload = async (
     key: string,
-    input: { sha256: string; sizeBytes: number; expiresInSeconds: number },
+    input: PresignUploadInput,
   ): Promise<PresignedUpload> => {
     const clean = validateObjectKey(key);
     const headers = uploadHeaders(input.sha256, input.sizeBytes);
     const url = await getSignedUrl(
-      this.client,
+      input.forClient ? this.publicClient : this.client,
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: clean,
@@ -374,5 +386,6 @@ export class S3ObjectStore implements ObjectStore {
 
   close = (): void => {
     this.client.destroy();
+    this.publicClient.destroy();
   };
 }

@@ -174,7 +174,7 @@ export const UploadTicketSchema = z
     method: z.literal("PUT"),
     url: z.string().min(1).openapi({
       description:
-        "Absolute presigned URL, or a path relative to the API base URL (local storage).",
+        "Presigned S3 PUT URL; send exactly `headers` (they bind the length and sha256).",
     }),
     headers: z.record(z.string(), z.string()),
     expires_at: IsoTimestampSchema,

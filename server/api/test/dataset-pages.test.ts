@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
@@ -17,8 +14,9 @@ import {
   writeRecordsPart,
 } from "../src/services/dataset-records.js";
 import { mergeRecords, scoreUpdate } from "../src/services/record-merge.js";
-import { LocalObjectStore } from "../src/storage/local.js";
+import type { ObjectStore } from "../src/storage/types.js";
 import type { DatasetPart } from "../src/store/types.js";
+import { testObjectStore } from "./fixtures/s3.js";
 
 const rec = (id: string | undefined, text: string): DatasetRecord => ({
   ...(id ? { id } : {}),
@@ -29,22 +27,22 @@ const rec = (id: string | undefined, text: string): DatasetRecord => ({
 });
 
 describe("dataset pages (r8 P1-5)", () => {
-  let dir: string;
-  let storage: LocalObjectStore;
+  let s3: ReturnType<typeof testObjectStore>;
+  let storage: ObjectStore;
   let fetched: string[];
 
-  beforeEach(async () => {
-    dir = await mkdtemp(path.join(process.env.TMPDIR ?? tmpdir(), "pages-"));
-    const local = new LocalObjectStore(dir);
+  beforeEach(() => {
+    s3 = testObjectStore();
     fetched = [];
-    storage = Object.assign(Object.create(local) as LocalObjectStore, {
+    storage = {
+      ...s3.storage,
       get: (key: string) => {
         fetched.push(key);
-        return local.get(key);
+        return s3.storage.get(key);
       },
-    });
+    };
   });
-  afterEach(async () => rm(dir, { recursive: true, force: true }));
+  afterEach(() => s3.close());
 
   const write = (records: DatasetRecord[]): Promise<DatasetPart> =>
     writeRecordsPart(storage, (sha) => `parts/${sha}.jsonl.gz`, records);

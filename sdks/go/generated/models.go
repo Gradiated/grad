@@ -2533,7 +2533,7 @@ type UploadTicket struct {
 	// UploadID The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless.
 	UploadID string             `json:"upload_id"`
 	Method   UploadTicketMethod `json:"method"`
-	// URL Absolute presigned URL, or a path relative to the API base URL (local storage).
+	// URL Presigned S3 PUT URL; send exactly `headers` (they bind the length and sha256).
 	URL       string            `json:"url"`
 	Headers   map[string]string `json:"headers"`
 	ExpiresAt string            `json:"expires_at"`

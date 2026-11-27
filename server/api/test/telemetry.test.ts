@@ -420,7 +420,6 @@ describe("metrics endpoint settings", () => {
 describe("instrumented object storage", () => {
   const fake = (fail: Error | null): ObjectStore =>
     ({
-      kind: "local",
       put: async () => {
         if (fail) throw fail;
         return { key: "k", sha256: "s", sizeBytes: 1 };
@@ -433,7 +432,7 @@ describe("instrumented object storage", () => {
   const errors = async (op: string) =>
     (await metrics.storageErrors.get()).values.find((v) => {
       const labels = v.labels as Record<string, unknown>;
-      return labels.op === op && labels.backend === "local";
+      return labels.op === op;
     })?.value ?? 0;
 
   it("times every call and counts only unexpected failures", async () => {

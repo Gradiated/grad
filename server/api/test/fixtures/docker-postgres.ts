@@ -35,13 +35,15 @@ export const waitForPostgres = async (url: string, timeoutMs: number) => {
   );
 };
 
-/** Removes `gradr5-pg-*` containers older than 2 h (left behind by a SIGKILL). */
-export const reapStaleContainers = async (): Promise<void> => {
+/** Removes `<prefix>*` containers older than 2 h (left behind by a SIGKILL). */
+export const reapStaleContainers = async (
+  prefix = CONTAINER_PREFIX,
+): Promise<void> => {
   const { stdout } = await exec("docker", [
     "ps",
     "-aq",
     "--filter",
-    `name=^${CONTAINER_PREFIX}`,
+    `name=^${prefix}`,
   ]);
   const ids = stdout.split("\n").filter(Boolean);
   if (ids.length === 0) return;
@@ -56,7 +58,7 @@ export const reapStaleContainers = async (): Promise<void> => {
     .map((line) => line.trim().split(" "))
     .filter(
       ([name, created]) =>
-        name?.startsWith(`/${CONTAINER_PREFIX}`) &&
+        name?.startsWith(`/${prefix}`) &&
         Date.now() - Date.parse(created ?? "") > STALE_AFTER_MS,
     )
     .map(([name]) => (name as string).slice(1));

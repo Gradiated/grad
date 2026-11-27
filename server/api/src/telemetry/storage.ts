@@ -28,8 +28,7 @@ const isExpected = (error: unknown): boolean =>
  * (with tracing on) runs in a `storage.<op>` span.
  */
 export const instrumentObjectStore = (store: ObjectStore): ObjectStore => {
-  const backend = store.kind;
-  const wrapped: Record<string, unknown> = { kind: backend };
+  const wrapped: Record<string, unknown> = {};
 
   for (const op of OPS) {
     wrapped[op] = async (...args: unknown[]) => {
@@ -37,7 +36,7 @@ export const instrumentObjectStore = (store: ObjectStore): ObjectStore => {
       try {
         return await withSpan(
           `storage.${op}`,
-          { "grad.storage.backend": backend, "grad.storage.op": op },
+          { "grad.storage.op": op },
           () =>
             (store[op] as (...a: unknown[]) => Promise<unknown>).apply(
               store,
@@ -46,10 +45,10 @@ export const instrumentObjectStore = (store: ObjectStore): ObjectStore => {
           { kind: SpanKind.CLIENT },
         );
       } catch (error) {
-        if (!isExpected(error)) metrics.storageErrors.inc({ backend, op });
+        if (!isExpected(error)) metrics.storageErrors.inc({ op });
         throw error;
       } finally {
-        metrics.storageDuration.observe({ backend, op }, secondsSince(start));
+        metrics.storageDuration.observe({ op }, secondsSince(start));
       }
     };
   }

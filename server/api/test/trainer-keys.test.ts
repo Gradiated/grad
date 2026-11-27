@@ -18,7 +18,11 @@ const keys = [
 
 describe("kind-scoped trainer keys (TRAINER_KEYS_JSON)", () => {
   it("parses labelled keys and rejects malformed ones", () => {
-    const base = { DATABASE_URL: "postgres://x", AUTH_MODE: "none" };
+    const base = {
+      DATABASE_URL: "postgres://x",
+      S3_BUCKET: "grad",
+      AUTH_MODE: "none",
+    };
     expect(parseServerEnvironment(base).trainerKeys).toEqual([]);
     expect(
       parseServerEnvironment({

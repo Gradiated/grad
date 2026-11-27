@@ -1877,7 +1877,7 @@ pub struct UploadTicket {
     /// The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless.
     pub upload_id: String,
     pub method: UploadTicketMethod,
-    /// Absolute presigned URL, or a path relative to the API base URL (local storage).
+    /// Presigned S3 PUT URL; send exactly `headers` (they bind the length and sha256).
     pub url: String,
     pub headers: BTreeMap<String, String>,
     pub expires_at: String,

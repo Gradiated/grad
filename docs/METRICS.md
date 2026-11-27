@@ -37,8 +37,8 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_source_syncs_total` | counter | `provider`, `status` | Source syncs finished, by provider and status. |
 | `grad_sources` | gauge | `provider` | Sources by provider. |
 | `grad_sources_paused` | gauge | `provider` | Sources paused after repeated failed syncs, by provider. |
-| `grad_storage_operation_duration_seconds` | histogram | `backend`, `op` | Object storage operation duration, by backend and operation. |
-| `grad_storage_operation_errors_total` | counter | `backend`, `op` | Object storage operations that failed, by backend and operation. |
+| `grad_storage_operation_duration_seconds` | histogram | `op` | Object storage operation duration, by operation. |
+| `grad_storage_operation_errors_total` | counter | `op` | Object storage operations that failed, by operation. |
 | `grad_training_tokens_total` | counter | `recipe_kind`, `model_family` | Tokens processed by training attempts, by recipe and model family. |
 | `grad_usage_flush_lag_seconds` | gauge |  | Longest time a running attempt has gone without writing usage. |
 | `grad_worker_gpu_memory_used_bytes` | gauge | `kind` | Sum of the GPU memory leased workers last reported. |

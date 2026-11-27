@@ -119,9 +119,7 @@ export class FakeWorker {
     if (ticket.status !== 201)
       throw new Error(`upload ticket failed: ${JSON.stringify(ticket.body)}`);
 
-    const put = await (
-      ticket.body.url.startsWith("http") ? fetch : this.t.app.request
-    )(ticket.body.url, {
+    const put = await fetch(ticket.body.url, {
       method: "PUT",
       headers: ticket.body.headers,
       body: new Uint8Array(data),
