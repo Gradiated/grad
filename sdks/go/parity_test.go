@@ -185,11 +185,13 @@ func TestParityRequests(t *testing.T) {
 			return err
 		},
 		"add_source_filtered": func() error {
+			tenMinutes := 600
 			_, err := c.Sources.Create(ctx, grad.DatasetName("support-prod"), grad.SourceParams{
 				Provider: grad.LangfuseSource{Secret: grad.SecretName("langfuse-prod"), Filters: map[string]any{
 					"environment": []any{"production"}, "min_score": map[string]any{"helpfulness": 0.8}}},
 				SampleRate:       0.1,
 				MaxRecordsPerDay: 100000,
+				VersionInterval:  &tenMinutes,
 			})
 			return err
 		},
@@ -340,6 +342,7 @@ func TestParityTypedResponses(t *testing.T) {
 		"source.sample_rate":                               source.SampleRate,
 		"source.max_records_per_day":                       float64(*source.MaxRecordsPerDay),
 		"source.records_today":                             float64(source.RecordsToday),
+		"source.pending_records":                           float64(source.PendingRecords),
 		"source.last_sync.status":                          string(source.LastSync.Status),
 		"source.last_sync.dataset_version":                 float64(*source.LastSync.DatasetVersion),
 		"source.status":                                    string(source.Status),

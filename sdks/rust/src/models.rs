@@ -394,6 +394,10 @@ pub struct Source {
     pub max_records_per_day: Option<u64>,
     /// New traces synced so far this UTC day (what `max_records_per_day` counts).
     pub records_today: u64,
+    /// Seconds between the dataset versions scheduled syncs commit (0: every sync).
+    pub version_interval: u64,
+    /// Records scheduled syncs fetched that wait for the next dataset version.
+    pub pending_records: u64,
     /// Null without a schedule or while paused; backs off after failed syncs.
     pub next_sync_at: Option<String>,
     /// `active`, or `paused` after 10 failed syncs in a row (a manual sync or a new value for
@@ -439,6 +443,9 @@ pub struct SourceOptions {
     /// At most this many new traces per UTC day.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_records_per_day: Option<u64>,
+    /// Seconds between scheduled syncs' dataset versions (None: 900; 0: every sync).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_interval: Option<u64>,
 }
 
 /// A change to a source from its next sync ([`Sources::update`]): `None` keeps a field,
@@ -456,4 +463,6 @@ pub struct SourceUpdate {
     pub max_records_per_sync: Option<Option<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_records_per_day: Option<Option<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_interval: Option<u64>,
 }

@@ -43,6 +43,21 @@ export interface SyncSummary {
   traces?: number | undefined;
 }
 
+/** What the sync's completion did with its parts. */
+export interface SyncOutcome {
+  /** Records the parts added (staged.count). */
+  records: number;
+  /** The parts wait for the next version (version_interval). */
+  deferred: boolean;
+  /** A new dataset version was committed. */
+  versioned: boolean;
+}
+
+/** Records waiting that commit a version whatever the interval. */
+export const DEFAULT_VERSION_MAX_RECORDS = 100_000;
+/** A new source's version_interval. */
+export const DEFAULT_VERSION_INTERVAL_SECONDS = 900;
+
 /** The UTC day `records_today` counts. */
 const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
 
@@ -70,6 +85,8 @@ export interface SyncPayload {
   source_id: string;
   provider: SourceProviderKind;
   full: boolean;
+  /** Started by the schedule: its version may wait for version_interval. */
+  scheduled?: boolean;
 }
 
 export const isSyncPayload = (source: Record<string, unknown>): boolean =>
@@ -199,7 +216,18 @@ export interface SourceService {
     tx: Repositories,
     job: ImportJobRecord,
     summary: SyncSummary,
+    outcome: SyncOutcome,
   ): Promise<void>;
+  /**
+   * In the completion transaction: whether a sync's parts wait for the next
+   * version. Only scheduled incremental syncs wait, until version_interval
+   * has passed since the last version or enough records are waiting.
+   */
+  defersVersion(
+    tx: Repositories,
+    job: ImportJobRecord,
+    records: number,
+  ): Promise<boolean>;
   /**
    * A sync ended failed: record the error, back the schedule off, pause the
    * source after PAUSE_AFTER_FAILURES in a row, else queue a pending full sync.
@@ -291,6 +319,8 @@ export const createSourceService = (
       max_records_per_sync: source.max_records_per_sync,
       max_records_per_day: source.max_records_per_day,
       records_today: recordsToday(source, clock.now()),
+      version_interval: source.version_interval,
+      pending_records: source.pending_records,
       next_sync_at: source.next_sync_at,
       status: source.status,
       paused_reason: source.paused_reason,
@@ -333,6 +363,7 @@ export const createSourceService = (
     source: SourceRecord,
     full: boolean,
     force = false,
+    scheduled = false,
   ): Promise<{ job: ImportJobRecord; retryAfter: number | null }> => {
     const current = await lastSync(repos, source);
     if (current && ACTIVE.has(current.status)) {
@@ -356,6 +387,7 @@ export const createSourceService = (
       source_id: source.id,
       provider: source.provider,
       full: full || source.pending_full,
+      ...(scheduled ? { scheduled: true } : {}),
     };
     const job = await repos.imports.create({
       workspaceId: source.workspace_id,
@@ -543,6 +575,10 @@ export const createSourceService = (
             sampleRate: body.sample_rate ?? 1,
             maxRecordsPerSync: body.max_records_per_sync ?? null,
             maxRecordsPerDay: body.max_records_per_day ?? null,
+            versionInterval:
+              body.version_interval ??
+              settings.sourceVersionIntervalSeconds ??
+              DEFAULT_VERSION_INTERVAL_SECONDS,
             schedule,
             nextSyncAt,
             idempotency,
@@ -592,6 +628,9 @@ export const createSourceService = (
         if (body.max_records_per_day !== undefined) {
           patch.max_records_per_day = body.max_records_per_day;
         }
+        if (body.version_interval !== undefined) {
+          patch.version_interval = body.version_interval;
+        }
 
         return tx.sources.update(source.id, {
           ...patch,
@@ -611,9 +650,20 @@ export const createSourceService = (
     },
 
     remove: async (workspaceId, id) => {
-      if (!(await store.sources.delete(workspaceId, id))) {
-        throw notFound("source", id);
-      }
+      const removed = await store.transaction(async (tx) => {
+        const source = await tx.sources.lock(workspaceId, id);
+        if (!source) return false;
+        // What scheduled syncs fetched stays: it becomes a last version.
+        if (source.pending_records > 0 || source.last_version_at !== null) {
+          await tx.datasets.commitSettled({
+            datasetId: source.dataset_id,
+            sourceId: source.id,
+          });
+        }
+
+        return tx.sources.delete(workspaceId, id);
+      });
+      if (!removed) throw notFound("source", id);
     },
 
     sync: async (workspaceId, id, full) => {
@@ -636,7 +686,7 @@ export const createSourceService = (
         const due = await tx.sources.lockDue(now.toISOString(), TICK_BATCH);
         for (const source of due) {
           // Queued, running or started under a minute ago: this firing is skipped.
-          await enqueue(tx, source, false);
+          await enqueue(tx, source, false, false, true);
           await tx.sources.update(source.id, {
             next_sync_at: nextScheduledSync(
               source.schedule,
@@ -684,7 +734,24 @@ export const createSourceService = (
       };
     },
 
-    completeSync: async (tx, job, { watermark, traces }) => {
+    defersVersion: async (tx, job, records) => {
+      const payload = job.source as unknown as SyncPayload;
+      if (payload.scheduled !== true || payload.full) return false;
+      const source = await tx.sources.lock(job.workspace_id, payload.source_id);
+      if (!source || source.version_interval <= 0) return false;
+      // The first version, and enough waiting records, commit at once.
+      if (source.last_version_at === null) return false;
+      const max =
+        settings.sourceVersionMaxRecords ?? DEFAULT_VERSION_MAX_RECORDS;
+      if (source.pending_records + records >= max) return false;
+
+      return (
+        clock.now().getTime() - Date.parse(source.last_version_at) <
+        source.version_interval * 1000
+      );
+    },
+
+    completeSync: async (tx, job, { watermark, traces }, outcome) => {
       const payload = job.source as unknown as SyncPayload;
       const source = await tx.sources.lock(job.workspace_id, payload.source_id);
       if (!source || source.sync_job_id !== job.id) return;
@@ -694,6 +761,11 @@ export const createSourceService = (
         ...(watermark !== undefined && watermark !== null ? { watermark } : {}),
         records_today: recordsToday(source, now) + (traces ?? 0),
         records_day: utcDay(now),
+        ...(outcome.deferred
+          ? { pending_records: source.pending_records + outcome.records }
+          : outcome.versioned
+            ? { pending_records: 0, last_version_at: now.toISOString() }
+            : {}),
         last_error: null,
         last_error_at: null,
         consecutive_failures: 0,

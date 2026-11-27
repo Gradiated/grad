@@ -325,6 +325,8 @@ type CreateSourceRequest struct {
 	MaxRecordsPerSync *int `json:"max_records_per_sync,omitempty"`
 	// MaxRecordsPerDay At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap.
 	MaxRecordsPerDay *int `json:"max_records_per_day,omitempty"`
+	// VersionInterval Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit.
+	VersionInterval *int `json:"version_interval,omitempty"`
 }
 
 // CreateUploadRequest is generated from the OpenAPI schema.
@@ -2360,6 +2362,10 @@ type Source struct {
 	MaxRecordsPerDay  *int    `json:"max_records_per_day"`
 	// RecordsToday New traces synced so far this UTC day (what max_records_per_day counts).
 	RecordsToday int `json:"records_today"`
+	// VersionInterval Seconds between the dataset versions scheduled syncs commit (0: every sync).
+	VersionInterval int `json:"version_interval"`
+	// PendingRecords Records scheduled syncs fetched that wait for the next dataset version.
+	PendingRecords int `json:"pending_records"`
 	// NextSyncAt When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule backs off: twice its interval per consecutive failure, at most an hour.
 	NextSyncAt *string `json:"next_sync_at"`
 	// Status `paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it.
@@ -2595,6 +2601,8 @@ type UpdateSourceRequest struct {
 	MaxRecordsPerSync *int `json:"max_records_per_sync,omitempty"`
 	// MaxRecordsPerDay At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap.
 	MaxRecordsPerDay *int `json:"max_records_per_day,omitempty"`
+	// VersionInterval Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit.
+	VersionInterval *int `json:"version_interval,omitempty"`
 }
 
 // UploadTicket is generated from the OpenAPI schema.

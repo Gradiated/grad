@@ -136,6 +136,9 @@ const toSource = (r: Row): SourceRecord => ({
   max_records_per_day: nn(r.max_records_per_day),
   records_today: Number(r.records_today ?? 0),
   records_day: sn(r.records_day),
+  version_interval: Number(r.version_interval ?? 900),
+  last_version_at: isoN(r.last_version_at),
+  pending_records: Number(r.pending_records ?? 0),
   schedule: sn(r.schedule),
   next_sync_at: isoN(r.next_sync_at),
   watermark: (r.watermark as Record<string, unknown> | null) ?? null,
@@ -157,6 +160,7 @@ const SOURCE_COLUMNS = {
     "next_sync_at",
     "last_synced_at",
     "last_error_at",
+    "last_version_at",
     "updated_at",
   ]),
 };
@@ -203,9 +207,9 @@ export const createSourceRepository = (
         `INSERT INTO grad_sources
            (id, workspace_id, dataset_id, provider, host, secret_name, project, filters,
             schedule, next_sync_at, idempotency_key, request_hash, created_at, updated_at,
-            sample_rate, max_records_per_sync, max_records_per_day)
+            sample_rate, max_records_per_sync, max_records_per_day, version_interval)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::timestamptz, $11, $12,
-                 $13::timestamptz, $13::timestamptz, $14, $15, $16)`,
+                 $13::timestamptz, $13::timestamptz, $14, $15, $16, $17)`,
         [
           id,
           input.workspaceId,
@@ -223,6 +227,7 @@ export const createSourceRepository = (
           input.sampleRate,
           input.maxRecordsPerSync,
           input.maxRecordsPerDay,
+          input.versionInterval,
         ],
       );
       const [created] = await select("id = $1", [id]);

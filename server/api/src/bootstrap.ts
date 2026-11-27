@@ -169,6 +169,8 @@ export const buildDependencies = async (
       usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
       usageExportLagSeconds: env.USAGE_EXPORT_LAG_SECONDS,
       sourceSyncIntervalSeconds: env.SOURCE_SYNC_INTERVAL_SECONDS,
+      sourceVersionIntervalSeconds: env.SOURCE_VERSION_INTERVAL_SECONDS,
+      sourceVersionMaxRecords: env.SOURCE_VERSION_MAX_RECORDS,
       metrics: {
         enabled: env.METRICS_ENABLED,
         token: env.METRICS_TOKEN,

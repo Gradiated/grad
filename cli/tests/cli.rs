@@ -1801,6 +1801,8 @@ fn sources_api() -> MockServer {
                 s["sample_rate"] = json!(0.1);
                 s["max_records_per_day"] = json!(100000);
                 s["records_today"] = json!(4200);
+                s["version_interval"] = json!(900);
+                s["pending_records"] = json!(120);
                 Reply::json(200, s)
             }
             ("PATCH", "/v1/sources/src_bad") => Reply::problem(
@@ -1824,6 +1826,7 @@ fn sources_show_and_update_print_the_effective_filters() {
     for want in [
         r#"environment=["production"] · min_score={"helpfulness":0.8} · 10% sampled · ≤100000/day"#,
         "4200 of 100000 new traces",
+        "at most every 900s; 120 records wait for the next",
         "completed (v3)",
     ] {
         assert!(r.stdout.contains(want), "{}", r.stdout);
@@ -3790,7 +3793,12 @@ fn parity_requests_match_the_shared_fixture() {
                     a.push("--schedule".into());
                     a.push(cron.into());
                 }
-                for key in ["sample_rate", "max_records_per_sync", "max_records_per_day"] {
+                for key in [
+                    "sample_rate",
+                    "max_records_per_sync",
+                    "max_records_per_day",
+                    "version_interval",
+                ] {
                     if !body[key].is_null() {
                         a.push(format!("--{}", key.replace('_', "-")));
                         a.push(body[key].to_string());

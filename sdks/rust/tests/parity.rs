@@ -337,6 +337,7 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             let opts = SourceOptions {
                 sample_rate: Some(0.1),
                 max_records_per_day: Some(100000),
+                version_interval: Some(600),
                 ..Default::default()
             };
             c.sources()
@@ -505,6 +506,7 @@ fn typed_responses() {
         "source.sample_rate": source.sample_rate,
         "source.max_records_per_day": source.max_records_per_day,
         "source.records_today": source.records_today,
+        "source.pending_records": source.pending_records,
         "source.last_sync.status": last.status.as_str(),
         "source.last_sync.dataset_version": last.dataset_version,
         "source.status": source.status,

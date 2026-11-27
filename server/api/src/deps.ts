@@ -32,6 +32,10 @@ export interface AppSettings {
   usageExportLagSeconds?: number;
   /** A source starts at most one sync per this long (default 60 s; live tests use 0). */
   sourceSyncIntervalSeconds?: number;
+  /** A new source's version_interval (default 900 s). */
+  sourceVersionIntervalSeconds?: number;
+  /** Waiting records that commit a scheduled sync's version at once (default 100k). */
+  sourceVersionMaxRecords?: number;
   /** Job events (metrics) older than this are deleted (default 90 days). */
   jobEventRetentionDays?: number;
   /** Unreferenced job blobs older than this are deleted (default 7 days). */

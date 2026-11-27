@@ -91,6 +91,8 @@ export interface SourceLimits {
   maxRecordsPerSync?: number | null;
   /** At most this many new traces per UTC day (null: no cap). */
   maxRecordsPerDay?: number | null;
+  /** Seconds between the dataset versions scheduled syncs commit (default 900; 0: every sync). */
+  versionInterval?: number;
 }
 
 export interface AddSourceOptions extends RequestOptions, SourceLimits {
@@ -174,18 +176,18 @@ const defined = <T extends object>(fields: T): Partial<T> =>
   Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as Partial<T>;
 
 export const addSource = async (core: Core, dataset: DatasetRef, options: AddSourceOptions): Promise<Source> => {
-  const { provider: body, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, ...request } = options;
+  const { provider: body, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, versionInterval, ...request } = options;
   const data = await core.api.createDatasetSource(
     datasetName(dataset),
-    { provider: body, ...defined({ schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay }) },
+    { provider: body, ...defined({ schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, versionInterval }) },
     request,
   );
   return new Source(core, data);
 };
 
 const updateSource = async (core: Core, id: string, options: UpdateSourceOptions): Promise<SourceData> => {
-  const { filters, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, ...request } = options;
-  return core.api.updateSource(id, defined({ filters, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay }), request);
+  const { filters, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, versionInterval, ...request } = options;
+  return core.api.updateSource(id, defined({ filters, schedule, sampleRate, maxRecordsPerSync, maxRecordsPerDay, versionInterval }), request);
 };
 
 export class SecretsResource {

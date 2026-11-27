@@ -165,6 +165,8 @@ export interface CreateSourceRequest {
   maxRecordsPerSync?: number | null | undefined;
   /** At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
   maxRecordsPerDay?: number | null | undefined;
+  /** Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit. */
+  versionInterval?: number | undefined;
 }
 
 export interface CreateUploadRequest {
@@ -1137,6 +1139,10 @@ export interface Source {
   maxRecordsPerDay: number | null;
   /** New traces synced so far this UTC day (what max_records_per_day counts). */
   recordsToday: number;
+  /** Seconds between the dataset versions scheduled syncs commit (0: every sync). */
+  versionInterval: number;
+  /** Records scheduled syncs fetched that wait for the next dataset version. */
+  pendingRecords: number;
   /** When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule backs off: twice its interval per consecutive failure, at most an hour. */
   nextSyncAt: string | null;
   /** `paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it. */
@@ -1234,6 +1240,8 @@ export interface UpdateSourceRequest {
   maxRecordsPerSync?: number | null | undefined;
   /** At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
   maxRecordsPerDay?: number | null | undefined;
+  /** Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit. */
+  versionInterval?: number | undefined;
 }
 
 export interface UploadTicket {

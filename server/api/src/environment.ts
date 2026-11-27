@@ -78,6 +78,15 @@ const EnvironmentSchema = z.object({
     .min(0)
     .max(3600)
     .default(60),
+  /** A new source's version_interval: seconds between scheduled syncs' versions. */
+  SOURCE_VERSION_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(7 * 86_400)
+    .default(900),
+  /** Waiting records that commit a scheduled sync's version at once. */
+  SOURCE_VERSION_MAX_RECORDS: z.coerce.number().int().min(1).default(100_000),
   /** Days job events (metrics) are kept. */
   JOB_EVENT_RETENTION_DAYS: z.coerce
     .number()

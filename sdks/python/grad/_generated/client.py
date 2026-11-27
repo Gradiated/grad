@@ -244,6 +244,7 @@ CreateSourceRequest = TypedDict(
         "sample_rate": "NotRequired[float]",
         "max_records_per_sync": "NotRequired[int | None]",
         "max_records_per_day": "NotRequired[int | None]",
+        "version_interval": "NotRequired[int]",
     },
 )
 
@@ -1192,6 +1193,8 @@ Source = TypedDict(
         "max_records_per_sync": "int | None",
         "max_records_per_day": "int | None",
         "records_today": "int",
+        "version_interval": "int",
+        "pending_records": "int",
         "next_sync_at": "str | None",
         "status": "Literal['active', 'paused']",
         "paused_reason": "str | None",
@@ -1369,6 +1372,7 @@ UpdateSourceRequest = TypedDict(
         "sample_rate": "NotRequired[float]",
         "max_records_per_sync": "NotRequired[int | None]",
         "max_records_per_day": "NotRequired[int | None]",
+        "version_interval": "NotRequired[int]",
     },
 )
 
@@ -1603,7 +1607,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "CreateApiKeyRequest": frozenset({"name", "scopes"}),
     "CreateDatasetRequest": frozenset({"metadata", "name"}),
     "CreateImportRequest": frozenset({"connector", "source"}),
-    "CreateSourceRequest": frozenset({"max_records_per_day", "max_records_per_sync", "provider", "sample_rate", "schedule"}),
+    "CreateSourceRequest": frozenset({"max_records_per_day", "max_records_per_sync", "provider", "sample_rate", "schedule", "version_interval"}),
     "CreateUploadRequest": frozenset({"filename", "purpose", "sha256", "size_bytes"}),
     "CreatedApiKey": frozenset({"key", "secret"}),
     "Dataset": frozenset({"created_at", "id", "metadata", "name", "record_count", "updated_at", "version", "workspace_id"}),
@@ -1667,7 +1671,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),
     "Secret": frozenset({"allowed_hosts", "created_at", "name", "updated_at", "workspace_id"}),
     "SetSecretRequest": frozenset({"allowed_hosts", "name", "value"}),
-    "Source": frozenset({"consecutive_failures", "created_at", "dataset", "id", "last_error", "last_error_at", "last_sync", "last_synced_at", "max_records_per_day", "max_records_per_sync", "next_sync_at", "paused_reason", "pending_full", "provider", "records_today", "sample_rate", "schedule", "status", "updated_at", "workspace_id"}),
+    "Source": frozenset({"consecutive_failures", "created_at", "dataset", "id", "last_error", "last_error_at", "last_sync", "last_synced_at", "max_records_per_day", "max_records_per_sync", "next_sync_at", "paused_reason", "pending_full", "pending_records", "provider", "records_today", "sample_rate", "schedule", "status", "updated_at", "version_interval", "workspace_id"}),
     "SourcePageRequest": frozenset({"attempt", "cursor", "worker_id"}),
     "SourcePageResponse": frozenset({"cursor", "has_more", "records"}),
     "SourceProvider": frozenset({"filters", "host", "kind", "project", "secret"}),
@@ -1682,7 +1686,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "TrainerWorkerStats": frozenset({"gpu_memory_used_bytes", "gpu_utilization", "phase", "tokens_per_second"}),
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
     "TrajectoryOutput": frozenset({"payload", "turns"}),
-    "UpdateSourceRequest": frozenset({"filters", "max_records_per_day", "max_records_per_sync", "sample_rate", "schedule"}),
+    "UpdateSourceRequest": frozenset({"filters", "max_records_per_day", "max_records_per_sync", "sample_rate", "schedule", "version_interval"}),
     "UploadTicket": frozenset({"expires_at", "headers", "method", "upload_id", "url"}),
     "UsageGroup": frozenset({"cost_usd", "key", "records", "tokens"}),
     "UsageKindTotal": frozenset({"cost_usd", "kind", "records", "tokens"}),

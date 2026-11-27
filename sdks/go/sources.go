@@ -174,6 +174,9 @@ type SourceParams struct {
 	// MaxRecordsPerSync and MaxRecordsPerDay cap the new traces taken (0: no cap). Feedback on
 	// traces already synced always lands.
 	MaxRecordsPerSync, MaxRecordsPerDay int
+	// VersionInterval is the seconds between the dataset versions scheduled syncs commit
+	// (nil: 900; 0: every sync). Manual and full syncs always commit.
+	VersionInterval *int
 	// IdempotencyKey makes a retried create return the first source.
 	IdempotencyKey string
 }
@@ -188,6 +191,8 @@ type SourceUpdate struct {
 	SampleRate *float64
 	// MaxRecordsPerSync and MaxRecordsPerDay: a cap, or 0 to remove it.
 	MaxRecordsPerSync, MaxRecordsPerDay *int
+	// VersionInterval: seconds between scheduled syncs' dataset versions (0: every sync).
+	VersionInterval *int
 }
 
 func (u SourceUpdate) body() map[string]any {
@@ -206,6 +211,9 @@ func (u SourceUpdate) body() map[string]any {
 	}
 	if u.MaxRecordsPerDay != nil {
 		body["max_records_per_day"] = nilIfZero(*u.MaxRecordsPerDay)
+	}
+	if u.VersionInterval != nil {
+		body["version_interval"] = *u.VersionInterval
 	}
 	return body
 }
@@ -305,6 +313,7 @@ func (s *SourcesService) Create(ctx context.Context, dataset DatasetRef, p Sourc
 			SampleRate:        optPositive(p.SampleRate),
 			MaxRecordsPerSync: optPositive(p.MaxRecordsPerSync),
 			MaxRecordsPerDay:  optPositive(p.MaxRecordsPerDay),
+			VersionInterval:   p.VersionInterval,
 		},
 		idempotency(p.IdempotencyKey)...)
 	if err != nil {

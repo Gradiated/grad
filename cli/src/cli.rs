@@ -1152,6 +1152,9 @@ pub struct SourceLimitArgs {
     /// At most N new traces per UTC day (`update`: 0 removes the cap)
     #[arg(long, value_name = "N")]
     pub max_records_per_day: Option<u64>,
+    /// Seconds between the dataset versions scheduled syncs commit (default 900; 0: every sync)
+    #[arg(long, value_name = "SECS")]
+    pub version_interval: Option<u64>,
 }
 
 #[derive(Args, Debug, Clone)]

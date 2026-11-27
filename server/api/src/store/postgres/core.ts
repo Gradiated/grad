@@ -313,7 +313,7 @@ export const createDatasetRepository = (
         await db.query(
           `SELECT * FROM grad_dataset_parts
            WHERE dataset_id = $1 AND version BETWEEN 1 AND $2 AND key IS NOT NULL
-           ORDER BY version, batch, id`,
+           ORDER BY version, settled_at, batch, id`,
           [datasetId, version],
         )
       ).map(toPart);
@@ -366,13 +366,31 @@ export const createDatasetRepository = (
       attempt,
       metadata,
       keepVersionIfEmpty,
+      sourceId,
     }) =>
       db.atomic(async () => {
+        // A sync's own parts settle now, after the source's earlier ones.
+        if (sourceId !== undefined) {
+          await db.query(
+            `UPDATE grad_dataset_parts SET source_id = $3, settled_at = $4::timestamptz
+             WHERE job_id = $1 AND attempt = $2 AND version IS NULL`,
+            [jobId, attempt, sourceId, nowIso(clock)],
+          );
+        }
+        const params: unknown[] =
+          sourceId !== undefined
+            ? [jobId, attempt, sourceId]
+            : [jobId, attempt];
+        const mine = `((job_id = $1 AND attempt = $2)${
+          sourceId !== undefined
+            ? " OR (source_id = $3 AND settled_at IS NOT NULL)"
+            : ""
+        }) AND version IS NULL`;
         const staged = await db.query(
           `SELECT count, resets FROM grad_dataset_parts
-           WHERE job_id = $1 AND attempt = $2 AND version IS NULL AND key IS NOT NULL
-           ORDER BY batch`,
-          [jobId, attempt],
+           WHERE ${mine} AND key IS NOT NULL
+           ORDER BY settled_at, batch, id`,
+          params,
         );
         const current =
           keepVersionIfEmpty === true && staged.length === 0
@@ -393,9 +411,8 @@ export const createDatasetRepository = (
               metadata,
             );
         await db.query(
-          `UPDATE grad_dataset_parts SET version = $3
-           WHERE job_id = $1 AND attempt = $2 AND version IS NULL`,
-          [jobId, attempt, dataset.version],
+          `UPDATE grad_dataset_parts SET version = $${params.length + 1} WHERE ${mine}`,
+          [...params, dataset.version],
         );
         const orphans = await db.query<{ key: string | null }>(
           `DELETE FROM grad_dataset_parts
@@ -406,7 +423,51 @@ export const createDatasetRepository = (
         return {
           dataset,
           orphanKeys: orphans.flatMap((r) => (r.key ? [r.key] : [])),
+          created: current === null,
         };
+      }),
+    deferStaged: ({ jobId, attempt, sourceId }) =>
+      db.atomic(async () => {
+        await db.query(
+          `UPDATE grad_dataset_parts SET source_id = $3, settled_at = $4::timestamptz
+           WHERE job_id = $1 AND attempt = $2 AND version IS NULL`,
+          [jobId, attempt, sourceId, nowIso(clock)],
+        );
+        const orphans = await db.query<{ key: string | null }>(
+          `DELETE FROM grad_dataset_parts
+           WHERE job_id = $1 AND attempt <> $2 AND version IS NULL RETURNING key`,
+          [jobId, attempt],
+        );
+
+        return {
+          orphanKeys: orphans.flatMap((r) => (r.key ? [r.key] : [])),
+        };
+      }),
+    commitSettled: ({ datasetId, sourceId }) =>
+      db.atomic(async () => {
+        const settled = await db.query(
+          `SELECT count, resets FROM grad_dataset_parts
+           WHERE source_id = $1 AND settled_at IS NOT NULL AND version IS NULL
+             AND key IS NOT NULL
+           ORDER BY settled_at, batch, id`,
+          [sourceId],
+        );
+        if (settled.length === 0) return null;
+        const dataset = await bump(
+          datasetId,
+          settled.map((r) => ({
+            count: Number(r.count),
+            resets: r.resets === true,
+          })),
+          undefined,
+        );
+        await db.query(
+          `UPDATE grad_dataset_parts SET version = $2
+           WHERE source_id = $1 AND settled_at IS NOT NULL AND version IS NULL`,
+          [sourceId, dataset.version],
+        );
+
+        return dataset;
       }),
     discardStaged: async (jobId) =>
       (

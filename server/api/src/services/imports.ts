@@ -468,17 +468,34 @@ export const createImportService = (
         drop_reasons: [],
       };
       const staged = await store.datasets.listStaged(job.id, job.attempt);
+      const sync = isSyncPayload(job.source);
+      const sourceId = sync ? String(job.source.source_id) : undefined;
       const { completed, orphans, dataset } = await store.transaction(
         async (tx) => {
           const benchmark = benchmarkMetadata(job.source);
-          const { dataset, orphanKeys } = await tx.datasets.commitStaged({
-            datasetId: job.dataset_id,
-            jobId: job.id,
-            attempt: job.attempt,
-            ...(benchmark ? { metadata: benchmark } : {}),
-            // A sync that found nothing new adds no empty version.
-            keepVersionIfEmpty: isSyncPayload(job.source),
-          });
+          // A scheduled sync's parts may wait for the source's next version.
+          const deferred =
+            sourceId !== undefined &&
+            (await collaborators.sources.defersVersion(tx, job, staged.count));
+          const { dataset, orphanKeys, created } = deferred
+            ? {
+                ...(await tx.datasets.deferStaged({
+                  jobId: job.id,
+                  attempt: job.attempt,
+                  sourceId,
+                })),
+                dataset: null,
+                created: false,
+              }
+            : await tx.datasets.commitStaged({
+                datasetId: job.dataset_id,
+                jobId: job.id,
+                attempt: job.attempt,
+                ...(benchmark ? { metadata: benchmark } : {}),
+                // A sync that found nothing new adds no empty version.
+                keepVersionIfEmpty: sync,
+                ...(sourceId !== undefined ? { sourceId } : {}),
+              });
           const updated = await tx.imports.update(
             id,
             {
@@ -497,14 +514,19 @@ export const createImportService = (
                 ...job.drop_reasons,
                 ...summary.drop_reasons,
               ].slice(0, MAX_DROP_REASONS),
-              dataset_version: dataset.version,
+              // Null while a scheduled sync's parts wait for the next version.
+              dataset_version: dataset?.version ?? null,
               error: null,
             },
             fenceOf(job, ["running"]),
           );
           if (!updated) throw leaseLost(id);
-          if (isSyncPayload(job.source)) {
-            await collaborators.sources.completeSync(tx, job, summary);
+          if (sync) {
+            await collaborators.sources.completeSync(tx, job, summary, {
+              records: staged.count,
+              deferred,
+              versioned: created,
+            });
           }
 
           return { completed: updated, orphans: orphanKeys, dataset };
@@ -515,6 +537,7 @@ export const createImportService = (
       // Synced or imported ids may already be in the dataset (an updated
       // trace, a re-import). Best effort: the next writer settles it again.
       if (
+        dataset &&
         staged.count > 0 &&
         (dataset.version > 1 || staged.parts.length > 1)
       ) {

@@ -992,6 +992,116 @@ describe("sources", () => {
     expect(failed.body.error).toContain("was removed");
   });
 
+  it("commits a scheduled sync's version at most every version_interval; manual syncs and removal commit (r8-sources)", async () => {
+    const source = (
+      await addSource({
+        provider: LANGFUSE,
+        schedule: "* * * * *",
+        version_interval: 600,
+      })
+    ).body as { id: string; version_interval: number };
+    expect(source.version_interval).toBe(600);
+    const scheduledSync = async (ids: string[]) => {
+      t.clock.advanceSeconds(61);
+      expect(await t.services.sources.tick(t.clock.now())).toBe(1);
+      const job = await claimImport();
+      if (ids.length > 0) await worker.records(job, 0, ids.map(record));
+      const done = await worker.complete(job, {
+        status: "completed",
+        import_summary: { watermark: null },
+      });
+      return (done.body.import as { dataset_version: number | null })
+        .dataset_version;
+    };
+    const ids = async () =>
+      (
+        await t.json<{ data: Array<{ id: string }> }>(
+          "/v1/datasets/support-prod/records?limit=100",
+        )
+      ).body.data.map((r) => r.id);
+    const state = async () =>
+      (await t.json<Record<string, any>>(`/v1/sources/${source.id}`)).body;
+
+    // The first sync commits; the next ones wait while the interval runs.
+    expect(await scheduledSync(["t1"])).toBe(1);
+    expect(await scheduledSync(["t2", "t3"])).toBeNull();
+    expect(await scheduledSync(["t4"])).toBeNull();
+    expect(await scheduledSync([])).toBeNull();
+    expect(await ids()).toEqual(["t1"]);
+    expect(await state()).toMatchObject({ pending_records: 3 });
+    // Past the interval, a sync commits everything waiting, in order.
+    t.clock.advanceSeconds(600);
+    expect(await scheduledSync(["t5"])).toBe(2);
+    expect(await ids()).toEqual(["t1", "t2", "t3", "t4", "t5"]);
+    expect(await state()).toMatchObject({ pending_records: 0 });
+
+    // A manual sync commits at once, with what waits.
+    expect(await scheduledSync(["t6"])).toBeNull();
+    t.clock.advanceSeconds(61);
+    await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
+    const manual = await claimImport();
+    await worker.records(manual, 0, [record("t7")]);
+    await worker.complete(manual, { status: "completed" });
+    expect(await ids()).toEqual(["t1", "t2", "t3", "t4", "t5", "t6", "t7"]);
+
+    // Removing a source commits what its scheduled syncs fetched.
+    expect(await scheduledSync(["t8"])).toBeNull();
+    expect(
+      (await t.json(`/v1/sources/${source.id}`, { method: "DELETE" })).status,
+    ).toBe(204);
+    expect((await ids()).at(-1)).toBe("t8");
+
+    // version_interval 0: every scheduled sync commits.
+    const every = (
+      await addSource({
+        provider: LANGFUSE,
+        schedule: "* * * * *",
+        version_interval: 0,
+      })
+    ).body as { id: string };
+    const before = (
+      await t.json<{ version: number }>("/v1/datasets/support-prod")
+    ).body.version;
+    expect(await scheduledSync(["u1"])).toBe(before + 1);
+    expect(await scheduledSync(["u2"])).toBe(before + 2);
+    const patched = await t.json<{ version_interval: number }>(
+      `/v1/sources/${every.id}`,
+      { method: "PATCH", body: { version_interval: 3600 } },
+    );
+    expect(patched.body.version_interval).toBe(3600);
+  });
+
+  it("commits waiting records at once past SOURCE_VERSION_MAX_RECORDS (r8-sources)", async () => {
+    await t.close();
+    t = await makeTestApp({
+      secrets: createSecretsCipher({ key: randomBytes(32).toString("base64") }),
+      settings: {
+        maxAttempts: 3,
+        evalConcurrency: 1,
+        sourceVersionMaxRecords: 3,
+      },
+    });
+    worker = new FakeWorker(t);
+    await t.json("/v1/secrets", {
+      body: { name: "langfuse-prod", value: KEY },
+    });
+    await addSource({ provider: LANGFUSE, schedule: "* * * * *" });
+    const versions: Array<number | null> = [];
+    for (const batch of [["a"], ["b"], ["c"], ["d"]]) {
+      t.clock.advanceSeconds(61);
+      await t.services.sources.tick(t.clock.now());
+      const job = await claimImport();
+      await worker.records(job, 0, batch.map(record));
+      const done = await worker.complete(job, { status: "completed" });
+      versions.push(
+        (done.body.import as { dataset_version: number | null })
+          .dataset_version,
+      );
+    }
+    // b and c wait; d brings the waiting records to 3 and commits all three.
+    expect(versions).toEqual([1, null, null, 2]);
+  });
+
   it("ticks due schedules on every replica with SKIP LOCKED, at most one sync per source", async () => {
     const source = (
       await addSource({ provider: LANGFUSE, schedule: "*/15 * * * *" })

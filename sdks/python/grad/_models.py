@@ -356,7 +356,7 @@ class Dataset(APIObject):
     def add_source(self, provider: Any, *, schedule: str | None = None, idempotency_key: str | None = None, **limits: Any) -> Source:
         """Connect an observability provider (``grad.sources.Langfuse(...)``, ...).
         ``schedule`` is a five-field UTC cron; leave it out to sync only on request. ``limits``:
-        ``sample_rate``, ``max_records_per_sync``, ``max_records_per_day``."""
+        ``sample_rate``, ``max_records_per_sync``, ``max_records_per_day``, ``version_interval``."""
         source: Source = self._need_client().sources.create(self.name, provider, schedule=schedule, idempotency_key=idempotency_key, **limits)
         return source
 
@@ -401,6 +401,8 @@ class Source(APIObject):
     max_records_per_sync: int | None = None
     max_records_per_day: int | None = None
     records_today: int = 0
+    version_interval: int = 900
+    pending_records: int = 0
     next_sync_at: str | None = None
     status: str = "active"
     paused_reason: str | None = None

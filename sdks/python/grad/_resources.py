@@ -533,18 +533,22 @@ class Sources(_Resource):
         sample_rate: float | None = None,
         max_records_per_sync: int | None = None,
         max_records_per_day: int | None = None,
+        version_interval: int | None = None,
         idempotency_key: str | None = None,
     ) -> Source:
         """Connect ``provider`` (``grad.sources.Langfuse(..., filters={...})``, ...) to
         ``dataset`` (created if missing). ``schedule`` is a five-field UTC cron, so it fires at
         most once a minute. ``sample_rate`` (0-1] keeps that share of traces, chosen by trace id;
-        ``max_records_per_sync`` / ``max_records_per_day`` cap the new traces taken."""
+        ``max_records_per_sync`` / ``max_records_per_day`` cap the new traces taken.
+        ``version_interval`` (seconds, default 900; 0: every sync) is how often scheduled syncs
+        commit a dataset version; manual and full syncs always do."""
         body: dict[str, Any] = {"provider": provider_body(provider)}
         for key, value in (
             ("schedule", schedule),
             ("sample_rate", sample_rate),
             ("max_records_per_sync", max_records_per_sync),
             ("max_records_per_day", max_records_per_day),
+            ("version_interval", version_interval),
         ):
             if value is not None:
                 body[key] = value
@@ -562,6 +566,7 @@ class Sources(_Resource):
         sample_rate: Any = UNSET,
         max_records_per_sync: Any = UNSET,
         max_records_per_day: Any = UNSET,
+        version_interval: Any = UNSET,
     ) -> Source:
         """Change a source from its next sync. Arguments left out keep their value; ``filters``
         replaces all of them (``{}`` clears them), ``None`` clears the schedule or a cap. Traces
@@ -574,6 +579,7 @@ class Sources(_Resource):
                 ("sample_rate", sample_rate),
                 ("max_records_per_sync", max_records_per_sync),
                 ("max_records_per_day", max_records_per_day),
+                ("version_interval", version_interval),
             )
             if value is not UNSET
         }

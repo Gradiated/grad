@@ -316,6 +316,7 @@ describe("Prometheus metrics", () => {
       sampleRate: 1,
       maxRecordsPerSync: null,
       maxRecordsPerDay: null,
+      versionInterval: 900,
       schedule: null,
       nextSyncAt: null,
     });

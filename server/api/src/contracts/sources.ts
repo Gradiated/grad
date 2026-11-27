@@ -162,6 +162,17 @@ const RecordCapSchema = (period: string) =>
       description: `At most this many new traces ${period}; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap.`,
     });
 
+const VersionIntervalSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(7 * 86_400)
+  .openapi({
+    description:
+      "Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit.",
+    example: 900,
+  });
+
 export const CreateSourceRequestSchema = z
   .object({
     provider: SourceProviderSchema,
@@ -169,6 +180,7 @@ export const CreateSourceRequestSchema = z
     sample_rate: SampleRateSchema.optional(),
     max_records_per_sync: RecordCapSchema("per sync"),
     max_records_per_day: RecordCapSchema("per UTC day"),
+    version_interval: VersionIntervalSchema.optional(),
   })
   .openapi("CreateSourceRequest");
 
@@ -184,6 +196,7 @@ export const UpdateSourceRequestSchema = z
     sample_rate: SampleRateSchema.optional(),
     max_records_per_sync: RecordCapSchema("per sync"),
     max_records_per_day: RecordCapSchema("per UTC day"),
+    version_interval: VersionIntervalSchema.optional(),
   })
   .openapi("UpdateSourceRequest", {
     description:
@@ -226,6 +239,14 @@ export const SourceSchema = z
     records_today: z.number().int().min(0).openapi({
       description:
         "New traces synced so far this UTC day (what max_records_per_day counts).",
+    }),
+    version_interval: z.number().int().min(0).openapi({
+      description:
+        "Seconds between the dataset versions scheduled syncs commit (0: every sync).",
+    }),
+    pending_records: z.number().int().min(0).openapi({
+      description:
+        "Records scheduled syncs fetched that wait for the next dataset version.",
     }),
     next_sync_at: IsoTimestampSchema.nullable().openapi({
       description:

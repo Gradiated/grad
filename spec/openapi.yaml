@@ -4938,6 +4938,14 @@ components:
           type: integer
           minimum: 0
           description: New traces synced so far this UTC day (what max_records_per_day counts).
+        version_interval:
+          type: integer
+          minimum: 0
+          description: "Seconds between the dataset versions scheduled syncs commit (0: every sync)."
+        pending_records:
+          type: integer
+          minimum: 0
+          description: Records scheduled syncs fetched that wait for the next dataset version.
         next_sync_at:
           type:
             - string
@@ -4998,6 +5006,8 @@ components:
         - max_records_per_sync
         - max_records_per_day
         - records_today
+        - version_interval
+        - pending_records
         - next_sync_at
         - status
         - paused_reason
@@ -5090,6 +5100,14 @@ components:
           maximum: 1000000000
           description: "At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them).
             Feedback on traces already synced always lands. Null: no cap."
+        version_interval:
+          type: integer
+          minimum: 0
+          maximum: 604800
+          description: "Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch
+            every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy
+            source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit."
+          example: 900
       required:
         - provider
     SourceProvider:
@@ -5188,6 +5206,14 @@ components:
           maximum: 1000000000
           description: "At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them).
             Feedback on traces already synced always lands. Null: no cap."
+        version_interval:
+          type: integer
+          minimum: 0
+          maximum: 604800
+          description: "Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch
+            every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy
+            source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit."
+          example: 900
       description: Fields left out keep their value. Changes apply from the next sync; traces already synced stay (a full sync
         rebuilds the dataset with the new settings).
     SyncSourceRequest:

@@ -192,7 +192,24 @@ export interface DatasetRepository {
     metadata?: Record<string, unknown>;
     /** Nothing staged: keep the current version instead of an empty new one (source syncs). */
     keepVersionIfEmpty?: boolean;
-  }): Promise<{ dataset: Dataset; orphanKeys: string[] }>;
+    /** A source sync: the source's settled parts go first, in the order they settled. */
+    sourceId?: string;
+  }): Promise<{ dataset: Dataset; orphanKeys: string[]; created: boolean }>;
+  /**
+   * A source sync whose version waits (version_interval): its attempt's
+   * parts become the source's settled parts, unversioned; the other
+   * attempts' staged rows go (their keys are returned).
+   */
+  deferStaged(input: {
+    jobId: string;
+    attempt: number;
+    sourceId: string;
+  }): Promise<{ orphanKeys: string[] }>;
+  /** The source's settled parts as a new version, if it has any (the source is going away). */
+  commitSettled(input: {
+    datasetId: string;
+    sourceId: string;
+  }): Promise<Dataset | null>;
   /** Deletes every staged part of a job (it failed); returns their keys. */
   discardStaged(jobId: string): Promise<string[]>;
 }
@@ -844,6 +861,11 @@ export interface SourceRecord {
   /** New traces synced on `records_day` (UTC `YYYY-MM-DD`). */
   records_today: number;
   records_day: string | null;
+  /** Seconds between the versions scheduled syncs commit (0: every sync). */
+  version_interval: number;
+  last_version_at: string | null;
+  /** Records in settled parts waiting for the next version. */
+  pending_records: number;
   schedule: string | null;
   next_sync_at: string | null;
   watermark: Record<string, unknown> | null;
@@ -871,6 +893,9 @@ export type SourcePatch = Partial<
     | "max_records_per_day"
     | "records_today"
     | "records_day"
+    | "version_interval"
+    | "last_version_at"
+    | "pending_records"
     | "schedule"
     | "next_sync_at"
     | "watermark"
@@ -897,6 +922,7 @@ export interface SourceRepository {
     sampleRate: number;
     maxRecordsPerSync: number | null;
     maxRecordsPerDay: number | null;
+    versionInterval: number;
     schedule: string | null;
     nextSyncAt: string | null;
     idempotency?: IdempotencyInput | undefined;

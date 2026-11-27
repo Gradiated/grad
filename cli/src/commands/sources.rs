@@ -213,6 +213,7 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                     sample_rate,
                     max_records_per_sync,
                     max_records_per_day,
+                    version_interval,
                 },
             idempotency_key,
         } => {
@@ -226,6 +227,7 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                 sample_rate,
                 max_records_per_sync,
                 max_records_per_day,
+                version_interval,
             };
             let c = ctx.client()?;
             let s = c
@@ -281,6 +283,16 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                         None => format!("{} new traces", s.records_today),
                     },
                 ),
+                (
+                    "versions",
+                    match (s.version_interval, s.pending_records) {
+                        (0, _) => "every sync".into(),
+                        (secs, 0) => format!("at most every {}s", secs),
+                        (secs, n) => {
+                            format!("at most every {}s; {} records wait for the next", secs, n)
+                        }
+                    },
+                ),
                 ("last sync", last_sync(&s)),
                 (
                     "last error",
@@ -303,6 +315,7 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                     sample_rate,
                     max_records_per_sync,
                     max_records_per_day,
+                    version_interval,
                 },
         } => {
             let change = SourceUpdate {
@@ -319,10 +332,11 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                 sample_rate,
                 max_records_per_sync: cap(max_records_per_sync),
                 max_records_per_day: cap(max_records_per_day),
+                version_interval,
             };
             if change == SourceUpdate::default() {
                 return Err(CliError::usage(
-                    "nothing to change: pass --filter, --clear-filters, --schedule, --no-schedule, --sample-rate or a --max-records-* cap",
+                    "nothing to change: pass --filter, --clear-filters, --schedule, --no-schedule, --sample-rate, --version-interval or a --max-records-* cap",
                 ));
             }
             let c = ctx.client()?;
