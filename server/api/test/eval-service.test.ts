@@ -7,6 +7,7 @@ import {
 import {
   AWAITING_SCORES_TIMEOUT_SECONDS,
   backgroundInterval,
+  DB_RETRY_DELAYS_MS,
 } from "../src/services/evals/service.js";
 import { makeTestApp, WORKSPACE_A } from "./fixtures/app.js";
 import {
@@ -484,10 +485,59 @@ describe("eval service", () => {
 
     const done = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("completed");
+    // The requeue note is cleared on success (r8 A9).
+    expect(done.error).toBeNull();
     expect(done.progress.generated).toBe(4);
     expect(
       fake.requests.filter((r) => r.model === "qwen/qwen3-8b"),
     ).toHaveLength(3);
+  });
+
+  it("retries a database blip in place instead of waiting out its lease (r8 G')", async () => {
+    h = await makeEvalHarness();
+    const { t } = h;
+    await seedDataset(t, "qa", qaRecords(3));
+    const created = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
+    );
+    const evals = t.deps.store.evals;
+    const insert = evals.insertOutput.bind(evals);
+    let resets = 2;
+    evals.insertOutput = async (output) => {
+      if (resets > 0) {
+        resets -= 1;
+        throw Object.assign(new Error("terminating connection"), {
+          code: "57P01",
+        });
+      }
+      return insert(output);
+    };
+    const delays = DB_RETRY_DELAYS_MS.splice(0, Infinity, 5, 5, 5);
+    try {
+      expect(await t.services.evals.drain()).toBe(1);
+      const done = await t.services.evals.get(WORKSPACE_A, created.id);
+      expect(done).toMatchObject({ status: "completed", error: null });
+      expect(done.progress.generated).toBe(3);
+      expect((await t.deps.store.jobs.getById(created.id))?.attempt).toBe(1);
+
+      // Errors past the retries end the attempt, counted: a query that
+      // always fails ends at max_attempts instead of looping.
+      const second = await createEval(
+        t.services.evals,
+        WORKSPACE_A,
+        request({ models: ["qwen/qwen3-8b"], dataset: "qa", name: "down" }),
+      );
+      resets = Infinity;
+      expect(await t.services.evals.drain()).toBe(3);
+      const job = await t.deps.store.jobs.getById(second.id);
+      expect(job).toMatchObject({ status: "failed", failed_attempts: 3 });
+      expect(job?.error).toMatch(/kept hitting database errors/);
+    } finally {
+      DB_RETRY_DELAYS_MS.splice(0, Infinity, ...delays);
+      evals.insertOutput = insert;
+    }
   });
 
   it("fails an eval whose lease expired max_attempts times", async () => {

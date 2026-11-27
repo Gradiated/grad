@@ -53,6 +53,7 @@ import {
   type JobKindHandler,
   type JobQueue,
 } from "../jobs.js";
+import { isDatabaseUnavailable } from "../../store/postgres/db.js";
 import { scoreUpdate } from "../record-merge.js";
 import { settleLabelledRuns } from "../router-labels.js";
 import type { UsageService } from "../usage.js";
@@ -170,6 +171,9 @@ export const backgroundInterval = (
 /** Thrown inside finalize's transaction when another caller finalized first. */
 class LostRace extends Error {}
 const TASK_PAGE = 200;
+/** Backoff between in-place retries after a database error (about 30 s). */
+export const DB_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const OUTPUT_PAGE = 1000;
 const ACTIVE: readonly EvalStatus[] = ["queued", "running", "awaiting_scores"];
 
@@ -379,6 +383,8 @@ export const createEvalService = (
           {
             ...RELEASE,
             status: "completed",
+            // A requeue's note ("lost its lease; requeued") is history now.
+            error: null,
             summary: aggregation.summary,
             total_cost_usd: aggregation.totalCostUsd,
             generated: outputs.length,
@@ -576,6 +582,26 @@ export const createEvalService = (
     ).tasks;
   };
 
+  /** Ends the open attempt as failed: requeued, or failed at max_attempts. */
+  const requeueCounted = async (
+    row: Parameters<typeof requeuePatch>[0] & { id: string },
+    what: string,
+    fence: Parameters<typeof store.evals.update>[2],
+    now: string,
+  ): Promise<void> => {
+    const updated = await store.transaction(async (tx) => {
+      const closed = await tx.evals.update(
+        row.id,
+        requeuePatch(row, what, now) as Parameters<typeof tx.evals.update>[1],
+        fence,
+      );
+      if (closed) await billAttempt(tx, { ...closed, attempt: row.attempt });
+
+      return closed;
+    });
+    if (updated?.status === "failed") await onFinished(updated);
+  };
+
   const runJob = async (job: EvalRecord): Promise<void> => {
     const expect = fenceOf(job, ["running"]);
     let lost = false;
@@ -591,7 +617,7 @@ export const createEvalService = (
       `eval ${job.id} lease renewal`,
     );
 
-    try {
+    const runOnce = async (): Promise<void> => {
       const existing = await store.evals.listOutputKeys(job.id);
       let generated = existing.size;
       const tasks = await tasksOf(job);
@@ -682,6 +708,31 @@ export const createEvalService = (
       }
 
       await finalize(current, expect);
+    };
+
+    try {
+      // A database blip retries in place (outputs already stored are kept)
+      // instead of waiting out the lease (r8 G'); a longer outage requeues.
+      for (let retry = 0; ; retry += 1) {
+        try {
+          await runOnce();
+          return;
+        } catch (error) {
+          if (!isDatabaseUnavailable(error) || lost || stopping) throw error;
+          if (retry >= DB_RETRY_DELAYS_MS.length) {
+            // Counted, so an eval that always hits one bad query fails at
+            // max_attempts instead of looping.
+            await requeueCounted(
+              job,
+              `Eval executor attempt ${job.attempt} kept hitting database errors (${errorMessage(error).slice(0, 200)})`,
+              expect,
+              clock.now().toISOString(),
+            ).catch(() => undefined);
+            return;
+          }
+          await sleep(DB_RETRY_DELAYS_MS[retry] as number);
+        }
+      }
     } catch (error) {
       const failed = await store.evals.update(
         job.id,
@@ -700,23 +751,13 @@ export const createEvalService = (
   };
 
   const handler: JobKindHandler = {
-    onLeaseLost: async (row, fence, now) => {
-      const updated = await store.transaction(async (tx) => {
-        const closed = await tx.evals.update(
-          row.id,
-          requeuePatch(
-            row,
-            `Eval executor attempt ${row.attempt} lost its lease`,
-            now.toISOString(),
-          ) as Parameters<typeof tx.evals.update>[1],
-          fence,
-        );
-        if (closed) await billAttempt(tx, { ...closed, attempt: row.attempt });
-
-        return closed;
-      });
-      if (updated?.status === "failed") await onFinished(updated);
-    },
+    onLeaseLost: (row, fence, now) =>
+      requeueCounted(
+        row,
+        `Eval executor attempt ${row.attempt} lost its lease`,
+        fence,
+        now.toISOString(),
+      ),
   };
 
   const drain = async (): Promise<number> => {
