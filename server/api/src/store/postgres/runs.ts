@@ -405,8 +405,8 @@ export const createBillingOutboxRepository = (
       await db.query(
         `INSERT INTO grad_billing_outbox
            (id, idempotency_key, workspace_id, run_id, attempt, tokens, cost_usd, status,
-            next_attempt_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8::timestamptz, $8::timestamptz)
+            next_attempt_at, created_at, kind)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8::timestamptz, $8::timestamptz, $9)
          ON CONFLICT (idempotency_key) DO NOTHING
          RETURNING *`,
         [
@@ -418,6 +418,7 @@ export const createBillingOutboxRepository = (
           input.tokens,
           input.costUsd,
           ts,
+          input.kind,
         ],
       ),
     );

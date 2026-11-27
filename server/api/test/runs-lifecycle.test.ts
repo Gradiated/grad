@@ -23,6 +23,7 @@ const recordingBilling = () => {
       }
       calls.push(input);
     },
+    recordEvalUsage: async () => undefined,
   };
 
   return { adapter, calls, failNext: (n: number) => (failuresLeft = n) };

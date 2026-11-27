@@ -275,6 +275,7 @@ describe("grad-server HTTP API", () => {
           reason: "No balance",
         }),
         recordRunUsage: async () => undefined,
+        recordEvalUsage: async () => undefined,
       },
     });
     await denied.json("/v1/datasets/d/records", {

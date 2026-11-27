@@ -64,7 +64,7 @@ __all__ = [
 ]
 
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "stopped_budget"})
-TERMINAL_EVAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+TERMINAL_EVAL_STATUSES = frozenset({"completed", "stopped_budget", "failed", "cancelled"})
 TERMINAL_IMPORT_STATUSES = frozenset({"completed", "failed"})
 
 

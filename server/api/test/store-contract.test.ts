@@ -127,6 +127,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         pass_threshold: 0.5,
         judge_models: [],
         local_scorers: ["local_fn"],
+        max_cost_usd: 5,
+        estimated_cost_usd: 1.5,
       });
     };
 
@@ -1424,6 +1426,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const input = {
         idempotencyKey: "run-usage:run_1:1",
         workspaceId: "ws_a",
+        kind: "run" as const,
         runId: "run_1",
         attempt: 1,
         tokens: 1000,
@@ -1494,6 +1497,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
             await inner.billing.enqueue({
               idempotencyKey: "nested",
               workspaceId: "ws_t",
+              kind: "run",
               runId: committed!.id,
               attempt: 1,
               tokens: 1,
@@ -1513,6 +1517,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           await inner.billing.enqueue({
             idempotencyKey: "nested-ok",
             workspaceId: "ws_t",
+            kind: "eval",
             runId: committed!.id,
             attempt: 1,
             tokens: 1,
@@ -1522,7 +1527,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         }),
       );
       expect(nested).toBe("ok");
-      expect(await store.billing.listByRun(committed!.id)).toHaveLength(1);
+      const [entry] = await store.billing.listByRun(committed!.id);
+      expect(entry?.kind).toBe("eval");
       expect(await store.ping()).toBe(true);
     });
   });

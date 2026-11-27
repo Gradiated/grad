@@ -2782,6 +2782,8 @@ components:
         max_cost_usd:
           type: number
           exclusiveMinimum: 0
+          description: "Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status
+            stopped_budget)."
       required:
         - models
     BenchmarkSpec:
@@ -2943,6 +2945,13 @@ components:
         total_cost_usd:
           type: number
           minimum: 0
+        max_cost_usd:
+          type:
+            - number
+            - "null"
+          exclusiveMinimum: 0
+          description: Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial
+            results.
         error:
           type:
             - string
@@ -2976,6 +2985,7 @@ components:
         - progress
         - summary
         - total_cost_usd
+        - max_cost_usd
         - error
         - created_at
         - updated_at
@@ -2987,6 +2997,7 @@ components:
         - running
         - awaiting_scores
         - completed
+        - stopped_budget
         - failed
         - cancelled
     EvalModelSummary:

@@ -1,3 +1,4 @@
+import type { BillingAdapter } from "../../src/adapters.js";
 import type { DatasetRecord } from "../../src/contracts.js";
 import { createOpenAICompatibleClient } from "../../src/services/evals/inference.js";
 import type { ArtifactRecord } from "../../src/store/types.js";
@@ -12,7 +13,7 @@ export interface EvalHarness {
 
 /** Test app whose inference + judge clients point at a fake OpenAI-compatible server. */
 export const makeEvalHarness = async (
-  options: { maxAttempts?: number } = {},
+  options: { maxAttempts?: number; billing?: BillingAdapter } = {},
 ): Promise<EvalHarness> => {
   const fake = await startFakeOpenAI();
   const client = createOpenAICompatibleClient({
@@ -21,6 +22,7 @@ export const makeEvalHarness = async (
     maxAttempts: 2,
   });
   const t = await makeTestApp({
+    ...(options.billing ? { billing: options.billing } : {}),
     inference: { models: client, judge: client },
     settings: {
       allowWave2Recipes: false,

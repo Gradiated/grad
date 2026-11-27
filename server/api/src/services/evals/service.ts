@@ -27,6 +27,7 @@ import type {
   Page,
   PageRequest,
 } from "../../store/types.js";
+import type { BillingOutbox } from "../billing-outbox.js";
 import type { DatasetService } from "../datasets.js";
 import { aggregateEval } from "./aggregate.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./planner.js";
@@ -130,9 +131,59 @@ const toPublicOutput = (
   },
 });
 
+/** Generation never starts a call that would take spend past the cap. */
+interface BudgetMeter {
+  /** True when one more call (at the running average cost) fits under the cap. */
+  admit(): boolean;
+  record(costUsd: number): void;
+  release(): void;
+  readonly exhausted: boolean;
+  /** Capped and no call priced yet: run one call alone to learn the cost. */
+  readonly needsPrice: boolean;
+}
+
+const createBudgetMeter = (
+  cap: number | null,
+  spent: number,
+  done: number,
+  estimatePerCall: number,
+): BudgetMeter => {
+  let total = spent;
+  let count = done;
+  let inFlight = 0;
+  let exhausted = false;
+  const perCall = () => (count > 0 ? total / count : estimatePerCall);
+
+  return {
+    admit: () => {
+      if (cap === null) return true;
+      if (exhausted || total + (inFlight + 1) * perCall() > cap + 1e-12) {
+        exhausted = true;
+        return false;
+      }
+      inFlight += 1;
+      return true;
+    },
+    record: (costUsd) => {
+      total += costUsd;
+      count += 1;
+    },
+    release: () => {
+      if (cap !== null) inFlight -= 1;
+    },
+    get exhausted() {
+      return exhausted;
+    },
+    get needsPrice() {
+      return cap !== null && count === 0;
+    },
+  };
+};
+
 export const createEvalService = (
   deps: AppDependencies,
   datasets: DatasetService,
+  billing: BillingOutbox,
 ): EvalService => {
   const { store, clock } = deps;
   const executorId = `eval-executor-${hostname()}-${process.pid}-${newId("x").slice(2, 10)}`;
@@ -178,6 +229,7 @@ export const createEvalService = (
     },
     summary: record.summary,
     total_cost_usd: record.total_cost_usd,
+    max_cost_usd: record.max_cost_usd,
     error: record.error,
     created_at: record.created_at,
     updated_at: record.updated_at,
@@ -200,7 +252,28 @@ export const createEvalService = (
     return rows;
   };
 
-  /** Aggregates outputs and marks the eval completed (CAS on `expect`). */
+  /** Bills a finished eval's model and judge usage (idempotent per eval). */
+  const bill = async (
+    record: Pick<EvalRecord, "id" | "workspace_id">,
+    outputs?: readonly EvalOutputRow[],
+  ): Promise<void> => {
+    const rows = outputs ?? (await allOutputs(record.id));
+    await billing.enqueueEvalUsage(store, {
+      workspaceId: record.workspace_id,
+      evalId: record.id,
+      tokens: rows.reduce(
+        (sum, o) => sum + o.prompt_tokens + o.completion_tokens,
+        0,
+      ),
+      costUsd: Number(rows.reduce((sum, o) => sum + o.cost_usd, 0).toFixed(8)),
+    });
+    billing.kick();
+  };
+
+  /**
+   * Aggregates outputs and marks the eval completed, or stopped_budget when
+   * generation stopped at its cap (partial results); CAS on `expect`.
+   */
   const finalize = async (
     record: EvalRecord,
     expect: JobExpectation<EvalStatus>,
@@ -209,10 +282,10 @@ export const createEvalService = (
     const aggregation = aggregateEval(record, outputs);
     await store.evals.replaceResults(record.id, aggregation.results);
 
-    return store.evals.update(
+    const finalized = await store.evals.update(
       record.id,
       {
-        status: "completed",
+        status: record.budget_stopped ? "stopped_budget" : "completed",
         summary: aggregation.summary,
         total_cost_usd: aggregation.totalCostUsd,
         generated: outputs.length,
@@ -222,6 +295,9 @@ export const createEvalService = (
       },
       expect,
     );
+    if (finalized) await bill(finalized, outputs);
+
+    return finalized;
   };
 
   const generateOne = async (
@@ -323,6 +399,16 @@ export const createEvalService = (
       const existing = await store.evals.listOutputKeys(job.id);
       let generated = existing.size;
       let afterIndex = -1;
+      const spent =
+        job.max_cost_usd === null
+          ? 0
+          : (await allOutputs(job.id)).reduce((sum, o) => sum + o.cost_usd, 0);
+      const budget = createBudgetMeter(
+        job.max_cost_usd,
+        spent,
+        generated,
+        job.total_outputs > 0 ? job.estimated_cost_usd / job.total_outputs : 0,
+      );
 
       for (;;) {
         const tasks = await store.evals.listTasks(
@@ -348,22 +434,39 @@ export const createEvalService = (
           }
         }
 
-        await runPool(work, deps.settings.evalConcurrency, async (item) => {
-          if (lost || stopping) return;
-          const output = await generateOne(
-            job,
-            item.task,
-            item.model,
-            item.sample,
-          );
-          await store.evals.upsertOutput(output);
-          generated += 1;
-        });
+        const generate = async (item: (typeof work)[number]) => {
+          if (lost || stopping || !budget.admit()) return;
+          try {
+            const output = await generateOne(
+              job,
+              item.task,
+              item.model,
+              item.sample,
+            );
+            await store.evals.upsertOutput(output);
+            budget.record(output.cost_usd);
+            generated += 1;
+          } finally {
+            budget.release();
+          }
+        };
+        const serial = budget.needsPrice ? 1 : 0;
+        await runPool(work.slice(0, serial), 1, generate);
+        await runPool(
+          work.slice(serial),
+          deps.settings.evalConcurrency,
+          generate,
+        );
 
         await extend();
         if (lost) return;
         if (stopping) break;
-        await store.evals.update(job.id, { generated }, expect);
+        await store.evals.update(
+          job.id,
+          { generated, budget_stopped: budget.exhausted },
+          expect,
+        );
+        if (budget.exhausted) break;
       }
 
       if (stopping) {
@@ -390,7 +493,11 @@ export const createEvalService = (
         );
       }
 
-      const current = { ...job, generated: outputs.length };
+      const current = {
+        ...job,
+        generated: outputs.length,
+        budget_stopped: budget.exhausted,
+      };
       if (job.local_scorers.length > 0) {
         const missing = await store.evals.countMissingScores(
           job.id,
@@ -413,7 +520,7 @@ export const createEvalService = (
 
       await finalize(current, expect);
     } catch (error) {
-      await store.evals.update(
+      const failed = await store.evals.update(
         job.id,
         {
           status: "failed",
@@ -424,6 +531,7 @@ export const createEvalService = (
         },
         expect,
       );
+      if (failed) await bill(failed);
     } finally {
       clearInterval(heartbeat);
     }
@@ -448,6 +556,7 @@ export const createEvalService = (
         { status: ["running"], workerId: e.worker_id, attempt: e.attempt },
       );
       if (updated) recovered += 1;
+      if (updated?.status === "failed") await bill(updated);
     }
 
     return recovered;
@@ -477,7 +586,7 @@ export const createEvalService = (
       maxScore?: number | undefined;
     },
   ): Promise<Page<EvalTaskOutcome>> => {
-    if (record.status !== "completed") {
+    if (record.status !== "completed" && record.status !== "stopped_budget") {
       throw conflict(
         "eval_not_completed",
         `Eval '${record.id}' is ${record.status}; results are available once it completes.`,
@@ -510,6 +619,13 @@ export const createEvalService = (
     create: async (workspaceId, request) => {
       const plan = await planEvalRequest(deps, datasets, workspaceId, request);
       assertNonEmptyPlan(plan);
+      const cap = request.max_cost_usd ?? null;
+      if (cap !== null && plan.response.estimated_cost_usd > cap) {
+        throw invalid(
+          "eval_budget_exceeded",
+          `Estimated eval cost $${plan.response.estimated_cost_usd.toFixed(4)} exceeds max_cost_usd $${cap.toFixed(4)}; raise max_cost_usd or lower limit, samples or models (evals.plan shows the estimate).`,
+        );
+      }
 
       const record = await store.transaction(async (tx) => {
         const created = await tx.evals.create({
@@ -529,6 +645,8 @@ export const createEvalService = (
           pass_threshold: plan.passThreshold,
           judge_models: plan.judgeModels,
           local_scorers: plan.localScorers,
+          max_cost_usd: cap,
+          estimated_cost_usd: plan.response.estimated_cost_usd,
         });
         await tx.evals.insertTasks(
           created.id,
@@ -651,6 +769,7 @@ export const createEvalService = (
           `Eval '${id}' is already ${record.status}.`,
         );
       }
+      await bill(updated);
 
       return toPublic(updated);
     },

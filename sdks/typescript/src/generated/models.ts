@@ -343,15 +343,17 @@ export interface EvalRun {
   };
   summary: Array<EvalModelSummary>;
   totalCostUsd: number;
+  /** Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial results. */
+  maxCostUsd: number | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
 }
 
-export type EvalStatus = "queued" | "running" | "awaiting_scores" | "completed" | "failed" | "cancelled";
+export type EvalStatus = "queued" | "running" | "awaiting_scores" | "completed" | "stopped_budget" | "failed" | "cancelled";
 
-export const EvalStatusValues = ["queued", "running", "awaiting_scores", "completed", "failed", "cancelled"] as const;
+export const EvalStatusValues = ["queued", "running", "awaiting_scores", "completed", "stopped_budget", "failed", "cancelled"] as const;
 
 export interface EvalTaskOutcome {
   taskId: string;
@@ -513,6 +515,7 @@ export interface PlanEvalRequest {
   limit?: number | undefined;
   /** Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise. */
   passThreshold?: number | null | undefined;
+  /** Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget). */
   maxCostUsd?: number | undefined;
 }
 

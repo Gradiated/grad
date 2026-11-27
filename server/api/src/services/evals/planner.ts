@@ -206,7 +206,7 @@ export const planEvalRequest = async (
     const price = deps.catalog.priceFor(item.model ?? "") ?? 0;
     cost += ((modelCalls * (perCallTokens + 400)) / 1_000_000) * price;
   }
-  const estimatedCost = Number(cost.toFixed(4));
+  const estimatedCost = Number(cost.toFixed(6));
 
   const warnings: string[] = [];
   if (built.skipped > 0) {
@@ -229,7 +229,7 @@ export const planEvalRequest = async (
     estimatedCost > request.max_cost_usd
   ) {
     warnings.push(
-      `Estimated eval cost ($${estimatedCost.toFixed(2)}) exceeds max_cost_usd ($${request.max_cost_usd.toFixed(2)}).`,
+      `Estimated eval cost ($${estimatedCost.toFixed(4)}) exceeds max_cost_usd ($${request.max_cost_usd.toFixed(4)}); evals.create rejects it. Raise max_cost_usd or lower limit, samples or models.`,
     );
   }
   if (

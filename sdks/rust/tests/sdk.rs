@@ -1062,6 +1062,10 @@ async fn resources_send_documented_wire_shapes() {
             200,
             json!({"id": "e2", "status": "failed", "error": "judge down"}),
         ),
+        ("GET", "/v1/evals/e3") => Reply::json(
+            200,
+            json!({"id": "e3", "status": "stopped_budget", "max_cost_usd": 0.1}),
+        ),
         ("POST", "/v1/datasets/ds/render") => Reply::json(
             200,
             json!({"examples": [{"record_id": "r", "spans": [{"text": "hi", "trained": true}]}]}),
@@ -1202,6 +1206,10 @@ async fn resources_send_documented_wire_shapes() {
         .unwrap_err();
     assert!(matches!(e, Error::EvalFailed(_)));
     assert!(e.to_string().contains("judge down"));
+    let capped = c.evals().wait("e3", &fast_wait(), |_| {}).await.unwrap();
+    assert_eq!(capped.status, EvalStatus::StoppedBudget);
+    assert!(capped.status.is_terminal());
+    assert_eq!(capped.max_cost_usd, Some(0.1));
     let r = c
         .datasets()
         .render(

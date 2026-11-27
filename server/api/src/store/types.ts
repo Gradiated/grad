@@ -482,6 +482,12 @@ export interface EvalRecord {
   pass_threshold: number;
   judge_models: string[];
   local_scorers: string[];
+  /** Spend cap: generation stops once outputs cost this much (`stopped_budget`). */
+  max_cost_usd: number | null;
+  /** The plan's estimate, used to price calls before any output has a cost. */
+  estimated_cost_usd: number;
+  /** True once generation stopped at `max_cost_usd`; finalizes as `stopped_budget`. */
+  budget_stopped: boolean;
   total_outputs: number;
   generated: number;
   summary: EvalModelSummary[];
@@ -509,6 +515,7 @@ export type EvalPatch = Partial<
     | "worker_id"
     | "lease_expires_at"
     | "lease_seconds"
+    | "budget_stopped"
     | "updated_at"
     | "completed_at"
   >
@@ -556,6 +563,7 @@ export interface EvalRepository {
       EvalRecord,
       | "id"
       | "status"
+      | "budget_stopped"
       | "total_outputs"
       | "generated"
       | "summary"
@@ -625,10 +633,15 @@ export interface EvalRepository {
 
 // --- Billing outbox ----------------------------------------------------------------
 
+/** What a usage record bills: a training run attempt or an eval. */
+export type UsageKind = "run" | "eval";
+
 export interface BillingOutboxEntry {
   id: string;
   idempotency_key: string;
   workspace_id: string;
+  kind: UsageKind;
+  /** The run id (kind run) or eval id (kind eval). */
   run_id: string;
   attempt: number;
   tokens: number;
@@ -646,6 +659,7 @@ export interface BillingOutboxRepository {
   enqueue(input: {
     idempotencyKey: string;
     workspaceId: string;
+    kind: UsageKind;
     runId: string;
     attempt: number;
     tokens: number;

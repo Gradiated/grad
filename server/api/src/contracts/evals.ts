@@ -120,7 +120,10 @@ export const PlanEvalRequestSchema = z
       description:
         "Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.",
     }),
-    max_cost_usd: z.number().positive().optional(),
+    max_cost_usd: z.number().positive().optional().openapi({
+      description:
+        "Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget).",
+    }),
   })
   .openapi("PlanEvalRequest");
 
@@ -185,6 +188,7 @@ export const EVAL_STATUSES = [
   "running",
   "awaiting_scores",
   "completed",
+  "stopped_budget",
   "failed",
   "cancelled",
 ] as const;
@@ -219,6 +223,10 @@ export const EvalRunSchema = z
     }),
     summary: z.array(EvalModelSummarySchema),
     total_cost_usd: z.number().min(0),
+    max_cost_usd: z.number().positive().nullable().openapi({
+      description:
+        "Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial results.",
+    }),
     error: z.string().nullable(),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,

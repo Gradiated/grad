@@ -755,6 +755,9 @@ class EvalTests(unittest.TestCase):
         self.assertIn("503", str(ctx.exception))
         self.assertEqual(ctx.exception.eval.status, "failed")
         self.assertEqual(client.evals.wait(eid, raise_on_failure=False).status, "failed")
+        capped = {**completed, "status": "stopped_budget", "max_cost_usd": 0.1}
+        client, _, _ = make_client({f"GET /v1/evals/{eid}": json_reply(capped)})
+        self.assertEqual(client.evals.wait(eid).status, "stopped_budget")
         queued = fixture("python-eval-queued.json")
         client, _, _ = make_client(
             {
