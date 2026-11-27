@@ -76,6 +76,15 @@ const EnvironmentSchema = z.object({
   METRICS_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   /** Add a workspace label (grad_workspace_jobs): self-hosted, few workspaces. */
   METRICS_WORKSPACE_LABEL: booleanFlag("false"),
+  /** Serve the web UI at `/` (default: on, except AUTH_MODE=cloud). */
+  UI_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) =>
+      v === undefined ? undefined : v === "true" || v === "1",
+    ),
+  /** A built server/ui directory (default: the image's /app/ui, or server/ui/dist in a checkout). */
+  UI_DIR: optionalString,
 });
 
 export type RawEnvironment = z.infer<typeof EnvironmentSchema>;
@@ -118,6 +127,8 @@ const parseTrainerKeys = (raw: string | undefined): TrainerKeyConfig[] => {
 export interface ServerEnvironment extends RawEnvironment {
   /** Labelled, kind-scoped trainer keys from TRAINER_KEYS_JSON. */
   trainerKeys: TrainerKeyConfig[];
+  /** Whether to serve the web UI (UI_ENABLED, default off only for AUTH_MODE=cloud). */
+  uiEnabled: boolean;
   /** Effective judge endpoint (JUDGE_BASE_URL, GRAD_JUDGE_BASE_URL, then inference). */
   judgeBaseUrl: string | undefined;
   judgeApiKey: string | undefined;
@@ -190,6 +201,7 @@ export const parseServerEnvironment = (
   return {
     ...env,
     trainerKeys: parseTrainerKeys(env.TRAINER_KEYS_JSON),
+    uiEnabled: env.UI_ENABLED ?? env.AUTH_MODE !== "cloud",
     judgeBaseUrl,
     judgeApiKey,
     warnings,

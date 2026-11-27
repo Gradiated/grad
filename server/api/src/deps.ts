@@ -9,6 +9,7 @@ import type {
 import type { BlobSigner } from "./storage/signer.js";
 import type { ObjectStore } from "./storage/types.js";
 import type { Store } from "./store/types.js";
+import type { UiBundle } from "./ui.js";
 
 export interface AppSettings {
   /** Lease expiries tolerated before a job fails (default 3). */
@@ -54,4 +55,6 @@ export interface AppDependencies {
   secrets?: SecretsCipher | null | undefined;
   /** Cloud only: gateway traces for the `gradiated` source. */
   traces?: TracesAdapter | null | undefined;
+  /** The built web UI, served at `/` (null or absent: UI disabled or not built). */
+  ui?: UiBundle | null | undefined;
 }

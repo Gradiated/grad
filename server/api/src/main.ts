@@ -49,6 +49,7 @@ const main = async () => {
       ? `:${env.METRICS_PORT ?? env.PORT}/metrics`
       : "off",
     tracing: tracing ? "otlp" : "off",
+    ui: deps.ui ? `http://${env.HOST}:${env.PORT}/` : "disabled",
   });
 
   let stopping = false;

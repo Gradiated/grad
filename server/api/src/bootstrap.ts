@@ -23,6 +23,7 @@ import type {
   InferenceClients,
 } from "./services/evals/types.js";
 import { assertMigrated } from "./migrations.js";
+import { resolveUiBundle, type UiBundle } from "./ui.js";
 import { LocalObjectStore } from "./storage/local.js";
 import { S3ObjectStore } from "./storage/s3.js";
 import { createBlobSigner } from "./storage/signer.js";
@@ -132,9 +133,21 @@ export const buildDependencies = async (
     );
   }
 
+  let ui: UiBundle | null = null;
+  if (env.uiEnabled) {
+    ui = resolveUiBundle(env.UI_DIR);
+    if (!ui) {
+      log(
+        "warn",
+        `UI_ENABLED but no built UI found${env.UI_DIR ? ` in UI_DIR=${env.UI_DIR}` : ""}: run \`pnpm -C server/ui build\` (the image ships one).`,
+      );
+    }
+  }
+
   return {
     store,
     storage,
+    ui,
     signer: createBlobSigner(env.BLOB_SIGNING_SECRET),
     auth,
     billing:

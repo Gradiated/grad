@@ -24,6 +24,7 @@ import { registerMetricsEndpoints } from "./telemetry/endpoint.js";
 import { httpTelemetry } from "./telemetry/http.js";
 import { log } from "./telemetry/log.js";
 import { metrics } from "./telemetry/metrics.js";
+import { serveUiFallback, serveUiFile } from "./ui.js";
 
 export type { AppDependencies } from "./deps.js";
 
@@ -141,14 +142,16 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     );
   });
 
-  app.notFound((c) =>
-    problemResponse(
-      c,
-      404,
-      "route_not_found",
-      "Route not found",
-      `No route matches ${c.req.method} ${c.req.path}.`,
-    ),
+  app.notFound(
+    (c) =>
+      (deps.ui && serveUiFallback(c, deps.ui, c.get("requestId"))) ??
+      problemResponse(
+        c,
+        404,
+        "route_not_found",
+        "Route not found",
+        `No route matches ${c.req.method} ${c.req.path}.`,
+      ),
   );
 
   app.use("*", async (c, next) => {
@@ -172,6 +175,12 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
       now: () => deps.clock.now(),
     });
   }
+  const ui = deps.ui;
+  if (ui)
+    app.use(
+      "*",
+      async (c, next) => serveUiFile(c, ui, c.get("requestId")) ?? next(),
+    );
 
   app.use(
     "/v1/*",

@@ -1,0 +1,287 @@
+import { describe, expect, it } from "vitest";
+
+import type { EvalReport, Run, UsageRecord } from "@sdk/generated/models.js";
+
+import { CODEC, convertKeys, lifecycleOf, listAll } from "../src/lib/api.js";
+import { maskKey, sessionKeyStore, takeFragmentKey } from "../src/lib/auth.js";
+import { applyEvents, decodeEvent, emptyStream, type RunEvent } from "../src/lib/events.js";
+import { ago, bytes, compact, duration, int, num, pct, toYaml, usd } from "../src/lib/format.js";
+import { renderReport } from "../src/lib/report.js";
+import { match } from "../src/lib/router.js";
+import { importPool, poolState, trainPool } from "../src/pages/health.js";
+import { filterRuns } from "../src/pages/runs.js";
+import { usageTotals } from "../src/pages/usage.js";
+import { fixture, fixtureText } from "./helpers.js";
+
+const run = (over: Record<string, unknown> = {}): Run => convertKeys(CODEC, "Run", { ...fixture<Record<string, unknown>>("run.json"), ...over }, "decode") as Run;
+
+describe("auth", () => {
+  it("takes a one-time #key= fragment into sessionStorage and strips it from the URL", () => {
+    sessionStorage.clear();
+    history.replaceState(null, "", "/runs/run_1?x=1#key=grad_secret_abc&tab=events");
+    const store = sessionKeyStore();
+    expect(takeFragmentKey(store)).toBe(true);
+    expect(store.get()).toBe("grad_secret_abc");
+    expect(sessionStorage.getItem("grad.api_key")).toBe("grad_secret_abc");
+    expect(localStorage.length).toBe(0);
+    expect(location.href).not.toContain("grad_secret_abc");
+    expect(location.pathname + location.search + location.hash).toBe("/runs/run_1?x=1#tab=events");
+    expect(takeFragmentKey(store)).toBe(false);
+    history.replaceState(null, "", "/#key=");
+    expect(takeFragmentKey(store)).toBe(false);
+    store.clear();
+    expect(store.get()).toBeUndefined();
+  });
+
+  it("falls back to memory when storage throws, and masks keys", () => {
+    const broken = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("denied"); }, removeItem: () => { throw new Error("denied"); } } as unknown as Storage;
+    const store = sessionKeyStore(broken);
+    store.set("grad_k");
+    expect(store.get()).toBe("grad_k");
+    store.clear();
+    expect(store.get()).toBeUndefined();
+    expect(maskKey("grad_abcdefghijklmnop")).toBe("grad_abcd…mnop");
+    expect(maskKey("short")).toBe("•••••");
+  });
+});
+
+describe("format", () => {
+  it("formats money, numbers, sizes and durations", () => {
+    expect(usd(0)).toBe("$0.00");
+    expect(usd(0.0034)).toBe("$0.0034");
+    expect(usd(1234.5)).toBe("$1,234.50");
+    expect(usd(null)).toBe("—");
+    expect(int(12345)).toBe("12,345");
+    expect(int(undefined)).toBe("—");
+    expect(compact(950)).toBe("950");
+    expect(compact(4_040_070)).toBe("4M");
+    expect(compact(12_345)).toBe("12.3K");
+    expect(compact(2.5e9)).toBe("2.5B");
+    expect(compact(null)).toBe("—");
+    expect(num(0.68954686)).toBe("0.6895");
+    expect(num(0.0003333)).toBe("3.33e-4");
+    expect(num(0)).toBe("0");
+    expect(num(Number.NaN)).toBe("—");
+    expect(pct(0.1234)).toBe("12.3%");
+    expect(bytes(2788)).toBe("2.7 KB");
+    expect(bytes(512)).toBe("512 B");
+    expect(bytes(3 * 1024 ** 3)).toBe("3.0 GB");
+    expect(duration(4_000)).toBe("4s");
+    expect(duration(200_000)).toBe("3m 20s");
+    expect(duration(2 * 3_600_000 + 5 * 60_000)).toBe("2h 5m");
+    expect(duration(3 * 86_400_000 + 4 * 3_600_000)).toBe("3d 4h");
+    expect(duration(-1)).toBe("—");
+  });
+
+  it("formats relative times", () => {
+    const now = Date.parse("2026-11-27T12:00:00Z");
+    expect(ago("2026-11-27T11:59:50Z", now)).toBe("just now");
+    expect(ago("2026-11-27T11:55:00Z", now)).toBe("5m ago");
+    expect(ago("2026-11-27T09:00:00Z", now)).toBe("3h ago");
+    expect(ago("2026-11-25T12:00:00Z", now)).toBe("2d ago");
+    expect(ago("2026-11-01T12:00:00Z", now)).toBe("Nov 1");
+    expect(ago("2026-11-27T12:05:00Z", now)).toBe("in 5m");
+    expect(ago(null, now)).toBe("—");
+    expect(ago("garbage", now)).toBe("—");
+  });
+
+  it("emits readable YAML", () => {
+    expect(toYaml({ lr: 0.001, model: "test/tiny-qwen3", adapter: { kind: "lora", rank: 32 }, betas: [0.9, 0.95], empty: {}, none: null, quoted: "yes", spaced: "a: b", params: { "my key": 1 }, list: [{ a: 1 }] })).toBe(
+      [
+        "lr: 0.001",
+        "model: test/tiny-qwen3",
+        "adapter:",
+        "  kind: lora",
+        "  rank: 32",
+        "betas:",
+        "- 0.9",
+        "- 0.95",
+        "empty: {}",
+        "none: null",
+        'quoted: "yes"',
+        'spaced: "a: b"',
+        "params:",
+        '  "my key": 1',
+        "list:",
+        "- a: 1",
+      ].join("\n"),
+    );
+    expect(toYaml([])).toBe("[]");
+    expect(toYaml("plain")).toBe("plain");
+  });
+});
+
+describe("router", () => {
+  it("matches patterns and decodes params", () => {
+    expect(match("/runs/:id", "/runs/run_1")).toEqual({ id: "run_1" });
+    expect(match("/datasets/:name", "/datasets/a%2Fb")).toEqual({ name: "a/b" });
+    expect(match("/runs/:id", "/runs")).toBeNull();
+    expect(match("/runs/:id", "/evals/x")).toBeNull();
+    expect(match("/runs/:id", "/runs/%E0%A4%A")).toBeNull();
+  });
+});
+
+describe("run lifecycle fields", () => {
+  it("reads phase fields in either casing and defaults them to null", () => {
+    expect(lifecycleOf(run())).toEqual({ phase: null, phaseSince: null, lastInterruption: null, workersOnline: null, autoscaling: null });
+    const wire = run({ phase: "training", phase_since: "2026-11-27T12:00:00Z", workers_online: 2, autoscaling: true, last_interruption: { attempt: 1, reason: "preempted", step: 120, resume_step: 100, at: "t", message: "m" } });
+    expect(lifecycleOf(wire)).toEqual({
+      phase: "training",
+      phaseSince: "2026-11-27T12:00:00Z",
+      workersOnline: 2,
+      autoscaling: true,
+      lastInterruption: { attempt: 1, reason: "preempted", step: 120, resumeStep: 100, at: "t", message: "m" },
+    });
+  });
+
+  it("pages through lists up to a cap", async () => {
+    const pages: Record<string, { data: number[]; nextCursor: string | null }> = { "": { data: [1, 2], nextCursor: "a" }, a: { data: [3], nextCursor: null } };
+    expect(await listAll(async (c) => pages[c ?? ""] as { data: number[]; nextCursor: string | null })).toEqual({ items: [1, 2, 3], truncated: false });
+    expect(await listAll(async () => ({ data: [1, 2], nextCursor: "again" }), 3)).toEqual({ items: [1, 2, 1, 2], truncated: true });
+  });
+});
+
+const sseEvents = (text: string): { event: string; data: string }[] =>
+  text
+    .split("\n\n")
+    .filter((b) => b.trim())
+    .map((block) => {
+      const lines = block.split("\n");
+      return { event: lines.find((l) => l.startsWith("event: "))?.slice(7) ?? "message", data: lines.filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("\n") };
+    });
+
+describe("run events", () => {
+  it("decodes the metrics stream (metric + status) into series and a completion", () => {
+    const events = sseEvents(fixtureText("metrics.sse")).map((e) => decodeEvent(e.event, e.data)).filter((e): e is RunEvent => e !== null);
+    expect(events.map((e) => e.type)).toEqual(["metric", "metric", "metric", "completed"]);
+    const state = applyEvents(emptyStream(), events);
+    expect(state.series.step).toEqual([1, 2, 3]);
+    expect(state.series.evalLoss.every((v) => typeof v === "number")).toBe(true);
+    expect(state.series.lr[0]).toBe(0.001);
+    expect(state.final?.status).toBe("completed");
+    expect(state.timeline.at(-1)).toMatchObject({ kind: "completed", title: "Completed" });
+    expect(state.lastSeq).toBe(3);
+    expect(applyEvents(state, [])).toBe(state);
+  });
+
+  it("decodes /events shapes and builds a calm timeline", () => {
+    const base = { run_id: "run_1", timestamp: "2026-11-27T12:00:00Z" };
+    const wire: [string, Record<string, unknown>][] = [
+      ["phase", { ...base, seq: 1, attempt: 1, phase: "queued", step: 0, workers_online: null, autoscaling: null, gpu: null }],
+      ["phase", { ...base, seq: 2, attempt: 1, phase: "waiting_for_compute", step: 0, workers_online: 2, autoscaling: false, gpu: null }],
+      ["attempt", { ...base, seq: 3, attempt: 1, event: "started", reason: null, step: null, resume_step: null, max_attempts: 3, message: "" }],
+      ["phase", { ...base, seq: 4, attempt: 1, phase: "starting", step: 0, workers_online: null, autoscaling: null, gpu: { name: "H100", memory_gb: 80 } }],
+      ["phase", { ...base, seq: 5, attempt: 1, phase: "training", step: 0 }],
+      ["metric", { ...base, seq: 6, attempt: 1, step: 10, metric: { seq: 6, attempt: 1, step: 10, loss: 2, tokens: 100, cost_usd: 0.1, timestamp: base.timestamp, eval_loss: 2.1 } }],
+      ["phase", { ...base, seq: 7, attempt: 1, phase: "evaluating", step: 10 }],
+      ["checkpoint", { ...base, seq: 8, attempt: 1, step: 10, checkpoint_id: "ckpt_1", eval_score: 2.1, format: "peft_lora" }],
+      ["phase", { ...base, seq: 9, attempt: 1, phase: "training", step: 10 }],
+      ["metric", { ...base, seq: 10, attempt: 1, step: 20, metric: { seq: 10, attempt: 1, step: 20, loss: 1.5, tokens: 200, cost_usd: 0.2, timestamp: base.timestamp } }],
+      ["attempt", { ...base, seq: 11, attempt: 1, event: "interrupted", reason: "preempted", step: 20, resume_step: 10, max_attempts: 3, message: "attempt 1 interrupted at step 20 (preempted); resuming from step 10" }],
+      ["attempt", { ...base, seq: 12, attempt: 2, event: "started", reason: null, step: null, resume_step: 10, max_attempts: 3, message: "" }],
+      ["phase", { ...base, seq: 13, attempt: 2, phase: "training", step: 10 }],
+      ["metric", { ...base, seq: 14, attempt: 2, step: 15, metric: { seq: 14, attempt: 2, step: 15, loss: 1.6, tokens: 250, cost_usd: 0.25, timestamp: base.timestamp } }],
+      ["warning", { ...base, seq: 15, attempt: 2, step: null, message: "truncated 3 records" }],
+      ["log", { ...base, seq: 16, attempt: 2, step: 15, message: "hello" }],
+      ["attempt", { ...base, seq: 17, attempt: 2, event: "gave_up", reason: "oom", step: 15, resume_step: null, max_attempts: 3, message: "no attempts left" }],
+      ["completed", { ...base, seq: 17, attempt: 2, status: "failed", run: { ...fixture<Record<string, unknown>>("run.json"), status: "failed", error: "out of memory" } }],
+      ["mystery", { ...base, seq: 18 }],
+    ];
+    const events = wire.map(([n, d]) => decodeEvent(n, JSON.stringify(d)));
+    expect(events.at(-1)).toBeNull();
+    expect(decodeEvent("metric", "{not json")).toBeNull();
+    expect(decodeEvent("metric", "null")).toBeNull();
+    const state = applyEvents(emptyStream(), events.filter((e): e is RunEvent => e !== null));
+    // The resumed attempt replays from step 10, so step 20 is dropped: x stays monotonic.
+    expect(state.series.step).toEqual([10, 15]);
+    expect(state.series.evalLoss).toEqual([2.1, null]);
+    expect(state.gpu).toEqual({ name: "H100", memoryGb: 80 });
+    expect(state.phase?.phase).toBe("training");
+    expect(state.final?.status).toBe("failed");
+    expect(state.timeline.map((t) => t.title)).toEqual([
+      "Queued",
+      "Waiting for compute",
+      "Attempt 1 started",
+      "Starting",
+      "Training",
+      "Checkpoint at step 10",
+      "Attempt 1 interrupted (preempted)",
+      "Attempt 2 resumed from step 10",
+      "Training",
+      "Warning",
+      "Log",
+      "Gave up",
+      "Failed",
+    ]);
+    expect(state.timeline[1]?.detail).toBe("2 workers online, all busy");
+    expect(state.timeline[3]?.detail).toBe("H100 · 80 GB");
+    expect(state.timeline[8]?.detail).toBe("from step 10");
+    expect(state.timeline.at(-1)?.detail).toBe("out of memory");
+    const autoscale = decodeEvent("phase", JSON.stringify({ ...base, seq: 1, attempt: 1, phase: "waiting_for_compute", step: 0, workers_online: 0, autoscaling: true }));
+    expect(applyEvents(emptyStream(), [autoscale as RunEvent]).timeline[0]?.detail).toMatch(/autoscaling/);
+  });
+});
+
+describe("eval reports", () => {
+  const report = (over: Partial<EvalReport>): EvalReport => ({ metricName: "eval_loss", selectedStep: 3, bestStep: 3, finalStep: 3, trainRecords: 10, evalRecords: 2, warnings: [], ...over });
+
+  it("renders the headline fields of each recipe", () => {
+    expect(renderReport("sft", report({ evalLoss: 0.69, evalTokenAccuracy: 0.5 })).headline).toEqual([
+      { label: "Eval loss", value: "0.69" },
+      { label: "Token accuracy", value: "50.0%" },
+    ]);
+    const emb = renderReport("embedding", report({ recallAt1: 0.5, mrr: 0.6, baseline: { recallAt1: 0.4, recallAt5: null, recallAt10: null, mrr: 0.5 } }));
+    expect(emb.headline).toEqual([
+      { label: "Recall@1", value: "50.0%", hint: "base 40.0%" },
+      { label: "MRR", value: "0.6", hint: "base 0.5" },
+    ]);
+    const router = renderReport("router", report({ fallbackModel: "big", routesAnyTraffic: true, paretoSummary: { targetMaxDrop: 0.02, routedQuality: 0.9, qualityDrop: 0.01, qualityDropCi95: null, offloadRate: 0.4, costSavingsPct: 35, ece: null, threshold: 0.5, temperature: 1 } }));
+    expect(router.headline.map((r) => r.value)).toEqual(["big", "yes"]);
+    expect(router.pareto.map((r) => r.value)).toEqual(["40.0%", "35%", "0.9", "0.01 (target ≤ 0.02)"]);
+    const decision = renderReport("decision", report({ heads: { intent: { type: "choice", examples: 4, accuracy: 0.75, ece: null, temperature: 1, macroF1: 0.7 }, missing: null } }));
+    expect(decision.heads).toEqual([
+      { name: "intent", macroF1: 0.7, accuracy: 0.75 },
+      { name: "missing", macroF1: null, accuracy: null },
+    ]);
+    expect(renderReport("grpo", report({ warnings: ["w"] })).warnings).toEqual(["w"]);
+    expect(renderReport("dpo", report({ routesAnyTraffic: false, preferenceAccuracy: 0.8 })).details.find((d) => d.label === "Selection metric")?.value).toBe("eval_loss");
+  });
+});
+
+describe("health and usage summaries", () => {
+  const now = Date.parse("2026-11-27T14:00:00Z");
+  it("derives pool state from queued runs and imports", () => {
+    const queued = run({ status: "queued", created_at: "2026-11-27T13:50:00Z", workers_online: 1, autoscaling: false });
+    const running = run({ status: "running" });
+    const p = trainPool([queued, running, run()], now);
+    expect(p).toMatchObject({ running: 1, queued: 1, online: 1, autoscaling: false, oldestQueuedMs: 600_000 });
+    expect(poolState(p)).toEqual({ label: "backlog", tone: "amber" });
+    expect(poolState(trainPool([run({ status: "queued", autoscaling: true })], now)).label).toBe("scaling up");
+    expect(poolState(trainPool([run({ status: "queued" })], now)).label).toBe("no workers");
+    expect(poolState(trainPool([running], now)).label).toBe("busy");
+    expect(poolState(trainPool([], now))).toEqual({ label: "idle", tone: "green" });
+    const imp = importPool([{ status: "queued", createdAt: "2026-11-27T13:59:00Z" }, { status: "running", createdAt: "x" }] as never, now);
+    expect(imp).toMatchObject({ queued: 1, running: 1, oldestQueuedMs: 60_000 });
+  });
+
+  it("totals the usage ledger by kind", () => {
+    const rows = (fixture<{ data: unknown[] }>("usage.json").data.map((r) => convertKeys(CODEC, "UsageRecord", r, "decode")) as UsageRecord[]).concat([
+      { id: "u_e", kind: "eval", refId: "eval_1", attempt: 1, tokensFrom: 0, tokensThrough: 0, tokens: 10, costUsd: 1, priceVersion: "p", idempotencyKey: "k", createdAt: "t" },
+    ]);
+    const t = usageTotals(rows);
+    expect(t.rows).toBe(4);
+    expect(t.byKind.run?.refs).toBe(1);
+    expect(t.byKind.eval).toEqual({ cost: 1, tokens: 10, refs: 1 });
+    expect(t.cost).toBeCloseTo(1.011415, 6);
+  });
+
+  it("filters runs by status and text", () => {
+    const runs = [run(), run({ id: "run_q", name: "router-x", status: "queued" }), run({ id: "run_f", name: "f", status: "failed" }), run({ id: "run_c", name: "c", status: "stopped_budget" })];
+    expect(filterRuns(runs, "active", "").map((r) => r.id)).toEqual(["run_q"]);
+    expect(filterRuns(runs, "completed", "").length).toBe(1);
+    expect(filterRuns(runs, "failed", "").length).toBe(1);
+    expect(filterRuns(runs, "stopped", "").map((r) => r.id)).toEqual(["run_c"]);
+    expect(filterRuns(runs, "all", "ROUTER").map((r) => r.id)).toEqual(["run_q"]);
+    expect(filterRuns(runs, "all", "tiny-qwen3").length).toBe(4);
+  });
+});
