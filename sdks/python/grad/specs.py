@@ -28,7 +28,6 @@ __all__ = [
     "mergers",
     "optim",
     "pooling",
-    "sources",
     "splits",
 ]
 
@@ -367,9 +366,4 @@ class Unavailable:
 
 
 mergers = Unavailable("mergers", "artifact merging is deferred past v0.")
-sources = Unavailable(
-    "sources",
-    "scheduled observability syncs are deferred past v0.",
-    alternative="Export traces to a file and use dataset.import_file(path, connector=...).",
-)
 heads = Unavailable("heads", "custom heads belong to the interactive Trainer API (Wave 2).")

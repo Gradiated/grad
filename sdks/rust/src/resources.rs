@@ -122,6 +122,8 @@ resource!(Checkpoints);
 resource!(Artifacts);
 resource!(Deployments);
 resource!(Evals);
+resource!(Secrets);
+resource!(Sources);
 
 async fn get<T: DeserializeOwned>(c: &Client, req: Req) -> Result<T> {
     c.t().json(req).await
@@ -594,6 +596,149 @@ impl Datasets<'_> {
         let connector = connector.as_deref().map(CreateImportRequestConnector::from);
         self.create_import(name, &CreateImportRequest { source, connector })
             .await
+    }
+
+    /// [`import_hf`](Self::import_hf) for a gated or private dataset: the worker
+    /// gets the token from the workspace secret `secret`, never from this process.
+    pub async fn import_hf_with_secret(
+        &self,
+        name: &str,
+        source: ImportSource,
+        connector: Option<String>,
+        secret: impl SecretName,
+    ) -> Result<ImportJob> {
+        check_path_param("dataset name", name)?;
+        let connector = connector.as_deref().map(CreateImportRequestConnector::from);
+        let mut req = body(&CreateImportRequest { source, connector })?;
+        req["source"]["secret"] = Value::String(secret.secret_name());
+        get(
+            self.c,
+            Req::post(format!("/v1/datasets/{}/imports", seg(name))).json(req),
+        )
+        .await
+    }
+
+    /// Connect an observability provider to dataset `name` (see [`Sources::create`]).
+    pub async fn add_source(
+        &self,
+        name: &str,
+        provider: &SourceProvider,
+        schedule: Option<&str>,
+    ) -> Result<Source> {
+        self.c
+            .sources()
+            .create(name, provider, schedule, None)
+            .await
+    }
+
+    /// The sources syncing into dataset `name`.
+    pub async fn sources(&self, name: &str) -> Result<Vec<Source>> {
+        self.c.sources().list_all(Some(name)).await
+    }
+}
+
+impl Secrets<'_> {
+    /// Create or replace a secret. The value is encrypted at rest and never returned.
+    pub async fn set(&self, name: &str, value: &str) -> Result<SecretRef> {
+        check_path_param("secret name", name)?;
+        if value.is_empty() {
+            return Err(Error::InvalidInput(
+                "a secret value must not be empty".into(),
+            ));
+        }
+        get(
+            self.c,
+            Req::post("/v1/secrets").json(json!({ "name": name, "value": value })),
+        )
+        .await
+    }
+
+    /// A reference to pass as a secret (checks that it exists; no value).
+    pub async fn get(&self, name: &str) -> Result<SecretRef> {
+        check_path_param("secret name", name)?;
+        get(self.c, Req::get(format!("/v1/secrets/{}", seg(name)))).await
+    }
+
+    pub async fn list(&self, p: &ListParams) -> Result<Page<SecretRef>> {
+        get(self.c, Req::get("/v1/secrets").query(p.query())).await
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<SecretRef>> {
+        collect_all(self.c, "/v1/secrets", LIST_SECRETS_LIMIT_MAX, vec![]).await
+    }
+
+    /// Delete a secret ([`Error::Conflict`] while a source uses it).
+    pub async fn delete(&self, secret: impl SecretName) -> Result<()> {
+        let name = secret.secret_name();
+        check_path_param("secret name", &name)?;
+        let req = Req::new(Method::DELETE, format!("/v1/secrets/{}", seg(&name)));
+        self.c.t().send(&req).await.map(drop)
+    }
+}
+
+impl Sources<'_> {
+    /// Connect `provider` to `dataset`. `schedule` is a five-field UTC cron;
+    /// without one the source syncs only on request.
+    pub async fn create(
+        &self,
+        dataset: &str,
+        provider: &SourceProvider,
+        schedule: Option<&str>,
+        idempotency_key: Option<&str>,
+    ) -> Result<Source> {
+        check_path_param("dataset name", dataset)?;
+        let mut b = json!({ "provider": body(provider)? });
+        if let Some(s) = schedule {
+            b["schedule"] = Value::String(s.to_string());
+        }
+        get(
+            self.c,
+            Req::post(format!("/v1/datasets/{}/sources", seg(dataset)))
+                .key(idempotency_key)
+                .json(b),
+        )
+        .await
+    }
+
+    pub async fn get(&self, id: &str) -> Result<Source> {
+        check_path_param("source id", id)?;
+        get(self.c, Req::get(format!("/v1/sources/{}", seg(id)))).await
+    }
+
+    /// One page of sources, optionally for one dataset.
+    pub async fn list(&self, dataset: Option<&str>, p: &ListParams) -> Result<Page<Source>> {
+        get(
+            self.c,
+            Req::get("/v1/sources")
+                .query(p.query())
+                .opt_param("dataset", dataset),
+        )
+        .await
+    }
+
+    pub async fn list_all(&self, dataset: Option<&str>) -> Result<Vec<Source>> {
+        let extra = dataset
+            .map(|d| vec![("dataset".to_string(), d.to_string())])
+            .unwrap_or_default();
+        collect_all(self.c, "/v1/sources", LIST_SOURCES_LIMIT_MAX, extra).await
+    }
+
+    /// Queue a sync, or get the one already in progress; wait on it with
+    /// [`Imports::wait`]. `full` rebuilds the dataset from the provider as a new version.
+    pub async fn sync(&self, id: &str, full: bool) -> Result<ImportJob> {
+        check_path_param("source id", id)?;
+        get(
+            self.c,
+            Req::post(format!("/v1/sources/{}/sync", seg(id))).json(json!({ "full": full })),
+        )
+        .await
+    }
+
+    /// Disconnect a source; its dataset and versions stay.
+    pub async fn remove(&self, id: &str) -> Result<()> {
+        check_path_param("source id", id)?;
+        let req = Req::new(Method::DELETE, format!("/v1/sources/{}", seg(id)));
+        self.c.t().send(&req).await.map(drop)
     }
 }
 

@@ -35,6 +35,8 @@ JUDGE = Judge(model="judge/m", prompt="Is the answer correct?", name="quality")
 
 def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
     artifact = grad.Artifact.from_api({"id": "art_1", "name": "support-sft", "version": "2026-11-27-1"}, client)
+    secret = grad.SecretRef.from_api({"name": "langfuse-prod"}, client)
+    source = grad.Source.from_api(PARITY["responses"]["source"], client)
     sft = SFTRecipe(
         model="test/tiny-qwen3",
         adapter=adapters.LoRA(rank=16, alpha=16),
@@ -113,6 +115,17 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "import_benchmark": lambda: client.datasets.from_benchmark("gsm8k", limit=200, name="gsm8k-test-200", wait=False),
         "filter_dataset_ids": lambda: client.datasets.filter("support-logs", ids=["rec_a", "rec_c"]),
         "deploy": lambda: client.deploy(artifact, name="support", fallback="test/tiny-qwen3", explore_rate=0.1, idempotency_key="parity-deploy-key"),
+        "set_secret": lambda: client.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
+        "add_source": lambda: client.sources.create(
+            "support-prod",
+            grad.sources.Langfuse(host="https://cloud.langfuse.com", secret=secret),
+            schedule="*/15 * * * *",
+            idempotency_key="parity-source-key",
+        ),
+        "add_source_gradiated": lambda: client.sources.create(
+            "support-prod", grad.sources.Gradiated(models=("acme/support",)), schedule="0 * * * *"
+        ),
+        "sync_source_full": lambda: source.sync(full=True),
     }
 
 
@@ -140,6 +153,9 @@ class ParityTests(unittest.TestCase):
         ev = grad.Eval.from_api(responses["eval"])
         plan = grad.EvalPlan.from_api(responses["eval_plan"])
         scoring = grad.Eval.from_api(responses["scoring"])
+        source = grad.Source.from_api(responses["source"])
+        secret = grad.SecretRef.from_api(responses["secret"])
+        assert source.last_sync is not None
         assert run.eval_report is not None and run.eval_report.pareto_summary is not None and run.latest_metric is not None
         got = {
             "run.eval_report.metric_name": run.eval_report.metric_name,
@@ -154,6 +170,13 @@ class ParityTests(unittest.TestCase):
             "eval_plan.estimated_cost_usd": plan.estimated_cost_usd,
             "scoring.mode": scoring.mode,
             "scoring.scored_dataset_version": scoring.scored_dataset_version,
+            "source.id": source.id,
+            "source.provider.kind": source.provider.kind,
+            "source.provider.secret": source.provider.secret,
+            "source.schedule": source.schedule,
+            "source.last_sync.status": source.last_sync.status,
+            "source.last_sync.dataset_version": source.last_sync.dataset_version,
+            "secret.name": secret.name,
         }
         self.assertEqual(got, want)
         self.assertIsInstance(run.eval_report, grad.EvalReport)

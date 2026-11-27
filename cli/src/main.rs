@@ -32,6 +32,8 @@ async fn dispatch(cli: Cli, ctx: &Ctx) -> CliResult {
         Command::Deploy(a) => serve::deploy(ctx, a).await,
         Command::Deployments { action } => serve::deployments(ctx, action).await,
         Command::Keys { action } => auth::keys(ctx, action).await,
+        Command::Secrets { action } => sources::secrets(ctx, action).await,
+        Command::Sources { action } => sources::sources(ctx, action).await,
         Command::Local { action } => local::local(ctx, action).await,
     }
 }

@@ -193,3 +193,193 @@ impl ChatMessage {
         }
     }
 }
+
+/// A workspace secret: its name and metadata, never its value. Pass it (or a
+/// plain name) as a provider's or `import_hf`'s secret.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretRef {
+    pub name: String,
+    pub workspace_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl SecretRef {
+    /// A reference by name, without asking the server.
+    pub fn named(name: impl Into<String>) -> Self {
+        SecretRef {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Anything that names a secret: a [`SecretRef`] or the name itself.
+pub trait SecretName {
+    fn secret_name(&self) -> String;
+}
+
+impl SecretName for SecretRef {
+    fn secret_name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl SecretName for &SecretRef {
+    fn secret_name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl SecretName for &str {
+    fn secret_name(&self) -> String {
+        (*self).to_string()
+    }
+}
+
+impl SecretName for String {
+    fn secret_name(&self) -> String {
+        self.clone()
+    }
+}
+
+/// An observability provider and how to reach it (`SourceProvider` on the wire).
+///
+/// ```
+/// use grad_sdk::{SecretRef, SourceProvider};
+/// let p = SourceProvider::langfuse()
+///     .host("https://cloud.langfuse.com")
+///     .secret(SecretRef::named("langfuse-prod"));
+/// assert_eq!(p.kind, "langfuse");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SourceProvider {
+    /// `langfuse`, `langsmith`, `braintrust`, `posthog`, `phoenix` or `gradiated`.
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The name of the workspace secret holding the provider key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Required for braintrust (project id or name) and posthog (numeric id).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub filters: serde_json::Map<String, Value>,
+}
+
+impl SourceProvider {
+    /// A provider of any `kind` (the server answers 422 `source_provider_unsupported` for unknown ones).
+    pub fn new(kind: impl Into<String>) -> Self {
+        SourceProvider {
+            kind: kind.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Langfuse traces and scores; the secret is `PUBLIC_KEY:SECRET_KEY`.
+    pub fn langfuse() -> Self {
+        Self::new("langfuse")
+    }
+
+    /// LangSmith runs and feedback, including corrections.
+    pub fn langsmith() -> Self {
+        Self::new("langsmith")
+    }
+
+    /// Braintrust project logs, scores and `expected` answers (needs `project`).
+    pub fn braintrust() -> Self {
+        Self::new("braintrust")
+    }
+
+    /// PostHog LLM analytics events and survey feedback (needs `project`).
+    pub fn posthog() -> Self {
+        Self::new("posthog")
+    }
+
+    /// Arize Phoenix spans and annotations (needs `host`).
+    pub fn phoenix() -> Self {
+        Self::new("phoenix")
+    }
+
+    /// Gradiated Cloud gateway traces and feedback (Cloud only; no host or secret).
+    pub fn gradiated() -> Self {
+        Self::new("gradiated")
+    }
+
+    pub fn host(mut self, host: impl Into<String>) -> Self {
+        self.host = Some(host.into());
+        self
+    }
+
+    pub fn secret(mut self, secret: impl SecretName) -> Self {
+        self.secret = Some(secret.secret_name());
+        self
+    }
+
+    pub fn project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
+    }
+
+    /// One provider-specific filter (`{"tags": ["prod"]}`, ...).
+    pub fn filter(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.filters.insert(key.into(), value.into());
+        self
+    }
+
+    /// `gradiated`: only these served models.
+    pub fn models<S: Into<String>>(self, models: impl IntoIterator<Item = S>) -> Self {
+        self.list_filter("models", models)
+    }
+
+    /// `gradiated`: only these tasks.
+    pub fn tasks<S: Into<String>>(self, tasks: impl IntoIterator<Item = S>) -> Self {
+        self.list_filter("tasks", tasks)
+    }
+
+    /// `gradiated`: only these served versions.
+    pub fn versions<S: Into<String>>(self, versions: impl IntoIterator<Item = S>) -> Self {
+        self.list_filter("versions", versions)
+    }
+
+    fn list_filter<S: Into<String>>(self, key: &str, items: impl IntoIterator<Item = S>) -> Self {
+        let values: Vec<Value> = items.into_iter().map(|s| Value::String(s.into())).collect();
+        if values.is_empty() {
+            self
+        } else {
+            self.filter(key, Value::Array(values))
+        }
+    }
+}
+
+/// The most recent sync of a [`Source`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SourceSync {
+    pub import_id: String,
+    pub status: ImportStatus,
+    pub full: bool,
+    pub dataset_version: Option<i64>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub finished_at: Option<String>,
+}
+
+/// An observability provider synced into a dataset; each sync adds a dataset version.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Source {
+    pub id: String,
+    pub workspace_id: String,
+    pub dataset: String,
+    pub provider: SourceProvider,
+    pub schedule: Option<String>,
+    pub next_sync_at: Option<String>,
+    pub last_synced_at: Option<String>,
+    pub last_sync: Option<SourceSync>,
+    pub created_at: String,
+    pub updated_at: String,
+}

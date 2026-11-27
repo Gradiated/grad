@@ -289,7 +289,7 @@ class SpecTests(unittest.TestCase):
         self.assertEqual(grad.loggers.MLflow(experiment="e").options["experiment"], "e")
 
     def test_unavailable_namespaces(self) -> None:
-        for ns in (grad.mergers, grad.sources, grad.heads):
+        for ns in (grad.mergers, grad.heads):
             with self.assertRaises(grad.NotAvailableInV0Error):
                 ns.Anything  # noqa: B018
             with self.assertRaises(grad.NotAvailableInV0Error):

@@ -19,6 +19,7 @@ import { DatasetsResource, ImportsResource } from "./resources/datasets.js";
 import { EvalsResource } from "./resources/evals.js";
 import { KeysResource, ModelsResource } from "./resources/misc.js";
 import { CheckpointsResource, RunsResource } from "./resources/runs.js";
+import { SecretsResource, SourcesResource } from "./resources/sources.js";
 import type { Deployment } from "./generated/models.js";
 
 export interface GradOptions {
@@ -143,6 +144,8 @@ export class Grad {
   readonly deployments: DeploymentsResource;
   readonly evals: EvalsResource;
   readonly keys: KeysResource;
+  readonly secrets: SecretsResource;
+  readonly sources: SourcesResource;
   readonly #transport: LazyTransport;
   readonly #core: Core;
 
@@ -170,6 +173,8 @@ export class Grad {
     this.deployments = new DeploymentsResource(this.#core);
     this.evals = new EvalsResource(this.#core);
     this.keys = new KeysResource(this.#core);
+    this.secrets = new SecretsResource(this.#core);
+    this.sources = new SourcesResource(this.#core);
   }
 
   /** The base URL and key source this client resolved (the key itself is never returned). */

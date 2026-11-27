@@ -427,6 +427,8 @@ fn help_documents_exit_codes_and_every_command_has_help() {
         vec!["runs", "inspect"],
         vec!["keys", "create"],
         vec!["deploy"],
+        vec!["secrets"],
+        vec!["sources"],
     ] {
         let mut args = cmd.clone();
         args.push("--help");
@@ -1329,6 +1331,292 @@ fn datasets_commands() {
     expect(&r, 2);
 }
 
+// ---------------------------------------------------------------- secrets & sources
+
+fn source_obj() -> Value {
+    json!({
+        "id": "src_01J9X", "workspace_id": "ws", "dataset": "support-prod",
+        "provider": {"kind": "langfuse", "host": "https://cloud.langfuse.com",
+                     "secret": "langfuse-prod", "project": null, "filters": {}},
+        "schedule": "*/15 * * * *", "next_sync_at": "2026-11-27T12:15:00.000Z",
+        "last_synced_at": "2026-11-27T12:00:41.000Z",
+        "last_sync": {"import_id": "imp_7c1d", "status": "completed", "full": false,
+                      "dataset_version": 3, "error": null,
+                      "created_at": "2026-11-27T12:00:00.000Z", "finished_at": "2026-11-27T12:00:41.000Z"},
+        "created_at": "2026-11-27T11:00:00.000Z", "updated_at": "2026-11-27T12:00:41.000Z"
+    })
+}
+
+fn sources_api() -> MockServer {
+    let polls = Arc::new(AtomicUsize::new(0));
+    MockServer::start(move |r| {
+        let secret = json!({"name": "langfuse-prod", "workspace_id": "ws",
+                            "created_at": "2026-11-27T11:00:00.000Z", "updated_at": "2026-11-27T11:00:00.000Z"});
+        let job = |status: &str| {
+            json!({"id": "imp_7c1d", "dataset": "support-prod", "status": status,
+                                        "connector": "auto", "imported_count": 4, "dropped_count": 0,
+                                        "dataset_version": 3, "source": {"kind": "provider"}})
+        };
+        match (r.method.as_str(), r.path()) {
+            ("POST", "/v1/secrets") => Reply::json(200, secret),
+            ("GET", "/v1/secrets") => {
+                Reply::json(200, json!({"data": [secret], "next_cursor": null}))
+            }
+            ("DELETE", "/v1/secrets/langfuse-prod") => Reply::bytes(204, vec![], vec![]),
+            ("DELETE", "/v1/secrets/used") => Reply::problem(
+                409,
+                "secret_in_use",
+                "Secret 'used' is used by source src_1.",
+            ),
+            ("POST", "/v1/datasets/support-prod/sources") => Reply::json(201, source_obj()),
+            ("POST", "/v1/datasets/manual/sources") => {
+                let mut s = source_obj();
+                s["schedule"] = Value::Null;
+                s["last_sync"] = Value::Null;
+                Reply::json(201, s)
+            }
+            ("POST", "/v1/datasets/self-hosted/sources") => Reply::problem(
+                501,
+                "source_unavailable",
+                "The 'gradiated' source is only available on Gradiated Cloud.",
+            ),
+            ("GET", "/v1/sources") => {
+                Reply::json(200, json!({"data": [source_obj()], "next_cursor": null}))
+            }
+            ("POST", "/v1/sources/src_01J9X/sync") => Reply::json(202, job("queued")),
+            ("GET", "/v1/imports/imp_7c1d") => {
+                let n = polls.fetch_add(1, Ordering::SeqCst);
+                Reply::json(200, job(if n == 0 { "running" } else { "completed" }))
+            }
+            ("DELETE", "/v1/sources/src_01J9X") => Reply::bytes(204, vec![], vec![]),
+            _ => Reply::problem(404, "not_found", "nope"),
+        }
+    })
+}
+
+#[test]
+fn secrets_set_reads_stdin_and_never_prints_the_value() {
+    let srv = sources_api();
+    let sb = Sandbox::new("secrets");
+    let u = Some(srv.url.as_str());
+    let value = "pk-lf-123:sk-lf-very-secret";
+
+    for json_mode in [false, true] {
+        let mut args = vec!["secrets", "set", "langfuse-prod"];
+        if json_mode {
+            args.push("--json");
+        }
+        let r = run_stdin(sb.grad(u), &args, &format!("{}\n", value));
+        expect(&r, 0);
+        assert!(
+            !r.stdout.contains("sk-lf") && !r.stderr.contains("sk-lf"),
+            "{}{}",
+            r.stdout,
+            r.stderr
+        );
+        let sent = srv.last("POST", "/v1/secrets").unwrap().json();
+        assert_eq!(
+            sent,
+            json!({"name": "langfuse-prod", "value": value}),
+            "one trailing newline is trimmed"
+        );
+        if json_mode {
+            assert_eq!(r.json()["data"]["name"], "langfuse-prod");
+        } else {
+            assert!(
+                r.stdout.contains("Saved secret langfuse-prod"),
+                "{}",
+                r.stdout
+            );
+        }
+    }
+
+    let before = srv.count("POST", "/v1/secrets");
+    let r = run_stdin(sb.grad(u), &["secrets", "set", "empty"], "\n");
+    expect(&r, 2);
+    assert!(r.stderr.contains("no value"), "{}", r.stderr);
+    let r = run_stdin(
+        sb.grad(u),
+        &["secrets", "set", "big"],
+        &"x".repeat(17 * 1024),
+    );
+    expect(&r, 2);
+    assert_eq!(
+        srv.count("POST", "/v1/secrets"),
+        before,
+        "nothing sent for bad values"
+    );
+
+    let r = run(sb.grad(u), &["secrets", "list"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("langfuse-prod"));
+    let r = run(sb.grad(u), &["secrets", "delete", "langfuse-prod"]);
+    expect(&r, 0);
+    assert_eq!(srv.count("DELETE", "/v1/secrets/langfuse-prod"), 1);
+    let r = run(sb.grad(u), &["secrets", "delete", "used", "--json"]);
+    expect(&r, 5);
+    assert_eq!(r.err_json()["error"]["code"], "secret_in_use");
+}
+
+#[test]
+fn sources_add_list_sync_and_remove() {
+    let srv = sources_api();
+    let sb = Sandbox::new("sources");
+    let u = Some(srv.url.as_str());
+
+    let r = run(
+        sb.grad(u),
+        &[
+            "sources",
+            "add",
+            "Langfuse",
+            "--dataset",
+            "support-prod",
+            "--host",
+            "https://cloud.langfuse.com",
+            "--secret",
+            "langfuse-prod",
+            "--schedule",
+            "*/15 * * * *",
+            "--filter",
+            "tags=[\"prod\"]",
+            "--filter",
+            "environment=production",
+        ],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("Added source src_01J9X"), "{}", r.stdout);
+    assert!(r.stdout.contains("*/15 * * * *"), "{}", r.stdout);
+    assert_eq!(
+        srv.last("POST", "/v1/datasets/support-prod/sources")
+            .unwrap()
+            .json(),
+        json!({"provider": {"kind": "langfuse", "host": "https://cloud.langfuse.com", "secret": "langfuse-prod",
+                            "filters": {"tags": ["prod"], "environment": "production"}},
+               "schedule": "*/15 * * * *"})
+    );
+    let r = run(
+        sb.grad(u),
+        &[
+            "sources",
+            "add",
+            "braintrust",
+            "--dataset",
+            "manual",
+            "--secret",
+            "bt",
+            "--project",
+            "support-bot",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("grad sources sync src_01J9X"),
+        "{}",
+        r.stdout
+    );
+    assert_eq!(
+        srv.last("POST", "/v1/datasets/manual/sources")
+            .unwrap()
+            .json(),
+        json!({"provider": {"kind": "braintrust", "secret": "bt", "project": "support-bot"}})
+    );
+    let r = run(
+        sb.grad(u),
+        &["sources", "add", "gradiated", "--dataset", "self-hosted"],
+    );
+    expect(&r, 6);
+    assert!(r.stderr.contains("Gradiated Cloud"), "{}", r.stderr);
+    let r = run(
+        sb.grad(u),
+        &[
+            "sources",
+            "add",
+            "langfuse",
+            "--dataset",
+            "d",
+            "--filter",
+            "nokey",
+        ],
+    );
+    expect(&r, 2);
+
+    let r = run(
+        sb.grad(u),
+        &["sources", "list", "--dataset", "support-prod"],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("completed (v3)"), "{}", r.stdout);
+    assert!(srv
+        .last("GET", "/v1/sources")
+        .unwrap()
+        .query()
+        .contains("dataset=support-prod"));
+
+    let r = run(sb.grad(u), &["sources", "sync", "src_01J9X"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("grad imports status imp_7c1d"),
+        "{}",
+        r.stdout
+    );
+    assert_eq!(
+        srv.last("POST", "/v1/sources/src_01J9X/sync")
+            .unwrap()
+            .json(),
+        json!({"full": false})
+    );
+    let r = run(
+        sb.grad(u),
+        &["sources", "sync", "src_01J9X", "--full", "--wait", "--json"],
+    );
+    expect(&r, 0);
+    assert_eq!(
+        srv.last("POST", "/v1/sources/src_01J9X/sync")
+            .unwrap()
+            .json(),
+        json!({"full": true})
+    );
+    assert_eq!(r.json()["data"]["status"], "completed");
+
+    let r = run(sb.grad(u), &["sources", "remove", "src_01J9X"]);
+    expect(&r, 0);
+    assert_eq!(srv.count("DELETE", "/v1/sources/src_01J9X"), 1);
+    let r = run(sb.grad(u), &["sources", "remove", "src_missing"]);
+    expect(&r, 4);
+}
+
+#[test]
+fn hf_import_with_a_secret_sends_its_name() {
+    let srv = MockServer::start(|_| {
+        Reply::json(
+            202,
+            json!({"id": "imp_1", "dataset": "gated", "status": "queued"}),
+        )
+    });
+    let sb = Sandbox::new("hf-secret");
+    let r = run(
+        sb.grad(Some(&srv.url)),
+        &[
+            "datasets",
+            "import",
+            "hf",
+            "org/gated",
+            "--name",
+            "gated",
+            "--secret",
+            "hf-token",
+            "--no-wait",
+        ],
+    );
+    expect(&r, 0);
+    let body = srv
+        .last("POST", "/v1/datasets/gated/imports")
+        .unwrap()
+        .json();
+    assert_eq!(body["source"]["secret"], "hf-token");
+}
+
 // ---------------------------------------------------------------- artifacts & serving
 
 #[test]
@@ -2147,6 +2435,46 @@ fn parity_requests_match_the_shared_fixture() {
                 }
                 a
             }
+            "/v1/secrets" => vec!["secrets".into(), "set".into(), s("name")],
+            "/v1/sources/src_01J9X/sync" => {
+                let mut a = vec!["sources".into(), "sync".into(), "src_01J9X".into()];
+                if body["full"] == json!(true) {
+                    a.push("--full".into());
+                }
+                a
+            }
+            p if p.starts_with("/v1/datasets/") && p.ends_with("/sources") => {
+                let provider = &body["provider"];
+                let field = |k: &str| provider[k].as_str().map(str::to_string);
+                let mut a: Vec<String> = vec![
+                    "sources".into(),
+                    "add".into(),
+                    field("kind").unwrap(),
+                    "--dataset".into(),
+                    p.trim_start_matches("/v1/datasets/")
+                        .trim_end_matches("/sources")
+                        .into(),
+                ];
+                for (flag, key) in [
+                    ("--host", "host"),
+                    ("--secret", "secret"),
+                    ("--project", "project"),
+                ] {
+                    if let Some(v) = field(key) {
+                        a.push(flag.into());
+                        a.push(v);
+                    }
+                }
+                for (k, v) in provider["filters"].as_object().into_iter().flatten() {
+                    a.push("--filter".into());
+                    a.push(format!("{}={}", k, v));
+                }
+                if let Some(cron) = body["schedule"].as_str() {
+                    a.push("--schedule".into());
+                    a.push(cron.into());
+                }
+                a
+            }
             other => panic!("no CLI command for {}", other),
         };
         if let Some(k) = case["idempotency_key"].as_str() {
@@ -2154,7 +2482,12 @@ fn parity_requests_match_the_shared_fixture() {
             args.push(k.into());
         }
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-        let r = run(sb.grad(Some(&srv.url)), &argv);
+        // `grad secrets set` reads the value from stdin, with a trailing newline.
+        let stdin = body["value"]
+            .as_str()
+            .map(|v| format!("{}\n", v))
+            .unwrap_or_default();
+        let r = run_stdin(sb.grad(Some(&srv.url)), &argv, &stdin);
         expect(&r, 0);
         let sent = srv
             .last(case["method"].as_str().unwrap(), path)

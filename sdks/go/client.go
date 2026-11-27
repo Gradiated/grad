@@ -41,6 +41,8 @@ type Client struct {
 	Deployments *DeploymentsService
 	Evals       *EvalsService
 	Keys        *KeysService
+	Secrets     *SecretsService
+	Sources     *SourcesService
 
 	baseURL    string
 	apiKey     string
@@ -265,6 +267,8 @@ func NewClient(opts ...Option) *Client {
 	c.Deployments = &DeploymentsService{c: c}
 	c.Evals = &EvalsService{c: c}
 	c.Keys = &KeysService{c: c}
+	c.Secrets = &SecretsService{c: c}
+	c.Sources = &SourcesService{c: c}
 	return c
 }
 

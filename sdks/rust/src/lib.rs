@@ -33,7 +33,7 @@ mod util;
 
 use std::time::Duration;
 
-pub use config::{ConfigFile, ConfigInputs, Profile, ResolvedConfig, Source};
+pub use config::{ConfigFile, ConfigInputs, Profile, ResolvedConfig, Source as ConfigSource};
 pub use download::{DownloadOptions, DownloadedArtifact, ExtractLimits};
 pub use error::{ApiErrorBody, Error, Result};
 pub use models::*;
@@ -209,9 +209,9 @@ impl Client {
             },
             resolved: ResolvedConfig {
                 base_url: config::DEFAULT_BASE_URL.into(),
-                base_url_source: Source::Default,
+                base_url_source: ConfigSource::Default,
                 api_key: None,
-                api_key_source: Source::Unset,
+                api_key_source: ConfigSource::Unset,
                 profile: config::DEFAULT_PROFILE.into(),
                 config_path: None,
                 note: None,
@@ -225,7 +225,7 @@ impl Client {
         self.transport.api_key = Some(key.clone());
         self.transport.auth_hint = None;
         self.resolved.api_key = Some(key);
-        self.resolved.api_key_source = Source::Argument;
+        self.resolved.api_key_source = ConfigSource::Argument;
         self
     }
 
@@ -235,11 +235,11 @@ impl Client {
         match config::validate_base_url(&url) {
             Ok(base) => {
                 // A key that came from a profile stays bound to that profile's server.
-                if let Source::Profile(_) = self.resolved.api_key_source {
+                if let ConfigSource::Profile(_) = self.resolved.api_key_source {
                     if url != self.resolved.base_url {
                         self.transport.api_key = None;
                         self.resolved.api_key = None;
-                        self.resolved.api_key_source = Source::Unset;
+                        self.resolved.api_key_source = ConfigSource::Unset;
                     }
                 }
                 if self
@@ -256,7 +256,7 @@ impl Client {
         }
         self.transport.base_url = url.clone();
         self.resolved.base_url = url;
-        self.resolved.base_url_source = Source::Argument;
+        self.resolved.base_url_source = ConfigSource::Argument;
         self
     }
 
@@ -324,6 +324,14 @@ impl Client {
     }
     pub fn evals(&self) -> Evals<'_> {
         Evals { c: self }
+    }
+    /// Workspace secrets (provider keys, HF tokens); values are write-only.
+    pub fn secrets(&self) -> Secrets<'_> {
+        Secrets { c: self }
+    }
+    /// Observability sources that sync traces and feedback into datasets.
+    pub fn sources(&self) -> Sources<'_> {
+        Sources { c: self }
     }
 }
 

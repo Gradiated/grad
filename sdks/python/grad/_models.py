@@ -336,6 +336,70 @@ class Dataset(APIObject):
         ``filter(lambda t: ...)`` run locally (see ``client.datasets.filter``)."""
         view: Dataset = self._need_client().datasets.filter(self, fn, **kwargs)
         return view
+    def add_source(self, provider: Any, *, schedule: str | None = None, idempotency_key: str | None = None) -> Source:
+        """Connect an observability provider (``grad.sources.Langfuse(...)``, ...).
+        ``schedule`` is a five-field UTC cron; leave it out to sync only on request."""
+        source: Source = self._need_client().sources.create(self.name, provider, schedule=schedule, idempotency_key=idempotency_key)
+        return source
+
+    def sources(self) -> list[Source]:
+        """The sources syncing into this dataset."""
+        found: list[Source] = list(self._need_client().sources.list(dataset=self.name))
+        return found
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class SecretRef(APIObject):
+    """A workspace secret: its name and metadata, never its value. Pass it as ``secret=``."""
+
+    name: str
+    workspace_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    _repr_fields = ("name",)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+@dataclass(kw_only=True, repr=False, eq=False)
+class Source(APIObject):
+    """An observability provider synced into a dataset; each sync adds a dataset version."""
+
+    id: str
+    dataset: str
+    provider: AttrDict = field(default_factory=AttrDict)
+    workspace_id: str | None = None
+    schedule: str | None = None
+    next_sync_at: str | None = None
+    last_synced_at: str | None = None
+    last_sync: AttrDict | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    _repr_fields = ("id", "dataset", "schedule")
+    _converters = {"provider": _attrdict, "last_sync": _attrdict}
+
+    @property
+    def kind(self) -> str:
+        """The provider (``langfuse``, ``langsmith``, ...)."""
+        return str(self.provider.get("kind", ""))
+
+    def refresh(self) -> Source:
+        """Reload from the server (in place) and return ``self``."""
+        self._update_from(self._need_client().sources.get(self.id))
+        return self
+
+    def sync(self, *, full: bool = False) -> ImportJob:
+        """Sync now (``.wait()`` on the result to block). ``full=True`` rebuilds the dataset
+        from the provider as a new version. Returns the running sync if one is in progress."""
+        job: ImportJob = self._need_client().sources.sync(self.id, full=full)
+        return job
+
+    def remove(self) -> None:
+        """Disconnect the source. The dataset and its versions stay."""
+        self._need_client().sources.remove(self.id)
 
 
 @dataclass(kw_only=True, repr=False, eq=False)

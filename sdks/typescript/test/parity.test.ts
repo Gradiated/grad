@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { adapters, Context, Judge, losses, optim, pooling, recipes, rollouts, Scorer, splits, validators, type Grad } from "../src/index.js";
-import type { EvalRun, PlanEvalResponse, Run } from "../src/generated/models.js";
+import { adapters, Context, Judge, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
+import type { EvalRun, PlanEvalResponse, Run, Secret, Source } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
 import { FakeServer, json, makeGrad, wire } from "./helpers.js";
@@ -9,7 +9,7 @@ import { FakeServer, json, makeGrad, wire } from "./helpers.js";
 /** tests/fixtures/wire/sdk-parity.json: every SDK and the CLI send these requests for the same calls. */
 interface Parity {
   requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown }[];
-  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown };
+  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; source: unknown; secret: unknown };
   expect: Record<string, unknown>;
 }
 const parity = wire<Parity>("sdk-parity.json");
@@ -122,6 +122,16 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
   import_benchmark: () => grad.datasets.fromBenchmark("gsm8k", { limit: 200, name: "gsm8k-test-200", wait: false }),
   filter_dataset_ids: () => grad.datasets.filter("support-logs", { ids: ["rec_a", "rec_c"] }),
   deploy: () => grad.deploy(artifact, { name: "support", fallback: "test/tiny-qwen3", exploreRate: 0.1, idempotencyKey: "parity-deploy-key" }),
+  set_secret: () => grad.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
+  add_source: () =>
+    grad.sources.create("support-prod", {
+      provider: sources.langfuse({ host: "https://cloud.langfuse.com", secret: new SecretRef({ name: "langfuse-prod" } as Secret) }),
+      schedule: "*/15 * * * *",
+      idempotencyKey: "parity-source-key",
+    }),
+  add_source_gradiated: () =>
+    grad.sources.create("support-prod", { provider: sources.gradiated({ models: ["acme/support"] }), schedule: "0 * * * *" }),
+  sync_source_full: async () => grad.sources.sync("src_01J9X", { full: true }),
 });
 
 describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
@@ -151,6 +161,8 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const ev = decode<EvalRun>("EvalRun", parity.responses.eval);
     const plan = decode<PlanEvalResponse>("PlanEvalResponse", parity.responses.eval_plan);
     const scoring = decode<EvalRun>("EvalRun", parity.responses.scoring);
+    const source = decode<Source>("Source", parity.responses.source);
+    const secret = decode<Secret>("Secret", parity.responses.secret);
     expect({
       "run.eval_report.metric_name": run.evalReport?.metricName,
       "run.eval_report.selected_step": run.evalReport?.selectedStep,
@@ -164,6 +176,13 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "eval_plan.estimated_cost_usd": plan.estimatedCostUsd,
       "scoring.mode": scoring.mode,
       "scoring.scored_dataset_version": scoring.scoredDatasetVersion,
+      "source.id": source.id,
+      "source.provider.kind": source.provider.kind,
+      "source.provider.secret": source.provider.secret,
+      "source.schedule": source.schedule,
+      "source.last_sync.status": source.lastSync?.status,
+      "source.last_sync.dataset_version": source.lastSync?.datasetVersion,
+      "secret.name": secret.name,
     }).toEqual(parity.expect);
   });
 });

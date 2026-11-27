@@ -326,6 +326,7 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                 revision,
                 limit,
                 columns,
+                secret,
                 wait,
             } => {
                 let c = ctx.client()?;
@@ -343,23 +344,25 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                         .unwrap_or(&repo)
                         .to_ascii_lowercase()
                 });
-                let job = c
-                    .datasets()
-                    .import_hf(
-                        &name,
-                        ImportSource {
-                            kind: ImportSourceKind::Hf,
-                            repo: Some(repo.clone()),
-                            split,
-                            config,
-                            revision,
-                            columns: if cols.is_empty() { None } else { Some(cols) },
-                            limit,
-                            ..Default::default()
-                        },
-                        None,
-                    )
-                    .await?;
+                let source = ImportSource {
+                    kind: ImportSourceKind::Hf,
+                    repo: Some(repo.clone()),
+                    split,
+                    config,
+                    revision,
+                    columns: if cols.is_empty() { None } else { Some(cols) },
+                    limit,
+                    ..Default::default()
+                };
+                let datasets = c.datasets();
+                let job = match secret {
+                    Some(s) => {
+                        datasets
+                            .import_hf_with_secret(&name, source, None, s)
+                            .await?
+                    }
+                    None => datasets.import_hf(&name, source, None).await?,
+                };
                 out.note(format!(
                     "Importing {} into dataset {} (job {})",
                     repo, name, job.id
@@ -456,7 +459,7 @@ async fn finish_import(ctx: &Ctx, c: &Client, job: ImportJob, wait: &ImportWaitA
     out.done(&done)
 }
 
-fn print_import(out: &Out, j: &ImportJob) {
+pub(crate) fn print_import(out: &Out, j: &ImportJob) {
     let scores = if j.detected_scores.is_empty() {
         String::new()
     } else {

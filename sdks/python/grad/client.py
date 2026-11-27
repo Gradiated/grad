@@ -70,6 +70,8 @@ class Grad:
         self.deployments = r.Deployments(self)
         self.evals = r.Evals(self)
         self.keys = r.Keys(self)
+        self.secrets = r.Secrets(self)
+        self.sources = r.Sources(self)
 
     @property
     def base_url(self) -> str:

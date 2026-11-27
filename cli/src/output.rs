@@ -82,7 +82,9 @@ impl From<SdkError> for CliError {
             SdkError::Authentication(_) | SdkError::PermissionDenied(_) => EXIT_AUTH,
             SdkError::NotFound(_) => EXIT_NOT_FOUND,
             SdkError::Conflict(_) | SdkError::Validation(_) => EXIT_CONFLICT,
-            SdkError::DeployUnavailable(_) | SdkError::InferenceUnavailable(_) => EXIT_UNAVAILABLE,
+            SdkError::DeployUnavailable(_)
+            | SdkError::InferenceUnavailable(_)
+            | SdkError::FeatureUnavailable(_) => EXIT_UNAVAILABLE,
             SdkError::RunFailed(_) | SdkError::EvalFailed(_) | SdkError::ImportFailed(_) => {
                 EXIT_RUN_FAILED
             }

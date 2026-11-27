@@ -37,6 +37,18 @@ export {
 export { DatasetScoring, Eval, EvalFailures, EvalsResource, type PendingScoring, TERMINAL_EVAL_STATUSES, type EvalParams, type EvalWaitOptions, type PendingEval } from "./resources/evals.js";
 export { KeysResource, ModelsResource } from "./resources/misc.js";
 export {
+  SecretRef,
+  SecretsResource,
+  Source,
+  SourcesResource,
+  sources,
+  type AddSourceOptions,
+  type GradiatedOptions,
+  type ProviderOptions,
+  type SecretLike,
+  type SourceProvider,
+} from "./resources/sources.js";
+export {
   Checkpoint,
   CheckpointsResource,
   Run,

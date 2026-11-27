@@ -16,6 +16,7 @@ import { Pending } from "../pending.js";
 import { pollUntil, type WaitOptions } from "../polling.js";
 import { toRubric, type RubricInput } from "../rubrics.js";
 import { DatasetScoring, type PendingScoring } from "./evals.js";
+import { addSource, secretName, type AddSourceOptions, type SecretLike, type Source } from "./sources.js";
 
 export type DatasetRef = string | { name: string };
 export const datasetName = (ref: DatasetRef): string => (typeof ref === "string" ? ref : ref.name);
@@ -47,6 +48,8 @@ export interface FromHfOptions extends WaitOptions {
   answer?: string;
   query?: string;
   positive?: string;
+  /** Workspace secret with a Hugging Face token, for gated or private datasets. */
+  secret?: SecretLike;
 }
 
 export interface PushOptions extends RequestOptions {
@@ -165,6 +168,11 @@ export class Dataset {
       );
       return { data: page.data, nextCursor: page.nextCursor };
     }, request.signal);
+  }
+
+  /** Connects an observability provider: `dataset.addSource({ provider: sources.langfuse({...}) })`. */
+  addSource(options: AddSourceOptions): Promise<Source> {
+    return addSource(this.#core, this.name, options);
   }
 
   /** Shows exactly which tokens train for the first few records. */
@@ -338,6 +346,7 @@ const importHf = async (core: Core, name: string, repo: string, options: Omit<Fr
       ...(options.revision !== undefined ? { revision: options.revision } : {}),
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
       ...(Object.keys(columns).length > 0 ? { columns } : {}),
+      ...(options.secret !== undefined ? { secret: secretName(options.secret) } : {}),
     },
     ...(options.connector !== undefined ? { connector: options.connector } : {}),
   });

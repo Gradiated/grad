@@ -101,6 +101,10 @@ pub enum Error {
     DeployUnavailable(Box<ApiErrorBody>),
     /// 501 `inference_unavailable`: no inference endpoint is configured for evals.
     InferenceUnavailable(Box<ApiErrorBody>),
+    /// Any other 501: a capability this server has not configured
+    /// (`secrets_unavailable`: no `GRAD_SECRETS_KEY`; `source_unavailable`: the
+    /// `gradiated` source on a self-hosted server).
+    FeatureUnavailable(Box<ApiErrorBody>),
     /// 5xx (already retried for idempotent requests).
     Server(Box<ApiErrorBody>),
     /// Any other non-success status.
@@ -180,6 +184,7 @@ impl Error {
             | Error::RateLimit(b)
             | Error::DeployUnavailable(b)
             | Error::InferenceUnavailable(b)
+            | Error::FeatureUnavailable(b)
             | Error::Server(b)
             | Error::Api(b) => Some(b.as_ref()),
             _ => None,
@@ -250,6 +255,7 @@ impl Error {
             (409, _) => Error::Conflict(body),
             (400 | 413 | 422, _) => Error::Validation(body),
             (429, _) => Error::RateLimit(body),
+            (501, _) => Error::FeatureUnavailable(body),
             (s, _) if s >= 500 => Error::Server(body),
             _ => Error::Api(body),
         }
@@ -267,6 +273,7 @@ impl fmt::Display for Error {
             | Error::RateLimit(b)
             | Error::DeployUnavailable(b)
             | Error::InferenceUnavailable(b)
+            | Error::FeatureUnavailable(b)
             | Error::Server(b)
             | Error::Api(b) => b.fmt(f),
             Error::Connection { method, url, cause } => write!(
@@ -423,6 +430,7 @@ mod tests {
             (429, "rate_limited", "rate_limited"),
             (501, "deploy_unavailable", "deploy_unavailable"),
             (501, "inference_unavailable", "inference_unavailable"),
+            (501, "secrets_unavailable", "secrets_unavailable"),
             (502, "x", "x"),
             (418, "teapot", "teapot"),
         ];
@@ -437,6 +445,10 @@ mod tests {
             Error::Validation(_)
         ));
         assert!(matches!(Error::from_status(body(418, "x")), Error::Api(_)));
+        assert!(matches!(
+            Error::from_status(body(501, "source_unavailable")),
+            Error::FeatureUnavailable(_)
+        ));
         assert!(Error::from_status(body(408, "x")).is_transient());
         assert!(!Error::from_status(body(404, "x")).is_transient());
     }

@@ -250,6 +250,35 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             };
             c.datasets().filter("support-logs", &req).await.map(drop)
         }
+        "set_secret" => c
+            .secrets()
+            .set("langfuse-prod", "pk-lf-1:sk-lf-2")
+            .await
+            .map(drop),
+        "add_source" => {
+            let provider = SourceProvider::langfuse()
+                .host("https://cloud.langfuse.com")
+                .secret(SecretRef::named("langfuse-prod"));
+            c.sources()
+                .create(
+                    "support-prod",
+                    &provider,
+                    Some("*/15 * * * *"),
+                    Some("parity-source-key"),
+                )
+                .await
+                .map(drop)
+        }
+        "add_source_gradiated" => c
+            .datasets()
+            .add_source(
+                "support-prod",
+                &SourceProvider::gradiated().models(["acme/support"]),
+                Some("0 * * * *"),
+            )
+            .await
+            .map(drop),
+        "sync_source_full" => c.sources().sync("src_01J9X", true).await.map(drop),
         other => panic!("no Rust call for parity case {}", other),
     }
 }
@@ -295,6 +324,9 @@ fn typed_responses() {
     let scoring: EvalRun = serde_json::from_value(fx["responses"]["scoring"].clone()).unwrap();
     let plan: PlanEvalResponse =
         serde_json::from_value(fx["responses"]["eval_plan"].clone()).unwrap();
+    let source: Source = serde_json::from_value(fx["responses"]["source"].clone()).unwrap();
+    let secret: SecretRef = serde_json::from_value(fx["responses"]["secret"].clone()).unwrap();
+    let last = source.last_sync.clone().unwrap();
     let report = run.eval_report.unwrap();
     let pareto = report.pareto_summary.clone().unwrap();
     let got = json!({
@@ -310,6 +342,13 @@ fn typed_responses() {
         "eval_plan.estimated_cost_usd": plan.estimated_cost_usd,
         "scoring.mode": scoring.mode.as_str(),
         "scoring.scored_dataset_version": scoring.scored_dataset_version,
+        "source.id": source.id,
+        "source.provider.kind": source.provider.kind,
+        "source.provider.secret": source.provider.secret,
+        "source.schedule": source.schedule,
+        "source.last_sync.status": last.status.as_str(),
+        "source.last_sync.dataset_version": last.dataset_version,
+        "secret.name": secret.name,
     });
     assert_eq!(norm(&got), norm(&fx["expect"]));
     assert_eq!(report.metric(), Some(0.41));

@@ -346,6 +346,8 @@ type HFOptions struct {
 	Messages, Prompt, Completion, Chosen, Rejected, Answer, Query, Positive string
 	// Connector forces a trace connector (default auto).
 	Connector string
+	// Secret holds a Hugging Face token for gated or private datasets.
+	Secret SecretLike
 }
 
 func (o HFOptions) source(repo string) generated.ImportSource {
@@ -354,6 +356,9 @@ func (o HFOptions) source(repo string) generated.ImportSource {
 		Rejected: optString(o.Rejected), Answer: optString(o.Answer), Query: optString(o.Query), Positive: optString(o.Positive)}
 	if cols != (generated.HFColumnMapping{}) {
 		src.Columns = &cols
+	}
+	if o.Secret != nil {
+		src.Secret = optString(o.Secret.secretName())
 	}
 	return src
 }

@@ -70,6 +70,8 @@ from ._models import (
     RenderPreview,
     RouterParetoSummary,
     Run,
+    SecretRef,
+    Source,
 )
 from ._version import __version__
 from .client import Grad
@@ -95,7 +97,8 @@ from .recipes import (
 )
 from .records import Context, PreferencePair, Record, Task, Trajectory, Triplet
 from .rubrics import Judge, Rubric, Scorer, StatefulScorer
-from .specs import adapters, advantages, heads, loggers, losses, mergers, optim, pooling, sources, splits
+from . import sources
+from .specs import adapters, advantages, heads, loggers, losses, mergers, optim, pooling, splits
 
 __all__ = [
     "APIConnectionError",
@@ -164,6 +167,8 @@ __all__ = [
     "RouterRecipe",
     "Rubric",
     "Run",
+    "SecretRef",
+    "Source",
     "RunFailedError",
     "SFTRecipe",
     "Scorer",

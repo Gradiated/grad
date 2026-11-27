@@ -49,6 +49,8 @@ from ._models import (
     Plan,
     RenderPreview,
     Run,
+    SecretRef,
+    Source,
     TERMINAL_EVAL_STATUSES,
     TERMINAL_IMPORT_STATUSES,
     TERMINAL_RUN_STATUSES,
@@ -57,6 +59,7 @@ from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX
 from ._transport import SSEDecoder, iter_sse, quote_path_param
 from .recipes import _thinking
 from .records import Trajectory
+from .sources import provider_body, secret_name
 from .rubrics import model_ref
 
 if TYPE_CHECKING:
@@ -229,10 +232,14 @@ class Datasets(_Resource):
         limit: int | None = None,
         name: str | None = None,
         connector: str = "auto",
+        secret: Any = None,
         wait: bool = True,
         timeout: float | None = None,
     ) -> Dataset:
         """Import a Hugging Face dataset server-side (nothing is downloaded locally).
+
+        For gated or private datasets pass ``secret=client.secrets.get("hf-token")``: the worker
+        receives the token from the workspace secret store, never from this process.
 
         Column mappings (``messages="messages"``, ``prompt="question"``, ``answer=``,
         ``chosen=``/``rejected=``, ``query=``/``positive=``) say which columns hold what.
@@ -259,6 +266,9 @@ class Datasets(_Resource):
             },
             limit=limit,
         )
+        token = secret_name(secret)
+        if token is not None:
+            source["secret"] = token
         ds_name = h.check_slug(name or h.hf_dataset_name(repo, split, cfg), "dataset name")
         job = ImportJob.from_api(
             self._wire.create_dataset_import(ds_name, {"source": source, "connector": h.check_connector(connector)}),
@@ -405,6 +415,59 @@ class Datasets(_Resource):
         if limit is not None:
             body["limit"] = limit
         return RenderPreview.from_api(self._wire.render_dataset(h.dataset_name(dataset), body), self._client)
+
+
+class Secrets(_Resource):
+    """Workspace secrets (provider keys, HF tokens). Values are write-only."""
+
+    def set(self, name: str, value: str) -> SecretRef:
+        """Create or replace a secret. The value is encrypted at rest and never returned."""
+        if not isinstance(value, str) or not value:
+            raise ValueError("A secret value must be a non-empty string.")
+        return SecretRef.from_api(self._wire.set_secret({"name": h.check_slug(name, "secret name"), "value": value}), self._client)
+
+    def get(self, name: str) -> SecretRef:
+        """A reference to pass as ``secret=`` (checks that the secret exists; no value)."""
+        return SecretRef.from_api(self._wire.get_secret(h.check_slug(name, "secret name")), self._client)
+
+    def list(self, *, limit: int | None = None) -> Page[SecretRef]:
+        """Secret names and metadata, newest first."""
+        return self._page(SecretRef, lambda cursor: self._wire.list_secrets(limit=limit, cursor=cursor))
+
+    def delete(self, name: Any) -> None:
+        """Delete a secret (409 ConflictError while a source uses it)."""
+        self._wire.delete_secret(h.check_slug(secret_name(name) or "", "secret name"))
+
+
+class Sources(_Resource):
+    """Observability sources that sync traces and feedback into datasets."""
+
+    def create(self, dataset: Any, provider: Any, *, schedule: str | None = None, idempotency_key: str | None = None) -> Source:
+        """Connect ``provider`` (``grad.sources.Langfuse(...)``, ...) to ``dataset``."""
+        body: dict[str, Any] = {"provider": provider_body(provider)}
+        if schedule is not None:
+            body["schedule"] = schedule
+        return Source.from_api(
+            self._wire.create_dataset_source(h.dataset_name(dataset), body, idempotency_key=idempotency_key),
+            self._client,
+        )
+
+    def get(self, source_id: str) -> Source:
+        return Source.from_api(self._wire.get_source(source_id), self._client)
+
+    def list(self, *, dataset: Any = None, limit: int | None = None) -> Page[Source]:
+        """Sources, newest first; ``dataset=`` keeps one dataset's."""
+        name = None if dataset is None else h.dataset_name(dataset)
+        return self._page(Source, lambda cursor: self._wire.list_sources(limit=limit, cursor=cursor, dataset=name))
+
+    def sync(self, source: Any, *, full: bool = False) -> ImportJob:
+        """Queue a sync (or get the one in progress); ``.wait()`` on the job to block."""
+        source_id = source.id if isinstance(source, Source) else str(source)
+        return ImportJob.from_api(self._wire.sync_source(source_id, {"full": full}), self._client)
+
+    def remove(self, source: Any) -> None:
+        """Disconnect a source; its dataset and versions stay."""
+        self._wire.delete_source(source.id if isinstance(source, Source) else str(source))
 
 
 class Imports(_Resource):

@@ -27,6 +27,8 @@ type parityFixture struct {
 		Eval     json.RawMessage `json:"eval"`
 		EvalPlan json.RawMessage `json:"eval_plan"`
 		Scoring  json.RawMessage `json:"scoring"`
+		Source   json.RawMessage `json:"source"`
+		Secret   json.RawMessage `json:"secret"`
 	} `json:"responses"`
 	Expect map[string]any `json:"expect"`
 }
@@ -135,6 +137,30 @@ func TestParityRequests(t *testing.T) {
 				grad.WithExploreRate(0.1), grad.WithDeployIdempotencyKey("parity-deploy-key"))
 			return err
 		},
+		"set_secret": func() error {
+			_, err := c.Secrets.Set(ctx, "langfuse-prod", "pk-lf-1:sk-lf-2")
+			return err
+		},
+		"add_source": func() error {
+			secret := &grad.SecretRef{Secret: generated.Secret{Name: "langfuse-prod"}}
+			_, err := c.Sources.Create(ctx, grad.DatasetName("support-prod"), grad.SourceParams{
+				Provider:       grad.LangfuseSource{Host: "https://cloud.langfuse.com", Secret: secret},
+				Schedule:       "*/15 * * * *",
+				IdempotencyKey: "parity-source-key",
+			})
+			return err
+		},
+		"add_source_gradiated": func() error {
+			_, err := c.Sources.Create(ctx, grad.DatasetName("support-prod"), grad.SourceParams{
+				Provider: grad.GradiatedSource{Models: []string{"acme/support"}},
+				Schedule: "0 * * * *",
+			})
+			return err
+		},
+		"sync_source_full": func() error {
+			_, err := c.Sources.Sync(ctx, "src_01J9X", grad.FullSync()).Result()
+			return err
+		},
 	}
 	var names, want []string
 	for name := range calls {
@@ -177,7 +203,9 @@ func TestParityTypedResponses(t *testing.T) {
 	var ev generated.EvalRun
 	var plan generated.PlanEvalResponse
 	var scoring generated.EvalRun
-	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan, &p.Responses.Scoring: &scoring} {
+	var source grad.Source
+	var secret grad.SecretRef
+	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan, &p.Responses.Scoring: &scoring, &p.Responses.Source: &source, &p.Responses.Secret: &secret} {
 		if err := json.Unmarshal(*raw, into); err != nil {
 			t.Fatal(err)
 		}
@@ -196,6 +224,13 @@ func TestParityTypedResponses(t *testing.T) {
 		"eval_plan.estimated_cost_usd":                     plan.EstimatedCostUSD,
 		"scoring.mode":                                     string(scoring.Mode),
 		"scoring.scored_dataset_version":                   float64(*scoring.ScoredDatasetVersion),
+		"source.id":                                        source.ID,
+		"source.provider.kind":                             string(source.Provider.Kind),
+		"source.provider.secret":                           *source.Provider.Secret,
+		"source.schedule":                                  *source.Schedule,
+		"source.last_sync.status":                          string(source.LastSync.Status),
+		"source.last_sync.dataset_version":                 float64(*source.LastSync.DatasetVersion),
+		"secret.name":                                      secret.Name,
 	}
 	if !reflect.DeepEqual(got, p.Expect) {
 		t.Fatalf("typed responses\n got %v\nwant %v", got, p.Expect)

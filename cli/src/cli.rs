@@ -206,6 +206,37 @@ on vLLM or SGLang instead.")]
         action: KeysCmd,
     },
 
+    /// Store provider keys and tokens as write-only workspace secrets
+    #[command(after_help = "\
+Examples:
+  grad secrets set langfuse-prod            # paste the value, then Ctrl-D
+  printf '%s' \"$LANGFUSE_KEYS\" | grad secrets set langfuse-prod
+  grad secrets list
+  grad secrets delete langfuse-prod
+
+Values are read from stdin, encrypted at rest and never returned.")]
+    Secrets {
+        #[command(subcommand)]
+        action: SecretsCmd,
+    },
+
+    /// Sync traces and feedback from an observability tool into a dataset
+    #[command(after_help = "\
+Examples:
+  grad sources add langfuse --dataset support-prod \\
+    --host https://cloud.langfuse.com --secret langfuse-prod --schedule \"*/15 * * * *\"
+  grad sources add gradiated --dataset support-prod --schedule \"0 * * * *\"
+  grad sources list
+  grad sources sync src_01J9X --wait
+  grad sources sync src_01J9X --full     # rebuild the dataset as a new version
+
+Providers: langfuse, langsmith, braintrust, posthog, phoenix, gradiated (Cloud).
+braintrust and posthog need --project.")]
+    Sources {
+        #[command(subcommand)]
+        action: SourcesCmd,
+    },
+
     /// Run a local grad stack with Docker Compose
     Local {
         #[command(subcommand)]
@@ -373,6 +404,9 @@ Example:
         /// Map a field to a column, e.g. --column prompt=question (repeatable)
         #[arg(long = "column", value_name = "FIELD=COLUMN")]
         columns: Vec<String>,
+        /// Workspace secret holding a Hugging Face token (gated or private datasets)
+        #[arg(long, value_name = "NAME")]
+        secret: Option<String>,
         #[command(flatten)]
         wait: ImportWaitArgs,
     },
@@ -819,7 +853,8 @@ Examples:
   grad keys create --name inference-cd --scopes artifacts:read
 
 Scopes: admin, datasets:read, datasets:write, runs:read, runs:write,
-artifacts:read, artifacts:write, deployments:write")]
+artifacts:read, artifacts:write, secrets:read, secrets:write,
+sources:read, sources:write, deployments:write")]
     Create {
         /// Key name
         #[arg(long)]
@@ -831,6 +866,82 @@ artifacts:read, artifacts:write, deployments:write")]
     /// Revoke a key
     Revoke {
         /// Key id
+        id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SecretsCmd {
+    /// Create or replace a secret; the value is read from stdin
+    Set {
+        /// Secret name (lowercase letters, digits, '.', '_', '-')
+        name: String,
+    },
+    /// List secret names (values are never shown)
+    List {
+        #[command(flatten)]
+        page: PageArgs,
+    },
+    /// Delete a secret (fails while a source uses it)
+    Delete {
+        /// Secret name
+        name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SourcesCmd {
+    /// Connect a provider to a dataset
+    Add {
+        /// langfuse, langsmith, braintrust, posthog, phoenix or gradiated
+        provider: String,
+        /// Dataset to sync into (created if missing)
+        #[arg(long)]
+        dataset: String,
+        /// Provider API host (default: the provider's public host)
+        #[arg(long)]
+        host: Option<String>,
+        /// Workspace secret holding the provider key (`grad secrets set NAME`)
+        #[arg(long, value_name = "NAME")]
+        secret: Option<String>,
+        /// Provider project (required for braintrust and posthog)
+        #[arg(long)]
+        project: Option<String>,
+        /// Five-field UTC cron; without it the source syncs only on request
+        #[arg(long, value_name = "CRON")]
+        schedule: Option<String>,
+        /// Provider filter KEY=VALUE (VALUE may be JSON; repeatable)
+        #[arg(long = "filter", value_name = "KEY=VALUE")]
+        filters: Vec<String>,
+        /// Reuse this key when retrying, so the source is created once
+        #[arg(long, value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// List sources
+    List {
+        /// Only this dataset's sources
+        #[arg(long)]
+        dataset: Option<String>,
+        #[command(flatten)]
+        page: PageArgs,
+    },
+    /// Sync a source now (returns the running sync if one is in progress)
+    Sync {
+        /// Source id
+        id: String,
+        /// Rebuild the dataset from the provider as a new version
+        #[arg(long)]
+        full: bool,
+        /// Wait for the sync to finish
+        #[arg(long)]
+        wait: bool,
+        /// Give up waiting after this many seconds (the sync keeps running)
+        #[arg(long, value_name = "SECS", default_value_t = 3600)]
+        timeout: u64,
+    },
+    /// Disconnect a source (its dataset and versions stay)
+    Remove {
+        /// Source id
         id: String,
     },
 }

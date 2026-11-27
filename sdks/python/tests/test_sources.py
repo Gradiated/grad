@@ -1,0 +1,151 @@
+"""Secrets and observability sources: request shapes, typed results, and errors."""
+
+from __future__ import annotations
+
+import unittest
+
+from _fakes import fixture, json_reply, make_client
+
+import grad
+from grad import sources
+
+PARITY = fixture("sdk-parity.json")
+SOURCE = PARITY["responses"]["source"]
+SECRET = PARITY["responses"]["secret"]
+DATASET = {"id": "ds_1", "workspace_id": "ws", "name": "support-prod", "version": 2, "record_count": 10, "metadata": {}}
+JOB = {"id": "imp_7c1d", "dataset": "support-prod", "status": "queued", "source": {"kind": "provider", "source_id": "src_01J9X", "full": False}}
+PROBLEM = {"type": "https://gradiated.com/problems/x", "title": "t", "status": 0, "detail": "d", "code": "x", "request_id": "req_1"}
+
+
+def problem(status: int, code: str, detail: str = "nope") -> dict[str, object]:
+    return {**PROBLEM, "status": status, "code": code, "detail": detail}
+
+
+class SecretsTests(unittest.TestCase):
+    def test_set_get_list_delete(self) -> None:
+        client, sender, _ = make_client(
+            {
+                "POST /v1/secrets": json_reply(SECRET),
+                "GET /v1/secrets/langfuse-prod": json_reply(SECRET),
+                "GET /v1/secrets": json_reply({"data": [SECRET], "next_cursor": None}),
+                "DELETE /v1/secrets/langfuse-prod": json_reply(None, 204),
+            }
+        )
+        ref = client.secrets.set("langfuse-prod", "pk:sk")
+        self.assertIsInstance(ref, grad.SecretRef)
+        self.assertEqual((ref.name, str(ref)), ("langfuse-prod", "langfuse-prod"))
+        self.assertNotIn("value", ref.raw)
+        self.assertEqual(client.secrets.get("langfuse-prod").name, "langfuse-prod")
+        self.assertEqual([s.name for s in client.secrets.list()], ["langfuse-prod"])
+        client.secrets.delete(ref)
+        self.assertEqual(sender.sent[-1].method, "DELETE")
+        with self.assertRaises(ValueError):
+            client.secrets.set("Bad Name", "v")
+        with self.assertRaises(ValueError):
+            client.secrets.set("ok", "")
+
+    def test_typed_errors(self) -> None:
+        client, _, _ = make_client(
+            {
+                "POST /v1/secrets": json_reply(problem(501, "secrets_unavailable", "set GRAD_SECRETS_KEY"), 501),
+                "DELETE /v1/secrets/used": json_reply(problem(409, "secret_in_use"), 409),
+                "GET /v1/secrets/missing": json_reply(problem(404, "secret_not_found"), 404),
+            }
+        )
+        with self.assertRaises(grad.FeatureUnavailableError) as raised:
+            client.secrets.set("x", "y")
+        self.assertEqual(raised.exception.code, "secrets_unavailable")
+        with self.assertRaises(grad.ConflictError):
+            client.secrets.delete("used")
+        with self.assertRaises(grad.NotFoundError):
+            client.secrets.get("missing")
+
+
+class SourcesTests(unittest.TestCase):
+    def test_providers_serialise_secret_refs_and_filters(self) -> None:
+        ref = grad.SecretRef.from_api(SECRET)
+        self.assertEqual(
+            sources.Braintrust(host="https://api.braintrust.dev", secret=ref, project="support-bot").to_api(),
+            {"kind": "braintrust", "host": "https://api.braintrust.dev", "secret": "langfuse-prod", "project": "support-bot"},
+        )
+        self.assertEqual(sources.LangSmith(secret="ls").to_api(), {"kind": "langsmith", "secret": "ls"})
+        self.assertEqual(sources.PostHog(secret="ph", filters={"event": "$ai_generation"}).to_api()["filters"], {"event": "$ai_generation"})
+        self.assertEqual(sources.Phoenix(host="http://phoenix:6006").to_api(), {"kind": "phoenix", "host": "http://phoenix:6006"})
+        self.assertEqual(
+            sources.Gradiated(models=("a/m",), tasks=("support",), versions=("v1",), filters={"trainable_only": True}).to_api(),
+            {"kind": "gradiated", "filters": {"trainable_only": True, "models": ["a/m"], "tasks": ["support"], "versions": ["v1"]}},
+        )
+        self.assertEqual(sources.Gradiated().to_api(), {"kind": "gradiated"})
+        with self.assertRaises(TypeError):
+            sources.Langfuse(secret=42).to_api()
+
+    def test_add_source_sync_and_remove_through_the_dataset(self) -> None:
+        client, sender, _ = make_client(
+            {
+                "GET /v1/datasets/support-prod": json_reply(DATASET),
+                "GET /v1/secrets/langfuse-prod": json_reply(SECRET),
+                "POST /v1/datasets/support-prod/sources": json_reply(SOURCE, 201),
+                "POST /v1/sources/src_01J9X/sync": json_reply(JOB, 202),
+                "GET /v1/sources/src_01J9X": json_reply(SOURCE),
+                "GET /v1/sources": json_reply({"data": [SOURCE], "next_cursor": None}),
+                "DELETE /v1/sources/src_01J9X": json_reply(None, 204),
+            }
+        )
+        dataset = client.datasets.get("support-prod")
+        source = dataset.add_source(
+            provider=sources.Langfuse(host="https://cloud.langfuse.com", secret=client.secrets.get("langfuse-prod")),
+            schedule="*/15 * * * *",
+        )
+        self.assertIsInstance(source, grad.Source)
+        self.assertEqual((source.kind, source.provider.host, source.dataset), ("langfuse", "https://cloud.langfuse.com", "support-prod"))
+        self.assertEqual(
+            sender.sent[-1].json,
+            {"provider": {"kind": "langfuse", "host": "https://cloud.langfuse.com", "secret": "langfuse-prod"}, "schedule": "*/15 * * * *"},
+        )
+
+        job = source.sync()
+        self.assertIsInstance(job, grad.ImportJob)
+        self.assertEqual(sender.sent[-1].json, {"full": False})
+        self.assertEqual(client.sources.sync("src_01J9X", full=True).id, "imp_7c1d")
+        self.assertEqual(sender.sent[-1].json, {"full": True})
+
+        self.assertIs(source.refresh(), source)
+        self.assertEqual([s.id for s in dataset.sources()], ["src_01J9X"])
+        self.assertEqual(sender.sent[-1].query.get("dataset"), ["support-prod"])
+        self.assertEqual(len(client.sources.list().to_list()), 1)
+        source.remove()
+        self.assertEqual((sender.sent[-1].method, sender.sent[-1].path), ("DELETE", "/v1/sources/src_01J9X"))
+        client.sources.remove("src_01J9X")
+
+    def test_mapping_provider_and_typed_errors(self) -> None:
+        client, sender, _ = make_client(
+            {
+                "POST /v1/datasets/d/sources": json_reply(problem(422, "source_provider_unsupported", "grad can't sync from 'helicone'"), 422),
+                "POST /v1/datasets/c/sources": json_reply(problem(501, "source_unavailable", "Cloud only"), 501),
+            }
+        )
+        with self.assertRaises(grad.ValidationError) as raised:
+            client.sources.create("d", {"kind": "helicone", "secret": grad.SecretRef.from_api(SECRET)})
+        self.assertEqual(raised.exception.code, "source_provider_unsupported")
+        self.assertEqual(sender.sent[-1].json, {"provider": {"kind": "helicone", "secret": "langfuse-prod"}})
+        with self.assertRaises(grad.FeatureUnavailableError):
+            client.sources.create("c", sources.Gradiated())
+        with self.assertRaises(TypeError):
+            client.sources.create("d", "langfuse")
+
+    def test_from_hf_sends_the_secret_name_only(self) -> None:
+        job = {**JOB, "source": {"kind": "hf"}, "status": "queued"}
+        client, sender, _ = make_client(
+            {
+                "POST /v1/datasets/gated/imports": json_reply(job, 202),
+                "GET /v1/datasets/gated": json_reply({**DATASET, "name": "gated"}),
+            }
+        )
+        client.datasets.from_hf("org/gated", prompt="q", name="gated", secret=grad.SecretRef.from_api({"name": "hf-token"}), wait=False)
+        self.assertEqual(sender.sent[0].json["source"]["secret"], "hf-token")
+        client.datasets.from_hf("org/gated", prompt="q", name="gated", secret="hf-token", wait=False)
+        self.assertEqual(sender.sent[-2].json["source"]["secret"], "hf-token")
+
+
+if __name__ == "__main__":
+    unittest.main()
