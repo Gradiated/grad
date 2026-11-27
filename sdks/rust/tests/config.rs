@@ -1,8 +1,8 @@
 //! Configuration precedence: args > explicit profile > env > default profile > default.
 //! One test function, because it mutates process-wide environment variables.
 
-use grad_sdk::config::{self, ConfigFile, ConfigInputs, Profile, Source};
-use grad_sdk::{Client, Error};
+use grad::config::{self, ConfigFile, ConfigInputs, Profile, Source};
+use grad::{Client, Error};
 use std::path::PathBuf;
 
 fn write_config(path: &std::path::Path, profiles: &[(&str, &str, &str)]) {

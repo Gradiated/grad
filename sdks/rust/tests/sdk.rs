@@ -2,7 +2,7 @@
 
 mod support;
 
-use grad_sdk::*;
+use grad::*;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -165,7 +165,7 @@ async fn no_key_for_a_remote_server_fails_before_sending() {
     assert!(matches!(e, Error::Config(_)), "{:?}", e);
     assert_eq!(
         e.to_string().trim_start_matches("configuration error: "),
-        grad_sdk::config::missing_key_message("https://grad.example.invalid")
+        grad::config::missing_key_message("https://grad.example.invalid")
     );
     // An explicitly empty key talks to a server without authentication.
     let open = Client::builder()
@@ -638,7 +638,7 @@ fn tmpdir(tag: &str) -> std::path::PathBuf {
     let d = base.join(format!(
         "grad-sdk-test-{}-{}",
         tag,
-        &grad_sdk::sha256_hex(format!("{:?}", std::time::Instant::now()).as_bytes())[..10]
+        &grad::sha256_hex(format!("{:?}", std::time::Instant::now()).as_bytes())[..10]
     ));
     std::fs::create_dir_all(&d).unwrap();
     d

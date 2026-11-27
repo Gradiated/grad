@@ -133,7 +133,7 @@ deployment, _ := run.Deploy(ctx) // Gradiated Cloud; call deployment.ModelID wit
 ```
 
 ```rust
-use grad_sdk::{Client, DeployArtifactRequest, PlanRunRequest, PushOptions, RecipeKind, RecipeSpec, WaitOptions};
+use grad::{Client, DeployArtifactRequest, PlanRunRequest, PushOptions, RecipeKind, RecipeSpec, WaitOptions};
 
 let client = Client::new();
 let path = std::path::Path::new("./examples/support_traces.jsonl");

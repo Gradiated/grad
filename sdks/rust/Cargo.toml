@@ -11,6 +11,10 @@ documentation = "https://docs.rs/grad-sdk"
 keywords = ["llm", "fine-tuning", "lora", "sdk", "gradiated"]
 categories = ["api-bindings"]
 
+# Published as `grad-sdk` (the `grad` crate name is taken); imported as `grad`.
+[lib]
+name = "grad"
+
 [dependencies]
 flate2 = "1.0"
 futures-core = "0.3"

@@ -2,7 +2,7 @@
 
 mod support;
 
-use grad_sdk::*;
+use grad::*;
 use serde_json::{json, Value};
 use support::mock::{MockServer, Reply};
 

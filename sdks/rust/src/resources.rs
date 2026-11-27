@@ -1024,12 +1024,12 @@ impl Runs<'_> {
     /// without, the stream pages the events recorded so far.
     ///
     /// ```no_run
-    /// # async fn f(c: &grad_sdk::Client) -> grad_sdk::Result<()> {
+    /// # async fn f(c: &grad::Client) -> grad::Result<()> {
     /// let mut events = c.runs().events("run_123", true);
     /// while let Some(ev) = events.next().await {
     ///     match ev? {
-    ///         grad_sdk::RunEvent::Phase(p) => println!("{}", p.phase.as_str()),
-    ///         grad_sdk::RunEvent::Attempt(a) => println!("{}", a.message),
+    ///         grad::RunEvent::Phase(p) => println!("{}", p.phase.as_str()),
+    ///         grad::RunEvent::Attempt(a) => println!("{}", a.message),
     ///         _ => {}
     ///     }
     /// }

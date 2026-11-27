@@ -24,7 +24,7 @@ FIELDS = [
     ("sdks/go/generated/transport.go", rf'^(const SDKVersion = ")({SEMVER})(")'),
     ("sdks/rust/Cargo.toml", rf'\A(\[package\]\nname = "grad-sdk"\nversion = ")({SEMVER})(")'),
     ("cli/Cargo.toml", rf'\A(\[package\]\nname = "grad-cli"\nversion = ")({SEMVER})(")'),
-    ("cli/Cargo.toml", rf'^(grad-sdk = \{{ path = "\.\./sdks/rust", version = "=)({SEMVER})(" \}})'),
+    ("cli/Cargo.toml", rf'^(grad_sdk = \{{ package = "grad-sdk", path = "\.\./sdks/rust", version = "=)({SEMVER})(" \}})'),
     ("Cargo.lock", rf'^(name = "grad-sdk"\nversion = ")({SEMVER})(")'),
     ("Cargo.lock", rf'^(name = "grad-cli"\nversion = ")({SEMVER})(")'),
     ("server/api/package.json", rf'\A(\{{\s*"name": "@gradiated/grad-server",\s*"version": ")({SEMVER})(")'),

@@ -250,7 +250,7 @@ impl SecretName for String {
 /// An observability provider and how to reach it (`SourceProvider` on the wire).
 ///
 /// ```
-/// use grad_sdk::{SecretRef, SourceProvider};
+/// use grad::{SecretRef, SourceProvider};
 /// let p = SourceProvider::langfuse()
 ///     .host("https://cloud.langfuse.com")
 ///     .secret(SecretRef::named("langfuse-prod"));

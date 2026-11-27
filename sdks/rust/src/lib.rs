@@ -1,8 +1,8 @@
 //! Rust SDK for the Gradiated `grad` training and serving platform.
 //!
 //! ```no_run
-//! # async fn demo() -> grad_sdk::Result<()> {
-//! use grad_sdk::{Client, PlanRunRequest, RecipeKind, RecipeSpec};
+//! # async fn demo() -> grad::Result<()> {
+//! use grad::{Client, PlanRunRequest, RecipeKind, RecipeSpec};
 //!
 //! // Reads GRADIATED_API_KEY / GRADIATED_BASE_URL, then the `grad login` config file.
 //! let client = Client::new();
