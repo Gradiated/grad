@@ -85,6 +85,7 @@ export const toJob = <S extends string>(r: Row): JobFields<S> => ({
   created_at: iso(r.created_at),
   updated_at: iso(r.updated_at),
   finished_at: isoN(r.finished_at),
+  min_gpu_memory_gb: nn(r.min_gpu_memory_gb),
   ...jobTelemetry(r),
 });
 

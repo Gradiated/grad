@@ -129,6 +129,25 @@ export const metrics = {
     "Age of the oldest claimable queued job by kind (0 when none).",
     ["kind"],
   ),
+  fairShareWait: gauge(
+    "grad_job_fair_share_wait_seconds",
+    "Longest wait of a job next in its workspace's fair share (the oldest claimable job of a workspace below its running cap), by kind (0 when none).",
+    ["kind"],
+  ),
+  jobsOverLimit: gauge(
+    "grad_jobs_over_workspace_limit",
+    "Queued jobs that wait because their workspace is at its running cap (GRAD_MAX_RUNNING_PER_WORKSPACE_*), by kind; not counted in grad_jobs_open.",
+    ["kind"],
+  ),
+  jobsUnfit: gauge(
+    "grad_jobs_unfit",
+    "Queued train jobs that need more GPU memory (min_gpu_memory_gb) than any online train worker has.",
+  ),
+  queueLimitRejections: counter(
+    "grad_queue_limit_rejections_total",
+    "Creates refused with 429 queue_limit (GRAD_MAX_QUEUED_PER_WORKSPACE), by the kind of job refused.",
+    ["kind"],
+  ),
   claimLatency: histogram(
     "grad_job_claim_latency_seconds",
     "Time from creating a job to its first claim.",

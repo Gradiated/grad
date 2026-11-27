@@ -52,6 +52,10 @@ pub struct PhaseEvent {
     pub workers_online: Option<i64>,
     /// queued/waiting_for_compute: workers scale from zero, so one is starting.
     pub autoscaling: Option<bool>,
+    /// queued/waiting_for_compute: about how many runs start first, when the phase began.
+    pub queue_position: Option<i64>,
+    /// queued/waiting_for_compute: why the run waits, ready to show (None: next in line).
+    pub message: Option<String>,
     /// starting: the worker's GPU (never its id or host).
     pub gpu: Option<GpuInfo>,
 }

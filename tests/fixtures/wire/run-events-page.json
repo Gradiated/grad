@@ -12,6 +12,8 @@
       "step": 0,
       "workers_online": 0,
       "autoscaling": false,
+      "queue_position": 2,
+      "message": "Queued behind 2 runs",
       "gpu": null
     },
     {
@@ -33,6 +35,8 @@
       "step": 0,
       "workers_online": 0,
       "autoscaling": false,
+      "queue_position": 1,
+      "message": "Queued behind 1 run",
       "gpu": null
     },
     {
@@ -58,6 +62,8 @@
       "step": 0,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": {
         "name": "NVIDIA H100 80GB HBM3",
         "memory_gb": 79.6
@@ -73,6 +79,8 @@
       "step": 0,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -85,6 +93,8 @@
       "step": 0,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -147,6 +157,8 @@
       "step": 2,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -183,6 +195,8 @@
       "step": 2,
       "workers_online": 0,
       "autoscaling": false,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -208,6 +222,8 @@
       "step": 2,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": {
         "name": "NVIDIA H100 80GB HBM3",
         "memory_gb": 79.6
@@ -223,6 +239,8 @@
       "step": 2,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -235,6 +253,8 @@
       "step": 2,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -274,6 +294,8 @@
       "step": 3,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -286,6 +308,8 @@
       "step": 3,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -298,6 +322,8 @@
       "step": 3,
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "message": null,
       "gpu": null
     },
     {
@@ -393,6 +419,9 @@
         },
         "workers_online": null,
         "autoscaling": null,
+        "queue_position": null,
+        "queue_message": null,
+        "min_gpu_memory_gb": null,
         "latest_metric": {
           "lr": 0.0001,
           "seq": 20,

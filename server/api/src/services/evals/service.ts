@@ -49,6 +49,7 @@ import { writeRecordsPart } from "../dataset-records.js";
 import { datasetPartKey, type DatasetService } from "../datasets.js";
 import {
   fenceOf,
+  queueLimits,
   RELEASE,
   requeuePatch,
   type JobKindHandler,
@@ -861,6 +862,7 @@ export const createEvalService = (
     return store.evals.create({
       workspaceId,
       maxAttempts: deps.settings.maxAttempts,
+      maxQueued: queueLimits(deps.settings).maxQueued,
       idempotency,
       name: request.name,
       models: request.models,

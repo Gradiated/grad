@@ -158,6 +158,8 @@ export const toRunEvent = (
         step: event.step,
         workers_online: num(p.workers_online),
         autoscaling: bool(p.autoscaling),
+        queue_position: num(p.queue_position),
+        message: typeof p.message === "string" ? p.message : null,
         gpu:
           p.gpu && typeof p.gpu === "object"
             ? (p.gpu as { name: string; memory_gb: number })

@@ -96,6 +96,7 @@ class Progress:
         self.phase_at: float | None = None
         self.workers_online: int | None = None
         self.autoscaling = False
+        self.queue_message: str | None = None
         self.gpu: str | None = None
         self.step = 0
         self.total = 0
@@ -123,6 +124,7 @@ class Progress:
             self.phase_at = _epoch(run.phase_since)
         self.workers_online = run.workers_online
         self.autoscaling = bool(run.autoscaling)
+        self.queue_message = run.queue_message
         if run.latest_metric is not None and run.latest_metric.loss is not None:
             self.loss = run.latest_metric.loss
         self.draw()
@@ -143,6 +145,7 @@ class Progress:
             if event.phase in ("queued", "waiting_for_compute"):
                 self.workers_online = event.workers_online
                 self.autoscaling = bool(event.autoscaling)
+                self.queue_message = event.message
             if event.gpu:
                 self.gpu = str(event.gpu.get("name") or "") or None
         elif isinstance(event, MetricEvent):
@@ -192,6 +195,9 @@ class Progress:
         if self.status is not None:
             return STATUS_LABELS.get(self.status, self.status)
         if self.phase in ("queued", "waiting_for_compute"):
+            # The server's reason: queue position, a workspace cap, a GPU nobody has.
+            if self.queue_message:
+                return f"{self.queue_message}{tail}"
             if self.autoscaling and not self.workers_online:
                 return f"Starting a GPU worker (autoscaling){tail}"
             if self.phase == "waiting_for_compute" or self.workers_online is not None:

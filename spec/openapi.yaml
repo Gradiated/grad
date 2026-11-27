@@ -2177,6 +2177,28 @@ components:
             - boolean
             - "null"
           description: "While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise."
+        queue_position:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          description: "While queued for a worker: about how many runs start before this one. Claims are fair across workspaces
+            (the workspace with the fewest running runs goes next), so this counts other workspaces' runs too.
+            Approximate; null otherwise."
+        queue_message:
+          type:
+            - string
+            - "null"
+          description: 'While queued for a worker: why it waits, ready to show: "Queued behind 3 runs", "Queued: workspace
+            concurrency limit (8 running)" (the workspace runs as many as it may at once), or "Waiting for a GPU with
+            ≥46 GB; online workers have 24 GB". Null when it is next in line, and once it is claimed.'
+        min_gpu_memory_gb:
+          type:
+            - number
+            - "null"
+          exclusiveMinimum: 0
+          description: "GPU memory (GB) the run needs (its plan's min_gpu_memory_gb): only workers with at least this much claim
+            it. Null when unknown."
         latest_metric:
           $ref: "#/components/schemas/MetricPoint"
         eval_report:
@@ -2234,6 +2256,9 @@ components:
         - last_interruption
         - workers_online
         - autoscaling
+        - queue_position
+        - queue_message
+        - min_gpu_memory_gb
         - latest_metric
         - eval_report
         - checkpoint_evals
@@ -2877,6 +2902,20 @@ components:
             - "null"
           description: "queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than
             missing."
+        queue_position:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+          description: "queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share
+            across workspaces). Run.queue_position is the live value."
+        message:
+          type:
+            - string
+            - "null"
+          description: 'queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued:
+            workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null
+            when it is next in line.'
         gpu:
           $ref: "#/components/schemas/GpuInfo"
       required:
@@ -2889,6 +2928,8 @@ components:
         - step
         - workers_online
         - autoscaling
+        - queue_position
+        - message
         - gpu
     RunPhase:
       type: string
@@ -3556,7 +3597,15 @@ components:
           required:
             - name
             - memory_gb
-          description: The worker's GPU, shown on the run's `starting` phase (never the worker id or host).
+          description: "The worker's GPU, shown on the run's `starting` phase (never the worker id or host). Its memory_gb also
+            filters train jobs: the worker gets only runs whose min_gpu_memory_gb fits."
+        device:
+          type: string
+          enum:
+            - cpu
+            - gpu
+          description: What the worker computes on. A GPU worker sends `gpu`; a CPU worker sends `cpu` and no `gpu` (it is not
+            GPU-filtered). Recorded so a run no online worker fits can say so.
       required:
         - worker_id
     TrainerHeartbeatResponse:

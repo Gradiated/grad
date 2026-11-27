@@ -1712,6 +1712,12 @@ pub struct Run {
     pub workers_online: Option<i64>,
     /// While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise.
     pub autoscaling: Option<bool>,
+    /// While queued for a worker: about how many runs start before this one. Claims are fair across workspaces (the workspace with the fewest running runs goes next), so this counts other workspaces' runs too. Approximate; null otherwise.
+    pub queue_position: Option<i64>,
+    /// While queued for a worker: why it waits, ready to show: "Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)" (the workspace runs as many as it may at once), or "Waiting for a GPU with ≥46 GB; online workers have 24 GB". Null when it is next in line, and once it is claimed.
+    pub queue_message: Option<String>,
+    /// GPU memory (GB) the run needs (its plan's min_gpu_memory_gb): only workers with at least this much claim it. Null when unknown.
+    pub min_gpu_memory_gb: Option<f64>,
     pub latest_metric: Option<MetricPoint>,
     pub eval_report: Option<EvalReport>,
     /// recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.

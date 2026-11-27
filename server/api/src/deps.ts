@@ -42,6 +42,15 @@ export interface AppSettings {
   orphanBlobDays?: number;
   /** Prometheus endpoint (default: on, on the API port, no token). */
   metrics?: MetricsSettings;
+  /** Per-workspace queue caps (defaults: 8 running per kind, 500 queued). */
+  queue?: QueueSettings;
+}
+
+export interface QueueSettings {
+  /** Running jobs per workspace and kind; past it the workspace's jobs wait. */
+  maxRunning?: Partial<Record<"train" | "import" | "eval", number>>;
+  /** Queued jobs per workspace; past it creates answer 429 queue_limit. */
+  maxQueued?: number;
 }
 
 export interface MetricsSettings {

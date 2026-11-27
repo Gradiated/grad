@@ -693,6 +693,13 @@ class Run(APIObject):
     """While queued: workers of this kind holding a lease (all busy); ``None`` otherwise."""
     autoscaling: bool | None = None
     """While queued: ``True`` when workers scale from zero, so one is starting."""
+    queue_position: int | None = None
+    """While queued for a worker: about how many runs start first (fair across workspaces)."""
+    queue_message: str | None = None
+    """While queued for a worker: why it waits, ready to show ("Queued behind 3 runs",
+    "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; ...")."""
+    min_gpu_memory_gb: float | None = None
+    """GPU memory (GB) the run needs; only workers with at least this much claim it."""
     latest_metric: MetricPoint | None = None
     eval_report: EvalReport | None = None
     checkpoint_evals: list[dict[str, Any]] = field(default_factory=list)
@@ -1336,6 +1343,10 @@ class PhaseEvent(_RunEventBase):
     step: int = 0
     workers_online: int | None = None
     autoscaling: bool | None = None
+    queue_position: int | None = None
+    """``queued``/``waiting_for_compute``: about how many runs start first, when the phase began."""
+    message: str | None = None
+    """``queued``/``waiting_for_compute``: why the run waits, ready to show (``None``: next in line)."""
     gpu: dict[str, Any] | None = None
     """``starting``: the worker's GPU, ``{"name", "memory_gb"}`` (``None`` without one)."""
 

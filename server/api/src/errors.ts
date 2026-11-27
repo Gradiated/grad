@@ -51,3 +51,12 @@ export const unavailable = (code: string, detail: string): ApiError =>
 
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/** 429: the workspace already has `limit` queued jobs (GRAD_MAX_QUEUED_PER_WORKSPACE). */
+export const queueLimit = (limit: number): ApiError =>
+  new ApiError(
+    429,
+    "queue_limit",
+    "Too many queued jobs",
+    `This workspace already has ${limit} queued jobs (runs, imports and evals), the most it may queue at once. Wait for some to start, or cancel queued ones, then retry.`,
+  );

@@ -74,6 +74,8 @@ import {
   requeuePatch,
   type JobKindHandler,
   observeInterruption,
+  queueLimits,
+  queueView,
   type JobQueue,
   type StopReason,
 } from "./jobs.js";
@@ -104,9 +106,16 @@ type EventBody = z.infer<typeof ReportEventRequestSchema>;
 export interface RunCompute {
   workers_online: number | null;
   autoscaling: boolean | null;
+  queue_position: number | null;
+  queue_message: string | null;
 }
 
-const NO_COMPUTE: RunCompute = { workers_online: null, autoscaling: null };
+const NO_COMPUTE: RunCompute = {
+  workers_online: null,
+  autoscaling: null,
+  queue_position: null,
+  queue_message: null,
+};
 
 const EVAL_TERMINAL: readonly EvalStatus[] = [
   "completed",
@@ -215,6 +224,9 @@ export const toPublicRun = (
   last_interruption: toInterruption(run.interruption_event),
   workers_online: compute.workers_online,
   autoscaling: compute.autoscaling,
+  queue_position: compute.queue_position,
+  queue_message: compute.queue_message,
+  min_gpu_memory_gb: run.min_gpu_memory_gb,
   latest_metric: run.latest_metric,
   eval_report:
     run.eval_report && run.checkpoint_evals.length > 0
@@ -606,17 +618,38 @@ export const createRunLifecycle = (
     costUsd: costForTokens(tokens, run.price_per_million_tokens),
   });
 
+  const limits = queueLimits(settings);
+  const waitingForWorker = (run: RunRecord): boolean =>
+    run.status === "queued" && run.waiting_on === null;
+
+  /** Live queue context of the runs among `runs` that wait for a worker. */
+  const computeOf = async (
+    runs: readonly RunRecord[],
+  ): Promise<Map<string, RunCompute>> => {
+    const queued = runs.filter(waitingForWorker);
+    const out = new Map<string, RunCompute>();
+    if (queued.length === 0) return out;
+    const now = clock.now();
+    const workers = await store.jobs.countLeasedWorkers("train", now);
+    const snapshot = await store.jobs.queueSnapshot(
+      "train",
+      queued.map((r) => r.id),
+      now,
+    );
+    for (const run of queued) {
+      out.set(run.id, {
+        workers_online: workers,
+        autoscaling: settings.workerAutoscaling ?? false,
+        ...queueView(run, snapshot, limits.maxRunning.train, "run"),
+      });
+    }
+
+    return out;
+  };
+
   /** Live queue context while a run waits for a worker. */
   const computeFor = async (run: RunRecord): Promise<RunCompute> =>
-    run.status === "queued" && run.waiting_on === null
-      ? {
-          workers_online: await store.jobs.countLeasedWorkers(
-            "train",
-            clock.now(),
-          ),
-          autoscaling: settings.workerAutoscaling ?? false,
-        }
-      : NO_COMPUTE;
+    (await computeOf([run])).get(run.id) ?? NO_COMPUTE;
 
   const publicRun = async (run: RunRecord): Promise<Run> =>
     toPublicRun(run, await computeFor(run));
@@ -632,13 +665,13 @@ export const createRunLifecycle = (
 
   /** The `queued` phase of the run's next attempt. */
   const markQueued = async (tx: Repositories, run: RunRecord) => {
-    const compute = await computeFor(run);
+    const { queue_message, ...compute } = await computeFor(run);
     await appendPhase(tx.jobs, {
       jobId: run.id,
       attempt: run.attempt + 1,
       phase: "queued",
       step: (await resumeStepOf(tx, run.id)) ?? 0,
-      info: { ...compute },
+      info: { ...compute, message: queue_message },
     });
   };
 
@@ -1007,7 +1040,9 @@ export const createRunLifecycle = (
               maxCostUsd: request.max_cost_usd ?? null,
               pricePerMillionTokens: plan.price_per_million_tokens,
               totalSteps: plan.estimated_steps,
+              minGpuMemoryGb: plan.min_gpu_memory_gb,
               maxAttempts: settings.maxAttempts,
+              maxQueued: limits.maxQueued,
               waitingOn: labels?.id ?? null,
               idempotency,
             });
@@ -1049,19 +1084,11 @@ export const createRunLifecycle = (
 
     list: async (workspaceId, page) => {
       const result = await store.runs.list(workspaceId, page);
-      const queued = result.data.find(
-        (r) => r.status === "queued" && r.waiting_on === null,
-      );
-      const compute = queued ? await computeFor(queued) : NO_COMPUTE;
+      const compute = await computeOf(result.data);
 
       return {
         data: result.data.map((r) =>
-          toPublicRun(
-            r,
-            r.status === "queued" && r.waiting_on === null
-              ? compute
-              : NO_COMPUTE,
-          ),
+          toPublicRun(r, compute.get(r.id) ?? NO_COMPUTE),
         ),
         next_cursor: result.next_cursor,
       };
@@ -1603,14 +1630,23 @@ export const createRunLifecycle = (
 
     markWaitingForCompute: async (now) => {
       const threshold = settings.waitingForComputeSeconds ?? 30;
+      // Runs whose workspace is at its running cap wait on themselves:
+      // they stay `queued` (their queue_message says why).
       const rows = await store.jobs.listUnclaimedSince(
         "train",
         new Date(now.getTime() - threshold * 1000),
         100,
+        limits.maxRunning.train,
       );
       if (rows.length === 0) return 0;
       const workers = await store.jobs.countLeasedWorkers("train", now);
+      const snapshot = await store.jobs.queueSnapshot(
+        "train",
+        rows.map((r) => r.id),
+        now,
+      );
       for (const row of rows) {
+        const view = queueView(row, snapshot, limits.maxRunning.train, "run");
         await appendPhase(store.jobs, {
           jobId: row.id,
           attempt: row.attempt + 1,
@@ -1618,6 +1654,8 @@ export const createRunLifecycle = (
           info: {
             workers_online: workers,
             autoscaling: settings.workerAutoscaling ?? false,
+            queue_position: view.queue_position,
+            message: view.queue_message,
           },
         });
       }

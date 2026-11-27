@@ -43,6 +43,7 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
     create: ({
       workspaceId,
       maxAttempts,
+      maxQueued,
       waitingOn,
       idempotency,
       totalOutputs,
@@ -54,6 +55,7 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
           kind: "eval",
           workspaceId,
           maxAttempts,
+          maxQueued,
           waitingOn,
           idempotency,
         },

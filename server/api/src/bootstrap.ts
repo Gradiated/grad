@@ -162,6 +162,14 @@ export const buildDependencies = async (
       maxPreemptions: env.MAX_PREEMPTIONS,
       waitingForComputeSeconds: env.WAITING_FOR_COMPUTE_SECONDS,
       workerAutoscaling: env.GRAD_WORKER_AUTOSCALING,
+      queue: {
+        maxRunning: {
+          train: env.GRAD_MAX_RUNNING_PER_WORKSPACE_TRAIN,
+          import: env.GRAD_MAX_RUNNING_PER_WORKSPACE_IMPORT,
+          eval: env.GRAD_MAX_RUNNING_PER_WORKSPACE_EVAL,
+        },
+        maxQueued: env.GRAD_MAX_QUEUED_PER_WORKSPACE,
+      },
       evalConcurrency: env.EVAL_CONCURRENCY,
       ssePollMs: env.SSE_POLL_MS,
       jobEventRetentionDays: env.JOB_EVENT_RETENTION_DAYS,

@@ -1,4 +1,4 @@
-import type { Store, TelemetrySnapshot } from "../store/types.js";
+import type { QueueCaps, Store, TelemetrySnapshot } from "../store/types.js";
 import { metrics, type MetricJobKind } from "./metrics.js";
 
 const KINDS: readonly MetricJobKind[] = ["train", "import", "sync", "eval"];
@@ -43,7 +43,7 @@ export interface TelemetrySampler {
  */
 export const createTelemetrySampler = (
   store: Pick<Store, "telemetry">,
-  options: { workspaceLabel?: boolean } = {},
+  options: { workspaceLabel?: boolean; maxRunning?: QueueCaps } = {},
 ): TelemetrySampler => {
   let last: TelemetrySnapshot | null = null;
   let sampledAt: string | null = null;
@@ -63,6 +63,17 @@ export const createTelemetrySampler = (
         );
       }
     }
+    // Jobs a workspace's running cap holds back don't need a worker: take
+    // them out of the open count KEDA scales on (an import's from imports
+    // first, then syncs).
+    for (const row of snap.queue) {
+      let rest = row.over_limit;
+      for (const kind of METRIC_KINDS[row.kind] ?? []) {
+        const take = Math.min(rest, open.get(kind) ?? 0);
+        open.set(kind, (open.get(kind) ?? 0) - take);
+        rest -= take;
+      }
+    }
     for (const kind of KINDS) {
       for (const status of STATES) {
         metrics.jobs.set({ kind, status }, jobs.get(`${kind}|${status}`) ?? 0);
@@ -70,6 +81,12 @@ export const createTelemetrySampler = (
       metrics.jobsOpen.set({ kind }, open.get(kind) ?? 0);
       metrics.oldestQueuedAge.set({ kind }, oldest.get(kind) ?? 0);
     }
+    for (const kind of WORKER_KINDS) {
+      const q = snap.queue.find((r) => r.kind === kind);
+      metrics.jobsOverLimit.set({ kind }, q?.over_limit ?? 0);
+      metrics.fairShareWait.set({ kind }, q?.fair_share_wait_seconds ?? 0);
+    }
+    metrics.jobsUnfit.set(snap.unfit);
 
     if (options.workspaceLabel) {
       metrics.workspaceJobs.reset();
@@ -114,12 +131,20 @@ export const createTelemetrySampler = (
   };
 
   // Zeros until the first read, so every series exists from boot.
-  apply({ jobs: [], workers: [], phases: [], sources: [] });
+  apply({
+    jobs: [],
+    workers: [],
+    phases: [],
+    sources: [],
+    queue: [],
+    unfit: 0,
+  });
 
   return {
     refresh: async (now) => {
       const snap = await store.telemetry.snapshot(now, {
         byWorkspace: options.workspaceLabel === true,
+        maxRunning: options.maxRunning,
       });
       apply(snap);
       last = snap;
@@ -144,6 +169,10 @@ export const createTelemetrySampler = (
         }
         if (row.state === "running") depth.running += row.count;
       }
+      const held = (last?.queue ?? [])
+        .filter((r) => kinds.includes(r.kind))
+        .reduce((sum, r) => sum + r.over_limit, 0);
+      depth.open = Math.max(0, depth.open - held);
 
       return depth;
     },

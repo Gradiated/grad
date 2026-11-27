@@ -1,4 +1,5 @@
 import type { Clock } from "../../clock.js";
+import { queueLimit } from "../../errors.js";
 import { newId } from "../../ids.js";
 import { metricKind, metrics } from "../../telemetry/metrics.js";
 import { currentTraceparent } from "../../telemetry/tracing.js";
@@ -12,6 +13,7 @@ import type {
   JobStatus,
   Page,
   PageRequest,
+  QueueCaps,
 } from "../types.js";
 import {
   expectClause,
@@ -137,8 +139,13 @@ export const insertJob = async (
     waitingOn?: string | null | undefined;
     payload?: Record<string, unknown>;
     idempotency?: IdempotencyInput | undefined;
+    maxQueued?: number | undefined;
+    minGpuMemoryGb?: number | null | undefined;
   },
 ): Promise<string> => {
+  if (input.maxQueued !== undefined) {
+    await assertQueueRoom(db, input.workspaceId, input.kind, input.maxQueued);
+  }
   const ts = nowIso(clock);
   const id = newId(input.prefix);
   // A worker's requests for this job join the creating request's trace.
@@ -146,8 +153,8 @@ export const insertJob = async (
   await db.query(
     `INSERT INTO grad_jobs
        (id, workspace_id, kind, status, max_attempts, waiting_on, payload,
-        idempotency_key, request_hash, created_at, updated_at)
-     VALUES ($1, $2, $3, 'queued', $4, $5, $6::jsonb, $7, $8, $9::timestamptz, $9::timestamptz)`,
+        idempotency_key, request_hash, created_at, updated_at, min_gpu_memory_gb)
+     VALUES ($1, $2, $3, 'queued', $4, $5, $6::jsonb, $7, $8, $9::timestamptz, $9::timestamptz, $10)`,
     [
       id,
       input.workspaceId,
@@ -161,11 +168,66 @@ export const insertJob = async (
       input.idempotency?.key ?? null,
       input.idempotency?.hash ?? null,
       ts,
+      input.minGpuMemoryGb ?? null,
     ],
   );
 
   return id;
 };
+
+/** Advisory lock classes (two-key form): serializing per workspace or kind. */
+const QUEUED_LOCK = 72_419_031;
+const CLAIM_LOCK = 72_419_032;
+
+/**
+ * 429 queue_limit once `workspaceId` has `limit` queued jobs. Runs in the
+ * insert's transaction under a per-workspace advisory lock, so concurrent
+ * creates on several replicas cannot all slip under the cap.
+ */
+const assertQueueRoom = async (
+  db: Db,
+  workspaceId: string,
+  kind: JobKind,
+  limit: number,
+): Promise<void> => {
+  await db.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [
+    QUEUED_LOCK,
+    workspaceId,
+  ]);
+  const queued = Number(
+    first(
+      await db.query<{ n: string }>(
+        `SELECT count(*) AS n FROM grad_jobs
+         WHERE kind IN ('train', 'import', 'eval') AND status = 'queued' AND workspace_id = $1`,
+        [workspaceId],
+      ),
+    )?.n ?? 0,
+  );
+  if (queued >= limit) {
+    metrics.queueLimitRejections.inc({ kind });
+    throw queueLimit(limit);
+  }
+};
+
+/** No cap: a claim without maxRunning (store tests, tools). */
+const UNCAPPED: QueueCaps = { train: 1e9, import: 1e9, eval: 1e9 };
+
+/** A worker may run train job `j` (alias): its recipe and GPU memory fit. */
+const fitsWorker = (j: string, recipes: string, gpuMemory: string): string =>
+  `(${recipes}::text[] IS NULL OR ${j}.kind <> 'train'
+     OR EXISTS (SELECT 1 FROM grad_runs r WHERE r.id = ${j}.id AND r.recipe_kind = ANY(${recipes}::text[])))
+   AND (${gpuMemory}::float8 IS NULL OR ${j}.kind <> 'train' OR ${j}.min_gpu_memory_gb IS NULL
+     OR ${j}.min_gpu_memory_gb <= ${gpuMemory}::float8)`;
+
+/** A worker counts as online this long after its last claim poll (or while it holds a lease). */
+const WORKER_ONLINE_SECONDS = 60;
+
+/** `grad_workers w` rows of online workers of job kind `kind` at `now` (SQL expressions). */
+export const onlineWorkers = (kind: string, now: string): string =>
+  `grad_workers w WHERE ${kind} = ANY(w.kinds)
+     AND (w.last_seen_at > ${now}::timestamptz - make_interval(secs => ${WORKER_ONLINE_SECONDS})
+          OR EXISTS (SELECT 1 FROM grad_jobs l
+                     WHERE l.worker_id = w.id AND l.lease_expires_at > ${now}::timestamptz))`;
 
 export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
   getById: async (id) => {
@@ -194,37 +256,96 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
     kinds,
     recipes,
     workspaceId,
+    gpuMemoryGb,
+    maxRunning,
   }) => {
-    const row = first(
-      await db.query(
-        `UPDATE grad_jobs
-         SET status = 'running', attempt = attempt + 1, worker_id = $1, worker_key = $8,
-             lease_expires_at = $2::timestamptz, lease_seconds = $3, updated_at = $4::timestamptz,
-             billed_through = 0, billed_cost = 0, billed_at = $4::timestamptz
-         WHERE id = (
-           SELECT j.id FROM grad_jobs j
-           WHERE j.status = 'queued' AND j.waiting_on IS NULL AND j.kind = ANY($5::text[])
-             AND ($6::text IS NULL OR j.workspace_id = $6)
-             AND ($7::text[] IS NULL OR j.kind <> 'train'
-                  OR EXISTS (SELECT 1 FROM grad_runs r WHERE r.id = j.id AND r.recipe_kind = ANY($7::text[])))
-           ORDER BY j.created_at, j.id COLLATE "C"
-           LIMIT 1 FOR UPDATE SKIP LOCKED
-         )
-         RETURNING *`,
-        [
-          workerId,
-          addSecondsIso(now, leaseSeconds),
-          leaseSeconds,
-          now.toISOString(),
-          [...kinds],
-          workspaceId ?? null,
-          recipes ? [...recipes] : null,
-          workerKey,
-        ],
-      ),
+    const params = [
+      [...kinds],
+      workspaceId ?? null,
+      recipes ? [...recipes] : null,
+      gpuMemoryGb ?? null,
+    ];
+    const claimable = `j.status = 'queued' AND j.waiting_on IS NULL AND j.kind = ANY($1::text[])
+      AND ($2::text IS NULL OR j.workspace_id = $2)
+      AND ${fitsWorker("j", "$3", "$4")}`;
+    // An idle poll of an empty queue takes no lock.
+    const any = await db.query(
+      `SELECT 1 FROM grad_jobs j WHERE ${claimable} LIMIT 1`,
+      params,
     );
+    if (any.length === 0) return null;
 
-    return row ? toJob(row) : null;
+    // Fair share: among workspaces below their running cap for the kind,
+    // the one with the fewest running jobs (ties: its oldest job this worker
+    // can run), then that job. Claims of a kind take one advisory lock (in
+    // kind order, so multi-kind claims cannot deadlock), which makes the
+    // running counts and caps exact across replicas; SKIP LOCKED leaves rows
+    // another writer (a cancel) holds.
+    return db.atomic(async () => {
+      for (const kind of [...kinds].sort()) {
+        await db.query("SELECT pg_advisory_xact_lock($1, hashtext($2))", [
+          CLAIM_LOCK,
+          kind,
+        ]);
+      }
+      const row = first(
+        await db.query(
+          `WITH RECURSIVE running AS (
+             SELECT workspace_id, kind, count(*)::int AS n FROM grad_jobs
+             WHERE status = 'running' AND kind = ANY($1::text[])
+               AND ($2::text IS NULL OR workspace_id = $2)
+             GROUP BY workspace_id, kind
+           ), spaces AS (
+             -- Each kind's workspaces with queued jobs: a loose index scan,
+             -- one probe per workspace however long its queue is.
+             -- ('' sorts before every workspace id and names none.)
+             SELECT k AS kind, ''::text AS workspace_id FROM unnest($1::text[]) k
+             UNION ALL
+             SELECT s.kind, (
+               SELECT min(workspace_id) FROM grad_jobs
+               WHERE kind = s.kind AND status = 'queued' AND workspace_id > s.workspace_id
+                 AND ($2::text IS NULL OR workspace_id = $2)
+             )
+             FROM spaces s WHERE s.workspace_id IS NOT NULL
+           ), heads AS (
+             -- Each workspace's oldest job this worker can run.
+             SELECT h.* FROM spaces s CROSS JOIN LATERAL (
+               SELECT j.id, j.kind, j.workspace_id, j.created_at FROM grad_jobs j
+               WHERE j.kind = s.kind AND j.workspace_id = s.workspace_id AND ${claimable}
+               ORDER BY j.created_at, j.id COLLATE "C" LIMIT 1
+             ) h
+             WHERE s.workspace_id IS NOT NULL AND s.workspace_id <> ''
+           ), pick AS (
+             SELECT h.id FROM heads h
+             LEFT JOIN running r ON r.workspace_id = h.workspace_id AND r.kind = h.kind
+             WHERE coalesce(r.n, 0) < ($5::jsonb ->> h.kind)::int
+             ORDER BY coalesce(r.n, 0), h.created_at, h.id COLLATE "C"
+             LIMIT 1
+           ), locked AS (
+             SELECT id FROM grad_jobs
+             WHERE id = (SELECT id FROM pick) AND status = 'queued'
+             FOR UPDATE SKIP LOCKED
+           )
+           UPDATE grad_jobs
+           SET status = 'running', attempt = attempt + 1, worker_id = $6, worker_key = $7,
+               lease_expires_at = $8::timestamptz, lease_seconds = $9, updated_at = $10::timestamptz,
+               billed_through = 0, billed_cost = 0, billed_at = $10::timestamptz
+           WHERE id = (SELECT id FROM locked)
+           RETURNING *`,
+          [
+            ...params,
+            JSON.stringify(maxRunning ?? UNCAPPED),
+            workerId,
+            workerKey,
+            addSecondsIso(now, leaseSeconds),
+            leaseSeconds,
+            now.toISOString(),
+          ],
+        ),
+      );
+
+      return row ? toJob(row) : null;
+    });
   },
   heldBy: async ({ workerId, workerKey, kinds, workspaceId }) => {
     const row = first(
@@ -372,7 +493,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
         ),
       )?.n ?? 0,
     ),
-  listUnclaimedSince: async (kind, before, limit) =>
+  listUnclaimedSince: async (kind, before, limit, maxRunning) =>
     (
       await db.query(
         `SELECT j.* FROM grad_jobs j
@@ -382,10 +503,85 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
          ) p ON true
          WHERE j.status = 'queued' AND j.waiting_on IS NULL AND j.kind = $1
            AND p.phase = 'queued' AND p.phase_at < $2::timestamptz
+           AND ($4::int IS NULL OR (
+             SELECT count(*) FROM grad_jobs r
+             WHERE r.kind = j.kind AND r.status = 'running' AND r.workspace_id = j.workspace_id
+           ) < $4::int)
          ORDER BY j.created_at, j.id COLLATE "C" LIMIT $3`,
-        [kind, before.toISOString(), limit],
+        [kind, before.toISOString(), limit, maxRunning ?? null],
       )
     ).map((r) => toJob(r)),
+  seeWorker: async ({ id, kinds, device, gpuMemoryGb, now }) => {
+    await db.query(
+      `INSERT INTO grad_workers (id, kinds, device, gpu_memory_gb, last_seen_at)
+       VALUES ($1, $2::text[], $3, $4, $5::timestamptz)
+       ON CONFLICT (id) DO UPDATE
+       SET kinds = EXCLUDED.kinds, device = EXCLUDED.device,
+           gpu_memory_gb = EXCLUDED.gpu_memory_gb, last_seen_at = EXCLUDED.last_seen_at
+       WHERE grad_workers.last_seen_at < EXCLUDED.last_seen_at - interval '10 seconds'
+          OR grad_workers.kinds IS DISTINCT FROM EXCLUDED.kinds
+          OR grad_workers.device IS DISTINCT FROM EXCLUDED.device
+          OR grad_workers.gpu_memory_gb IS DISTINCT FROM EXCLUDED.gpu_memory_gb`,
+      [id, [...kinds].sort(), device, gpuMemoryGb, now.toISOString()],
+    );
+  },
+  pruneWorkers: async (before) =>
+    (
+      await db.query(
+        `DELETE FROM grad_workers w WHERE w.last_seen_at < $1::timestamptz
+           AND NOT EXISTS (SELECT 1 FROM grad_jobs j WHERE j.worker_id = w.id)
+         RETURNING id`,
+        [before.toISOString()],
+      )
+    ).length,
+  queueSnapshot: async (kind, ids, now) => {
+    const shares = await db.query(
+      `SELECT workspace_id,
+              count(*) FILTER (WHERE status = 'queued' AND waiting_on IS NULL)::int AS queued,
+              count(*) FILTER (WHERE status = 'running')::int AS running,
+              min(created_at) FILTER (WHERE status = 'queued' AND waiting_on IS NULL) AS oldest
+       FROM grad_jobs WHERE kind = $1 AND status IN ('queued', 'running')
+       GROUP BY workspace_id`,
+      [kind],
+    );
+    const ranks =
+      ids.length === 0
+        ? []
+        : await db.query(
+            `SELECT j.id, (
+               SELECT count(*)::int FROM grad_jobs o
+               WHERE o.kind = j.kind AND o.status = 'queued' AND o.waiting_on IS NULL
+                 AND o.workspace_id = j.workspace_id
+                 AND (o.created_at, o.id COLLATE "C") < (j.created_at, j.id COLLATE "C")
+             ) AS rank
+             FROM grad_jobs j WHERE j.id = ANY($1::text[])`,
+            [[...ids]],
+          );
+    const workers = await db.query(
+      `SELECT w.gpu_memory_gb FROM ${onlineWorkers("$1", "$2")}`,
+      [kind, now.toISOString()],
+    );
+
+    return {
+      shares: shares.map((r) => ({
+        workspace_id: String(r.workspace_id),
+        queued: Number(r.queued),
+        running: Number(r.running),
+        oldest:
+          r.oldest === null || r.oldest === undefined
+            ? null
+            : new Date(r.oldest as string).toISOString(),
+      })),
+      ranks: Object.fromEntries(
+        ranks.map((r) => [String(r.id), Number(r.rank)]),
+      ),
+      workerGpus: workers.map((r) =>
+        r.gpu_memory_gb === null || r.gpu_memory_gb === undefined
+          ? null
+          : Number(r.gpu_memory_gb),
+      ),
+    };
+  },
   deleteEventsBefore: async (before, limit) =>
     (
       await db.query(

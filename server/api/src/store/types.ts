@@ -247,6 +247,8 @@ export interface JobFields<S extends string = JobStatus> {
   created_at: string;
   updated_at: string;
   finished_at: string | null;
+  /** GPU memory (GB) a train job needs; null: any worker may claim it. */
+  min_gpu_memory_gb: number | null;
   /** W3C traceparent of the request that created the job (tracing on). */
   traceparent: string | null;
   /** `source`: an import a source sync started. */
@@ -266,6 +268,7 @@ export type JobPatch<S extends string = JobStatus> = Partial<
     | "billed_cost"
     | "billed_at"
     | "traceparent"
+    | "min_gpu_memory_gb"
     | "origin"
   >
 >;
@@ -289,6 +292,41 @@ export interface ClaimInput {
   recipes?: readonly RecipeKind[] | undefined;
   /** Restrict to one workspace (workspace-scoped worker keys). */
   workspaceId?: string | undefined;
+  /** The worker's GPU memory: train jobs needing more are left queued (null: no filter). */
+  gpuMemoryGb?: number | null | undefined;
+  /** Running jobs per workspace and kind past which its queued jobs wait (absent: no cap). */
+  maxRunning?: QueueCaps | undefined;
+}
+
+/** A per-workspace limit for each job kind. */
+export type QueueCaps = Readonly<Record<JobKind, number>>;
+
+/** One workspace's share of a kind's queue (queue position and phase text). */
+export interface QueueShare {
+  workspace_id: string;
+  /** Claimable queued jobs (not waiting on another job). */
+  queued: number;
+  running: number;
+  /** created_at of its oldest claimable queued job (null: none queued). */
+  oldest: string | null;
+}
+
+/** What a queued job's position and phase text are computed from. */
+export interface QueueSnapshot {
+  shares: QueueShare[];
+  /** Per job asked about: claimable queued jobs of its workspace and kind ahead of it. */
+  ranks: Record<string, number>;
+  /** GPU memory (GB) of each online worker of the kind (null: a CPU or unreporting worker). */
+  workerGpus: (number | null)[];
+}
+
+/** What a claiming worker said about itself (grad_workers). */
+export interface WorkerSighting {
+  id: string;
+  kinds: readonly JobKind[];
+  device: "cpu" | "gpu" | null;
+  gpuMemoryGb: number | null;
+  now: Date;
 }
 
 export interface JobEvent {
@@ -386,13 +424,25 @@ export interface JobRepository {
   countLeasedWorkers(kind: JobKind, now: Date): Promise<number>;
   /**
    * Claimable queued jobs of `kind` whose latest `phase` event is `queued`
-   * and older than `before` (nobody claimed them in time).
+   * and older than `before` (nobody claimed them in time), in workspaces
+   * below their running cap (the others wait on themselves, not on compute).
    */
   listUnclaimedSince(
     kind: JobKind,
     before: Date,
     limit: number,
+    maxRunning?: number,
   ): Promise<JobRow[]>;
+  /** Records a claiming worker (throttled: at most one write per worker per 10 s). */
+  seeWorker(worker: WorkerSighting): Promise<void>;
+  /** Forgets workers unseen since `before` that hold no lease. */
+  pruneWorkers(before: Date): Promise<number>;
+  /** The queue of `kind` as the fair claim sees it, plus each of `ids`' rank. */
+  queueSnapshot(
+    kind: JobKind,
+    ids: readonly string[],
+    now: Date,
+  ): Promise<QueueSnapshot>;
   /** Retention: deletes up to `limit` events created before `before`. */
   deleteEventsBefore(before: Date, limit: number): Promise<number>;
 }
@@ -401,6 +451,11 @@ export interface JobRepository {
 interface JobCreate {
   workspaceId: string;
   maxAttempts: number;
+  /**
+   * Refuse (429 queue_limit) when the workspace already has this many queued
+   * jobs. Absent for server-started jobs (source syncs: one per source).
+   */
+  maxQueued?: number | undefined;
   waitingOn?: string | null | undefined;
   idempotency?: IdempotencyInput | undefined;
 }
@@ -507,6 +562,8 @@ export interface RunRepository {
       maxCostUsd: number | null;
       pricePerMillionTokens: number;
       totalSteps: number;
+      /** GPU memory (GB) it needs; absent or null: any worker. */
+      minGpuMemoryGb?: number | null | undefined;
     },
   ): Promise<RunRecord>;
   get(workspaceId: string, id: string): Promise<RunRecord | null>;
@@ -1010,6 +1067,16 @@ export interface TelemetrySnapshot {
     flush_lag_seconds: number | null;
   }>;
   phases: Array<{ kind: string; phase: string; count: number }>;
+  /** Per job kind (train, import, eval): fair-share queue state. */
+  queue: Array<{
+    kind: string;
+    /** Queued jobs beyond what their workspace's running cap lets start. */
+    over_limit: number;
+    /** Longest wait of a workspace's next job, among workspaces below their cap. */
+    fair_share_wait_seconds: number | null;
+  }>;
+  /** Queued train jobs no online train worker has the GPU memory for. */
+  unfit: number;
   sources: Array<{
     provider: string;
     count: number;
@@ -1021,7 +1088,7 @@ export interface TelemetrySnapshot {
 export interface TelemetryRepository {
   snapshot(
     now: Date,
-    options: { byWorkspace: boolean },
+    options: { byWorkspace: boolean; maxRunning?: QueueCaps | undefined },
   ): Promise<TelemetrySnapshot>;
 }
 

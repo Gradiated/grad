@@ -25,12 +25,16 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_job_attempts_total` | counter | `kind` | Job attempts started (claims). |
 | `grad_job_claim_latency_seconds` | histogram | `kind` | Time from creating a job to its first claim. |
 | `grad_job_duration_seconds` | histogram | `kind`, `recipe_kind`, `status` | Time from creating a job to its terminal status, by kind, recipe and status. |
+| `grad_job_fair_share_wait_seconds` | gauge | `kind` | Longest wait of a job next in its workspace's fair share (the oldest claimable job of a workspace below its running cap), by kind (0 when none). |
 | `grad_job_oldest_queued_age_seconds` | gauge | `kind` | Age of the oldest claimable queued job by kind (0 when none). |
 | `grad_job_requeues_total` | counter | `kind`, `reason` | Attempts that ended without a result, by reason (lease_lost, compute_reclaimed, worker_error, oom). |
 | `grad_jobs` | gauge | `kind`, `status` | Open jobs by kind and status: queued (claimable), blocked (waiting on another job), waiting_for_compute, running, awaiting_scores. |
 | `grad_jobs_open` | gauge | `kind` | Claimable queued plus leased jobs by kind: what KEDA scales workers on. |
+| `grad_jobs_over_workspace_limit` | gauge | `kind` | Queued jobs that wait because their workspace is at its running cap (GRAD_MAX_RUNNING_PER_WORKSPACE_*), by kind; not counted in grad_jobs_open. |
+| `grad_jobs_unfit` | gauge |  | Queued train jobs that need more GPU memory (min_gpu_memory_gb) than any online train worker has. |
 | `grad_maintenance_step_duration_seconds` | histogram | `step` | Maintenance step duration. |
 | `grad_maintenance_step_errors_total` | counter | `step` | Maintenance steps that failed. |
+| `grad_queue_limit_rejections_total` | counter | `kind` | Creates refused with 429 queue_limit (GRAD_MAX_QUEUED_PER_WORKSPACE), by the kind of job refused. |
 | `grad_source_consecutive_failures` | gauge | `provider` | The most consecutive failed syncs of any source, by provider. |
 | `grad_source_records_synced_total` | counter | `provider` | Records source syncs added, by provider. |
 | `grad_source_score_updates_total` | counter | `provider` | Score updates source syncs added, by provider. |

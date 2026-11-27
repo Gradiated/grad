@@ -63,6 +63,24 @@ const EnvironmentSchema = z.object({
   WAITING_FOR_COMPUTE_SECONDS: z.coerce.number().int().min(1).default(30),
   /** Workers scale from zero (KEDA): say "a GPU worker is starting". */
   GRAD_WORKER_AUTOSCALING: booleanFlag("false"),
+  /** Running jobs per workspace and kind; past it the workspace's jobs wait (fair share). */
+  GRAD_MAX_RUNNING_PER_WORKSPACE_TRAIN: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(8),
+  GRAD_MAX_RUNNING_PER_WORKSPACE_IMPORT: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(8),
+  GRAD_MAX_RUNNING_PER_WORKSPACE_EVAL: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(8),
+  /** Queued jobs per workspace (runs, imports, evals); past it creates answer 429 queue_limit. */
+  GRAD_MAX_QUEUED_PER_WORKSPACE: z.coerce.number().int().min(1).default(500),
   MIGRATE_ON_BOOT: booleanFlag("true"),
   AUTH_MODE_NONE_ALLOW_REMOTE: booleanFlag("false"),
   /** Bill a running attempt every this many tokens... */

@@ -636,6 +636,18 @@ export const RunSchema = z
       description:
         "While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise.",
     }),
+    queue_position: z.number().int().min(0).nullable().openapi({
+      description:
+        "While queued for a worker: about how many runs start before this one. Claims are fair across workspaces (the workspace with the fewest running runs goes next), so this counts other workspaces' runs too. Approximate; null otherwise.",
+    }),
+    queue_message: z.string().nullable().openapi({
+      description:
+        'While queued for a worker: why it waits, ready to show: "Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)" (the workspace runs as many as it may at once), or "Waiting for a GPU with ≥46 GB; online workers have 24 GB". Null when it is next in line, and once it is claimed.',
+    }),
+    min_gpu_memory_gb: z.number().positive().nullable().openapi({
+      description:
+        "GPU memory (GB) the run needs (its plan's min_gpu_memory_gb): only workers with at least this much claim it. Null when unknown.",
+    }),
     latest_metric: MetricPointSchema.nullable(),
     eval_report: EvalReportSchema.nullable(),
     checkpoint_evals: z.array(CheckpointEvalResultSchema).openapi({
@@ -770,6 +782,14 @@ export const PhaseEventSchema = z
     autoscaling: z.boolean().nullable().openapi({
       description:
         "queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than missing.",
+    }),
+    queue_position: z.number().int().min(0).nullable().openapi({
+      description:
+        "queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value.",
+    }),
+    message: z.string().nullable().openapi({
+      description:
+        'queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.',
     }),
     gpu: GpuInfoSchema.nullable().openapi({
       description:

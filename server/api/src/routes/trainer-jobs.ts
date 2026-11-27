@@ -71,13 +71,14 @@ export const registerTrainerJobRoutes = (
           `This trainer key may claim only ${(principal.workerKinds ?? []).join(", ")} jobs, not ${input.kinds.join(", ")}.`,
         );
       }
-      // One queue, oldest first across the requested kinds.
+      // One queue, fair across workspaces, over the requested kinds.
       const job = await services.queue.claim(principal, {
         workerId: input.worker_id,
         leaseSeconds: input.lease_seconds,
         kinds,
         recipes: input.recipes,
         gpu: input.gpu,
+        device: input.device,
       });
 
       return c.json(

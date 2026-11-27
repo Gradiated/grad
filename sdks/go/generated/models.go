@@ -1584,8 +1584,12 @@ type PhaseEvent struct {
 	// WorkersOnline queued and waiting_for_compute: workers of this job kind holding a lease (all busy; an idle worker would have claimed the run).
 	WorkersOnline *int `json:"workers_online"`
 	// Autoscaling queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than missing.
-	Autoscaling *bool    `json:"autoscaling"`
-	GPU         *GPUInfo `json:"gpu"`
+	Autoscaling *bool `json:"autoscaling"`
+	// QueuePosition queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value.
+	QueuePosition *int `json:"queue_position"`
+	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.
+	Message *string  `json:"message"`
+	GPU     *GPUInfo `json:"gpu"`
 }
 
 // PhaseEventType is an enumeration of allowed values.
@@ -2183,9 +2187,15 @@ type Run struct {
 	// WorkersOnline While queued: workers of this kind holding a lease (all busy). Null otherwise.
 	WorkersOnline *int `json:"workers_online"`
 	// Autoscaling While queued: true when workers scale from zero (KEDA), so a worker is starting. Null otherwise.
-	Autoscaling  *bool        `json:"autoscaling"`
-	LatestMetric *MetricPoint `json:"latest_metric"`
-	EvalReport   *EvalReport  `json:"eval_report"`
+	Autoscaling *bool `json:"autoscaling"`
+	// QueuePosition While queued for a worker: about how many runs start before this one. Claims are fair across workspaces (the workspace with the fewest running runs goes next), so this counts other workspaces' runs too. Approximate; null otherwise.
+	QueuePosition *int `json:"queue_position"`
+	// QueueMessage While queued for a worker: why it waits, ready to show: "Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)" (the workspace runs as many as it may at once), or "Waiting for a GPU with ≥46 GB; online workers have 24 GB". Null when it is next in line, and once it is claimed.
+	QueueMessage *string `json:"queue_message"`
+	// MinGPUMemoryGb GPU memory (GB) the run needs (its plan's min_gpu_memory_gb): only workers with at least this much claim it. Null when unknown.
+	MinGPUMemoryGb *float64     `json:"min_gpu_memory_gb"`
+	LatestMetric   *MetricPoint `json:"latest_metric"`
+	EvalReport     *EvalReport  `json:"eval_report"`
 	// CheckpointEvals recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.
 	CheckpointEvals []CheckpointEvalResult `json:"checkpoint_evals"`
 	ArtifactID      *string                `json:"artifact_id"`
@@ -2211,7 +2221,11 @@ type RunEvent struct {
 	// WorkersOnline queued and waiting_for_compute: workers of this job kind holding a lease (all busy; an idle worker would have claimed the run).
 	WorkersOnline *int `json:"workers_online,omitempty"`
 	// Autoscaling queued and waiting_for_compute: true when workers scale from zero (KEDA), so one is starting rather than missing.
-	Autoscaling  *bool               `json:"autoscaling,omitempty"`
+	Autoscaling *bool `json:"autoscaling,omitempty"`
+	// QueuePosition queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value.
+	QueuePosition *int `json:"queue_position,omitempty"`
+	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.
+	Message      *string             `json:"message,omitempty"`
 	GPU          *GPUInfo            `json:"gpu,omitempty"`
 	Metric       *MetricPoint        `json:"metric,omitempty"`
 	CheckpointID *string             `json:"checkpoint_id,omitempty"`
@@ -2222,7 +2236,6 @@ type RunEvent struct {
 	// ResumeStep Checkpoint step to resume from; null starts from scratch.
 	ResumeStep  *int       `json:"resume_step,omitempty"`
 	MaxAttempts *int       `json:"max_attempts,omitempty"`
-	Message     *string    `json:"message,omitempty"`
 	Status      *RunStatus `json:"status,omitempty"`
 	Run         *Run       `json:"run,omitempty"`
 }

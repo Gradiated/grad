@@ -327,6 +327,7 @@ describe("run lifecycle and worker protocol", () => {
     const queued = `run support-sft is already queued (${first.id}); this starts a second one.`;
     expect(plan.body.warnings[0]).toBe(queued);
 
+    t.clock.advanceSeconds(1);
     const second = await createSftRun(t);
     expect(second.id).not.toBe(first.id);
     expect(second.warnings).toContain(queued);

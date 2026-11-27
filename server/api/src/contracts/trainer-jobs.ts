@@ -50,7 +50,11 @@ export const ClaimJobRequestSchema = z
     }),
     gpu: GpuInfoSchema.nullable().optional().openapi({
       description:
-        "The worker's GPU, shown on the run's `starting` phase (never the worker id or host).",
+        "The worker's GPU, shown on the run's `starting` phase (never the worker id or host). Its memory_gb also filters train jobs: the worker gets only runs whose min_gpu_memory_gb fits.",
+    }),
+    device: z.enum(["cpu", "gpu"]).optional().openapi({
+      description:
+        "What the worker computes on. A GPU worker sends `gpu`; a CPU worker sends `cpu` and no `gpu` (it is not GPU-filtered). Recorded so a run no online worker fits can say so.",
     }),
   })
   .openapi("ClaimJobRequest");

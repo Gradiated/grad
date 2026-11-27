@@ -2,7 +2,7 @@ import { claimableKinds, type AuthPrincipal } from "../adapters.js";
 import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import type { RecipeKind, TrainerJob } from "../contracts.js";
 import type { InterruptionReason } from "../contracts/runs.js";
-import type { AppDependencies } from "../deps.js";
+import type { AppDependencies, AppSettings } from "../deps.js";
 import { ApiError, conflict, notFound } from "../errors.js";
 import {
   WORKER_STAT_PHASES,
@@ -17,6 +17,8 @@ import type {
   JobPatch,
   JobRow,
   JobStatus,
+  QueueCaps,
+  QueueSnapshot,
 } from "../store/types.js";
 
 /**
@@ -32,6 +34,91 @@ export type StopReason = "cancelled" | "budget" | "insufficient_balance" | null;
 export interface ClaimWorker {
   gpu: { name: string; memory_gb: number } | null;
 }
+
+/** Default per-workspace caps: running jobs per kind, and queued jobs. */
+export const DEFAULT_MAX_RUNNING_PER_WORKSPACE = 8;
+export const DEFAULT_MAX_QUEUED_PER_WORKSPACE = 500;
+
+export interface QueueLimits {
+  maxRunning: QueueCaps;
+  maxQueued: number;
+}
+
+/** The workspace caps in effect (GRAD_MAX_RUNNING_PER_WORKSPACE_*, GRAD_MAX_QUEUED_PER_WORKSPACE). */
+export const queueLimits = (settings: AppSettings): QueueLimits => {
+  const running = settings.queue?.maxRunning ?? {};
+  const cap = (kind: JobKind) =>
+    running[kind] ?? DEFAULT_MAX_RUNNING_PER_WORKSPACE;
+
+  return {
+    maxRunning: {
+      train: cap("train"),
+      import: cap("import"),
+      eval: cap("eval"),
+    },
+    maxQueued: settings.queue?.maxQueued ?? DEFAULT_MAX_QUEUED_PER_WORKSPACE,
+  };
+};
+
+/** Where a queued job stands: ready for the run's phase text. */
+export interface QueueView {
+  /** About how many claimable jobs of its kind start before it. */
+  queue_position: number;
+  /** "Queued behind 3 runs", a workspace cap or a GPU nobody has; null when next in line. */
+  queue_message: string | null;
+}
+
+const gb = (n: number): string => `${Number(n.toFixed(1))} GB`;
+
+/**
+ * A queued job's position and phase text under fair share. The claim takes
+ * the workspace with the fewest running jobs, then its oldest job: a
+ * workspace's k-th queued job starts at about "level" running + k. The
+ * position counts every job with a lower level (ties: the workspace whose
+ * oldest job is older goes first), each workspace limited by its cap.
+ * Approximate: it ignores jobs finishing meanwhile and GPU fit.
+ */
+export const queueView = (
+  job: Pick<JobRow, "id" | "workspace_id" | "min_gpu_memory_gb">,
+  snapshot: QueueSnapshot,
+  cap: number,
+  noun: string,
+): QueueView => {
+  const rank = snapshot.ranks[job.id] ?? 0;
+  const mine = snapshot.shares.find((s) => s.workspace_id === job.workspace_id);
+  const running = mine?.running ?? 0;
+  const level = running + rank;
+  let ahead = rank;
+  for (const s of snapshot.shares) {
+    if (s.workspace_id === job.workspace_id || s.queued === 0) continue;
+    const tie =
+      s.oldest !== null && mine?.oldest != null && s.oldest < mine.oldest
+        ? 1
+        : 0;
+    ahead += Math.max(
+      0,
+      Math.min(s.queued, level - s.running + tie, cap - s.running),
+    );
+  }
+
+  const need = job.min_gpu_memory_gb;
+  const gpus = snapshot.workerGpus;
+  const unfit =
+    need !== null &&
+    gpus.length > 0 &&
+    gpus.every((m) => m !== null && m < need);
+  let message: string | null = null;
+  if (running >= cap) {
+    message = `Queued: workspace concurrency limit (${running} running)`;
+  } else if (unfit) {
+    const sizes = [...new Set(gpus as number[])].sort((a, b) => a - b);
+    message = `Waiting for a GPU with ≥${gb(need)}; online workers have ${sizes.map(gb).join(", ")}`;
+  } else if (ahead > 0) {
+    message = `Queued behind ${ahead} ${noun}${ahead === 1 ? "" : "s"}`;
+  }
+
+  return { queue_position: ahead, queue_message: message };
+};
 
 export interface JobKindHandler {
   /**
@@ -201,6 +288,7 @@ export interface JobQueue {
       kinds: readonly JobKind[];
       recipes?: readonly RecipeKind[] | undefined;
       gpu?: ClaimWorker["gpu"] | undefined;
+      device?: "cpu" | "gpu" | undefined;
     },
   ): Promise<TrainerJob | null>;
   /** In-process claim (the eval executor): the raw job row. */
@@ -244,6 +332,7 @@ export const createJobQueue = (
   handlers: Record<JobKind, JobKindHandler>,
 ): JobQueue => {
   const { store, clock } = deps;
+  const limits = queueLimits(deps.settings);
 
   const renew = (job: JobRow, leaseSeconds = job.lease_seconds) =>
     store.jobs.update(
@@ -283,6 +372,7 @@ export const createJobQueue = (
       ...input,
       workerKey: IN_PROCESS_WORKER_KEY,
       now,
+      maxRunning: limits.maxRunning,
     });
     if (job) observeClaim(job, now);
 
@@ -322,6 +412,14 @@ export const createJobQueue = (
     claim: async (principal, input) => {
       await expireLeases(clock.now());
       const worker: ClaimWorker = { gpu: input.gpu ?? null };
+      const gpuMemoryGb = input.gpu?.memory_gb || null;
+      await store.jobs.seeWorker({
+        id: input.workerId,
+        kinds: input.kinds,
+        device: input.device ?? (input.gpu ? "gpu" : null),
+        gpuMemoryGb,
+        now: clock.now(),
+      });
 
       // A worker retrying a claim whose response was lost gets its job back:
       // only under the same key, kinds and workspace scope as a fresh claim.
@@ -352,6 +450,8 @@ export const createJobQueue = (
           kinds: input.kinds,
           recipes: input.recipes,
           workspaceId,
+          gpuMemoryGb,
+          maxRunning: limits.maxRunning,
         });
         if (!job) return null;
         const built = await build(job, worker);

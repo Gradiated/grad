@@ -7,7 +7,7 @@ import { createDatasetService, type DatasetService } from "./datasets.js";
 import { createEvalService, type EvalService } from "./evals/service.js";
 import { createEventHub, type EventHub } from "./event-hub.js";
 import { createImportService, type ImportService } from "./imports.js";
-import { createJobQueue, type JobQueue } from "./jobs.js";
+import { createJobQueue, queueLimits, type JobQueue } from "./jobs.js";
 import { createMaintenance, type Maintenance } from "./maintenance.js";
 import { createRunLifecycle, type RunLifecycle } from "./runs.js";
 import { createSourceService, type SourceService } from "./sources.js";
@@ -63,6 +63,7 @@ export const createServices = (deps: AppDependencies): Services => {
   });
   const telemetry = createTelemetrySampler(deps.store, {
     workspaceLabel: deps.settings.metrics?.workspaceLabel === true,
+    maxRunning: queueLimits(deps.settings).maxRunning,
   });
   const maintenance = createMaintenance(deps, {
     telemetry,

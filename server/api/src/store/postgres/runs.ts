@@ -79,6 +79,8 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
           kind: "train",
           workspaceId: input.workspaceId,
           maxAttempts: input.maxAttempts,
+          maxQueued: input.maxQueued,
+          minGpuMemoryGb: input.minGpuMemoryGb,
           waitingOn: input.waitingOn,
           idempotency: input.idempotency,
         },
@@ -125,6 +127,7 @@ export const createImportJobRepository = (
           kind: "import",
           workspaceId: input.workspaceId,
           maxAttempts: input.maxAttempts,
+          maxQueued: input.maxQueued,
           idempotency: input.idempotency,
           payload: {
             dataset_id: input.datasetId,

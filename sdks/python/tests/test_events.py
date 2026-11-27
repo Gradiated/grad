@@ -207,7 +207,8 @@ class ProgressTests(unittest.TestCase):
     def test_terminal_line_snapshots(self) -> None:
         renderer, buf, clock = self.terminal()
         lines = self.replay(renderer, clock)
-        self.assertEqual(lines[2], "Waiting for a GPU (0 workers online) — 2m 10s  $0.00/$1.00")
+        self.assertEqual(lines[0], "Queued behind 2 runs — 2m 10s  $0.00/$1.00")
+        self.assertEqual(lines[2], "Queued behind 1 run — 2m 10s  $0.00/$1.00")
         self.assertEqual(lines[4], "Starting on NVIDIA H100 80GB HBM3 — 2m 10s  $0.00/$1.00")
         self.assertEqual(lines[8], "Training  2/5 [█████       ] 40%  loss 0.3333  ETA 3s  $0.00/$1.00")
         self.assertEqual(lines[13], "Waiting for a GPU (0 workers online) — 2m 10s  attempt 2  2/5 [█████       ] 40%  loss 0.3333  $0.00/$1.00")
@@ -235,11 +236,12 @@ class ProgressTests(unittest.TestCase):
     def test_autoscaling_and_long_waits(self) -> None:
         clock = [epoch(EVENTS[2]["timestamp"]) + 3700]
         renderer = _progress.TerminalProgress(io.StringIO(), width=40, now=lambda: clock[0])
-        renderer.event(run_event_from_api({**EVENTS[2], "autoscaling": True}))  # type: ignore[arg-type]
+        waiting = {**EVENTS[2], "message": None}
+        renderer.event(run_event_from_api({**waiting, "autoscaling": True}))  # type: ignore[arg-type]
         self.assertEqual(renderer.line(), "Starting a GPU worker (autoscaling) — 1h 01m")
-        renderer.event(run_event_from_api({**EVENTS[2], "workers_online": 1}))  # type: ignore[arg-type]
+        renderer.event(run_event_from_api({**waiting, "workers_online": 1}))  # type: ignore[arg-type]
         self.assertEqual(renderer.line(), "Waiting for a GPU (1 worker online) — 1h 01m")
-        renderer.event(run_event_from_api({**EVENTS[0], "workers_online": None}))  # type: ignore[arg-type]
+        renderer.event(run_event_from_api({**EVENTS[0], "workers_online": None, "message": None}))  # type: ignore[arg-type]
         self.assertEqual(renderer.headline(), "Queued — 1h 02m")
         drawn = renderer.stream.getvalue().split("\r\x1b[K")[1:]  # type: ignore[attr-defined]
         self.assertEqual(max(len(d) for d in drawn), 40, "lines are cut to the terminal width")

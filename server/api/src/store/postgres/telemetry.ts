@@ -1,5 +1,6 @@
 import type { TelemetryRepository, TelemetrySnapshot } from "../types.js";
 import type { Db } from "./db.js";
+import { onlineWorkers } from "./jobs.js";
 
 const num = (v: unknown): number =>
   v === null || v === undefined ? 0 : Number(v);
@@ -56,6 +57,38 @@ export const createTelemetryRepository = (db: Db): TelemetryRepository => ({
       [at],
     );
 
+    // Fair share: per kind and workspace, the queued jobs its running cap
+    // holds back, and how long the next job of each uncapped workspace waits.
+    const caps = JSON.stringify(
+      options.maxRunning ?? { train: 1e9, import: 1e9, eval: 1e9 },
+    );
+    const queue = await db.query(
+      `WITH s AS (
+         SELECT kind, workspace_id,
+                count(*) FILTER (WHERE status = 'queued' AND waiting_on IS NULL) AS q,
+                count(*) FILTER (WHERE status = 'running') AS r,
+                min(updated_at) FILTER (WHERE status = 'queued' AND waiting_on IS NULL) AS oldest,
+                coalesce(($2::jsonb ->> kind)::int, 1000000000) AS cap
+         FROM grad_jobs WHERE status IN ('queued', 'running')
+         GROUP BY kind, workspace_id
+       )
+       SELECT kind,
+              sum(greatest(0, q - greatest(0, cap - r))) AS over_limit,
+              max(EXTRACT(EPOCH FROM ($1::timestamptz - oldest))) FILTER (WHERE q > 0 AND r < cap) AS wait
+       FROM s GROUP BY kind`,
+      [at, caps],
+    );
+    const unfit = await db.query(
+      `WITH online AS (SELECT w.gpu_memory_gb FROM ${onlineWorkers("'train'", "$1")})
+       SELECT count(*) AS n FROM grad_jobs j
+       WHERE j.kind = 'train' AND j.status = 'queued' AND j.waiting_on IS NULL
+         AND j.min_gpu_memory_gb IS NOT NULL
+         AND EXISTS (SELECT 1 FROM online)
+         AND NOT EXISTS (SELECT 1 FROM online o
+                         WHERE o.gpu_memory_gb IS NULL OR o.gpu_memory_gb >= j.min_gpu_memory_gb)`,
+      [at],
+    );
+
     const sources = await db.query(
       `SELECT provider, count(*) AS n,
               count(*) FILTER (WHERE status = 'paused') AS paused,
@@ -92,6 +125,12 @@ export const createTelemetryRepository = (db: Db): TelemetryRepository => ({
         phase: String(r.phase),
         count: num(r.n),
       })),
+      queue: queue.map((r) => ({
+        kind: String(r.kind),
+        over_limit: num(r.over_limit),
+        fair_share_wait_seconds: r.wait === null ? null : num(r.wait),
+      })),
+      unfit: num(unfit[0]?.n),
     };
   },
 });

@@ -582,6 +582,9 @@
       },
       "workers_online": null,
       "autoscaling": null,
+      "queue_position": null,
+      "queue_message": null,
+      "min_gpu_memory_gb": 44,
       "latest_metric": {
         "step": 6,
         "loss": 0.6927526450092352,
@@ -935,6 +938,8 @@
           "step": 0,
           "workers_online": 0,
           "autoscaling": false,
+          "queue_position": 2,
+          "message": "Queued behind 2 runs",
           "gpu": null
         },
         {
@@ -956,6 +961,8 @@
           "step": 0,
           "workers_online": 0,
           "autoscaling": false,
+          "queue_position": 1,
+          "message": "Queued behind 1 run",
           "gpu": null
         },
         {
@@ -981,6 +988,8 @@
           "step": 0,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": {
             "name": "NVIDIA H100 80GB HBM3",
             "memory_gb": 79.6
@@ -996,6 +1005,8 @@
           "step": 0,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1008,6 +1019,8 @@
           "step": 0,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1070,6 +1083,8 @@
           "step": 2,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1106,6 +1121,8 @@
           "step": 2,
           "workers_online": 0,
           "autoscaling": false,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1131,6 +1148,8 @@
           "step": 2,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": {
             "name": "NVIDIA H100 80GB HBM3",
             "memory_gb": 79.6
@@ -1146,6 +1165,8 @@
           "step": 2,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1158,6 +1179,8 @@
           "step": 2,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1197,6 +1220,8 @@
           "step": 3,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1209,6 +1234,8 @@
           "step": 3,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1221,6 +1248,8 @@
           "step": 3,
           "workers_online": null,
           "autoscaling": null,
+          "queue_position": null,
+          "message": null,
           "gpu": null
         },
         {
@@ -1316,6 +1345,9 @@
             },
             "workers_online": null,
             "autoscaling": null,
+            "queue_position": null,
+            "queue_message": null,
+            "min_gpu_memory_gb": null,
             "latest_metric": {
               "lr": 0.0001,
               "seq": 20,
@@ -1457,6 +1489,9 @@
     "run.last_interruption.resume_step": 120,
     "run_events.data[2].phase": "waiting_for_compute",
     "run_events.data[2].workers_online": 0,
+    "run_events.data[0].queue_position": 2,
+    "run_events.data[2].message": "Queued behind 1 run",
+    "run.min_gpu_memory_gb": 44,
     "run_events.data[4].gpu.name": "NVIDIA H100 80GB HBM3",
     "run_events.data[7].metric.step": 1,
     "run_events.data[12].event": "interrupted",

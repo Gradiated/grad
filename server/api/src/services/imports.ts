@@ -32,6 +32,7 @@ import {
   holdsLease,
   leaseLost,
   observeInterruption,
+  queueLimits,
   RELEASE,
   requeuePatch,
   type JobKindHandler,
@@ -280,6 +281,7 @@ export const createImportService = (
           const common = {
             workspaceId,
             maxAttempts: settings.maxAttempts,
+            maxQueued: queueLimits(settings).maxQueued,
             datasetId: dataset.id,
             datasetName: dataset.name,
             connector: body.connector,
