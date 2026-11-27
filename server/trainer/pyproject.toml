@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grad-trainer"
+version = "0.1.0"
+description = "Gradiated training runtime, v0 recipes, and Tier-1 trace connectors"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+gpu = [
+  "torch>=2.4",
+  "transformers>=4.48",
+  "peft>=0.14",
+  "safetensors>=0.4",
+]
+
+[project.scripts]
+grad-trainer = "grad_trainer.worker:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["grad_trainer*"]
