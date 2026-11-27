@@ -362,12 +362,40 @@ fn ensure_keys(profile: &str, base_url: &str) -> CliResult<LocalKeys> {
     Ok(out.expect("profile callback ran"))
 }
 
-fn profile_of(ctx: &Ctx) -> String {
-    ctx.global
+/// The profile `grad local up` and `reset` write: always `local`, whatever
+/// `--profile` or GRADIATED_PROFILE selects, so they never rewrite another
+/// profile's key or URL. They refuse when the selected profile, or `local`
+/// itself, points at a server that isn't on this machine.
+fn local_profile(ctx: &Ctx) -> CliResult<&'static str> {
+    let path = crate::commands::auth::config_path()?;
+    let file = grad_sdk::ConfigFile::load(&path)?;
+    let selected = ctx
+        .global
         .profile
-        .clone()
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| LOCAL_PROFILE.into())
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    for name in selected.into_iter().chain([LOCAL_PROFILE]) {
+        let url = file.profiles.get(name).and_then(|p| p.base_url.as_deref());
+        if let Some(url) = url.filter(|u| !grad_sdk::config::is_loopback(u)) {
+            return Err(CliError::usage(format!(
+                "profile '{}' points at {}, not a local stack; `grad local` only writes the '{}' profile, for a server on this machine",
+                name, url, LOCAL_PROFILE
+            ))
+            .hint(if name == LOCAL_PROFILE {
+                "Point the 'local' profile back at this machine (`grad login --profile local --base-url http://127.0.0.1:8787`) or remove it (`grad --profile local logout`)."
+            } else {
+                "Unset GRADIATED_PROFILE or pass --profile local."
+            }));
+        }
+    }
+    if let Some(name) = selected.filter(|n| *n != LOCAL_PROFILE) {
+        ctx.out.note(format!(
+            "grad local uses the '{}' profile, not '{}'",
+            LOCAL_PROFILE, name
+        ));
+    }
+    Ok(LOCAL_PROFILE)
 }
 
 async fn wait_healthy(ctx: &Ctx, base_url: &str, timeout: Duration) -> CliResult {
@@ -421,8 +449,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             let tag = image_tag.as_deref().unwrap_or(DEFAULT_IMAGE_TAG);
             let files = compose_files(&args, build, tag)?;
             let base_url = format!("http://127.0.0.1:{}", port);
-            let profile = profile_of(ctx);
-            let keys = ensure_keys(&profile, &base_url)?;
+            let profile = local_profile(ctx)?;
+            let keys = ensure_keys(profile, &base_url)?;
             if keys.created {
                 out.note(format!(
                     "Generated an admin key and a trainer key (saved in profile '{}')",
@@ -548,7 +576,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 .and_then(|p| grad_sdk::ConfigFile::load(&p).ok())
                 .and_then(|f| {
                     f.profiles
-                        .get(&profile_of(ctx))
+                        .get(LOCAL_PROFILE)
                         .and_then(|p| p.base_url.clone())
                 })
                 .unwrap_or_else(|| "http://127.0.0.1:8787".into());
@@ -587,6 +615,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             out.done(&json!({ "project": args.project_name }))
         }
         LocalCmd::Reset { compose: args, yes } => {
+            let profile = local_profile(ctx)?;
             if !yes {
                 use std::io::IsTerminal;
                 if !std::io::stdin().is_terminal() {
@@ -605,8 +634,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             let mut cmd = compose_all(&args, &files);
             cmd.arg("down").arg("--volumes").arg("--remove-orphans");
             run(ctx, cmd, "down").await?;
-            let profile = profile_of(ctx);
-            save_profile(&profile, |p| {
+            save_profile(profile, |p| {
                 p.api_key = None;
                 p.extra.remove("trainer_key");
                 p.extra.remove("secrets_key");

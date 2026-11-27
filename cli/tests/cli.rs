@@ -2312,6 +2312,96 @@ fn ui_opens_the_browser_with_a_one_time_key_fragment_and_never_prints_the_key() 
 }
 
 #[test]
+fn local_up_and_reset_only_ever_write_the_local_profile() {
+    // r8 code-quality P1: GRADIATED_PROFILE=staging used to make `grad local up`
+    // overwrite staging's key and URL with the local stack's, and `reset` wipe it.
+    let sb = Sandbox::new("local-profile");
+    let shim = docker_shim(&sb, 0);
+    std::fs::create_dir_all(sb.config_path().parent().unwrap()).unwrap();
+    let staging =
+        json!({"base_url": "https://grad.staging.example", "api_key": "grad_staging_key"});
+    std::fs::write(
+        sb.config_path(),
+        json!({"profiles": {"staging": staging}}).to_string(),
+    )
+    .unwrap();
+    let config = || -> Value {
+        serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap()
+    };
+    for (env, args) in [
+        (Some("staging"), vec!["local", "up", "--no-wait"]),
+        (
+            None,
+            vec!["--profile", "staging", "local", "up", "--no-wait"],
+        ),
+        (Some("staging"), vec!["local", "reset", "--yes"]),
+    ] {
+        let mut c = sb.grad(None);
+        c.env("GRAD_DOCKER", &shim);
+        if let Some(p) = env {
+            c.env("GRADIATED_PROFILE", p);
+        }
+        let r = run(c, &args);
+        expect(&r, 2);
+        assert!(
+            r.stderr.contains(
+                "profile 'staging' points at https://grad.staging.example, not a local stack"
+            ),
+            "{:?}: {}",
+            args,
+            r.stderr
+        );
+        assert!(r
+            .stderr
+            .contains("Unset GRADIATED_PROFILE or pass --profile local"));
+        assert_eq!(config()["profiles"]["staging"], staging, "{:?}", args);
+        assert!(config()["profiles"].get("local").is_none());
+    }
+    assert!(
+        !sb.path("docker.log").exists(),
+        "docker never ran for a refused command"
+    );
+
+    // A selected profile that isn't remote: the stack still lives in 'local'.
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim).env("GRADIATED_PROFILE", "dev");
+    let r = run(c, &["local", "up", "--no-wait"]);
+    expect(&r, 0);
+    assert!(
+        r.stderr.contains("uses the 'local' profile, not 'dev'"),
+        "{}",
+        r.stderr
+    );
+    let cfg = config();
+    assert!(cfg["profiles"]["local"]["api_key"]
+        .as_str()
+        .unwrap()
+        .starts_with("grad_local_"));
+    assert!(cfg["profiles"].get("dev").is_none());
+    assert_eq!(cfg["profiles"]["staging"], staging);
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim).env("GRADIATED_PROFILE", "dev");
+    let r = run(c, &["local", "reset", "--yes"]);
+    expect(&r, 0);
+    let cfg = config();
+    assert!(cfg["profiles"]["local"].get("api_key").is_none());
+    assert_eq!(cfg["profiles"]["staging"], staging);
+
+    // 'local' itself pointed at a remote server is refused too.
+    let mut cfg = config();
+    cfg["profiles"]["local"] = staging.clone();
+    std::fs::write(sb.config_path(), cfg.to_string()).unwrap();
+    let mut c = sb.grad(None);
+    c.env("GRAD_DOCKER", &shim);
+    let r = run(c, &["local", "up", "--no-wait"]);
+    expect(&r, 2);
+    assert!(r
+        .stderr
+        .contains("profile 'local' points at https://grad.staging.example"));
+    assert_eq!(config()["profiles"]["local"], staging);
+}
+
+#[test]
 fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let srv = api();
     let port = srv.url.rsplit(':').next().unwrap().to_string();
@@ -2497,7 +2587,11 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
     let pair = format!("-f {} -f {}", base.display(), extra.display());
     assert!(log.contains(&format!("{} up -d", pair)), "{}", log);
-    assert!(log.contains(&format!("{} --profile * down", pair)), "{}", log);
+    assert!(
+        log.contains(&format!("{} --profile * down", pair)),
+        "{}",
+        log
+    );
     // Docker missing or failing.
     let mut c = sb.grad(None);
     c.env("GRAD_DOCKER", sb.path("no-docker-here"));
