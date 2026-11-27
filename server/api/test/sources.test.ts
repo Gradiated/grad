@@ -194,11 +194,7 @@ describe("sources", () => {
     seq = 0,
   ) => {
     if (ids.length > 0) {
-      const posted = await worker.call(`/v1/trainer-jobs/${job.id}/records`, {
-        ...worker.ref(job),
-        seq,
-        records: ids.map(record),
-      });
+      const posted = await worker.records(job, seq, ids.map(record));
       expect(posted.status).toBe(200);
     }
     return worker.complete(job, {
@@ -460,18 +456,14 @@ describe("sources", () => {
     });
 
     // Score updates fold into their records on read; the old version is unchanged.
-    const scored = await worker.call(`/v1/trainer-jobs/${second.id}/records`, {
-      ...worker.ref(second),
-      seq: 0,
-      records: [
-        {
-          id: "t1",
-          source: "langfuse",
-          scores: { resolved: 1 },
-          metadata: { score_update: true },
-        },
-      ],
-    });
+    const scored = await worker.records(second, 0, [
+      {
+        id: "t1",
+        source: "langfuse",
+        scores: { resolved: 1 },
+        metadata: { score_update: true },
+      },
+    ]);
     expect(scored.status).toBe(200);
     await worker.complete(second, {
       status: "completed",
@@ -543,11 +535,7 @@ describe("sources", () => {
       t.clock.advanceSeconds(61);
       await t.json(`/v1/sources/${source.id}/sync`, { body: { full } });
       const job = await claimImport();
-      await worker.call(`/v1/trainer-jobs/${job.id}/records`, {
-        ...worker.ref(job),
-        seq: 0,
-        records,
-      });
+      await worker.records(job, 0, records);
       const done = await worker.complete(job, {
         status: "completed",
         import_summary: { watermark: null },
@@ -740,11 +728,7 @@ describe("sources", () => {
       t.clock.advanceSeconds(61);
       await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
       const job = await claimImport();
-      await worker.call(`/v1/trainer-jobs/${job.id}/records`, {
-        ...worker.ref(job),
-        seq: 0,
-        records,
-      });
+      await worker.records(job, 0, records);
       await worker.complete(job, {
         status: "completed",
         import_summary: { watermark: null },
@@ -944,11 +928,7 @@ describe("sources", () => {
           await w.complete(job, { status: "failed", error: "401" });
           continue;
         }
-        await w.call(`/v1/trainer-jobs/${job.id}/records`, {
-          ...w.ref(job),
-          seq: 0,
-          records: [record(`h${i}`)],
-        });
+        await w.records(job, 0, [record(`h${i}`)]);
         await w.complete(job, {
           status: "completed",
           import_summary: { watermark: { traces: `w${i}` } },

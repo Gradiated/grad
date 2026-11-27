@@ -1059,12 +1059,23 @@ describe("run lifecycle and worker protocol", () => {
   it("rejects wrong-kind calls on job ids", async () => {
     const run = await createSftRun(t);
     const job = await worker.claim();
-    const records = await worker.call(`/v1/trainer-jobs/${run.id}/records`, {
+    const sha = "a".repeat(64);
+    const part = await worker.call(`/v1/trainer-jobs/${run.id}/parts`, {
       ...worker.ref(job!),
       seq: 0,
-      records: [{}],
+      upload_id: sha,
+      sha256: sha,
+      count: 1,
+      records: 1,
     });
-    expect(records.status).toBe(409);
+    expect(part.status).toBe(409);
+    const upload = await worker.call(`/v1/trainer-jobs/${run.id}/uploads`, {
+      ...worker.ref(job!),
+      kind: "records",
+      sha256: sha,
+      size_bytes: 10,
+    });
+    expect(upload.status).toBe(409);
     const progress = await worker.call("/v1/trainer-jobs/imp_x/progress", {
       worker_id: "w",
       attempt: 1,

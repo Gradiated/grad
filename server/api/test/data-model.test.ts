@@ -132,16 +132,16 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
       w: FakeWorker,
       seq: number,
       n: number,
-    ) =>
-      w.call(`/v1/trainer-jobs/${job.id}/records`, {
-        ...w.ref(job as never),
-        seq,
-        records: sftRecords(n),
-      });
+    ) => w.records(job, seq, sftRecords(n));
 
     const first = (await worker.claim())!;
     expect((await post(first, worker, 0, 4)).status).toBe(200);
-    const staleKey = `${jobBlobKey({ workspace_id: WORKSPACE_A, id: imp.body.id }, 1, "records")}/0.jsonl.gz`;
+    const [stalePart] = (await t.deps.store.datasets.listStaged(first.id, 1))
+      .parts;
+    const staleKey = stalePart!.key;
+    expect(staleKey).toMatch(
+      `${jobBlobKey({ workspace_id: WORKSPACE_A, id: imp.body.id }, 1, "")}`,
+    );
     expect(await t.deps.storage.head(staleKey)).not.toBeNull();
     t.clock.advanceSeconds(90);
     await t.services.maintenance.tick();
@@ -173,11 +173,7 @@ describe("data model: one queue, artifacts, staged parts, sweeps", () => {
       body: { source: { kind: "hf", repo: "o/n" } },
     });
     const job = (await worker.claim())!;
-    await worker.call(`/v1/trainer-jobs/${job.id}/records`, {
-      ...worker.ref(job),
-      seq: 0,
-      records: sftRecords(2),
-    });
+    await worker.records(job, 0, sftRecords(2));
     const failed = await worker.call<{ import: { status: string } }>(
       `/v1/trainer-jobs/${job.id}/complete`,
       { ...worker.ref(job), status: "failed", error: "bad file" },

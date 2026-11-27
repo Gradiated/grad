@@ -635,9 +635,9 @@ class WorkerProtocolTests(unittest.TestCase):
             ]
         )
         srv.blobs["/blobs/objects"] = b'{"a": 1}\n'
-        # The first batch's response is lost after the server stored it: the
-        # worker re-posts the same batch (same seq), which the server dedupes.
-        srv.fail_next["records"] = [0]
+        # The part's registration response is lost after the server staged it: the
+        # worker re-posts the same part (same seq), which the server dedupes.
+        srv.fail_next["parts"] = [0]
         importer = StubImporter(batches=2, batch_size=3)
         result = self.worker(srv, importer=importer).run_once()
         self.assertEqual(result["status"], "completed")
@@ -645,8 +645,13 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(importer.sources[0]["format"], "jsonl")
         self.assertEqual(importer.sources[0]["content"], b'{"a": 1}\n')
         self.assertIsNone(importer.sources[0]["connector"])
-        self.assertEqual([len(b["records"]) for b in srv.bodies("records")], [3, 3, 3])
-        self.assertEqual([b["seq"] for b in srv.bodies("records")], [0, 0, 1])
+        # One small part: both batches, ids assigned deterministically.
+        self.assertEqual([b["seq"] for b in srv.bodies("parts")], [0, 0])
+        self.assertEqual([b["kind"] for b in srv.bodies("uploads")], ["records"])
+        [part] = srv.parts()[:1]
+        self.assertEqual([r["messages"][0]["content"] for r in part], ["0-0", "0-1", "0-2", "1-0", "1-1", "1-2"])
+        self.assertTrue(all(r["id"].startswith("rec_") for r in part))
+        self.assertEqual(srv.bodies("parts")[0]["count"], 6)
         complete = srv.bodies("complete")[0]
         self.assertEqual(
             complete["import_summary"],
@@ -667,12 +672,11 @@ class WorkerProtocolTests(unittest.TestCase):
         }
         srv = self.server(jobs=[import_job(hf)])
         importer = StubImporter(batches=1, batch_size=10_001)
-        self.worker(srv, importer=importer).run_once()
+        with mock.patch("grad_trainer.parts.PART_RECORDS", 10_000):
+            self.worker(srv, importer=importer).run_once()
         self.assertEqual(importer.sources[0]["repo"], "openai/gsm8k")
-        self.assertEqual(
-            [len(b["records"]) for b in srv.bodies("records")], [10_000, 1]
-        )
-        self.assertEqual([b["seq"] for b in srv.bodies("records")], [0, 1])
+        self.assertEqual([len(p) for p in srv.parts()], [10_000, 1])
+        self.assertEqual([b["seq"] for b in srv.bodies("parts")], [0, 1])
 
     def test_gradiated_source_sync_pages_through_the_server_and_reports_the_watermark(self) -> None:
         from grad_trainer import import_runner
@@ -686,7 +690,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual([b["cursor"] for b in srv.bodies("source-page")], ["c0", "c0"])
         self.assertTrue(all(b["attempt"] == 1 and b["worker_id"].startswith("w-test-") for b in srv.bodies("source-page")))
-        records = [r for b in srv.bodies("records") for r in b["records"]]
+        records = [r for p in srv.parts() for r in p]
         self.assertEqual([r["id"] for r in records], ["t1", "t1"])
         self.assertEqual(srv.bodies("complete")[0]["import_summary"]["watermark"], {"traces": "c1", "scores": "c1"})
         self.assertEqual(srv.bodies("complete")[0]["import_summary"]["traces"], 1)

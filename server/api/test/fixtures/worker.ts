@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
+
+import type { DatasetRecord } from "../../src/contracts.js";
+import {
+  countRecords,
+  encodeRecordsJsonl,
+} from "../../src/services/dataset-records.js";
+import { isScoreUpdate } from "../../src/services/record-merge.js";
 
 import { TRAINER_KEY, type TestApp } from "./app.js";
 
@@ -69,7 +76,7 @@ export class FakeWorker {
     return res.body.job;
   };
 
-  ref = (job: ClaimedJob) => ({
+  ref = (job: Pick<ClaimedJob, "attempt">) => ({
     worker_id: this.workerId,
     attempt: job.attempt,
   });
@@ -99,11 +106,41 @@ export class FakeWorker {
       },
     });
 
+  /**
+   * Writes `records` as part `seq` of the import attempt the way the trainer
+   * does: a gzip JSONL part PUT to storage, then registered with /parts.
+   */
+  records = async (
+    job: Pick<ClaimedJob, "id" | "attempt">,
+    seq: number,
+    records: Array<Record<string, unknown>>,
+    ref: { worker_id: string; attempt: number } = this.ref(job),
+  ) => {
+    const jsonl = encodeRecordsJsonl(records as DatasetRecord[]);
+    const uploadId = await this.upload(job, "records", gzipSync(jsonl), ref);
+    const scores = new Set<string>();
+    for (const r of records as DatasetRecord[]) {
+      Object.keys(r.scores ?? {}).forEach((k) => scores.add(k));
+    }
+
+    return this.call<{ staged: boolean }>(`/v1/trainer-jobs/${job.id}/parts`, {
+      ...ref,
+      seq,
+      upload_id: uploadId,
+      sha256: sha256Hex(jsonl),
+      ...countRecords(records as DatasetRecord[]),
+      records: records.length,
+      score_updates: (records as DatasetRecord[]).filter(isScoreUpdate).length,
+      detected_scores: [...scores].sort(),
+    });
+  };
+
   /** Requests an upload ticket and PUTs `bytes` to it; returns the upload id. */
   upload = async (
-    job: ClaimedJob,
-    kind: "checkpoint" | "artifact",
+    job: Pick<ClaimedJob, "id" | "attempt">,
+    kind: "checkpoint" | "artifact" | "records",
     bytes: Uint8Array | string,
+    ref: { worker_id: string; attempt: number } = this.ref(job),
   ) => {
     const data = typeof bytes === "string" ? Buffer.from(bytes) : bytes;
     const ticket = await this.call<{
@@ -111,7 +148,7 @@ export class FakeWorker {
       url: string;
       headers: Record<string, string>;
     }>(`/v1/trainer-jobs/${job.id}/uploads`, {
-      ...this.ref(job),
+      ...ref,
       kind,
       sha256: sha256Hex(data),
       size_bytes: data.byteLength,

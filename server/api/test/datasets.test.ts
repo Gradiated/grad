@@ -457,34 +457,36 @@ describe("datasets, uploads and imports", () => {
       should_stop: false,
     });
 
+    // The worker validates records and uploads parts itself (grad-server
+    // never reads them); it reports what it dropped at completion.
     const records = [
       ...sftRecords(3),
-      { foo: 1 },
-      { messages: "nope" },
-      { ...sftRecords(1)[0], scores: { csat: 1 } },
+      { ...sftRecords(1)[0], id: "r-scored", scores: { csat: 1 } },
     ];
-    const post = (seq: number) =>
-      worker.call<{
-        accepted: number;
-        rejected: number;
-        errors: unknown[];
-      }>(`/v1/trainer-jobs/${job!.id}/records`, {
-        ...worker.ref(job!),
-        seq,
-        records,
-      });
-    const batch = await post(0);
-    expect(batch.body).toMatchObject({ accepted: 4, rejected: 2 });
-    expect(batch.body.errors).toHaveLength(2);
-    // A retry whose first response was lost is stored once (records without
-    // an id get the same deterministic ids, so the part is byte-identical).
-    const retry = await post(0);
+    const batch = await worker.records(job!, 0, records);
+    expect(batch.body).toEqual({ staged: true });
+    // A retry whose first response was lost is stored once.
+    const retry = await worker.records(job!, 0, records);
     expect(retry.status).toBe(200);
-    expect(retry.body).toMatchObject({ accepted: 4, rejected: 2 });
+    expect(retry.body).toEqual({ staged: false });
     const progress = await t.json(`/v1/imports/${imp.body.id}`);
     expect(progress.body).toMatchObject({
       imported_count: 4,
-      dropped_count: 2,
+      dropped_count: 0,
+      detected_scores: ["csat"],
+    });
+    // A part must be the object the worker uploaded.
+    const missing = await worker.call(`/v1/trainer-jobs/${job!.id}/parts`, {
+      ...worker.ref(job!),
+      seq: 1,
+      upload_id: "b".repeat(64),
+      sha256: "b".repeat(64),
+      count: 1,
+      records: 1,
+    });
+    expect(missing.body).toMatchObject({
+      status: 409,
+      code: "upload_incomplete",
     });
 
     const before = await t.json("/v1/datasets/traces");
@@ -496,7 +498,7 @@ describe("datasets, uploads and imports", () => {
     expect(done.body.import).toMatchObject({
       status: "completed",
       imported_count: 4,
-      dropped_count: 5,
+      dropped_count: 3,
       detected_scores: ["csat", "latency"],
       dataset_version: 1,
     });
@@ -552,11 +554,7 @@ describe("datasets, uploads and imports", () => {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const job = await worker.claim();
       expect(job?.attempt).toBe(attempt);
-      await worker.call(`/v1/trainer-jobs/${job!.id}/records`, {
-        ...worker.ref(job!),
-        seq: 0,
-        records: sftRecords(2),
-      });
+      await worker.records(job!, 0, sftRecords(2));
       t.clock.advanceSeconds(81);
       await t.services.maintenance.tick();
     }
@@ -579,11 +577,12 @@ describe("datasets, uploads and imports", () => {
     expect(
       (await t.deps.store.imports.getById(job2!.id))?.failed_attempts,
     ).toBe(1);
-    const stale = await worker.call(`/v1/trainer-jobs/${job2!.id}/records`, {
+    const stale = await worker.call(`/v1/trainer-jobs/${job2!.id}/uploads`, {
       worker_id: worker.workerId,
       attempt: 1,
-      seq: 0,
-      records: sftRecords(1),
+      kind: "records",
+      sha256: "a".repeat(64),
+      size_bytes: 10,
     });
     expect(stale.status).toBe(409);
     const res = await worker.complete(job2!, {

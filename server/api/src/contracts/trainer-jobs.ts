@@ -4,7 +4,6 @@ import { IsoTimestampSchema, Sha256HexSchema } from "./common.js";
 import { EvalReportSchema } from "./eval-report.js";
 import {
   CONNECTOR_NAMES,
-  DatasetRecordSchema,
   ImportJobSchema,
   MAX_UPLOAD_BYTES,
 } from "./datasets.js";
@@ -239,7 +238,10 @@ export const ReportEventRequestSchema = z
 export const WorkerUploadRequestSchema = z
   .object({
     ...AttemptRefShape,
-    kind: z.enum(["checkpoint", "artifact"]),
+    kind: z.enum(["checkpoint", "artifact", "records"]).openapi({
+      description:
+        "checkpoint or artifact (train jobs), records (import jobs: a gzip JSONL dataset part, registered with /parts).",
+    }),
     sha256: Sha256HexSchema,
     size_bytes: z.number().int().min(1).max(MAX_UPLOAD_BYTES),
   })
@@ -256,26 +258,47 @@ export const RegisterCheckpointRequestSchema = z
   })
   .openapi("RegisterTrainerCheckpointRequest");
 
-export const PostImportRecordsRequestSchema = z
+export const RegisterImportPartRequestSchema = z
   .object({
     ...AttemptRefShape,
     seq: z.number().int().min(0).openapi({
       description:
-        "This attempt's batch number (0, 1, 2, ...). A batch is stored once per (job, attempt, seq), so retrying a batch whose response was lost is safe.",
+        "This attempt's part number (0, 1, 2, ...): the part's place in the version. A part is staged once per (job, attempt, seq), so retrying a registration whose response was lost is safe.",
     }),
-    records: z.array(z.unknown()).min(1).max(10_000),
+    upload_id: Sha256HexSchema.openapi({
+      description:
+        "The uploaded gzip part (its sha256, from a `records` upload ticket).",
+    }),
+    sha256: Sha256HexSchema.openapi({
+      description:
+        "sha256 of the part's uncompressed JSONL; every read verifies it.",
+    }),
+    count: z.number().int().min(0).openapi({
+      description:
+        "Distinct records the part adds after its last reset marker (score updates and reset markers add none).",
+    }),
+    resets: z.boolean().default(false).openapi({
+      description:
+        "The part holds a reset marker (a full source sync): the count restarts.",
+    }),
+    records: z.number().int().min(1).openapi({
+      description: "Lines in the part (records, score updates and markers).",
+    }),
+    score_updates: z.number().int().min(0).default(0),
+    detected_scores: z.array(z.string().max(160)).max(1000).default([]),
   })
-  .openapi("PostImportRecordsRequest");
+  .openapi("RegisterImportPartRequest", {
+    description:
+      "A dataset part the worker uploaded with a presigned PUT: grad-server checks the object and stages it, without reading the records.",
+  });
 
-export const PostImportRecordsResponseSchema = z
+export const RegisterImportPartResponseSchema = z
   .object({
-    accepted: z.number().int().min(0),
-    rejected: z.number().int().min(0),
-    errors: z.array(
-      z.object({ index: z.number().int().min(0), error: z.string() }),
-    ),
+    staged: z.boolean().openapi({
+      description: "False when this (job, attempt, seq) was already staged.",
+    }),
   })
-  .openapi("PostImportRecordsResponse");
+  .openapi("RegisterImportPartResponse");
 
 export const COMPLETION_STATUSES = [
   "completed",
@@ -342,8 +365,6 @@ export const CompleteJobResponseSchema = z
   .openapi("CompleteTrainerJobResponse");
 
 export const RegisterCheckpointResponseSchema = CheckpointSchema;
-
-export const ImportRecordsSchema = z.array(DatasetRecordSchema);
 
 export const SourcePageRequestSchema = z
   .object({

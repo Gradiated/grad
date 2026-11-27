@@ -38,7 +38,7 @@ where = ["."]
 include = ["grad_trainer*"]
 
 [tool.setuptools.package-data]
-grad_trainer = ["artifact_schemas/*.schema.json", "dev_models/*.jinja"]
+grad_trainer = ["artifact_schemas/*.schema.json", "record.schema.json", "dev_models/*.jinja"]
 
 [tool.coverage.run]
 branch = true

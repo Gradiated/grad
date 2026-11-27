@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Generated from spec/openapi.yaml by server/api/scripts/emit-openapi.ts; do not edit.",
+  "$ref": "#/$defs/DatasetRecord",
+  "$defs": {
+    "DatasetRecord": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "enum": [
+            "grad.trajectory/1"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "group_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "chosen",
+            "rejected",
+            "anchor",
+            "positive",
+            "negative",
+            "desirable",
+            "undesirable",
+            "rollout",
+            null
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 80
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "input": {
+          "$ref": "#/$defs/TrajectoryInput"
+        },
+        "output": {
+          "$ref": "#/$defs/TrajectoryOutput"
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ChatMessage"
+              }
+            }
+          ]
+        },
+        "completion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ChatMessage"
+              }
+            }
+          ]
+        },
+        "chosen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ChatMessage"
+              }
+            }
+          ]
+        },
+        "rejected": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ChatMessage"
+              }
+            }
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "positive": {
+          "type": "string"
+        },
+        "negatives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "state": {},
+        "questions": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "expected_output": {},
+        "scores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChatMessage": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "tool_call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "train": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "additionalProperties": {}
+    },
+    "TrajectoryInput": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "payload": {}
+      },
+      "additionalProperties": {}
+    },
+    "TrajectoryOutput": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          }
+        },
+        "payload": {}
+      },
+      "additionalProperties": {}
+    }
+  }
+}

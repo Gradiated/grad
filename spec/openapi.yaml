@@ -3804,6 +3804,9 @@ components:
           enum:
             - checkpoint
             - artifact
+            - records
+          description: "checkpoint or artifact (train jobs), records (import jobs: a gzip JSONL dataset part, registered with
+            /parts)."
         sha256:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -3850,33 +3853,15 @@ components:
         - attempt
         - step
         - upload_id
-    PostImportRecordsResponse:
+    RegisterImportPartResponse:
       type: object
       properties:
-        accepted:
-          type: integer
-          minimum: 0
-        rejected:
-          type: integer
-          minimum: 0
-        errors:
-          type: array
-          items:
-            type: object
-            properties:
-              index:
-                type: integer
-                minimum: 0
-              error:
-                type: string
-            required:
-              - index
-              - error
+        staged:
+          type: boolean
+          description: False when this (job, attempt, seq) was already staged.
       required:
-        - accepted
-        - rejected
-        - errors
-    PostImportRecordsRequest:
+        - staged
+    RegisterImportPartRequest:
       type: object
       properties:
         worker_id:
@@ -3890,18 +3875,49 @@ components:
         seq:
           type: integer
           minimum: 0
-          description: This attempt's batch number (0, 1, 2, ...). A batch is stored once per (job, attempt, seq), so retrying a
-            batch whose response was lost is safe.
+          description: "This attempt's part number (0, 1, 2, ...): the part's place in the version. A part is staged once per
+            (job, attempt, seq), so retrying a registration whose response was lost is safe."
+        upload_id:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+          description: The uploaded gzip part (its sha256, from a `records` upload ticket).
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+          description: sha256 of the part's uncompressed JSONL; every read verifies it.
+        count:
+          type: integer
+          minimum: 0
+          description: Distinct records the part adds after its last reset marker (score updates and reset markers add none).
+        resets:
+          type: boolean
+          default: false
+          description: "The part holds a reset marker (a full source sync): the count restarts."
         records:
+          type: integer
+          minimum: 1
+          description: Lines in the part (records, score updates and markers).
+        score_updates:
+          type: integer
+          minimum: 0
+          default: 0
+        detected_scores:
           type: array
-          items: {}
-          minItems: 1
-          maxItems: 10000
+          items:
+            type: string
+            maxLength: 160
+          maxItems: 1000
+          default: []
       required:
         - worker_id
         - attempt
         - seq
+        - upload_id
+        - sha256
+        - count
         - records
+      description: "A dataset part the worker uploaded with a presigned PUT: grad-server checks the object and stages it,
+        without reading the records."
     CompleteTrainerJobResponse:
       type: object
       properties:
@@ -7568,7 +7584,7 @@ paths:
   /v1/trainer-jobs/{id}/uploads:
     post:
       operationId: createTrainerUpload
-      summary: Get an upload URL for a checkpoint or artifact bundle
+      summary: Get an upload URL for a checkpoint or artifact bundle, or an import's dataset part
       tags: *a4
       x-internal: true
       parameters:
@@ -7721,10 +7737,10 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-  /v1/trainer-jobs/{id}/records:
+  /v1/trainer-jobs/{id}/parts:
     post:
-      operationId: postImportRecords
-      summary: Append a batch of parsed records to an import job
+      operationId: registerImportPart
+      summary: Stage an uploaded dataset part of an import job (the worker uploads it directly to storage)
       tags: *a4
       x-internal: true
       parameters:
@@ -7740,14 +7756,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PostImportRecordsRequest"
+              $ref: "#/components/schemas/RegisterImportPartRequest"
       responses:
         "200":
-          description: Accepted and rejected counts.
+          description: Staged.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PostImportRecordsResponse"
+                $ref: "#/components/schemas/RegisterImportPartResponse"
         "400":
           description: Malformed request.
           content:

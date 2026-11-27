@@ -827,25 +827,6 @@ PostEvalScoresResponse = TypedDict(
     },
 )
 
-PostImportRecordsRequest = TypedDict(
-    "PostImportRecordsRequest",
-    {
-        "worker_id": "str",
-        "attempt": "int",
-        "seq": "int",
-        "records": "list[Any]",
-    },
-)
-
-PostImportRecordsResponse = TypedDict(
-    "PostImportRecordsResponse",
-    {
-        "accepted": "int",
-        "rejected": "int",
-        "errors": "list[dict[str, Any]]",
-    },
-)
-
 Problem = TypedDict(
     "Problem",
     {
@@ -939,6 +920,29 @@ RecordFeedbackResponse = TypedDict(
         "accepted": "int",
         "deduplicated": "int",
         "records": "list[FeedbackRecord]",
+    },
+)
+
+RegisterImportPartRequest = TypedDict(
+    "RegisterImportPartRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "seq": "int",
+        "upload_id": "str",
+        "sha256": "str",
+        "count": "int",
+        "resets": "NotRequired[bool]",
+        "records": "int",
+        "score_updates": "NotRequired[int]",
+        "detected_scores": "NotRequired[list[str]]",
+    },
+)
+
+RegisterImportPartResponse = TypedDict(
+    "RegisterImportPartResponse",
+    {
+        "staged": "bool",
     },
 )
 
@@ -1322,7 +1326,7 @@ TrainerUploadRequest = TypedDict(
     {
         "worker_id": "str",
         "attempt": "int",
-        "kind": "Literal['checkpoint', 'artifact']",
+        "kind": "Literal['checkpoint', 'artifact', 'records']",
         "sha256": "str",
         "size_bytes": "int",
     },
@@ -1638,8 +1642,6 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
     "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
-    "PostImportRecordsRequest": frozenset({"attempt", "records", "seq", "worker_id"}),
-    "PostImportRecordsResponse": frozenset({"accepted", "errors", "rejected"}),
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
@@ -1647,6 +1649,8 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "epochs", "eval_every", "evals", "fallback", "kind", "loggers", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rollout", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
     "RecordFeedbackRequest": frozenset({"events"}),
     "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
+    "RegisterImportPartRequest": frozenset({"attempt", "count", "detected_scores", "records", "resets", "score_updates", "seq", "sha256", "upload_id", "worker_id"}),
+    "RegisterImportPartResponse": frozenset({"staged"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
     "RenderDatasetRequest": frozenset({"limit", "model", "preserve_thinking", "thinking", "train_on"}),
     "RenderDatasetResponse": frozenset({"dataset", "examples", "model", "template_revision", "token_counts"}),

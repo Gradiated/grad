@@ -66,17 +66,16 @@ describe("datasets.from_benchmark", () => {
 
     const job = await worker.claim();
     expect(job?.import?.source).toMatchObject({ benchmark: "gsm8k" });
-    await worker.call(`/v1/trainer-jobs/${job!.id}/records`, {
-      worker_id: worker.workerId,
-      attempt: job!.attempt,
-      seq: 0,
-      records: [0, 1].map((i) => ({
+    await worker.records(
+      job!,
+      0,
+      [0, 1].map((i) => ({
         id: `gsm8k:${i}`,
         messages: [{ role: "user", content: `What is ${i} + 1?` }],
         expected_output: String(i + 1),
         metadata: { benchmark: "gsm8k" },
       })),
-    });
+    );
     await worker.complete(job!, { status: "completed" });
 
     const ds = await h.t.json<Json>("/v1/datasets/gsm8k-2");

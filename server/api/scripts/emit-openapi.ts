@@ -14,6 +14,38 @@ import { createRegexEvaluator } from "../src/services/evals/regex.js";
 import { S3ObjectStore } from "../src/storage/s3.js";
 import type { Store } from "../src/store/types.js";
 
+/**
+ * DatasetRecord as a standalone JSON Schema (2020-12): the component and
+ * every component it references, under `$defs`.
+ */
+const recordSchema = (document: {
+  components?: { schemas?: Record<string, unknown> };
+}): Record<string, unknown> => {
+  const all = document.components?.schemas ?? {};
+  const defs: Record<string, unknown> = {};
+  const visit = (name: string) => {
+    if (name in defs) return;
+    defs[name] = all[name];
+    const refs = JSON.stringify(all[name]).matchAll(
+      /"#\/components\/schemas\/([^"]+)"/g,
+    );
+    for (const [, ref] of refs) visit(ref as string);
+  };
+  visit("DatasetRecord");
+  const body = JSON.stringify(defs).replaceAll(
+    "#/components/schemas/",
+    "#/$defs/",
+  );
+
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $comment:
+      "Generated from spec/openapi.yaml by server/api/scripts/emit-openapi.ts; do not edit.",
+    $ref: "#/$defs/DatasetRecord",
+    $defs: JSON.parse(body) as Record<string, unknown>,
+  };
+};
+
 const run = async () => {
   const check = process.argv.includes("--check");
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -33,18 +65,28 @@ const run = async () => {
     settings: { maxAttempts: 3, evalConcurrency: 1 },
   });
 
-  const rendered = YAML.stringify(buildOpenApiDocument(app), {
-    lineWidth: 120,
-  });
+  const document = buildOpenApiDocument(app);
+  const rendered = YAML.stringify(document, { lineWidth: 120 });
   await regex.close();
+  // The trainer validates the records it writes against the same schema.
+  const recordPath = path.resolve(
+    scriptDir,
+    "../../trainer/grad_trainer/record.schema.json",
+  );
+  const record = `${JSON.stringify(recordSchema(document), null, 2)}\n`;
 
   if (check) {
-    const existing = await readFile(outPath, "utf8").catch(() => "");
-    if (existing !== rendered) {
-      console.error(
-        `OpenAPI drift detected in ${outPath}. Run 'pnpm -C server/api openapi:generate'.`,
-      );
-      process.exit(1);
+    for (const [file, want] of [
+      [outPath, rendered],
+      [recordPath, record],
+    ] as const) {
+      const existing = await readFile(file, "utf8").catch(() => "");
+      if (existing !== want) {
+        console.error(
+          `Drift detected in ${file}. Run 'pnpm -C server/api openapi:generate'.`,
+        );
+        process.exit(1);
+      }
     }
 
     console.log("spec/openapi.yaml is up to date.");
@@ -53,7 +95,8 @@ const run = async () => {
 
   await mkdir(path.dirname(outPath), { recursive: true });
   await writeFile(outPath, rendered, "utf8");
-  console.log(`Wrote ${outPath}`);
+  await writeFile(recordPath, record, "utf8");
+  console.log(`Wrote ${outPath} and ${recordPath}`);
 };
 
 run().catch((e) => {

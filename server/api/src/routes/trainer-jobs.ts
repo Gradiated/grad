@@ -8,8 +8,8 @@ import {
   CompleteJobResponseSchema,
   HeartbeatRequestSchema,
   HeartbeatResponseSchema,
-  PostImportRecordsRequestSchema,
-  PostImportRecordsResponseSchema,
+  RegisterImportPartRequestSchema,
+  RegisterImportPartResponseSchema,
   RegisterCheckpointRequestSchema,
   ReportEventRequestSchema,
   ReportProgressRequestSchema,
@@ -177,7 +177,8 @@ export const registerTrainerJobRoutes = (
       method: "post",
       path: "/v1/trainer-jobs/{id}/uploads",
       operationId: "createTrainerUpload",
-      summary: "Get an upload URL for a checkpoint or artifact bundle",
+      summary:
+        "Get an upload URL for a checkpoint or artifact bundle, or an import's dataset part",
       tags,
       "x-internal": true,
       request: { params: IdParamSchema, ...body(WorkerUploadRequestSchema) },
@@ -189,13 +190,16 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      if (isImportJob(id))
-        throw conflict("wrong_job_kind", "Import jobs do not upload bundles.");
-      const ticket = await services.runs.createUpload(
-        principal,
-        id,
-        c.req.valid("json"),
-      );
+      const input = c.req.valid("json");
+      if (isImportJob(id) !== (input.kind === "records")) {
+        throw conflict(
+          "wrong_job_kind",
+          "Import jobs upload records parts; train jobs upload checkpoints and artifacts.",
+        );
+      }
+      const ticket = isImportJob(id)
+        ? await services.imports.createUpload(principal, id, input)
+        : await services.runs.createUpload(principal, id, input);
 
       return c.json(ticket, 201);
     },
@@ -237,20 +241,18 @@ export const registerTrainerJobRoutes = (
   app.openapi(
     createRoute({
       method: "post",
-      path: "/v1/trainer-jobs/{id}/records",
-      operationId: "postImportRecords",
-      summary: "Append a batch of parsed records to an import job",
+      path: "/v1/trainer-jobs/{id}/parts",
+      operationId: "registerImportPart",
+      summary:
+        "Stage an uploaded dataset part of an import job (the worker uploads it directly to storage)",
       tags,
       "x-internal": true,
       request: {
         params: IdParamSchema,
-        ...body(PostImportRecordsRequestSchema),
+        ...body(RegisterImportPartRequestSchema),
       },
       responses: {
-        200: jsonResponse(
-          PostImportRecordsResponseSchema,
-          "Accepted and rejected counts.",
-        ),
+        200: jsonResponse(RegisterImportPartResponseSchema, "Staged."),
         ...defaultErrors,
       },
     }),
@@ -258,10 +260,10 @@ export const registerTrainerJobRoutes = (
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
       if (!isImportJob(id))
-        throw conflict("wrong_job_kind", "Only import jobs accept records.");
+        throw conflict("wrong_job_kind", "Only import jobs stage parts.");
 
       return c.json(
-        await services.imports.postRecords(principal, id, c.req.valid("json")),
+        await services.imports.registerPart(principal, id, c.req.valid("json")),
         200,
       );
     },

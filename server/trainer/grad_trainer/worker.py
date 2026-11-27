@@ -42,6 +42,7 @@ from .errors import GPUOutOfMemoryError
 from .gpu import ALLOC_CONF, release_gpu_memory
 from .loggers import Loggers
 from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
+from .parts import Part, PartWriter
 from .records import merge_records
 from .sources import redact
 from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
@@ -49,7 +50,6 @@ from .telemetry import WorkerTelemetry
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
 JOB_KINDS = ("train", "import")
-RECORDS_BATCH_LIMIT = 10_000
 _CHUNK = 1024 * 1024
 
 
@@ -268,7 +268,6 @@ class _JobState:
     lease_lost: bool = False
     auth_error: WorkerAuthError | None = None
     max_tokens: int = 0
-    batches: int = 0
     final_status: str = "failed"
     # Lifecycle: the phase last reported, log line numbering, step/checkpoint timing.
     phase: str | None = None
@@ -677,7 +676,7 @@ class TrainerWorker:
         except ServerError as exc:
             if exc.status in (404, 409) and suffix in (
                 "progress",
-                "records",
+                "parts",
                 "complete",
                 "uploads",
                 "source-page",
@@ -1037,20 +1036,30 @@ class TrainerWorker:
                 state, {"status": "failed", "error": redact(f"download failed: {exc}", *secrets)[:4000]}
             )
 
+        def upload_part(part: Part) -> None:
+            upload_id = self._upload(state, "records", part.path, part.upload_sha256, part.size)
+            self._post(
+                state,
+                "parts",
+                {
+                    "seq": part.seq,
+                    "upload_id": upload_id,
+                    "sha256": part.sha256,
+                    "count": part.count,
+                    "resets": part.resets,
+                    "records": part.records,
+                    "score_updates": part.score_updates,
+                    "detected_scores": part.scores[:1000],
+                },
+                attempts=5,
+            )
+
+        parts = PartWriter(job_dir, upload_part, id_prefix=f"{state.job_id}:{state.attempt}")
+
         def emit_batch(records: list[dict[str, Any]]) -> None:
             if state.stop.is_set():
                 raise _StopImport()
-            for start in range(0, len(records), RECORDS_BATCH_LIMIT):
-                self._post(
-                    state,
-                    "records",
-                    {
-                        "seq": state.batches,
-                        "records": records[start : start + RECORDS_BATCH_LIMIT],
-                    },
-                    attempts=5,
-                )
-                state.batches += 1
+            parts.write(records)
 
         def source_page(cursor: str | None) -> dict[str, Any]:
             if state.stop.is_set():
@@ -1067,6 +1076,7 @@ class TrainerWorker:
                 workdir=work,
                 source_page=source_page,
             )
+            parts.close()
         except (LeaseLost, WorkerAuthError):
             raise
         except _StopImport:
@@ -1083,8 +1093,8 @@ class TrainerWorker:
             {
                 "status": "completed",
                 "import_summary": {
-                    "dropped_count": int(summary.skipped),
-                    "drop_reasons": [str(e)[:1000] for e in summary.errors[:101]],
+                    "dropped_count": int(summary.skipped) + parts.dropped,
+                    "drop_reasons": [str(e)[:1000] for e in [*summary.errors, *parts.reasons][:101]],
                     **({"watermark": summary.watermark, "traces": int(summary.traces)} if summary.watermark is not None else {}),
                 },
             },

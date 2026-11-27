@@ -1,19 +1,17 @@
-import { createHash } from "node:crypto";
-
 import type { z } from "@hono/zod-openapi";
 
 import type { AuthPrincipal } from "../adapters.js";
 import { benchmarkMetadata, benchmarkSource } from "../benchmarks.js";
-import {
-  DatasetRecordSchema,
-  type CreateImportRequestSchema,
-  type DatasetRecord,
-  type ImportJob,
-  type TrainerJob,
+import type {
+  CreateImportRequestSchema,
+  ImportJob,
+  TrainerJob,
+  UploadTicket,
 } from "../contracts.js";
 import type {
   CompleteJobRequestSchema,
-  PostImportRecordsRequestSchema,
+  RegisterImportPartRequestSchema,
+  WorkerUploadRequestSchema,
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
 import { errorMessage, notFound } from "../errors.js";
@@ -27,7 +25,6 @@ import type {
   Page,
   PageRequest,
 } from "../store/types.js";
-import { writeRecordsPart } from "./dataset-records.js";
 import type { DatasetService } from "./datasets.js";
 import {
   DEFAULT_MAX_PREEMPTIONS,
@@ -47,29 +44,23 @@ import {
 } from "./sources.js";
 import { jobBlobKey, stagingKey, type UploadService } from "./uploads.js";
 import { metricKind, metrics } from "../telemetry/metrics.js";
-import { isScoreUpdate } from "./record-merge.js";
 
 /** Records a worker posted (counted once per batch), and a sync's split. */
-const observeRecords = (
-  job: ImportJobRecord,
-  accepted: readonly DatasetRecord[],
-  rejected: number,
-): void => {
+const observePart = (job: ImportJobRecord, part: PartBody): void => {
   const kind = metricKind(job);
-  metrics.importRecords.inc({ kind, result: "accepted" }, accepted.length);
-  metrics.importRecords.inc({ kind, result: "dropped" }, rejected);
+  metrics.importRecords.inc({ kind, result: "accepted" }, part.records);
   if (kind !== "sync") return;
   const provider = String(job.source.provider ?? "unknown");
-  const updates = accepted.filter(isScoreUpdate).length;
-  metrics.sourceRecords.inc({ provider }, accepted.length - updates);
-  metrics.sourceScoreUpdates.inc({ provider }, updates);
+  metrics.sourceRecords.inc({ provider }, part.records - part.score_updates);
+  metrics.sourceScoreUpdates.inc({ provider }, part.score_updates);
 };
 
 /** HF imports send their token to the Hugging Face Hub only. */
 const HF_USE: SecretUse = { url: `https://${HF_HOST}`, use: "HF import" };
 
 type CreateImportBody = z.infer<typeof CreateImportRequestSchema>;
-type RecordsBody = z.infer<typeof PostImportRecordsRequestSchema>;
+type PartBody = z.infer<typeof RegisterImportPartRequestSchema>;
+type UploadBody = z.infer<typeof WorkerUploadRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
 
 const MAX_DROP_REASONS = 101;
@@ -101,15 +92,21 @@ export interface ImportService {
   ): Promise<Created<ImportJob>>;
   get(workspaceId: string, id: string): Promise<ImportJob>;
   list(workspaceId: string, page: PageRequest): Promise<Page<ImportJob>>;
-  postRecords(
+  /** A presigned PUT for one gzip JSONL part of the import attempt the worker holds. */
+  createUpload(
     principal: AuthPrincipal,
     id: string,
-    body: RecordsBody,
-  ): Promise<{
-    accepted: number;
-    rejected: number;
-    errors: Array<{ index: number; error: string }>;
-  }>;
+    body: UploadBody,
+  ): Promise<UploadTicket>;
+  /**
+   * Stages an uploaded part once per (job, attempt, seq): grad-server checks
+   * the object (prefix, size, checksum) and never reads the records.
+   */
+  registerPart(
+    principal: AuthPrincipal,
+    id: string,
+    body: PartBody,
+  ): Promise<{ staged: boolean }>;
   complete(
     principal: AuthPrincipal,
     id: string,
@@ -118,14 +115,6 @@ export interface ImportService {
   /** The import kind's hooks in the job queue. */
   handler: JobKindHandler;
 }
-
-/** The id of record `index` of batch `seq`: the same on every retry of the batch. */
-const batchRecordId = (
-  job: { id: string; attempt: number },
-  seq: number,
-  index: number,
-): string =>
-  `rec_${createHash("sha256").update(`${job.id}:${job.attempt}:${seq}:${index}`).digest("hex").slice(0, 16)}`;
 
 export const createImportService = (
   deps: AppDependencies,
@@ -363,68 +352,51 @@ export const createImportService = (
       };
     },
 
-    postRecords: async (principal, id, body) => {
+    createUpload: async (principal, id, body) => {
       await collaborators
         .queue()
         .loadLeased(principal, id, body.worker_id, body.attempt);
       const job = await load(id);
-      const accepted: DatasetRecord[] = [];
-      const errors: Array<{ index: number; error: string }> = [];
-      const scores = new Set(job.detected_scores);
 
-      body.records.forEach((raw, index) => {
-        const parsed = DatasetRecordSchema.safeParse(raw);
-        if (!parsed.success) {
-          if (errors.length < 20) {
-            errors.push({
-              index,
-              error: parsed.error.issues
-                .slice(0, 3)
-                .map((i) => `${i.path.join(".") || "record"}: ${i.message}`)
-                .join("; "),
-            });
-          }
-          return;
-        }
-        // Deterministic ids keep a retried batch byte-identical.
-        const record = parsed.data.id
-          ? parsed.data
-          : { ...parsed.data, id: batchRecordId(job, body.seq, index) };
-        Object.keys(record.scores ?? {}).forEach((key) => scores.add(key));
-        accepted.push(record);
-      });
+      return uploads.ticket(
+        jobBlobKey(job, job.attempt, body.sha256),
+        body.size_bytes,
+      );
+    },
 
-      const rejected = body.records.length - accepted.length;
-      const part =
-        accepted.length > 0
-          ? await writeRecordsPart(
-              storage,
-              () =>
-                `${jobBlobKey(job, job.attempt, "records")}/${body.seq}.jsonl.gz`,
-              accepted,
-            )
-          : null;
+    registerPart: async (principal, id, body) => {
+      await collaborators
+        .queue()
+        .loadLeased(principal, id, body.worker_id, body.attempt);
+      const job = await load(id);
+      const blob = await uploads.commit(body.upload_id, (sha) =>
+        jobBlobKey(job, job.attempt, sha),
+      );
       // Staged once per (job, attempt, batch): a worker retry adds nothing.
-      const added = await store.datasets.stagePart({
+      const staged = await store.datasets.stagePart({
         datasetId: job.dataset_id,
         jobId: job.id,
         attempt: job.attempt,
         batch: body.seq,
-        part,
-        dropped: rejected,
+        part: {
+          key: blob.key,
+          count: body.count,
+          resets: body.resets,
+          sha256: body.sha256,
+          bytes: blob.sizeBytes,
+        },
+        dropped: 0,
       });
-
       const updated = await store.imports.update(
         id,
         {
           // Progress only: completion recounts from the staged parts.
-          ...(added
-            ? {
-                imported_count: job.imported_count + (part?.count ?? 0),
-                dropped_count: job.dropped_count + rejected,
-              }
+          ...(staged
+            ? { imported_count: job.imported_count + body.count }
             : {}),
-          detected_scores: [...scores].sort(),
+          detected_scores: [
+            ...new Set([...job.detected_scores, ...body.detected_scores]),
+          ].sort(),
           lease_expires_at: new Date(
             clock.now().getTime() + job.lease_seconds * 1000,
           ).toISOString(),
@@ -436,9 +408,12 @@ export const createImportService = (
         },
       );
       if (!updated) throw leaseLost(id);
-      if (added) observeRecords(job, accepted, rejected);
+      if (staged) {
+        observePart(job, body);
+        metrics.partBytes.inc({ form: "compressed" }, blob.sizeBytes);
+      }
 
-      return { accepted: accepted.length, rejected, errors };
+      return { staged };
     },
 
     complete: async (principal, id, body) => {

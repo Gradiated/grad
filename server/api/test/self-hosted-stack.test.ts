@@ -141,11 +141,7 @@ describe("self-hosted stack (Postgres + S3)", () => {
         await (await fetch(source.download_url)).arrayBuffer(),
       ).equals(file),
     ).toBe(true);
-    await worker.call(`/v1/trainer-jobs/${job!.id}/records`, {
-      ...worker.ref(job!),
-      seq: 0,
-      records: sftRecords(2),
-    });
+    await worker.records(job!, 0, sftRecords(2));
     const done = await worker.complete(job!, { status: "completed" });
     expect(done.body.import).toMatchObject({
       status: "completed",

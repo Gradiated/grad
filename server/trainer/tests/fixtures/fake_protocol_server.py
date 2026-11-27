@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gzip
+
 import json
 import re
 import threading
@@ -130,6 +132,14 @@ class FakeProtocolServer:
     def bodies(self, action: str) -> list[Any]:
         return [r.json() for r in self.calls(action) if r.method == "POST"]
 
+    def parts(self) -> list[list[dict[str, Any]]]:
+        """The records of each registered part, read back from its upload."""
+        out = []
+        for body in self.bodies("parts"):
+            lines = gzip.decompress(self.uploads[body["upload_id"]]).decode().splitlines()
+            out.append([json.loads(line) for line in lines])
+        return out
+
     # -- routing -------------------------------------------------------------------
 
     def _problem(self, status: int, code: str) -> tuple[int, Any, None, None]:
@@ -241,14 +251,8 @@ class FakeProtocolServer:
             if self.checkpoint_status >= 400:
                 return self._problem(self.checkpoint_status, "checkpoint_conflict")
             return 201, {"id": "ckpt_1"}, None, None
-        if action == "records":
-            records = (rec.json() or {}).get("records", [])
-            return (
-                200,
-                {"accepted": len(records), "rejected": 0, "errors": []},
-                None,
-                None,
-            )
+        if action == "parts":
+            return 200, {"staged": True}, None, None
         if action == "events":
             return 204, None, None, None
         if action == "source-page":
