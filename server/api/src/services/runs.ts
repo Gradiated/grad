@@ -155,12 +155,16 @@ export const toPublicCheckpoint = ({
 /** Losses are minimised; a checkpoint without metric_mode falls back on its metric name. */
 const MINIMISED_METRICS = new Set(["eval_loss", "eval_kl", "loss"]);
 
-export const metricMode = (metadata: Record<string, unknown>): "min" | "max" => {
+export const metricMode = (
+  metadata: Record<string, unknown>,
+): "min" | "max" => {
   const mode = metadata["metric_mode"];
   if (mode === "min" || mode === "max") return mode;
   const name = metadata["metric_name"];
 
-  return typeof name === "string" && MINIMISED_METRICS.has(name) ? "min" : "max";
+  return typeof name === "string" && MINIMISED_METRICS.has(name)
+    ? "min"
+    : "max";
 };
 
 /** The error a run stopped for lack of workspace balance carries (resumable). */

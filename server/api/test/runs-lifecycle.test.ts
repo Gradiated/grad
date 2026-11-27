@@ -571,8 +571,14 @@ describe("run lifecycle and worker protocol", () => {
     const run = await createSftRun(t);
     const job = await worker.claim();
     const loss = { metric_name: "eval_loss" };
-    await worker.checkpoint(job!, 1, "c1", { eval_score: 6.247, metadata: loss });
-    await worker.checkpoint(job!, 2, "c2", { eval_score: 6.115, metadata: loss });
+    await worker.checkpoint(job!, 1, "c1", {
+      eval_score: 6.247,
+      metadata: loss,
+    });
+    await worker.checkpoint(job!, 2, "c2", {
+      eval_score: 6.115,
+      metadata: loss,
+    });
     await worker.complete(
       job!,
       { status: "completed", tokens_processed: 1 },
