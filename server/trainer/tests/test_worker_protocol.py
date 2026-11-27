@@ -181,7 +181,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(manifest["format"], "peft_lora")
         self.assertIn("adapter_model.safetensors", manifest["files"])
         self.assertIn("eval_report_sha256", manifest)
-        self.assertEqual((manifest["kind"], manifest["format_version"]), ("final", 1))
+        self.assertEqual((manifest["kind"], manifest["format_version"]), ("final", 2))
         # The server gets the bundle's own manifest, file map included.
         self.assertEqual(complete["manifest"], manifest)
 

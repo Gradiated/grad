@@ -96,6 +96,78 @@
         }
       }
     },
+    "provenance": {
+      "description": "Where the artifact came from. Required in final manifests from format_version 2; a version 1 manifest is a run's.",
+      "type": "object",
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "run",
+            "upload",
+            "import"
+          ]
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uploader": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "pattern": "^hf://[A-Za-z0-9][\\w.-]*(/[A-Za-z0-9][\\w.-]*)?@[0-9a-f]{40}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "run"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "run_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "upload"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "uploader"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "import"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "uri"
+            ]
+          }
+        }
+      ]
+    },
     "files": {
       "type": "object",
       "minProperties": 1,
@@ -138,6 +210,27 @@
       "then": {
         "required": [
           "step"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "final"
+          },
+          "format_version": {
+            "minimum": 2
+          }
+        },
+        "required": [
+          "kind",
+          "format_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "provenance"
         ]
       }
     },

@@ -309,7 +309,7 @@ class ReferenceBackendTests(TempDirCase):
             out = run_recipe(kind, {**CONFIG, "epochs": 1}, RECORDS, self.tmpdir(), recorder=rec)
             self.assertEqual(out.artifact_format, "reference")
             # Final and checkpoint bundles pass the artifact schemas, as the worker writes them.
-            info = bundle_directory(out.artifact_dir, self.tmpdir() / "a", manifest={**out.manifest, "format": "reference"})
+            info = bundle_directory(out.artifact_dir, self.tmpdir() / "a", manifest={**out.manifest, "format": "reference", "provenance": {"source": "run", "run_id": "run_1"}})
             self.assertEqual((info.manifest["recipe_kind"], info.manifest["deployable"]), (kind, False))
             step, _, directory, metadata = rec.checkpoints[-1]
             bundle_directory(directory, self.tmpdir() / "c", manifest={**metadata["manifest"], "kind": "checkpoint", "step": step})

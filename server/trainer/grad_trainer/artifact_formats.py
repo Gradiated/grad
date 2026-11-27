@@ -19,17 +19,20 @@ from jsonschema import Draft202012Validator
 from . import __version__
 
 SCHEMA_DIR = Path(__file__).resolve().parent / "artifact_schemas"
-#: Bumped when a format changes in a way an existing loader can't read.
+#: Bumped when a format changes in a way an existing loader can't read. Version 2 adds the
+#: required ``provenance`` to final manifests (the files and configs are unchanged), so
+#: readers accept 1 and 2 (``READABLE_VERSIONS``) and read a version 1 manifest as a run's.
 FORMAT_VERSIONS: dict[str, int] = {
-    "peft_lora": 1,
-    "merged_safetensors": 1,
-    "cartridge": 1,
-    "encoder_safetensors": 1,
-    "router_bundle": 1,
-    "decision_bundle": 1,
-    "reward_bundle": 1,
-    "reference": 1,
+    "peft_lora": 2,
+    "merged_safetensors": 2,
+    "cartridge": 2,
+    "encoder_safetensors": 2,
+    "router_bundle": 2,
+    "decision_bundle": 2,
+    "reward_bundle": 2,
+    "reference": 2,
 }
+READABLE_VERSIONS = (1, 2)
 #: The file each format's ``<format>.schema.json`` validates (for a cartridge, the safetensors header).
 CONFIG_FILES: dict[str, str] = {
     "peft_lora": "adapter_config.json",

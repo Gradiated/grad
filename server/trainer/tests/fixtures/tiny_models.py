@@ -17,7 +17,7 @@ from pathlib import Path
 
 from grad_trainer.dev_models import BERT_ID, QWEN3_TEMPLATE, QWEN_ID, QWEN_TEACHER_ID, build_bert, build_qwen
 
-__all__ = ["BERT_ID", "QWEN3_TEMPLATE", "QWEN_ID", "QWEN_TEACHER_ID", "ensure_tiny_models", "torch_available"]
+__all__ = ["BERT_ID", "QWEN3_TEMPLATE", "QWEN_ID", "QWEN_TEACHER_ID", "build_tiny_loras", "ensure_tiny_models", "torch_available"]
 
 _root: Path | None = None
 
@@ -42,6 +42,24 @@ def ensure_tiny_models() -> dict[str, Path]:
     os.environ["GRAD_MODEL_PATHS"] = json.dumps({k: str(v) for k, v in paths.items()})
     os.environ["GRAD_OFFLINE"] = "1"
     return paths
+
+
+def build_tiny_loras(root: Path) -> dict[str, str]:
+    """A PEFT LoRA for test/tiny-qwen3 (``lora``) and one naming the wrong base (``lora_invalid``),
+    for the SDKs' live ``artifacts.upload`` tests."""
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM
+
+    base = AutoModelForCausalLM.from_pretrained(str(ensure_tiny_models()[QWEN_ID]))
+    model = get_peft_model(base, LoraConfig(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"], task_type="CAUSAL_LM"))
+    out = {}
+    for name, base_name in (("lora", QWEN_ID), ("lora_invalid", "Qwen/Qwen3-8B")):
+        directory = root / f"tiny-{name.replace('_', '-')}"
+        model.save_pretrained(str(directory))
+        config = json.loads((directory / "adapter_config.json").read_text())
+        (directory / "adapter_config.json").write_text(json.dumps({**config, "base_model_name_or_path": base_name}))
+        out[name] = str(directory)
+    return out
 
 
 def torch_available() -> bool:

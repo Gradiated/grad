@@ -37,9 +37,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
+from . import artifact_import
 from . import import_runner as connector_import_runner
 from .bundles import bundle_directory, extract_bundle
-from .errors import GPUOutOfMemoryError
+from .errors import GPUOutOfMemoryError, SourceUnavailableError
 from .gpu import ALLOC_CONF, release_gpu_memory
 from .loggers import Loggers
 from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
@@ -630,6 +631,8 @@ class TrainerWorker:
         heartbeat = _Heartbeat(self, state, self.heartbeat_interval_s)
         heartbeat.start()
         try:
+            if job.get("artifact_import"):
+                return self._run_artifact_import(job, state, job_dir)
             if job.get("kind") == "import":
                 return self._run_import(job, state, job_dir)
             return self._run_train(job, state, job_dir)
@@ -1014,7 +1017,11 @@ class TrainerWorker:
                 info = bundle_directory(
                     artifact_dir,
                     bundle,
-                    manifest={**output.manifest, "format": output.artifact_format},
+                    manifest={
+                        **output.manifest,
+                        "format": output.artifact_format,
+                        "provenance": {"source": "run", "run_id": state.job_id},
+                    },
                     eval_report=output.eval_report or None,
                 )
             except ValueError as exc:
@@ -1070,6 +1077,32 @@ class TrainerWorker:
         return BaseArtifact(artifact_id=str(base["artifact_id"]), directory=target)
 
     # -- import jobs ----------------------------------------------------------
+
+    def _run_artifact_import(
+        self, job: dict[str, Any], state: _JobState, job_dir: Path
+    ) -> dict[str, Any]:
+        """``grad artifacts upload`` / ``import``: validate, bundle, upload, complete."""
+        spec = job["artifact_import"]
+        token = (spec.get("source") or {}).get("token")
+        try:
+            info = artifact_import.run(spec, workdir=job_dir, download=self.client.download)
+        except (LeaseLost, WorkerAuthError):
+            raise
+        except artifact_import.InvalidArtifact as exc:
+            return self._complete(
+                state, {"status": "failed", "error_code": "invalid_artifact", "error": str(exc)[:4000]}
+            )
+        except (SourceUnavailableError, ServerError, ServerUnreachable) as exc:
+            return self._complete(
+                state,
+                {"status": "failed", "error_code": "source_unavailable", "error": redact(str(exc), token)[:4000]},
+            )
+        self.telemetry.set_phase("uploading")
+        upload_id = self._upload(state, "artifact", info.path, info.sha256, info.size_bytes)
+        return self._complete(
+            state,
+            {"status": "completed", "upload_id": upload_id, "format": spec["format"], "manifest": info.manifest},
+        )
 
     def _run_import(
         self, job: dict[str, Any], state: _JobState, job_dir: Path

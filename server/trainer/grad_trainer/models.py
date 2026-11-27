@@ -221,6 +221,86 @@ def resolve_model(model_id: str) -> ResolvedModel:
     return _from_hub(key, repo)
 
 
+def _hub_config(model_id: str, repo: str) -> Path:
+    """The Hub snapshot directory holding just the base's ``config.json`` (no weights)."""
+    offline = is_offline()
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise _unavailable(model_id, repo, "huggingface_hub is not installed") from exc
+    try:
+        return Path(hf_hub_download(repo, "config.json", local_files_only=offline)).parent
+    except Exception as exc:
+        how = (
+            "offline mode is on and its config.json is not in the local Hugging Face cache"
+            if offline
+            else f"fetching its config.json from the Hugging Face Hub failed ({type(exc).__name__}: {exc})"
+        )
+        raise _unavailable(model_id, repo, how) from exc
+
+
+def _s3_config(uri: str, dest: Path) -> bool:
+    """Download only ``<uri>/config.json`` (and its ``.grad_revision`` marker) into ``dest``.
+    Returns False if there is no config.json."""
+    try:
+        import boto3  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ModelUnavailableError("GRAD_MODELS_MIRROR is an s3:// URI but boto3 is not installed.") from exc
+    bucket, _, prefix = uri[len("s3://") :].partition("/")
+    dest.mkdir(parents=True, exist_ok=True)
+    client = boto3.client("s3")
+    found = False
+    for name in ("config.json", ".grad_revision"):
+        try:
+            client.download_file(bucket, f"{prefix.rstrip('/')}/{name}", str(dest / name))
+            found = found or name == "config.json"
+        except Exception:
+            continue
+    return found
+
+
+def resolve_config(model_id: str) -> tuple[ResolvedModel, dict[str, Any]]:
+    """A base model's resolution and its ``config.json``, without downloading its weights.
+
+    Artifact imports check uploaded files against it (hidden size, layers, module shapes).
+    The resolution order is :func:`resolve_model`'s; a Hub base fetches ``config.json`` only.
+    """
+    key = model_id.strip().lower()
+    catalog = BUILTIN_MODELS.get(key)
+    repo = catalog.repo if catalog else None
+    override = _model_paths().get(key)
+    resolved: ResolvedModel | None = None
+    if not override and key in dev_models.DEV_MODELS and dev_models.enabled():
+        resolved = _resolved(key, dev_models.ensure(key), key, "dev")
+    elif override and Path(override).expanduser().is_dir():
+        resolved = _resolved(key, Path(override).expanduser(), repo or override, "path")
+    else:
+        if override and not override.startswith(("/", ".", "~")):
+            repo = override
+        mirror = os.environ.get("GRAD_MODELS_MIRROR", "").strip()
+        if mirror.startswith("s3://"):
+            cache = Path(os.environ.get("GRAD_MODELS_CACHE", Path.home() / ".cache" / "grad" / "models"))
+            for name in [n for n in [key] + ([repo] if repo else []) if _mirror_name(n)]:
+                weights, configs = cache / name, cache / ".configs" / name
+                if (weights / "config.json").is_file():
+                    resolved = _resolved(key, weights, repo or key, "mirror")
+                elif (configs / "config.json").is_file() or _s3_config(f"{mirror.rstrip('/')}/{name}", configs):
+                    resolved = _resolved(key, configs, repo or key, "mirror")
+                if resolved:
+                    break
+        elif mirror:
+            resolved = _from_mirror(key, repo, mirror)
+        if resolved is None:
+            if repo is None:
+                resolve_model(model_id)  # raises the same error a run would
+            resolved = _resolved(key, _hub_config(key, str(repo)), str(repo), "hub")
+    try:
+        config = json.loads((resolved.path / "config.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ModelUnavailableError(f"Model '{model_id}' has no readable config.json at {resolved.path}.") from exc
+    return resolved, config
+
+
 def describe_model(resolved: ResolvedModel) -> dict[str, Any]:
     described: dict[str, Any] = {
         "base_model": resolved.model_id,

@@ -20,7 +20,10 @@
       "const": "encoder_safetensors"
     },
     "format_version": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "pooling": {
       "enum": [

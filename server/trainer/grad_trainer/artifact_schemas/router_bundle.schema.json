@@ -32,7 +32,10 @@
       "const": "router_bundle"
     },
     "format_version": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "candidates": {
       "type": "array",

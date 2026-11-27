@@ -79,14 +79,15 @@ import json
 import tarfile
 from pathlib import Path
 
+# The format_versions this reader accepts: 2 only adds `provenance` to final manifests.
 FORMAT_VERSIONS = {
-    "peft_lora": 1,
-    "merged_safetensors": 1,
-    "cartridge": 1,
-    "encoder_safetensors": 1,
-    "router_bundle": 1,
-    "decision_bundle": 1,
-    "reward_bundle": 1,
+    "peft_lora": (1, 2),
+    "merged_safetensors": (1, 2),
+    "cartridge": (1, 2),
+    "encoder_safetensors": (1, 2),
+    "router_bundle": (1, 2),
+    "decision_bundle": (1, 2),
+    "reward_bundle": (1, 2),
 }
 RESERVED = {"manifest.json", "eval_report.json"}
 
@@ -120,7 +121,7 @@ def read_manifest(bundle_dir):
     manifest = json.loads((Path(bundle_dir) / "manifest.json").read_text())
     if manifest.get("schema") != "grad.artifact/1":
         raise ValueError(f"unsupported bundle schema {manifest.get('schema')!r}")
-    if FORMAT_VERSIONS.get(manifest["format"]) != manifest["format_version"]:
+    if manifest["format_version"] not in FORMAT_VERSIONS.get(manifest["format"], ()):
         raise ValueError(f"unsupported format {manifest['format']} v{manifest['format_version']}")
     return manifest
 

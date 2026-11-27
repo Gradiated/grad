@@ -62,6 +62,7 @@ def manifest_for(**extra: Any) -> dict[str, Any]:
         "base_model_repo": "Qwen/Qwen3-0.6B",
         "base_model_revision": None,
         "deployable": True,
+        "provenance": {"source": "run", "run_id": "run_1"},
         **extra,
     }
 
@@ -98,7 +99,7 @@ class SchemaTests(TempDirCase):
 
     def test_bundle_directory_stamps_versions_and_validates(self) -> None:
         info = bundle_directory(self.lora_dir(), self.tmpdir() / "a.grad.tar.gz", manifest=manifest_for())
-        self.assertEqual(info.manifest["format_version"], 1)
+        self.assertEqual(info.manifest["format_version"], 2)
         self.assertEqual(info.manifest["created_by"], {"name": "grad-trainer", "version": __version__})
         self.assertEqual(sorted(info.manifest["files"]), sorted(LORA))
 
@@ -108,6 +109,9 @@ class SchemaTests(TempDirCase):
             (manifest_for(kind="checkpoint"), "'step' is a required"),
             (manifest_for(format="cartridge", recipe_kind="cartridge"), "files: 'cartridge.safetensors' is a required"),
             (manifest_for(base_model_repo=None), "base_model_repo: None is not of type 'string'"),
+            ({k: v for k, v in manifest_for().items() if k != "provenance"}, "'provenance' is a required"),
+            (manifest_for(provenance={"source": "upload"}), "provenance: 'uploader' is a required"),
+            (manifest_for(provenance={"source": "import", "uri": "hf://a/b@main"}), "provenance/uri: 'hf://a/b@main' does not match"),
         ]
         for manifest, message in bad:
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
@@ -119,7 +123,7 @@ class SchemaTests(TempDirCase):
         src = self.tmpdir()
         (src / "reference_model.json").write_text("{}")
         ref = manifest_for(format="reference", deployable=False, base_model_repo=None)
-        self.assertEqual(bundle_directory(src, self.tmpdir() / "r", manifest=ref).manifest["format_version"], 1)
+        self.assertEqual(bundle_directory(src, self.tmpdir() / "r", manifest=ref).manifest["format_version"], 2)
         with self.assertRaisesRegex(ValueError, "deployable"):
             bundle_directory(src, self.tmpdir() / "s", manifest={**ref, "deployable": True})
         stamped = {**ref, "schema": "grad.artifact/1", "format_version": 1, "created_by": {"name": "grad-trainer", "version": "1"}}
@@ -186,10 +190,15 @@ class RecipeBundleTests(TorchCase):
     def bundle(self, out: Any, ns: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         """Bundle the export exactly as the worker does, then open it with the doc's reader."""
         path = self.tmpdir() / "artifact.grad.tar.gz"
-        bundle_directory(out.artifact_dir, path, manifest={**out.manifest, "format": out.artifact_format}, eval_report=out.eval_report)
+        bundle_directory(
+            out.artifact_dir,
+            path,
+            manifest={**out.manifest, "format": out.artifact_format, "provenance": {"source": "run", "run_id": "run_1"}},
+            eval_report=out.eval_report,
+        )
         dest = self.tmpdir() / "bundle"
         manifest = ns["open_bundle"](path, dest)
-        self.assertEqual((manifest["kind"], manifest["format"], manifest["format_version"]), ("final", out.artifact_format, 1))
+        self.assertEqual((manifest["kind"], manifest["format"], manifest["format_version"]), ("final", out.artifact_format, 2))
         # The loader gets only the documented files.
         self.assertEqual(set(manifest["files"]), DOCUMENTED_FILES[out.artifact_format])
         documented = self.tmpdir() / "documented"
@@ -400,3 +409,12 @@ class RecipeBundleTests(TorchCase):
                 tar.add(p, p.name)
         with self.assertRaisesRegex(ValueError, "checksum mismatch for reference_model.json"):
             ns["open_bundle"](tampered, self.tmpdir() / "b")
+        # Readers take format_version 1 (no provenance) and 2, and refuse a version they don't know.
+        self.assertEqual(ns["read_manifest"](unpacked)["format_version"], 2)
+        for version, ok in ((1, True), (3, False)):
+            (unpacked / "manifest.json").write_text(json.dumps({**manifest, "format_version": version}))
+            if ok:
+                self.assertEqual(ns["read_manifest"](unpacked)["format_version"], 1)
+            else:
+                with self.assertRaisesRegex(ValueError, "unsupported format peft_lora v3"):
+                    ns["read_manifest"](unpacked)
