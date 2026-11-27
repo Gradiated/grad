@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::data::print_import;
 use super::{more_hint, on_interrupt, page, Ctx};
-use crate::cli::{SecretsCmd, SourcesCmd};
+use crate::cli::{PageArgs, SecretsCmd, SourcesCmd};
 use crate::output::{when, CliError, CliResult};
 
 /// Secret values are small (the server caps them at 16 KiB).
@@ -258,6 +258,36 @@ async fn wait_sync(ctx: &Ctx, c: &Client, job_id: &str, timeout: u64) -> CliResu
     let done = c.imports().wait(job_id, &opts).await?;
     print_import(&ctx.out, &done);
     ctx.out.done(&done)
+}
+
+pub async fn usage(ctx: &Ctx, p: PageArgs) -> CliResult {
+    let out = &ctx.out;
+    let c = ctx.client()?;
+    let res = c.usage().list(&page(&p)).await?;
+    out.table(
+        &["kind", "ref", "attempt", "tokens", "cost_usd", "billed"],
+        res.data
+            .iter()
+            .map(|u| {
+                vec![
+                    u.kind.clone(),
+                    u.ref_id.clone(),
+                    u.attempt.to_string(),
+                    u.tokens.to_string(),
+                    format!("{:.6}", u.cost_usd),
+                    when(&u.created_at),
+                ]
+            })
+            .collect(),
+    );
+    more_hint(
+        out,
+        "/v1/usage",
+        &p,
+        res.data.len(),
+        res.next_cursor.as_deref(),
+    )?;
+    out.done(&res)
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 {
-  "description": "Every SDK and the CLI replay this file. 'requests': what each SDK must send for the same logical call (method, path, Idempotency-Key when the caller passes one, JSON body). 'responses': bodies whose typed fields every SDK asserts ('expect' lists them).",
+  "description": "Every SDK and the CLI replay this file. 'requests': what each SDK must send for the same logical call (method, path, Idempotency-Key when the caller passes one, JSON body). 'responses': bodies whose typed fields every SDK asserts ('expect' lists them). GET cases carry 'query' (string values) and no body or Idempotency-Key.",
   "requests": [
     {
       "case": "plan_sft_every_param",
@@ -373,6 +373,16 @@
       "body": {
         "full": true
       }
+    },
+    {
+      "case": "list_usage",
+      "method": "GET",
+      "path": "/v1/usage",
+      "query": {
+        "limit": "10"
+      },
+      "idempotency_key": null,
+      "body": null
     }
   ],
   "responses": {
@@ -674,6 +684,24 @@
       "workspace_id": "ws_e2e",
       "created_at": "2026-11-27T11:00:00.000Z",
       "updated_at": "2026-11-27T11:00:00.000Z"
+    },
+    "usage_page": {
+      "data": [
+        {
+          "id": "use_1",
+          "kind": "run",
+          "ref_id": "run_015437ae0c01e09a573e4811",
+          "attempt": 1,
+          "tokens_from": 0,
+          "tokens_through": 84,
+          "tokens": 84,
+          "cost_usd": 8.4e-05,
+          "price_version": "catalog@1",
+          "idempotency_key": "run-usage:run_015437ae0c01e09a573e4811:1:84",
+          "created_at": "2026-11-27T04:35:21.351Z"
+        }
+      ],
+      "next_cursor": null
     }
   },
   "expect": {
@@ -698,6 +726,9 @@
     "source.schedule": "*/15 * * * *",
     "source.last_sync.status": "completed",
     "source.last_sync.dataset_version": 3,
-    "secret.name": "langfuse-prod"
+    "secret.name": "langfuse-prod",
+    "usage[0].kind": "run",
+    "usage[0].tokens_through": 84,
+    "usage[0].cost_usd": 8.4e-05
   }
 }

@@ -176,3 +176,28 @@ func TestFromHFSendsTheSecretName(t *testing.T) {
 		t.Fatalf("source %v", src)
 	}
 }
+
+func TestUsageList(t *testing.T) {
+	ctx := context.Background()
+	page := wireMap(t, "sdk-parity.json")["responses"].(map[string]any)["usage_page"].(map[string]any)
+	calls := 0
+	f := newFake(t, map[string]route{"GET /v1/usage": func(w http.ResponseWriter, r *http.Request, b []byte) {
+		calls++
+		if calls == 1 {
+			jsonValue(200, map[string]any{"data": page["data"], "next_cursor": "c1"})(w, r, b)
+			return
+		}
+		jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil})(w, r, b)
+	}})
+	c, _ := f.client()
+	var got []string
+	for u, err := range c.Usage.List(ctx, grad.WithUsagePageSize(5)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, u.RefID)
+	}
+	if len(got) != 1 || f.last("GET", "/v1/usage").Query != "cursor=c1&limit=5" {
+		t.Fatalf("usage %v %q", got, f.last("GET", "/v1/usage").Query)
+	}
+}

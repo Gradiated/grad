@@ -279,13 +279,27 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             .await
             .map(drop),
         "sync_source_full" => c.sources().sync("src_01J9X", true).await.map(drop),
+        "list_usage" => c
+            .usage()
+            .list(&ListParams {
+                limit: Some(10),
+                cursor: None,
+            })
+            .await
+            .map(drop),
         other => panic!("no Rust call for parity case {}", other),
     }
 }
 
 #[tokio::test]
 async fn requests_match_the_shared_fixture() {
-    let srv = MockServer::start(|_| Reply::json(200, json!({"id": "x", "status": "queued"})));
+    let srv = MockServer::start(|r| {
+        if r.path() == "/v1/usage" {
+            Reply::json(200, json!({"data": [], "next_cursor": null}))
+        } else {
+            Reply::json(200, json!({"id": "x", "status": "queued"}))
+        }
+    });
     let c = Client::builder()
         .ignore_env(true)
         .ignore_config_file(true)
@@ -307,8 +321,20 @@ async fn requests_match_the_shared_fixture() {
             "{}",
             name
         );
-        assert_eq!(norm(&sent.json()), norm(&case["body"]), "{}", name);
         let key = sent.header("idempotency-key").unwrap_or_default();
+        if case["method"] == "GET" {
+            let query: Value = sent
+                .query()
+                .split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+                .collect::<serde_json::Map<_, _>>()
+                .into();
+            assert_eq!(query, case["query"], "{}", name);
+            assert_eq!(key, "", "{}: GETs carry no Idempotency-Key", name);
+            continue;
+        }
+        assert_eq!(norm(&sent.json()), norm(&case["body"]), "{}", name);
         match case["idempotency_key"].as_str() {
             Some(k) => assert_eq!(key, k, "{}", name),
             None => assert_eq!(key.len(), 36, "{}: a fresh UUIDv4", name),
@@ -326,6 +352,8 @@ fn typed_responses() {
         serde_json::from_value(fx["responses"]["eval_plan"].clone()).unwrap();
     let source: Source = serde_json::from_value(fx["responses"]["source"].clone()).unwrap();
     let secret: SecretRef = serde_json::from_value(fx["responses"]["secret"].clone()).unwrap();
+    let usage: UsageRecord =
+        serde_json::from_value(fx["responses"]["usage_page"]["data"][0].clone()).unwrap();
     let last = source.last_sync.clone().unwrap();
     let report = run.eval_report.unwrap();
     let pareto = report.pareto_summary.clone().unwrap();
@@ -349,6 +377,9 @@ fn typed_responses() {
         "source.last_sync.status": last.status.as_str(),
         "source.last_sync.dataset_version": last.dataset_version,
         "secret.name": secret.name,
+        "usage[0].kind": usage.kind,
+        "usage[0].tokens_through": usage.tokens_through,
+        "usage[0].cost_usd": usage.cost_usd,
     });
     assert_eq!(norm(&got), norm(&fx["expect"]));
     assert_eq!(report.metric(), Some(0.41));

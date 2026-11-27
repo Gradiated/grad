@@ -1,4 +1,4 @@
-import type { ApiKey, ApiKeyScope, CreatedApiKey, TrainableModel } from "../generated/models.js";
+import type { ApiKey, ApiKeyScope, CreatedApiKey, TrainableModel, UsageRecord } from "../generated/models.js";
 import type { RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { Paginator } from "../pagination.js";
@@ -30,5 +30,18 @@ export class KeysResource {
 
   revoke(id: string, options?: RequestOptions): Promise<ApiKey> {
     return this.core.api.revokeApiKey(id, options);
+  }
+}
+
+export class UsageResource {
+  constructor(private readonly core: Core) {}
+
+  /** Billed usage, newest first: one record per billed increment of a run or eval attempt. */
+  list(options: { limit?: number } & RequestOptions = {}): Paginator<UsageRecord> {
+    const { limit, ...request } = options;
+    return new Paginator(async (cursor) => {
+      const page = await this.core.api.listUsage({ ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) }, request);
+      return { data: page.data, nextCursor: page.nextCursor };
+    }, request.signal);
   }
 }

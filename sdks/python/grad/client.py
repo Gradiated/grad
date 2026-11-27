@@ -72,6 +72,7 @@ class Grad:
         self.keys = r.Keys(self)
         self.secrets = r.Secrets(self)
         self.sources = r.Sources(self)
+        self.usage = r.Usage(self)
 
     @property
     def base_url(self) -> str:

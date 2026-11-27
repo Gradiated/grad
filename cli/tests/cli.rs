@@ -1459,6 +1459,35 @@ fn secrets_set_reads_stdin_and_never_prints_the_value() {
 }
 
 #[test]
+fn usage_lists_billed_increments() {
+    let srv = MockServer::start(|r| {
+        assert_eq!(r.path(), "/v1/usage");
+        Reply::json(
+            200,
+            json!({"data": [{"id": "use_1", "kind": "run", "ref_id": "run_abc", "attempt": 2,
+                "tokens_from": 0, "tokens_through": 84, "tokens": 84, "cost_usd": 0.000084,
+                "price_version": "catalog@1", "idempotency_key": "k", "created_at": "2026-11-27T04:35:21.351Z"}],
+                "next_cursor": null}),
+        )
+    });
+    let sb = Sandbox::new("usage");
+    let r = run(sb.grad(Some(&srv.url)), &["usage"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("run_abc") && r.stdout.contains("0.000084"),
+        "{}",
+        r.stdout
+    );
+    let r = run(sb.grad(Some(&srv.url)), &["usage", "--json"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("\"tokens_through\": 84") || r.stdout.contains("\"tokens_through\":84"),
+        "{}",
+        r.stdout
+    );
+}
+
+#[test]
 fn sources_add_list_sync_and_remove() {
     let srv = sources_api();
     let sb = Sandbox::new("sources");
@@ -2321,8 +2350,12 @@ fn parity_requests_match_the_shared_fixture() {
     )
     .unwrap();
     let fx: Value = serde_json::from_str(&raw).unwrap();
-    let srv = MockServer::start(|_| {
-        Reply::json(200, json!({"id": "x", "name": "x", "status": "queued"}))
+    let srv = MockServer::start(|r| {
+        if r.path() == "/v1/usage" {
+            Reply::json(200, json!({"data": [], "next_cursor": null}))
+        } else {
+            Reply::json(200, json!({"id": "x", "name": "x", "status": "queued"}))
+        }
     });
     let sb = Sandbox::new("parity");
     for case in fx["requests"].as_array().unwrap() {
@@ -2436,6 +2469,11 @@ fn parity_requests_match_the_shared_fixture() {
                 a
             }
             "/v1/secrets" => vec!["secrets".into(), "set".into(), s("name")],
+            "/v1/usage" => vec![
+                "usage".into(),
+                "--limit".into(),
+                case["query"]["limit"].as_str().unwrap().into(),
+            ],
             "/v1/sources/src_01J9X/sync" => {
                 let mut a = vec!["sources".into(), "sync".into(), "src_01J9X".into()];
                 if body["full"] == json!(true) {
@@ -2492,8 +2530,13 @@ fn parity_requests_match_the_shared_fixture() {
         let sent = srv
             .last(case["method"].as_str().unwrap(), path)
             .unwrap_or_else(|| panic!("{}: nothing sent", name));
-        assert_eq!(norm(&sent.json()), norm(body), "{}", name);
         let key = sent.header("idempotency-key").unwrap_or_default();
+        if case["method"] == "GET" {
+            assert_eq!(sent.query(), "limit=10", "{}", name);
+            assert_eq!(key, "", "{}", name);
+            continue;
+        }
+        assert_eq!(norm(&sent.json()), norm(body), "{}", name);
         match case["idempotency_key"].as_str() {
             Some(k) => assert_eq!(key, k, "{}", name),
             None => assert_eq!(key.len(), 36, "{}", name),

@@ -51,6 +51,7 @@ from ._models import (
     Run,
     SecretRef,
     Source,
+    UsageRecord,
     TERMINAL_EVAL_STATUSES,
     TERMINAL_IMPORT_STATUSES,
     TERMINAL_RUN_STATUSES,
@@ -415,6 +416,14 @@ class Datasets(_Resource):
         if limit is not None:
             body["limit"] = limit
         return RenderPreview.from_api(self._wire.render_dataset(h.dataset_name(dataset), body), self._client)
+
+
+class Usage(_Resource):
+    """Billed usage: one record per billed increment of a run or eval attempt."""
+
+    def list(self, *, limit: int | None = None) -> Page[UsageRecord]:
+        """Usage records, newest first (iterate the page to follow every page)."""
+        return self._page(UsageRecord, lambda cursor: self._wire.list_usage(limit=limit, cursor=cursor))
 
 
 class Secrets(_Resource):

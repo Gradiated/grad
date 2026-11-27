@@ -147,5 +147,17 @@ class SourcesTests(unittest.TestCase):
         self.assertEqual(sender.sent[-2].json["source"]["secret"], "hf-token")
 
 
+class UsageTests(unittest.TestCase):
+    def test_lists_usage_pages(self) -> None:
+        page = PARITY["responses"]["usage_page"]
+        client, sender, _ = make_client(
+            {"GET /v1/usage": [json_reply({**page, "next_cursor": "c1"}), json_reply({"data": [], "next_cursor": None})]}
+        )
+        records = client.usage.list(limit=5).to_list()
+        self.assertEqual([(r.kind, r.tokens, r.cost_usd) for r in records], [("run", 84, 0.000084)])
+        self.assertIsInstance(records[0], grad.UsageRecord)
+        self.assertEqual(sender.sent[-1].query, {"limit": ["5"], "cursor": ["c1"]})
+
+
 if __name__ == "__main__":
     unittest.main()

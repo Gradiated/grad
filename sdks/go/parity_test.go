@@ -3,6 +3,7 @@ package grad_test
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"reflect"
 	"regexp"
 	"sort"
@@ -16,11 +17,12 @@ import (
 // send these requests for the same logical calls.
 type parityFixture struct {
 	Requests []struct {
-		Case           string  `json:"case"`
-		Method         string  `json:"method"`
-		Path           string  `json:"path"`
-		IdempotencyKey *string `json:"idempotency_key"`
-		Body           any     `json:"body"`
+		Case           string            `json:"case"`
+		Method         string            `json:"method"`
+		Path           string            `json:"path"`
+		IdempotencyKey *string           `json:"idempotency_key"`
+		Body           any               `json:"body"`
+		Query          map[string]string `json:"query"`
 	} `json:"requests"`
 	Responses struct {
 		Run      json.RawMessage `json:"run"`
@@ -29,6 +31,9 @@ type parityFixture struct {
 		Scoring  json.RawMessage `json:"scoring"`
 		Source   json.RawMessage `json:"source"`
 		Secret   json.RawMessage `json:"secret"`
+		Usage    struct {
+			Data []json.RawMessage `json:"data"`
+		} `json:"usage_page"`
 	} `json:"responses"`
 	Expect map[string]any `json:"expect"`
 }
@@ -49,6 +54,7 @@ func TestParityRequests(t *testing.T) {
 	for _, c := range p.Requests {
 		routes[c.Method+" "+c.Path] = jsonValue(200, map[string]any{"id": "x", "status": "queued"})
 	}
+	routes["GET /v1/usage"] = jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil})
 	f := newFake(t, routes)
 	c, _ := f.client()
 	judge := grad.Judge{Name: "quality", Model: "judge/m", Prompt: "Is the answer correct?", Weight: 1}
@@ -157,6 +163,12 @@ func TestParityRequests(t *testing.T) {
 			})
 			return err
 		},
+		"list_usage": func() error {
+			for _, err := range c.Usage.List(ctx, grad.WithUsagePageSize(10)) {
+				return err
+			}
+			return nil
+		},
 		"sync_source_full": func() error {
 			_, err := c.Sources.Sync(ctx, "src_01J9X", grad.FullSync()).Result()
 			return err
@@ -182,6 +194,13 @@ func TestParityRequests(t *testing.T) {
 		reqs := f.requests()
 		sent := reqs[len(reqs)-1]
 		var body any
+		if tc.Method == "GET" {
+			key := sent.Header.Get("Idempotency-Key")
+			if sent.Path != tc.Path || key != "" || !reflect.DeepEqual(queryMap(sent.Query), tc.Query) {
+				t.Errorf("%s: %s %s?%s key %q", tc.Case, sent.Method, sent.Path, sent.Query, key)
+			}
+			continue
+		}
 		if err := json.Unmarshal(sent.Body, &body); err != nil {
 			t.Fatal(err)
 		}
@@ -205,6 +224,10 @@ func TestParityTypedResponses(t *testing.T) {
 	var scoring generated.EvalRun
 	var source grad.Source
 	var secret grad.SecretRef
+	var usage grad.UsageRecord
+	if err := json.Unmarshal(p.Responses.Usage.Data[0], &usage); err != nil {
+		t.Fatal(err)
+	}
 	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan, &p.Responses.Scoring: &scoring, &p.Responses.Source: &source, &p.Responses.Secret: &secret} {
 		if err := json.Unmarshal(*raw, into); err != nil {
 			t.Fatal(err)
@@ -231,8 +254,20 @@ func TestParityTypedResponses(t *testing.T) {
 		"source.last_sync.status":                          string(source.LastSync.Status),
 		"source.last_sync.dataset_version":                 float64(*source.LastSync.DatasetVersion),
 		"secret.name":                                      secret.Name,
+		"usage[0].kind":                                    string(usage.Kind),
+		"usage[0].tokens_through":                          float64(usage.TokensThrough),
+		"usage[0].cost_usd":                                usage.CostUSD,
 	}
 	if !reflect.DeepEqual(got, p.Expect) {
 		t.Fatalf("typed responses\n got %v\nwant %v", got, p.Expect)
 	}
+}
+
+func queryMap(raw string) map[string]string {
+	values, _ := url.ParseQuery(raw)
+	out := map[string]string{}
+	for k, v := range values {
+		out[k] = v[0]
+	}
+	return out
 }

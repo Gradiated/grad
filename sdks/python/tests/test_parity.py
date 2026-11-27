@@ -126,6 +126,7 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
             "support-prod", grad.sources.Gradiated(models=("acme/support",)), schedule="0 * * * *"
         ),
         "sync_source_full": lambda: source.sync(full=True),
+        "list_usage": lambda: client.usage.list(limit=10),
     }
 
 
@@ -142,7 +143,10 @@ class ParityTests(unittest.TestCase):
                 self.assertEqual((sent.method, sent.path), (case["method"], case["path"]))
                 self.assertEqual(sent.json, case["body"])
                 key = sent.header("Idempotency-Key")
-                if case["idempotency_key"] is None:
+                if case["method"] == "GET":
+                    self.assertEqual({k: v[0] for k, v in sent.query.items()}, case["query"])
+                    self.assertIsNone(key)
+                elif case["idempotency_key"] is None:
                     self.assertRegex(key or "", r"^[0-9a-f-]{36}$")
                 else:
                     self.assertEqual(key, case["idempotency_key"])
@@ -155,6 +159,7 @@ class ParityTests(unittest.TestCase):
         scoring = grad.Eval.from_api(responses["scoring"])
         source = grad.Source.from_api(responses["source"])
         secret = grad.SecretRef.from_api(responses["secret"])
+        usage = grad.UsageRecord.from_api(responses["usage_page"]["data"][0])
         assert source.last_sync is not None
         assert run.eval_report is not None and run.eval_report.pareto_summary is not None and run.latest_metric is not None
         got = {
@@ -177,6 +182,9 @@ class ParityTests(unittest.TestCase):
             "source.last_sync.status": source.last_sync.status,
             "source.last_sync.dataset_version": source.last_sync.dataset_version,
             "secret.name": secret.name,
+            "usage[0].kind": usage.kind,
+            "usage[0].tokens_through": usage.tokens_through,
+            "usage[0].cost_usd": usage.cost_usd,
         }
         self.assertEqual(got, want)
         self.assertIsInstance(run.eval_report, grad.EvalReport)

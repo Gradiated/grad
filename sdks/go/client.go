@@ -43,6 +43,7 @@ type Client struct {
 	Keys        *KeysService
 	Secrets     *SecretsService
 	Sources     *SourcesService
+	Usage       *UsageService
 
 	baseURL    string
 	apiKey     string
@@ -269,6 +270,7 @@ func NewClient(opts ...Option) *Client {
 	c.Keys = &KeysService{c: c}
 	c.Secrets = &SecretsService{c: c}
 	c.Sources = &SourcesService{c: c}
+	c.Usage = &UsageService{c: c}
 	return c
 }
 

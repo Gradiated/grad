@@ -383,3 +383,21 @@ pub struct Source {
     pub created_at: String,
     pub updated_at: String,
 }
+
+/// One billed increment of a run or eval attempt (`client.usage().list(...)`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UsageRecord {
+    pub id: String,
+    /// `run` or `eval`.
+    pub kind: String,
+    pub ref_id: String,
+    pub attempt: u32,
+    pub tokens_from: u64,
+    pub tokens_through: u64,
+    pub tokens: u64,
+    pub cost_usd: f64,
+    pub price_version: String,
+    pub idempotency_key: String,
+    pub created_at: String,
+}

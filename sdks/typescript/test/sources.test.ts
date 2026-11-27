@@ -124,3 +124,14 @@ describe("sources", () => {
     expect(JSON.parse(post?.body ?? "{}").source.secret).toBe("hf-token");
   });
 });
+
+describe("usage", () => {
+  it("pages billed usage records", async () => {
+    const page = wire<{ responses: { usage_page: { data: unknown[] } } }>("sdk-parity.json").responses.usage_page;
+    const server = new FakeServer().on("GET", "/v1/usage", json({ ...page, next_cursor: "c1" }), json({ data: [], next_cursor: null }));
+    const { grad } = makeGrad(server);
+    const records = await grad.usage.list({ limit: 5 }).all();
+    expect(records.map((r) => [r.kind, r.tokensThrough, r.costUsd])).toEqual([["run", 84, 0.000084]]);
+    expect(server.calls.at(-1)?.url.searchParams.get("cursor")).toBe("c1");
+  });
+});

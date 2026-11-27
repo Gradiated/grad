@@ -842,6 +842,25 @@ class ApiKey(APIObject):
     _repr_fields = ("id", "name", "prefix", "scopes")
 
 
+@dataclass(kw_only=True, repr=False, eq=False)
+class UsageRecord(APIObject):
+    """One billed increment of a run or eval attempt (``client.usage.list()``)."""
+
+    id: str
+    kind: str
+    ref_id: str
+    attempt: int = 0
+    tokens_from: int = 0
+    tokens_through: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+    price_version: str | None = None
+    idempotency_key: str | None = None
+    created_at: str | None = None
+
+    _repr_fields = ("kind", "ref_id", "attempt", "tokens", "cost_usd")
+
+
 def _api_key(value: Any, client: Any) -> Any:
     return ApiKey.from_api(value, client) if isinstance(value, Mapping) else value
 

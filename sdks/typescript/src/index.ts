@@ -35,7 +35,7 @@ export {
   type PushOptions,
 } from "./resources/datasets.js";
 export { DatasetScoring, Eval, EvalFailures, EvalsResource, type PendingScoring, TERMINAL_EVAL_STATUSES, type EvalParams, type EvalWaitOptions, type PendingEval } from "./resources/evals.js";
-export { KeysResource, ModelsResource } from "./resources/misc.js";
+export { KeysResource, ModelsResource, UsageResource } from "./resources/misc.js";
 export {
   SecretRef,
   SecretsResource,

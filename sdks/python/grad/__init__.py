@@ -72,6 +72,7 @@ from ._models import (
     Run,
     SecretRef,
     Source,
+    UsageRecord,
 )
 from ._version import __version__
 from .client import Grad
@@ -169,6 +170,7 @@ __all__ = [
     "Run",
     "SecretRef",
     "Source",
+    "UsageRecord",
     "RunFailedError",
     "SFTRecipe",
     "Scorer",

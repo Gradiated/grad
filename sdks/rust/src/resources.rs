@@ -123,6 +123,7 @@ resource!(Artifacts);
 resource!(Deployments);
 resource!(Evals);
 resource!(Secrets);
+resource!(UsageLedger);
 resource!(Sources);
 
 async fn get<T: DeserializeOwned>(c: &Client, req: Req) -> Result<T> {
@@ -634,6 +635,17 @@ impl Datasets<'_> {
     /// The sources syncing into dataset `name`.
     pub async fn sources(&self, name: &str) -> Result<Vec<Source>> {
         self.c.sources().list_all(Some(name)).await
+    }
+}
+
+impl UsageLedger<'_> {
+    /// Billed usage, newest first: one record per billed increment of a run or eval attempt.
+    pub async fn list(&self, p: &ListParams) -> Result<Page<UsageRecord>> {
+        get(self.c, Req::get("/v1/usage").query(p.query())).await
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<UsageRecord>> {
+        collect_all(self.c, "/v1/usage", LIST_USAGE_LIMIT_MAX, vec![]).await
     }
 }
 

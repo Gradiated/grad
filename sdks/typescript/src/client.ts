@@ -17,7 +17,7 @@ import { defaultPollContext, type PollContext } from "./polling.js";
 import { Artifact, ArtifactsResource, deployArtifact, DeploymentsResource, type ArtifactRef, type DeployOptions } from "./resources/artifacts.js";
 import { DatasetsResource, ImportsResource } from "./resources/datasets.js";
 import { EvalsResource } from "./resources/evals.js";
-import { KeysResource, ModelsResource } from "./resources/misc.js";
+import { KeysResource, ModelsResource, UsageResource } from "./resources/misc.js";
 import { CheckpointsResource, RunsResource } from "./resources/runs.js";
 import { SecretsResource, SourcesResource } from "./resources/sources.js";
 import type { Deployment } from "./generated/models.js";
@@ -146,6 +146,7 @@ export class Grad {
   readonly keys: KeysResource;
   readonly secrets: SecretsResource;
   readonly sources: SourcesResource;
+  readonly usage: UsageResource;
   readonly #transport: LazyTransport;
   readonly #core: Core;
 
@@ -175,6 +176,7 @@ export class Grad {
     this.keys = new KeysResource(this.#core);
     this.secrets = new SecretsResource(this.#core);
     this.sources = new SourcesResource(this.#core);
+    this.usage = new UsageResource(this.#core);
   }
 
   /** The base URL and key source this client resolved (the key itself is never returned). */

@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { adapters, Context, Judge, losses, optim, pooling, recipes, rollouts, Scorer, SecretRef, sources, splits, validators, type Grad } from "../src/index.js";
-import type { EvalRun, PlanEvalResponse, Run, Secret, Source } from "../src/generated/models.js";
+import type { EvalRun, PlanEvalResponse, Run, Secret, Source, UsageRecord } from "../src/generated/models.js";
 import { CODEC } from "../src/generated/client.js";
 import { convertKeys } from "../src/transport.js";
 import { FakeServer, json, makeGrad, wire } from "./helpers.js";
 
 /** tests/fixtures/wire/sdk-parity.json: every SDK and the CLI send these requests for the same calls. */
 interface Parity {
-  requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown }[];
-  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; source: unknown; secret: unknown };
+  requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown; query?: Record<string, string> }[];
+  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown; source: unknown; secret: unknown; usage_page: { data: unknown[] } };
   expect: Record<string, unknown>;
 }
 const parity = wire<Parity>("sdk-parity.json");
@@ -132,12 +132,14 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
   add_source_gradiated: () =>
     grad.sources.create("support-prod", { provider: sources.gradiated({ models: ["acme/support"] }), schedule: "0 * * * *" }),
   sync_source_full: async () => grad.sources.sync("src_01J9X", { full: true }),
+  list_usage: () => grad.usage.list({ limit: 10 }).pages().next(),
 });
 
 describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
   it("sends the fixture's request for every case", async () => {
     const server = new FakeServer();
     for (const c of parity.requests) server.on(c.method, c.path, () => json({ id: "x", status: "queued" }));
+    server.on("GET", "/v1/usage", () => json({ data: [], next_cursor: null }));
     // fromBenchmark reads the dataset back.
     server.on("GET", "/v1/datasets/gsm8k-test-200", () => json({ id: "x", name: "gsm8k-test-200" }));
     const { grad } = makeGrad(server);
@@ -150,7 +152,10 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       expect([sent?.method, sent?.url.pathname], c.case).toEqual([c.method, c.path]);
       expect(JSON.parse(sent?.body ?? "null"), c.case).toEqual(c.body);
       const key = sent?.headers.get("idempotency-key");
-      if (c.idempotency_key === null) expect(key, c.case).toMatch(/^[0-9a-f-]{36}$/);
+      if (c.method === "GET") {
+        expect(Object.fromEntries(sent?.url.searchParams ?? []), c.case).toEqual(c.query);
+        expect(key, c.case).toBeNull();
+      } else if (c.idempotency_key === null) expect(key, c.case).toMatch(/^[0-9a-f-]{36}$/);
       else expect(key, c.case).toBe(c.idempotency_key);
     }
   });
@@ -163,6 +168,7 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const scoring = decode<EvalRun>("EvalRun", parity.responses.scoring);
     const source = decode<Source>("Source", parity.responses.source);
     const secret = decode<Secret>("Secret", parity.responses.secret);
+    const usage = decode<UsageRecord>("UsageRecord", parity.responses.usage_page.data[0]);
     expect({
       "run.eval_report.metric_name": run.evalReport?.metricName,
       "run.eval_report.selected_step": run.evalReport?.selectedStep,
@@ -183,6 +189,9 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "source.last_sync.status": source.lastSync?.status,
       "source.last_sync.dataset_version": source.lastSync?.datasetVersion,
       "secret.name": secret.name,
+      "usage[0].kind": usage.kind,
+      "usage[0].tokens_through": usage.tokensThrough,
+      "usage[0].cost_usd": usage.costUsd,
     }).toEqual(parity.expect);
   });
 });

@@ -206,6 +206,16 @@ on vLLM or SGLang instead.")]
         action: KeysCmd,
     },
 
+    /// List billed usage: one row per billed increment of a run or eval attempt
+    #[command(after_help = "\
+Examples:
+  grad usage
+  grad usage --limit 20 --json")]
+    Usage {
+        #[command(flatten)]
+        page: PageArgs,
+    },
+
     /// Store provider keys and tokens as write-only workspace secrets
     #[command(after_help = "\
 Examples:

@@ -325,6 +325,10 @@ impl Client {
     pub fn evals(&self) -> Evals<'_> {
         Evals { c: self }
     }
+    /// Billed usage records (`GET /v1/usage`).
+    pub fn usage(&self) -> UsageLedger<'_> {
+        UsageLedger { c: self }
+    }
     /// Workspace secrets (provider keys, HF tokens); values are write-only.
     pub fn secrets(&self) -> Secrets<'_> {
         Secrets { c: self }
