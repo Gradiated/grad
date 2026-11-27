@@ -184,10 +184,10 @@ func TestEvalWaitErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, bad := range []grad.RubricItem{grad.Judge{Name: "j"}, grad.Scorer{}, grad.Scorer{Name: "s"}, grad.Scorer{Name: "s", Validator: grad.ValidatorJSON, Fn: func(context.Context, grad.ScoreInput) (float64, error) { return 0, nil }}, grad.Regex{Name: "r"}} {
-		if _, err := c.Evals.Plan(ctx, grad.EvalParams{Models: []string{"m"}, Rubric: grad.Rubric{bad}}); err == nil {
+		if _, err := c.Evals.Plan(ctx, grad.EvalParams{Models: []string{"m"}, Dataset: grad.DatasetName("d"), Rubric: grad.Rubric{bad}}); err == nil {
 			t.Fatalf("invalid rubric item accepted: %+v", bad)
 		}
-		if _, err := c.Evals.Create(ctx, grad.EvalParams{Models: []string{"m"}, Rubric: grad.Rubric{bad}}).Result(); err == nil {
+		if _, err := c.Evals.Create(ctx, grad.EvalParams{Models: []string{"m"}, Dataset: grad.DatasetName("d"), Rubric: grad.Rubric{bad}}).Result(); err == nil {
 			t.Fatalf("invalid rubric item accepted: %+v", bad)
 		}
 	}
@@ -294,5 +294,17 @@ func TestRecipesSendOnlyUserSetFields(t *testing.T) {
 		if raw := string(f.last("POST", "/v1/runs/plan").Body); !strings.Contains(raw, s.want) {
 			t.Errorf("split %s missing in %s", s.want, raw)
 		}
+	}
+}
+
+func TestEvalNeedsADataset(t *testing.T) {
+	f := newFake(t, map[string]route{})
+	c, _ := f.client()
+	_, err := c.Evals.Plan(context.Background(), grad.EvalParams{Models: []string{"m"}})
+	if err == nil || !strings.Contains(err.Error(), "EvalParams.Dataset is required") {
+		t.Fatalf("err %v", err)
+	}
+	if n := len(f.requests()); n != 0 {
+		t.Fatalf("sent %d requests without a dataset", n)
 	}
 }

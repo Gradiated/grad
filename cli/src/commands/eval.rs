@@ -85,7 +85,10 @@ pub fn build_request(a: &EvalRunArgs) -> CliResult<PlanEvalRequest> {
         name: a.name.clone(),
         models,
         baseline: a.baseline.clone(),
-        dataset: a.dataset.clone(),
+        dataset: a
+            .dataset
+            .clone()
+            .ok_or_else(|| CliError::usage("--dataset is required"))?,
         dataset_version: a.dataset_version,
         rubric,
         samples: a.samples,
@@ -93,7 +96,6 @@ pub fn build_request(a: &EvalRunArgs) -> CliResult<PlanEvalRequest> {
         max_tokens: a.max_tokens,
         limit: a.limit,
         pass_threshold: in_range(a.pass_threshold, "--pass-threshold", 0.0, 1.0)?,
-        ..Default::default()
     })
 }
 

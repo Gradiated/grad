@@ -261,7 +261,6 @@ pub fn build_request(rf: RunFile) -> CliResult<PlanRunRequest> {
         recipe,
         split,
         max_cost_usd: rf.max_cost_usd,
-        ..Default::default()
     })
 }
 

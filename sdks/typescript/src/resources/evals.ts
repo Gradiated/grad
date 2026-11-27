@@ -24,7 +24,7 @@ export interface EvalParams {
   name?: string;
   models: ArtifactRef[];
   baseline?: ArtifactRef;
-  dataset?: DatasetRef;
+  dataset: DatasetRef;
   datasetVersion?: number;
   /** Server-side checks, judges, and local functions (scored by `wait()` in this process). */
   rubric?: RubricInput;
@@ -49,7 +49,7 @@ const buildEvalBody = (params: EvalParams): { body: PlanEvalRequest; local: Map<
       models: params.models.map(artifactRef),
       ...(params.name !== undefined ? { name: params.name } : {}),
       ...(params.baseline !== undefined ? { baseline: artifactRef(params.baseline) } : {}),
-      ...(params.dataset !== undefined ? { dataset: datasetName(params.dataset) } : {}),
+      dataset: datasetName(params.dataset),
       ...(params.datasetVersion !== undefined ? { datasetVersion: params.datasetVersion } : {}),
       ...(rubric ? { rubric: rubric.wire } : {}),
       ...(params.samples !== undefined ? { samples: params.samples } : {}),

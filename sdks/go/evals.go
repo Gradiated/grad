@@ -2,6 +2,7 @@ package grad
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"math"
@@ -186,7 +187,7 @@ type EvalParams struct {
 	Name     string
 	Models   []string
 	Baseline string
-	// Dataset supplies the tasks: a *Dataset or DatasetName("name").
+	// Dataset supplies the tasks (required): a *Dataset or DatasetName("name").
 	Dataset        DatasetRef
 	DatasetVersion int
 	Rubric         Rubric
@@ -201,16 +202,16 @@ type EvalParams struct {
 }
 
 func (p EvalParams) wire() (*generated.PlanEvalRequest, map[string]ScorerFunc, error) {
+	if p.Dataset == nil || p.Dataset.datasetName() == "" {
+		return nil, nil, errors.New(`grad: EvalParams.Dataset is required (a *Dataset or grad.DatasetName("name"))`)
+	}
 	items, local, err := p.Rubric.wire()
 	if err != nil {
 		return nil, nil, err
 	}
-	req := &generated.PlanEvalRequest{Name: optString(p.Name), Models: p.Models, Baseline: optString(p.Baseline), DatasetVersion: optInt(p.DatasetVersion),
+	req := &generated.PlanEvalRequest{Dataset: p.Dataset.datasetName(), Name: optString(p.Name), Models: p.Models, Baseline: optString(p.Baseline), DatasetVersion: optInt(p.DatasetVersion),
 		Rubric: items, Samples: optInt(p.Samples), Temperature: p.Temperature, MaxTokens: optInt(p.MaxTokens), Limit: optInt(p.Limit),
 		PassThreshold: p.PassThreshold}
-	if p.Dataset != nil {
-		req.Dataset = optString(p.Dataset.datasetName())
-	}
 	return req, local, nil
 }
 

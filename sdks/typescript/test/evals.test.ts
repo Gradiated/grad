@@ -69,7 +69,7 @@ describe("evals", () => {
     expect(ev).toBeInstanceOf(Eval);
     expect(ev.status).toBe("awaiting_scores");
     expect(JSON.parse(JSON.stringify(ev)).id).toBe(awaiting.id);
-    await expect(grad.evals.plan({ models: [] })).rejects.toBeInstanceOf(GradUsageError);
+    await expect(grad.evals.plan({ models: [], dataset: "support-holdout" })).rejects.toBeInstanceOf(GradUsageError);
   });
 
   it("wait() scores outputs locally, posts the scores and resolves on completed", async () => {
@@ -80,7 +80,7 @@ describe("evals", () => {
       .on("POST", `${EVAL}/scores`, json({ accepted: 6, status: "awaiting_scores", pending_local_scores: 0 }));
     const { grad } = makeGrad(server);
     const statuses: string[] = [];
-    const ev = await grad.evals.create({ models: ["test/tiny-qwen3"], rubric: rubric() }).wait({ onStatus: (s) => void statuses.push(s) });
+    const ev = await grad.evals.create({ models: ["test/tiny-qwen3"], dataset: "support-holdout", rubric: rubric() }).wait({ onStatus: (s) => void statuses.push(s) });
     expect(ev.status).toBe("completed");
     expect(statuses).toEqual(["running", "awaiting_scores", "completed"]);
     const scoreCall = server.callsTo("GET", `${EVAL}/outputs`)[0];
@@ -225,11 +225,11 @@ describe("evals", () => {
   it("accepts judges and raw wire rubric items", async () => {
     const server = new FakeServer().on("POST", "/v1/evals/plan", json(wire("plan-eval.json")));
     const { grad } = makeGrad(server);
-    await grad.evals.plan({ models: ["m"], rubric: new Judge({ name: "resolved", model: "anthropic/claude-sonnet", prompt: "Solved?" }) });
+    await grad.evals.plan({ models: ["m"], dataset: "d", rubric: new Judge({ name: "resolved", model: "anthropic/claude-sonnet", prompt: "Solved?" }) });
     expect(server.lastBody<{ rubric: unknown }>("POST", "/v1/evals/plan").rubric).toEqual([
       { name: "resolved", kind: "judge", model: "anthropic/claude-sonnet", prompt: "Solved?" },
     ]);
-    await grad.evals.plan({ models: ["m"], rubric: [{ name: "ok", kind: "validator", validator: "json" }] });
+    await grad.evals.plan({ models: ["m"], dataset: "d", rubric: [{ name: "ok", kind: "validator", validator: "json" }] });
     expect(server.lastBody<{ rubric: unknown }>("POST", "/v1/evals/plan").rubric).toEqual([{ name: "ok", kind: "validator", validator: "json" }]);
   });
 });

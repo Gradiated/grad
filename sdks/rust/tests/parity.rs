@@ -148,7 +148,7 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             let req = PlanEvalRequest {
                 name: model("parity-eval"),
                 models: vec!["test/tiny-qwen3".into(), ARTIFACT.into()],
-                dataset: model("support"),
+                dataset: "support".into(),
                 dataset_version: Some(1),
                 rubric: Some(vec![judge(), non_empty]),
                 baseline: model("test/tiny-qwen3"),
@@ -157,7 +157,6 @@ async fn call(c: &Client, case: &str) -> Result<()> {
                 max_tokens: Some(256),
                 limit: Some(10),
                 pass_threshold: Some(0.5),
-                ..Default::default()
             };
             c.evals()
                 .create(&req, Some("parity-eval-key"))
