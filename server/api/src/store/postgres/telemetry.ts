@@ -56,7 +56,20 @@ export const createTelemetryRepository = (db: Db): TelemetryRepository => ({
       [at],
     );
 
+    const sources = await db.query(
+      `SELECT provider, count(*) AS n,
+              count(*) FILTER (WHERE status = 'paused') AS paused,
+              max(consecutive_failures) AS failures
+       FROM grad_sources GROUP BY provider`,
+    );
+
     return {
+      sources: sources.map((r) => ({
+        provider: String(r.provider),
+        count: num(r.n),
+        paused: num(r.paused),
+        max_consecutive_failures: num(r.failures),
+      })),
       jobs: jobs.map((r) => ({
         kind: String(r.kind),
         state: String(r.state),

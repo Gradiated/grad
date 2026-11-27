@@ -863,6 +863,12 @@ export interface TelemetrySnapshot {
     flush_lag_seconds: number | null;
   }>;
   phases: Array<{ kind: string; phase: string; count: number }>;
+  sources: Array<{
+    provider: string;
+    count: number;
+    paused: number;
+    max_consecutive_failures: number;
+  }>;
 }
 
 export interface TelemetryRepository {

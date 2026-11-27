@@ -244,6 +244,7 @@ export const metrics = {
     "Score updates source syncs added, by provider.",
     ["provider"],
   ),
+  sources: gauge("grad_sources", "Sources by provider.", ["provider"]),
   sourceFailures: gauge(
     "grad_source_consecutive_failures",
     "The most consecutive failed syncs of any source, by provider.",
@@ -251,7 +252,7 @@ export const metrics = {
   ),
   sourcesPaused: gauge(
     "grad_sources_paused",
-    "Sources paused (by a user or after repeated failures), by provider.",
+    "Sources paused after repeated failed syncs, by provider.",
     ["provider"],
   ),
 

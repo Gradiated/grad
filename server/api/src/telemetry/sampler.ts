@@ -97,6 +97,16 @@ export const createTelemetrySampler = (
     }
     metrics.usageFlushLag.set(flushLag);
 
+    metrics.sources.reset();
+    metrics.sourcesPaused.reset();
+    metrics.sourceFailures.reset();
+    for (const row of snap.sources) {
+      const labels = { provider: row.provider };
+      metrics.sources.set(labels, row.count);
+      metrics.sourcesPaused.set(labels, row.paused);
+      metrics.sourceFailures.set(labels, row.max_consecutive_failures);
+    }
+
     metrics.workerPhase.reset();
     for (const row of snap.phases) {
       metrics.workerPhase.set({ kind: row.kind, phase: row.phase }, row.count);

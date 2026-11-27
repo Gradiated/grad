@@ -300,6 +300,39 @@ describe("Prometheus metrics", () => {
     ).toBe(1);
   });
 
+  it("reports sources, paused sources and consecutive failures by provider", async () => {
+    await t.json("/v1/datasets/traces/records", {
+      body: { records: [{ messages: [{ role: "user", content: "hi" }] }] },
+    });
+    const dataset = await t.deps.store.datasets.get("ws_a", "traces");
+    const source = await t.deps.store.sources.create({
+      workspaceId: "ws_a",
+      datasetId: dataset!.id,
+      provider: "langfuse",
+      host: null,
+      secretName: null,
+      project: null,
+      filters: {},
+      schedule: null,
+      nextSyncAt: null,
+    });
+    await t.deps.store.sources.update(source.id, {
+      status: "paused",
+      consecutive_failures: 10,
+    });
+    await t.services.maintenance.tick();
+    const samples = await scrape(t);
+    expect(value(samples, "grad_sources", { provider: "langfuse" })).toBe(1);
+    expect(
+      value(samples, "grad_sources_paused", { provider: "langfuse" }),
+    ).toBe(1);
+    expect(
+      value(samples, "grad_source_consecutive_failures", {
+        provider: "langfuse",
+      }),
+    ).toBe(10);
+  });
+
   it("leaves tracing off by default", async () => {
     expect(tracingEnabled()).toBe(false);
     expect(currentTraceparent()).toBeNull();
@@ -398,9 +431,10 @@ describe("instrumented object storage", () => {
     }) as unknown as ObjectStore;
 
   const errors = async (op: string) =>
-    (await metrics.storageErrors.get()).values.find(
-      (v) => v.labels.op === op && v.labels.backend === "local",
-    )?.value ?? 0;
+    (await metrics.storageErrors.get()).values.find((v) => {
+      const labels = v.labels as Record<string, unknown>;
+      return labels.op === op && labels.backend === "local";
+    })?.value ?? 0;
 
   it("times every call and counts only unexpected failures", async () => {
     const before = await errors("put");
@@ -420,7 +454,9 @@ describe("instrumented object storage", () => {
     ).rejects.toThrow("boom");
     expect(await errors("put")).toBe(before + 1);
     const timed = (await metrics.storageDuration.get()).values.find(
-      (v) => v.metricName?.endsWith("_count") && v.labels.op === "put",
+      (v) =>
+        v.metricName?.endsWith("_count") &&
+        (v.labels as Record<string, unknown>).op === "put",
     );
     expect(timed?.value).toBeGreaterThanOrEqual(3);
   });
