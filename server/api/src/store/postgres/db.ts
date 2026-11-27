@@ -68,6 +68,36 @@ export const createDb = (pool: Pool): Db => {
   };
 };
 
+const UNAVAILABLE_ERRNO = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EPIPE",
+  "EHOSTUNREACH",
+]);
+
+/**
+ * True when an error means the database is unreachable or overloaded right
+ * now (retry shortly), not that the request is wrong: connection failures,
+ * SQLSTATE class 08, admin shutdown / cannot connect now (57P0x), too many
+ * connections (53300), statement timeout (57014) and pool or connection
+ * timeouts.
+ */
+export const isDatabaseUnavailable = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string") {
+    if (UNAVAILABLE_ERRNO.has(code)) return true;
+    if (code.startsWith("08") || code.startsWith("57P")) return true;
+    if (code === "53300" || code === "57014") return true;
+  }
+
+  return /timeout exceeded when trying to connect|Connection terminated/i.test(
+    error.message,
+  );
+};
+
 /** Placeholder allocator for building parameterized SQL. */
 export class Params {
   readonly values: unknown[] = [];

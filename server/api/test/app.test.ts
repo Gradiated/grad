@@ -10,6 +10,7 @@ import {
 } from "../src/adapters.js";
 import { buildOpenApiDocument } from "../src/app.js";
 import { ApiError } from "../src/errors.js";
+import { isDatabaseUnavailable } from "../src/store/postgres/db.js";
 import {
   ADMIN_KEY,
   makeTestApp,
@@ -116,6 +117,39 @@ describe("grad-server HTTP API", () => {
     }
     expect(JSON.stringify(doc.paths)).not.toContain("/blobs/");
     expect((await t.request("/openapi.json")).status).toBe(200);
+  });
+
+  it("answers 503 with Retry-After when the database is unreachable", async () => {
+    const broken = await makeTestApp();
+    broken.deps.store.runs.list = async () => {
+      throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), {
+        code: "ECONNREFUSED",
+      });
+    };
+    const res = await broken.request("/v1/runs");
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("1");
+    expect(await res.json()).toMatchObject({ code: "database_unavailable" });
+    await broken.close();
+  });
+
+  it("tells database outages from bugs", () => {
+    const err = (message: string, code?: string) =>
+      Object.assign(new Error(message), code ? { code } : {});
+    for (const e of [
+      err("x", "ECONNRESET"),
+      err("x", "08006"),
+      err("x", "57P01"),
+      err("x", "53300"),
+      err("canceling statement due to statement timeout", "57014"),
+      err("timeout exceeded when trying to connect"),
+      err("Connection terminated unexpectedly"),
+    ]) {
+      expect(isDatabaseUnavailable(e), e.message).toBe(true);
+    }
+    expect(isDatabaseUnavailable(err("dup", "23505"))).toBe(false);
+    expect(isDatabaseUnavailable(new TypeError("bug"))).toBe(false);
+    expect(isDatabaseUnavailable("nope")).toBe(false);
   });
 
   it("reports readiness failure as problem+json", async () => {

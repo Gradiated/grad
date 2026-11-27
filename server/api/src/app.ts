@@ -18,6 +18,7 @@ import { registerModelsAndKeysRoutes } from "./routes/keys.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
 import { createServices, type Services } from "./services/index.js";
+import { isDatabaseUnavailable } from "./store/postgres/db.js";
 
 export type { AppDependencies } from "./deps.js";
 
@@ -103,6 +104,19 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
         malformed ? "Malformed request" : "Request failed",
         error.message || "The request could not be processed.",
       );
+    }
+
+    if (isDatabaseUnavailable(error)) {
+      const res = problemResponse(
+        c,
+        503,
+        "database_unavailable",
+        "Database unavailable",
+        "The database is unreachable or overloaded; retry shortly.",
+      );
+      res.headers.set("Retry-After", "1");
+
+      return res;
     }
 
     console.error(

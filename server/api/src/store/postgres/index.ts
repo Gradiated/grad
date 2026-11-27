@@ -35,6 +35,19 @@ export interface PostgresStoreOptions {
 const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,62}$/;
 
 /**
+ * Fail fast instead of hanging when Postgres is down or a failover leaves a
+ * dead TCP connection: a request waits at most 5 s for a connection, a
+ * statement runs at most 30 s, an abandoned transaction is ended after 60 s,
+ * and TCP keepalive notices a vanished peer.
+ */
+export const POOL_TIMEOUTS = {
+  connectionTimeoutMillis: 5_000,
+  keepAlive: true,
+} as const;
+export const STATEMENT_TIMEOUT_MS = 30_000;
+export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
+
+/**
  * PostgreSQL-backed Store. Repositories share one pool; `transaction` runs on
  * a single client and every repository call made inside it (directly or via
  * the top-level store) joins that transaction.
@@ -45,7 +58,12 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
   }
   const pool = new Pool({
     connectionString: options.connectionString,
-    ...(options.schema ? { options: `-c search_path=${options.schema}` } : {}),
+    ...POOL_TIMEOUTS,
+    options: [
+      `-c statement_timeout=${STATEMENT_TIMEOUT_MS}`,
+      `-c idle_in_transaction_session_timeout=${IDLE_IN_TRANSACTION_TIMEOUT_MS}`,
+      ...(options.schema ? [`-c search_path=${options.schema}`] : []),
+    ].join(" "),
   });
   pool.on("error", (error) => {
     console.error(
