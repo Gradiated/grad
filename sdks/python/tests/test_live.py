@@ -254,16 +254,16 @@ class CloudReferenceLiveTests(_LiveCase):
     cloud = True
     worker = "reference"
 
-    def test_cloud_run_and_undeployable_reference_artifact(self) -> None:
+    def test_cloud_run_and_deploy_served_by_cloud(self) -> None:
         client = Grad()
         dataset = client.datasets.push("sql-quickstart", SQL_RECORDS)
         run = client.runs.create(dataset=dataset, name="sql-helper", recipe=SFTRecipe(model=LLM), max_cost_usd=5).wait(timeout=180)
         self.assertEqual(run.status, "completed")
         self.assertGreaterEqual(run.cost_usd or 0.0, 0.0)
-        # Reference-backend artifacts are test doubles and can never be deployed.
-        with self.assertRaises(grad.GradAPIError) as ctx:
+        # Deploys go to Gradiated Cloud's product API; grad-server itself answers 501.
+        with self.assertRaises(grad.DeployUnavailableError) as ctx:
             run.deploy()
-        self.assertIn(ctx.exception.status, {409, 422})
+        self.assertEqual(ctx.exception.status, 501)
         with self.assertRaises(grad.AuthenticationError):
             Grad(api_key="grad_not_a_cloud_token").runs.list().to_list()
 
