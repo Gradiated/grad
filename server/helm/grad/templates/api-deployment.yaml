@@ -63,10 +63,10 @@ spec:
             - {name: S3_ENDPOINT, value: {{ . | quote }}}
             {{- end }}
             {{- with .Values.evals.inferenceBaseUrl }}
-            - {name: INFERENCE_BASE_URL, value: {{ . | quote }}}
+            - {name: GRAD_INFERENCE_BASE_URL, value: {{ . | quote }}}
             {{- end }}
             {{- with .Values.evals.judgeBaseUrl }}
-            - {name: JUDGE_BASE_URL, value: {{ . | quote }}}
+            - {name: GRAD_JUDGE_BASE_URL, value: {{ . | quote }}}
             {{- end }}
             - {name: METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
             {{- if .Values.metrics.enabled }}
@@ -84,8 +84,8 @@ spec:
             {{- include "grad.secretEnv" (list . "TRAINER_API_KEY" "trainer-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "TRAINER_KEYS_JSON" "trainer-keys-json" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "GRAD_SECRETS_KEY" "secrets-key" true) | nindent 12 }}
-            {{- include "grad.secretEnv" (list . "INFERENCE_API_KEY" "inference-api-key" true) | nindent 12 }}
-            {{- include "grad.secretEnv" (list . "JUDGE_API_KEY" "judge-api-key" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "GRAD_INFERENCE_API_KEY" "inference-api-key" true) | nindent 12 }}
+            {{- include "grad.secretEnv" (list . "GRAD_JUDGE_API_KEY" "judge-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "CLOUD_SERVICE_TOKEN" "cloud-service-token" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "AWS_ACCESS_KEY_ID" "aws-access-key-id" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "AWS_SECRET_ACCESS_KEY" "aws-secret-access-key" true) | nindent 12 }}

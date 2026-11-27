@@ -26,7 +26,13 @@ import type {
   WorkerUploadRequestSchema,
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
-import { conflict, forbidden, invalid, notFound } from "../errors.js";
+import {
+  conflict,
+  forbidden,
+  invalid,
+  notFound,
+  unavailable,
+} from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
@@ -322,6 +328,14 @@ export const createRunLifecycle = (
       ? await store.artifacts.get(workspaceId, request.recipe.model)
       : null;
     const labelRequest = labelingEvalRequest(request, resolved.version.version);
+    if (labelRequest && deps.inference === null) {
+      throw unavailable(
+        "inference_unavailable",
+        request.recipe.kind === "router"
+          ? 'This router labels your prompts with an eval (it replays them through recipe.models and scores the answers), which needs a model endpoint: set GRAD_INFERENCE_BASE_URL on the server (for `grad local up`, export it before starting the stack), or train on scores already in your records (rubric="resolved", a score name).'
+          : "Off-policy distillation generates the teacher's answers with an eval, which needs a model endpoint: set GRAD_INFERENCE_BASE_URL on the server (for `grad local up`, export it before starting the stack), or use rollout=OnPolicy(...).",
+      );
+    }
     const labeling = labelRequest
       ? toLabelingPlan(await evals.plan(workspaceId, labelRequest))
       : null;

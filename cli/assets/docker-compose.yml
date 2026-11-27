@@ -36,10 +36,10 @@ services:
       TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
       # Encrypts workspace secrets (32 random bytes, base64); `grad local up` generates it.
       GRAD_SECRETS_KEY: "${GRAD_SECRETS_KEY:-}"
-      INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-}"
-      INFERENCE_API_KEY: "${GRAD_INFERENCE_API_KEY:-}"
-      JUDGE_BASE_URL: "${GRAD_JUDGE_BASE_URL:-}"
-      JUDGE_API_KEY: "${GRAD_JUDGE_API_KEY:-}"
+      GRAD_INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-}"
+      GRAD_INFERENCE_API_KEY: "${GRAD_INFERENCE_API_KEY:-}"
+      GRAD_JUDGE_BASE_URL: "${GRAD_JUDGE_BASE_URL:-}"
+      GRAD_JUDGE_API_KEY: "${GRAD_JUDGE_API_KEY:-}"
       # Priced judge models beyond the catalog, e.g. [{"id":"...","price_per_million_tokens_usd":3}].
       GRAD_JUDGE_MODELS_JSON: "${GRAD_JUDGE_MODELS_JSON:-}"
       STORAGE_DIR: "/var/lib/grad"

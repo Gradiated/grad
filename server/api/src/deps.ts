@@ -47,7 +47,7 @@ export interface AppDependencies {
   billing: BillingAdapter;
   catalog: ModelCatalog;
   clock: Clock;
-  /** Null when INFERENCE_BASE_URL is not configured (evals → inference_unavailable). */
+  /** Null when GRAD_INFERENCE_BASE_URL is not configured (evals → inference_unavailable). */
   inference: InferenceClients | null;
   regex: RegexEvaluator;
   settings: AppSettings;

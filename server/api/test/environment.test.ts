@@ -98,17 +98,39 @@ describe("parseServerEnvironment", () => {
       judgeBaseUrl: "http://vllm/v1",
       judgeApiKey: "k",
     });
+    expect(shared.warnings.join(" ")).toMatch(
+      /INFERENCE_BASE_URL is deprecated; rename it to GRAD_INFERENCE_BASE_URL/,
+    );
     const helm = parseServerEnvironment({
       ...DB,
       AUTH_MODE: "none",
-      INFERENCE_BASE_URL: "http://vllm/v1",
-      INFERENCE_API_KEY: "k",
+      GRAD_INFERENCE_BASE_URL: "http://vllm/v1",
+      GRAD_INFERENCE_API_KEY: "k",
       GRAD_JUDGE_BASE_URL: "http://judge/v1",
     });
     expect(helm).toMatchObject({
+      inferenceBaseUrl: "http://vllm/v1",
+      inferenceApiKey: "k",
       judgeBaseUrl: "http://judge/v1",
       judgeApiKey: undefined,
     });
+    expect(helm.warnings.join(" ")).not.toMatch(/deprecated/);
+    const both = parseServerEnvironment({
+      ...DB,
+      AUTH_MODE: "none",
+      GRAD_INFERENCE_BASE_URL: "http://new/v1",
+      INFERENCE_BASE_URL: "http://old/v1",
+      JUDGE_BASE_URL: "http://old-judge/v1",
+      JUDGE_API_KEY: "jk",
+    });
+    expect(both).toMatchObject({
+      inferenceBaseUrl: "http://new/v1",
+      judgeBaseUrl: "http://old-judge/v1",
+      judgeApiKey: "jk",
+    });
+    expect(both.warnings.join(" ")).toMatch(
+      /INFERENCE_BASE_URL is ignored because GRAD_INFERENCE_BASE_URL is set/,
+    );
     expect(
       parseServerEnvironment({ ...DB, AUTH_MODE: "none", EVAL_EXECUTOR: "0" })
         .EVAL_EXECUTOR,
@@ -128,8 +150,8 @@ describe("buildDependencies", () => {
           ADMIN_API_KEY_HASH: ADMIN_HASH,
           TRAINER_API_KEY: "worker-secret",
           STORAGE_DIR: dir,
-          INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
-          JUDGE_BASE_URL: "http://127.0.0.1:10/v1",
+          GRAD_INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
+          GRAD_JUDGE_BASE_URL: "http://127.0.0.1:10/v1",
           GRAD_EXTRA_MODELS_JSON:
             '[{"id":"t/x","family":"llm","adapters":["lora"],"price_per_million_tokens_usd":1,"calibrated_lrs":{"sft":1e-4}}]',
         }),

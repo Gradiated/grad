@@ -37,8 +37,8 @@ services:
       fake-openai:
         condition: service_started
     environment:
-      INFERENCE_BASE_URL: "http://fake-openai:8080/v1"
-      INFERENCE_API_KEY: "sk-fake-inference"
+      GRAD_INFERENCE_BASE_URL: "http://fake-openai:8080/v1"
+      GRAD_INFERENCE_API_KEY: "sk-fake-inference"
       GRAD_EXTRA_MODELS_JSON: >-
         [{"id":"test/tiny-qwen3","hf_repo":null,"family":"llm","adapters":["lora","prefix_kv"],"default_for":[],"price_per_million_tokens_usd":1,"max_context_tokens":2048,"template_revision":"qwen3@3","calibrated_lrs":{"sft":0.001,"dpo":0.0001,"router":0.001,"cartridge":0.01}},
         {"id":"test/tiny-bert","hf_repo":null,"family":"encoder","adapters":["encoder_full"],"default_for":[],"price_per_million_tokens_usd":0.5,"max_context_tokens":512,"template_revision":"bge@1","calibrated_lrs":{"embedding":0.0001}}]

@@ -229,7 +229,7 @@ export const buildTasks = (
 };
 
 export const INFERENCE_UNAVAILABLE_DETAIL =
-  "Evals need model outputs: set INFERENCE_BASE_URL (an OpenAI-compatible vLLM/SGLang endpoint serving your base models and LoRA artifacts by name, or the Gradiated gateway) and optionally JUDGE_BASE_URL.";
+  "Evals need model outputs: set GRAD_INFERENCE_BASE_URL on the server (an OpenAI-compatible vLLM/SGLang endpoint serving your base models and LoRA artifacts by name, or the Gradiated gateway; for `grad local up`, export it before starting the stack) and optionally GRAD_JUDGE_BASE_URL.";
 
 export const DEFAULT_RUBRIC: EvalRubricItem[] = [
   { name: "non_empty", kind: "validator", weight: 1, validator: "non_empty" },
@@ -248,7 +248,7 @@ export const datasetRubric = (dataset: {
 };
 
 export const JUDGE_UNAVAILABLE_DETAIL =
-  "Judges need a model endpoint: set JUDGE_BASE_URL (or INFERENCE_BASE_URL) to an OpenAI-compatible endpoint serving the judge models. Regex, validator and code scorers need no endpoint.";
+  "Judges need a model endpoint: set GRAD_JUDGE_BASE_URL (or GRAD_INFERENCE_BASE_URL) on the server to an OpenAI-compatible endpoint serving the judge models. Regex, validator and code scorers need no endpoint.";
 
 /**
  * Plans an eval. `mode: "score"` (`dataset.score()`) grades the records' own

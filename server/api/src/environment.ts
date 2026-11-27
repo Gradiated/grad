@@ -35,11 +35,15 @@ const EnvironmentSchema = z.object({
   BILLING_MODE: z.enum(["noop", "cloud"]).default("noop"),
   CLOUD_INTERNAL_API_URL: optionalString,
   CLOUD_SERVICE_TOKEN: optionalString,
+  GRAD_INFERENCE_BASE_URL: optionalString,
+  GRAD_INFERENCE_API_KEY: optionalString,
+  GRAD_JUDGE_BASE_URL: optionalString,
+  GRAD_JUDGE_API_KEY: optionalString,
+  /** Deprecated names of the four above (accepted with a warning). */
   INFERENCE_BASE_URL: optionalString,
   INFERENCE_API_KEY: optionalString,
   JUDGE_BASE_URL: optionalString,
   JUDGE_API_KEY: optionalString,
-  GRAD_JUDGE_BASE_URL: optionalString,
   EVAL_EXECUTOR: booleanFlag("true"),
   EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
   GRAD_EXTRA_MODELS_JSON: optionalString,
@@ -129,7 +133,10 @@ export interface ServerEnvironment extends RawEnvironment {
   trainerKeys: TrainerKeyConfig[];
   /** Whether to serve the web UI (UI_ENABLED, default off only for AUTH_MODE=cloud). */
   uiEnabled: boolean;
-  /** Effective judge endpoint (JUDGE_BASE_URL, GRAD_JUDGE_BASE_URL, then inference). */
+  /** Eval generations endpoint (GRAD_INFERENCE_BASE_URL). */
+  inferenceBaseUrl: string | undefined;
+  inferenceApiKey: string | undefined;
+  /** Effective judge endpoint (GRAD_JUDGE_BASE_URL, then the inference endpoint). */
   judgeBaseUrl: string | undefined;
   judgeApiKey: string | undefined;
   warnings: string[];
@@ -186,13 +193,30 @@ export const parseServerEnvironment = (
     );
   }
 
-  const judgeBaseUrl =
-    env.JUDGE_BASE_URL ?? env.GRAD_JUDGE_BASE_URL ?? env.INFERENCE_BASE_URL;
-  const judgeApiKey =
-    env.JUDGE_API_KEY ??
-    (env.JUDGE_BASE_URL || env.GRAD_JUDGE_BASE_URL
-      ? undefined
-      : env.INFERENCE_API_KEY);
+  // One name per setting (GRAD_*), the same in compose, Helm and the docs;
+  // the unprefixed names shipped first and still work, with a warning.
+  const named = (current: keyof typeof env, legacy: keyof typeof env) => {
+    const value = env[current] as string | undefined;
+    const old = env[legacy] as string | undefined;
+    if (old !== undefined) {
+      warnings.push(
+        value === undefined
+          ? `${legacy} is deprecated; rename it to ${current}.`
+          : `${legacy} is ignored because ${current} is set; remove it.`,
+      );
+    }
+
+    return value ?? old;
+  };
+  const inferenceBaseUrl = named(
+    "GRAD_INFERENCE_BASE_URL",
+    "INFERENCE_BASE_URL",
+  );
+  const inferenceApiKey = named("GRAD_INFERENCE_API_KEY", "INFERENCE_API_KEY");
+  const judgeUrl = named("GRAD_JUDGE_BASE_URL", "JUDGE_BASE_URL");
+  const judgeKey = named("GRAD_JUDGE_API_KEY", "JUDGE_API_KEY");
+  const judgeBaseUrl = judgeUrl ?? inferenceBaseUrl;
+  const judgeApiKey = judgeKey ?? (judgeUrl ? undefined : inferenceApiKey);
 
   if (env.METRICS_PORT !== undefined && env.METRICS_PORT === env.PORT) {
     throw new Error("METRICS_PORT must differ from PORT.");
@@ -202,6 +226,8 @@ export const parseServerEnvironment = (
     ...env,
     trainerKeys: parseTrainerKeys(env.TRAINER_KEYS_JSON),
     uiEnabled: env.UI_ENABLED ?? env.AUTH_MODE !== "cloud",
+    inferenceBaseUrl,
+    inferenceApiKey,
     judgeBaseUrl,
     judgeApiKey,
     warnings,

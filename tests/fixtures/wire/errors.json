@@ -359,7 +359,7 @@
         "type": "https://gradiated.com/problems/inference_unavailable",
         "title": "Inference is not configured",
         "status": 501,
-        "detail": "Set INFERENCE_BASE_URL and INFERENCE_API_KEY to run evals.",
+        "detail": "Set GRAD_INFERENCE_BASE_URL and GRAD_INFERENCE_API_KEY to run evals.",
         "code": "inference_unavailable",
         "request_id": "req_501i"
       },

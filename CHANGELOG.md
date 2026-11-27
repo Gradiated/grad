@@ -7,6 +7,14 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+### Changed
+
+- The eval endpoint settings are `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY`,
+  `GRAD_JUDGE_BASE_URL` and `GRAD_JUDGE_API_KEY` everywhere (server, compose, Helm, docs).
+  The unprefixed `INFERENCE_*` / `JUDGE_*` names still work and log a deprecation warning.
+- A run stopped because the workspace ran out of balance (Cloud) is `stopped_balance`;
+  `stopped_budget` means the run's own cap and resumes only with a higher one.
+
 ## [0.2.0-alpha.1] - 2026-11-27
 
 First public release.

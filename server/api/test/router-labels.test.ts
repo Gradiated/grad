@@ -96,6 +96,10 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
     const res = await plain.json("/v1/runs/plan", { body: routerRequest() });
     expect(res.status).toBe(501);
     expect(res.body).toMatchObject({ code: "inference_unavailable" });
+    // It says why a run plan needs an endpoint, and the local alternative.
+    expect(res.body.detail).toMatch(/labels your prompts with an eval/);
+    expect(res.body.detail).toMatch(/GRAD_INFERENCE_BASE_URL/);
+    expect(res.body.detail).toMatch(/rubric="resolved"/);
   });
 
   it("waits for the labels, then trains on the judged answers", async () => {

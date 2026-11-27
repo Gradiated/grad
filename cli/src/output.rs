@@ -96,7 +96,7 @@ impl From<SdkError> for CliError {
                 "This server has no hosted serving. Download the weights with `grad artifacts download NAME@latest --output DIR` and serve them on vLLM or SGLang.".to_string(),
             ),
             SdkError::InferenceUnavailable(b) if !b.detail.contains("INFERENCE_BASE_URL") => Some(
-                "Evals need an OpenAI-compatible endpoint: set INFERENCE_BASE_URL (and INFERENCE_API_KEY) on the server.".to_string(),
+                "Evals need an OpenAI-compatible endpoint: set GRAD_INFERENCE_BASE_URL (and GRAD_INFERENCE_API_KEY) on the server.".to_string(),
             ),
             SdkError::PermissionDenied(_) => Some("Use a key with the scope this command needs (`grad keys create --scopes ...`).".to_string()),
             _ => None,

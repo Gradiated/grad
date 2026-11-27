@@ -55,15 +55,15 @@ const countCalls = (
 });
 
 const buildInference = (env: ServerEnvironment): InferenceClients | null => {
-  if (!env.INFERENCE_BASE_URL) return null;
+  if (!env.inferenceBaseUrl) return null;
 
   const models = createOpenAICompatibleClient({
-    baseUrl: env.INFERENCE_BASE_URL,
-    apiKey: env.INFERENCE_API_KEY,
+    baseUrl: env.inferenceBaseUrl,
+    apiKey: env.inferenceApiKey,
     timeoutMs: 120_000,
   });
   const judge =
-    env.judgeBaseUrl && env.judgeBaseUrl !== env.INFERENCE_BASE_URL
+    env.judgeBaseUrl && env.judgeBaseUrl !== env.inferenceBaseUrl
       ? createOpenAICompatibleClient({
           baseUrl: env.judgeBaseUrl,
           apiKey: env.judgeApiKey,
