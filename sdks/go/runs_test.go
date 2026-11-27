@@ -57,7 +57,7 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 	}
 	// fmt.Println(plan) prints the same readout as Python's print(plan) and the CLI.
 	text := fmt.Sprint(plan)
-	for _, want := range []string{"Dataset     support-prod v2", "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=", "Estimate    ~", "Warnings    2", "  ! 6 steps are below"} {
+	for _, want := range []string{"Dataset     support-prod v2", "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=", "Estimate    ~", "Duration    ~", "on one GPU", "Warnings    2", "  ! 6 steps are below"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan readout lacks %q:\n%s", want, text)
 		}
@@ -66,8 +66,10 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 	labeled.ResolvedConfig.RecipeParams = map[string]any{"context_text": "abcd", "max_quality_drop": 0.02, "models": []any{"a", "b"}}
 	labeled.Labeling = &generated.PlanRunResponseLabeling{EstimatedModelCalls: 1200, EstimatedJudgeCalls: 3, EstimatedCostUSD: 0.004}
 	labeled.Teacher = &generated.PlanRunResponseTeacher{Model: "big", EstimatedTokens: 25_000_000, EstimatedCostUSD: 1234.5}
+	gb := 36.0
+	labeled.EstimatedDurationS, labeled.MinGPUMemoryGb = 843, &gb
 	text = labeled.String()
-	for _, want := range []string{"Params      context_text=<4 chars>, max_quality_drop=0.02, models=[\"a\",\"b\"]", "Labeling    1,200 model · 3 judge calls, ~$0.0040", "Teacher     big: ~25.0M tokens, ~$1,234.50"} {
+	for _, want := range []string{"Params      context_text=<4 chars>, max_quality_drop=0.02, models=[\"a\",\"b\"]", "Labeling    1,200 model · 3 judge calls, ~$0.0040", "Teacher     big: ~25.0M tokens, ~$1,234.50", "Duration    ~14 min on one GPU · needs 36 GB of GPU memory"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan readout lacks %q:\n%s", want, text)
 		}

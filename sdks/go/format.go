@@ -35,6 +35,11 @@ func (p *RunPlan) String() string {
 		lines = append(lines, "Params      "+params)
 	}
 	lines = append(lines, fmt.Sprintf("Estimate    ~%s tokens (~%s at %s/M)", fmtTokens(p.EstimatedTokens), fmtUSD(p.EstimatedCostUSD), fmtUSD(p.PricePerMillionTokens)))
+	duration := fmt.Sprintf("Duration    ~%s on one GPU", fmtDuration(p.EstimatedDurationS))
+	if p.MinGPUMemoryGb != nil {
+		duration += fmt.Sprintf(" · needs %s GB of GPU memory", fmtNum(*p.MinGPUMemoryGb))
+	}
+	lines = append(lines, duration)
 	if t := p.Teacher; t != nil {
 		lines = append(lines, fmt.Sprintf("Teacher     %s: ~%s tokens, ~%s at %s/M (included above)", t.Model, fmtTokens(t.EstimatedTokens), fmtUSD(t.EstimatedCostUSD), fmtUSD(t.PricePerMillionTokens)))
 	}
@@ -46,6 +51,18 @@ func (p *RunPlan) String() string {
 		lines = append(lines, "  ! "+w)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// fmtDuration matches Python's plan readout: seconds under 90 s, minutes under 90 min, else hours.
+func fmtDuration(seconds int) string {
+	switch {
+	case seconds < 90:
+		return fmt.Sprintf("%ds", seconds)
+	case seconds < 90*60:
+		return fmt.Sprintf("%.0f min", float64(seconds)/60)
+	default:
+		return fmt.Sprintf("%.1f h", float64(seconds)/3600)
+	}
 }
 
 func fmtInt(n int) string {
