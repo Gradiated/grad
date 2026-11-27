@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
+import socket
+import threading
+import time
 import unittest
 from typing import Any
 
@@ -29,6 +32,47 @@ class Echo:
 
 def resolver(*ips: str) -> Any:
     return lambda host, port: list(ips)
+
+
+class _DripServer:
+    """Sends a response one byte every 0.2 s (headers too, with ``headers_first``)."""
+
+    def __init__(self, headers_first: bool) -> None:
+        self.headers_first = headers_first
+        self.stop = threading.Event()
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.sock.settimeout(0.2)
+
+    def __enter__(self) -> str:
+        threading.Thread(target=self._serve, daemon=True).start()
+        return f"http://127.0.0.1:{self.sock.getsockname()[1]}"
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop.set()
+        self.sock.close()
+
+    def _serve(self) -> None:
+        while not self.stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                continue
+            body = b"{}" + b" " * 40
+            head = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body)
+            try:
+                conn.recv(65536)
+                if not self.headers_first:
+                    conn.sendall(head)
+                for byte in (head if self.headers_first else b"") + body:
+                    if self.stop.wait(0.2):
+                        break
+                    conn.sendall(bytes([byte]))
+            except OSError:
+                pass
+            finally:
+                conn.close()
 
 
 class EgressTests(unittest.TestCase):
@@ -129,12 +173,22 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(SourceAPIChangedError, "expected JSON"):
             Response(200, {}, b"<html>").json()
 
-    def test_slow_responses_hit_the_page_deadline(self) -> None:
-        ticks = iter(range(0, 10_000, 100))
-        client = self.client(clock=lambda: float(next(ticks)), response_timeout_s=50)
-        self.fixture.replies["/base/slow"] = (200, "y" * 200_000, {})
-        with self.assertRaisesRegex(SourceUnreachableError, "took longer"):
-            client.get("/slow")
+    def test_a_dripping_host_hits_the_wall_clock_deadline(self) -> None:
+        # r8 P1-6: one byte every 0.2 s resets every per-read timeout; the deadline still holds,
+        # whether the host drips the headers or the body.
+        for headers_first in (True, False):
+            with self.subTest(headers_first=headers_first), _DripServer(headers_first) as url:
+                client = HttpClient(url, policy=LOOPBACK, response_timeout_s=1.0, read_timeout_s=0.5, max_attempts=1)
+                start = time.monotonic()
+                with self.assertRaisesRegex(SourceUnreachableError, "took longer than 1s"):
+                    client.get("/")
+                self.assertLess(time.monotonic() - start, 2.5)
+
+    def test_no_request_after_the_sync_deadline(self) -> None:
+        client = self.client(clock=lambda: 100.0)
+        client.deadline = 99.0
+        with self.assertRaisesRegex(SourceUnreachableError, "ran out of time"):
+            client.get("/x")
 
     def test_connection_errors_retry_then_raise(self) -> None:
         self.server.__exit__()

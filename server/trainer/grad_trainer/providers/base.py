@@ -159,6 +159,12 @@ class Provider(ABC):
             **self._http_options,
         )
 
+    def set_deadline(self, deadline: float) -> None:
+        """No request starts or continues after ``deadline`` (``time.monotonic()``): a sync's cap."""
+        self._http_options["deadline"] = deadline
+        if "http" in self.__dict__:
+            self.http.deadline = deadline
+
     def require_project(self) -> str:
         if not self.spec.project:
             raise SourceUnavailableError(f"The {self.name} source needs a project.")

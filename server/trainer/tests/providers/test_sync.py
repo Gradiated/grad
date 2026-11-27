@@ -12,7 +12,7 @@ from fixtures.providers import GradiatedFixture, LangfuseFixture
 from fixtures.providers.base import NOW, iso
 
 from grad_trainer import import_runner
-from grad_trainer.errors import PaginationLoopError
+from grad_trainer.errors import PaginationLoopError, SourceUnreachableError
 from grad_trainer.providers import Page, Provider, ScoreUpdate, SyncEngine
 from grad_trainer.providers.langfuse import LangfuseProvider
 from grad_trainer.providers.sync import pages
@@ -99,6 +99,15 @@ class EngineTests(unittest.TestCase):
 
 
 class MergeTests(unittest.TestCase):
+    def test_a_sync_has_a_wall_clock_cap(self) -> None:
+        # r8 P1-6: a source that keeps answering slowly can't hold the worker past the cap,
+        # and the provider's HTTP client gets the same deadline for its in-flight request.
+        ticks = iter(float(t) for t in range(0, 1000, 10))
+        provider = Scripted([Page([{"id": "a"}], cursor="1"), Page([{"id": "b"}], cursor="2"), Page([{"id": "c"}])])
+        with self.assertRaisesRegex(SourceUnreachableError, "longer than 15s"):
+            run(provider, max_seconds=15, clock=lambda: next(ticks))
+        self.assertEqual(provider._http_options["deadline"], 15.0)
+
     def test_merge_rules(self) -> None:
         def update(rid: str, **kw: Any) -> dict:
             return ScoreUpdate(rid, **kw).to_record("x")

@@ -18,11 +18,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
-from ..errors import PaginationLoopError
+from ..errors import PaginationLoopError, SourceUnreachableError
 from ..records import RESET_RECORD
 from .base import Page, Provider, ScoreUpdate, iso, parse_time
 
@@ -33,6 +34,8 @@ DEFAULT_BATCH_SIZE = 500
 MAX_PAGES = 100_000
 MAX_EMPTY_PAGES = 20  # some APIs (Langfuse) may return empty pages that still carry a cursor
 MAX_ERRORS = 100
+# A sync's wall-clock cap, so one slow or huge source can't hold a shared import worker.
+MAX_SYNC_SECONDS = float(os.environ.get("GRAD_SOURCES_SYNC_MAX_SECONDS") or 3600)
 
 
 @dataclass
@@ -77,17 +80,23 @@ class SyncEngine:
         batch_size: int = DEFAULT_BATCH_SIZE,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         max_pages: int = MAX_PAGES,
+        max_seconds: float = MAX_SYNC_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.provider = provider
         self.emit_batch = emit_batch
         self.batch_size = max(1, batch_size)
         self.now = now
         self.max_pages = max_pages
+        self.max_seconds = max_seconds
+        self.clock = clock
 
     def run(self, watermark: dict[str, Any] | None = None, *, full: bool = False) -> SyncResult:
         p = self.provider
         wm = {} if full or not isinstance(watermark, dict) else watermark
         now = self.now()
+        self._deadline = self.clock() + self.max_seconds
+        p.set_deadline(self._deadline)
         self._until = now - SETTLE
         self._result = SyncResult()
         self._seen: dict[str, bytes] = {}
@@ -116,6 +125,11 @@ class SyncEngine:
     def _drain(self, fetch: Callable[[str | None, str | None], Page], since: str | None, take: Callable[[dict[str, Any]], None]) -> str | None:
         resume = None
         for page in pages(fetch, since, max_pages=self.max_pages):
+            if self.clock() > self._deadline:
+                raise SourceUnreachableError(
+                    f"{self.provider.name} sync took longer than {self.max_seconds:.0f}s (GRAD_SOURCES_SYNC_MAX_SECONDS); "
+                    "the next sync starts again from the last completed sync"
+                )
             for raw in page.items:
                 try:
                     take(raw)

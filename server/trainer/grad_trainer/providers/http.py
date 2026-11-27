@@ -8,8 +8,10 @@ Source hosts are user-supplied, so every request
   metadata, CGNAT, multicast, reserved, IPv4-mapped forms of those) and connects to the vetted
   IP, with SNI and ``Host`` set to the hostname, so DNS rebinding can't swap the address;
 - re-checks every redirect hop and never sends the provider credentials to another origin;
-- caps the connect time, the time and bytes per response, and retries 429/5xx and connection
-  errors with backoff, honouring ``Retry-After``.
+- caps the connect time, the time of every socket read, the wall-clock time and bytes per
+  response (a watchdog closes the connection at the deadline, so a host that drips a byte at a
+  time can't hold a worker), an optional overall ``deadline`` (a sync's wall-clock cap), and
+  retries 429/5xx and connection errors with backoff, honouring ``Retry-After``.
 
 Error messages name the method, host and path, never a response body or a secret.
 The egress policy is a hook: pass ``EgressPolicy(allow=..., deny=...)``, or set
@@ -26,6 +28,7 @@ import os
 import random
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -102,6 +105,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
     def connect(self) -> None:
         sock = socket.create_connection((self._ip, self.port), self.timeout)
+        self.sock = sock  # the watchdog can cut a dripped TLS handshake too
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
@@ -113,7 +117,10 @@ class HttpClient:
     policy: EgressPolicy = field(default_factory=EgressPolicy.from_env)
     requests_per_minute: float | None = None
     connect_timeout_s: float = 10.0
+    read_timeout_s: float = 30.0
     response_timeout_s: float = 120.0
+    # Absolute ``clock()`` time after which no request starts or continues (a sync's cap).
+    deadline: float | None = None
     max_response_bytes: int = 32 * 1024 * 1024
     max_attempts: int = 5
     sleep: Callable[[float], None] = time.sleep
@@ -127,13 +134,19 @@ class HttpClient:
 
     # -- public ----------------------------------------------------------------------
 
-    def request(self, method: str, path: str, *, params: Mapping[str, Any] | None = None, body: Any = None) -> Response:
+    def request(
+        self, method: str, path: str, *, params: Mapping[str, Any] | None = None, body: Any = None, check_status: bool = True
+    ) -> Response:
+        """One request with retries. ``check_status=False`` returns any final response (the
+        caller reads ``status``) instead of raising for 4xx/5xx; nothing is retried then."""
         query = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v is not None}, doseq=True)
         target = f"{self.base_path}{path}" + (f"?{query}" if query else "")
         payload = None if body is None else json.dumps(body).encode()
         where = f"{method} {self.base.hostname}{self.base_path}{path}"
         for attempt in range(1, self.max_attempts + 1):
             self._pace()
+            if self.deadline is not None and self.clock() >= self.deadline:
+                raise SourceUnreachableError(f"{where}: the sync ran out of time (its wall-clock cap)")
             try:
                 resp = self._follow(method, self.base, target, payload)
             except (OSError, http.client.HTTPException) as exc:
@@ -141,6 +154,8 @@ class HttpClient:
                     raise SourceUnreachableError(self.redact(f"{where} failed after {attempt} attempts: {type(exc).__name__}: {exc}")) from None
                 self.sleep(self._backoff(attempt, None))
                 continue
+            if not check_status:
+                return resp
             if resp.status in RETRY_STATUSES and attempt < self.max_attempts:
                 self.sleep(self._backoff(attempt, resp.headers.get("retry-after")))
                 continue
@@ -211,23 +226,51 @@ class HttpClient:
         ip = self._vetted_ip(parts)
         cls = _PinnedHTTPSConnection if parts.scheme == "https" else _PinnedHTTPConnection
         conn = cls(str(parts.hostname), parts.port, ip, self.connect_timeout_s)
-        deadline = self.clock() + self.response_timeout_s
+        budget = self.response_timeout_s
+        if self.deadline is not None:
+            budget = min(budget, max(0.0, self.deadline - self.clock()))
+        # The watchdog bounds the whole exchange (connect, TLS, headers, body) in wall-clock
+        # time: per-read timeouts alone reset on every byte a slow host drips.
+        expired = threading.Event()
+
+        def abort() -> None:
+            expired.set()
+            sock = conn.sock
+            if sock is not None:
+                try:
+                    # socket.socket.shutdown, not SSLSocket.shutdown: the latter drops the SSL
+                    # object under the reading thread, which then raises ValueError, not OSError.
+                    socket.socket.shutdown(sock, socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        watchdog = threading.Timer(budget, abort)
+        watchdog.daemon = True
+        watchdog.start()
+        too_slow = f"{parts.hostname} took longer than {budget:.0f}s for one page"
         try:
             send = dict(headers)
             if payload is not None:
                 send["Content-Type"] = "application/json"
             conn.request(method, target or "/", body=payload, headers=send)
+            if conn.sock is not None:
+                conn.sock.settimeout(self.read_timeout_s)
             raw = conn.getresponse()
             chunks, size = [], 0
-            while chunk := raw.read(64 * 1024):
+            while chunk := raw.read1(64 * 1024):
                 size += len(chunk)
                 if size > self.max_response_bytes:
                     raise SourceAPIChangedError(f"{parts.hostname} sent more than {self.max_response_bytes} bytes in one page")
-                if self.clock() > deadline:
-                    raise SourceUnreachableError(f"{parts.hostname} took longer than {self.response_timeout_s:.0f}s for one page")
                 chunks.append(chunk)
+            if expired.is_set():
+                raise SourceUnreachableError(too_slow)
             return Response(raw.status, {k.lower(): v for k, v in raw.getheaders()}, b"".join(chunks))
+        except (OSError, http.client.HTTPException):
+            if expired.is_set():
+                raise SourceUnreachableError(too_slow) from None
+            raise
         finally:
+            watchdog.cancel()
             conn.close()
 
     def _pace(self) -> None:
