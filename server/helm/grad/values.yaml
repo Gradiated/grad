@@ -14,6 +14,7 @@ nameOverride: ""
 #   inference-api-key     key for evals.inferenceBaseUrl
 #   judge-api-key         key for evals.judgeBaseUrl
 #   cloud-service-token   AUTH/BILLING_MODE=cloud
+#   metrics-token         bearer token for /metrics and /metrics/queue (metrics.requireToken)
 #   aws-access-key-id / aws-secret-access-key   static S3 keys (MinIO); omit them with Pod Identity or IRSA
 secret:
   name: grad
@@ -154,10 +155,68 @@ workerServiceAccount:
   name: ""
   annotations: {}
 
+# Prometheus metrics. grad-server serves /metrics (grad_* metrics, see
+# docs/SELF_HOSTING.md) on its own port, so the API Service's http port and the
+# ingress never expose it; workers serve grad_trainer_* metrics on workerPort.
+metrics:
+  enabled: true
+  # METRICS_PORT on grad-server (a `metrics` port on the API Service).
+  port: 9464
+  # GRAD_WORKER_METRICS_PORT on workers (0: off; heartbeats still carry their stats).
+  workerPort: 9465
+  # Require the Secret key `metrics-token` as a bearer token on /metrics and
+  # /metrics/queue (the ServiceMonitor and KEDA send it).
+  requireToken: false
+  # Adds grad_workspace_jobs{workspace}: only for a handful of workspaces.
+  workspaceLabel: false
+  # Who may reach the metrics ports when networkPolicy.enabled (Prometheus, KEDA).
+  allowFrom:
+    - namespaceSelector: {}
+  # prometheus-operator: scrape grad-server (ServiceMonitor) and workers (PodMonitor).
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    # Labels your Prometheus selects monitors by, e.g. {release: kube-prometheus-stack}.
+    labels: {}
+  podMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  # The Grafana dashboards (overview, training, evals and sources) as ConfigMaps
+  # labelled for the Grafana sidecar (kube-prometheus-stack, grafana chart).
+  grafanaDashboards:
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+    # e.g. {grafana_folder: grad} with the sidecar's folderAnnotation.
+    annotations: {}
+  # A PrometheusRule with a few alerts (prometheus-operator).
+  prometheusRule:
+    enabled: false
+    labels: {}
+    # Alert when the oldest claimable job has waited this long.
+    oldestQueuedSeconds: 1800
+    # Alert when this share of API requests fail with 5xx (over 5 minutes).
+    error5xxRatio: 0.05
+    # Alert when a running attempt has written no usage for this long.
+    usageFlushLagSeconds: 900
+
 # KEDA scales each worker Deployment on its open jobs (queued plus running), so a
 # scale-down never strands a running job. Needs KEDA installed in the cluster.
+# trigger picks how KEDA reads that number:
+#   prometheus   query grad_jobs_open from keda.prometheus.serverAddress
+#                (needs Prometheus scraping grad-server; the default)
+#   metrics-api  poll grad-server's /metrics/queue directly (no Prometheus)
+# Neither needs database credentials.
 keda:
   enabled: false
+  trigger: prometheus
+  prometheus:
+    # e.g. http://prometheus-operated.monitoring.svc:9090
+    serverAddress: ""
+    # Series selector for this release's grad-server; empty: namespace and
+    # service labels as prometheus-operator sets them.
+    selector: ""
   pollingInterval: 15
   cooldownPeriod: 300
   # Open jobs per replica.

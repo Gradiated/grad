@@ -48,12 +48,20 @@ spec:
         - name: grad-trainer
           image: "{{ $image.repository }}:{{ $image.tag }}"
           imagePullPolicy: {{ $image.pullPolicy }}
+          {{- if gt (int $.Values.metrics.workerPort) 0 }}
+          ports:
+            - name: metrics
+              containerPort: {{ $.Values.metrics.workerPort }}
+          {{- end }}
           env:
             - name: GRAD_SERVER_URL
               value: "http://{{ include "grad.fullname" $ }}-api:{{ $.Values.api.service.port }}"
             - {name: GRAD_WORKER_KINDS, value: {{ join "," $w.kinds | quote }}}
             - {name: GRAD_POLL_INTERVAL_S, value: {{ $d.pollIntervalSeconds | quote }}}
             - {name: GRAD_LEASE_SECONDS, value: {{ $d.leaseSeconds | quote }}}
+            {{- if gt (int $.Values.metrics.workerPort) 0 }}
+            - {name: GRAD_WORKER_METRICS_PORT, value: {{ $.Values.metrics.workerPort | quote }}}
+            {{- end }}
             # Pod name: unique per replica, readable in leases and logs.
             - name: GRAD_WORKER_ID
               valueFrom:

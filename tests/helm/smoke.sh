@@ -69,14 +69,21 @@ kubectl -n "$NS" create secret generic grad \
 
 step "helm install"
 helm install "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" --wait --timeout 6m
-# The KEDA trigger queries (keda.enabled=true) must run against the migrated schema.
-helm template "$RELEASE" "$CHART" -f "$CHART/ci/kind-values.yaml" --set keda.enabled=true \
-  | python3 -c 'import json,re,sys; [print(json.loads(q)) for q in re.findall(r"^ +query: (\".*\")$", sys.stdin.read(), re.M)]' \
-  | while read -r query; do
-      n=$(kubectl -n "$NS" exec deploy/postgres -- psql -U grad -d grad -tAc "$query")
-      [[ "$n" =~ ^[0-9]+$ ]] || { echo "FAIL: KEDA query returned '$n': $query" >&2; exit 1; }
-      echo "ok: KEDA query counts $n open jobs"
+# KEDA's metrics-api trigger (keda.trigger=metrics-api) reads each pool's queue
+# depth from grad-server's metrics port; the prometheus trigger reads
+# grad_jobs_open from /metrics. Both must answer from inside the cluster.
+helm template "$RELEASE" "$CHART" -f "$CHART/ci/kind-values.yaml" --set keda.enabled=true --set keda.trigger=metrics-api \
+  | python3 -c 'import json,re,sys; [print(json.loads(u)) for u in re.findall(r"^ +url: (\".*\")$", sys.stdin.read(), re.M)]' \
+  | while read -r url; do
+      body=$(kubectl -n "$NS" exec deploy/"$RELEASE-grad-api" -- node -e "fetch(process.argv[1]).then(r=>r.text()).then(t=>console.log(t))" "$url")
+      python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert isinstance(d["open"], int), d' "$body" \
+        || { echo "FAIL: KEDA metrics-api $url answered '$body'" >&2; exit 1; }
+      echo "ok: KEDA metrics-api $url -> $body"
     done
+kubectl -n "$NS" exec deploy/"$RELEASE-grad-api" -- node -e \
+  "fetch('http://127.0.0.1:9464/metrics').then(r=>r.text()).then(t=>{if(!/^grad_jobs_open\{kind=\"train\"\} \d+/m.test(t))process.exit(1)})" \
+  || { echo "FAIL: /metrics has no grad_jobs_open series" >&2; exit 1; }
+echo "ok: /metrics exports grad_jobs_open"
 python3 "$ROOT/tests/helm/smoke.py" --namespace "$NS" --release "$RELEASE" --admin-key "$ADMIN_KEY"
 
 step "helm upgrade"

@@ -1,20 +1,21 @@
 {{- if .Values.keda.enabled }}
+{{- $metricsApi := eq .Values.keda.trigger "metrics-api" }}
+{{- if and $metricsApi .Values.metrics.requireToken }}
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
 metadata:
-  name: {{ include "grad.fullname" . }}-postgres
+  name: {{ include "grad.fullname" . }}-metrics
   labels:
     {{- include "grad.labels" . | nindent 4 }}
 spec:
   secretTargetRef:
-    - parameter: connection
+    - parameter: token
       name: {{ .Values.secret.name }}
-      key: database-url
+      key: metrics-token
+{{- end }}
 {{- range $name, $w := .Values.workers }}
 {{- if $w.enabled }}
 {{- $scale := index $.Values.keda.workers $name | default dict }}
-{{- $kinds := list }}
-{{- range $w.kinds }}{{ $kinds = append $kinds (printf "'%s'" .) }}{{ end }}
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
@@ -29,15 +30,28 @@ spec:
   cooldownPeriod: {{ $.Values.keda.cooldownPeriod }}
   minReplicaCount: {{ $scale.minReplicaCount | default 0 }}
   maxReplicaCount: {{ $scale.maxReplicaCount | default 4 }}
+  # Open jobs of this pool's kinds: queued (claimable) plus running (leased),
+  # so a scale-down never strands a running job.
   triggers:
-    - type: postgresql
+    {{- if $metricsApi }}
+    - type: metrics-api
       metadata:
-        # Open jobs of this worker's kinds: queued (claimable) plus running (leased),
-        # so a scale-down never strands a running job.
-        query: {{ include "grad.openJobsQuery" (join ", " $kinds) | quote }}
-        targetQueryValue: {{ $.Values.keda.targetOpenJobs | quote }}
+        url: {{ include "grad.queueDepthUrl" (list $ $w.kinds) | quote }}
+        format: json
+        valueLocation: open
+        targetValue: {{ $.Values.keda.targetOpenJobs | quote }}
+        {{- if $.Values.metrics.requireToken }}
+        authMode: bearer
       authenticationRef:
-        name: {{ include "grad.fullname" $ }}-postgres
+        name: {{ include "grad.fullname" $ }}-metrics
+        {{- end }}
+    {{- else }}
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $.Values.keda.prometheus.serverAddress | quote }}
+        query: {{ include "grad.openJobsPromQL" (list $ $w.kinds) | quote }}
+        threshold: {{ $.Values.keda.targetOpenJobs | quote }}
+    {{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

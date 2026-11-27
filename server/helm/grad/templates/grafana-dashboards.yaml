@@ -1,0 +1,20 @@
+{{- if .Values.metrics.grafanaDashboards.enabled }}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+---
+# A grad dashboard for the Grafana sidecar (label grafana_dashboard: "1").
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "grad.fullname" $ }}-dashboard-{{ base $path | trimSuffix ".json" }}
+  labels:
+    {{- include "grad.labels" $ | nindent 4 }}
+    {{- toYaml $.Values.metrics.grafanaDashboards.labels | nindent 4 }}
+  {{- with $.Values.metrics.grafanaDashboards.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  grad-{{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}

@@ -45,6 +45,10 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.api.service.port }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
           env:
             - {name: HOST, value: "0.0.0.0"}
             - {name: PORT, value: {{ .Values.api.service.port | quote }}}
@@ -63,6 +67,14 @@ spec:
             {{- end }}
             {{- with .Values.evals.judgeBaseUrl }}
             - {name: JUDGE_BASE_URL, value: {{ . | quote }}}
+            {{- end }}
+            - {name: METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
+            {{- if .Values.metrics.enabled }}
+            - {name: METRICS_PORT, value: {{ .Values.metrics.port | quote }}}
+            - {name: METRICS_WORKSPACE_LABEL, value: {{ .Values.metrics.workspaceLabel | quote }}}
+            {{- if .Values.metrics.requireToken }}
+            {{- include "grad.secretEnv" (list . "METRICS_TOKEN" "metrics-token" false) | nindent 12 }}
+            {{- end }}
             {{- end }}
             {{- with .Values.cloud.internalApiUrl }}
             - {name: CLOUD_INTERNAL_API_URL, value: {{ . | quote }}}

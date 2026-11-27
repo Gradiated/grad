@@ -113,6 +113,9 @@ export const createTelemetrySampler = (
     }
   };
 
+  // Zeros until the first read, so every series exists from boot.
+  apply({ jobs: [], workers: [], phases: [], sources: [] });
+
   return {
     refresh: async (now) => {
       const snap = await store.telemetry.snapshot(now, {

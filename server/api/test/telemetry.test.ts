@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createMetricsApp } from "../src/app.js";
+import { API_VERSION, createMetricsApp } from "../src/app.js";
 import {
   ObjectExistsError,
   ObjectNotFoundError,
@@ -187,7 +187,7 @@ describe("Prometheus metrics", () => {
     expect(
       value(done, "grad_db_pool_connections", { state: "idle" }),
     ).toBeGreaterThanOrEqual(0);
-    expect(value(done, "grad_build_info", { version: "0.2.0" })).toBe(1);
+    expect(value(done, "grad_build_info", { version: API_VERSION })).toBe(1);
     expect(value(done, "process_cpu_user_seconds_total")).toBeGreaterThan(0);
 
     // Route templates, never raw paths.

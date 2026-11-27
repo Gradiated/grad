@@ -279,7 +279,7 @@ jobs:
           docker compose -f server/docker-compose.yml config --quiet
           docker compose -f server/docker-compose.yml -f tests/compose/smoke.yml config --quiet
 
-      - name: Lint, template and kubeconform the Helm chart (default, kind, air-gapped/KEDA, Cloud)
+      - name: Lint, template and kubeconform the Helm chart (default, kind, air-gapped/KEDA, monitoring, Cloud)
         run: |
           chart=server/helm/grad
           helm lint "$chart" --strict --set storage.s3Bucket=lint
@@ -295,6 +295,7 @@ jobs:
             helm template grad "$chart" \
               --set storage.s3Bucket=airgap-artifacts \
               --set keda.enabled=true \
+              --set keda.trigger=metrics-api \
               --set ingress.enabled=true \
               --set networkPolicy.enabled=true \
               --set migrations.enabled=false \
@@ -303,15 +304,26 @@ jobs:
               --set evals.judgeBaseUrl=https://judge.internal/v1
             echo ---
             helm template grad "$chart" \
+              --set storage.s3Bucket=monitored-artifacts \
+              --set keda.enabled=true \
+              --set keda.prometheus.serverAddress=http://prometheus-operated.monitoring.svc:9090 \
+              --set metrics.requireToken=true \
+              --set metrics.serviceMonitor.enabled=true \
+              --set metrics.podMonitor.enabled=true \
+              --set metrics.prometheusRule.enabled=true \
+              --set metrics.grafanaDashboards.enabled=true \
+              --set networkPolicy.enabled=true
+            echo ---
+            helm template grad "$chart" \
               --set storage.s3Bucket=cloud-artifacts \
               --set api.authMode=cloud \
               --set api.billingMode=cloud \
               --set cloud.internalApiUrl=https://api.gradiated.com \
               --set workers.train.enabled=false
           } > "$RUNNER_TEMP/rendered.yaml"
-          # KEDA's CRDs have no schema in the default catalog.
+          # KEDA's and prometheus-operator's CRDs have no schema in the default catalog.
           kubeconform -strict -summary -kubernetes-version 1.37.0 \
-            -skip ScaledObject,TriggerAuthentication "$RUNNER_TEMP/rendered.yaml"
+            -skip ScaledObject,TriggerAuthentication,ServiceMonitor,PodMonitor,PrometheusRule "$RUNNER_TEMP/rendered.yaml"
 
   versions:
     name: One version across the repo

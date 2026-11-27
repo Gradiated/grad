@@ -1,0 +1,60 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+{{- $sel := include "grad.metricsSelector" . }}
+{{- $r := .Values.metrics.prometheusRule }}
+# A few alerts on grad-server's metrics. Gauges sampled from Postgres are the
+# same on every API replica, so they are read with max().
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "grad.fullname" . }}
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+    {{- with $r.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: grad
+      rules:
+        - alert: GradApiErrorRateHigh
+          expr: |
+            sum(rate(grad_http_requests_total{ {{- $sel }}, status_class="5xx"}[5m]))
+              / clamp_min(sum(rate(grad_http_requests_total{ {{- $sel }}}[5m])), 1e-9) > {{ $r.error5xxRatio }}
+          for: 10m
+          labels: {severity: critical}
+          annotations:
+            summary: grad-server answers {{ "{{" }} $value | humanizePercentage {{ "}}" }} of requests with a 5xx.
+            description: Check `kubectl logs` of the API pods (5xx lines carry request_id and trace_id) and the database.
+        - alert: GradJobQueuedTooLong
+          expr: max by (kind) (grad_job_oldest_queued_age_seconds{ {{- $sel }}}) > {{ $r.oldestQueuedSeconds }}
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: A {{ "{{" }} $labels.kind {{ "}}" }} job has waited {{ "{{" }} $value | humanizeDuration {{ "}}" }} for a worker.
+            description: No worker of that kind claimed it. Check the worker pools, KEDA, and GPU capacity.
+        {{- range $kind := list "train" "import" }}
+        - alert: GradNoWorkersForQueuedJobs
+          expr: |
+            max(sum by (pod) (grad_jobs{ {{- $sel }}, kind=~"{{ ternary "import|sync" $kind (eq $kind "import") }}", status=~"queued|waiting_for_compute"})) > 0
+              unless max(grad_workers_online{ {{- $sel }}, kind="{{ $kind }}"}) > 0
+          for: 15m
+          labels: {severity: warning, kind: {{ $kind }}}
+          annotations:
+            summary: {{ $kind }} jobs are queued and no {{ $kind }} worker has been online for 15 minutes.
+            description: The {{ $kind }} worker pool is scaled to zero or can't start (image, GPU quota, worker key).
+        {{- end }}
+        - alert: GradSourcePaused
+          expr: max by (provider) (grad_sources_paused{ {{- $sel }}}) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} {{ "{{" }} $labels.provider {{ "}}" }} source(s) paused after repeated failed syncs."
+            description: "`grad sources list` shows the error; fix the provider key (`grad secrets set NAME` resumes its sources) or run `grad sources sync ID`."
+        - alert: GradUsageFlushLagging
+          expr: max(grad_usage_flush_lag_seconds{ {{- $sel }}}) > {{ $r.usageFlushLagSeconds }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: A running attempt has written no usage for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
+            description: Its worker stopped reporting progress, or billing writes are failing (see grad_maintenance_step_errors_total and the API logs).
+{{- end }}

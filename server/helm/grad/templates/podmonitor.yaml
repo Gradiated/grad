@@ -1,0 +1,23 @@
+{{- if and .Values.metrics.podMonitor.enabled (gt (int .Values.metrics.workerPort) 0) }}
+# prometheus-operator scrapes every worker pod's grad_trainer_* metrics.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "grad.fullname" . }}-workers
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+    {{- with .Values.metrics.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+{{- end }}

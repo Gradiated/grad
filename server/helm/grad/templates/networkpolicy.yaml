@@ -24,8 +24,17 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.api.service.port }}
+    {{- if and .Values.metrics.enabled .Values.metrics.allowFrom }}
+    # Prometheus and KEDA scrape the metrics port.
+    - from:
+        {{- toYaml .Values.metrics.allowFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.port }}
+    {{- end }}
 ---
-# Workers reach DNS, the API and the egress allowlist, nothing else.
+# Workers reach DNS, the API and the egress allowlist, nothing else; only the
+# metrics port accepts traffic.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -38,6 +47,14 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: worker
   policyTypes: [Ingress, Egress]
+  {{- if and (gt (int .Values.metrics.workerPort) 0) .Values.metrics.allowFrom }}
+  ingress:
+    - from:
+        {{- toYaml .Values.metrics.allowFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.metrics.workerPort }}
+  {{- end }}
   egress:
     - ports:
         - {protocol: UDP, port: 53}
