@@ -28,6 +28,8 @@ export interface AppSettings {
   usageFlushSeconds?: number;
   /** AUTH_MODE=cloud: /v1/keys answers 501 keys_managed_by_cloud. */
   keysManagedByCloud?: boolean;
+  /** AUTH_MODE=none: refuse public Host names and cross-site browser requests. */
+  unauthenticated?: boolean;
   /** Browser origins allowed cross-origin on /v1 (GRAD_CORS_ORIGINS; default none). */
   corsOrigins?: readonly string[];
   /** Seconds between a workspace delete and its purge (default 7 days). */

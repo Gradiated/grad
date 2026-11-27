@@ -7,6 +7,7 @@ import { HTTPException } from "hono/http-exception";
 
 import type { AppDependencies } from "./deps.js";
 import { ApiError } from "./errors.js";
+import { largeBodyGate, unauthenticatedGuard } from "./http-guards.js";
 import { documentIdempotencyHeader } from "./idempotency.js";
 import { registerArtifactRoutes } from "./routes/artifacts.js";
 import { registerCheckpointRoutes } from "./routes/checkpoints.js";
@@ -32,7 +33,10 @@ export const API_TITLE = "Gradiated Training & Serving API";
 export const API_VERSION = "0.2.0-alpha.4";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
-const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;
+/** SDKs push records in 8-16 MiB batches; bigger files go through upload tickets. */
+export const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
+/** Large bodies handled at once per replica (src/http-guards.ts). */
+const LARGE_BODY_SLOTS = 2;
 
 /** What a browser may send cross-origin (GRAD_CORS_ORIGINS). */
 export const CORS_REQUEST_HEADERS = [
@@ -190,6 +194,15 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
 
   app.use("*", httpTelemetry());
 
+  if (deps.settings.unauthenticated) {
+    app.use(
+      "*",
+      unauthenticatedGuard(deps.settings.corsOrigins ?? [], (c, code, detail) =>
+        problemResponse(c, 403, code, "Forbidden", detail),
+      ),
+    );
+  }
+
   const metricsSettings = deps.settings.metrics ?? { enabled: true };
   if (metricsSettings.enabled && !metricsSettings.separatePort) {
     registerMetricsEndpoints(app as unknown as Hono, {
@@ -298,6 +311,8 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
       );
     }
   });
+
+  app.use("/v1/*", largeBodyGate(LARGE_BODY_SLOTS));
 
   // Worker routes check the platform scope before body validation so tenants
   // learn nothing about the protocol from validation errors.

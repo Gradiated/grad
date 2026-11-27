@@ -175,6 +175,7 @@ export const buildDependencies = async (
       usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
       workspacePurgeDelaySeconds: env.GRAD_WORKSPACE_PURGE_DELAY_SECONDS,
       corsOrigins: env.corsOrigins,
+      unauthenticated: env.AUTH_MODE === "none",
       keysManagedByCloud: env.AUTH_MODE === "cloud",
       sourceSyncIntervalSeconds: env.SOURCE_SYNC_INTERVAL_SECONDS,
       sourceVersionIntervalSeconds: env.SOURCE_VERSION_INTERVAL_SECONDS,

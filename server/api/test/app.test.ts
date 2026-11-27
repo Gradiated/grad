@@ -242,7 +242,7 @@ describe("grad-server HTTP API", () => {
   it("returns 413 problem+json for oversized bodies", async () => {
     const res = await t.request("/v1/datasets/x/records", {
       method: "POST",
-      body: "x".repeat(65 * 1024 * 1024),
+      body: "x".repeat(33 * 1024 * 1024),
       headers: { "Content-Type": "application/json" },
     });
     expect(res.status).toBe(413);
