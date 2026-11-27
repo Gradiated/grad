@@ -372,6 +372,50 @@ fn live_self_hosted_quickstart() {
     ok(&o);
     assert!(o.stdout.contains("qwen/qwen3-8b"), "{}", o.stdout);
 
+    // grad datasets score / filter: score the records' own answers, then keep the passing ones.
+    std::fs::write(
+        home.dir.join("score.yaml"),
+        "- name: mentions_settings\n  kind: regex\n  pattern: Settings\n",
+    )
+    .unwrap();
+    let o = grad(
+        &home,
+        &[
+            "datasets",
+            "score",
+            "support-prod",
+            "--rubric",
+            "score.yaml",
+            "--wait",
+        ],
+        &[],
+    );
+    ok(&o);
+    assert!(
+        o.stdout.contains("Scored dataset support-prod"),
+        "{}",
+        o.stdout
+    );
+    let o = grad(
+        &home,
+        &[
+            "--json",
+            "datasets",
+            "filter",
+            "support-prod",
+            "--score",
+            "mentions_settings>=1",
+        ],
+        &[],
+    );
+    ok(&o);
+    let view: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert!(
+        view["data"]["record_count"].as_i64().unwrap_or(0) > 0,
+        "{}",
+        o.stdout
+    );
+
     // Scoped keys: a runs:read key cannot push data (exit 3).
     let o = grad(
         &home,

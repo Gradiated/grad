@@ -119,3 +119,19 @@ export const trajectories = async () => {
   const imported = await (await grad.datasets.create("support-prod")).importFile("./traces.parquet").wait();
   console.log(imported.importedCount, imported.droppedCount, imported.detectedScores);
 };
+
+// docs: training/trajectories.mdx "Score and filter datasets"
+export const scoreAndFilter = async () => {
+  const grad = new Grad();
+  const dataset = await grad.datasets.get("support-prod");
+
+  const judge = new Judge({
+    name: "resolved",
+    model: "anthropic/claude-sonnet-5-5",
+    prompt: "Did the assistant accurately resolve the user's request without hallucinating?",
+  });
+  const scored = await dataset.score(judge).wait();
+
+  const passing = await scored.filter({ scores: { resolved: ">=0.8" } });
+  console.log(passing.recordCount);
+};

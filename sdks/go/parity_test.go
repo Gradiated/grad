@@ -26,6 +26,7 @@ type parityFixture struct {
 		Run      json.RawMessage `json:"run"`
 		Eval     json.RawMessage `json:"eval"`
 		EvalPlan json.RawMessage `json:"eval_plan"`
+		Scoring  json.RawMessage `json:"scoring"`
 	} `json:"responses"`
 	Expect map[string]any `json:"expect"`
 }
@@ -111,6 +112,20 @@ func TestParityRequests(t *testing.T) {
 				DatasetVersion: 1, IdempotencyKey: "parity-eval-key"}).Result()
 			return err
 		},
+		"score_dataset": func() error {
+			_, err := c.Datasets.Score(ctx, "support-logs", grad.Rubric{judge},
+				grad.ScoreOptions{Version: 1, Name: "support-logs-quality", Limit: 100, IdempotencyKey: "parity-score-key"}).Result()
+			return err
+		},
+		"filter_dataset_fields": func() error {
+			_, err := c.Datasets.Filter(ctx, "support-logs", grad.FilterOptions{Scores: map[string]string{"quality": ">=0.8"},
+				Metadata: map[string]any{"env": "prod"}, CreatedAfter: "2026-11-01", Version: 2, Name: "support-good"})
+			return err
+		},
+		"filter_dataset_ids": func() error {
+			_, err := c.Datasets.Filter(ctx, "support-logs", grad.FilterOptions{IDs: []string{"rec_a", "rec_c"}})
+			return err
+		},
 		"deploy": func() error {
 			_, err := c.Deployments.Create(ctx, artifact, grad.WithDeploymentName("support"), grad.WithFallback("test/tiny-qwen3"),
 				grad.WithExploreRate(0.1), grad.WithDeployIdempotencyKey("parity-deploy-key"))
@@ -157,7 +172,8 @@ func TestParityTypedResponses(t *testing.T) {
 	var run generated.Run
 	var ev generated.EvalRun
 	var plan generated.PlanEvalResponse
-	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan} {
+	var scoring generated.EvalRun
+	for raw, into := range map[*json.RawMessage]any{&p.Responses.Run: &run, &p.Responses.Eval: &ev, &p.Responses.EvalPlan: &plan, &p.Responses.Scoring: &scoring} {
 		if err := json.Unmarshal(*raw, into); err != nil {
 			t.Fatal(err)
 		}
@@ -174,6 +190,8 @@ func TestParityTypedResponses(t *testing.T) {
 		"eval.total_cost_usd":                              ev.TotalCostUSD,
 		"eval.summary[0].cost_per_1k_tasks_usd":            *ev.Summary[0].CostPer1kTasksUSD,
 		"eval_plan.estimated_cost_usd":                     plan.EstimatedCostUSD,
+		"scoring.mode":                                     string(scoring.Mode),
+		"scoring.scored_dataset_version":                   float64(*scoring.ScoredDatasetVersion),
 	}
 	if !reflect.DeepEqual(got, p.Expect) {
 		t.Fatalf("typed responses\n got %v\nwant %v", got, p.Expect)

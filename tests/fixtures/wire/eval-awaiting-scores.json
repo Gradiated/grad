@@ -3,6 +3,7 @@
   "workspace_id": "ws_e2e",
   "name": "support-eval",
   "status": "awaiting_scores",
+  "mode": "eval",
   "models": [
     "test/tiny-qwen3",
     "qwen/qwen3-8b"
@@ -42,6 +43,7 @@
   },
   "summary": [],
   "total_cost_usd": 0,
+  "scored_dataset_version": null,
   "error": null,
   "created_at": "2026-11-27T04:35:21.543Z",
   "updated_at": "2026-11-27T04:35:21.779Z",

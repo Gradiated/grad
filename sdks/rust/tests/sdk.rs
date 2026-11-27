@@ -1418,3 +1418,91 @@ fn eval_reports_and_metric_points_are_typed() {
     assert_eq!(metrics["eval_loss"], Some(0.4));
     assert_eq!(metrics["eval_token_accuracy"], None);
 }
+
+#[tokio::test]
+async fn dataset_scoring_waits_and_filters_stream_ids() {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let p = polls.clone();
+    let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
+        ("POST", "/v1/datasets/logs/score") => Reply::json(
+            202,
+            json!({"id": "eval_s", "name": "logs-score", "status": "queued", "mode": "score",
+                   "models": ["record"], "task_source": {"kind": "dataset", "dataset": "logs", "version": 3}}),
+        ),
+        ("GET", "/v1/evals/eval_s") => {
+            let done = p.fetch_add(1, Ordering::SeqCst) > 0;
+            Reply::json(
+                200,
+                json!({"id": "eval_s", "name": "logs-score", "status": if done { "completed" } else { "running" },
+                       "mode": "score", "scored_dataset_version": if done { json!(4) } else { Value::Null },
+                       "task_source": {"kind": "dataset", "dataset": "logs", "version": 3}}),
+            )
+        }
+        ("GET", "/v1/datasets/logs") => {
+            Reply::json(200, json!({"id": "ds_1", "name": "logs", "version": 3}))
+        }
+        ("GET", "/v1/datasets/logs/records") => {
+            if r.query().contains("cursor=c1") {
+                Reply::json(
+                    200,
+                    json!({"dataset": "logs", "version": 3, "total": 3, "next_cursor": null,
+                           "data": [{"id": "c", "prompt": "long one"}]}),
+                )
+            } else {
+                Reply::json(
+                    200,
+                    json!({"dataset": "logs", "version": 3, "total": 3, "next_cursor": "c1",
+                           "data": [{"id": "a", "prompt": "hi"}, {"prompt": "no id"}]}),
+                )
+            }
+        }
+        ("POST", "/v1/datasets/logs/filter") => Reply::json(
+            201,
+            json!({"id": "ds_2", "name": "logs-f-0123456789", "version": 1}),
+        ),
+        _ => Reply::problem(404, "route_not_found", "no route"),
+    });
+    let c = client(&srv.url);
+    let item = EvalRubricItem {
+        name: "ok".into(),
+        kind: EvalRubricItemKind::Validator,
+        validator: Some(EvalRubricItemValidator::NonEmpty),
+        ..Default::default()
+    };
+    let job = c
+        .datasets()
+        .score(
+            "logs",
+            &ScoreDatasetRequest {
+                rubric: vec![item],
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.mode.as_str(), "score");
+    let (ev, ds) = c
+        .datasets()
+        .wait_scored(&job.id, &fast_wait(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        (ev.scored_dataset_version, ds.name.as_str()),
+        (Some(4), "logs")
+    );
+
+    let view = c
+        .datasets()
+        .filter_with("logs", None, Some("short"), |r| {
+            r.prompt.as_ref().and_then(Value::as_str).map(str::len) < Some(5)
+        })
+        .await
+        .unwrap();
+    assert_eq!(view.name, "logs-f-0123456789");
+    let sent = srv.requests().pop().unwrap();
+    assert_eq!(
+        sent.json(),
+        json!({"ids": ["a"], "version": 3, "name": "short"})
+    );
+}

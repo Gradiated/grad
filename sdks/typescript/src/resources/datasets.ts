@@ -1,5 +1,6 @@
 import type {
   Dataset as DatasetData,
+  FilterDatasetRequest,
   DatasetRecord,
   HfColumnMapping,
   ImportJob as ImportJobData,
@@ -12,6 +13,8 @@ import { GradUsageError, ImportFailedError } from "../errors.js";
 import { Paginator } from "../pagination.js";
 import { Pending } from "../pending.js";
 import { pollUntil, type WaitOptions } from "../polling.js";
+import { toRubric, type RubricInput } from "../rubrics.js";
+import { DatasetScoring, type PendingScoring } from "./evals.js";
 
 export type DatasetRef = string | { name: string };
 export const datasetName = (ref: DatasetRef): string => (typeof ref === "string" ? ref : ref.name);
@@ -52,6 +55,31 @@ export interface PushOptions extends RequestOptions {
   /** Approximate JSON bytes per request (default 8 MiB; the server caps bodies at 32 MiB). */
   maxBatchBytes?: number;
 }
+
+export interface ScoreOptions extends RequestOptions {
+  /** Version to score (default: the current one). */
+  version?: number;
+  /** Name of the scoring job (default `<dataset>-score`). */
+  name?: string;
+  limit?: number;
+}
+
+/** Options of a filter function run locally: the source version and the view name. */
+export interface ViewOptions extends RequestOptions {
+  /** Source version (default: the current one). */
+  version?: number;
+  /** View name (default `<dataset>-f-<hash>`, the same for the same filter). */
+  name?: string;
+}
+
+/** Field filters run on the server; `scores` conditions look like `">=0.8"`. */
+export interface FilterOptions extends ViewOptions, Omit<FilterDatasetRequest, "createdAfter" | "createdBefore" | "version" | "name"> {
+  /** On the record `timestamp`: a Date, an ISO timestamp or a UTC date `YYYY-MM-DD`. */
+  createdAfter?: string | Date;
+  createdBefore?: string | Date;
+}
+
+export type RecordPredicate = (record: DatasetRecord) => boolean | Promise<boolean>;
 
 const DEFAULT_BATCH = 1000;
 const DEFAULT_BATCH_BYTES = 8 * 1024 * 1024;
@@ -143,6 +171,24 @@ export class Dataset {
     return this.#core.api.renderDataset(this.name, options, request);
   }
 
+  /**
+   * Scores the records' own answers with judges, validators or local scorers
+   * (server-side, billed like an eval); `.wait()` resolves to the dataset whose
+   * next version carries the scores. Records with every score are skipped.
+   */
+  score(rubric: RubricInput, options: ScoreOptions = {}): PendingScoring {
+    return scoreDataset(this.#core, this.name, rubric, options);
+  }
+
+  /**
+   * Saves a filtered view: field filters (`{ scores: { resolved: ">=0.8" } }`)
+   * run on the server for free; a function runs here over the streamed records
+   * and the matching ids are saved as the view.
+   */
+  filter(filter: FilterOptions | RecordPredicate, options: ViewOptions = {}): Promise<Dataset> {
+    return filterDataset(this.#core, this.name, filter, options);
+  }
+
   toJSON(): DatasetData {
     return { ...this } as DatasetData;
   }
@@ -153,6 +199,60 @@ const jsonSize = (value: unknown): number => JSON.stringify(value).length;
 async function* iterate<T>(source: Iterable<T> | AsyncIterable<T>): AsyncGenerator<T> {
   yield* source as AsyncIterable<T>;
 }
+
+export const scoreDataset = (core: Core, name: string, rubric: RubricInput, options: ScoreOptions = {}): PendingScoring => {
+  const { version, name: jobName, limit, ...request } = options;
+  const { wire, local } = toRubric(rubric);
+  if (wire.length === 0) throw new GradUsageError("dataset.score() needs a Judge, Scorer, validator or Rubric.", "invalid_rubric");
+  return new Pending(
+    (async () => {
+      const run = await core.api.scoreDataset(
+        name,
+        {
+          rubric: wire,
+          ...(version !== undefined ? { version } : {}),
+          ...(jobName !== undefined ? { name: jobName } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        },
+        request,
+      );
+      return new DatasetScoring(core, run, local);
+    })(),
+  );
+};
+
+const isoBound = (value: string | Date | undefined): string | undefined => (value instanceof Date ? value.toISOString() : value);
+
+export const filterDataset = async (
+  core: Core,
+  name: string,
+  filter: FilterOptions | RecordPredicate,
+  options: ViewOptions = {},
+): Promise<Dataset> => {
+  const merged: FilterOptions = typeof filter === "function" ? options : { ...filter, ...options };
+  const { scores, metadata, createdAfter, createdBefore, ids, version, name: viewName, ...request } = merged;
+  let pinned = version;
+  let selected = ids;
+  if (typeof filter === "function") {
+    pinned = version ?? (await core.api.getDataset(name, request)).version;
+    selected = [];
+    for await (const record of new Dataset(core, { name } as DatasetData).records({ version: pinned, ...request })) {
+      if (record.id !== undefined && (await filter(record))) selected.push(record.id);
+    }
+  }
+  const after = isoBound(createdAfter);
+  const before = isoBound(createdBefore);
+  const body = {
+    ...(scores !== undefined ? { scores } : {}),
+    ...(metadata !== undefined ? { metadata } : {}),
+    ...(after !== undefined ? { createdAfter: after } : {}),
+    ...(before !== undefined ? { createdBefore: before } : {}),
+    ...(selected !== undefined ? { ids: selected } : {}),
+    ...(pinned !== undefined ? { version: pinned } : {}),
+    ...(viewName !== undefined ? { name: viewName } : {}),
+  };
+  return new Dataset(core, await core.api.filterDataset(name, body, request));
+};
 
 export const pushRecords = async (
   core: Core,
@@ -287,6 +387,16 @@ export class DatasetsResource {
 
   render(name: string, options: RenderDatasetRequest = {}, request?: RequestOptions): Promise<RenderDatasetResponse> {
     return this.core.api.renderDataset(name, options, request);
+  }
+
+  /** See `Dataset.score`. */
+  score(name: DatasetRef, rubric: RubricInput, options: ScoreOptions = {}): PendingScoring {
+    return scoreDataset(this.core, datasetName(name), rubric, options);
+  }
+
+  /** See `Dataset.filter`. */
+  filter(name: DatasetRef, filter: FilterOptions | RecordPredicate, options: ViewOptions = {}): Promise<Dataset> {
+    return filterDataset(this.core, datasetName(name), filter, options);
   }
 
   importFile(name: DatasetRef, path: string, options: ImportFileOptions = {}): PendingImport {

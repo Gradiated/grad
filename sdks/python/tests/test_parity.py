@@ -6,6 +6,7 @@ request; the typed response fields must read back the fixture's values.
 
 from __future__ import annotations
 
+import datetime
 import unittest
 from collections.abc import Callable
 from typing import Any
@@ -103,6 +104,13 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
             dataset_version=1,
             idempotency_key="parity-eval-key",
         ),
+        "score_dataset": lambda: client.datasets.score(
+            "support-logs", JUDGE, version=1, name="support-logs-quality", limit=100, idempotency_key="parity-score-key"
+        ),
+        "filter_dataset_fields": lambda: client.datasets.filter(
+            "support-logs", scores={"quality": ">=0.8"}, metadata={"env": "prod"}, created_after=datetime.date(2026, 11, 1), version=2, name="support-good"
+        ),
+        "filter_dataset_ids": lambda: client.datasets.filter("support-logs", ids=["rec_a", "rec_c"]),
         "deploy": lambda: client.deploy(artifact, name="support", fallback="test/tiny-qwen3", explore_rate=0.1, idempotency_key="parity-deploy-key"),
     }
 
@@ -129,6 +137,7 @@ class ParityTests(unittest.TestCase):
         run = grad.Run.from_api(responses["run"])
         ev = grad.Eval.from_api(responses["eval"])
         plan = grad.EvalPlan.from_api(responses["eval_plan"])
+        scoring = grad.Eval.from_api(responses["scoring"])
         assert run.eval_report is not None and run.eval_report.pareto_summary is not None and run.latest_metric is not None
         got = {
             "run.eval_report.metric_name": run.eval_report.metric_name,
@@ -141,6 +150,8 @@ class ParityTests(unittest.TestCase):
             "eval.total_cost_usd": ev.total_cost_usd,
             "eval.summary[0].cost_per_1k_tasks_usd": ev.summary[0].cost_per_1k_tasks_usd,
             "eval_plan.estimated_cost_usd": plan.estimated_cost_usd,
+            "scoring.mode": scoring.mode,
+            "scoring.scored_dataset_version": scoring.scored_dataset_version,
         }
         self.assertEqual(got, want)
         self.assertIsInstance(run.eval_report, grad.EvalReport)

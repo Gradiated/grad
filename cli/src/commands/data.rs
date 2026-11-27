@@ -1,16 +1,49 @@
 //! `grad models`, `grad datasets`, `grad import`, `grad imports`, `grad render`.
 
 use grad_sdk::{
-    recipes, Client, HfColumnMapping, ImportFileOptions, ImportJob, ImportSource, ImportSourceKind,
-    PushOptions, RenderDatasetRequest, WaitOptions,
+    recipes, Client, FilterDatasetRequest, HfColumnMapping, ImportFileOptions, ImportJob,
+    ImportSource, ImportSourceKind, PushOptions, RenderDatasetRequest, ScoreDatasetRequest,
+    WaitOptions,
 };
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
+use super::eval::{load_rubric, wait_eval};
 use super::{more_hint, on_interrupt, page, Ctx};
 use crate::cli::{
     DatasetImportCmd, DatasetsCmd, ImportArgs, ImportWaitArgs, ImportsCmd, ModelsCmd, RenderArgs,
 };
-use crate::output::{join, thousands, when, CliError, CliResult, Out};
+use crate::output::{join, thousands, usd, when, CliError, CliResult, Out};
+
+/// `resolved>=0.8` -> ("resolved", ">=0.8"); the server validates the condition.
+fn score_condition(spec: &str) -> CliResult<(String, Value)> {
+    let at = spec
+        .find(['>', '<', '=', '!'])
+        .filter(|&i| i > 0)
+        .ok_or_else(|| {
+            CliError::usage(format!(
+                "--score expects NAME<OP>VALUE such as resolved>=0.8, got '{}'",
+                spec
+            ))
+        })?;
+    Ok((
+        spec[..at].trim().to_string(),
+        Value::from(spec[at..].trim()),
+    ))
+}
+
+/// `KEY=VALUE`; true/false and numbers match as such.
+fn metadata_match(spec: &str) -> CliResult<(String, Value)> {
+    let (k, v) = spec
+        .split_once('=')
+        .ok_or_else(|| CliError::usage(format!("--metadata expects KEY=VALUE, got '{}'", spec)))?;
+    let value = serde_json::from_str::<Value>(v)
+        .ok()
+        .filter(|x| x.is_number() || x.is_boolean())
+        .unwrap_or_else(|| Value::from(v));
+    Ok((k.trim().to_string(), value))
+}
 
 pub async fn models(ctx: &Ctx, action: ModelsCmd) -> CliResult {
     let c = ctx.client()?;
@@ -208,6 +241,81 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                 res.next_cursor.as_deref(),
             )?;
             out.done(&res)
+        }
+        DatasetsCmd::Score {
+            name,
+            rubric,
+            version,
+            job_name,
+            limit,
+            wait,
+            timeout,
+            idempotency_key,
+        } => {
+            let req = ScoreDatasetRequest {
+                rubric: load_rubric(&rubric)?,
+                version,
+                name: job_name,
+                limit,
+            };
+            let c = ctx.client()?;
+            let job = c
+                .datasets()
+                .score(&name, &req, idempotency_key.as_deref())
+                .await?;
+            if !wait {
+                out.line(format!(
+                    "✓ Queued scoring job {} for dataset {}",
+                    job.id, name
+                ));
+                out.line(format!("  Check it with: grad eval status {}", job.id));
+                return out.done(&job);
+            }
+            let job = wait_eval(ctx, &c, &job.id, timeout).await?;
+            let d = c.datasets().get(&name).await?;
+            out.line(format!(
+                "✓ Scored dataset {}: scores in version {} · cost {}",
+                d.name,
+                job.scored_dataset_version.unwrap_or(d.version),
+                usd(job.total_cost_usd)
+            ));
+            out.done(&job)
+        }
+        DatasetsCmd::Filter {
+            name,
+            scores,
+            metadata,
+            created_after,
+            created_before,
+            ids,
+            version,
+            view,
+        } => {
+            let scores = scores
+                .iter()
+                .map(|s| score_condition(s))
+                .collect::<CliResult<BTreeMap<_, _>>>()?;
+            let metadata = metadata
+                .iter()
+                .map(|s| metadata_match(s))
+                .collect::<CliResult<BTreeMap<_, _>>>()?;
+            let req = FilterDatasetRequest {
+                scores: (!scores.is_empty()).then_some(scores),
+                metadata: (!metadata.is_empty()).then_some(metadata),
+                created_after: created_after.map(Value::from),
+                created_before: created_before.map(Value::from),
+                ids: (!ids.is_empty()).then_some(ids),
+                version,
+                name: view,
+            };
+            let c = ctx.client()?;
+            let d = c.datasets().filter(&name, &req).await?;
+            out.line(format!(
+                "✓ View {}: {} records",
+                d.name,
+                thousands(d.record_count)
+            ));
+            out.done(&d)
         }
         DatasetsCmd::Import { source } => match source {
             DatasetImportCmd::Hf {

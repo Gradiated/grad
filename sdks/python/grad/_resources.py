@@ -34,6 +34,7 @@ from ._models import (
     CreatedApiKey,
     CursorTrail,
     Dataset,
+    DatasetScoring,
     Deployment,
     DeploymentStatus,
     Embeddings,
@@ -58,6 +59,7 @@ from ._models import (
 from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX
 from ._transport import SSEDecoder, iter_sse, quote_path_param
 from .recipes import _thinking
+from .records import Trajectory
 from .rubrics import model_ref
 
 if TYPE_CHECKING:
@@ -268,6 +270,85 @@ class Datasets(_Resource):
         if wait:
             job.wait(timeout=timeout)
         return self.get(ds_name)
+
+    def score(
+        self,
+        dataset: Any,
+        rubric: Any,
+        *,
+        version: int | None = None,
+        name: str | None = None,
+        limit: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> DatasetScoring:
+        """Score the records' own answers with a ``Judge``, ``Scorer`` or ``Rubric`` (server-side,
+        billed like an eval); ``.wait()`` returns the dataset whose next version carries the
+        scores in ``record.scores``. Records that already have every score are skipped."""
+        ds = h.dataset_name(dataset)
+        items, local = h.rubric_items(rubric)
+        if not items:
+            raise ValueError("dataset.score() needs a Judge, Scorer, validator or Rubric.")
+        if local is not None and local.local_scorers:
+            sample = next(iter(self.records(ds, version=version, limit=1)), None)
+            if sample is not None:
+                local.dry_run(sample)
+        body: dict[str, Any] = {"rubric": items}
+        if version is not None:
+            body["version"] = version
+        if name is not None:
+            body["name"] = h.check_slug(name, "scoring job name")
+        if limit is not None:
+            body["limit"] = limit
+        ev = Eval.from_api(self._wire.score_dataset(ds, body, idempotency_key=idempotency_key), self._client)
+        ev._local_rubric = local
+        return DatasetScoring(ev)
+
+    def filter(
+        self,
+        dataset: Any,
+        fn: Callable[[Trajectory], bool] | None = None,
+        *,
+        scores: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        created_after: Any = None,
+        created_before: Any = None,
+        ids: Sequence[str] | None = None,
+        version: int | None = None,
+        name: str | None = None,
+    ) -> Dataset:
+        """Save a filtered view and return it as a dataset.
+
+        Field filters run on the server and cost nothing (``scores={"resolved": ">=0.8"}``,
+        ``metadata={"env": "prod"}``, ``created_after=``/``created_before=`` on the record
+        timestamp). A function ``fn(trajectory) -> bool`` runs here: the records stream to this
+        machine once and the matching ids are saved as the view. The same filter on the same
+        version returns the same view.
+        """
+        ds = h.dataset_name(dataset)
+        body: dict[str, Any] = {}
+        if fn is not None:
+            if not callable(fn):
+                raise TypeError("dataset.filter(fn) takes a function (Trajectory) -> bool; use scores= for score conditions.")
+            if scores or metadata or created_after or created_before or ids:
+                raise ValueError("Pass either a filter function or field filters, not both.")
+            version = version or self.get(ds).version
+            body["ids"] = [
+                str(rec["id"]) for rec in self.records(ds, version=version) if rec.get("id") and fn(Trajectory.from_record(rec))
+            ]
+        if scores:
+            body["scores"] = {str(k): v if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v) for k, v in scores.items()}
+        if metadata:
+            body["metadata"] = dict(metadata)
+        for key, value in (("created_after", created_after), ("created_before", created_before)):
+            if value is not None:
+                body[key] = h.time_bound(value)
+        if ids is not None:
+            body["ids"] = [str(i) for i in ids]
+        if version is not None:
+            body["version"] = version
+        if name is not None:
+            body["name"] = h.check_slug(name, "view name")
+        return Dataset.from_api(self._wire.filter_dataset(ds, body), self._client)
 
     def records(self, name: Any, *, version: int | None = None, limit: int | None = None) -> Iterator[dict[str, Any]]:
         """Iterate the records of a version (latest by default), page by page."""

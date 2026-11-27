@@ -35,6 +35,7 @@
   ],
   "samples": 1,
   "status": "awaiting_scores",
+  "mode": "eval",
   "summary": [],
   "task_source": {
     "dataset": "support",
@@ -43,6 +44,7 @@
   },
   "temperature": 0.7,
   "total_cost_usd": 0,
+  "scored_dataset_version": null,
   "updated_at": "2026-11-27T04:42:39.967Z",
   "workspace_id": "ws_e2e"
 }

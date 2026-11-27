@@ -284,6 +284,39 @@ func TestLiveSelfHosted(t *testing.T) {
 		}
 	})
 
+	t.Run("score a dataset, then filter on the scores and with a function", func(t *testing.T) {
+		id := func(s string) *string { return &s }
+		logs := must(client.Datasets.Push(ctx, "go-support-logs", []grad.Trajectory{
+			{ID: id("short"), Messages: []grad.Message{{Role: "user", Content: "Reset?"}, {Role: "assistant", Content: "Settings."}}},
+			{ID: id("long"), Messages: []grad.Message{{Role: "user", Content: "Export?"}, {Role: "assistant", Content: "Open Billing, then Export, then pick CSV."}}},
+		}))(t)
+		rubric := grad.Rubric{
+			grad.Regex{Name: "mentions_settings", Pattern: "Settings"},
+			grad.Scorer{Name: "brief", Fn: func(_ context.Context, in grad.ScoreInput) (float64, error) {
+				if len(in.Output) < 20 {
+					return 1, nil
+				}
+				return 0, nil
+			}},
+		}
+		scored := must(logs.Score(ctx, rubric, grad.ScoreOptions{}).Wait(ctx))(t)
+		if scored.Version != logs.Version+1 {
+			t.Fatalf("scored version %d after %d", scored.Version, logs.Version)
+		}
+		records := must(grad.Collect(scored.Records(ctx)))(t)
+		if s := records[0].Scores; s["brief"] != 1 || s["mentions_settings"] != 1 || records[1].Scores["brief"] != 0 {
+			t.Fatalf("scores %v %v", records[0].Scores, records[1].Scores)
+		}
+		passing := must(scored.Filter(ctx, grad.FilterOptions{Scores: map[string]string{"brief": ">=0.8"}}))(t)
+		if passing.RecordCount != 1 {
+			t.Fatalf("passing %+v", passing)
+		}
+		exports := must(scored.FilterFunc(ctx, func(r grad.Trajectory) bool { return strings.Contains(r.Messages[0].Content.(string), "Export") }, grad.FilterOptions{}))(t)
+		if exports.RecordCount != 1 {
+			t.Fatalf("exports %+v", exports)
+		}
+	})
+
 	t.Run("scoped keys, errors.As and config fallbacks", func(t *testing.T) {
 		key := must(client.Keys.Create(ctx, "ci", "runs:read"))(t)
 		ci := grad.NewClient(grad.WithBaseURL(stack.BaseURL), grad.WithAPIKey(key.Secret))

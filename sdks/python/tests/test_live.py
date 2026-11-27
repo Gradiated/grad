@@ -165,6 +165,31 @@ class SelfHostedLiveTests(_LiveCase):
         hard = failures.to_dataset("sql-hard-cases")
         self.assertEqual(client.datasets.get(hard.name).record_count, len(SQL_RECORDS))
 
+    def test_dataset_score_and_filter(self) -> None:
+        # docs: training/trajectories.mdx "Score and filter datasets"
+        client = Grad()
+        dataset = client.datasets.push("sql-logs", SQL_RECORDS)
+        rubric = Rubric(
+            [
+                validators.Regex(r"^SELECT"),
+                Scorer("short", fn=lambda t: 1.0 if len(t.text) < 70 else 0.0),
+            ]
+        )
+        scored = dataset.score(rubric).wait(timeout=180)
+        self.assertEqual(scored.version, dataset.version + 1)
+        self.assertEqual(scored.record_count, len(SQL_RECORDS))
+        scores = [r.get("scores") for r in scored.records()]
+        self.assertEqual([s["short"] for s in scores], [1.0, 0.0])
+        self.assertTrue(all(len(s) == 2 for s in scores))
+        passing = scored.filter(scores={"short": ">=0.8"})
+        self.assertEqual(passing.count(), 1)
+        self.assertEqual(scored.filter(scores={"short": ">=0.8"}).id, passing.id)
+        long_prompts = scored.filter(lambda t: "revenue" in t.input.messages[0]["content"])
+        self.assertEqual([r["id"] for r in long_prompts.records()], [list(scored.records())[1]["id"]])
+        # Everything is scored now: a second pass skips every record and adds no version.
+        again = client.datasets.score(scored, rubric).wait(timeout=60)
+        self.assertEqual(again.version, scored.version)
+
     def test_errors_keys_and_pagination(self) -> None:
         client = Grad()
         with self.assertRaises(grad.NotFoundError) as ctx:

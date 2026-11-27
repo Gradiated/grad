@@ -428,6 +428,104 @@ impl Datasets<'_> {
         .await
     }
 
+    /// Score the records' own answers with a rubric (`POST /v1/datasets/{name}/score`):
+    /// an eval in mode `score`, billed like one. Wait with [`Datasets::wait_scored`].
+    pub async fn score(
+        &self,
+        name: &str,
+        req: &ScoreDatasetRequest,
+        idempotency_key: Option<&str>,
+    ) -> Result<EvalRun> {
+        check_path_param("dataset name", name)?;
+        get(
+            self.c,
+            Req::post(format!("/v1/datasets/{}/score", seg(name)))
+                .key(idempotency_key)
+                .json(body(req)?),
+        )
+        .await
+    }
+
+    /// Wait for a scoring job and return the dataset whose version
+    /// `scored_dataset_version` carries the scores.
+    pub async fn wait_scored(
+        &self,
+        id: &str,
+        opts: &WaitOptions,
+        on_progress: impl FnMut(&EvalRun),
+    ) -> Result<(EvalRun, Dataset)> {
+        let ev = Evals { c: self.c }.wait(id, opts, on_progress).await?;
+        let dataset = self.get(&ev.task_source.dataset).await?;
+        Ok((ev, dataset))
+    }
+
+    /// Save a filtered view (`POST /v1/datasets/{name}/filter`); field filters
+    /// run on the server at no cost, and the same filter returns the same view.
+    pub async fn filter(&self, name: &str, req: &FilterDatasetRequest) -> Result<Dataset> {
+        check_path_param("dataset name", name)?;
+        get(
+            self.c,
+            Req::post(format!("/v1/datasets/{}/filter", seg(name))).json(body(req)?),
+        )
+        .await
+    }
+
+    /// Run `keep` over the records of `version` (default: current) here and
+    /// save the matching ids as a view named `view` (default: hashed).
+    pub async fn filter_with(
+        &self,
+        name: &str,
+        version: Option<u64>,
+        view: Option<&str>,
+        mut keep: impl FnMut(&DatasetRecord) -> bool,
+    ) -> Result<Dataset> {
+        let version = match version {
+            Some(v) => v,
+            None => self.get(name).await?.version as u64,
+        };
+        let mut ids = Vec::new();
+        let mut trail = CursorTrail::new(format!("GET /v1/datasets/{name}/records"));
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .records(
+                    name,
+                    Some(version),
+                    &ListParams {
+                        limit: Some(1000),
+                        cursor: cursor.clone(),
+                    },
+                )
+                .await?;
+            for rec in &page.data {
+                if let Some(id) = rec.id.as_ref().filter(|_| keep(rec)) {
+                    ids.push(id.clone());
+                }
+            }
+            cursor = trail.advance(
+                cursor.as_deref(),
+                page.data.len(),
+                page.next_cursor.as_deref(),
+            )?;
+            if cursor.is_none() {
+                break;
+            }
+            if trail.pages() > MAX_COLLECT_PAGES {
+                return Err(trail.limit_error());
+            }
+        }
+        self.filter(
+            name,
+            &FilterDatasetRequest {
+                ids: Some(ids),
+                version: Some(version as i64),
+                name: view.map(str::to_string),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
     /// Start an import job (`POST /v1/datasets/{name}/imports`).
     pub async fn create_import(&self, name: &str, req: &CreateImportRequest) -> Result<ImportJob> {
         check_path_param("dataset name", name)?;

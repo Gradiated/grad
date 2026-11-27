@@ -150,6 +150,29 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
     }
   });
 
+  it("scores a dataset, then filters on the scores and with a local function", async () => {
+    const dataset = await grad.datasets.push("support-logs-ts", [
+      { id: "short", messages: [{ role: "user", content: "Reset?" }, { role: "assistant", content: "Settings." }] },
+      { id: "long", messages: [{ role: "user", content: "Export?" }, { role: "assistant", content: "Open Billing, then Export, then pick CSV." }] },
+    ]);
+    const rubric = new Rubric([
+      new Scorer("mentions_settings", { fn: validators.regex("Settings") }),
+      new Scorer("brief", { fn: (output) => (output ?? "").length < 20 }),
+    ]);
+    const scored = await dataset.score(rubric).wait({ timeoutMs: 120_000 });
+    expect(scored.version).toBe(dataset.version + 1);
+    const records = await scored.records().all();
+    expect(records.map((r) => r.scores)).toEqual([
+      { mentions_settings: 1, brief: 1 },
+      { mentions_settings: 0, brief: 0 },
+    ]);
+    const passing = await scored.filter({ scores: { brief: ">=0.8" } });
+    expect(await passing.count()).toBe(1);
+    expect((await scored.filter({ scores: { brief: ">=0.8" } })).id).toBe(passing.id);
+    const exports = await scored.filter((r) => JSON.stringify(r.messages).includes("Export"));
+    expect((await exports.records().all()).map((r) => r.id)).toEqual(["long"]);
+  });
+
   it("retries a POST whose response was lost and gets the server's replay", async () => {
     // The fault proxy lets the server commit the first attempt, then answers 503. The
     // retry carries the same Idempotency-Key, so the server replays 201 instead of 409.

@@ -26,6 +26,7 @@ whose typed fields each client reads back; every column below replays it.
 | Caller-supplied `Idempotency-Key` (runs, evals, deploy) | same, `idempotency_key=` | same, `{ idempotencyKey }` | same, `IdempotencyKey` / `WithDeployIdempotencyKey` | same, `create(&req, Some(key))` | same, `--idempotency-key` |
 | Typed `eval_report` and `eval_metrics` | `test_parity.ParityTests.test_typed_responses` | "reads typed eval reports, eval metrics and eval billing" | `TestParityTypedResponses` | `parity.rs::typed_responses` | `cli.rs::train_wait_streams_metrics_and_prints_the_readout` |
 | Eval billing (`estimated_cost_usd`, `total_cost_usd`, cost per 1k tasks) | same | same | same | same | `cli.rs::eval_commands` |
+| Dataset scoring (`dataset.score(rubric).wait()` → the scored version) and filtered views (`dataset.filter(scores=...)`, or a local function saved as ids) | same, cases `score_dataset`, `filter_dataset_fields`, `filter_dataset_ids`; `test_resources.DatasetTests.test_score_*`/`test_filter_*`; live `test_dataset_score_and_filter` | same; `resources.test.ts` "dataset scoring and filters"; live "scores a dataset..." | same; `TestDatasetScore*`, `TestDatasetFilter*`; live `TestLiveSelfHosted/score_a_dataset...` | same; `sdk.rs::dataset_scoring_waits_and_filters_stream_ids` | same (`grad datasets score`, `grad datasets filter`); `cli.rs::dataset_score_and_filter_commands`; live quickstart |
 
 Each SDK also runs its own live suite against `tests/harness/stack.ts`
 (`tests/test_live.py`, `test/live/`, `live_test.go`, `cli/tests/live.rs`).

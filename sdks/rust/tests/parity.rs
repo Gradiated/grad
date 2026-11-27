@@ -215,6 +215,36 @@ async fn call(c: &Client, case: &str) -> Result<()> {
                 .await
                 .map(drop)
         }
+        "score_dataset" => {
+            let req = ScoreDatasetRequest {
+                rubric: vec![judge()],
+                version: Some(1),
+                name: model("support-logs-quality"),
+                limit: Some(100),
+            };
+            c.datasets()
+                .score("support-logs", &req, Some("parity-score-key"))
+                .await
+                .map(drop)
+        }
+        "filter_dataset_fields" => {
+            let req = FilterDatasetRequest {
+                scores: Some([("quality".to_string(), json!(">=0.8"))].into()),
+                metadata: Some([("env".to_string(), json!("prod"))].into()),
+                created_after: Some(json!("2026-11-01")),
+                version: Some(2),
+                name: model("support-good"),
+                ..Default::default()
+            };
+            c.datasets().filter("support-logs", &req).await.map(drop)
+        }
+        "filter_dataset_ids" => {
+            let req = FilterDatasetRequest {
+                ids: Some(vec!["rec_a".into(), "rec_c".into()]),
+                ..Default::default()
+            };
+            c.datasets().filter("support-logs", &req).await.map(drop)
+        }
         other => panic!("no Rust call for parity case {}", other),
     }
 }
@@ -257,6 +287,7 @@ fn typed_responses() {
     let fx = fixture();
     let run: Run = serde_json::from_value(fx["responses"]["run"].clone()).unwrap();
     let ev: EvalRun = serde_json::from_value(fx["responses"]["eval"].clone()).unwrap();
+    let scoring: EvalRun = serde_json::from_value(fx["responses"]["scoring"].clone()).unwrap();
     let plan: PlanEvalResponse =
         serde_json::from_value(fx["responses"]["eval_plan"].clone()).unwrap();
     let report = run.eval_report.unwrap();
@@ -272,6 +303,8 @@ fn typed_responses() {
         "eval.total_cost_usd": ev.total_cost_usd,
         "eval.summary[0].cost_per_1k_tasks_usd": ev.summary[0].cost_per_1k_tasks_usd,
         "eval_plan.estimated_cost_usd": plan.estimated_cost_usd,
+        "scoring.mode": scoring.mode.as_str(),
+        "scoring.scored_dataset_version": scoring.scored_dataset_version,
     });
     assert_eq!(norm(&got), norm(&fx["expect"]));
     assert_eq!(report.metric(), Some(0.41));

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import math
@@ -83,6 +84,15 @@ def rubric_items(rubric: Any) -> tuple[list[dict[str, Any]] | None, Rubric | Non
         return [dict(i) for i in rubric], None
     coerced = coerce_rubric(rubric)
     return coerced.to_wire_items(), coerced
+
+
+def time_bound(value: Any) -> str:
+    """A filter time bound: a ``datetime`` (naive means UTC), a ``date`` or an ISO string."""
+    if isinstance(value, datetime.datetime) and value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    if isinstance(value, datetime.date):
+        return str(value.isoformat())
+    return str(value)
 
 
 def eval_body(

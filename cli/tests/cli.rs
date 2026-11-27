@@ -380,6 +380,18 @@ fn handler(r: &Recorded) -> Reply {
             200,
             json!({"data": [{"task_id": "t1", "model": "qwen/qwen3-8b", "score": 1.0, "passed": true}]}),
         ),
+        ("POST", "/v1/datasets/support-prod/score") => Reply::json(
+            202,
+            json!({"id": "eval_s", "name": "support-prod-score", "status": "queued", "mode": "score", "models": ["record"]}),
+        ),
+        ("GET", "/v1/evals/eval_s") => Reply::json(
+            200,
+            json!({"id": "eval_s", "name": "support-prod-score", "status": "completed", "mode": "score", "total_cost_usd": 0.12, "scored_dataset_version": 4}),
+        ),
+        ("POST", "/v1/datasets/support-prod/filter") => Reply::json(
+            201,
+            json!({"id": "ds_v", "name": "support-prod-f-0123456789", "version": 1, "record_count": 1200}),
+        ),
         ("POST", "/v1/evals/eval_1/cancel") => {
             Reply::json(200, json!({"id": "eval_1", "status": "cancelled"}))
         }
@@ -1557,6 +1569,91 @@ fn deploy_route_rollback_embed_and_keys() {
 }
 
 #[test]
+fn dataset_score_and_filter_commands() {
+    let srv = api();
+    let sb = Sandbox::new("score");
+    let u = Some(srv.url.as_str());
+    std::fs::write(
+        sb.path("judge.yaml"),
+        "- name: resolved\n  kind: judge\n  model: qwen/qwen3-32b\n  prompt: Resolved?\n",
+    )
+    .unwrap();
+    let r = run(
+        sb.grad(u),
+        &[
+            "datasets",
+            "score",
+            "support-prod",
+            "--rubric",
+            "judge.yaml",
+            "--wait",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("scores in version 4") && r.stdout.contains("cost $0.12"),
+        "{}",
+        r.stdout
+    );
+    let body = srv
+        .last("POST", "/v1/datasets/support-prod/score")
+        .unwrap()
+        .json();
+    assert_eq!(body["rubric"][0]["kind"], "judge");
+    let r = run(
+        sb.grad(u),
+        &[
+            "datasets",
+            "score",
+            "support-prod",
+            "--rubric",
+            "judge.yaml",
+        ],
+    );
+    expect(&r, 0);
+    assert!(r.stdout.contains("grad eval status eval_s"), "{}", r.stdout);
+
+    let r = run(
+        sb.grad(u),
+        &[
+            "datasets",
+            "filter",
+            "support-prod",
+            "--score",
+            "resolved>=0.8",
+            "--metadata",
+            "env=prod",
+            "--metadata",
+            "turns=3",
+            "--created-before",
+            "2026-12-01",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stdout
+            .contains("support-prod-f-0123456789: 1,200 records"),
+        "{}",
+        r.stdout
+    );
+    let body = srv
+        .last("POST", "/v1/datasets/support-prod/filter")
+        .unwrap()
+        .json();
+    assert_eq!(
+        body,
+        json!({"scores": {"resolved": ">=0.8"}, "metadata": {"env": "prod", "turns": 3}, "created_before": "2026-12-01"})
+    );
+    for bad in [["--score", ">=0.8"], ["--metadata", "env"]] {
+        let r = run(
+            sb.grad(u),
+            &["datasets", "filter", "support-prod", bad[0], bad[1]],
+        );
+        expect(&r, 2);
+    }
+}
+
+#[test]
 fn eval_commands() {
     let srv = api();
     let sb = Sandbox::new("eval");
@@ -2040,6 +2137,50 @@ fn parity_requests_match_the_shared_fixture() {
                 "--explore-rate".into(),
                 s("explore_rate"),
             ],
+            "/v1/datasets/support-logs/score" => {
+                std::fs::write(sb.path("rubric.yaml"), body["rubric"].to_string()).unwrap();
+                vec![
+                    "datasets".into(),
+                    "score".into(),
+                    "support-logs".into(),
+                    "--rubric".into(),
+                    "rubric.yaml".into(),
+                    "--version".into(),
+                    s("version"),
+                    "--job-name".into(),
+                    s("name"),
+                    "--limit".into(),
+                    s("limit"),
+                ]
+            }
+            "/v1/datasets/support-logs/filter" => {
+                let mut a: Vec<String> =
+                    vec!["datasets".into(), "filter".into(), "support-logs".into()];
+                for (k, v) in body["scores"].as_object().into_iter().flatten() {
+                    a.push("--score".into());
+                    a.push(format!("{}{}", k, v.as_str().unwrap()));
+                }
+                for (k, v) in body["metadata"].as_object().into_iter().flatten() {
+                    a.push("--metadata".into());
+                    a.push(format!("{}={}", k, v.as_str().unwrap()));
+                }
+                if let Some(ids) = body["ids"].as_array() {
+                    let ids: Vec<&str> = ids.iter().map(|i| i.as_str().unwrap()).collect();
+                    a.push("--ids".into());
+                    a.push(ids.join(","));
+                }
+                for (flag, key) in [
+                    ("--created-after", "created_after"),
+                    ("--version", "version"),
+                    ("--view", "name"),
+                ] {
+                    if !body[key].is_null() {
+                        a.push(flag.into());
+                        a.push(s(key));
+                    }
+                }
+                a
+            }
             other => panic!("no CLI command for {}", other),
         };
         if let Some(k) = case["idempotency_key"].as_str() {

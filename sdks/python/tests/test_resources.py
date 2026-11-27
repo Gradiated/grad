@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import tempfile
 import unittest
@@ -184,6 +185,72 @@ class DatasetTests(unittest.TestCase):
                 client.datasets.import_file("d", empty)
             with self.assertRaises(FileNotFoundError):
                 client.datasets.import_file("d", Path(tmp) / "missing.jsonl")
+
+    def test_score_waits_then_returns_the_scored_dataset(self) -> None:
+        queued, done = fixture("eval-scoring-queued.json"), fixture("eval-scoring-completed.json")
+        awaiting = {**queued, "status": "awaiting_scores", "local_scorers": ["short"]}
+        output = {
+            "id": "evout_1", "eval_id": queued["id"], "task_id": "rec_a", "model": "record", "sample_index": 0,
+            "input": [{"role": "user", "content": "hi"}], "output": "hello there", "expected_output": None,
+            "record": {"id": "rec_a"}, "scores": {}, "error": None, "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        }
+        records = {"dataset": "support-logs", "version": 1, "total": 1, "data": [{"id": "rec_a", "messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello there"}]}], "next_cursor": None}
+        client, sender, _ = make_client(
+            {
+                "GET /v1/datasets/support-logs/records": json_reply(records),
+                "POST /v1/datasets/support-logs/score": json_reply(queued, 202),
+                f"GET /v1/evals/{queued['id']}": [json_reply(awaiting), json_reply(awaiting), json_reply(done)],
+                f"GET /v1/evals/{queued['id']}/outputs": [json_reply({"data": [output], "next_cursor": None}), json_reply({"data": [], "next_cursor": None})],
+                f"POST /v1/evals/{queued['id']}/scores": json_reply({"accepted": 1, "status": "completed", "pending_local_scores": 0}),
+                "GET /v1/datasets/support-logs": json_reply({**DATASET, "name": "support-logs", "version": 2}),
+            }
+        )
+        dataset = grad.Dataset.from_api({**DATASET, "name": "support-logs"}, client)
+        short = Scorer("short", fn=lambda t: 1.0 if len(t.text) < 20 else 0.0)
+        job = dataset.score(Rubric([Judge(name="resolved", model="qwen/qwen3-32b", prompt="ok?"), short]))
+        self.assertIsInstance(job, grad.DatasetScoring)
+        self.assertEqual((job.id, job.status, job.total_cost_usd), (queued["id"], "queued", 0))
+        self.assertIn("DatasetScoring", repr(job))
+        scored = job.wait(timeout=5)
+        self.assertEqual((scored.name, scored.version), ("support-logs", 2))
+        self.assertEqual(job.eval.scored_dataset_version, 2)
+        body = next(s.json for s in sender.sent if s.path.endswith("/score"))
+        self.assertEqual([i["kind"] for i in body["rubric"]], ["judge", "code"])
+        posted = next(s.json for s in sender.sent if s.path.endswith("/scores"))
+        self.assertEqual(posted, {"scores": [{"output_id": "evout_1", "scorer": "short", "score": 1.0}]})
+        with self.assertRaises(ValueError):
+            client.datasets.score("support-logs", [])
+
+    def test_filter_by_fields_or_a_local_function(self) -> None:
+        page = {
+            "dataset": "support-logs", "version": 3, "total": 3, "next_cursor": None,
+            "data": [
+                {"id": "a", "messages": [{"role": "user", "content": "short"}]},
+                {"id": "b", "messages": [{"role": "user", "content": "x"}] * 8},
+                {"messages": [{"role": "user", "content": "no id"}]},
+            ],
+        }
+        view = {**DATASET, "name": "support-logs-f-0123456789", "metadata": {"view": {}}}
+        client, sender, _ = make_client(
+            {
+                "GET /v1/datasets/support-logs": json_reply({**DATASET, "name": "support-logs", "version": 3}),
+                "GET /v1/datasets/support-logs/records": json_reply(page),
+                "POST /v1/datasets/support-logs/filter": json_reply(view, 201),
+            }
+        )
+        dataset = grad.Dataset.from_api({**DATASET, "name": "support-logs"}, client)
+        got = dataset.filter(lambda t: len(t.input.messages) <= 6)
+        self.assertEqual(got.name, "support-logs-f-0123456789")
+        self.assertEqual(sender.sent[-1].json, {"ids": ["a"], "version": 3})
+        dataset.filter(scores={"resolved": ">=0.8", "exact": 1}, created_after=datetime.datetime(2026, 11, 1), created_before="2026-12-01")
+        self.assertEqual(
+            sender.sent[-1].json,
+            {"scores": {"resolved": ">=0.8", "exact": 1}, "created_after": "2026-11-01T00:00:00+00:00", "created_before": "2026-12-01"},
+        )
+        with self.assertRaises(ValueError):
+            dataset.filter(lambda t: True, scores={"x": ">0"})
+        with self.assertRaises(TypeError):
+            dataset.filter({"resolved": ">=0.8"})
 
     def test_from_hf(self) -> None:
         job = fixture("python-import-queued.json")

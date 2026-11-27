@@ -13,9 +13,11 @@ import {
   GradError,
   GradUsageError,
   ImportFailedError,
+  Judge,
   NotFoundError,
   Paginator,
   RouteDecision,
+  Scorer,
   Trajectory,
   ValidationError,
 } from "../src/index.js";
@@ -96,6 +98,74 @@ describe("configuration", () => {
     await expect(new Grad({ configPath: bad }).config()).rejects.toThrow(/must be an object/);
     await expect(new Grad({ configPath: dir }).config()).rejects.toThrow(/Could not read/);
     expect(() => new Grad({ baseURL: "localhost:8787" })).toThrow(/absolute http\(s\) URL/);
+  });
+});
+
+describe("dataset scoring and filters", () => {
+  it("scores (running local scorers) and resolves to the scored dataset", async () => {
+    const queued = wire<Record<string, unknown>>("eval-scoring-queued.json");
+    const done = wire<Record<string, unknown>>("eval-scoring-completed.json");
+    const awaiting = { ...queued, status: "awaiting_scores", local_scorers: ["short"] };
+    const output = {
+      id: "evout_1",
+      eval_id: queued.id,
+      task_id: "rec_a",
+      model: "record",
+      sample_index: 0,
+      input: [{ role: "user", content: "hi" }],
+      output: "hello",
+      expected_output: null,
+      record: { id: "rec_a" },
+      scores: {},
+      error: null,
+      usage: { prompt_tokens: 0, completion_tokens: 0 },
+    };
+    const server = new FakeServer()
+      .on("POST", "/v1/datasets/support-logs/score", json(queued, 202))
+      .on("GET", `/v1/evals/${String(queued.id)}`, json(awaiting), json(done))
+      .on("GET", `/v1/evals/${String(queued.id)}/outputs`, json({ data: [output], next_cursor: null }))
+      .on("POST", `/v1/evals/${String(queued.id)}/scores`, json({ accepted: 1, status: "completed", pending_local_scores: 0 }))
+      .on("GET", "/v1/datasets/support-logs", json({ ...wire<Record<string, unknown>>("dataset.json"), name: "support-logs", version: 2 }));
+    const { grad } = makeGrad(server);
+    const ds = await grad.datasets.get("support-logs");
+    const rubric = [new Judge({ name: "resolved", model: "qwen/qwen3-32b", prompt: "ok?" }), new Scorer("short", { fn: (out) => (out ?? "").length < 20 })];
+    const job = await ds.score(rubric);
+    expect([job.id, job.status]).toEqual([queued.id, "queued"]);
+    const scored = await ds.score(rubric).wait({ pollIntervalMs: 1 });
+    expect([scored.name, scored.version]).toEqual(["support-logs", 2]);
+    expect(server.lastBody("POST", `/v1/evals/${String(queued.id)}/scores`)).toEqual({ scores: [{ output_id: "evout_1", scorer: "short", score: 1 }] });
+    expect((server.lastBody("POST", "/v1/datasets/support-logs/score") as { rubric: { kind: string }[] }).rubric.map((r) => r.kind)).toEqual(["judge", "code"]);
+    expect(() => grad.datasets.score("support-logs", [])).toThrow(GradUsageError);
+  });
+
+  it("filters by fields on the server or by a local function", async () => {
+    const view = { ...wire<Record<string, unknown>>("dataset.json"), name: "support-logs-f-0123456789" };
+    const page = {
+      dataset: "support-logs",
+      version: 3,
+      total: 3,
+      next_cursor: null,
+      data: [
+        { id: "a", messages: [{ role: "user", content: "short" }] },
+        { id: "b", messages: Array.from({ length: 8 }, () => ({ role: "user", content: "x" })) },
+        { messages: [{ role: "user", content: "no id" }] },
+      ],
+    };
+    const server = new FakeServer()
+      .on("GET", "/v1/datasets/support-logs", json({ ...wire<Record<string, unknown>>("dataset.json"), name: "support-logs", version: 3 }))
+      .on("GET", "/v1/datasets/support-logs/records", json(page))
+      .on("POST", "/v1/datasets/support-logs/filter", json(view, 201));
+    const { grad } = makeGrad(server);
+    const ds = await grad.datasets.get("support-logs");
+    const short = await ds.filter((t) => (t.messages ?? []).length <= 6, { name: "short-chats" });
+    expect(short.name).toBe("support-logs-f-0123456789");
+    expect(server.lastBody("POST", "/v1/datasets/support-logs/filter")).toEqual({ ids: ["a"], version: 3, name: "short-chats" });
+    await ds.filter({ scores: { resolved_score: ">=0.8", exact: 1 }, createdAfter: new Date("2026-11-01T00:00:00Z"), createdBefore: "2026-12-01" });
+    expect(server.lastBody("POST", "/v1/datasets/support-logs/filter")).toEqual({
+      scores: { resolved_score: ">=0.8", exact: 1 },
+      created_after: "2026-11-01T00:00:00.000Z",
+      created_before: "2026-12-01",
+    });
   });
 });
 

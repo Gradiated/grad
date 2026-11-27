@@ -260,6 +260,55 @@
         "fallback": "test/tiny-qwen3",
         "explore_rate": 0.1
       }
+    },
+    {
+      "case": "score_dataset",
+      "method": "POST",
+      "path": "/v1/datasets/support-logs/score",
+      "idempotency_key": "parity-score-key",
+      "body": {
+        "rubric": [
+          {
+            "name": "quality",
+            "kind": "judge",
+            "model": "judge/m",
+            "weight": 1.0,
+            "prompt": "Is the answer correct?"
+          }
+        ],
+        "version": 1,
+        "name": "support-logs-quality",
+        "limit": 100
+      }
+    },
+    {
+      "case": "filter_dataset_fields",
+      "method": "POST",
+      "path": "/v1/datasets/support-logs/filter",
+      "idempotency_key": null,
+      "body": {
+        "scores": {
+          "quality": ">=0.8"
+        },
+        "metadata": {
+          "env": "prod"
+        },
+        "created_after": "2026-11-01",
+        "version": 2,
+        "name": "support-good"
+      }
+    },
+    {
+      "case": "filter_dataset_ids",
+      "method": "POST",
+      "path": "/v1/datasets/support-logs/filter",
+      "idempotency_key": null,
+      "body": {
+        "ids": [
+          "rec_a",
+          "rec_c"
+        ]
+      }
     }
   ],
   "responses": {
@@ -469,6 +518,66 @@
         "samples=1 is fine for a quick check; use samples>=3 for decisions you will act on.",
         "Code scorers (mentions_menu) run in your SDK process: the eval waits in 'awaiting_scores' until their scores are posted."
       ]
+    },
+    "scoring": {
+      "id": "eval_5c0e1f3a9b7d2e4c6a8b0d12",
+      "workspace_id": "ws_e2e",
+      "name": "support-logs-score",
+      "status": "completed",
+      "mode": "score",
+      "models": [
+        "record"
+      ],
+      "baseline": null,
+      "task_source": {
+        "kind": "dataset",
+        "dataset": "support-logs",
+        "version": 1
+      },
+      "rubric": [
+        {
+          "name": "resolved",
+          "kind": "judge",
+          "weight": 1,
+          "model": "qwen/qwen3-32b",
+          "prompt": "Did the assistant resolve the request?"
+        }
+      ],
+      "samples": 1,
+      "temperature": 0,
+      "max_tokens": 1,
+      "pass_threshold": 0.5,
+      "judge_models": [
+        "qwen/qwen3-32b"
+      ],
+      "local_scorers": [],
+      "progress": {
+        "total_outputs": 3,
+        "generated": 3,
+        "pending_local_scores": 0
+      },
+      "summary": [
+        {
+          "model": "record",
+          "overall": 0.667,
+          "ci_low": 0.2,
+          "ci_high": 0.9,
+          "pass_at_k": {
+            "pass@1": 0.667
+          },
+          "vs_baseline": null,
+          "tasks": 3,
+          "errors": 0,
+          "tokens_per_task": 120,
+          "cost_per_1k_tasks_usd": 0.024
+        }
+      ],
+      "total_cost_usd": 7.2e-05,
+      "scored_dataset_version": 2,
+      "error": null,
+      "created_at": "2026-11-27T04:35:21.543Z",
+      "updated_at": "2026-11-27T04:35:21.958Z",
+      "completed_at": "2026-11-27T04:35:21.958Z"
     }
   },
   "expect": {
@@ -484,6 +593,8 @@
     "eval.total_cost_usd": 7.1e-05,
     "eval.summary[0].cost_per_1k_tasks_usd": 0.017,
     "eval_plan.estimated_cost_usd": 0.0123,
-    "run.eval_report.eval_loss": 0.41
+    "run.eval_report.eval_loss": 0.41,
+    "scoring.mode": "score",
+    "scoring.scored_dataset_version": 2
   }
 }

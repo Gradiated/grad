@@ -240,6 +240,35 @@ export class Eval {
 
 export type PendingEval = Pending<Eval, Eval, EvalWaitOptions>;
 
+/**
+ * A `dataset.score(...)` job (an eval in mode `score`). `wait()` runs local
+ * scorers when asked and resolves to the dataset with the new scores.
+ */
+export class DatasetScoring {
+  readonly #core: Core;
+  readonly eval: Eval;
+
+  constructor(core: Core, data: EvalRun, local: Map<string, ScoreFn> = new Map()) {
+    this.#core = core;
+    this.eval = new Eval(core, data, local);
+  }
+
+  get id(): string {
+    return this.eval.id;
+  }
+
+  get status(): EvalStatus {
+    return this.eval.status;
+  }
+
+  async wait(options: EvalWaitOptions = {}): Promise<Dataset> {
+    await this.eval.wait(options);
+    return new Dataset(this.#core, await this.#core.api.getDataset(this.eval.taskSource.dataset, options));
+  }
+}
+
+export type PendingScoring = Pending<DatasetScoring, Dataset, EvalWaitOptions>;
+
 export class EvalsResource {
   constructor(private readonly core: Core) {}
 

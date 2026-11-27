@@ -185,7 +185,12 @@ fn print_summary(out: &Out, ev: &EvalRun) {
     );
 }
 
-async fn wait_eval(ctx: &Ctx, c: &grad_sdk::Client, id: &str, timeout: u64) -> CliResult<EvalRun> {
+pub(crate) async fn wait_eval(
+    ctx: &Ctx,
+    c: &grad_sdk::Client,
+    id: &str,
+    timeout: u64,
+) -> CliResult<EvalRun> {
     on_interrupt(format!(
         "stopped waiting; eval {} keeps running (`grad eval status {}`)",
         id, id

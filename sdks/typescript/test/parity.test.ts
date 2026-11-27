@@ -9,7 +9,7 @@ import { FakeServer, json, makeGrad, wire } from "./helpers.js";
 /** tests/fixtures/wire/sdk-parity.json: every SDK and the CLI send these requests for the same calls. */
 interface Parity {
   requests: { case: string; method: string; path: string; idempotency_key: string | null; body: unknown }[];
-  responses: { run: unknown; eval: unknown; eval_plan: unknown };
+  responses: { run: unknown; eval: unknown; eval_plan: unknown; scoring: unknown };
   expect: Record<string, unknown>;
 }
 const parity = wire<Parity>("sdk-parity.json");
@@ -115,6 +115,11 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
       },
       { idempotencyKey: "parity-eval-key" },
     ),
+  score_dataset: async () =>
+    grad.datasets.score("support-logs", judge, { version: 1, name: "support-logs-quality", limit: 100, idempotencyKey: "parity-score-key" }),
+  filter_dataset_fields: () =>
+    grad.datasets.filter("support-logs", { scores: { quality: ">=0.8" }, metadata: { env: "prod" }, createdAfter: "2026-11-01", version: 2, name: "support-good" }),
+  filter_dataset_ids: () => grad.datasets.filter("support-logs", { ids: ["rec_a", "rec_c"] }),
   deploy: () => grad.deploy(artifact, { name: "support", fallback: "test/tiny-qwen3", exploreRate: 0.1, idempotencyKey: "parity-deploy-key" }),
 });
 
@@ -141,6 +146,7 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
     const run = decode<Run>("Run", parity.responses.run);
     const ev = decode<EvalRun>("EvalRun", parity.responses.eval);
     const plan = decode<PlanEvalResponse>("PlanEvalResponse", parity.responses.eval_plan);
+    const scoring = decode<EvalRun>("EvalRun", parity.responses.scoring);
     expect({
       "run.eval_report.metric_name": run.evalReport?.metricName,
       "run.eval_report.selected_step": run.evalReport?.selectedStep,
@@ -152,6 +158,8 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "eval.total_cost_usd": ev.totalCostUsd,
       "eval.summary[0].cost_per_1k_tasks_usd": ev.summary[0]?.costPer1kTasksUsd,
       "eval_plan.estimated_cost_usd": plan.estimatedCostUsd,
+      "scoring.mode": scoring.mode,
+      "scoring.scored_dataset_version": scoring.scoredDatasetVersion,
     }).toEqual(parity.expect);
   });
 });

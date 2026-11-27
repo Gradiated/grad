@@ -28,12 +28,16 @@ export {
   ImportJob,
   ImportsResource,
   type DatasetRef,
+  type FilterOptions,
+  type ViewOptions,
+  type RecordPredicate,
+  type ScoreOptions,
   type FromHfOptions,
   type ImportFileOptions,
   type PendingImport,
   type PushOptions,
 } from "./resources/datasets.js";
-export { Eval, EvalFailures, EvalsResource, TERMINAL_EVAL_STATUSES, type EvalParams, type EvalWaitOptions, type PendingEval } from "./resources/evals.js";
+export { DatasetScoring, Eval, EvalFailures, EvalsResource, type PendingScoring, TERMINAL_EVAL_STATUSES, type EvalParams, type EvalWaitOptions, type PendingEval } from "./resources/evals.js";
 export { KeysResource, ModelsResource } from "./resources/misc.js";
 export {
   Checkpoint,

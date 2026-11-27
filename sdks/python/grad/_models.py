@@ -325,9 +325,21 @@ class Dataset(APIObject):
         return preview
 
     def records(self, *, version: int | None = None, limit: int | None = None) -> Iterator[dict[str, Any]]:
-        """Iterate the records of a version (the latest by default)."""
+        """Iterate the records of a version (the latest by default), scores merged in."""
         records: Iterator[dict[str, Any]] = self._need_client().datasets.records(self.name, version=version, limit=limit)
         return records
+
+    def score(self, rubric: Any, **kwargs: Any) -> DatasetScoring:
+        """Score the records with a ``Judge``/``Scorer``/``Rubric`` server-side; ``.wait()`` returns
+        the dataset with the scores (see ``client.datasets.score``)."""
+        scoring: DatasetScoring = self._need_client().datasets.score(self, rubric, **kwargs)
+        return scoring
+
+    def filter(self, fn: Any = None, **kwargs: Any) -> Dataset:
+        """A filtered view: ``filter(scores={"resolved": ">=0.8"})`` on the server, or
+        ``filter(lambda t: ...)`` run locally (see ``client.datasets.filter``)."""
+        view: Dataset = self._need_client().datasets.filter(self, fn, **kwargs)
+        return view
 
 
 @dataclass(kw_only=True, repr=False, eq=False)
@@ -1017,6 +1029,7 @@ class Eval(APIObject):
     name: str
     status: str
     workspace_id: str | None = None
+    mode: str = "eval"
     models: list[str] = field(default_factory=list)
     baseline: str | None = None
     task_source: dict[str, Any] = field(default_factory=dict)
@@ -1030,6 +1043,7 @@ class Eval(APIObject):
     progress: dict[str, int] = field(default_factory=dict)
     summary: list[EvalModelSummary] = field(default_factory=list)
     total_cost_usd: float = 0.0
+    scored_dataset_version: int | None = None
     error: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -1099,3 +1113,35 @@ class Eval(APIObject):
         """Cancel the eval (in place)."""
         self._update_from(self._need_client().evals.cancel(self.id))
         return self
+
+
+class DatasetScoring:
+    """A ``dataset.score(...)`` job: an eval in mode ``score`` over the dataset's own answers.
+
+    ``wait()`` blocks (running local ``Scorer`` functions when asked), then returns the dataset;
+    its version ``eval.scored_dataset_version`` carries the scores in ``record.scores``.
+    """
+
+    def __init__(self, ev: Eval) -> None:
+        self.eval = ev
+
+    @property
+    def id(self) -> str:
+        return self.eval.id
+
+    @property
+    def status(self) -> str:
+        return self.eval.status
+
+    @property
+    def total_cost_usd(self) -> float:
+        return self.eval.total_cost_usd
+
+    def __repr__(self) -> str:
+        return f"<DatasetScoring {self.eval.id} {self.eval.status}>"
+
+    def wait(self, *, timeout: float | None = None) -> Dataset:
+        """Block until scored; returns the dataset (``refresh()``-ed, latest version)."""
+        self.eval.wait(timeout=timeout)
+        dataset: Dataset = self.eval._need_client().datasets.get(str(self.eval.task_source.get("dataset")))
+        return dataset

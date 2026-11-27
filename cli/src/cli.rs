@@ -298,6 +298,65 @@ pub enum DatasetsCmd {
         #[command(subcommand)]
         source: DatasetImportCmd,
     },
+    /// Score each record's own answer with a rubric (billed like an eval); the scores become the next version
+    #[command(after_help = "\
+Records that already have every score are skipped. Rubric files hold regex, validator and judge
+items (code scorers need an SDK). Example:
+  grad datasets score support-prod --rubric ./judge.yaml --wait")]
+    Score {
+        /// Dataset name
+        name: String,
+        /// Rubric file: YAML/JSON list of items (regex, validator, judge)
+        #[arg(long, value_name = "FILE")]
+        rubric: PathBuf,
+        /// Dataset version to score (default: latest)
+        #[arg(long)]
+        version: Option<i64>,
+        /// Scoring job name (default: <dataset>-score)
+        #[arg(long = "job-name")]
+        job_name: Option<String>,
+        /// Score at most this many records
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Wait until the scores are in the dataset
+        #[arg(long)]
+        wait: bool,
+        /// Give up waiting after this many seconds
+        #[arg(long, value_name = "SECS", default_value_t = 86_400)]
+        timeout: u64,
+        /// Idempotency-Key: rerunning with the same key returns the job it created
+        #[arg(long, value_name = "KEY")]
+        idempotency_key: Option<String>,
+    },
+    /// Save a filtered view of a dataset (server-side; re-running costs nothing)
+    #[command(after_help = "\
+Example:
+  grad datasets filter support-prod --score 'resolved>=0.8' --created-after 2026-11-01")]
+    Filter {
+        /// Dataset name
+        name: String,
+        /// Score condition NAME<OP>VALUE with OP one of >=, <=, >, <, ==, != (repeatable)
+        #[arg(long = "score", value_name = "COND")]
+        scores: Vec<String>,
+        /// Exact metadata match KEY=VALUE (repeatable)
+        #[arg(long = "metadata", value_name = "KEY=VALUE")]
+        metadata: Vec<String>,
+        /// Records whose timestamp is at or after this time (RFC 3339 or YYYY-MM-DD)
+        #[arg(long)]
+        created_after: Option<String>,
+        /// Records whose timestamp is before this time
+        #[arg(long)]
+        created_before: Option<String>,
+        /// Keep only these record ids, comma-separated
+        #[arg(long, value_delimiter = ',')]
+        ids: Vec<String>,
+        /// Source version (default: latest)
+        #[arg(long)]
+        version: Option<i64>,
+        /// View name (default: <dataset>-f-<hash of the filter>)
+        #[arg(long)]
+        view: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
