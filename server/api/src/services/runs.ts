@@ -141,6 +141,22 @@ export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
 
 /** Tokens are the source of truth; cost is derived from them in one place. */
 /** Retention: the last N checkpoints of a run stay, plus the best and final ones. */
+/**
+ * Run names aren't unique (artifacts get versioned names), so a second run
+ * under a busy name only warns: "run support-sft is already running (run_abc);
+ * this starts a second one".
+ */
+export const sameNameWarning = (
+  active: readonly Pick<RunRecord, "id" | "name" | "status">[],
+): string => {
+  const [first] = active;
+  if (active.length === 1 && first) {
+    return `run ${first.name} is already ${first.status} (${first.id}); this starts a second one.`;
+  }
+
+  return `${active.length} runs named ${first?.name ?? ""} are already queued or running (${active.map((r) => r.id).join(", ")}); this starts another one.`;
+};
+
 export const CHECKPOINTS_KEPT = 3;
 
 /**
@@ -422,6 +438,12 @@ export const createRunLifecycle = (
       labeling,
     });
     await planCheckpointEvals(workspaceId, request, plan);
+    const active = await store.runs.listActiveByName(
+      workspaceId,
+      request.name,
+      20,
+    );
+    if (active.length > 0) plan.warnings.unshift(sameNameWarning(active));
     if (request.recipe.loggers) {
       plan.resolved_config.loggers = request.recipe.loggers;
       plan.warnings.push(...(await loggerWarnings(workspaceId, request)));
@@ -491,6 +513,13 @@ export const createRunLifecycle = (
     const points = Math.max(
       1,
       Math.ceil(plan.estimated_steps / plan.resolved_config.eval_every_steps),
+    );
+    const evalsUsd = costPerCheckpoint * points;
+    plan.cost_breakdown.eval_usd = Number(
+      (plan.cost_breakdown.eval_usd + evalsUsd).toFixed(4),
+    );
+    plan.estimated_cost_usd = Number(
+      (plan.estimated_cost_usd + evalsUsd).toFixed(4),
     );
     plan.warnings.push(
       `recipe.evals run ${pinned.length} eval(s) on each checkpoint (about ${points}), estimated $${costPerCheckpoint.toFixed(4)} per checkpoint, billed as evals and not capped by max_cost_usd.`,
@@ -994,7 +1023,11 @@ export const createRunLifecycle = (
             }
             return { run, labels };
           });
-          if (!labels) return publicRun(await loadById(run.id));
+          const created = (run: Run): Run => ({
+            ...run,
+            warnings: plan.warnings,
+          });
+          if (!labels) return created(await publicRun(await loadById(run.id)));
 
           // The labeling eval may have finished before the run was inserted.
           const labelEval = await store.evals.getById(labels.id);
@@ -1006,7 +1039,9 @@ export const createRunLifecycle = (
             );
           }
 
-          return publicRun((await store.runs.getById(run.id)) ?? run);
+          return created(
+            await publicRun((await store.runs.getById(run.id)) ?? run),
+          );
         },
       ),
 

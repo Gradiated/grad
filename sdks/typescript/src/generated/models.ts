@@ -699,6 +699,16 @@ export interface PhaseEvent {
   gpu: GpuInfo | null;
 }
 
+/** estimated_cost_usd split by what bills it; the parts sum to it (to rounding). */
+export interface PlanCostBreakdown {
+  /** The base model's tokens on every training step: each record (or both sides of a preference pair) once per epoch, at price_per_million_tokens. Held-out evaluation during training is not billed. */
+  trainUsd: number;
+  /** The teacher's tokens (on-policy distill), at its price. */
+  teacherUsd: number;
+  /** Evals the run starts, billed as evals: the labeling eval before training and recipe.evals on every checkpoint. */
+  evalUsd: number;
+}
+
 export interface PlanEvalRequest {
   name?: string | undefined;
   models: Array<string>;
@@ -743,6 +753,7 @@ export interface PlanRunResponse {
   totalRecords: number;
   estimatedSteps: number;
   estimatedTokens: number;
+  /** Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling, recipe.evals). See cost_breakdown. */
   estimatedCostUsd: number;
   /** Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval. */
   estimatedDurationS: number;
@@ -763,6 +774,7 @@ export interface PlanRunResponse {
     estimatedTokens: number;
     estimatedCostUsd: number;
   } | null;
+  costBreakdown: PlanCostBreakdown;
   warnings: Array<string>;
 }
 
@@ -1034,6 +1046,8 @@ export interface Run {
   createdAt: string;
   updatedAt: string;
   finishedAt: string | null;
+  /** Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events. */
+  warnings?: Array<string> | undefined;
 }
 
 /** One event of a run's lifecycle, discriminated by `type`. `completed` is always last. */

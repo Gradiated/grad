@@ -56,6 +56,11 @@
     "trained_token_fraction": 0.62,
     "labeling": null,
     "teacher": null,
+    "cost_breakdown": {
+      "train_usd": 0.15,
+      "teacher_usd": 0.0,
+      "eval_usd": 0.02
+    },
     "warnings": [
       "3 records have no scores"
     ]

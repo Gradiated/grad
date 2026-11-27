@@ -205,6 +205,7 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "scoring.scored_dataset_version": scoring.scoredDatasetVersion,
       "run_plan.estimated_duration_s": runPlan.estimatedDurationS,
       "run_plan.min_gpu_memory_gb": runPlan.minGpuMemoryGb,
+      "run_plan.cost_breakdown.train_usd": runPlan.costBreakdown.trainUsd,
       "source.id": source.id,
       "source.provider.kind": source.provider.kind,
       "source.provider.secret": source.provider.secret,

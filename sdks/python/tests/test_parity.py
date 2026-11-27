@@ -193,6 +193,7 @@ class ParityTests(unittest.TestCase):
             "scoring.scored_dataset_version": scoring.scored_dataset_version,
             "run_plan.estimated_duration_s": run_plan.estimated_duration_s,
             "run_plan.min_gpu_memory_gb": run_plan.min_gpu_memory_gb,
+            "run_plan.cost_breakdown.train_usd": (run_plan.cost_breakdown or {}).get("train_usd"),
             "source.id": source.id,
             "source.provider.kind": source.provider.kind,
             "source.provider.secret": source.provider.secret,

@@ -1522,3 +1522,25 @@ async fn dataset_scoring_waits_and_filters_stream_ids() {
         json!({"ids": ["a"], "version": 3, "name": "short"})
     );
 }
+
+#[tokio::test]
+async fn create_returns_the_plan_warnings() {
+    let dup = "run support-sft is already running (run_abc); this starts a second one.";
+    let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
+        ("POST", "/v1/runs") => {
+            let mut run = run_json("run_2", "queued");
+            run["warnings"] = json!([dup]);
+            Reply::json(202, run)
+        }
+        _ => Reply::json(404, json!({})),
+    });
+    let run = client(&srv.url)
+        .runs()
+        .create(
+            &PlanRunRequest::new("d", "support-sft", RecipeSpec::new(RecipeKind::Sft)),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(run.warnings, Some(vec![dup.to_string()]));
+}

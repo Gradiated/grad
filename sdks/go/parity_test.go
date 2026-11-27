@@ -294,6 +294,7 @@ func TestParityTypedResponses(t *testing.T) {
 		"scoring.scored_dataset_version":                   float64(*scoring.ScoredDatasetVersion),
 		"run_plan.estimated_duration_s":                    float64(runPlan.EstimatedDurationS),
 		"run_plan.min_gpu_memory_gb":                       *runPlan.MinGPUMemoryGb,
+		"run_plan.cost_breakdown.train_usd":                runPlan.CostBreakdown.TrainUSD,
 		"source.id":                                        source.ID,
 		"source.provider.kind":                             string(source.Provider.Kind),
 		"source.provider.secret":                           *source.Provider.Secret,

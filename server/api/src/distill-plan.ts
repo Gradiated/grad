@@ -56,6 +56,7 @@ const percentile = (values: number[], p: number): number => {
 const resolveMaxNewTokens = (
   rollout: RolloutSpec,
   records: readonly DatasetRecord[],
+  charsPerToken: number | undefined,
 ): number => {
   if (
     rollout.kind === "on_policy" &&
@@ -68,7 +69,7 @@ const resolveMaxNewTokens = (
     .filter(
       (ref): ref is string => typeof ref === "string" && ref.trim() !== "",
     )
-    .map((ref) => estimateTextTokens(ref) + 1);
+    .map((ref) => estimateTextTokens(ref, charsPerToken) + 1);
   if (lengths.length === 0) return DEFAULT_MAX_NEW_TOKENS;
 
   return Math.min(
@@ -144,10 +145,11 @@ export const planDistill = (
 ): DistillPlan => {
   const { recipe } = request;
   const rollout: RolloutSpec = recipe.rollout ?? { kind: "on_policy" };
-  const answerTokens = resolveMaxNewTokens(rollout, [
-    ...split.train,
-    ...split.eval,
-  ]);
+  const answerTokens = resolveMaxNewTokens(
+    rollout,
+    [...split.train, ...split.eval],
+    options.charsPerToken,
+  );
   const prompts = (records: readonly DatasetRecord[]) =>
     records
       .map((r) => promptTokens(r, options))
@@ -176,7 +178,10 @@ export const planDistill = (
   const maxNew = answerTokens;
   const weight =
     teacher.price_per_million_tokens_usd / student.price_per_million_tokens_usd;
-  const contextTokens = estimateTextTokens(recipe.context_text ?? "");
+  const contextTokens = estimateTextTokens(
+    recipe.context_text ?? "",
+    options.charsPerToken,
+  );
   const teacherTrain =
     trainPrompts.reduce((sum, p) => sum + p + contextTokens + maxNew, 0) *
     epochs;

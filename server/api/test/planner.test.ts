@@ -413,6 +413,107 @@ describe("planRun", () => {
     expect(long.warnings.join(" ")).toMatch(/exceed 8192 tokens/);
   });
 
+  it("estimates what the trainer bills: tokenizer density, both pair sides, whole batches per epoch", () => {
+    // r8 trial: a dev-model SFT run planned $1.13 and billed about 2.3x that (chars/4
+    // against a 1.5 characters-a-token tokenizer); DPO missed the rejected side and the
+    // prompt's second pass; 3 epochs planned 32 steps where the trainer ran 33.
+    const dense = createModelCatalog(
+      JSON.stringify([
+        {
+          id: "test/dense",
+          family: "llm",
+          adapters: ["lora"],
+          price_per_million_tokens_usd: 1,
+          chars_per_token: 1.5,
+          calibrated_lrs: { sft: 1e-3, dpo: 1e-4 },
+        },
+      ]),
+    );
+    expect(dense.charsPerToken("TEST/Dense")).toBe(1.5);
+    expect(dense.charsPerToken("qwen/qwen3-8b")).toBe(4);
+    expect(dense.find("test/dense")).not.toHaveProperty("chars_per_token");
+    const long = (i: number): DatasetRecord => ({
+      id: `r${i}`,
+      messages: [
+        { role: "user", content: "q".repeat(600) },
+        { role: "assistant", content: "a".repeat(600) },
+      ],
+    });
+    const rows = Array.from({ length: 83 }, (_, i) => long(i));
+    const at = (cat: typeof catalog, recipe: Record<string, unknown>) =>
+      planRun(
+        request(
+          { kind: "sft", model: "test/dense", batch_size: 8, ...recipe },
+          { split: { eval_fraction: 0 } },
+        ),
+        rows,
+        { catalog: cat, datasetVersion: 1 },
+      );
+    const sft = at(dense, {});
+    expect(sft.estimated_tokens).toBe(83 * (3 + 400 + 2 + 3 + 4 + 400 + 2));
+    expect(sft.cost_breakdown).toEqual({
+      train_usd: sft.estimated_cost_usd,
+      teacher_usd: 0,
+      eval_usd: 0,
+    });
+    // ceil(83 / 8) = 11 steps per epoch, as the trainer's loop: 33, not ceil(249 / 8) = 32.
+    expect(at(dense, { epochs: 3 }).estimated_steps).toBe(33);
+    expect(at(dense, { epochs: 3 }).estimated_tokens).toBe(
+      3 * sft.estimated_tokens,
+    );
+
+    const pairs = Array.from({ length: 40 }, (_, i) => ({
+      id: `p${i}`,
+      prompt: "q".repeat(300),
+      chosen: "c".repeat(150),
+      rejected: "r".repeat(30),
+    }));
+    const dpo = planRun(
+      request(
+        { kind: "dpo", model: "test/dense", batch_size: 8 },
+        { split: { eval_fraction: 0 } },
+      ),
+      pairs,
+      { catalog: dense, datasetVersion: 1 },
+    );
+    // Each pair: user prompt (3 + 200 + 2) on both sides, plus each answer (3 + 4 + n + 2).
+    expect(dpo.estimated_tokens).toBe(40 * (2 * 205 + (9 + 100) + (9 + 20)));
+    expect(dpo.estimated_steps).toBe(5);
+  });
+
+  it("defaults small datasets to a smaller batch and warns about few optimizer steps", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => chat(i));
+    const small = plan({ kind: "sft" }, rows);
+    const train = small.resolved_config.split.train_records;
+    expect(small.resolved_config.batch_size).toBe(
+      Math.max(8, Math.floor(train / 4)),
+    );
+    expect(small.estimated_steps).toBe(
+      Math.ceil(train / small.resolved_config.batch_size),
+    );
+    const pinned = plan({ kind: "sft", batch_size: 128 }, rows);
+    // The auto lr follows the batch size (sqrt scaling from the calibrated 128).
+    const scale = Math.sqrt(small.resolved_config.batch_size / 128);
+    expect(small.resolved_config.lr).toBeCloseTo(
+      Number((pinned.resolved_config.lr * scale).toPrecision(3)),
+      8,
+    );
+    expect(pinned.estimated_steps).toBe(1);
+    expect(pinned.warnings).toContain(
+      `${train} training examples at batch 128 is 1 step per epoch, below the 100 steps we recommend; consider more data, more epochs or a smaller batch_size.`,
+    );
+    const big = Array.from({ length: 2000 }, (_, i) => chat(i));
+    expect(plan({ kind: "sft" }, big).resolved_config.batch_size).toBe(128);
+    const embedding = Array.from({ length: 40 }, (_, i) => ({
+      id: `e${i}`,
+      query: `q${i}`,
+      positive: `p${i}`,
+    }));
+    expect(
+      plan({ kind: "embedding" }, embedding).resolved_config.batch_size,
+    ).toBe(128);
+  });
+
   it("checkpoints every 10% of steps (at least every 20), evaluates every 25%, and estimates duration and GPU memory", () => {
     const many = Array.from({ length: 4000 }, (_, i) => chat(i));
     const big = plan({ kind: "sft", batch_size: 8 }, many);
@@ -469,6 +570,7 @@ describe("planRun", () => {
     const onPolicy = distill({
       model: "qwen/qwen3-4b",
       teacher: "qwen/qwen3-14b",
+      batch_size: 128,
       rollout: { kind: "on_policy", max_new_tokens: 64 },
     });
     expect(onPolicy.resolved_config.model).toBe("qwen/qwen3-4b");
@@ -604,7 +706,10 @@ describe("planRun", () => {
       chosen: "good",
       rejected: "bad",
     }));
-    const reward = plan({ kind: "reward" }, [...pairs, ...records]);
+    const reward = plan({ kind: "reward", batch_size: 128 }, [
+      ...pairs,
+      ...records,
+    ]);
     expect(reward.resolved_config).toMatchObject({
       model: "qwen/qwen3-8b",
       adapter: { kind: "lora", rank: 32 },
@@ -656,14 +761,18 @@ describe("planRun", () => {
     const one = plan({ kind: "sft" }, records.slice(0, 4));
     const few = one.warnings.find((w) => w.includes("below the 100"));
     expect(few).toMatch(
-      /^1 step is below the 100 we recommend; add data or epochs\.$/,
+      /^\d training examples at batch 8 is 1 step per epoch, below the 100 steps we recommend; consider more data, more epochs or a smaller batch_size\.$/,
     );
     const many = Array.from({ length: 400 }, (_, i) => chat(i));
     const advice = plan({ kind: "sft", batch_size: 32 }, many).warnings.find(
       (w) => w.includes("below the 100"),
     );
     expect(advice).toMatch(
-      /^\d+ steps are below the 100 we recommend; use batch_size=\d+ \(or add epochs or data\)\.$/,
+      /^\d+ training examples at batch 32 is \d+ steps per epoch, below the 100 steps we recommend; use batch_size=\d+ \(or add epochs or data\)\.$/,
+    );
+    const epochs = plan({ kind: "sft", batch_size: 32, epochs: 3 }, many);
+    expect(epochs.warnings.join(" ")).toMatch(
+      /at batch 32 is (\d+) steps per epoch \(\d+ over 3 epochs\)/,
     );
     const long = plan({ kind: "sft", model: "test/tiny-qwen3" }, [
       {

@@ -1110,6 +1110,18 @@ string_enum! {
     }
 }
 
+/// estimated_cost_usd split by what bills it; the parts sum to it (to rounding).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlanCostBreakdown {
+    /// The base model's tokens on every training step: each record (or both sides of a preference pair) once per epoch, at price_per_million_tokens. Held-out evaluation during training is not billed.
+    pub train_usd: f64,
+    /// The teacher's tokens (on-policy distill), at its price.
+    pub teacher_usd: f64,
+    /// Evals the run starts, billed as evals: the labeling eval before training and recipe.evals on every checkpoint.
+    pub eval_usd: f64,
+}
+
 /// Generated from the OpenAPI schema `PlanEvalRequest`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -1184,6 +1196,7 @@ pub struct PlanRunResponse {
     pub total_records: i64,
     pub estimated_steps: i64,
     pub estimated_tokens: i64,
+    /// Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling, recipe.evals). See cost_breakdown.
     pub estimated_cost_usd: f64,
     /// Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval.
     pub estimated_duration_s: i64,
@@ -1195,6 +1208,7 @@ pub struct PlanRunResponse {
     pub labeling: Option<PlanRunResponseLabeling>,
     /// On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).
     pub teacher: Option<PlanRunResponseTeacher>,
+    pub cost_breakdown: PlanCostBreakdown,
     pub warnings: Vec<String>,
 }
 
@@ -1707,6 +1721,9 @@ pub struct Run {
     pub created_at: String,
     pub updated_at: String,
     pub finished_at: Option<String>,
+    /// Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
 }
 
 /// Generated from the OpenAPI schema `RunInterruption`.

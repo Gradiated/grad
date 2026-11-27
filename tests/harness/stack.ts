@@ -72,6 +72,8 @@ export const TINY_MODELS = [
     default_for: [],
     price_per_million_tokens_usd: 1,
     max_context_tokens: 2048,
+    // The 512-token dev tokenizer: about 1.5 characters a token on chat text.
+    chars_per_token: 1.5,
     template_revision: "qwen3@3",
     calibrated_lrs: {
       sft: 1e-3,
@@ -91,6 +93,8 @@ export const TINY_MODELS = [
     default_for: [],
     price_per_million_tokens_usd: 2,
     max_context_tokens: 2048,
+    // The 512-token dev tokenizer: about 1.5 characters a token on chat text.
+    chars_per_token: 1.5,
     template_revision: "qwen3@3",
     calibrated_lrs: { sft: 1e-3 },
   },

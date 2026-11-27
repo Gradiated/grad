@@ -66,6 +66,27 @@ describe("runs", () => {
     await expect(grad.runs.create({ dataset: "d", name: "", recipe: { kind: "sft" } })).rejects.toBeInstanceOf(GradUsageError);
   });
 
+  it("surfaces the plan's warnings on the created run and console.warn", async () => {
+    const dup = "run support-sft is already running (run_abc); this starts a second one.";
+    const server = new FakeServer()
+      .on("POST", "/v1/runs", json({ ...queued, warnings: [dup] }, 202), json(queued, 202))
+      .on("POST", "/v1/runs/plan", json(wire("plan-run.json")));
+    const { grad } = makeGrad(server);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const run = await grad.runs.create({ dataset: "support", name: "support-sft", recipe: { kind: "sft" } });
+      expect(run.warnings).toEqual([dup]);
+      expect(warn).toHaveBeenCalledWith(`grad: ${dup}`);
+      warn.mockClear();
+      await grad.runs.create({ dataset: "support", name: "other", recipe: { kind: "sft" } });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+    const plan = await grad.runs.plan({ dataset: "support", name: "x", recipe: { kind: "sft" } });
+    expect(plan.costBreakdown.trainUsd).toBe(0.0002);
+  });
+
   it("backs off to 5 s, rides out transient errors and stops on real ones", async () => {
     const running = json(withStatus("running"));
     const server = new FakeServer().on("GET", RUN, running, running, json({}, 503), running, running, running, running, running, running, running, running, json(completed));

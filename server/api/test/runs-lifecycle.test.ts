@@ -314,6 +314,50 @@ describe("run lifecycle and worker protocol", () => {
     expect(refused.body).toMatchObject({ code: "run_not_cancellable" });
   });
 
+  it("warns, without refusing, when a queued or running run already has the name", async () => {
+    const first = await createSftRun(t);
+    expect(first.warnings).not.toContainEqual(expect.stringMatching(/already/));
+    const plan = await t.json<{ warnings: string[] }>("/v1/runs/plan", {
+      body: {
+        dataset: "support",
+        name: "support-sft",
+        recipe: { kind: "sft", model: "test/tiny-qwen3", batch_size: 4 },
+      },
+    });
+    const queued = `run support-sft is already queued (${first.id}); this starts a second one.`;
+    expect(plan.body.warnings[0]).toBe(queued);
+
+    const second = await createSftRun(t);
+    expect(second.id).not.toBe(first.id);
+    expect(second.warnings).toContain(queued);
+    // GET doesn't repeat them; they're the run's warning events.
+    const got = await t.json<Record<string, unknown>>(`/v1/runs/${second.id}`);
+    expect(got.body).not.toHaveProperty("warnings");
+    const events = await t.json<{ data: Array<Record<string, unknown>> }>(
+      `/v1/runs/${second.id}/events`,
+    );
+    expect(events.body.data).toContainEqual(
+      expect.objectContaining({ type: "warning", message: queued }),
+    );
+
+    const job = await worker.claim();
+    expect([first.id, second.id]).toContain(job?.id);
+    const third = await createSftRun(t);
+    expect((third.warnings as string[])[0]).toBe(
+      `2 runs named support-sft are already queued or running (${second.id}, ${first.id}); this starts another one.`,
+    );
+    for (const run of [first, second, third]) {
+      if (run.id !== job?.id) {
+        await t.json(`/v1/runs/${run.id}/cancel`, { method: "POST" });
+      }
+    }
+    await worker.complete(job!, { status: "failed", error: "boom" });
+    const after = await createSftRun(t);
+    expect(after.warnings).not.toContainEqual(expect.stringMatching(/already/));
+    const other = await createSftRun(t, { name: "other" });
+    expect(other.warnings).not.toContainEqual(expect.stringMatching(/already/));
+  });
+
   it("enforces max_cost_usd: progress stops, claim refuses, resume requires a raised cap", async () => {
     const run = await createSftRun(t, { maxCostUsd: 1 });
     const job = await worker.claim();

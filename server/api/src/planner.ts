@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { ModelCatalog } from "./catalog.js";
+import { DEFAULT_CHARS_PER_TOKEN, type ModelCatalog } from "./catalog.js";
 import { isArtifactRef, resolveContinuation } from "./continued-training.js";
 import { planDistill, type DistillPlan } from "./distill-plan.js";
 import {
@@ -29,6 +29,7 @@ import {
   recordConversation,
   recordPromptAndResponse,
   recordShapeHelp,
+  preferenceItems,
   routerObservations,
   type RecipeUsability,
 } from "./records.js";
@@ -36,15 +37,19 @@ import {
 export const AUTO_RULE_VERSION = "auto@2";
 
 /**
- * Rough text token estimate (chars / 4); plans label counts as estimates. It
- * errs high for English prose (Qwen3 averages about 4.5 characters a token
- * there) and low for code-free CJK text.
+ * Rough text token estimate (chars / the base tokenizer's characters per
+ * token, 4 by default); plans label counts as estimates. At 4 it errs high for
+ * English prose (Qwen3 averages about 4.6 characters a token there) and low
+ * for code-free CJK text.
  */
-export const estimateTextTokens = (text: string): number => {
+export const estimateTextTokens = (
+  text: string,
+  charsPerToken = DEFAULT_CHARS_PER_TOKEN,
+): number => {
   const trimmed = text.trim();
   if (!trimmed) return 0;
 
-  return Math.max(1, Math.ceil(trimmed.length / 4));
+  return Math.max(1, Math.ceil(trimmed.length / charsPerToken));
 };
 
 const hashFraction = (key: string, seed: number): number =>
@@ -114,6 +119,8 @@ export interface RenderOptions {
   train_on: "last" | "all_assistant";
   thinking: "auto" | "on" | "off";
   preserve_thinking: boolean;
+  /** The base tokenizer's characters per token (catalog; default 4). */
+  charsPerToken?: number;
 }
 
 /** ChatML framing, exact for the Qwen3 tokenizer: `<|im_start|>`, role, newline. */
@@ -197,7 +204,8 @@ export const renderMessages = (
     const header = `<|im_start|>${message.role}\n${emptyThink ? EMPTY_THINK : ""}`;
     const body = `${content}<|im_end|>\n`;
     const headerTokens = HEADER_TOKENS + (emptyThink ? EMPTY_THINK_TOKENS : 0);
-    const bodyTokens = estimateTextTokens(content) + FOOTER_TOKENS;
+    const bodyTokens =
+      estimateTextTokens(content, options.charsPerToken) + FOOTER_TOKENS;
 
     spans.push({ text: header, trained: false, tokens: headerTokens });
     spans.push({ text: body, trained, tokens: bodyTokens });
@@ -251,7 +259,7 @@ const estimateRecordTokens = (
       ? ""
       : JSON.stringify(record.expected_output),
   ].join("\n");
-  const total = Math.max(16, estimateTextTokens(text));
+  const total = Math.max(16, estimateTextTokens(text, options.charsPerToken));
 
   return { total, trained: Math.max(8, Math.round(total * 0.4)) };
 };
@@ -264,19 +272,37 @@ export const formatUsd = (usd: number): string => {
   return `$${usd.toFixed(decimals)}`;
 };
 
-/** The "too few steps" advice: a batch size only when one reaches 100 steps. */
-const fewStepsWarning = (
-  steps: number,
-  examples: number,
-  batchSize: number,
-): string => {
-  const reach = Math.floor(examples / 100);
-  const advice =
-    reach >= 1 && reach < batchSize
-      ? `use batch_size=${reach} (or add epochs or data)`
-      : "add data or epochs";
+/** The batch size the auto learning rates were calibrated at, and the default. */
+export const CALIBRATED_BATCH_SIZE = 128;
 
-  return `${steps} ${steps === 1 ? "step is" : "steps are"} below the 100 we recommend; ${advice}.`;
+/**
+ * The default batch size: 128, or a quarter of the training items (at least
+ * 8) when that's smaller, so a small dataset still takes about 4 optimizer
+ * steps per epoch. Embedding keeps 128: its in-batch negatives need the
+ * batch.
+ */
+export const defaultBatchSize = (kind: RecipeKind, items: number): number =>
+  kind === "embedding"
+    ? CALIBRATED_BATCH_SIZE
+    : Math.min(CALIBRATED_BATCH_SIZE, Math.max(8, Math.floor(items / 4)));
+
+/** The "too few steps" warning: the step count, and a batch size only when one reaches 100 steps. */
+const fewStepsWarning = (p: {
+  steps: number;
+  stepsPerEpoch: number;
+  items: number;
+  epochs: number;
+  batchSize: number;
+}): string => {
+  const reach = Math.floor((p.items * p.epochs) / 100);
+  const advice =
+    reach >= 1 && reach < p.batchSize
+      ? `use batch_size=${reach} (or add epochs or data)`
+      : "consider more data, more epochs or a smaller batch_size";
+  const perEpoch = `${p.stepsPerEpoch} step${p.stepsPerEpoch === 1 ? "" : "s"} per epoch`;
+  const total = p.epochs === 1 ? "" : ` (${p.steps} over ${p.epochs} epochs)`;
+
+  return `${p.items} training example${p.items === 1 ? "" : "s"} at batch ${p.batchSize} is ${perEpoch}${total}, below the 100 steps we recommend; ${advice}.`;
 };
 
 /** Tokens of a record's prompt rendered with the generation header, or null without one. */
@@ -658,8 +684,6 @@ export const planRun = (
     );
   }
 
-  const defaultBatch = 128;
-  const batchSize = recipe.batch_size ?? defaultBatch;
   const evalFraction =
     request.split?.eval_fraction ??
     (recipe.kind === "router" || recipe.kind === "decision" ? 0.15 : 0.1);
@@ -678,24 +702,13 @@ export const planRun = (
     );
   }
 
-  let lr: number;
-  let lrSource: string;
-  if (recipe.lr === "auto") {
-    const baseLr = model.calibrated_lrs[recipe.kind] as number;
-    const scale = Math.sqrt(batchSize / defaultBatch) * recipe.lr_scale;
-    lr = Number((baseLr * scale).toPrecision(3));
-    lrSource = `${AUTO_RULE_VERSION}: calibrated for ${model.id} at batch ${defaultBatch}, sqrt batch scaling`;
-  } else {
-    lr = recipe.lr * recipe.lr_scale;
-    lrSource = "explicit";
-  }
-
   const reduction = resolvedParams.reduction;
   const renderOptions: RenderOptions = {
     templateRevision: model.template_revision,
     train_on: recipe.train_on,
     thinking: recipe.thinking,
     preserve_thinking: recipe.preserve_thinking,
+    charsPerToken: context.catalog.charsPerToken(model.id),
   };
 
   const maxSeqLen = Math.min(model.max_context_tokens, TRAINER_MAX_SEQ_LEN);
@@ -714,6 +727,32 @@ export const planRun = (
       (sum, t) => sum + t,
       0,
     );
+  } else if (paired) {
+    // One item per pair: prompt + chosen and prompt + rejected both go through the model.
+    const pointwise =
+      recipe.kind === "reward" && typeof recipe.rubric === "string"
+        ? recipe.rubric
+        : undefined;
+    const sequenceTokens = (items: ChatMessage[][][]) =>
+      items.map((sequences) =>
+        sequences.map((messages) =>
+          renderMessages("pair", messages, renderOptions),
+        ),
+      );
+    const trainSides = sequenceTokens(preferenceItems(train, pointwise));
+    trainItems = trainSides.length;
+    for (const sides of trainSides) {
+      for (const side of sides) {
+        totalTokens += Math.min(side.total_tokens, maxSeqLen);
+        trainedTokens += Math.min(side.trained_tokens, maxSeqLen);
+        if (side.total_tokens > maxSeqLen) truncated += 1;
+      }
+    }
+    for (const sides of sequenceTokens(preferenceItems(evalSet, pointwise))) {
+      for (const side of sides) {
+        evalTokens += Math.min(side.total_tokens, maxSeqLen);
+      }
+    }
   } else {
     for (const record of train) {
       const counts = estimateRecordTokens(record, renderOptions);
@@ -745,13 +784,33 @@ export const planRun = (
     }
   }
 
-  const estimatedSteps = Math.max(
-    1,
-    Math.ceil((trainItems * recipe.epochs) / batchSize),
-  );
+  const batchSize =
+    recipe.batch_size ?? defaultBatchSize(recipe.kind, trainItems);
+  let lr: number;
+  let lrSource: string;
+  if (recipe.lr === "auto") {
+    const baseLr = model.calibrated_lrs[recipe.kind] as number;
+    const scale =
+      Math.sqrt(batchSize / CALIBRATED_BATCH_SIZE) * recipe.lr_scale;
+    lr = Number((baseLr * scale).toPrecision(3));
+    lrSource = `${AUTO_RULE_VERSION}: calibrated for ${model.id} at batch ${CALIBRATED_BATCH_SIZE}, sqrt batch scaling`;
+  } else {
+    lr = recipe.lr * recipe.lr_scale;
+    lrSource = "explicit";
+  }
+
+  // As the trainer's loop: whole batches per epoch (the last one may be short).
+  const stepsPerEpoch = Math.max(1, Math.ceil(trainItems / batchSize));
+  const estimatedSteps = stepsPerEpoch * recipe.epochs;
   if (estimatedSteps < 100) {
     warnings.push(
-      fewStepsWarning(estimatedSteps, trainItems * recipe.epochs, batchSize),
+      fewStepsWarning({
+        steps: estimatedSteps,
+        stepsPerEpoch,
+        items: trainItems,
+        epochs: recipe.epochs,
+        batchSize,
+      }),
     );
   }
   if (truncated > 0) {
@@ -765,12 +824,13 @@ export const planRun = (
     : totalTokens * recipe.epochs;
   const price = model.price_per_million_tokens_usd;
   const labeling = context.labeling ?? null;
-  const estimatedCostUsd = Number(
-    (
-      (estimatedTokens / 1_000_000) * price +
-      (labeling?.estimated_cost_usd ?? 0)
-    ).toFixed(4),
-  );
+  // What the run bills: every token through the model on a training step, at
+  // the base's price (on-policy teacher tokens weighted to it). Held-out evals
+  // during training aren't billed; labeling and recipe.evals bill as evals.
+  const runCostUsd = (estimatedTokens / 1_000_000) * price;
+  const teacherUsd = distill?.teacher?.estimated_cost_usd ?? 0;
+  const evalUsd = labeling?.estimated_cost_usd ?? 0;
+  const estimatedCostUsd = Number((runCostUsd + evalUsd).toFixed(4));
   if (labeling && offPolicy) {
     warnings.push(
       `Before training, the teacher '${recipe.teacher ?? ""}' answers each prompt in a labeling eval: ${labeling.estimated_model_calls} model calls, about $${labeling.estimated_cost_usd.toFixed(4)} (billed as an eval).`,
@@ -881,6 +941,11 @@ export const planRun = (
       totalTokens > 0 ? Number((trainedTokens / totalTokens).toFixed(4)) : 0,
     labeling,
     teacher: distill?.teacher ?? null,
+    cost_breakdown: {
+      train_usd: Number(Math.max(0, runCostUsd - teacherUsd).toFixed(4)),
+      teacher_usd: teacherUsd,
+      eval_usd: Number(evalUsd.toFixed(4)),
+    },
     warnings,
   };
 };

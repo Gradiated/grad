@@ -478,6 +478,12 @@ export interface RunRepository {
   get(workspaceId: string, id: string): Promise<RunRecord | null>;
   getById(id: string): Promise<RunRecord | null>;
   list(workspaceId: string, page: PageRequest): Promise<Page<RunRecord>>;
+  /** Queued and running runs with this name, newest first (at most `limit`). */
+  listActiveByName(
+    workspaceId: string,
+    name: string,
+    limit: number,
+  ): Promise<RunRecord[]>;
   update(
     id: string,
     patch: RunPatch,

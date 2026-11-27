@@ -1,4 +1,5 @@
 //! Shared parity fixture (tests/fixtures/wire/sdk-parity.json), replayed by every SDK and the CLI.
+#![recursion_limit = "256"]
 
 mod support;
 
@@ -451,6 +452,7 @@ fn typed_responses() {
         "scoring.scored_dataset_version": scoring.scored_dataset_version,
         "run_plan.estimated_duration_s": run_plan.estimated_duration_s,
         "run_plan.min_gpu_memory_gb": run_plan.min_gpu_memory_gb,
+        "run_plan.cost_breakdown.train_usd": run_plan.cost_breakdown.train_usd,
         "source.id": source.id,
         "source.provider.kind": source.provider.kind,
         "source.provider.secret": source.provider.secret,

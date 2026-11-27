@@ -259,9 +259,9 @@ describe("recipe parameters", () => {
         grad_clip: 1,
       },
     });
-    expect(sft.resolved_config.eval_every_steps).toBe(
-      sft.resolved_config.checkpoint_every_steps,
-    );
+    // Every 25% of the run, at most every 20 steps: a run under 20 steps evaluates at its end.
+    expect(sft.estimated_steps).toBeLessThan(20);
+    expect(sft.resolved_config.eval_every_steps).toBe(sft.estimated_steps);
     const dpo = plan(
       { kind: "dpo", model: "test/tiny-qwen3", beta: 0.2 },
       FULL_REQUESTS.dpo?.records ?? [],

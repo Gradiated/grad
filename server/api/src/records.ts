@@ -518,3 +518,101 @@ export const assessRecipeUsability = (
     ...(kind === "router" ? { discoveredModels: [...models].sort() } : {}),
   };
 };
+
+const prefixLength = (a: readonly ChatMessage[], b: readonly ChatMessage[]) => {
+  let n = 0;
+  while (
+    n < a.length &&
+    n < b.length &&
+    sortedJson(a[n]) === sortedJson(b[n])
+  ) {
+    n += 1;
+  }
+
+  return n;
+};
+
+/**
+ * The training items of a dpo or reward run, each as the sequences the
+ * trainer runs through the model (recipes/data.py::extract_pairs and
+ * reward.py::split_pointwise): prompt + chosen and prompt + rejected for a
+ * pair, the scored conversation for a pointwise reward record. A
+ * chosen/rejected trajectory group is one pair per rejected side.
+ */
+export const preferenceItems = (
+  records: readonly DatasetRecord[],
+  pointwise?: string,
+): ChatMessage[][][] => {
+  const items: ChatMessage[][][] = [];
+  const groups = new Map<
+    string,
+    { chosen: DatasetRecord[]; rejected: DatasetRecord[] }
+  >();
+  const pair = (
+    prompt: ChatMessage[],
+    chosen: ChatMessage[],
+    rejected: ChatMessage[],
+  ) => {
+    if (prompt.length === 0 || chosen.length === 0 || rejected.length === 0) {
+      return;
+    }
+    if (sortedJson(chosen) === sortedJson(rejected)) return;
+    items.push([
+      [...prompt, ...chosen],
+      [...prompt, ...rejected],
+    ]);
+  };
+  for (const r of records) {
+    const trajectory =
+      r.schema === "grad.trajectory/1" &&
+      (r.role === "chosen" || r.role === "rejected") &&
+      r.group_id != null;
+    if (trajectory) {
+      const group = groups.get(r.group_id as string) ?? {
+        chosen: [],
+        rejected: [],
+      };
+      group[r.role as "chosen" | "rejected"].push(r);
+      groups.set(r.group_id as string, group);
+      continue;
+    }
+    const score = pointwise === undefined ? undefined : r.scores?.[pointwise];
+    if (score !== undefined && r.chosen === undefined) {
+      const own = ownConversation(r);
+      const scored =
+        splitAnswer(own)[1].length > 0 ? own : recordConversation(r);
+      if (hasAssistantTarget(scored)) items.push([scored]);
+      continue;
+    }
+    if (r.chosen === undefined || r.rejected === undefined) {
+      const correction = correctionPair(r);
+      if (correction) pair(...correction);
+      continue;
+    }
+    let chosen = asMessages(r.chosen, "assistant");
+    let rejected = asMessages(r.rejected, "assistant");
+    let prompt: ChatMessage[];
+    if (r.prompt !== undefined) prompt = asMessages(r.prompt, "user");
+    else if (r.messages && r.messages.length > 0) prompt = r.messages;
+    else {
+      const shared = prefixLength(chosen, rejected);
+      prompt = chosen.slice(0, shared);
+      chosen = chosen.slice(shared);
+      rejected = rejected.slice(shared);
+    }
+    pair(prompt, chosen, rejected);
+  }
+  for (const [, { chosen, rejected }] of [...groups].sort(([a], [b]) =>
+    a < b ? -1 : 1,
+  )) {
+    const [first] = chosen;
+    if (chosen.length !== 1 || !first) continue;
+    const [prompt, answer] = [
+      first.input?.messages ?? [],
+      first.output?.turns ?? [],
+    ];
+    for (const rej of rejected) pair(prompt, answer, rej.output?.turns ?? []);
+  }
+
+  return items;
+};

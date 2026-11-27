@@ -186,6 +186,15 @@ fn print_plan(out: &Out, req: &PlanRunRequest, plan: &PlanRunResponse) {
             ),
         ),
         (
+            "breakdown",
+            format!(
+                "train {} · teacher {} · evals {} (held-out evals during training aren't billed)",
+                usd(plan.cost_breakdown.train_usd),
+                usd(plan.cost_breakdown.teacher_usd),
+                usd(plan.cost_breakdown.eval_usd)
+            ),
+        ),
+        (
             "duration",
             format!(
                 "~{} on one GPU{}",
@@ -276,6 +285,12 @@ pub async fn train(ctx: &Ctx, a: TrainArgs) -> CliResult {
         }
     }
     let run = c.runs().create(&req, a.idempotency_key.as_deref()).await?;
+    // The plan's warnings (e.g. "run X is already running"); --wait shows them as events.
+    if !a.wait || out.json {
+        for w in run.warnings.iter().flatten() {
+            out.warn(w.clone());
+        }
+    }
     if !a.wait {
         out.line(format!(
             "✓ Started run {} ({} on {}, {} steps)",
@@ -953,7 +968,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             out.done(&res)
         }
         RunsCmd::Inspect { run, yaml } => {
-            let r = resolve_run(&c, &run).await?;
+            let r = resolve_run(&c, out, &run).await?;
             if yaml {
                 let text = trainfile::export(&r)?;
                 if out.json {
@@ -970,7 +985,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             follow,
             after_step,
         } => {
-            let r = resolve_run(&c, &run).await?;
+            let r = resolve_run(&c, out, &run).await?;
             if !follow {
                 let pg = c
                     .runs()
@@ -1016,7 +1031,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             let id = if run.starts_with("run_") {
                 run
             } else {
-                resolve_run(&c, &run).await?.id
+                resolve_run(&c, out, &run).await?.id
             };
             if follow {
                 on_interrupt(format!("stopped following run {}", id));
@@ -1039,7 +1054,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             out.done(&json!({ "run_id": id, "events": collected }))
         }
         RunsCmd::Wait { run, timeout } | RunsCmd::Watch { run, timeout } => {
-            let r = resolve_run(&c, &run).await?;
+            let r = resolve_run(&c, out, &run).await?;
             if r.status.is_terminal() {
                 if r.status != RunStatus::Completed {
                     return Err(SdkError::RunFailed(Box::new(r)).into());
@@ -1085,7 +1100,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             out.done(&json!({ "run": finished, "artifact": art }))
         }
         RunsCmd::Checkpoints { run } => {
-            let r = resolve_run(&c, &run).await?;
+            let r = resolve_run(&c, out, &run).await?;
             let res = c.runs().checkpoints(&r.id, &Default::default()).await?;
             out.table(
                 &[

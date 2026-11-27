@@ -512,6 +512,8 @@ class Plan(APIObject):
     """The labeling eval that runs first (router Judge rubrics, off-policy distillation), billed as an eval."""
     teacher: dict[str, Any] | None = None
     """On-policy distillation: the teacher's scoring tokens and cost (included in the estimate)."""
+    cost_breakdown: dict[str, Any] | None = None
+    """``estimated_cost_usd`` by what bills it: ``train_usd``, ``teacher_usd``, ``eval_usd`` (labeling, recipe.evals)."""
     warnings: list[str] = field(default_factory=list)
     max_cost_usd: float | None = None
 
@@ -675,6 +677,9 @@ class Run(APIObject):
     created_at: str | None = None
     updated_at: str | None = None
     finished_at: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    """On the run ``runs.create`` returns: the plan's warnings (such as another queued or running run
+    with this name). Later reads leave it empty; they're also the run's first warning events."""
 
     _repr_fields = ("id", "name", "status", "current_step", "total_steps")
     _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {

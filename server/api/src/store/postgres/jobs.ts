@@ -405,6 +405,19 @@ export const createJobBackedRepository = <R extends JobFields<string>>(
     getById: (id: string) => byId("id = $1", [id]),
     /** `where` over grad_jobs (and the domain table), first match. */
     find: (where: string, params: unknown[]) => byId(where, params),
+    /** Every match of `where`, newest first (at most `limit`). */
+    findAll: async (
+      where: string,
+      params: unknown[],
+      limit: number,
+    ): Promise<R[]> =>
+      (
+        await db.query(
+          `SELECT * FROM ${from} WHERE kind = '${spec.kind}' AND ${where}
+           ORDER BY created_at DESC, id COLLATE "C" DESC LIMIT ${Math.trunc(limit)}`,
+          params,
+        )
+      ).map(spec.map),
     list: (workspaceId: string, page: PageRequest): Promise<Page<R>> => {
       const params = new Params();
 

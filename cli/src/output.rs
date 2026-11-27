@@ -132,6 +132,8 @@ pub type CliResult<T = ()> = Result<T, CliError>;
 pub struct Out {
     pub json: bool,
     pub tty: bool,
+    /// Warnings for the JSON envelope (`warnings`); human mode prints them as they come.
+    warnings: std::sync::Mutex<Vec<String>>,
 }
 
 impl Out {
@@ -139,6 +141,7 @@ impl Out {
         Out {
             json,
             tty: std::io::stdout().is_terminal(),
+            warnings: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -157,10 +160,26 @@ impl Out {
         }
     }
 
+    /// A warning: on stderr now, or in the JSON envelope's `warnings`.
+    pub fn warn(&self, s: impl Into<String>) {
+        let s = s.into();
+        if self.json {
+            if let Ok(mut w) = self.warnings.lock() {
+                w.push(s);
+            }
+        } else {
+            eprintln!("warning: {}", s);
+        }
+    }
+
     /// Emit the success envelope (JSON mode) and return Ok.
     pub fn done<T: Serialize>(&self, data: &T) -> CliResult {
         if self.json {
-            let v = json!({ "ok": true, "data": data });
+            let mut v = json!({ "ok": true, "data": data });
+            let warnings = self.warnings.lock().map(|w| w.clone()).unwrap_or_default();
+            if !warnings.is_empty() {
+                v["warnings"] = json!(warnings);
+            }
             let mut o = std::io::stdout().lock();
             let _ = writeln!(
                 o,

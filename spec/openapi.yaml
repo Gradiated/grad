@@ -1223,6 +1223,8 @@ components:
         estimated_cost_usd:
           type: number
           minimum: 0
+          description: "Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling,
+            recipe.evals). See cost_breakdown."
         estimated_duration_s:
           type: integer
           minimum: 0
@@ -1286,6 +1288,8 @@ components:
             - estimated_cost_usd
           description: "On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens
             as student-price tokens, and in estimated_cost_usd)."
+        cost_breakdown:
+          $ref: "#/components/schemas/PlanCostBreakdown"
         warnings:
           type: array
           items:
@@ -1304,6 +1308,7 @@ components:
         - trained_token_fraction
         - labeling
         - teacher
+        - cost_breakdown
         - warnings
     ResolvedRunConfig:
       type: object
@@ -1655,6 +1660,28 @@ components:
             - kind
             - tracking_uri
           additionalProperties: false
+    PlanCostBreakdown:
+      type: object
+      properties:
+        train_usd:
+          type: number
+          minimum: 0
+          description: "The base model's tokens on every training step: each record (or both sides of a preference pair) once per
+            epoch, at price_per_million_tokens. Held-out evaluation during training is not billed."
+        teacher_usd:
+          type: number
+          minimum: 0
+          description: The teacher's tokens (on-policy distill), at its price.
+        eval_usd:
+          type: number
+          minimum: 0
+          description: "Evals the run starts, billed as evals: the labeling eval before training and recipe.evals on every
+            checkpoint."
+      required:
+        - train_usd
+        - teacher_usd
+        - eval_usd
+      description: estimated_cost_usd split by what bills it; the parts sum to it (to rounding).
     PlanRunRequest:
       type: object
       properties:
@@ -2178,6 +2205,12 @@ components:
             - string
             - "null"
           format: date-time
+        warnings:
+          type: array
+          items:
+            type: string
+          description: "Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or
+            running run with the same name. They're also the run's first warning events."
       required:
         - id
         - workspace_id

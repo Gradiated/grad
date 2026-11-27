@@ -931,7 +931,9 @@ impl Runs<'_> {
     }
 
     /// Create and enqueue a run. Pass your own `idempotency_key` to retry the
-    /// call (even from another process) without starting a second run.
+    /// call (even from another process) without starting a second run. The
+    /// returned run's `warnings` holds the plan's warnings, such as another
+    /// queued or running run with the same name (names aren't unique).
     pub async fn create(&self, req: &PlanRunRequest, idempotency_key: Option<&str>) -> Result<Run> {
         get(
             self.c,

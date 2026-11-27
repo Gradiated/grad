@@ -1,6 +1,7 @@
 {
   "dataset_version": 1,
   "estimated_cost_usd": 0.0001,
+  "cost_breakdown": {"train_usd": 0.0001, "teacher_usd": 0, "eval_usd": 0},
   "estimated_duration_s": 66,
   "estimated_steps": 1,
   "estimated_tokens": 60,

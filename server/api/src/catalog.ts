@@ -8,7 +8,17 @@ import {
   type TrainableModel,
 } from "./contracts.js";
 
-type CatalogEntry = Omit<TrainableModel, "recipes">;
+/**
+ * `chars_per_token`: the base tokenizer's average characters per token on chat
+ * text, which plan token estimates divide by (default 4: Qwen3 measures 4.64,
+ * so plans err about 16% high; the 512-token dev tokenizer measures 1.5).
+ * Internal: it isn't part of the public model listing.
+ */
+type CatalogEntry = Omit<TrainableModel, "recipes"> & {
+  chars_per_token?: number | undefined;
+};
+
+export const DEFAULT_CHARS_PER_TOKEN = 4;
 
 const QWEN_LRS = {
   "qwen/qwen3-0.6b": {
@@ -132,6 +142,7 @@ const ExtraModelSchema = TrainableModelSchema.omit({ recipes: true }).extend({
   template_revision: z.string().min(1).default("qwen3@3"),
   max_context_tokens: z.number().int().positive().default(32_768),
   min_gpu_memory_gb: z.number().positive().nullable().default(null),
+  chars_per_token: z.number().positive().optional(),
 });
 
 export interface ModelCatalog {
@@ -147,11 +158,16 @@ export interface ModelCatalog {
   judgePriceFor(modelId: string): number | undefined;
   /** The ids `judgePriceFor` knows, for error messages. */
   judgeModels(): readonly string[];
+  /** The tokenizer's characters per token that plan estimates use (default 4). */
+  charsPerToken(modelId: string): number;
   /** Short hash of every model's price: recorded on each usage row. */
   readonly priceVersion: string;
 }
 
-const withRecipes = (entry: CatalogEntry): TrainableModel => ({
+const withRecipes = ({
+  chars_per_token: _density,
+  ...entry
+}: CatalogEntry): TrainableModel => ({
   ...entry,
   recipes: Object.keys(entry.calibrated_lrs).sort() as RecipeKind[],
 });
@@ -214,8 +230,10 @@ export const createModelCatalog = (
   );
 
   const byId = new Map<string, TrainableModel>();
+  const density = new Map<string, number>();
   for (const entry of [...BUILTIN_MODELS, ...extras]) {
     byId.set(entry.id, withRecipes(entry));
+    density.set(entry.id, entry.chars_per_token ?? DEFAULT_CHARS_PER_TOKEN);
   }
 
   const models = Array.from(byId.values());
@@ -244,6 +262,8 @@ export const createModelCatalog = (
       return judges.get(id) ?? byId.get(id)?.price_per_million_tokens_usd;
     },
     judgeModels: () => [...new Set([...judges.keys(), ...byId.keys()])].sort(),
+    charsPerToken: (modelId) =>
+      density.get(modelId.trim().toLowerCase()) ?? DEFAULT_CHARS_PER_TOKEN,
   };
 };
 

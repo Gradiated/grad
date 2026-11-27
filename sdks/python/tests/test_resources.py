@@ -7,6 +7,7 @@ import datetime
 import json
 import tempfile
 import unittest
+import warnings
 from unittest import mock
 from pathlib import Path
 from typing import Any
@@ -388,6 +389,20 @@ class RunTests(unittest.TestCase):
         for adapter, expected in (({"kind": "encoder_full"}, "full encoder"), ({"kind": "lora", "rank": 8, "alpha": 32, "merge_on_export": True}, "merge_on_export"), (None, "—"), ({"kind": "frozen_head"}, "frozen_head")):
             data["resolved_config"]["adapter"] = adapter
             self.assertIn(expected, str(grad.Plan.from_api(data)))
+
+    def test_create_surfaces_the_plan_warnings(self) -> None:
+        dup = "run support-sft is already running (run_abc); this starts a second one."
+        client, _, _ = make_client({"POST /v1/runs": json_reply({**RUN_Q, "warnings": [dup]}, 202)})
+        with self.assertWarns(UserWarning) as caught:
+            run = client.runs.create("support", name="support-sft", recipe={"kind": "sft"})
+        self.assertEqual(str(caught.warning), dup)
+        self.assertEqual(run.warnings, [dup])
+        quiet, _, _ = make_client({"POST /v1/runs": json_reply(RUN_Q, 202)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self.assertEqual(quiet.runs.create("support", name="a", recipe={"kind": "sft"}).warnings, [])
+        text = str(grad.Plan.from_api({**fixture("python-plan.json"), "cost_breakdown": {"train_usd": 2.61, "teacher_usd": 0, "eval_usd": 0.004}}))
+        self.assertIn("Breakdown   train ~$2.61 · teacher ~$0.00 · evals ~$0.0040 (held-out evals during training aren't billed)", text)
 
     def test_run_arguments(self) -> None:
         client, sender, _ = make_client({"POST /v1/runs": json_reply(RUN_Q, 202)})

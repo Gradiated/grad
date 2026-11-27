@@ -352,10 +352,17 @@ export class RunsResource {
     return new RunPlan(await this.core.api.planRun(await buildRunBody(params), options));
   }
 
-  /** Queues a run: `await` it for the Run, or chain `.wait()`. */
+  /**
+   * Queues a run: `await` it for the Run, or chain `.wait()`. The plan's warnings (such as
+   * another queued or running run with this name) are on `run.warnings` and go to console.warn.
+   */
   create(params: RunParams, options?: RequestOptions): PendingRun {
     return new Pending(
-      (async () => new Run(this.core, await this.core.api.createRun(await buildRunBody(params), options)))(),
+      (async () => {
+        const run = new Run(this.core, await this.core.api.createRun(await buildRunBody(params), options));
+        for (const warning of run.warnings ?? []) console.warn(`grad: ${warning}`);
+        return run;
+      })(),
     );
   }
 

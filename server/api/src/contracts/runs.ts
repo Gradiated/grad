@@ -393,7 +393,10 @@ export const PlanRunResponseSchema = z
     total_records: z.number().int().min(0),
     estimated_steps: z.number().int().min(0),
     estimated_tokens: z.number().int().min(0),
-    estimated_cost_usd: z.number().min(0),
+    estimated_cost_usd: z.number().min(0).openapi({
+      description:
+        "Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling, recipe.evals). See cost_breakdown.",
+    }),
     estimated_duration_s: z.number().int().min(0).openapi({
       description:
         "Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval.",
@@ -426,6 +429,25 @@ export const PlanRunResponseSchema = z
       .openapi({
         description:
           "On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).",
+      }),
+    cost_breakdown: z
+      .object({
+        train_usd: z.number().min(0).openapi({
+          description:
+            "The base model's tokens on every training step: each record (or both sides of a preference pair) once per epoch, at price_per_million_tokens. Held-out evaluation during training is not billed.",
+        }),
+        teacher_usd: z.number().min(0).openapi({
+          description:
+            "The teacher's tokens (on-policy distill), at its price.",
+        }),
+        eval_usd: z.number().min(0).openapi({
+          description:
+            "Evals the run starts, billed as evals: the labeling eval before training and recipe.evals on every checkpoint.",
+        }),
+      })
+      .openapi("PlanCostBreakdown", {
+        description:
+          "estimated_cost_usd split by what bills it; the parts sum to it (to rounding).",
       }),
     warnings: z.array(z.string()),
   })
@@ -625,6 +647,10 @@ export const RunSchema = z
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
     finished_at: IsoTimestampSchema.nullable(),
+    warnings: z.array(z.string()).optional().openapi({
+      description:
+        "Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events.",
+    }),
   })
   .openapi("Run");
 

@@ -1263,6 +1263,11 @@
       "estimated_steps": 6,
       "estimated_tokens": 190,
       "estimated_cost_usd": 0.0002,
+      "cost_breakdown": {
+        "train_usd": 0.0002,
+        "teacher_usd": 0,
+        "eval_usd": 0
+      },
       "estimated_duration_s": 1700,
       "min_gpu_memory_gb": 44,
       "price_per_million_tokens": 1,
@@ -1317,6 +1322,7 @@
     "run_events.data[24].run.last_interruption.reason": "compute_reclaimed",
     "run_events.data[11].checkpoint_id": "ckpt_15220c34be70af6cffa4aa67",
     "run_plan.estimated_duration_s": 1700,
-    "run_plan.min_gpu_memory_gb": 44
+    "run_plan.min_gpu_memory_gb": 44,
+    "run_plan.cost_breakdown.train_usd": 0.0002
   }
 }

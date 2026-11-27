@@ -85,6 +85,12 @@ def format_plan(plan: Any, max_cost_usd: float | None = None) -> str:
     if max_cost_usd is not None:
         estimate += f" · cap max_cost_usd={_num(max_cost_usd)}"
     lines.append(estimate)
+    parts = getattr(plan, "cost_breakdown", None)
+    if parts:
+        lines.append(
+            f"Breakdown   train ~{_usd(parts.get('train_usd', 0))} · teacher ~{_usd(parts.get('teacher_usd', 0))} · "
+            f"evals ~{_usd(parts.get('eval_usd', 0))} (held-out evals during training aren't billed)"
+        )
     gpu = getattr(plan, "min_gpu_memory_gb", None)
     lines.append(
         f"Duration    ~{_duration(getattr(plan, 'estimated_duration_s', None))} on one GPU"

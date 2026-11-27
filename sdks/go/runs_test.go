@@ -57,7 +57,7 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 	}
 	// fmt.Println(plan) prints the same readout as Python's print(plan) and the CLI.
 	text := fmt.Sprint(plan)
-	for _, want := range []string{"Dataset     support-prod v2", "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=", "Estimate    ~", "Duration    ~", "on one GPU", "Warnings    2", "  ! 6 steps are below"} {
+	for _, want := range []string{"Dataset     support-prod v2", "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=", "Estimate    ~", "Breakdown   train ~$0.0002 · teacher ~$0.00 · evals ~$0.00 (held-out evals during training aren't billed)", "Duration    ~", "on one GPU", "Warnings    2", "  ! 6 steps are below"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan readout lacks %q:\n%s", want, text)
 		}
@@ -114,6 +114,20 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 	}
 	if body := f.last("POST", "/v1/deployments").JSON(t); body["artifact"] != artifact["id"] || body["name"] != "support" || body["fallback"] != "qwen/qwen3-32b" || body["explore_rate"] != 0.0 {
 		t.Fatalf("deploy body %v", body)
+	}
+}
+
+func TestCreateCarriesThePlanWarnings(t *testing.T) {
+	dup := "run support-sft is already running (run_abc); this starts a second one."
+	queued := wireMap(t, "run-queued.json")
+	queued["warnings"] = []any{dup}
+	f := newFake(t, map[string]route{"POST /v1/runs": jsonValue(202, queued)})
+	c, _ := f.client(grad.WithMaxRetries(0))
+	run, err := c.Runs.Create(context.Background(), grad.RunParams{
+		Dataset: grad.DatasetName("support"), Name: "support-sft", Recipe: grad.SFTRecipe{},
+	}).Result()
+	if err != nil || fmt.Sprint(run.Warnings) != fmt.Sprint([]string{dup}) {
+		t.Fatalf("run %+v err %v", run, err)
 	}
 }
 

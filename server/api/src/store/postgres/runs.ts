@@ -52,6 +52,12 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
     get: repo.get,
     getById: repo.getById,
     list: repo.list,
+    listActiveByName: (workspaceId, name, limit) =>
+      repo.findAll(
+        "workspace_id = $1 AND name = $2 AND status IN ('queued', 'running')",
+        [workspaceId, name],
+        limit,
+      ),
     update: repo.update,
     appendCheckpointEval: async (id, result) => {
       await db.query(

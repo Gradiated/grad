@@ -727,6 +727,15 @@ PhaseEvent = TypedDict(
     },
 )
 
+PlanCostBreakdown = TypedDict(
+    "PlanCostBreakdown",
+    {
+        "train_usd": "float",
+        "teacher_usd": "float",
+        "eval_usd": "float",
+    },
+)
+
 PlanEvalRequest = TypedDict(
     "PlanEvalRequest",
     {
@@ -787,6 +796,7 @@ PlanRunResponse = TypedDict(
         "trained_token_fraction": "float",
         "labeling": "dict[str, Any] | None",
         "teacher": "dict[str, Any] | None",
+        "cost_breakdown": "PlanCostBreakdown",
         "warnings": "list[str]",
     },
 )
@@ -1100,6 +1110,7 @@ Run = TypedDict(
         "created_at": "str",
         "updated_at": "str",
         "finished_at": "str | None",
+        "warnings": "NotRequired[list[str]]",
     },
 )
 
@@ -1548,10 +1559,11 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
     "OptimizerSpec": frozenset({"betas", "grad_clip", "kind", "weight_decay"}),
     "PhaseEvent": frozenset({"attempt", "autoscaling", "gpu", "phase", "run_id", "seq", "step", "timestamp", "type", "workers_online"}),
+    "PlanCostBreakdown": frozenset({"eval_usd", "teacher_usd", "train_usd"}),
     "PlanEvalRequest": frozenset({"baseline", "dataset", "dataset_version", "limit", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
     "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
-    "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_duration_s", "estimated_steps", "estimated_tokens", "labeling", "min_gpu_memory_gb", "price_per_million_tokens", "resolved_config", "teacher", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
+    "PlanRunResponse": frozenset({"cost_breakdown", "dataset_version", "estimated_cost_usd", "estimated_duration_s", "estimated_steps", "estimated_tokens", "labeling", "min_gpu_memory_gb", "price_per_million_tokens", "resolved_config", "teacher", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
     "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
     "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
@@ -1574,7 +1586,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
-    "Run": frozenset({"artifact_id", "attempt", "autoscaling", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "last_interruption", "latest_metric", "max_attempts", "max_cost_usd", "name", "phase", "phase_since", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workers_online", "workspace_id"}),
+    "Run": frozenset({"artifact_id", "attempt", "autoscaling", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "last_interruption", "latest_metric", "max_attempts", "max_cost_usd", "name", "phase", "phase_since", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "warnings", "workers_online", "workspace_id"}),
     "RunEventsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
     "RunInterruption": frozenset({"at", "attempt", "message", "reason", "resume_step", "step"}),
     "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),

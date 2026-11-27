@@ -181,6 +181,7 @@ fn plan_obj() -> Value {
         "dataset_version": 3, "usable_records": 4820, "total_records": 4820, "estimated_steps": 33,
         "estimated_tokens": 1100000, "estimated_cost_usd": 0.165, "estimated_duration_s": 140,
         "min_gpu_memory_gb": 24, "price_per_million_tokens": 0.15,
+        "cost_breakdown": {"train_usd": 0.15, "teacher_usd": 0, "eval_usd": 0.02},
         "trained_token_fraction": 0.62, "warnings": ["3 records have no scores"]
     })
 }
@@ -943,6 +944,7 @@ fn train_dry_run_prints_the_plan_and_sends_the_recipe() {
         "~1.1M",
         "$0.17",
         "~2m20s on one GPU (needs 24 GB of GPU memory)",
+        "breakdown : train $0.15 · teacher $0.00 · evals $0.02 (held-out evals during training aren't billed)",
         "3 records have no scores",
     ] {
         assert!(
@@ -1467,6 +1469,88 @@ fn cancel_and_resume_by_name_never_pick_one_of_several_runs() {
     let r = run(sb.grad(u), &["runs", "resume", "run_s2"]);
     expect(&r, 0);
     assert!(r.stdout.contains("next attempt"), "{}", r.stdout);
+}
+
+#[test]
+fn a_name_several_runs_share_shows_the_newest_and_says_so() {
+    let dup = "run support-sft is already running (run_old); this starts a second one.";
+    let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
+        ("GET", "/v1/runs") => Reply::json(
+            200,
+            json!({"data": [
+                run_obj("run_new", "dup", "queued"),
+                run_obj("run_old", "dup", "completed"),
+                run_obj("run_solo", "solo", "running"),
+            ], "next_cursor": null}),
+        ),
+        ("GET", "/v1/runs/run_new/checkpoints") => {
+            Reply::json(200, json!({"data": [], "next_cursor": null}))
+        }
+        ("GET", _) => Reply::problem(404, "run_not_found", "no such run"),
+        ("POST", "/v1/runs") => {
+            let mut run = run_obj("run_2", "support-sft", "queued");
+            run["warnings"] = json!([dup]);
+            Reply::json(202, run)
+        }
+        _ => Reply::problem(404, "not_found", "no route"),
+    });
+    let sb = Sandbox::new("dup-names");
+    let u = Some(srv.url.as_str());
+    let note = "2 runs match 'dup'; showing the newest (run_new). Pass a run id to choose.";
+    for args in [
+        &["runs", "inspect", "dup"][..],
+        &["runs", "checkpoints", "dup"][..],
+    ] {
+        let r = run(sb.grad(u), args);
+        expect(&r, 0);
+        assert!(r.stderr.contains(note), "{:?}: {}", args, r.stderr);
+    }
+    assert!(srv.last("GET", "/v1/runs/run_new/checkpoints").is_some());
+    let r = run(sb.grad(u), &["--json", "runs", "inspect", "dup"]);
+    expect(&r, 0);
+    let j = r.json();
+    assert_eq!(j["data"]["id"], "run_new");
+    assert_eq!(j["warnings"], json!([note]));
+    // One run with the name: nothing to say.
+    let r = run(sb.grad(u), &["--json", "runs", "inspect", "solo"]);
+    expect(&r, 0);
+    assert!(r.json().get("warnings").is_none());
+
+    // grad train warns about a queued or running run with the same name, but starts it.
+    let r = run(
+        sb.grad(u),
+        &[
+            "train",
+            "--dataset",
+            "support",
+            "--name",
+            "support-sft",
+            "--recipe",
+            "sft",
+        ],
+    );
+    expect(&r, 0);
+    assert!(
+        r.stderr.contains(&format!("warning: {}", dup)),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stdout.contains("Started run run_2"), "{}", r.stdout);
+    let r = run(
+        sb.grad(u),
+        &[
+            "--json",
+            "train",
+            "--dataset",
+            "support",
+            "--name",
+            "support-sft",
+            "--recipe",
+            "sft",
+        ],
+    );
+    expect(&r, 0);
+    assert_eq!(r.json()["warnings"], json!([dup]));
 }
 
 // ---------------------------------------------------------------- data

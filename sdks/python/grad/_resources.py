@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import tempfile
+import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -569,9 +570,14 @@ class Runs(_Resource):
         To keep training from a finished run, pass its artifact as the recipe's model:
         ``SFTRecipe(model=run.artifact)``. ``idempotency_key`` makes a retried call (even from
         another process) return the run the first call created instead of starting a second one.
+        The plan's warnings (such as another queued or running run with this ``name``) are on
+        ``run.warnings`` and are issued as Python warnings.
         """
         body = h.run_body(dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd)
-        return Run.from_api(self._wire.create_run(body, idempotency_key=idempotency_key), self._client)
+        run = Run.from_api(self._wire.create_run(body, idempotency_key=idempotency_key), self._client)
+        for message in run.warnings:
+            warnings.warn(message, stacklevel=2)
+        return run
 
     def get(self, run_id: str) -> Run:
         """A run by id."""

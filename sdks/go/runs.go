@@ -146,6 +146,8 @@ func (h *RunHandle) Wait(ctx context.Context, opts ...WaitOption) (*Run, error) 
 }
 
 // Create starts a training run: client.Runs.Create(ctx, params).Wait(ctx).
+// The created run's Warnings holds the plan's warnings, such as another queued
+// or running run with the same name (names aren't unique; this only warns).
 func (s *RunsService) Create(ctx context.Context, p RunParams) *RunHandle {
 	api, err := s.c.api()
 	if err != nil {
