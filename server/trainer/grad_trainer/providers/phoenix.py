@@ -2,7 +2,8 @@
 and their annotations from ``GET /v1/projects/{project}/span_annotations``.
 
 The annotations endpoint has no time filter and needs ``span_ids``, so ``fetch_scores`` pages
-over the root spans in the re-scan window and asks for their annotations; ``updated_at`` then
+over the root spans since the score watermark (every 15 minutes, the last 7 days:
+``GRAD_SOURCES_PHOENIX_RESCAN_SECONDS``) and asks for their annotations; ``updated_at`` then
 drops the ones already synced. Exported span files import with ``--format otel`` instead.
 
 Filters: ``start_time``/``end_time``, ``name`` (the root span name), and ``attribute`` for
@@ -17,6 +18,8 @@ Docs: https://arize.com/docs/phoenix/sdk-api-reference/rest-api/overview
 from __future__ import annotations
 
 import json
+import os
+from datetime import timedelta
 from typing import Any
 
 from ..formats import otel_attributes, otel_messages
@@ -30,6 +33,9 @@ ANNOTATIONS_LIMIT = 10_000
 class PhoenixProvider(Provider):
     name = "phoenix"
     page_size = 1000  # spans: up to 1000
+    # Annotations are found through their spans, so the re-scan (every 15 min) reaches back
+    # further than for providers that time-stamp feedback.
+    rescan_window = timedelta(seconds=float(os.environ.get("GRAD_SOURCES_PHOENIX_RESCAN_SECONDS") or 7 * 86_400))
     pushdown_filters = frozenset({"name", "user_id", "session_id", "metadata", "from", "to"})
 
     def auth_headers(self, secret: str) -> dict[str, str]:
