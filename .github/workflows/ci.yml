@@ -205,6 +205,11 @@ jobs:
       - name: Install server/api dependencies for the live tests
         run: pnpm -C server/api install --frozen-lockfile
 
+      # The live stacks run the reference worker on `python3`; it validates bundles
+      # with jsonschema (pinned as in server/trainer/requirements.txt).
+      - name: Install the reference worker's one dependency
+        run: python3 -m pip install "jsonschema==4.26.0"
+
       - name: Test Python SDK (unit + live self-hosted/Cloud stack, coverage >= 90%, mypy --strict)
         run: |
           python3 -m venv /tmp/py-sdk-venv
