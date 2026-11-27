@@ -22,6 +22,10 @@ export interface PostgresStoreOptions {
   clock: Clock;
   /** Schema to create and use (search_path); tests isolate with one per case. */
   schema?: string;
+  /** Client-side bound on one query (default QUERY_TIMEOUT_MS); tests shorten it. */
+  queryTimeoutMs?: number;
+  /** How often a LISTEN connection proves it is alive (default LISTEN_PING_MS). */
+  listenPingMs?: number;
 }
 
 const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,62}$/;
@@ -30,14 +34,24 @@ const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,62}$/;
  * Fail fast instead of hanging when Postgres is down or a failover leaves a
  * dead TCP connection: a request waits at most 5 s for a connection, a
  * statement runs at most 30 s, an abandoned transaction is ended after 60 s,
- * and TCP keepalive notices a vanished peer.
+ * and TCP keepalive probes an idle peer after 10 s. A peer that vanished
+ * without a RST can't enforce statement_timeout, so the client gives up on a
+ * query after QUERY_TIMEOUT_MS and the pool drops that connection.
  */
 export const POOL_TIMEOUTS = {
   connectionTimeoutMillis: 5_000,
   keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
 } as const;
 export const STATEMENT_TIMEOUT_MS = 30_000;
+export const QUERY_TIMEOUT_MS = STATEMENT_TIMEOUT_MS + 5_000;
 export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
+/**
+ * A LISTEN connection only reads, so a dead peer that sent no RST would go
+ * unnoticed for the kernel's keepalive (minutes): it runs `SELECT 1` this
+ * often and counts as lost when that fails.
+ */
+export const LISTEN_PING_MS = 30_000;
 
 /**
  * PostgreSQL-backed Store. Repositories share one pool; `transaction` runs on
@@ -51,6 +65,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
   const pool = new Pool({
     connectionString: options.connectionString,
     ...POOL_TIMEOUTS,
+    query_timeout: options.queryTimeoutMs ?? QUERY_TIMEOUT_MS,
     options: [
       `-c statement_timeout=${STATEMENT_TIMEOUT_MS}`,
       `-c idle_in_transaction_session_timeout=${IDLE_IN_TRANSACTION_TIMEOUT_MS}`,
@@ -91,7 +106,18 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
     telemetry: createTelemetryRepository(db),
     transaction: (fn) => db.atomic(() => fn(repos)),
     migrate: async () => {
-      await migrate(pool, { schema: options.schema });
+      // Its own connection: the serving pool's client-side query timeout
+      // would cut a long migration off.
+      const migrator = new Pool({
+        connectionString: options.connectionString,
+        max: 1,
+      });
+      migrator.on("error", logLost);
+      try {
+        await migrate(migrator, { schema: options.schema });
+      } finally {
+        await migrator.end();
+      }
     },
     ping: async () => {
       try {
@@ -121,16 +147,24 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
       if (!/^[a-z_][a-z0-9_]*$/.test(channel)) {
         throw new Error(`Invalid channel name '${channel}'.`);
       }
+      const pingMs = options.listenPingMs ?? LISTEN_PING_MS;
       const client = new Client({
         connectionString: options.connectionString,
         ...POOL_TIMEOUTS,
+        query_timeout: pingMs,
       });
       let open = true;
+      let ping: NodeJS.Timeout | undefined;
       const lost = (error: Error) => {
         if (!open) return;
         open = false;
+        clearInterval(ping);
         onLost(error);
+        // A dead peer never answers the terminate message: drop the socket.
         void client.end().catch(() => undefined);
+        (
+          client as unknown as { connection?: { stream?: { destroy(): void } } }
+        ).connection?.stream?.destroy();
       };
       client.on("notification", (message) => {
         if (message.channel === channel) onPayload(message.payload ?? "");
@@ -145,9 +179,18 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
         await client.end().catch(() => undefined);
         throw error;
       }
+      ping = setInterval(() => {
+        client
+          .query("SELECT 1")
+          .catch((error: unknown) =>
+            lost(error instanceof Error ? error : new Error(String(error))),
+          );
+      }, pingMs);
+      ping.unref();
 
       return async () => {
         open = false;
+        clearInterval(ping);
         await client.end().catch(() => undefined);
       };
     },

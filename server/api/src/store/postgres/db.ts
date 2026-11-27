@@ -71,6 +71,9 @@ export const createDb = (pool: Pool): Db => {
       }
 
       const client = await pool.connect();
+      // A client whose ROLLBACK failed (its connection died or timed out) is
+      // destroyed, never handed to the next transaction.
+      let broken: Error | undefined;
       try {
         await client.query("BEGIN");
         const value = await ambient.run(client, fn);
@@ -78,10 +81,13 @@ export const createDb = (pool: Pool): Db => {
 
         return value;
       } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
+        await client.query("ROLLBACK").catch((rollback: unknown) => {
+          broken =
+            rollback instanceof Error ? rollback : new Error(String(rollback));
+        });
         throw error;
       } finally {
-        client.release();
+        client.release(broken);
       }
     },
   };
@@ -112,7 +118,7 @@ export const isDatabaseUnavailable = (error: unknown): boolean => {
     if (code === "53300" || code === "57014") return true;
   }
 
-  return /timeout exceeded when trying to connect|Connection terminated|connection error and is not queryable/i.test(
+  return /timeout exceeded when trying to connect|Connection terminated|connection error and is not queryable|Query read timeout/i.test(
     error.message,
   );
 };
