@@ -4,7 +4,7 @@ import type { Clock } from "../clock.js";
 import { ApiError, errorMessage } from "../errors.js";
 import { metrics } from "../telemetry/metrics.js";
 import { cloudRequest, detailOf, isOk, type CloudResponse } from "./http.js";
-import type { CloudPrices } from "./prices.js";
+import { pricesUnavailable, type CloudPrices } from "./prices.js";
 
 /**
  * Gradiated Cloud billing: the balance check at create time and at every
@@ -73,11 +73,7 @@ export const createCloudBilling = (
     checkCanStartRun: async (workspaceId, estimatedCostUsd) => {
       if (!options.prices.fresh()) {
         await options.prices.refresh(true);
-        if (!options.prices.fresh()) {
-          throw billingUnavailable(
-            "The Gradiated Cloud price list is unavailable, so new runs and evals cannot be priced; retry shortly.",
-          );
-        }
+        if (!options.prices.fresh()) throw pricesUnavailable();
       }
       let res: CloudResponse;
       try {

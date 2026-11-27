@@ -112,7 +112,11 @@ Secrets, source writes and deploy are admin-only. A key's or token's non-empty
 `ETag`. grad fetches it at boot and from the maintenance tick every 5 minutes
 with `If-None-Match`; a failure backs off (30 s, doubling to 5 min) and keeps
 the last good list. After 24 h without a good answer, new runs and evals get
-503 `billing_unavailable`.
+503 `billing_unavailable`. The list lives in each replica's memory: a replica
+that boots while the endpoint is down has none, so its model lookups (plans,
+creates, `/v1/base-models`) answer 503 `billing_unavailable` and it retries
+every 30 s until it gets one. Running work is unaffected: runs bill at the
+price they were created with.
 
 - A model trains at `train:<catalog id>`; on Cloud only models with that SKU
   are offered (`/v1/base-models`), and plans and costs use its price.

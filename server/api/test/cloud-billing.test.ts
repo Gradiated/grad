@@ -110,7 +110,12 @@ describe("Cloud price list", () => {
       createModelCatalog(TINY_MODELS_JSON, TEST_JUDGES_JSON),
       p,
     );
-    expect(catalog.list()).toEqual([]);
+    // No list yet: lookups are retryable 503s, never "unknown model".
+    expect(() => catalog.list()).toThrow(
+      expect.objectContaining({ status: 503, code: "billing_unavailable" }),
+    );
+    expect(() => catalog.find("test/tiny-qwen3")).toThrow(ApiError);
+    expect(catalog.priceFor("test/tiny-qwen3")).toBeUndefined();
     expect(catalog.priceVersion).toBe("unpriced");
     await p.refresh(true);
 

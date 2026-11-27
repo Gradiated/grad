@@ -6,7 +6,12 @@ import { createAuthView, type AuthView } from "../src/cloud/auth-view.js";
 import { createJwtVerifier } from "../src/cloud/jwt.js";
 import { PlanEvalRequestSchema } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
-import { TEST_JUDGE, WORKSPACE_A } from "./fixtures/app.js";
+import {
+  makeTestApp,
+  TEST_JUDGE,
+  WORKSPACE_A,
+  type TestApp,
+} from "./fixtures/app.js";
 import {
   createEval,
   fakeInference,
@@ -17,12 +22,14 @@ import {
   type EvalHarness,
 } from "./fixtures/evals.js";
 import { ManualClock } from "./fixtures/clock.js";
+import { cloudBillingDeps, startTestCloud } from "./fixtures/cloud.js";
 import {
   startFakeCloudApi,
   type FakeCloudApi,
 } from "./fixtures/fake-cloud-api.js";
 import { judgeResponder } from "./fixtures/fake-openai.js";
 import { postgresUrl } from "./fixtures/postgres.js";
+import { createSftRun, FakeWorker, sftRecords } from "./fixtures/worker.js";
 
 const WS = "8f0e7c52-2d7e-4c39-9a51-0a5b3c1d2e3f";
 
@@ -263,5 +270,99 @@ describe("chaos: the product database (auth view) and the JWKS down", () => {
     expect(await a.authenticate(cloud.consoleToken(WS))).toMatchObject({
       workspaceId: WS,
     });
+  });
+});
+
+describe("chaos: billing (price list, balance check) down", () => {
+  const PRICES = "/api/internal/v1/billing/prices";
+  const CHECK = "/api/internal/v1/billing/check";
+  let cloud: FakeCloudApi;
+  let t: TestApp | undefined;
+
+  afterEach(async () => {
+    await t?.close();
+    t = undefined;
+    await cloud.close();
+  });
+
+  const runBody = (name: string) => ({
+    body: {
+      dataset: "support",
+      name,
+      recipe: { kind: "sft", model: "test/tiny-qwen3", batch_size: 4 },
+    },
+  });
+
+  it("a fresh boot with the price list down answers 503 billing_unavailable (not unknown_model) and prices itself once it is back", async () => {
+    cloud = await startTestCloud();
+    const clock = new ManualClock();
+    // Down for the boot fetch and four ticks: each backs off further, but
+    // never past 30 s while there is no list.
+    cloud.failNext(5, 503, PRICES);
+    t = await makeTestApp({ clock, ...(await cloudBillingDeps(cloud, clock)) });
+    await t.json("/v1/datasets/support/records", {
+      body: { records: sftRecords(20) },
+    });
+
+    const down = await t.json("/v1/runs", runBody("boot-1"));
+    expect([down.status, down.body.code]).toEqual([503, "billing_unavailable"]);
+    const models = await t.json("/v1/base-models");
+    expect([models.status, models.body.code]).toEqual([
+      503,
+      "billing_unavailable",
+    ]);
+    for (let i = 0; i < 4; i += 1) {
+      clock.advanceSeconds(31);
+      expect((await t.services.maintenance.tick()).refreshedPrices).toBe(0);
+    }
+
+    // Back: with no list at all the tick retries every 30 s (not the 5 min
+    // backoff), and creates work again.
+    clock.advanceSeconds(31);
+    expect((await t.services.maintenance.tick()).refreshedPrices).toBe(1);
+    const up = await t.json("/v1/runs", runBody("boot-2"));
+    expect(up.status).toBe(202);
+    expect(
+      ((await t.json("/v1/base-models")).body.data as unknown[]).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("balance check down: creates answer 503 and a retry with the same Idempotency-Key makes one run; heartbeats keep training", async () => {
+    cloud = await startTestCloud();
+    const clock = new ManualClock();
+    t = await makeTestApp({ clock, ...(await cloudBillingDeps(cloud, clock)) });
+    const first = await createSftRun(t);
+    const worker = new FakeWorker(t);
+    const job = (await worker.claim())!;
+    expect(job.id).toBe(first.id);
+
+    cloud.failNext(1, 503, CHECK);
+    const key = { "Idempotency-Key": "chaos-check-1" };
+    const refused = await t.json("/v1/runs", {
+      ...runBody("again"),
+      headers: key,
+    });
+    expect([refused.status, refused.body.code]).toEqual([
+      503,
+      "billing_unavailable",
+    ]);
+    const retried = await t.json("/v1/runs", {
+      ...runBody("again"),
+      headers: key,
+    });
+    const replay = await t.json("/v1/runs", {
+      ...runBody("again"),
+      headers: key,
+    });
+    expect([retried.status, replay.status]).toEqual([202, 202]);
+    expect(replay.body.id).toBe(retried.body.id);
+
+    // Down (and slow) at heartbeat: the run goes on.
+    cloud.failNext(100, 500, CHECK);
+    clock.advanceSeconds(31);
+    expect((await worker.heartbeat(job)).body).toMatchObject({
+      should_stop: false,
+    });
+    expect((await t.deps.store.runs.getById(first.id))?.status).toBe("running");
   });
 });

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { inferenceSku, trainSku, type ModelCatalog } from "../catalog.js";
 import type { TrainableModel } from "../contracts.js";
 import type { Clock } from "../clock.js";
+import { ApiError } from "../errors.js";
 import { log } from "../telemetry/log.js";
 import { watchPriceList } from "../telemetry/metrics.js";
 import { cloudRequest, detailOf, isOk } from "./http.js";
@@ -27,6 +28,18 @@ const PriceListSchema = z.object({
     )
     .max(100_000),
 });
+
+/** No price list yet (a boot during a billing outage) or none confirmed for 24 h. */
+export const pricesUnavailable = (): ApiError =>
+  new ApiError(
+    503,
+    "billing_unavailable",
+    "Billing service unavailable",
+    "The Gradiated Cloud price list is unavailable, so new runs and evals cannot be priced; retry shortly.",
+  );
+
+/** A failed fetch with no list at all retries at this pace, not the slower backoff. */
+const UNPRICED_RETRY_MS = 30_000;
 
 export interface PriceList {
   version: string;
@@ -108,8 +121,14 @@ export const createCloudPrices = (options: CloudPricesOptions): CloudPrices => {
         return true;
       } catch (error) {
         failures += 1;
-        // Back off 30 s, 60 s, ... up to the poll interval.
-        nextPollAt = now() + Math.min(pollMs, 30_000 * 2 ** (failures - 1));
+        // Back off 30 s, 60 s, ... up to the poll interval (never past
+        // 30 s while there is no list at all: nothing can be priced).
+        nextPollAt =
+          now() +
+          Math.min(
+            list ? pollMs : UNPRICED_RETRY_MS,
+            30_000 * 2 ** (failures - 1),
+          );
         log("warn", "Gradiated Cloud price list unavailable", {
           error,
           keeping: list?.version ?? null,
@@ -127,9 +146,10 @@ const usdOf = (nanoPerMtok: number): number => nanoPerMtok / 1e9;
  * The catalog priced by the Cloud price list: a model trains at its
  * `train:<model>` SKU, and only models with one are offered; judges (and eval
  * targets) are estimated at `inference:<model>`, since the gateway serves
- * and bills them. Until a list is fetched the
- * catalog is unpriced (no models): plans and creates fail rather than use a
- * price billing would reject.
+ * and bills them. Until a list is fetched (a boot during a billing outage)
+ * model lookups answer 503 billing_unavailable: plans and creates fail,
+ * retryably, rather than use a price billing would reject or call a model
+ * unknown. Prices of existing runs and evals (`priceFor`) never throw.
  */
 export const pricedCatalog = (
   catalog: ModelCatalog,
@@ -142,14 +162,26 @@ export const pricedCatalog = (
     return { ...model, price_per_million_tokens_usd: usdOf(nano) };
   };
 
+  const listed = () => {
+    if (!prices.current()) throw pricesUnavailable();
+  };
+
   return {
-    list: () =>
-      catalog
+    list: () => {
+      listed();
+      return catalog
         .list()
         .map(priced)
-        .filter((m): m is TrainableModel => m !== undefined),
-    find: (id) => priced(catalog.find(id)),
-    defaultModelFor: (kind) => priced(catalog.defaultModelFor(kind)),
+        .filter((m): m is TrainableModel => m !== undefined);
+    },
+    find: (id) => {
+      listed();
+      return priced(catalog.find(id));
+    },
+    defaultModelFor: (kind) => {
+      listed();
+      return priced(catalog.defaultModelFor(kind));
+    },
     priceFor: (id) => priced(catalog.find(id))?.price_per_million_tokens_usd,
     judgePriceFor: (id) => {
       const nano = prices
