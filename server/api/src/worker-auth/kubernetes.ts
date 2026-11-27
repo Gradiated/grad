@@ -185,15 +185,24 @@ export const createKubernetesWorkerAuth = (options: {
   maxCacheEntries?: number;
   /** Most TokenReviews in flight at once (default 8); past it: 503. */
   maxInFlight?: number;
+  /**
+   * While reviews fail (the API server is down or reviews are saturated), a
+   * token reviewed within this long still works (default 15 min; never past
+   * its exp), so a control-plane blip doesn't expire every lease.
+   */
+  staleTtlMs?: number;
 }): WorkerAuthenticator => {
   const ttlMs = options.cacheTtlMs ?? 60_000;
+  const staleMs = options.staleTtlMs ?? 15 * 60_000;
   const maxEntries = options.maxCacheEntries ?? 1_000;
   const maxInFlight = options.maxInFlight ?? 8;
   let inFlight = 0;
   const cache = new Map<
     string,
-    { principal: WorkerPrincipal; until: number }
+    { principal: WorkerPrincipal; until: number; staleUntil: number }
   >();
+  // One review per token at a time: a pod's concurrent requests share it.
+  const pending = new Map<string, Promise<WorkerPrincipal | null>>();
   const warned = new Set<string>();
 
   const unavailable = (detail: string) =>
@@ -284,17 +293,34 @@ export const createKubernetesWorkerAuth = (options: {
         metrics.authCache.inc({ mode: "kubernetes", result: "hit" });
         return hit.principal;
       }
-      if (hit) cache.delete(key);
       metrics.authCache.inc({ mode: "kubernetes", result: "miss" });
 
       const exp = (claims?.exp as number) * 1000;
-      const principal = await review(token, exp);
+      let reviewing = pending.get(key);
+      if (!reviewing) {
+        reviewing = review(token, exp).finally(() => pending.delete(key));
+        pending.set(key, reviewing);
+      }
+      let principal: WorkerPrincipal | null;
+      try {
+        principal = await reviewing;
+      } catch (error) {
+        // Down or busy: a token the API server accepted lately still holds.
+        if (hit && hit.staleUntil > now) return hit.principal;
+        throw error;
+      }
+
+      cache.delete(key);
       if (principal) {
         if (cache.size >= maxEntries) {
           const oldest = cache.keys().next().value;
           if (oldest !== undefined) cache.delete(oldest);
         }
-        cache.set(key, { principal, until: Math.min(exp, now + ttlMs) });
+        cache.set(key, {
+          principal,
+          until: Math.min(exp, now + ttlMs),
+          staleUntil: Math.min(exp, now + staleMs),
+        });
       }
 
       return principal;

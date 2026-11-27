@@ -205,3 +205,89 @@ describe("preemption storms", () => {
     expect(failed.body.error).toContain("reclaimed 3 time(s) (limit 3)");
   });
 });
+
+describe("kubernetes TokenReview outages", () => {
+  const exp = Math.floor(Date.UTC(2030, 0, 1) / 1000);
+  const jwt = (sub: string) =>
+    [
+      Buffer.from('{"alg":"RS256"}').toString("base64url"),
+      Buffer.from(JSON.stringify({ aud: ["grad"], sub, exp })).toString(
+        "base64url",
+      ),
+      "sig",
+    ].join(".");
+  const ok = (user: string) => ({
+    authenticated: true,
+    audiences: ["grad"],
+    user: {
+      username: user,
+      extra: { "authentication.kubernetes.io/pod-name": ["trainer-0"] },
+    },
+  });
+
+  it("keeps a reviewed token working while the API server is down, for a bounded time", async () => {
+    const clock = new ManualClock();
+    let down = false;
+    let reviews = 0;
+    const auth = createKubernetesWorkerAuth({
+      serviceAccounts: { "grad/trainer": ["train"], "grad/other": ["train"] },
+      clock,
+      review: async () => {
+        reviews += 1;
+        if (down) throw new Error("connect ECONNREFUSED");
+        return ok("system:serviceaccount:grad:trainer");
+      },
+    });
+    const token = jwt("system:serviceaccount:grad:trainer");
+    expect((await auth.authenticate(token))?.identity).toBe(
+      "k8s:grad/trainer/trainer-0",
+    );
+
+    down = true;
+    clock.advanceSeconds(120);
+    // Past the 60 s cache: the review fails, the last good one still holds.
+    expect((await auth.authenticate(token))?.identity).toBe(
+      "k8s:grad/trainer/trainer-0",
+    );
+    // A token never reviewed while the API was up gets the 503.
+    await expect(
+      auth.authenticate(jwt("system:serviceaccount:grad:other")),
+    ).rejects.toMatchObject({ status: 503 });
+    clock.advanceSeconds(16 * 60);
+    await expect(auth.authenticate(token)).rejects.toMatchObject({
+      status: 503,
+    });
+
+    // Back up: a fresh review, and a rejection is never served stale.
+    down = false;
+    expect(await auth.authenticate(token)).not.toBeNull();
+    expect(reviews).toBeGreaterThan(2);
+  });
+
+  it("serves a reviewed token while reviews are saturated, and coalesces concurrent reviews of one token", async () => {
+    const clock = new ManualClock();
+    let release: () => void = () => undefined;
+    let reviews = 0;
+    const auth = createKubernetesWorkerAuth({
+      serviceAccounts: { "grad/trainer": ["train"] },
+      clock,
+      maxInFlight: 1,
+      review: async () => {
+        reviews += 1;
+        if (reviews > 1) await new Promise<void>((r) => (release = r));
+        return ok("system:serviceaccount:grad:trainer");
+      },
+    });
+    const token = jwt("system:serviceaccount:grad:trainer");
+    expect(await auth.authenticate(token)).not.toBeNull();
+    clock.advanceSeconds(61);
+
+    // Three requests of one pod at once (heartbeat, progress, checkpoint):
+    // one review, no 503.
+    const same = Promise.all([0, 1, 2].map(() => auth.authenticate(token)));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(reviews).toBe(2);
+    release();
+    for (const p of await same) expect(p).not.toBeNull();
+  });
+});
