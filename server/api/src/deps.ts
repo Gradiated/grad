@@ -23,6 +23,8 @@ export interface AppSettings {
   evalConcurrency: number;
   /** SSE metrics stream poll interval (default 1000 ms). */
   ssePollMs?: number;
+  /** Event streams one API key may hold open per replica (default 20). */
+  sseStreamsPerKey?: number;
   /** Bill an open attempt once this many tokens are unbilled (default 1M). */
   usageFlushTokens?: number;
   /** ... or once this long passed since its last usage row (default 300 s). */

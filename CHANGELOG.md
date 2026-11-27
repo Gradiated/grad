@@ -29,6 +29,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   TypeScript and Go SDKs.
 - `AUTH_MODE=none` refuses a non-loopback `HOST` unless `AUTH_MODE_NONE_ALLOW_REMOTE=true`
   (`server/docker-compose.yml` sets it; its port is published on loopback only).
+- A regex rubric item that times out runs at most once per eval; the eval's other outputs
+  score it 0 without queueing behind it on the replica's shared regex worker.
+- One API key can hold at most 20 run event or metric streams open per replica (429
+  `too_many_streams`).
 
 ### Changed
 

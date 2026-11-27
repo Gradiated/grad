@@ -19,6 +19,7 @@ import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
 import { toRunEvent } from "../services/run-events.js";
 import { toMetricPoint, toPublicRun } from "../services/runs.js";
+import { createSseLimits } from "./sse-limits.js";
 import {
   defaultErrors,
   IdParamSchema,
@@ -48,6 +49,7 @@ export const registerRunRoutes = (
   services: Services,
 ): void => {
   const tags = ["Runs"];
+  const reserveStream = createSseLimits(deps.settings.sseStreamsPerKey ?? 20);
 
   app.openapi(
     createRoute({
@@ -211,44 +213,52 @@ export const registerRunRoutes = (
         Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : 0;
       const pollMs = deps.settings.ssePollMs ?? 1000;
 
-      return streamSSE(c, async (stream) => {
-        let sincePing = 0;
-        while (!stream.aborted) {
-          const points = (
-            await deps.store.jobs.listEvents(id, "metric", afterSeq, SSE_BATCH)
-          ).map(toMetricPoint);
-          for (const point of points) {
-            await stream.writeSSE({
-              event: "metric",
-              id: String(point.seq),
-              data: JSON.stringify(point),
-            });
-            afterSeq = point.seq;
-          }
-          if (points.length === SSE_BATCH) continue;
-
-          const current = await deps.store.runs.get(workspaceId, id);
-          if (
-            !current ||
-            (TERMINAL.has(current.status) && current.worker_id === null)
-          ) {
-            if (current) {
+      return streamSSE(
+        c,
+        reserveStream(c, async (stream) => {
+          let sincePing = 0;
+          while (!stream.aborted) {
+            const points = (
+              await deps.store.jobs.listEvents(
+                id,
+                "metric",
+                afterSeq,
+                SSE_BATCH,
+              )
+            ).map(toMetricPoint);
+            for (const point of points) {
               await stream.writeSSE({
-                event: "status",
-                data: JSON.stringify(toPublicRun(current)),
+                event: "metric",
+                id: String(point.seq),
+                data: JSON.stringify(point),
               });
+              afterSeq = point.seq;
             }
-            break;
-          }
+            if (points.length === SSE_BATCH) continue;
 
-          await stream.sleep(pollMs);
-          sincePing += pollMs;
-          if (sincePing >= SSE_PING_MS) {
-            sincePing = 0;
-            await stream.write(": ping\n\n");
+            const current = await deps.store.runs.get(workspaceId, id);
+            if (
+              !current ||
+              (TERMINAL.has(current.status) && current.worker_id === null)
+            ) {
+              if (current) {
+                await stream.writeSSE({
+                  event: "status",
+                  data: JSON.stringify(toPublicRun(current)),
+                });
+              }
+              break;
+            }
+
+            await stream.sleep(pollMs);
+            sincePing += pollMs;
+            if (sincePing >= SSE_PING_MS) {
+              sincePing = 0;
+              await stream.write(": ping\n\n");
+            }
           }
-        }
-      }) as never;
+        }),
+      ) as never;
     },
   );
 
@@ -308,49 +318,52 @@ export const registerRunRoutes = (
         Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : 0;
       const pollMs = deps.settings.ssePollMs ?? 1000;
 
-      return streamSSE(c, async (stream) => {
-        let sincePing = 0;
-        while (!stream.aborted) {
-          const rows = await deps.store.jobs.listEvents(
-            id,
-            RUN_EVENT_TYPES,
-            afterSeq,
-            SSE_BATCH,
-          );
-          for (const row of rows) {
-            afterSeq = row.seq;
-            const event = toRunEvent(id, row);
-            if (!event) continue;
-            await stream.writeSSE({
-              event: event.type,
-              id: String(event.seq),
-              data: JSON.stringify(event),
-            });
-          }
-          if (rows.length === SSE_BATCH) continue;
-
-          const current = await deps.store.runs.get(workspaceId, id);
-          const done = current
-            ? await services.runs.completedEvent(current, afterSeq)
-            : null;
-          if (!current || done) {
-            if (done) {
+      return streamSSE(
+        c,
+        reserveStream(c, async (stream) => {
+          let sincePing = 0;
+          while (!stream.aborted) {
+            const rows = await deps.store.jobs.listEvents(
+              id,
+              RUN_EVENT_TYPES,
+              afterSeq,
+              SSE_BATCH,
+            );
+            for (const row of rows) {
+              afterSeq = row.seq;
+              const event = toRunEvent(id, row);
+              if (!event) continue;
               await stream.writeSSE({
-                event: done.type,
-                data: JSON.stringify(done),
+                event: event.type,
+                id: String(event.seq),
+                data: JSON.stringify(event),
               });
             }
-            break;
-          }
+            if (rows.length === SSE_BATCH) continue;
 
-          await stream.sleep(pollMs);
-          sincePing += pollMs;
-          if (sincePing >= SSE_PING_MS) {
-            sincePing = 0;
-            await stream.write(": ping\n\n");
+            const current = await deps.store.runs.get(workspaceId, id);
+            const done = current
+              ? await services.runs.completedEvent(current, afterSeq)
+              : null;
+            if (!current || done) {
+              if (done) {
+                await stream.writeSSE({
+                  event: done.type,
+                  data: JSON.stringify(done),
+                });
+              }
+              break;
+            }
+
+            await stream.sleep(pollMs);
+            sincePing += pollMs;
+            if (sincePing >= SSE_PING_MS) {
+              sincePing = 0;
+              await stream.write(": ping\n\n");
+            }
           }
-        }
-      }) as never;
+        }),
+      ) as never;
     },
   );
 
