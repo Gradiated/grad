@@ -47,7 +47,10 @@ test("generates every OpenAPI operation across TypeScript, Python, Go, and Rust"
   }
 
   assert.ok(ts.includes("downloadArtifact(id: string): Promise<{ bytes: Uint8Array"));
-  assert.ok(py.includes("def download_artifact(self, id: str) -> tuple[bytes, dict[str, str]]:"));
+  assert.ok(py.includes("def download_artifact(self, id: str, *, timeout: float | None = None) -> Response:"));
+  assert.ok(py.includes("async def download_artifact(self, id: str, *, timeout: float | None = None) -> AsyncResponse:"));
+  assert.ok(py.includes("def get_run(self, id: str, *, timeout: float | None = None) -> Run:"));
+  assert.ok(!py.includes("asyncio.to_thread"), "Python async client must be natively async");
   assert.ok(go.includes("func (c *Client) DownloadArtifact(ctx context.Context, id string) ([]byte, http.Header, error)"));
   assert.ok(rs.includes("pub async fn download_artifact(&self, id: &str) -> Result<(Vec<u8>, Option<String>), ApiError>"));
 });
