@@ -141,7 +141,10 @@ export const buildDependencies = async (
       env.BILLING_MODE === "cloud"
         ? createCloudBillingAdapter(cloud())
         : createNoopBillingAdapter(),
-    catalog: createModelCatalog(env.GRAD_EXTRA_MODELS_JSON),
+    catalog: createModelCatalog(
+      env.GRAD_EXTRA_MODELS_JSON,
+      env.GRAD_JUDGE_MODELS_JSON,
+    ),
     clock,
     inference: buildInference(env),
     regex: createRegexEvaluator(),

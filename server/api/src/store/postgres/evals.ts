@@ -26,6 +26,7 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
         "model_targets",
         "rubric",
         "judge_models",
+        "judge_targets",
         "local_scorers",
         "summary",
       ]),

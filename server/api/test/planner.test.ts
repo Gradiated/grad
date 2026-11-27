@@ -514,6 +514,28 @@ describe("catalog", () => {
       recipes: ["sft"],
     });
   });
+
+  it("prices judges from the catalog and GRAD_JUDGE_MODELS_JSON only", () => {
+    const judges = createModelCatalog(
+      undefined,
+      '[{"id":"Anthropic/Claude-X","price_per_million_tokens_usd":3}]',
+    );
+    expect(judges.judgePriceFor("anthropic/claude-x")).toBe(3);
+    expect(judges.judgePriceFor("qwen/qwen3-8b")).toBe(0.4);
+    expect(judges.judgePriceFor("nope")).toBeUndefined();
+    expect(judges.judgeModels()).toContain("anthropic/claude-x");
+    expect(judges.find("anthropic/claude-x")).toBeUndefined();
+    expect(judges.priceVersion).not.toBe(createModelCatalog().priceVersion);
+    expect(() => createModelCatalog(undefined, "{nope")).toThrow(
+      /GRAD_JUDGE_MODELS_JSON is not valid JSON/,
+    );
+    expect(() =>
+      createModelCatalog(
+        undefined,
+        '[{"id":"j","price_per_million_tokens_usd":0}]',
+      ),
+    ).toThrow(/GRAD_JUDGE_MODELS_JSON is invalid/);
+  });
 });
 
 describe("record helpers", () => {

@@ -242,6 +242,14 @@ const main = async () => {
       BLOB_SIGNING_SECRET: `stack-${process.pid}-blob-signing-secret`,
       STORAGE_DIR: join(scratch, "storage"),
       GRAD_EXTRA_MODELS_JSON: JSON.stringify(TINY_MODELS),
+      // The frontier judges the docs use, priced like an operator would.
+      GRAD_JUDGE_MODELS_JSON: JSON.stringify(
+        [
+          "anthropic/claude-sonnet-5-5",
+          "anthropic/claude-opus-5-5",
+          "openai/gpt-6.1-sol",
+        ].map((id) => ({ id, price_per_million_tokens_usd: 3 })),
+      ),
       INFERENCE_BASE_URL: `${inference.baseUrl}`,
       INFERENCE_API_KEY: "sk-fake-inference",
       TRAINER_API_KEY: TRAINER_KEY,

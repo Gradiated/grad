@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { makeTestApp } from "./fixtures/app.js";
+import { makeTestApp, TEST_JUDGE } from "./fixtures/app.js";
 import {
   makeEvalHarness,
   qaRecords,
+  seedArtifact,
   seedDataset,
   type EvalHarness,
 } from "./fixtures/evals.js";
@@ -201,6 +202,84 @@ describe("evals HTTP API", () => {
     expect(noWrite.status).toBe(403);
     const unauth = await h.t.json<Json>("/v1/evals", { token: null });
     expect(unauth.status).toBe(401);
+  });
+});
+
+describe("eval judges (r8 P1-3)", () => {
+  let h: EvalHarness;
+  afterEach(async () => h.close());
+
+  it("resolves judges within the workspace, prices every judge, and names the workspace on every call", async () => {
+    h = await makeEvalHarness();
+    const art = await seedArtifact(h.t, "a-private-model");
+    const other = await h.t.mintKey("ws_b", ["runs:write", "datasets:write"]);
+    await seedDataset(h.t, "qa", qaRecords(3), "ws_b");
+    const judged = (model: string) => ({
+      models: ["test/tiny-qwen3"],
+      dataset: "qa",
+      rubric: [{ name: "j", kind: "judge", model, prompt: "ok?" }],
+    });
+
+    // Another workspace's artifact, by version or @latest, and an unpriced
+    // model are refused: no cross-tenant judges, no $0 judges.
+    for (const judge of [
+      art.id,
+      "a-private-model@latest",
+      "anthropic/claude-x",
+    ]) {
+      const res = await h.t.json<Json>("/v1/evals", {
+        token: other,
+        body: judged(judge),
+      });
+      expect([judge, res.status, res.body.code]).toEqual([
+        judge,
+        422,
+        "unknown_judge_model",
+      ]);
+    }
+
+    // A priced judge is estimated and billed at its price.
+    const plan = await h.t.json<Json>("/v1/evals/plan", {
+      token: other,
+      body: judged(TEST_JUDGE),
+    });
+    expect(plan.status).toBe(200);
+    expect(plan.body.estimated_cost_usd as number).toBeGreaterThan(0);
+    const ev = await h.t.json<Json>("/v1/evals", {
+      token: other,
+      body: judged(TEST_JUDGE),
+    });
+    expect(ev.status).toBe(202);
+    await h.t.services.evals.drain();
+    const done = await h.t.json<Json>(`/v1/evals/${ev.body.id}`, {
+      token: other,
+    });
+    expect(done.body.status).toBe("completed");
+    const judgeRequests = h.fake.requests.filter((r) => r.model === TEST_JUDGE);
+    expect(judgeRequests.length).toBe(3);
+    // The same eval without the judge costs less: the judge's calls are billed.
+    const unjudged = await h.t.json<Json>("/v1/evals", {
+      token: other,
+      body: { models: ["test/tiny-qwen3"], dataset: "qa" },
+    });
+    await h.t.services.evals.drain();
+    const plain = await h.t.json<Json>(`/v1/evals/${unjudged.body.id}`, {
+      token: other,
+    });
+    expect(done.body.total_cost_usd as number).toBeGreaterThan(
+      plain.body.total_cost_usd as number,
+    );
+    // Every inference and judge call names its workspace.
+    expect(
+      new Set(h.fake.requests.map((r) => r.headers["x-grad-workspace"])),
+    ).toEqual(new Set(["ws_b"]));
+
+    // The owner may judge with its own artifact, priced at its base model.
+    await seedDataset(h.t, "qa", qaRecords(1));
+    const own = await h.t.json<Json>("/v1/evals/plan", {
+      body: judged("a-private-model@latest"),
+    });
+    expect(own.status).toBe(200);
   });
 });
 

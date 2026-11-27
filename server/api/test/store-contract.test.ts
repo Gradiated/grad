@@ -123,6 +123,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         limit: null,
         pass_threshold: 0.5,
         judge_models: [],
+        judge_targets: {},
         local_scorers: ["local_fn"],
         mode: "eval",
         run_id: null,

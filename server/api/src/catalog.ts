@@ -135,6 +135,14 @@ export interface ModelCatalog {
   find(modelId: string): TrainableModel | undefined;
   defaultModelFor(kind: RecipeKind): TrainableModel | undefined;
   priceFor(modelId: string): number | undefined;
+  /**
+   * A judge's price: a catalog model's, or an operator-configured judge's
+   * (`GRAD_JUDGE_MODELS_JSON`, e.g. a frontier model behind the gateway).
+   * Undefined for a model nobody priced: such judges are refused.
+   */
+  judgePriceFor(modelId: string): number | undefined;
+  /** The ids `judgePriceFor` knows, for error messages. */
+  judgeModels(): readonly string[];
   /** Short hash of every model's price: recorded on each usage row. */
   readonly priceVersion: string;
 }
@@ -144,31 +152,62 @@ const withRecipes = (entry: CatalogEntry): TrainableModel => ({
   recipes: Object.keys(entry.calibrated_lrs).sort() as RecipeKind[],
 });
 
+const JudgeModelSchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(160)
+      .transform((v) => v.trim().toLowerCase()),
+    price_per_million_tokens_usd: z.number().positive(),
+  })
+  .strict();
+
+const parseJsonEnv = <T>(
+  name: string,
+  value: string | undefined,
+  schema: z.ZodType<T>,
+): T[] => {
+  if (!value?.trim()) return [];
+  let raw: unknown;
+  try {
+    raw = JSON.parse(value);
+  } catch (error) {
+    throw new Error(
+      `${name} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const parsed = z.array(schema).safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `${name} is invalid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+    );
+  }
+
+  return parsed.data;
+};
+
 /**
  * Builds the trainable-model catalog. `extraModelsJson` (from
  * `GRAD_EXTRA_MODELS_JSON`) adds or overrides entries; tests use it to register
  * tiny models. The catalog is the single price source for billing.
  */
-export const createModelCatalog = (extraModelsJson?: string): ModelCatalog => {
-  const extras = extraModelsJson?.trim()
-    ? (() => {
-        let raw: unknown;
-        try {
-          raw = JSON.parse(extraModelsJson);
-        } catch (error) {
-          throw new Error(
-            `GRAD_EXTRA_MODELS_JSON is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        const parsed = z.array(ExtraModelSchema).safeParse(raw);
-        if (!parsed.success) {
-          throw new Error(
-            `GRAD_EXTRA_MODELS_JSON is invalid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
-          );
-        }
-        return parsed.data;
-      })()
-    : [];
+export const createModelCatalog = (
+  extraModelsJson?: string,
+  judgeModelsJson?: string,
+): ModelCatalog => {
+  const extras = parseJsonEnv(
+    "GRAD_EXTRA_MODELS_JSON",
+    extraModelsJson,
+    ExtraModelSchema,
+  );
+  const judges = new Map(
+    parseJsonEnv(
+      "GRAD_JUDGE_MODELS_JSON",
+      judgeModelsJson,
+      JudgeModelSchema,
+    ).map((j) => [j.id, j.price_per_million_tokens_usd]),
+  );
 
   const byId = new Map<string, TrainableModel>();
   for (const entry of [...BUILTIN_MODELS, ...extras]) {
@@ -178,8 +217,10 @@ export const createModelCatalog = (extraModelsJson?: string): ModelCatalog => {
   const models = Array.from(byId.values());
   const priceVersion = `p_${createHash("sha256")
     .update(
-      models
-        .map((m) => `${m.id}=${m.price_per_million_tokens_usd}`)
+      [
+        ...models.map((m) => `${m.id}=${m.price_per_million_tokens_usd}`),
+        ...[...judges].map(([id, price]) => `judge:${id}=${price}`),
+      ]
         .sort()
         .join("\n"),
     )
@@ -193,6 +234,12 @@ export const createModelCatalog = (extraModelsJson?: string): ModelCatalog => {
     defaultModelFor: (kind) => models.find((m) => m.default_for.includes(kind)),
     priceFor: (modelId) =>
       byId.get(modelId.trim().toLowerCase())?.price_per_million_tokens_usd,
+    judgePriceFor: (modelId) => {
+      const id = modelId.trim().toLowerCase();
+
+      return judges.get(id) ?? byId.get(id)?.price_per_million_tokens_usd;
+    },
+    judgeModels: () => [...new Set([...judges.keys(), ...byId.keys()])].sort(),
   };
 };
 

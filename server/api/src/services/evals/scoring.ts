@@ -26,6 +26,10 @@ export interface ScoringResult {
 export interface ScoringContext {
   regex: RegexEvaluator;
   judge: ChatCompletionClient | null;
+  /** The eval's workspace: sent with every judge call. */
+  workspace: string;
+  /** Judge ref → the model name the endpoint serves it under (resolved at plan). */
+  judgeTargets: Readonly<Record<string, { inference_model: string }>>;
 }
 
 const JUDGE_SYSTEM_PROMPT =
@@ -155,7 +159,8 @@ export const scoreOutput = async (
 
     try {
       const reply = await ctx.judge.complete({
-        model: item.model,
+        model: ctx.judgeTargets[item.model]?.inference_model ?? item.model,
+        workspace: ctx.workspace,
         messages: buildJudgeMessages(item, input),
         temperature: 0,
         max_tokens: 256,

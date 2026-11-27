@@ -16,6 +16,9 @@ export interface OpenAICompatibleOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** Names the workspace of every inference and judge call. */
+export const WORKSPACE_HEADER = "X-Grad-Workspace";
+
 const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 const toWireMessage = (message: ChatMessage): Record<string, unknown> => {
@@ -78,6 +81,7 @@ export const createOpenAICompatibleClient = (
   ): Promise<ChatCompletionResult> => {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      [WORKSPACE_HEADER]: request.workspace,
     };
     if (options.apiKey) headers.Authorization = `Bearer ${options.apiKey}`;
 

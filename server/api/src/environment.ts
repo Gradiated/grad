@@ -43,6 +43,7 @@ const EnvironmentSchema = z.object({
   EVAL_EXECUTOR: booleanFlag("true"),
   EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
   GRAD_EXTRA_MODELS_JSON: optionalString,
+  GRAD_JUDGE_MODELS_JSON: optionalString,
   BLOB_SIGNING_SECRET: optionalString,
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
   MIGRATE_ON_BOOT: booleanFlag("true"),

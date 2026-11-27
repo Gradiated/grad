@@ -39,6 +39,8 @@ services:
       INFERENCE_API_KEY: "${GRAD_INFERENCE_API_KEY:-}"
       JUDGE_BASE_URL: "${GRAD_JUDGE_BASE_URL:-}"
       JUDGE_API_KEY: "${GRAD_JUDGE_API_KEY:-}"
+      # Priced judge models beyond the catalog, e.g. [{"id":"...","price_per_million_tokens_usd":3}].
+      GRAD_JUDGE_MODELS_JSON: "${GRAD_JUDGE_MODELS_JSON:-}"
       STORAGE_DIR: "/var/lib/grad"
     mem_limit: ${GRAD_SERVER_MEMORY:-1g}
     restart: unless-stopped

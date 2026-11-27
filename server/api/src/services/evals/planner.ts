@@ -22,6 +22,7 @@ import type { EvalRecord, EvalTask } from "../../store/types.js";
 import type { DatasetService, ResolvedDatasetVersion } from "../datasets.js";
 
 export type ModelTargets = EvalRecord["model_targets"];
+export type JudgeTargets = EvalRecord["judge_targets"];
 
 export interface ResolvedEvalPlan {
   response: PlanEvalResponse;
@@ -31,6 +32,7 @@ export interface ResolvedEvalPlan {
   /** The request's rubric, or the dataset's own (benchmarks), or non_empty. */
   rubric: EvalRubricItem[];
   judgeModels: string[];
+  judgeTargets: JudgeTargets;
   localScorers: string[];
   passThreshold: number;
 }
@@ -91,6 +93,54 @@ export const resolveModelTargets = async (
       inference_model: artifact.id,
       price_per_million_tokens:
         deps.catalog.priceFor(artifact.base_model) ?? null,
+    };
+  }
+
+  return targets;
+};
+
+/**
+ * Resolves judge models like eval models, but stricter: a judge is a priced
+ * catalog model, an operator-configured judge (GRAD_JUDGE_MODELS_JSON), or a
+ * servable artifact of this workspace priced at its base model. Anything else
+ * is 422 unknown_judge_model, so no judge runs unbilled and no workspace can
+ * judge with another's artifact.
+ */
+export const resolveJudgeTargets = async (
+  deps: Pick<AppDependencies, "catalog" | "store">,
+  workspaceId: string,
+  judges: readonly string[],
+): Promise<JudgeTargets> => {
+  const targets: JudgeTargets = {};
+  for (const ref of judges) {
+    if (targets[ref]) continue;
+    const price = deps.catalog.judgePriceFor(ref);
+    if (price !== undefined) {
+      targets[ref] = {
+        inference_model: ref.trim().toLowerCase(),
+        price_per_million_tokens: price,
+      };
+      continue;
+    }
+    const artifact = ref.includes("@")
+      ? await deps.store.artifacts.get(workspaceId, ref)
+      : null;
+    const base = artifact && deps.catalog.priceFor(artifact.base_model);
+    if (!artifact || base === undefined || base === null) {
+      throw invalid(
+        "unknown_judge_model",
+        `Judge model '${ref}' is neither a priced judge on this server (${deps.catalog.judgeModels().join(", ")}) nor an artifact in this workspace ('name@version'). Operators add judges with GRAD_JUDGE_MODELS_JSON.`,
+      );
+    }
+    if (NON_DEPLOYABLE_FORMATS.includes(artifact.format)) {
+      throw invalid(
+        "artifact_not_servable",
+        `Artifact '${artifact.id}' has format '${artifact.format}' and cannot be served as a judge.`,
+      );
+    }
+    targets[ref] = {
+      inference_model: artifact.id,
+      price_per_million_tokens: base,
     };
   }
 
@@ -234,6 +284,12 @@ export const planEvalRequest = async (
     throw invalid("duplicate_scorer", "Rubric item names must be unique.");
   }
 
+  const judgeModels = [...new Set(judgeItems.map((r) => r.model ?? ""))];
+  const judgeTargets = await resolveJudgeTargets(
+    deps,
+    workspaceId,
+    judgeModels,
+  );
   const targets: ModelTargets = scoring
     ? {
         [RECORD_MODEL]: {
@@ -247,7 +303,6 @@ export const planEvalRequest = async (
   const built = buildTasks(records, request.limit, scoring ? names : null);
   const { tasks } = built;
 
-  const judgeModels = [...new Set(judgeItems.map((r) => r.model ?? ""))];
   const localScorers = rubric
     .filter((r) => r.kind === "code")
     .map((r) => r.name);
@@ -268,7 +323,7 @@ export const planEvalRequest = async (
       ((tasks.length * request.samples * perCallTokens) / 1_000_000) * price;
   }
   for (const item of judgeItems) {
-    const price = deps.catalog.priceFor(item.model ?? "") ?? 0;
+    const price = judgeTargets[item.model ?? ""]?.price_per_million_tokens ?? 0;
     cost += ((outputs * (perCallTokens + 400)) / 1_000_000) * price;
   }
   const estimatedCost = Number(cost.toFixed(6));
@@ -336,6 +391,7 @@ export const planEvalRequest = async (
     tasks,
     rubric,
     judgeModels,
+    judgeTargets,
     localScorers,
     passThreshold,
   };

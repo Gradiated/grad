@@ -52,6 +52,12 @@ export const TINY_MODELS_JSON = JSON.stringify([
   },
 ]);
 
+/** A frontier judge the operator priced (GRAD_JUDGE_MODELS_JSON). */
+export const TEST_JUDGE = "test/frontier-judge";
+export const TEST_JUDGES_JSON = JSON.stringify([
+  { id: TEST_JUDGE, price_per_million_tokens_usd: 10 },
+]);
+
 export interface TestApp {
   app: ReturnType<typeof createGradApp>["app"];
   services: ReturnType<typeof createGradApp>["services"];
@@ -106,7 +112,7 @@ export const makeTestApp = async (
       lookup: store.apiKeys,
     }),
     billing: createNoopBillingAdapter(),
-    catalog: createModelCatalog(TINY_MODELS_JSON),
+    catalog: createModelCatalog(TINY_MODELS_JSON, TEST_JUDGES_JSON),
     clock,
     inference: null,
     regex: createRegexEvaluator(),

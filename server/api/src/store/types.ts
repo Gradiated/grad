@@ -556,6 +556,11 @@ export interface EvalDomain {
   limit: number | null;
   pass_threshold: number;
   judge_models: string[];
+  /** judge ref → inference model name and price (resolved at create; always priced). */
+  judge_targets: Record<
+    string,
+    { inference_model: string; price_per_million_tokens: number }
+  >;
   local_scorers: string[];
   total_outputs: number;
   generated: number;

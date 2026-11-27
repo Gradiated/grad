@@ -93,7 +93,7 @@ describe("rubric scoring", () => {
     const good = await scoreOutput(
       rubric,
       { prompt: [], output: ' {"OK": 1} ', reference: '{"OK": 1}' },
-      { regex, judge: null },
+      { regex, judge: null, workspace: "ws", judgeTargets: {} },
     );
     expect(good.scores).toEqual({ json: 1, nonempty: 1, exact: 1, has_ok: 1 });
     expect(good.errors).toEqual([]);
@@ -101,7 +101,7 @@ describe("rubric scoring", () => {
     const bad = await scoreOutput(
       rubric,
       { prompt: [], output: "  ", reference: null },
-      { regex, judge: null },
+      { regex, judge: null, workspace: "ws", judgeTargets: {} },
     );
     expect(bad.scores).toEqual({ json: 0, nonempty: 0, exact: 0, has_ok: 0 });
   });
@@ -153,7 +153,7 @@ describe("rubric scoring", () => {
     const noJudge = await scoreOutput(
       [judgeItem],
       { prompt: [], output: "x", reference: null },
-      { regex, judge: null },
+      { regex, judge: null, workspace: "ws", judgeTargets: {} },
     );
     expect(noJudge.scores.j).toBe(0);
     expect(noJudge.errors[0]).toContain("no judge endpoint");
@@ -163,6 +163,8 @@ describe("rubric scoring", () => {
       { prompt: [], output: "x", reference: null },
       {
         regex,
+        workspace: "ws",
+        judgeTargets: {},
         judge: {
           complete: async () => ({
             text: "no idea",
@@ -180,6 +182,8 @@ describe("rubric scoring", () => {
       { prompt: [], output: "x", reference: null },
       {
         regex,
+        workspace: "ws",
+        judgeTargets: {},
         judge: {
           complete: async () => {
             throw new Error("down");
@@ -287,6 +291,7 @@ describe("OpenAI-compatible client", () => {
     });
     const result = await client.complete({
       model: "m1",
+      workspace: "ws_a",
       messages: [{ role: "user", content: "ping", train: false }],
       temperature: 0,
       max_tokens: 8,
@@ -295,6 +300,7 @@ describe("OpenAI-compatible client", () => {
     expect(result.usage.prompt_tokens).toBe(10);
     const last = fake.requests.at(-1);
     expect(last?.headers.authorization).toBe("Bearer sk-test");
+    expect(last?.headers["x-grad-workspace"]).toBe("ws_a");
     expect(last?.messages[0]).toEqual({ role: "user", content: "ping" });
   });
 
@@ -306,6 +312,7 @@ describe("OpenAI-compatible client", () => {
     fake.failNext(2, 503);
     const result = await client.complete({
       model: "m1",
+      workspace: "ws_a",
       messages: [{ role: "user", content: "x" }],
       temperature: 0,
       max_tokens: 4,
@@ -323,6 +330,7 @@ describe("OpenAI-compatible client", () => {
     await expect(
       client.complete({
         model: "missing",
+        workspace: "ws_a",
         messages: [],
         temperature: 0,
         max_tokens: 4,
@@ -341,6 +349,7 @@ describe("OpenAI-compatible client", () => {
     await expect(
       flaky.complete({
         model: "m",
+        workspace: "ws_a",
         messages: [],
         temperature: 0,
         max_tokens: 4,
@@ -356,6 +365,7 @@ describe("OpenAI-compatible client", () => {
     await expect(
       down.complete({
         model: "m",
+        workspace: "ws_a",
         messages: [],
         temperature: 0,
         max_tokens: 4,
@@ -370,6 +380,7 @@ describe("OpenAI-compatible client", () => {
     await expect(
       malformed.complete({
         model: "m",
+        workspace: "ws_a",
         messages: [],
         temperature: 0,
         max_tokens: 4,
@@ -390,6 +401,7 @@ describe("OpenAI-compatible client", () => {
     });
     const res = await toolCalls.complete({
       model: "m",
+      workspace: "ws_a",
       messages: [],
       temperature: 0,
       max_tokens: 4,
@@ -403,6 +415,7 @@ describe("OpenAI-compatible client", () => {
     const client = createOpenAICompatibleClient({ baseUrl: fake.baseUrl });
     const reply = await client.complete({
       model: "judge/x",
+      workspace: "ws_a",
       messages: [],
       temperature: 0,
       max_tokens: 4,

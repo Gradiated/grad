@@ -57,7 +57,7 @@ import { settleLabelledRuns } from "../router-labels.js";
 import type { UsageService } from "../usage.js";
 import { aggregateEval } from "./aggregate.js";
 import { assertNonEmptyPlan, buildTasks, planEvalRequest } from "./planner.js";
-import { scoreOutput } from "./scoring.js";
+import { scoreOutput, type ScoringContext } from "./scoring.js";
 
 export interface EvalService {
   plan(
@@ -397,6 +397,20 @@ export const createEvalService = (
   };
 
   /** A scoring job's output: the record's own answer, scored by the rubric. */
+  const scoringContext = (record: EvalRecord): ScoringContext => ({
+    regex: deps.regex,
+    judge: deps.inference?.judge ?? null,
+    workspace: record.workspace_id,
+    judgeTargets: record.judge_targets,
+  });
+
+  /** A judge's tokens at the price resolved at plan time (judges are always priced). */
+  const judgeCost = (record: EvalRecord, judge: string, tokens: number) =>
+    (tokens / 1_000_000) *
+    (record.judge_targets[judge]?.price_per_million_tokens ??
+      deps.catalog.judgePriceFor(judge) ??
+      0);
+
   const scoreOne = async (
     record: EvalRecord,
     task: EvalTask,
@@ -432,13 +446,13 @@ export const createEvalService = (
         output: parts.response,
         reference: parts.expected,
       },
-      { regex: deps.regex, judge: deps.inference?.judge ?? null },
+      scoringContext(record),
     );
     let cost = 0;
     let tokens = 0;
     for (const [judge, judgeTokens] of Object.entries(scored.judgeTokens)) {
       tokens += judgeTokens;
-      cost += (judgeTokens / 1_000_000) * (deps.catalog.priceFor(judge) ?? 0);
+      cost += judgeCost(record, judge, judgeTokens);
     }
     const scores = Object.fromEntries(
       Object.entries(scored.scores).filter(
@@ -494,6 +508,7 @@ export const createEvalService = (
     try {
       completion = await deps.inference.models.complete({
         model: target.inference_model,
+        workspace: record.workspace_id,
         messages: pr.prompt,
         temperature: record.temperature,
         max_tokens: record.max_tokens,
@@ -506,13 +521,13 @@ export const createEvalService = (
     const scored = await scoreOutput(
       record.rubric,
       { prompt: pr.prompt, output: completion.text, reference: pr.reference },
-      { regex: deps.regex, judge: deps.inference.judge },
+      scoringContext(record),
     );
     const tokens =
       completion.usage.prompt_tokens + completion.usage.completion_tokens;
     let cost = (tokens / 1_000_000) * (target.price_per_million_tokens ?? 0);
     for (const [judge, judgeTokens] of Object.entries(scored.judgeTokens)) {
-      cost += (judgeTokens / 1_000_000) * (deps.catalog.priceFor(judge) ?? 0);
+      cost += judgeCost(record, judge, judgeTokens);
     }
 
     return {
@@ -783,6 +798,7 @@ export const createEvalService = (
       limit: request.limit ?? null,
       pass_threshold: plan.passThreshold,
       judge_models: plan.judgeModels,
+      judge_targets: plan.judgeTargets,
       local_scorers: plan.localScorers,
       run_id: checkpoint?.runId ?? null,
       run_step: checkpoint?.step ?? null,

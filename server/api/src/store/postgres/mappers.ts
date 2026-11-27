@@ -151,6 +151,7 @@ export const toEvalDomain = (r: Row): EvalDomain => ({
   limit: nn(r.limit),
   pass_threshold: n(r.pass_threshold),
   judge_models: j(r.judge_models, []),
+  judge_targets: j(r.judge_targets, {}),
   local_scorers: j(r.local_scorers, []),
   total_outputs: n(r.total_outputs),
   generated: n(r.generated),

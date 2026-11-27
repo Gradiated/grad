@@ -237,6 +237,8 @@ CREATE TABLE grad_evals (
   "limit" INTEGER,
   pass_threshold DOUBLE PRECISION NOT NULL,
   judge_models JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- judge ref -> inference model name and price (resolved at create, like model_targets).
+  judge_targets JSONB NOT NULL DEFAULT '{}'::jsonb,
   local_scorers JSONB NOT NULL DEFAULT '[]'::jsonb,
   total_outputs INTEGER NOT NULL DEFAULT 0,
   generated INTEGER NOT NULL DEFAULT 0,
