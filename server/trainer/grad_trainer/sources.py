@@ -7,12 +7,16 @@ import json
 from pathlib import Path
 from typing import IO, Any, Iterator
 
-from .connectors.parsers import NATIVE_FIELDS
+from .records import NATIVE_FIELDS
 from .errors import SourceUnavailableError
 from .models import is_offline
 
 # A row is (location for error messages, parsed object or None, error or None).
 Row = tuple[str, Any, str | None]
+
+# Hugging Face column mappings onto record fields; the rest map onto the field of the same name.
+HF_FIELD_ALIASES = {"answer": "expected_output"}
+HF_MAPPABLE = (*NATIVE_FIELDS, *HF_FIELD_ALIASES)
 
 
 _GZIP_MAGIC = b"\x1f\x8b"
@@ -95,7 +99,7 @@ def hf_rows(source: dict[str, Any]) -> Iterator[Row]:
     split = source.get("split", "train")
     config = source.get("config") or source.get("subset") or source.get("name")
     columns: dict[str, str] = dict(source.get("columns") or {})
-    columns.update({f: str(source[f]) for f in NATIVE_FIELDS if isinstance(source.get(f), str) and f not in ("id",)})
+    columns.update({f: str(source[f]) for f in HF_MAPPABLE if isinstance(source.get(f), str) and f not in ("id",)})
     limit = source.get("limit")
     try:
         ds = datasets.load_dataset(str(repo), config, split=split, revision=source.get("revision"), streaming=True)
@@ -114,7 +118,7 @@ def hf_rows(source: dict[str, Any]) -> Iterator[Row]:
                 )
             checked = True
         if columns:
-            record = {field: row[column] for field, column in columns.items()}
+            record = {HF_FIELD_ALIASES.get(field, field): row[column] for field, column in columns.items()}
         else:
             record = {k: v for k, v in row.items() if k in NATIVE_FIELDS}
         record.setdefault("id", f"{repo}:{split}:{index}")

@@ -99,6 +99,17 @@ class ImportRunnerTests(TempDirCase):
                 self.run_import({"type": "hf", "repo": "org/missing"})
             with self.assertRaisesRegex(SourceUnavailableError, "needs 'repo'"):
                 self.run_import({"type": "hf"})
+            # Regression: completion= and answer= mappings used to be dropped.
+            fake.load_dataset = lambda *a, **k: iter([{"question": "2+2?", "solution": "4", "final": "4"}])
+            _, batches = self.run_import(
+                {"type": "hf", "repo": "org/math", "prompt": "question", "completion": "solution", "answer": "final"}
+            )
+            self.assertEqual(
+                {k: batches[0][0][k] for k in ("prompt", "completion", "expected_output")},
+                {"prompt": "2+2?", "completion": "4", "expected_output": "4"},
+            )
+            _, batches = self.run_import({"type": "hf", "repo": "org/math", "columns": {"prompt": "question", "answer": "final"}})
+            self.assertEqual(batches[0][0]["expected_output"], "4")
         with mock.patch.dict(os.environ, {"GRAD_OFFLINE": "1"}):
             with self.assertRaisesRegex(SourceUnavailableError, "offline mode"):
                 self.run_import({"type": "hf", "repo": "org/chats"})

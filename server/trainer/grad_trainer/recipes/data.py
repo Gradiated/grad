@@ -52,7 +52,7 @@ def record_messages(rec: dict[str, Any]) -> list[dict[str, Any]]:
         prompt, turns = trajectory_messages(rec)
         return prompt + turns
     prompt = as_messages(rec.get("prompt"), "user")
-    expected = rec.get("expected_output")
+    expected = rec["completion"] if rec.get("completion") is not None else rec.get("expected_output")
     if isinstance(expected, dict) and "content" in expected:
         expected = expected["content"]
     answer = as_messages(expected, "assistant") if isinstance(expected, (str, list, dict)) else []
