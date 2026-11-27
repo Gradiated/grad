@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in grad doesn't work the way the docs say it should.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it?
+      description: The smallest code, CLI command or dataset that shows the problem.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: The full error or log, with API keys and private data removed.
+      render: text
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where does it happen?
+      multiple: true
+      options:
+        - grad-server
+        - grad-trainer
+        - Python SDK
+        - TypeScript SDK
+        - Go SDK
+        - Rust SDK
+        - CLI
+        - Helm chart or Docker images
+        - Docs
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running grad?
+      options:
+        - grad local up
+        - Helm (self-hosted)
+        - Gradiated Cloud
+        - From source
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`grad --version`, the SDK version, or the image tag."
+    validations:
+      required: true

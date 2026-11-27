@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "grad-sdk"
 dynamic = ["version"]
 description = "Python SDK for the Gradiated training platform: datasets, managed fine-tuning runs, evals, artifacts and deployments."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "MIT"
 authors = [{ name = "Gradiated" }]
 requires-python = ">=3.11"
 dependencies = ["httpx>=0.27,<1"]
@@ -16,7 +16,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -30,6 +29,8 @@ classifiers = [
 [project.urls]
 Homepage = "https://gradiated.com"
 Documentation = "https://gradiated.com/docs/training"
+Repository = "https://github.com/Gradiated/grad"
+Changelog = "https://github.com/Gradiated/grad/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["coverage>=7.6", "mypy>=1.13"]

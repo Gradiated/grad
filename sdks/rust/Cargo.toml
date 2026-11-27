@@ -1,10 +1,15 @@
 [package]
 name = "grad-sdk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 description = "Rust SDK for the Gradiated training and serving platform"
 rust-version = "1.82"
+repository = "https://github.com/Gradiated/grad"
+homepage = "https://gradiated.com/docs/training/"
+documentation = "https://docs.rs/grad-sdk"
+keywords = ["llm", "fine-tuning", "lora", "sdk", "gradiated"]
+categories = ["api-bindings"]
 
 [dependencies]
 flate2 = "1.0"
