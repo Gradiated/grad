@@ -8,7 +8,13 @@ import {
 } from "./common.js";
 import { DatasetRecordSchema } from "./datasets.js";
 
-export const VALIDATOR_NAMES = ["json", "non_empty", "exact_match"] as const;
+export const VALIDATOR_NAMES = [
+  "json",
+  "non_empty",
+  "exact_match",
+  "final_number",
+  "choice",
+] as const;
 
 export const BINARY_RUBRIC_KINDS = ["regex", "validator"] as const;
 
@@ -83,18 +89,10 @@ export const PlanEvalRequestSchema = z
     baseline: z.string().min(1).max(200).optional(),
     dataset: SlugSchema,
     dataset_version: z.number().int().min(1).optional(),
-    rubric: z
-      .array(EvalRubricItemSchema)
-      .min(1)
-      .max(32)
-      .default([
-        {
-          name: "non_empty",
-          kind: "validator",
-          weight: 1.0,
-          validator: "non_empty",
-        },
-      ]),
+    rubric: z.array(EvalRubricItemSchema).min(1).max(32).optional().openapi({
+      description:
+        "Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator.",
+    }),
     samples: z.number().int().min(1).max(32).default(1),
     temperature: z.number().min(0).max(2).default(0.7),
     max_tokens: z.number().int().min(1).max(32_768).default(1024),

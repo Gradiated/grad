@@ -735,9 +735,11 @@ type EvalRubricItemValidator string
 
 // Values of EvalRubricItemValidator.
 const (
-	EvalRubricItemValidatorJSON       EvalRubricItemValidator = "json"
-	EvalRubricItemValidatorNonEmpty   EvalRubricItemValidator = "non_empty"
-	EvalRubricItemValidatorExactMatch EvalRubricItemValidator = "exact_match"
+	EvalRubricItemValidatorJSON        EvalRubricItemValidator = "json"
+	EvalRubricItemValidatorNonEmpty    EvalRubricItemValidator = "non_empty"
+	EvalRubricItemValidatorExactMatch  EvalRubricItemValidator = "exact_match"
+	EvalRubricItemValidatorFinalNumber EvalRubricItemValidator = "final_number"
+	EvalRubricItemValidatorChoice      EvalRubricItemValidator = "choice"
 )
 
 // EvalRun is generated from the OpenAPI schema.
@@ -907,16 +909,28 @@ const (
 
 // ImportSource is a union of object shapes; set the fields of exactly one variant.
 type ImportSource struct {
-	Kind     ImportSourceKind    `json:"kind"`
-	UploadID *string             `json:"upload_id,omitempty"`
-	Format   *ImportSourceFormat `json:"format,omitempty"`
-	Repo     *string             `json:"repo,omitempty"`
-	Split    *string             `json:"split,omitempty"`
-	Config   *string             `json:"config,omitempty"`
-	Revision *string             `json:"revision,omitempty"`
-	Columns  *HFColumnMapping    `json:"columns,omitempty"`
-	Limit    *int                `json:"limit,omitempty"`
+	Kind      ImportSourceKind       `json:"kind"`
+	UploadID  *string                `json:"upload_id,omitempty"`
+	Format    *ImportSourceFormat    `json:"format,omitempty"`
+	Repo      *string                `json:"repo,omitempty"`
+	Split     *string                `json:"split,omitempty"`
+	Config    *string                `json:"config,omitempty"`
+	Revision  *string                `json:"revision,omitempty"`
+	Columns   *HFColumnMapping       `json:"columns,omitempty"`
+	Limit     *int                   `json:"limit,omitempty"`
+	Benchmark *ImportSourceBenchmark `json:"benchmark,omitempty"`
 }
+
+// ImportSourceBenchmark is an enumeration of allowed values.
+type ImportSourceBenchmark string
+
+// Values of ImportSourceBenchmark.
+const (
+	ImportSourceBenchmarkGsm8k        ImportSourceBenchmark = "gsm8k"
+	ImportSourceBenchmarkMmlu         ImportSourceBenchmark = "mmlu"
+	ImportSourceBenchmarkMmluPro      ImportSourceBenchmark = "mmlu_pro"
+	ImportSourceBenchmarkArcChallenge ImportSourceBenchmark = "arc_challenge"
+)
 
 // ImportSourceFormat is an enumeration of allowed values.
 type ImportSourceFormat string
@@ -934,8 +948,9 @@ type ImportSourceKind string
 
 // Values of ImportSourceKind.
 const (
-	ImportSourceKindUpload ImportSourceKind = "upload"
-	ImportSourceKindHF     ImportSourceKind = "hf"
+	ImportSourceKindUpload    ImportSourceKind = "upload"
+	ImportSourceKindHF        ImportSourceKind = "hf"
+	ImportSourceKindBenchmark ImportSourceKind = "benchmark"
 )
 
 // ImportStatus is an enumeration of allowed values.
@@ -1246,16 +1261,17 @@ const (
 
 // PlanEvalRequest is generated from the OpenAPI schema.
 type PlanEvalRequest struct {
-	Name           *string          `json:"name,omitempty"`
-	Models         []string         `json:"models"`
-	Baseline       *string          `json:"baseline,omitempty"`
-	Dataset        string           `json:"dataset"`
-	DatasetVersion *int             `json:"dataset_version,omitempty"`
-	Rubric         []EvalRubricItem `json:"rubric,omitempty"`
-	Samples        *int             `json:"samples,omitempty"`
-	Temperature    *float64         `json:"temperature,omitempty"`
-	MaxTokens      *int             `json:"max_tokens,omitempty"`
-	Limit          *int             `json:"limit,omitempty"`
+	Name           *string  `json:"name,omitempty"`
+	Models         []string `json:"models"`
+	Baseline       *string  `json:"baseline,omitempty"`
+	Dataset        string   `json:"dataset"`
+	DatasetVersion *int     `json:"dataset_version,omitempty"`
+	// Rubric Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator.
+	Rubric      []EvalRubricItem `json:"rubric,omitempty"`
+	Samples     *int             `json:"samples,omitempty"`
+	Temperature *float64         `json:"temperature,omitempty"`
+	MaxTokens   *int             `json:"max_tokens,omitempty"`
+	Limit       *int             `json:"limit,omitempty"`
 	// PassThreshold Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.
 	PassThreshold *float64 `json:"pass_threshold,omitempty"`
 }

@@ -4,6 +4,7 @@ import {
   type EvalRubricItem,
 } from "../../contracts.js";
 import { errorMessage } from "../../errors.js";
+import { choiceMatches, finalNumberMatches } from "./answers.js";
 import type { ChatCompletionClient, RegexEvaluator } from "./types.js";
 
 export const MAX_SCORED_CHARS = 16_384;
@@ -100,6 +101,10 @@ const validatorScore = (item: EvalRubricItem, input: ScoringInput): number => {
       return input.reference !== null && output === input.reference.trim()
         ? 1
         : 0;
+    case "final_number":
+      return finalNumberMatches(output, input.reference) ? 1 : 0;
+    case "choice":
+      return choiceMatches(output, input.reference) ? 1 : 0;
     default:
       return output.length > 0 ? 1 : 0;
   }

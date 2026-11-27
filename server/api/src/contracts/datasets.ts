@@ -1,5 +1,6 @@
 import { z } from "@hono/zod-openapi";
 
+import { BENCHMARK_NAMES } from "../benchmarks.js";
 import {
   ChatMessageSchema,
   IsoTimestampSchema,
@@ -231,6 +232,16 @@ export const ImportSourceSchema = z
       revision: z.string().min(1).max(128).optional(),
       columns: HfColumnMappingSchema.default({}),
       limit: z.number().int().min(1).max(10_000_000).optional(),
+    }),
+    z.object({
+      kind: z.literal("benchmark"),
+      benchmark: z.enum(BENCHMARK_NAMES).openapi({
+        description:
+          "A built-in benchmark, imported from Hugging Face at a pinned revision with fixed prompts; evals on the dataset default to its answer check.",
+      }),
+      limit: z.number().int().min(1).max(10_000_000).optional().openapi({
+        description: "Import the first N problems (the same ones every time).",
+      }),
     }),
   ])
   .openapi("ImportSource");

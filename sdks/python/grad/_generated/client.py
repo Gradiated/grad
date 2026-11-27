@@ -418,7 +418,7 @@ EvalRubricItem = TypedDict(
         "weight": "NotRequired[float]",
         "pattern": "NotRequired[str]",
         "flags": "NotRequired[str]",
-        "validator": "NotRequired[Literal['json', 'non_empty', 'exact_match']]",
+        "validator": "NotRequired[Literal['json', 'non_empty', 'exact_match', 'final_number', 'choice']]",
         "model": "NotRequired[str]",
         "prompt": "NotRequired[str]",
         "runtime": "NotRequired[Literal['local']]",

@@ -717,6 +717,8 @@ string_enum! {
         Json => "json",
         NonEmpty => "non_empty",
         ExactMatch => "exact_match",
+        FinalNumber => "final_number",
+        Choice => "choice",
     }
 }
 
@@ -943,6 +945,18 @@ pub struct ImportSource {
     pub columns: Option<HfColumnMapping>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub benchmark: Option<ImportSourceBenchmark>,
+}
+
+string_enum! {
+    /// Allowed values of `ImportSourceBenchmark`.
+    ImportSourceBenchmark {
+        Gsm8k => "gsm8k",
+        Mmlu => "mmlu",
+        MmluPro => "mmlu_pro",
+        ArcChallenge => "arc_challenge",
+    }
 }
 
 string_enum! {
@@ -960,6 +974,7 @@ string_enum! {
     ImportSourceKind {
         Upload => "upload",
         Hf => "hf",
+        Benchmark => "benchmark",
     }
 }
 
@@ -1080,6 +1095,7 @@ pub struct PlanEvalRequest {
     pub dataset: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset_version: Option<i64>,
+    /// Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rubric: Option<Vec<EvalRubricItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]

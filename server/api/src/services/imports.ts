@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { z } from "@hono/zod-openapi";
 
 import type { AuthPrincipal } from "../adapters.js";
+import { benchmarkMetadata, benchmarkSource } from "../benchmarks.js";
 import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import {
   DatasetRecordSchema,
@@ -155,12 +156,15 @@ export const createImportService = (
         metadata: {},
       });
 
-      if (body.source.kind === "hf") {
+      if (body.source.kind === "hf" || body.source.kind === "benchmark") {
         const job = await store.imports.create({
           workspaceId,
           datasetId: dataset.id,
           datasetName: dataset.name,
-          source: { ...body.source },
+          source:
+            body.source.kind === "hf"
+              ? { ...body.source }
+              : benchmarkSource(body.source.benchmark, body.source.limit),
           connector: body.connector,
           uploadKey: null,
         });
@@ -430,9 +434,11 @@ export const createImportService = (
         job.attempt,
       );
       const completed = await store.transaction(async (tx) => {
+        const benchmark = benchmarkMetadata(job.source);
         const { version } = await tx.datasets.appendVersion({
           datasetId: job.dataset_id,
           parts,
+          ...(benchmark ? { metadata: benchmark } : {}),
         });
         const updated = await tx.imports.update(
           id,

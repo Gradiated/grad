@@ -1,5 +1,8 @@
+import { z } from "@hono/zod-openapi";
+
 import {
   BINARY_RUBRIC_KINDS,
+  EvalRubricItemSchema,
   messageText,
   NON_DEPLOYABLE_FORMATS,
   RECORD_MODEL,
@@ -25,6 +28,8 @@ export interface ResolvedEvalPlan {
   dataset: ResolvedDatasetVersion;
   targets: ModelTargets;
   tasks: Array<Omit<EvalTaskRow, "eval_id">>;
+  /** The request's rubric, or the dataset's own (benchmarks), or non_empty. */
+  rubric: EvalRubricItem[];
   judgeModels: string[];
   localScorers: string[];
   passThreshold: number;
@@ -175,6 +180,22 @@ const buildTasks = (
 export const INFERENCE_UNAVAILABLE_DETAIL =
   "Evals need model outputs: set INFERENCE_BASE_URL (an OpenAI-compatible vLLM/SGLang endpoint serving your base models and LoRA artifacts by name, or the Gradiated gateway) and optionally JUDGE_BASE_URL.";
 
+export const DEFAULT_RUBRIC: EvalRubricItem[] = [
+  { name: "non_empty", kind: "validator", weight: 1, validator: "non_empty" },
+];
+
+/** A dataset's own rubric (`metadata.rubric`, set by benchmark imports), else non_empty. */
+export const datasetRubric = (dataset: {
+  metadata: Record<string, unknown>;
+}): EvalRubricItem[] => {
+  const parsed = z
+    .array(EvalRubricItemSchema)
+    .min(1)
+    .safeParse(dataset.metadata.rubric);
+
+  return parsed.success ? parsed.data : DEFAULT_RUBRIC;
+};
+
 export const JUDGE_UNAVAILABLE_DETAIL =
   "Judges need a model endpoint: set JUDGE_BASE_URL (or INFERENCE_BASE_URL) to an OpenAI-compatible endpoint serving the judge models. Regex, validator and code scorers need no endpoint.";
 
@@ -191,16 +212,22 @@ export const planEvalRequest = async (
   mode: EvalMode = "eval",
 ): Promise<ResolvedEvalPlan> => {
   const scoring = mode === "score";
-  const judgeItems = request.rubric.filter((r) => r.kind === "judge");
   if (deps.inference === null && !scoring) {
     throw unavailable("inference_unavailable", INFERENCE_UNAVAILABLE_DETAIL);
   }
+
+  const dataset = await datasets.resolve(
+    workspaceId,
+    request.dataset,
+    request.dataset_version,
+  );
+  const rubric = request.rubric ?? datasetRubric(dataset.dataset);
+  const judgeItems = rubric.filter((r) => r.kind === "judge");
   if (deps.inference === null && judgeItems.length > 0) {
     throw unavailable("inference_unavailable", JUDGE_UNAVAILABLE_DETAIL);
   }
 
-  const datasetName = request.dataset;
-  const names = request.rubric.map((r) => r.name);
+  const names = rubric.map((r) => r.name);
   if (new Set(names).size !== names.length) {
     throw invalid("duplicate_scorer", "Rubric item names must be unique.");
   }
@@ -213,23 +240,15 @@ export const planEvalRequest = async (
         },
       }
     : await resolveModelTargets(deps, workspaceId, request.models);
-  const dataset = await datasets.resolve(
-    workspaceId,
-    datasetName,
-    request.dataset_version,
-  );
   const records = await datasets.readRecords(dataset.version);
   const built = buildTasks(records, request.limit, scoring ? names : null);
   const { tasks } = built;
 
   const judgeModels = [...new Set(judgeItems.map((r) => r.model ?? ""))];
-  const localScorers = request.rubric
+  const localScorers = rubric
     .filter((r) => r.kind === "code")
     .map((r) => r.name);
-  const passThreshold = resolvePassThreshold(
-    request.rubric,
-    request.pass_threshold,
-  );
+  const passThreshold = resolvePassThreshold(rubric, request.pass_threshold);
 
   const outputs = tasks.length * request.models.length * request.samples;
   const modelCalls = scoring ? 0 : outputs;
@@ -312,6 +331,7 @@ export const planEvalRequest = async (
     dataset,
     targets,
     tasks,
+    rubric,
     judgeModels,
     localScorers,
     passThreshold,

@@ -362,7 +362,7 @@ export interface EvalRubricItem {
   weight?: number | undefined;
   pattern?: string | undefined;
   flags?: string | undefined;
-  validator?: "json" | "non_empty" | "exact_match" | undefined;
+  validator?: "json" | "non_empty" | "exact_match" | "final_number" | "choice" | undefined;
   model?: string | undefined;
   prompt?: string | undefined;
   /** Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK posts their scores. */
@@ -500,6 +500,12 @@ export type ImportSource = {
   revision?: string | undefined;
   columns?: HfColumnMapping | undefined;
   limit?: number | undefined;
+} | {
+  kind: "benchmark";
+  /** A built-in benchmark, imported from Hugging Face at a pinned revision with fixed prompts; evals on the dataset default to its answer check. */
+  benchmark: "gsm8k" | "mmlu" | "mmlu_pro" | "arc_challenge";
+  /** Import the first N problems (the same ones every time). */
+  limit?: number | undefined;
 };
 
 export type ImportStatus = "queued" | "running" | "completed" | "failed";
@@ -561,6 +567,7 @@ export interface PlanEvalRequest {
   baseline?: string | undefined;
   dataset: string;
   datasetVersion?: number | undefined;
+  /** Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator. */
   rubric?: Array<EvalRubricItem> | undefined;
   samples?: number | undefined;
   temperature?: number | undefined;

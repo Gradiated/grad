@@ -730,7 +730,7 @@ export const createEvalService = (
         dataset_id: plan.dataset.dataset.id,
         dataset_name: plan.dataset.dataset.name,
         dataset_version: plan.dataset.version.version,
-        rubric: request.rubric,
+        rubric: plan.rubric,
         samples: request.samples,
         temperature: request.temperature,
         max_tokens: request.max_tokens,

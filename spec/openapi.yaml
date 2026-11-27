@@ -649,6 +649,8 @@ components:
             - json
             - non_empty
             - exact_match
+            - final_number
+            - choice
         model:
           type: string
           minLength: 1
@@ -1113,6 +1115,29 @@ components:
           required:
             - kind
             - repo
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - benchmark
+            benchmark:
+              type: string
+              enum:
+                - gsm8k
+                - mmlu
+                - mmlu_pro
+                - arc_challenge
+              description: A built-in benchmark, imported from Hugging Face at a pinned revision with fixed prompts; evals on the
+                dataset default to its answer check.
+            limit:
+              type: integer
+              minimum: 1
+              maximum: 10000000
+              description: Import the first N problems (the same ones every time).
+          required:
+            - kind
+            - benchmark
     HfColumnMapping:
       type: object
       properties:
@@ -3499,11 +3524,7 @@ components:
             $ref: "#/components/schemas/EvalRubricItem"
           minItems: 1
           maxItems: 32
-          default:
-            - name: non_empty
-              kind: validator
-              weight: 1
-              validator: non_empty
+          description: "Default: the dataset's own rubric (a benchmark's answer check), else a non_empty validator."
         samples:
           type: integer
           minimum: 1
