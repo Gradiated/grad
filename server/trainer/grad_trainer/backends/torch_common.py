@@ -103,6 +103,10 @@ def lora_settings(adapter: dict[str, Any]) -> dict[str, Any]:
 def _enable_gradient_checkpointing(model: Any) -> None:
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
+    # from_pretrained returns the model in eval mode, and transformers only checkpoints layers
+    # while `module.training` is True; without this, checkpointing is silently a no-op.
+    # Dropout stays off: LoRA dropout is 0.0 and the Qwen3 configs set attention_dropout=0.
+    model.train()
 
 
 def apply_lora(model: Any, adapter: dict[str, Any], gradient_checkpointing: bool = False) -> Any:
@@ -123,7 +127,10 @@ def apply_lora(model: Any, adapter: dict[str, Any], gradient_checkpointing: bool
     )
     if gradient_checkpointing:
         _enable_gradient_checkpointing(model)
-    return get_peft_model(model, config)
+    peft_model = get_peft_model(model, config)
+    if gradient_checkpointing:
+        peft_model.train()
+    return peft_model
 
 
 def load_lora(
@@ -154,6 +161,8 @@ def load_lora(
     if gradient_checkpointing:
         _enable_gradient_checkpointing(model)
     peft_model = PeftModel.from_pretrained(model, str(adapter_dir), is_trainable=True)
+    if gradient_checkpointing:
+        peft_model.train()
     return peft_model, {**expected, "target_modules": sorted(config.get("target_modules") or [])}
 
 

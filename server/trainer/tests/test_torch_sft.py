@@ -225,3 +225,17 @@ class SFTTests(TorchCase):
             run_recipe("sft", {**CONFIG, "adapter": {"kind": "lora", "target_modules": ["c_attn"]}}, RECORDS, self.tmpdir())
         with self.assertRaisesRegex(RecipeConfigError, "prefix_kv"):
             run_recipe("sft", {**CONFIG, "adapter": {"kind": "prefix_kv"}}, RECORDS, self.tmpdir())
+
+
+class GradientCheckpointingTests(TorchCase):
+    """Regression: checkpointing was a silent no-op because the model stayed in eval mode,
+    so default Qwen3-8B SFT ran out of memory on an 80 GB GPU (r6 GPU run)."""
+
+    def test_apply_lora_with_checkpointing_trains_with_checkpointing_active(self) -> None:
+        from grad_trainer.backends.torch_common import apply_lora
+
+        model = apply_lora(load_base(), {"kind": "lora", "rank": 4, "alpha": 8}, gradient_checkpointing=True)
+        self.assertTrue(model.training)
+        base = model.get_base_model()
+        self.assertTrue(base.is_gradient_checkpointing)
+        self.assertTrue(all(m.training for m in base.modules() if hasattr(m, "gradient_checkpointing")))

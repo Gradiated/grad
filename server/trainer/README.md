@@ -70,7 +70,11 @@ never downloads and fails with `model_unavailable` instead. `gradiated/linden-1`
 not public and must be provided this way.
 
 Other settings: `GRAD_TRAINER_DEVICE` (default `cuda` when available), `GRAD_TORCH_THREADS`.
-v0 trains on one device; LoRA on 32B in bf16 needs an 80 GB GPU.
+v0 trains on one device. Measured peak memory at the defaults (LoRA rank 32, batch 128,
+micro-batches of 16,384 tokens, gradient checkpointing on), H100 80 GB: Qwen3-0.6B 24 GB, 4B 34 GB,
+8B 45 GB (up to 72 GB reserved over a full run), 14B 61 GB. Qwen3-32B does not fit an 80 GB GPU at
+the defaults; it fits, with about 2 GB to spare, only with 4,096-token micro-batches
+(trainer config `micro_batch_tokens`, which the v0 API does not expose).
 
 `GRAD_TRAINER_BACKEND=reference` selects a stdlib-only **test double** that runs the same loop
 over a hashed bag-of-words model. Its artifacts are `format: reference`, `deployable: false`.
