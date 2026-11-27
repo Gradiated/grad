@@ -12,8 +12,10 @@
  *     [--drop-worker-ack-every N]
  *
  * Without --database-url it starts a throwaway `gradr5-pg-<pid>` Postgres
- * container on a random loopback port and removes it on exit (stale ones
- * older than 2 h, left by a SIGKILL, are reaped on the next start).
+ * container on a random loopback port, and it always starts a `gradr8-s3-<pid>`
+ * SeaweedFS (the S3 store `grad local up` runs; the server and workers use
+ * its presigned URLs). Both are removed on exit (stale ones older than 2 h,
+ * left by a SIGKILL, are reaped on the next start).
  *
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
  *          "workspace_id","mode","worker","model_paths","fault_url",
@@ -29,7 +31,7 @@
  * drops the response to the first attempt of every keyed POST (after the
  * server committed it) so live tests can prove Idempotency-Key replays.
  * `--replicas N` starts N grad-server processes on the same database and
- * storage (one PID each, so a chaos test can kill -9 one); `worker_url` is a
+ * bucket (one PID each, so a chaos test can kill -9 one); `worker_url` is a
  * fault proxy over all of them that fails over from a dead replica and, with
  * `--drop-worker-ack-every N`, cuts every N-th worker POST's response after
  * the server committed it. Workers started here use `worker_url`.
@@ -49,6 +51,10 @@ import {
   startDockerPostgres,
   type DockerPostgres,
 } from "../../server/api/test/fixtures/docker-postgres.js";
+import {
+  startDockerSeaweedfs,
+  type DockerSeaweedfs,
+} from "../../server/api/test/fixtures/docker-seaweedfs.js";
 import { startFakeCloudApi } from "../../server/api/test/fixtures/fake-cloud-api.js";
 import { startFakeOpenAI } from "../../server/api/test/fixtures/fake-openai.js";
 import { startFakeLangfuse } from "../fixtures/fake-langfuse.js";
@@ -188,6 +194,7 @@ const main = async () => {
   let faultProxy: FaultProxy | undefined;
   let workerProxy: FaultProxy | undefined;
   let postgres: Promise<DockerPostgres> | undefined;
+  let s3: Promise<DockerSeaweedfs> | undefined;
 
   let stopping = false;
   const stop = async (code = 0) => {
@@ -219,6 +226,10 @@ const main = async () => {
       (pg) => pg.stop(),
       () => undefined,
     );
+    await s3?.then(
+      (store) => store.stop(),
+      () => undefined,
+    );
     rmSync(scratch, { recursive: true, force: true });
     for (const dir of new Set(
       Object.values(modelPaths).map((p) => dirname(p)),
@@ -239,17 +250,23 @@ const main = async () => {
         scopes: ["admin"],
       });
     }
+    s3 = startDockerSeaweedfs();
+    s3.catch(() => undefined); // awaited below, after Postgres
     let databaseUrl = args["database-url"];
     if (!databaseUrl) {
       postgres = startDockerPostgres();
       databaseUrl = (await postgres).url;
-      if (stopping) return;
     }
+    const bucket = (await s3).target;
+    if (stopping) return;
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       HOST: "127.0.0.1",
-      BLOB_SIGNING_SECRET: `stack-${process.pid}-blob-signing-secret`,
-      STORAGE_DIR: join(scratch, "storage"),
+      S3_BUCKET: bucket.bucket,
+      S3_ENDPOINT: bucket.endpoint,
+      S3_REGION: bucket.region,
+      AWS_ACCESS_KEY_ID: bucket.accessKeyId,
+      AWS_SECRET_ACCESS_KEY: bucket.secretAccessKey,
       GRAD_EXTRA_MODELS_JSON: JSON.stringify(TINY_MODELS),
       // The frontier judges the docs use, priced like an operator would.
       GRAD_JUDGE_MODELS_JSON: JSON.stringify(
