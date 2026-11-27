@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BillingAdapter } from "../src/adapters.js";
 import { costForTokens } from "../src/catalog.js";
@@ -944,6 +944,30 @@ describe("run lifecycle and worker protocol", () => {
       token: undefined as never,
     });
     expect(ds.status).toBe(403);
+  });
+
+  it("an object-storage outage in one maintenance step does not stop the billing drain", async () => {
+    await createSftRun(t);
+    const job = await worker.claim();
+    billing.failNext(1); // the inline kick fails; the tick must retry it
+    await worker.complete(job!, { status: "abandoned", tokens_processed: 10 });
+    await t.services.billing.idle();
+    expect(billing.calls).toHaveLength(0);
+
+    const storageDown = async () => {
+      throw new Error("S3 unavailable");
+    };
+    t.deps.storage.delete = storageDown;
+    t.services.runs.collectExpiredCheckpoints = storageDown;
+    t.services.uploads.collectExpired = storageDown;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    t.clock.advanceSeconds(600);
+    const report = await t.services.maintenance.tick();
+    const logged = errors.mock.calls.map((c) => String(c[0])).join();
+    errors.mockRestore();
+    expect(report).toMatchObject({ deletedCheckpoints: 0, billingSent: 1 });
+    expect(billing.calls).toHaveLength(1);
+    expect(logged).toContain("gc_checkpoints");
   });
 
   it("runs maintenance on an interval until stopped", async () => {

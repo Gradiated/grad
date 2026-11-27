@@ -40,19 +40,54 @@ export const createMaintenance = (
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<unknown> | null = null;
 
+  /** One step's failure (an S3 outage, say) is logged and never stops the others. */
+  const step = async (name: string, fn: () => Promise<number>) => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          msg: "maintenance step failed",
+          step: name,
+          error: errorMessage(error),
+        }),
+      );
+      return 0;
+    }
+  };
+
   const tick = async (): Promise<MaintenanceReport> => {
     const now = deps.clock.now();
-    const expiredRuns = await services.runs.expireLeases(now);
-    const expiredImports = await services.imports.expireLeases(now);
-    const recoveredEvals = await services.evals.recoverExpired(now);
-    const settledEvals = await services.evals.settleAwaitingScores(now);
-    const deletedCheckpoints =
-      await services.runs.collectExpiredCheckpoints(now);
-    const deletedUploads = await services.uploads.collectExpired(now);
-    const deletedIdempotencyKeys = await deps.store.idempotency.deleteExpired(
-      addSeconds(now, -IDEMPOTENCY_TTL_SECONDS),
+    const expiredRuns = await step("expire_runs", () =>
+      services.runs.expireLeases(now),
     );
-    const billing = await services.billing.drain();
+    const expiredImports = await step("expire_imports", () =>
+      services.imports.expireLeases(now),
+    );
+    const recoveredEvals = await step("recover_evals", () =>
+      services.evals.recoverExpired(now),
+    );
+    const settledEvals = await step("settle_evals", () =>
+      services.evals.settleAwaitingScores(now),
+    );
+    const deletedCheckpoints = await step("gc_checkpoints", () =>
+      services.runs.collectExpiredCheckpoints(now),
+    );
+    const deletedUploads = await step("gc_uploads", () =>
+      services.uploads.collectExpired(now),
+    );
+    const deletedIdempotencyKeys = await step("gc_idempotency_keys", () =>
+      deps.store.idempotency.deleteExpired(
+        addSeconds(now, -IDEMPOTENCY_TTL_SECONDS),
+      ),
+    );
+    let billingFailed = 0;
+    const billingSent = await step("billing", async () => {
+      const billing = await services.billing.drain();
+      billingFailed = billing.failed;
+      return billing.sent;
+    });
 
     return {
       expiredRuns,
@@ -62,8 +97,8 @@ export const createMaintenance = (
       deletedCheckpoints,
       deletedUploads,
       deletedIdempotencyKeys,
-      billingSent: billing.sent,
-      billingFailed: billing.failed,
+      billingSent,
+      billingFailed,
     };
   };
 
