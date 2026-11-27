@@ -147,12 +147,29 @@ class LoopTests(TempDirCase):
         first = loop(FakeTask(), self.tmpdir(), budget=budget, recorder=rec, checkpoint_every_steps=100).run()
         self.assertEqual(first.status, "stopped_budget")
         step, _, ckpt, _ = rec.checkpoints[-1]
+        # The server sends the budget left after earlier attempts, and the loop meters per attempt.
+        remaining = Budget(60 - first.tokens_total, 1e6)
         again = Recorder(self.tmpdir())
-        second = loop(FakeTask(), self.tmpdir(), budget=budget, recorder=again, resume=ResumeState(step, ckpt)).run()
+        second = loop(FakeTask(), self.tmpdir(), budget=remaining, recorder=again, resume=ResumeState(step, ckpt)).run()
         self.assertEqual((second.status, second.step, second.tokens_total - second.tokens_at_start), ("stopped_budget", step, 0))
         self.assertEqual((again.metrics, again.checkpoints), ([], []))
-        more = loop(FakeTask(), self.tmpdir(), budget=Budget(None, 1e6), resume=ResumeState(step, ckpt)).run()
+        more_rec = Recorder(self.tmpdir())
+        more = loop(FakeTask(), self.tmpdir(), budget=Budget(None, 1e6), recorder=more_rec, resume=ResumeState(step, ckpt)).run()
         self.assertEqual((more.status, more.step), ("completed", 8))
+        # Metric tokens and cost are this attempt's only: never the tokens restored from the checkpoint.
+        self.assertEqual(more_rec.metrics[-1]["tokens"], more.tokens_total - more.tokens_at_start)
+        self.assertEqual(first.tokens_total + more_rec.metrics[-1]["tokens"], more.tokens_total)
+        self.assertEqual(more_rec.metrics[-1]["cost_usd"], more_rec.metrics[-1]["tokens"])
+
+    def test_resumed_attempt_meters_against_the_remaining_budget(self) -> None:
+        rec = Recorder(self.tmpdir(), stop_after=2)
+        first = loop(FakeTask(), self.tmpdir(), recorder=rec, checkpoint_every_steps=100).run()
+        step, _, ckpt, _ = rec.checkpoints[-1]
+        # A cap larger than the restored tokens alone still lets the resumed attempt train.
+        again = Recorder(self.tmpdir())
+        second = loop(FakeTask(), self.tmpdir(), budget=Budget(first.tokens_total, 1e6), recorder=again, resume=ResumeState(step, ckpt)).run()
+        self.assertGreater(second.step, step)
+        self.assertLessEqual(second.tokens_total - second.tokens_at_start, first.tokens_total)
 
     def test_resume_mismatch_errors(self) -> None:
         rec = Recorder(self.tmpdir(), stop_after=2)

@@ -6,10 +6,13 @@ must behave the same for every recipe:
 - Data order: epoch ``e`` visits train items in a permutation seeded by ``(seed, e)``; step
   ``s`` is batch ``s % batches_per_epoch`` of epoch ``s // batches_per_epoch``. The data cursor
   is therefore just the step number, and resuming at step ``k`` replays the same batches.
-- Metering: each step's tokens are known before it runs (``task.item_tokens``). A step runs only
-  if ``(tokens so far + step tokens) * price`` stays within ``max_cost_usd``; otherwise the run
-  stops with ``stopped_budget`` and a final checkpoint. The meter is never rolled back:
-  ``select="best"`` restores weights only.
+- Metering is per attempt: each step's tokens are known before it runs (``task.item_tokens``).
+  A step runs only if ``(this attempt's tokens + step tokens) * price`` stays within
+  ``max_cost_usd``, which is the budget left for this attempt (the server subtracts what earlier
+  attempts were billed). Otherwise the run stops with ``stopped_budget`` and a final checkpoint.
+  Metric ``tokens``/``cost_usd`` are this attempt's, so a resumed run never re-reports the tokens
+  restored from its checkpoint. The meter is never rolled back: ``select="best"`` restores
+  weights only.
 - Checkpoints hold the exported artifact files plus ``trainer_state/`` (loop state, task state
   with optimizer and RNG, current weights, best weights), so a checkpoint is both promotable
   and resumable.
@@ -272,7 +275,8 @@ class TrainingLoop:
             planned = self.task.planned_prep_tokens()  # type: ignore[attr-defined]
             if (
                 self.budget.max_cost_usd is not None
-                and cost_usd(self.tokens_total + planned, self.budget) > self.budget.max_cost_usd
+                and cost_usd(self.tokens_total - tokens_at_start + planned, self.budget)
+                > self.budget.max_cost_usd
             ):
                 status = "stopped_budget"
             else:
@@ -283,7 +287,8 @@ class TrainingLoop:
             step_tokens = sum(self.task.item_tokens(i) for i in indices)
             if (
                 self.budget.max_cost_usd is not None
-                and cost_usd(self.tokens_total + step_tokens, self.budget) > self.budget.max_cost_usd
+                and cost_usd(self.tokens_total - tokens_at_start + step_tokens, self.budget)
+                > self.budget.max_cost_usd
             ):
                 status = "stopped_budget"
                 break
@@ -306,8 +311,8 @@ class TrainingLoop:
                 "epoch": (self.step - 1) // self.batches_per_epoch,
                 **{k: float(v) for k, v in stats.items()},
                 "lr": lr,
-                "tokens": self.tokens_total,
-                "cost_usd": round(cost_usd(self.tokens_total, self.budget), 8),
+                "tokens": self.tokens_total - tokens_at_start,
+                "cost_usd": round(cost_usd(self.tokens_total - tokens_at_start, self.budget), 8),
                 "tokens_per_sec": step_tokens / elapsed,
                 "timestamp": utc_now_iso(),
             }
