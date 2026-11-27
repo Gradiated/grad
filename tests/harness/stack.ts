@@ -20,7 +20,7 @@
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
  *          "workspace_id","mode","worker","model_paths","fault_url",
  *          "worker_url","replicas":[{"url","pid"}],
- *          "langfuse_url","langfuse_secret","ui_url"}
+ *          "langfuse_url","langfuse_secret","ui_url","s3"}
  * `ui_url` is the web UI (null in --cloud mode or until `pnpm -C server/ui
  * build` has run); open `<ui_url>#key=<api_key>` to sign in.
  * `langfuse_url` is tests/fixtures/fake-langfuse.ts (drive it via its
@@ -369,6 +369,8 @@ const main = async () => {
         replicas,
         langfuse_url: langfuse.url,
         langfuse_secret: langfuse.secret,
+        // The stack's SeaweedFS bucket (scripts/load/sources.py counts its objects).
+        s3: bucket,
         // grad-server serves server/ui/dist when it is built (pnpm -C server/ui build).
         ui_url:
           !cloud && existsSync(join(repo, "server", "ui", "dist", "index.html"))

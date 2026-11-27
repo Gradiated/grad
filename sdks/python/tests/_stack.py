@@ -38,10 +38,14 @@ def live_skip_reason(worker: str = "none") -> str | None:
 class Stack:
     """A running harness stack; ``info`` is its JSON line (base_url, api_key, ...)."""
 
-    def __init__(self, *, cloud: bool = False, worker: str = "none", auth: str = "api_key", timeout: float = 240.0) -> None:
+    def __init__(
+        self, *, cloud: bool = False, worker: str = "none", auth: str = "api_key", timeout: float = 240.0, database_url: str | None = None
+    ) -> None:
         args = [str(TSX), str(HARNESS), "--worker", worker, "--auth", auth]
         if cloud:
             args.append("--cloud")
+        if database_url:
+            args += ["--database-url", database_url]
         env = dict(os.environ)
         env.setdefault("TMPDIR", os.environ.get("TMPDIR", "/tmp"))
         self.log_path = Path(env["TMPDIR"]) / f"grad-py-stack-{os.getpid()}-{int(time.time() * 1000)}.log"
