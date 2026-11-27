@@ -73,8 +73,8 @@ spec:
             - name: TRAINER_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ $.Values.secret.name }}
-                  key: {{ $w.apiKeySecretKey | default $d.apiKeySecretKey }}
+                  name: {{ include "grad.secretName" $ }}
+                  key: {{ include "grad.workerKeyName" (list $ $name $w) }}
             {{- range $k, $v := $w.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

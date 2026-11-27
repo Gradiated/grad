@@ -17,7 +17,6 @@ NODE_IMAGE=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e
 NS=grad
 RELEASE=grad
 CHART="$ROOT/server/helm/grad"
-ADMIN_KEY="grad_kind_admin_$(openssl rand -hex 12)"
 export KUBECONFIG="${TMPDIR:-/tmp}/kubeconfig-$CLUSTER"
 
 step() { printf '\n== %s\n' "$*"; }
@@ -46,7 +45,7 @@ kind create cluster --name "$CLUSTER" --image "$NODE_IMAGE" --wait 120s
 docker update --memory "${GRAD_KIND_MEMORY:-3g}" --memory-swap "${GRAD_KIND_MEMORY:-3g}" "$CLUSTER-control-plane" >/dev/null
 kind load docker-image --name "$CLUSTER" grad-server:dev grad-trainer:dev
 
-step "fixtures: Postgres, MinIO, the bucket and the Secret"
+step "fixtures: Postgres, MinIO and the bucket (no Secret: the chart creates it)"
 kubectl create namespace "$NS"
 kubectl -n "$NS" apply -f "$ROOT/tests/helm/fixtures.yaml"
 kubectl -n "$NS" rollout status deploy/postgres deploy/minio --timeout 180s
@@ -54,21 +53,18 @@ kubectl -n "$NS" run make-bucket --rm -i --restart=Never --image grad-server:dev
   --env AWS_ACCESS_KEY_ID=gradkind --env AWS_SECRET_ACCESS_KEY=grad-kind-only-secret -- \
   node --input-type=module -e "import {S3Client,CreateBucketCommand} from '@aws-sdk/client-s3';
     await new S3Client({endpoint:'http://minio:9000',region:'us-east-1',forcePathStyle:true}).send(new CreateBucketCommand({Bucket:'grad-kind'}))"
-# One worker key per pool, each scoped to its pool's job kinds.
-sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
-TRAIN_KEY="grad_kind_train_$(openssl rand -hex 12)" IMPORT_KEY="grad_kind_import_$(openssl rand -hex 12)"
-kubectl -n "$NS" create secret generic grad \
-  --from-literal=database-url="postgres://grad:grad-kind-only@postgres:5432/grad" \
-  --from-literal=admin-api-key-hash="$(sha "$ADMIN_KEY")" \
-  --from-literal=trainer-keys-json="[{\"label\":\"train\",\"sha256\":\"$(sha "$TRAIN_KEY")\",\"kinds\":[\"train\"]},{\"label\":\"import\",\"sha256\":\"$(sha "$IMPORT_KEY")\",\"kinds\":[\"import\"]}]" \
-  --from-literal=train-worker-api-key="$TRAIN_KEY" \
-  --from-literal=import-worker-api-key="$IMPORT_KEY" \
-  --from-literal=secrets-key="$(openssl rand -base64 32)" \
-  --from-literal=aws-access-key-id=gradkind \
-  --from-literal=aws-secret-access-key=grad-kind-only-secret
 
 step "helm install"
 helm install "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" --wait --timeout 6m
+SECRET="$RELEASE-grad"
+secret_key() { kubectl -n "$NS" get secret "$SECRET" -o jsonpath="{.data.$1}" | base64 -d; }
+ADMIN_KEY=$(secret_key admin-api-key)
+[[ "$ADMIN_KEY" == grad_* ]] || { echo "FAIL: the chart did not generate an admin key" >&2; exit 1; }
+[ "$(printf '%s' "$ADMIN_KEY" | sha256sum | cut -d' ' -f1)" = "$(secret_key admin-api-key-hash)" ]
+[ "$(secret_key secrets-key | base64 -d | wc -c)" -eq 32 ] || { echo "FAIL: secrets-key is not 32 bytes" >&2; exit 1; }
+# One generated key per pool, each scoped to its pool's job kinds.
+secret_key trainer-keys-json | python3 -c 'import json,sys; keys=json.load(sys.stdin); assert sorted((k["label"],k["kinds"]) for k in keys) == [("import",["import"]),("train",["train"])], keys'
+GENERATED=$(kubectl -n "$NS" get secret "$SECRET" -o jsonpath='{.data}')
 # KEDA's metrics-api trigger (keda.trigger=metrics-api) reads each pool's queue
 # depth from grad-server's metrics port; the prometheus trigger reads
 # grad_jobs_open from /metrics. Both must answer from inside the cluster.
@@ -92,6 +88,7 @@ helm upgrade "$RELEASE" "$CHART" -n "$NS" -f "$CHART/ci/kind-values.yaml" \
 kubectl -n "$NS" get deploy "$RELEASE-grad-api" -o jsonpath='{.spec.template.spec.containers[0].env}' | grep -q MAX_ATTEMPTS
 kubectl -n "$NS" rollout status deploy/"$RELEASE-grad-api" --timeout 180s
 test "$(helm -n "$NS" history "$RELEASE" -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)[-1]["status"])')" = deployed
+[ "$(kubectl -n "$NS" get secret "$SECRET" -o jsonpath='{.data}')" = "$GENERATED" ] || { echo "FAIL: helm upgrade changed the generated keys" >&2; exit 1; }
 
 step "helm uninstall"
 helm uninstall "$RELEASE" -n "$NS" --wait --timeout 3m
@@ -99,4 +96,6 @@ helm uninstall "$RELEASE" -n "$NS" --wait --timeout 3m
 kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/instance=$RELEASE --timeout 120s
 left=$(kubectl -n "$NS" get all,serviceaccount,pdb,job,networkpolicy -l app.kubernetes.io/instance=$RELEASE -o name)
 [ -z "$left" ] || { echo "FAIL: left behind: $left" >&2; exit 1; }
+# The Secret outlives the release, so a reinstall keeps its keys and workspace secrets.
+kubectl -n "$NS" get secret "$SECRET" >/dev/null
 echo "helm smoke test passed"

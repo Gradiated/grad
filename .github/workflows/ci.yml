@@ -282,18 +282,31 @@ jobs:
       - name: Lint, template and kubeconform the Helm chart (default, kind, air-gapped/KEDA, monitoring, Cloud)
         run: |
           chart=server/helm/grad
-          helm lint "$chart" --strict --set storage.s3Bucket=lint
+          db=postgres://grad:ci@postgres:5432/grad
+          helm lint "$chart" --strict --set storage.s3Bucket=lint --set secrets.databaseUrl="$db"
           helm lint "$chart" --strict -f "$chart/ci/kind-values.yaml"
-          if helm template grad "$chart" > /dev/null 2>&1; then
-            echo "the chart must refuse to render without storage.s3Bucket"; exit 1
-          fi
+          refuses() {  # refuses <why> <helm template args...>
+            local why=$1; shift
+            if out=$(helm template grad "$chart" "$@" 2>&1); then echo "the chart must refuse to render $why"; exit 1; fi
+            echo "ok: refuses $why: ${out##*error calling fail: }"
+          }
+          refuses "without storage.s3Bucket" --set secrets.databaseUrl="$db"
+          refuses "without secrets.databaseUrl" --set storage.s3Bucket=artifacts
+          refuses "without secrets.existingSecret" --set storage.s3Bucket=artifacts --set secrets.create=false
+          refuses "the old docs' database.existingSecret" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set database.existingSecret=grad-postgres
+          refuses "the old docs' trainer.gpuCount" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set trainer.gpuCount=1
+          refuses "the old docs' keda.maxReplicaCount" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set keda.maxReplicaCount=4
+          refuses "the old docs' models.mirrorUri" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set models.mirrorUri=s3://m
           {
-            helm template grad "$chart" --set storage.s3Bucket=artifacts
+            helm template grad "$chart" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db"
+            echo ---
+            helm template grad "$chart" --set storage.s3Bucket=artifacts --set secrets.create=false --set secrets.existingSecret=grad
             echo ---
             helm template grad "$chart" -f "$chart/ci/kind-values.yaml"
             echo ---
             helm template grad "$chart" \
               --set storage.s3Bucket=airgap-artifacts \
+              --set secrets.databaseUrl="$db" \
               --set keda.enabled=true \
               --set keda.trigger=metrics-api \
               --set ingress.enabled=true \
@@ -305,6 +318,7 @@ jobs:
             echo ---
             helm template grad "$chart" \
               --set storage.s3Bucket=monitored-artifacts \
+              --set secrets.databaseUrl="$db" \
               --set keda.enabled=true \
               --set keda.prometheus.serverAddress=http://prometheus-operated.monitoring.svc:9090 \
               --set metrics.requireToken=true \
@@ -316,6 +330,7 @@ jobs:
             echo ---
             helm template grad "$chart" \
               --set storage.s3Bucket=cloud-artifacts \
+              --set secrets.databaseUrl="$db" \
               --set api.authMode=cloud \
               --set api.billingMode=cloud \
               --set cloud.internalApiUrl=https://api.gradiated.com \

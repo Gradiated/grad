@@ -1,5 +1,10 @@
 # Test values for tests/helm/smoke.sh: locally built images, in-cluster
 # Postgres and MinIO fixtures, the reference trainer backend, small requests.
+# The chart creates its Secret (admin key, worker keys, secrets-key) itself.
+secrets:
+  databaseUrl: postgres://grad:grad-kind-only@postgres:5432/grad
+  awsAccessKeyId: gradkind
+  awsSecretAccessKey: grad-kind-only-secret
 api:
   replicaCount: 2
   image: {repository: grad-server, tag: dev, pullPolicy: Never}
@@ -15,7 +20,6 @@ workerDefaults:
 workers:
   train:
     image: {tag: dev}
-    apiKeySecretKey: train-worker-api-key
     gpuCount: 0
     terminationGracePeriodSeconds: 30
     env:
@@ -25,7 +29,6 @@ workers:
       limits: {cpu: "1", memory: 768Mi}
   import:
     image: {tag: dev}
-    apiKeySecretKey: import-worker-api-key
     resources:
       requests: {cpu: 50m, memory: 128Mi}
       limits: {cpu: "1", memory: 768Mi}

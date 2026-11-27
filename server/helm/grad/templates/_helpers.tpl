@@ -30,13 +30,35 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- end -}}
 {{- end -}}
 
+{{/* The Secret every pod reads: the chart's own (secrets.create) or secrets.existingSecret. */}}
+{{- define "grad.secretName" -}}
+{{- if .Values.secrets.create -}}
+{{- include "grad.fullname" . -}}
+{{- else -}}
+{{- .Values.secrets.existingSecret -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret key holding a worker pool's API key: (list ctx poolName pool) */}}
+{{- define "grad.workerKeyName" -}}
+{{- $ctx := index . 0 -}}
+{{- $w := index . 2 -}}
+{{- if $w.apiKeySecretKey -}}
+{{- $w.apiKeySecretKey -}}
+{{- else if $ctx.Values.secrets.create -}}
+{{- printf "worker-%s-api-key" (index . 1) -}}
+{{- else -}}
+{{- $ctx.Values.workerDefaults.apiKeySecretKey -}}
+{{- end -}}
+{{- end -}}
+
 {{/* An env var from the chart Secret: (list ctx NAME key optional) */}}
 {{- define "grad.secretEnv" -}}
 {{- $ctx := index . 0 -}}
 - name: {{ index . 1 }}
   valueFrom:
     secretKeyRef:
-      name: {{ $ctx.Values.secret.name }}
+      name: {{ include "grad.secretName" $ctx }}
       key: {{ index . 2 }}
       {{- if index . 3 }}
       optional: true
@@ -65,8 +87,24 @@ capabilities:
 {{- if not .Values.storage.s3Bucket -}}
 {{- fail "storage.s3Bucket is required: grad-server replicas and workers share artifacts through S3-compatible storage (set storage.s3Endpoint for MinIO or R2)." -}}
 {{- end -}}
-{{- if not .Values.secret.name -}}
-{{- fail "secret.name is required: a Secret with at least a database-url key." -}}
+{{- if and (not .Values.secrets.create) (not .Values.secrets.existingSecret) -}}
+{{- fail "secrets.existingSecret is required with secrets.create=false: a Secret with at least a database-url key." -}}
+{{- end -}}
+{{- /* Keys from older docs and chart versions: refuse them instead of ignoring them. */ -}}
+{{- $moved := dict "secret" "secrets.existingSecret (with secrets.create=false)" "database" "secrets.databaseUrl, or secrets.existingSecret" "auth" "secrets.adminApiKeyHash, or secrets.existingSecret" "trainer" "workers.train (gpuCount, nodeSelector, tolerations) and workerDefaults.image" "judge" "evals.judgeBaseUrl" -}}
+{{- range $key, $instead := $moved -}}
+{{- if hasKey $.Values $key -}}
+{{- fail (printf "values key '%s' is not part of this chart; use %s." $key $instead) -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey .Values.api "deployMode" -}}
+{{- fail "values key 'api.deployMode' is not part of this chart: self-hosted servers never deploy (deployments are served by Gradiated Cloud)." -}}
+{{- end -}}
+{{- if hasKey .Values.models "mirrorUri" -}}
+{{- fail "values key 'models.mirrorUri' is not part of this chart; use models.mirror." -}}
+{{- end -}}
+{{- if or (hasKey .Values.keda "minReplicaCount") (hasKey .Values.keda "maxReplicaCount") -}}
+{{- fail "values keys 'keda.minReplicaCount'/'keda.maxReplicaCount' are not part of this chart; use keda.workers.<pool>.minReplicaCount/maxReplicaCount (pools: train, import)." -}}
 {{- end -}}
 {{- if .Values.keda.enabled -}}
 {{- if not (has .Values.keda.trigger (list "prometheus" "metrics-api")) -}}

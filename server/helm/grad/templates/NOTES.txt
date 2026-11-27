@@ -12,6 +12,11 @@ Check readiness:
 Web UI: http://127.0.0.1:8787/ while port-forwarding{{ with .Values.ingress }}{{ if .enabled }}{{ range .hosts }}, or http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/{{ end }}{{ end }}{{ end }}
 Sign in with an API key, or run `grad ui` to open it signed in.
 {{- end }}
+{{- if and .Values.secrets.create (not .Values.secrets.adminApiKeyHash) }}
+
+Admin API key (generated; kept across upgrades and after uninstall):
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "grad.secretName" . }} -o jsonpath='{.data.admin-api-key}' | base64 -d
+{{- end }}
 {{- if not .Values.evals.inferenceBaseUrl }}
 
 Evals are off: set evals.inferenceBaseUrl to an OpenAI-compatible endpoint.

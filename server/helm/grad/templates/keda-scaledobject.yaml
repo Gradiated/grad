@@ -10,7 +10,7 @@ metadata:
 spec:
   secretTargetRef:
     - parameter: token
-      name: {{ .Values.secret.name }}
+      name: {{ include "grad.secretName" . }}
       key: metrics-token
 {{- end }}
 {{- range $name, $w := .Values.workers }}
