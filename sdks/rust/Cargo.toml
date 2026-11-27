@@ -1,6 +1,6 @@
 [package]
 name = "grad-sdk"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 edition = "2021"
 license = "MIT"
 description = "Rust SDK for the Gradiated training and serving platform"

@@ -261,10 +261,18 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       # Go modules in a subdirectory are versioned by a tag with that prefix.
+      # Idempotent: a maintainer may push the tag by hand (git push origin sdks/go/vX.Y.Z);
+      # then this only checks it points at the released commit.
       - name: Push the sdks/go/vX.Y.Z tag
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f ref="refs/tags/sdks/go/v$VERSION" -f sha="$GITHUB_SHA"
+          ref="tags/sdks/go/v$VERSION"
+          if existing=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$ref" -q .object.sha 2>/dev/null); then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing" -q .object.sha 2>/dev/null || echo "$existing")
+            echo "sdks/go/v$VERSION already exists at $sha"
+            test "$sha" = "$GITHUB_SHA" || { echo "::error::sdks/go/v$VERSION points at $sha, not $GITHUB_SHA"; exit 1; }
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/$ref" -f sha="$GITHUB_SHA"
+          fi
 
       - name: Ask the Go module proxy to fetch it
         run: |

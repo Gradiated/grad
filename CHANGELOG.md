@@ -7,8 +7,12 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+## [0.2.0-alpha.3] - 2026-11-27
+
 ### Changed
 
+- npm publishes with trusted publishing (OIDC); this is the first crates.io release of `grad-sdk`
+  and `grad-cli`. The Go module tag step accepts a tag pushed by hand.
 - The images are published to Docker Hub as `docker.io/gradiated/grad-server` and
   `docker.io/gradiated/grad-trainer`, with the same tags mirrored on GHCR. `grad local up`, the
   embedded compose file and the Helm chart default to Docker Hub.
