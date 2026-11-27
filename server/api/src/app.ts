@@ -29,7 +29,7 @@ import { serveUiFallback, serveUiFile } from "./ui.js";
 export type { AppDependencies } from "./deps.js";
 
 export const API_TITLE = "Gradiated Training & Serving API";
-export const API_VERSION = "0.2.0-alpha.3";
+export const API_VERSION = "0.2.0-alpha.4";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;

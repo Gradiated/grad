@@ -7,166 +7,144 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+## [0.2.0-alpha.4] - 2026-11-27
+
+Upgrading runs migrations 0002 to 0009 (`node dist/main.js migrate`, or the Helm chart's Job).
+Breaking changes are marked; most affect operators, not SDK code.
+
 ### Added
 
 - **One artifact registry for trained, uploaded and imported weights.** `grad artifacts upload
-  PATH --base MODEL [--format F] [--name N]` (`client.artifacts.upload(...)` in Python,
-  `grad.artifacts.upload` in TypeScript, `Artifacts.Upload` in Go, `artifacts().upload` in
-  Rust) uploads a directory (tarred), a file or a `.tar.gz`; `grad artifacts import
-  hf://owner/name[@revision] --base MODEL` (`from_hf` / `fromHf` / `FromHF` / `import_hf`)
-  imports a Hugging Face repo at a pinned commit. An import worker checks the files against
-  docs/ARTIFACT_FORMATS.md and the base model's `config.json` (for a PEFT LoRA: the adapter
-  config, base model and revision, target modules and every tensor shape) and releases a normal
-  `name@YYYY-MM-DD-n` artifact you can download, evaluate or continue training from. A failed
-  check is a `422 invalid_artifact` naming the file (CLI exit 5). API: `POST
-  /v1/artifact-imports`, `GET /v1/artifact-imports/{id}`; `POST /v1/uploads` takes `purpose:
-  artifact_import`.
-- **Provenance.** Every artifact has `provenance` (`source` run, upload or import, with the
-  `run_id`, the `uploader` key or the `hf://` URI and commit), in the bundle manifest and on the
-  API object.
-- **Deleting artifacts and pins.** `grad artifacts delete NAME@VERSION` (`DELETE
-  /v1/artifacts/{id}`, `artifact.delete()` in every SDK) deletes an artifact and its bundle.
-  Internal `POST`/`DELETE /v1/artifacts/{id}/pins` (scope `artifacts:pin`, which only `admin`
-  implies) let Gradiated Cloud pin the artifacts its model versions serve; a pinned artifact is
-  never deleted (migration 0006: the pin references it `ON DELETE RESTRICT`), and a delete
-  answers `409 artifact_pinned` naming the holders.
+  PATH --base MODEL` uploads an adapter, merged model, encoder or router bundle trained
+  elsewhere; `grad artifacts import hf://owner/name[@revision] --base MODEL` imports one from
+  the Hugging Face Hub at a pinned commit. An import worker checks the files against
+  docs/ARTIFACT_FORMATS.md and the base model's `config.json` (a failed check is `422
+  invalid_artifact` naming the file, CLI exit 5) and releases an ordinary `name@YYYY-MM-DD-n`
+  artifact to download, evaluate or continue training from. Every SDK has `artifacts.upload`
+  and the Hub import (`from_hf` / `fromHf` / `FromHF` / `import_hf`).
+- Every artifact has `provenance` (the run, the uploader key, or the `hf://` URI and commit).
+  `grad artifacts delete NAME@VERSION` (`artifact.delete()`) deletes one; an artifact Gradiated
+  Cloud has pinned for a model version is never deleted (`409 artifact_pinned`).
+- **Worker authentication modes** (`GRAD_WORKER_AUTH`): static keys (`TRAINER_KEYS_JSON`, the
+  default), Kubernetes service-account tokens checked with the TokenReview API, or lease
+  tokens an orchestrator mints on `INTERNAL_PORT` (`POST /internal/v1/worker-tokens`), bound
+  to a host, job kinds, a GPU size and an expiry. Workers read `GRAD_WORKER_TOKEN` or
+  `GRAD_WORKER_TOKEN_FILE` on every request, so tokens rotate without a restart.
+- **Gradiated Cloud adapters** ([docs/CLOUD_MODE.md](docs/CLOUD_MODE.md)): `AUTH_MODE=cloud`
+  (API keys from the product's auth view, console JWTs against its JWKS), `BILLING_MODE=cloud`
+  (Cloud's price list, balances and usage events), evals through the Gradiated gateway,
+  workspace suspend and delete hooks, artifact pins and resolve for serving, and workspace
+  secrets sealed with AWS KMS (`GRAD_SECRETS_KMS_KEY_ID`). Self-hosted servers are unchanged.
+- **A fair queue.** A claim goes to the workspace with the fewest running jobs of its kind,
+  then to that workspace's oldest job, so one workspace's backlog no longer holds up another.
+  A workspace runs at most `GRAD_MAX_RUNNING_PER_WORKSPACE_{TRAIN,IMPORT,EVAL}` (8) jobs of a
+  kind and queues at most `GRAD_MAX_QUEUED_PER_WORKSPACE` (500); past that, creating a job
+  answers `429 queue_limit`, which every SDK raises at once as `QueueLimitError` instead of
+  retrying. Workers only get runs whose `min_gpu_memory_gb` fits their GPU. Runs carry
+  `queue_position` and `queue_message`, and the CLI, TUI and web UI say why a run waits
+  ("Queued behind 3 runs", "Waiting for a GPU with ≥46 GB; ...").
+- **Usage reports.** `grad usage` prints a period's cost and tokens by kind (training, eval,
+  scoring, labeling, teacher) with the top runs and evals; `--by day|week|month|model|recipe|kind`
+  groups it and `--from`/`--to` set the period. `GET /v1/usage/summary`, `usage.summary(...)` in
+  every SDK, and a usage page in the web UI. The old listing is `grad usage list`.
+- **Source controls.** Filters are checked per provider (`422 source_filter_unsupported` or
+  `source_filter_invalid`) and sent to the provider's API where it supports them.
+  `sample_rate`, `max_records_per_sync` and `max_records_per_day` cap what a source brings in,
+  `version_interval` (default 15 min) makes a busy source commit fewer dataset versions, and
+  `grad sources update` (`PATCH /v1/sources/{id}`) changes any of them from the next sync.
+- Browser clients: `GRAD_CORS_ORIGINS` allows listed origins on `/v1`, and `grad artifacts
+  download REF --url` (`GET /v1/artifacts/{id}/download-url`) prints a presigned download.
+- A maintenance sweep deletes job blobs no artifact or dataset part references once they are
+  `ORPHAN_BLOB_DAYS` (7) old.
+- Homebrew: `brew install gradiated/tap/grad`. The release workflow updates the formula.
 
 ### Changed
 
-- **Released artifacts live under `artifacts/<workspace>/<sha256>`**, the one prefix serving
-  reads. A run's final bundle is uploaded there; promoting a checkpoint copies it there
-  (checkpoints stay under their job and are never servable). The orphaned-blob sweep covers
-  `artifacts/` too. Releases created earlier keep their job-prefix key.
-- **Artifact format_version 2.** Final manifests require `provenance`; nothing else changed in
-  any format, so readers accept versions 1 and 2 (a version 1 manifest is a run's).
-
-- **Gradiated Cloud adapters** ([docs/CLOUD_MODE.md](docs/CLOUD_MODE.md)). `AUTH_MODE=cloud`
-  reads API keys from the product's read-only auth view (cached 5 s) and verifies console JWTs
-  against the control plane's JWKS; `BILLING_MODE=cloud` prices from Cloud's versioned price
-  list, checks balances in nano-USD and pushes the usage ledger as usage events; evals can call
-  the Gradiated gateway's eval lane (`GRAD_CLOUD_GATEWAY_URL`); the internal listener takes the
-  product's workspace hooks (suspend, reinstate, delete and purge) and artifact pins. Usage
-  records gain `billed_by` (`grad` | `gateway`). **Breaking (Cloud operators only):**
-  `CLOUD_INTERNAL_API_URL`'s `/auth/verify` and `billing/usage/cursor` calls and
-  `USAGE_EXPORT_LAG_SECONDS` are gone.
-
-- **Browser clients.** `GRAD_CORS_ORIGINS` (default off) allows listed origins on `/v1`, and
-  `GET /v1/artifacts/{id}/download-url` returns a presigned download (`artifacts.downloadUrl`,
-  `download_url`, `DownloadURL`, `grad artifacts download REF --url`).
-
-- **Workspace secrets on AWS KMS.** `GRAD_SECRETS_KMS_KEY_ID` seals each value under its own
-  data key wrapped by KMS; values sealed by `GRAD_SECRETS_KEY` move onto KMS in the background.
-
-- **Evals run on eval workers, not in grad-server.** Evals, `dataset.score()`, router
-  labelling, distillation's teacher answers and checkpoint evals are `eval` jobs on the job
-  queue, claimed by `node dist/main.js worker --kinds eval` (the grad-server image): the Helm
-  `import` pool runs one beside its trainer (kinds `[import, eval]`), and `grad local up` adds a
-  `grad-eval-worker` service. A deploy or restart of the API no longer interrupts an eval; a lost
-  worker's eval resumes after its stored outputs, each billed once. **Breaking (operators):**
-  `GRAD_INFERENCE_API_KEY`, `GRAD_JUDGE_API_KEY` and `EVAL_CONCURRENCY` move to the eval workers
-  (the API keeps the endpoint URLs, to refuse evals without one), and `EVAL_EXECUTOR` is gone.
-
-- **Worker authentication modes.** `GRAD_WORKER_AUTH` picks how workers authenticate, as a
-  comma-separated list tried in order: `static` (the default, `TRAINER_KEYS_JSON` as before),
-  `kubernetes` (projected service-account tokens, audience `grad`, verified with the TokenReview
-  API and mapped to job kinds by `GRAD_WORKER_K8S_SERVICE_ACCOUNTS`) and `lease` (tokens an
-  orchestrator mints through `POST /internal/v1/worker-tokens` on `INTERNAL_PORT`, bound to a
-  host, kinds, a GPU bound and an expiry, revoked with `DELETE /internal/v1/worker-tokens/{lease_id}`;
-  migration 0007). Workers read `GRAD_WORKER_TOKEN` or `GRAD_WORKER_TOKEN_FILE`, re-read on
-  every request. The Helm chart now defaults to `workers.auth=kubernetes`: one ServiceAccount
-  per pool, no worker keys, and a ClusterRole for grad-server that only creates TokenReviews.
-  `workers.auth=static` keeps the generated per-pool keys. Training pods run under a low
-  PriorityClass (`trainingPriorityClass`, `<release>-training-low`, value -10, preemptionPolicy
-  Never), so your own workloads preempt them. A train job's dataset stream now also checks that
-  the caller holds the job's lease.
-
-- **Event streams share one reader per API replica.** SSE streams of run events and metrics no
-  longer poll Postgres each (two queries a second per open stream). Each replica LISTENs on
-  `grad_job_events` (migration 0004 adds NOTIFY triggers on event inserts and job status
-  changes), fetches new events for all its streams in one bounded query, and re-reads every
-  followed run every `SSE_POLL_MS` (default 2000) in case a notification was missed. With 1,000
-  streams over 50 running jobs, the streams' queries fell from about 2,000/s to about 40/s and
-  write-to-client latency from about 0.5 s to under 0.1 s (p50). Resume with `Last-Event-ID`,
-  full backfill, pings and the 20-streams-per-key cap are unchanged; SIGTERM now ends open
-  streams at once so clients resume on another replica. New metrics: `grad_sse_streams`,
-  `grad_sse_hub_fetches_total`, `grad_sse_hub_notifications_total`, `grad_sse_hub_listening`
-  and `grad_sse_dispatch_latency_seconds`.
-
-- **Fair queue across workspaces.** A claim now picks the workspace with the fewest running
-  jobs of that kind (ties: its oldest queued job), then that workspace's oldest job, instead
-  of the oldest job overall, so one workspace's backlog no longer delays another's. Per
-  workspace, at most `GRAD_MAX_RUNNING_PER_WORKSPACE_{TRAIN,IMPORT,EVAL}` (8) jobs of a kind
-  run at once (the rest wait, "Queued: workspace concurrency limit (8 running)"), and
-  `GRAD_MAX_QUEUED_PER_WORKSPACE` (500) jobs may be queued: creating more answers
-  `429 queue_limit` (Helm `api.queue`). Workers send `device` and their GPU memory with each
-  claim and get only runs whose `min_gpu_memory_gb` fits; a run nobody online fits says so.
-  `Run` gains `queue_position`, `queue_message` and `min_gpu_memory_gb`, and queued phase
-  events `queue_position` and `message`, in every SDK; `grad train`, the TUI and the web UI
-  show the message. New metrics: `grad_job_fair_share_wait_seconds`,
-  `grad_jobs_over_workspace_limit` (excluded from `grad_jobs_open`, so KEDA doesn't scale for
-  capped jobs), `grad_jobs_unfit` and `grad_queue_limit_rejections_total`.
-
-- **Usage reports.** `grad usage` prints a period's total cost and tokens, a breakdown by kind
-  (training, eval, scoring, labeling, teacher) and the top runs and evals; `--by
-  day|week|month|model|recipe|kind` prints one grouped table, and `--from`/`--to` set the period
-  in UTC (default: the current calendar month; a date `--to` covers that whole day). The old
-  row listing is `grad usage list`, with `--from`/`--to`, `--run`, `--eval`, `--kind` and
-  readable columns. The API adds `GET /v1/usage/summary` and those filters on `GET /v1/usage`;
-  every SDK has `usage.summary(...)` and a filtered `usage.list(...)` taking strings or native
-  dates. **Breaking:** a `UsageRecord`'s `kind` is now the usage kind (`training` replaces
-  `run`; evals are `eval`, `scoring`, `labeling` or `teacher`), and records carry `ref_name`
-  and `run_id`. Rust `client.usage().list` takes a `UsageQuery`. The web UI's usage page has a
-  date range, groups and the top runs and evals.
-
-- **Storage is S3-compatible only.** grad-server always uses an S3 bucket (AWS S3, SeaweedFS,
-  MinIO, R2 and similar): `S3_BUCKET` is required, and the local-disk mode (`STORAGE_DIR`,
-  `BLOB_SIGNING_SECRET` and the server-proxied `/blobs/*` routes) is gone. `grad local up`
-  runs SeaweedFS as the store, with a key it generates into the `local` profile and its S3
-  API on `127.0.0.1:18786` (probed like the other ports), because the CLI and SDKs upload
-  files to presigned URLs. Data in the old `grad-storage` volume is not migrated: re-push
-  datasets after upgrading a local stack. `S3_PUBLIC_ENDPOINT` signs client upload tickets
-  for an endpoint other than `S3_ENDPOINT` (the Helm value `storage.s3PublicEndpoint`).
-- The compose stack migrates with a one-shot `migrate` service (`node dist/main.js
-  migrate`, as the Helm Job runs it); grad-server waits for it and starts with
-  `MIGRATE_ON_BOOT=false`.
-- The `grad_storage_operation_*` metrics drop their `backend` label.
+- **The web UI is restyled** in the Gradiated brand: dark by default with a light theme, a
+  phase stepper and live indicator on runs, smoothed loss and throughput charts with a hover
+  readout, a cost cap line once spend nears it, and a runs table that fits at 1024 px.
+  Storybook renders every component and page state (`pnpm -C server/ui storybook`).
+- **Evals run on eval workers, not in grad-server.** Evals, `dataset.score()`, router labelling,
+  distillation's teacher answers and checkpoint evals are `eval` jobs claimed by `node
+  dist/main.js worker --kinds eval` (the grad-server image; Helm's `import` pool runs one, and
+  `grad local up` adds `grad-eval-worker`). Restarting the API no longer interrupts an eval.
+  **Breaking (operators):** `GRAD_INFERENCE_API_KEY`, `GRAD_JUDGE_API_KEY` and
+  `EVAL_CONCURRENCY` move to the eval workers, and `EVAL_EXECUTOR` is gone.
+- **Helm defaults to `workers.auth=kubernetes`**: one ServiceAccount per pool and no worker
+  keys (`workers.auth=static` keeps the generated keys). Training pods run under a low
+  PriorityClass (`<release>-training-low`), so your own workloads preempt them.
+- **Storage is S3-compatible only.** **Breaking:** `S3_BUCKET` is required, and local-disk
+  mode (`STORAGE_DIR`, `BLOB_SIGNING_SECRET`, the `/blobs/*` routes) is gone. `grad local up`
+  runs SeaweedFS (S3 on `127.0.0.1:18786`) and migrates with a one-shot `migrate` service.
+  Data in an old local stack's `grad-storage` volume is not migrated: push datasets again.
+  `S3_PUBLIC_ENDPOINT` (Helm `storage.s3PublicEndpoint`) signs client uploads for another host.
 - `grad local up` publishes the API and web UI on `127.0.0.1:18787`, Grafana on `18788` and
-  Prometheus on `18789` (was `8787`, `3000` and `9090`). Before starting it probes each port:
-  a busy default moves to a free port in 18790-18809 and one line says so; a busy port set
-  with `--port` or `GRAD_*_PORT` fails with exit 2 (`port_in_use`) and how to see its owner.
-  A running stack's own ports are not a clash. The choice is saved, so later runs keep the
-  same URLs, the `local` profile follows it, and `grad local status` prints the API, UI,
-  Grafana and Prometheus URLs. The Helm NOTES port-forward to `18787` too.
-- The default `batch_size` is a quarter of the training examples (at least 8) when that's
-  under 128 (embedding keeps 128), so a 40-record run takes several optimizer steps; the
-  few-steps warning names the count ("40 training examples at batch 128 is 1 step per epoch").
-- `runs.plan` has `cost_breakdown` (`train_usd`, `teacher_usd`, `eval_usd`), and
-  `estimated_cost_usd` includes `recipe.evals` on every checkpoint. `print(plan)`, Go's
-  `fmt.Println(plan)` and `grad train --dry-run` show the breakdown.
+  Prometheus on `18789` (were `8787`, `3000` and `9090`). It moves a busy default port to a
+  free one and says so, remembers the choice, and `grad local status` prints the URLs.
+- Released artifacts live under `artifacts/<workspace>/<sha256>`, the one prefix serving reads;
+  checkpoints stay under their job. Manifests are format_version 2 (they add `provenance`);
+  readers accept 1 and 2.
+- Event streams share one reader per API replica (LISTEN on `grad_job_events`) instead of
+  polling Postgres per stream: with 1,000 streams, about 40 queries a second instead of
+  2,000, and under 0.1 s from write to client.
+- Import workers upload dataset parts (gzip JSONL, up to 50k records or 64 MB) straight to
+  storage; grad-server never carries the records. Reading a large synced dataset is about ten
+  times faster (180k records: 71 s to 6 s).
+- Source syncs use each API's largest page, fetch traces and scores side by side, and re-read
+  the last hour of feedback for edits every 15 minutes (Phoenix: 7 days) instead of a week
+  every minute. `GRAD_SOURCES_<PROVIDER>_REQUESTS_PER_MINUTE` raises a provider's rate.
+- **Breaking:** a `UsageRecord`'s `kind` is the usage kind (`training` replaces `run`; evals
+  are `eval`, `scoring`, `labeling` or `teacher`). Rust `client.usage().list` takes a
+  `UsageQuery`.
+- **Breaking (Cloud operators only):** `CLOUD_INTERNAL_API_URL`'s `/auth/verify` and
+  `billing/usage/cursor` calls and `USAGE_EXPORT_LAG_SECONDS` are gone.
+- The default `batch_size` is a quarter of the training examples (at least 8) when that is
+  under 128, so a small dataset takes several optimizer steps. `runs.plan` adds
+  `cost_breakdown` (training, teacher and eval), and its estimate includes `recipe.evals`.
+- npm: until 1.0 every release, alpha included, gets the `latest` dist-tag, so `npm i
+  @gradiated/grad` installs the newest one (it was stuck on alpha.1).
 
 ### Removed
 
-- **The deploy surface.** grad-server no longer has the `/v1/deployments`, `/v1/route`,
-  `/v1/embeddings` and `/v1/feedback` 501 stubs, and the SDKs and CLI drop `deploy()`,
-  `deployments`, `grad deploy`, `grad deployments` and `DeployUnavailableError`. Publishing an
-  artifact as a model version is Gradiated Cloud's Models API; self-hosted, download it and
-  serve it yourself.
+- **The deploy surface.** grad-server drops the `/v1/deployments`, `/v1/route`,
+  `/v1/embeddings` and `/v1/feedback` stubs; the SDKs and CLI drop `deploy()`, `deployments`,
+  `grad deploy` and `DeployUnavailableError`. On Gradiated Cloud you publish an artifact as a
+  model version through the Models API; self-hosted, download it and serve it yourself.
+- The trainer protocol's `POST /v1/trainer-jobs/{id}/records`: imports upload parts instead.
 
 ### Fixed
 
-- Plans estimate what runs bill: text tokens use each base model's tokenizer density (the dev
-  models' was off by 2.3x), DPO and reward plans count both sides of every pair (they counted
-  one), and steps are whole batches per epoch, so plan and run report the same step count.
-- A second run under a queued or running run's name warns in the plan and on `runs.create`
-  (`run.warnings` in every SDK; Python `warnings.warn`, TypeScript `console.warn`), and
-  `grad train` prints it. CLI commands given a name several runs share show the newest and say
-  so on stderr (`--json`: `warnings`).
-- `grad runs watch` and a re-attached `grad train --wait` show the whole run: the view replays
-  the event stream from its first event (it dropped every point before the run's latest), the
-  phase clock starts at the server's `phase_since`, and the chart spans 0 to `total_steps` with
-  min/max downsampling and a 1st-99th percentile y axis. Before the first step the chart says
-  what the run is doing ("Waiting for a GPU (2 workers online, all busy)…"). The web UI's phase
-  clock no longer restarts after each eval.
+- Plans estimate what runs bill: each base model's tokenizer density (the dev models' was off
+  by 2.3x), both sides of every DPO and reward pair, and whole batches per epoch.
+- A second run under a queued or running run's name warns in the plan and on create
+  (`run.warnings`); CLI commands given a shared name pick the newest and say so.
+- `grad runs watch` and a re-attached `grad train --wait` show the whole run from its first
+  event, and the empty chart says what the run is waiting for.
+- A Postgres restart, failover or killed backend no longer crashes grad-server: the request
+  answers `503 database_unavailable` and the pool drops the dead connection.
+- Concurrent identical pushes and promotes no longer make duplicate versions or releases
+  (migration 0002), and `record_count` counts a record pushed or synced again once.
+- A retried eval cancel or run resume returns the current state instead of 409, and
+  `dataset.score` honours `Idempotency-Key`, so a retry after a lost response starts nothing new.
+- A restarted worker container takes a new, billed attempt instead of its old lease.
+- An eval's or import's final status commits with its bill; a database blip during an eval is
+  retried in place instead of waiting out the lease; an eval worker waiting on the regex
+  sandbox no longer exits mid-eval.
+- Leases follow the database clock on a monotonic clock, so a host clock step no longer
+  requeues healthy jobs.
+- A source sync that fails waits for its in-flight provider requests before returning.
+- Databases created by an earlier release get the usage-report indexes (migration 0009); they
+  had been added to 0001 after it shipped.
+
+### Security
+
+- Kubernetes worker auth only sends JWTs that name audience `grad`, a mapped service account
+  and a future expiry to TokenReview, at most 8 at a time per replica, so a flood of tokens on
+  the public port can't turn into unbounded Kubernetes API calls.
+- A lease token is bound to its orchestrator and host as well as its lease id, and a replayed
+  `/complete` answers only the credential that closed the attempt (others get `409
+  lease_lost`).
+- Train and eval dataset streams are served only to the credential holding the job's lease.
 
 ## [0.2.0-alpha.3] - 2026-11-27
 
