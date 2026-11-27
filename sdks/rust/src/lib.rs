@@ -92,7 +92,7 @@ impl GradClient {
     }
 
     pub async fn list_datasets(&self) -> Result<Value, ApiError> {
-        self.wire.list_datasets().await
+        self.wire.list_datasets(&[]).await
     }
 
     pub async fn push_dataset(&self, name: &str, records: Vec<Value>) -> Result<Value, ApiError> {
@@ -133,7 +133,7 @@ impl GradClient {
     }
 
     pub async fn list_runs(&self) -> Result<Value, ApiError> {
-        self.wire.list_runs().await
+        self.wire.list_runs(&[]).await
     }
 
     pub async fn get_run(&self, id: &str) -> Result<Value, ApiError> {
@@ -243,7 +243,7 @@ impl GradClient {
     }
 
     pub async fn list_deployments(&self) -> Result<Value, ApiError> {
-        self.wire.list_deployments().await
+        self.wire.list_deployments(&[]).await
     }
 
     pub async fn get_deployment(&self, name: &str) -> Result<Value, ApiError> {
@@ -300,7 +300,7 @@ impl GradClient {
     }
 
     pub async fn list_api_keys(&self) -> Result<Value, ApiError> {
-        self.wire.list_api_keys().await
+        self.wire.list_api_keys(&[]).await
     }
 
     pub async fn revoke_api_key(&self, id: &str) -> Result<Value, ApiError> {

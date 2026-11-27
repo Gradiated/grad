@@ -123,7 +123,12 @@ func (c *Client) doBytes(ctx context.Context, method, routePath string, body any
 	return payload, headers, err
 }
 
-// CancelRun: Cancel a training run
+// CancelEval: Cancel a queued, running or awaiting_scores evaluation
+func (c *Client) CancelEval(ctx context.Context, id string) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/evals/%s/cancel", url.PathEscape(id)), nil, nil)
+}
+
+// CancelRun: Cancel a training run (a running attempt is stopped and billed)
 func (c *Client) CancelRun(ctx context.Context, id string) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/runs/%s/cancel", url.PathEscape(id)), nil, nil)
 }
@@ -133,7 +138,7 @@ func (c *Client) ClaimEnvTask(ctx context.Context, name string, body any) (map[s
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/env-workers/%s/claim", url.PathEscape(name)), body, nil)
 }
 
-// ClaimTrainerJob: Claim the next queued training run for execution
+// ClaimTrainerJob: Claim the next queued train or import job (trainer:worker)
 func (c *Client) ClaimTrainerJob(ctx context.Context, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", "/v1/trainer-jobs/claim", body, nil)
 }
@@ -143,14 +148,24 @@ func (c *Client) CompleteEnvTask(ctx context.Context, id string, body any) (map[
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/env-workers/tasks/%s/complete", url.PathEscape(id)), body, nil)
 }
 
-// CompleteTrainerJob: Finish a training run and publish its immutable artifact
+// CompleteTrainerJob: Finish a job attempt: publish its artifact, bill it, release the lease
 func (c *Client) CompleteTrainerJob(ctx context.Context, id string, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/complete", url.PathEscape(id)), body, nil)
 }
 
-// CreateApiKey: Create a scoped API key
+// CreateApiKey: Create a scoped workspace API key (trainer worker keys are platform config, not keys)
 func (c *Client) CreateApiKey(ctx context.Context, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", "/v1/keys", body, nil)
+}
+
+// CreateDataset: Create an empty dataset
+func (c *Client) CreateDataset(ctx context.Context, body any) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", "/v1/datasets", body, nil)
+}
+
+// CreateDatasetImport: Import an uploaded file or a Hugging Face dataset into a dataset (async job)
+func (c *Client) CreateDatasetImport(ctx context.Context, name string, body any) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/datasets/%s/imports", url.PathEscape(name)), body, nil)
 }
 
 // CreateEmbeddings: Generate embeddings from a deployed embedding artifact
@@ -158,14 +173,24 @@ func (c *Client) CreateEmbeddings(ctx context.Context, body any) (map[string]any
 	return c.doJSON(ctx, "POST", "/v1/embeddings", body, nil)
 }
 
-// CreateEval: Run a standalone evaluation across models, tasks, and a rubric
+// CreateEval: Queue an evaluation across models on a pinned dataset version (executed by the server)
 func (c *Client) CreateEval(ctx context.Context, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", "/v1/evals", body, nil)
 }
 
-// CreateRun: Create and enqueue a training run
+// CreateRun: Create and enqueue a training run (pins the dataset version)
 func (c *Client) CreateRun(ctx context.Context, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", "/v1/runs", body, nil)
+}
+
+// CreateTrainerUpload: Get an upload URL for a checkpoint or artifact bundle
+func (c *Client) CreateTrainerUpload(ctx context.Context, id string, body any) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/uploads", url.PathEscape(id)), body, nil)
+}
+
+// CreateUpload: Get an upload URL for a file to import (PUT the bytes, then create an import)
+func (c *Client) CreateUpload(ctx context.Context, body any) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", "/v1/uploads", body, nil)
 }
 
 // DeployArtifact: Deploy or update an artifact under a stable model name
@@ -178,12 +203,17 @@ func (c *Client) DispatchEnvTask(ctx context.Context, body any) (map[string]any,
 	return c.doJSON(ctx, "POST", "/v1/env-workers/tasks", body, nil)
 }
 
-// DownloadArtifact: Download an artifact archive
+// DownloadArtifact: Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256
 func (c *Client) DownloadArtifact(ctx context.Context, id string) ([]byte, http.Header, error) {
 	return c.doBytes(ctx, "GET", fmt.Sprintf("/v1/artifacts/%s/download", url.PathEscape(id)), nil, nil)
 }
 
-// GetArtifact: Get an artifact by ID or name@latest
+// DownloadTrainerDataset: Stream the pinned dataset version of a claimed train job as JSONL
+func (c *Client) DownloadTrainerDataset(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/trainer-jobs/%s/dataset", url.PathEscape(id)), nil, query)
+}
+
+// GetArtifact: Get an artifact by id or name@latest
 func (c *Client) GetArtifact(ctx context.Context, id string) (map[string]any, error) {
 	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/artifacts/%s", url.PathEscape(id)), nil, nil)
 }
@@ -208,34 +238,49 @@ func (c *Client) GetEval(ctx context.Context, id string) (map[string]any, error)
 	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s", url.PathEscape(id)), nil, nil)
 }
 
+// GetImport: Get a dataset import job
+func (c *Client) GetImport(ctx context.Context, id string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/imports/%s", url.PathEscape(id)), nil, nil)
+}
+
 // GetRun: Get a training run
 func (c *Client) GetRun(ctx context.Context, id string) (map[string]any, error) {
 	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/runs/%s", url.PathEscape(id)), nil, nil)
 }
 
-// ListApiKeys: List scoped API keys
-func (c *Client) ListApiKeys(ctx context.Context) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/keys", nil, nil)
+// GetTrainerQueueStats: Queue depth for autoscaling: queued plus running jobs (trainer:worker)
+func (c *Client) GetTrainerQueueStats(ctx context.Context) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", "/v1/trainer-jobs/queue", nil, nil)
 }
 
-// ListArtifacts: List immutable artifacts
+// HeartbeatTrainerJob: Renew the job lease; reports whether the worker should stop
+func (c *Client) HeartbeatTrainerJob(ctx context.Context, id string, body any) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/heartbeat", url.PathEscape(id)), body, nil)
+}
+
+// ListApiKeys: List workspace API keys
+func (c *Client) ListApiKeys(ctx context.Context, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", "/v1/keys", nil, query)
+}
+
+// ListArtifacts: List immutable artifacts (newest first)
 func (c *Client) ListArtifacts(ctx context.Context, query map[string]string) (map[string]any, error) {
 	return c.doJSON(ctx, "GET", "/v1/artifacts", nil, query)
 }
 
-// ListDatasetRecords: Read records from a dataset
+// ListDatasetRecords: Read records of a dataset version
 func (c *Client) ListDatasetRecords(ctx context.Context, name string, query map[string]string) (map[string]any, error) {
 	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/datasets/%s/records", url.PathEscape(name)), nil, query)
 }
 
-// ListDatasets: List datasets
-func (c *Client) ListDatasets(ctx context.Context) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/datasets", nil, nil)
+// ListDatasets: List datasets (newest first)
+func (c *Client) ListDatasets(ctx context.Context, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", "/v1/datasets", nil, query)
 }
 
-// ListDeployments: List active deployments
-func (c *Client) ListDeployments(ctx context.Context) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/deployments", nil, nil)
+// ListDeployments: List deployments
+func (c *Client) ListDeployments(ctx context.Context, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", "/v1/deployments", nil, query)
 }
 
 // ListEvalFailures: List failing task records from an evaluation run for mining
@@ -243,29 +288,44 @@ func (c *Client) ListEvalFailures(ctx context.Context, id string, query map[stri
 	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s/failures", url.PathEscape(id)), nil, query)
 }
 
-// ListEvals: List evaluation runs
-func (c *Client) ListEvals(ctx context.Context) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/evals", nil, nil)
+// ListEvalOutputs: Page through generated model outputs (filter by model or by a code scorer that still needs a score)
+func (c *Client) ListEvalOutputs(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s/outputs", url.PathEscape(id)), nil, query)
 }
 
-// ListModels: List trainable base models
+// ListEvalResults: Per-task, per-model results of a completed evaluation
+func (c *Client) ListEvalResults(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/evals/%s/results", url.PathEscape(id)), nil, query)
+}
+
+// ListEvals: List evaluation runs
+func (c *Client) ListEvals(ctx context.Context, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", "/v1/evals", nil, query)
+}
+
+// ListImports: List dataset import jobs (newest first)
+func (c *Client) ListImports(ctx context.Context, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", "/v1/imports", nil, query)
+}
+
+// ListModels: List trainable base models (the server catalog and price source)
 func (c *Client) ListModels(ctx context.Context) (map[string]any, error) {
 	return c.doJSON(ctx, "GET", "/v1/models", nil, nil)
 }
 
-// ListRunCheckpoints: List checkpoints saved during a run
-func (c *Client) ListRunCheckpoints(ctx context.Context, id string) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/runs/%s/checkpoints", url.PathEscape(id)), nil, nil)
+// ListRunCheckpoints: List unexpired checkpoints of a run (best and final never expire)
+func (c *Client) ListRunCheckpoints(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/runs/%s/checkpoints", url.PathEscape(id)), nil, query)
 }
 
-// ListRunMetrics: Fetch training step metrics for a run
+// ListRunMetrics: Training step metrics as JSON pages, or a live SSE stream
 func (c *Client) ListRunMetrics(ctx context.Context, id string, query map[string]string) (map[string]any, error) {
 	return c.doJSON(ctx, "GET", fmt.Sprintf("/v1/runs/%s/metrics", url.PathEscape(id)), nil, query)
 }
 
-// ListRuns: List training runs
-func (c *Client) ListRuns(ctx context.Context) (map[string]any, error) {
-	return c.doJSON(ctx, "GET", "/v1/runs", nil, nil)
+// ListRuns: List training runs (newest first)
+func (c *Client) ListRuns(ctx context.Context, query map[string]string) (map[string]any, error) {
+	return c.doJSON(ctx, "GET", "/v1/runs", nil, query)
 }
 
 // PlanEval: Estimate tasks, model/judge calls, and cost before running an eval
@@ -278,12 +338,22 @@ func (c *Client) PlanRun(ctx context.Context, body any) (map[string]any, error) 
 	return c.doJSON(ctx, "POST", "/v1/runs/plan", body, nil)
 }
 
-// PromoteCheckpoint: Promote an intermediate checkpoint into a permanent artifact
+// PostEvalScores: Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing
+func (c *Client) PostEvalScores(ctx context.Context, id string, body any) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/evals/%s/scores", url.PathEscape(id)), body, nil)
+}
+
+// PostImportRecords: Append a batch of parsed records to an import job
+func (c *Client) PostImportRecords(ctx context.Context, id string, body any) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/records", url.PathEscape(id)), body, nil)
+}
+
+// PromoteCheckpoint: Copy an exportable checkpoint into a new immutable artifact
 func (c *Client) PromoteCheckpoint(ctx context.Context, id string, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/checkpoints/%s/promote", url.PathEscape(id)), body, nil)
 }
 
-// PushDatasetRecords: Create or append records to a dataset
+// PushDatasetRecords: Append records as a new dataset version (creates the dataset if needed)
 func (c *Client) PushDatasetRecords(ctx context.Context, name string, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/datasets/%s/records", url.PathEscape(name)), body, nil)
 }
@@ -298,29 +368,34 @@ func (c *Client) RegisterEnvWorker(ctx context.Context, body any) (map[string]an
 	return c.doJSON(ctx, "POST", "/v1/env-workers/register", body, nil)
 }
 
-// RegisterTrainerCheckpoint: Upload and register an intermediate checkpoint
+// RegisterTrainerCheckpoint: Register an uploaded checkpoint bundle
 func (c *Client) RegisterTrainerCheckpoint(ctx context.Context, id string, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/checkpoints", url.PathEscape(id)), body, nil)
 }
 
-// RenderDataset: Preview chat template rendering and loss masks
+// RenderDataset: Preview chat-template rendering and loss masks (estimated token counts)
 func (c *Client) RenderDataset(ctx context.Context, name string, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/datasets/%s/render", url.PathEscape(name)), body, nil)
 }
 
-// ReportTrainerProgress: Report training step metrics and renew worker lease
+// ReportTrainerProgress: Report one training step's metrics
 func (c *Client) ReportTrainerProgress(ctx context.Context, id string, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/trainer-jobs/%s/progress", url.PathEscape(id)), body, nil)
 }
 
-// ResumeRun: Resume a stopped or failed training run
+// ResumeRun: Resume a stopped, failed or cancelled run from its latest checkpoint
 func (c *Client) ResumeRun(ctx context.Context, id string, body any) (map[string]any, error) {
 	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/runs/%s/resume", url.PathEscape(id)), body, nil)
 }
 
-// RevokeApiKey: Revoke a scoped API key
+// RevokeApiKey: Revoke a workspace API key
 func (c *Client) RevokeApiKey(ctx context.Context, id string) (map[string]any, error) {
 	return c.doJSON(ctx, "DELETE", fmt.Sprintf("/v1/keys/%s", url.PathEscape(id)), nil, nil)
+}
+
+// RollbackDeployment: Roll a deployment back to its previous artifact
+func (c *Client) RollbackDeployment(ctx context.Context, name string) (map[string]any, error) {
+	return c.doJSON(ctx, "POST", fmt.Sprintf("/v1/deployments/%s/rollback", url.PathEscape(name)), nil, nil)
 }
 
 // RouteRequest: Ask a deployed model router which model to call

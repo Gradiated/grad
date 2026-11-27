@@ -184,7 +184,13 @@ impl GeneratedClient {
         Ok((bytes.to_vec(), sha))
     }
 
-    /// Cancel a training run
+    /// Cancel a queued, running or awaiting_scores evaluation
+    pub async fn cancel_eval(&self, id: &str) -> Result<Value, ApiError> {
+        let path = format!("/v1/evals/{}/cancel", encode_path_segment(id));
+        self.send_json(reqwest::Method::POST, &path, None, &[]).await
+    }
+
+    /// Cancel a training run (a running attempt is stopped and billed)
     pub async fn cancel_run(&self, id: &str) -> Result<Value, ApiError> {
         let path = format!("/v1/runs/{}/cancel", encode_path_segment(id));
         self.send_json(reqwest::Method::POST, &path, None, &[]).await
@@ -196,7 +202,7 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Claim the next queued training run for execution
+    /// Claim the next queued train or import job (trainer:worker)
     pub async fn claim_trainer_job(&self, body: &Value) -> Result<Value, ApiError> {
         let path = "/v1/trainer-jobs/claim".to_string();
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
@@ -208,15 +214,27 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Finish a training run and publish its immutable artifact
+    /// Finish a job attempt: publish its artifact, bill it, release the lease
     pub async fn complete_trainer_job(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
         let path = format!("/v1/trainer-jobs/{}/complete", encode_path_segment(id));
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Create a scoped API key
+    /// Create a scoped workspace API key (trainer worker keys are platform config, not keys)
     pub async fn create_api_key(&self, body: &Value) -> Result<Value, ApiError> {
         let path = "/v1/keys".to_string();
+        self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
+    }
+
+    /// Create an empty dataset
+    pub async fn create_dataset(&self, body: &Value) -> Result<Value, ApiError> {
+        let path = "/v1/datasets".to_string();
+        self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
+    }
+
+    /// Import an uploaded file or a Hugging Face dataset into a dataset (async job)
+    pub async fn create_dataset_import(&self, name: &str, body: &Value) -> Result<Value, ApiError> {
+        let path = format!("/v1/datasets/{}/imports", encode_path_segment(name));
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
@@ -226,15 +244,27 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Run a standalone evaluation across models, tasks, and a rubric
+    /// Queue an evaluation across models on a pinned dataset version (executed by the server)
     pub async fn create_eval(&self, body: &Value) -> Result<Value, ApiError> {
         let path = "/v1/evals".to_string();
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Create and enqueue a training run
+    /// Create and enqueue a training run (pins the dataset version)
     pub async fn create_run(&self, body: &Value) -> Result<Value, ApiError> {
         let path = "/v1/runs".to_string();
+        self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
+    }
+
+    /// Get an upload URL for a checkpoint or artifact bundle
+    pub async fn create_trainer_upload(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/uploads", encode_path_segment(id));
+        self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
+    }
+
+    /// Get an upload URL for a file to import (PUT the bytes, then create an import)
+    pub async fn create_upload(&self, body: &Value) -> Result<Value, ApiError> {
+        let path = "/v1/uploads".to_string();
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
@@ -250,13 +280,19 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Download an artifact archive
+    /// Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256
     pub async fn download_artifact(&self, id: &str) -> Result<(Vec<u8>, Option<String>), ApiError> {
         let path = format!("/v1/artifacts/{}/download", encode_path_segment(id));
         self.send_bytes(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// Get an artifact by ID or name@latest
+    /// Stream the pinned dataset version of a claimed train job as JSONL
+    pub async fn download_trainer_dataset(&self, id: &str, query: &[(&str, String)]) -> Result<Value, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/dataset", encode_path_segment(id));
+        self.send_json(reqwest::Method::GET, &path, None, query).await
+    }
+
+    /// Get an artifact by id or name@latest
     pub async fn get_artifact(&self, id: &str) -> Result<Value, ApiError> {
         let path = format!("/v1/artifacts/{}", encode_path_segment(id));
         self.send_json(reqwest::Method::GET, &path, None, &[]).await
@@ -286,40 +322,58 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::GET, &path, None, &[]).await
     }
 
+    /// Get a dataset import job
+    pub async fn get_import(&self, id: &str) -> Result<Value, ApiError> {
+        let path = format!("/v1/imports/{}", encode_path_segment(id));
+        self.send_json(reqwest::Method::GET, &path, None, &[]).await
+    }
+
     /// Get a training run
     pub async fn get_run(&self, id: &str) -> Result<Value, ApiError> {
         let path = format!("/v1/runs/{}", encode_path_segment(id));
         self.send_json(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// List scoped API keys
-    pub async fn list_api_keys(&self) -> Result<Value, ApiError> {
-        let path = "/v1/keys".to_string();
+    /// Queue depth for autoscaling: queued plus running jobs (trainer:worker)
+    pub async fn get_trainer_queue_stats(&self) -> Result<Value, ApiError> {
+        let path = "/v1/trainer-jobs/queue".to_string();
         self.send_json(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// List immutable artifacts
+    /// Renew the job lease; reports whether the worker should stop
+    pub async fn heartbeat_trainer_job(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/heartbeat", encode_path_segment(id));
+        self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
+    }
+
+    /// List workspace API keys
+    pub async fn list_api_keys(&self, query: &[(&str, String)]) -> Result<Value, ApiError> {
+        let path = "/v1/keys".to_string();
+        self.send_json(reqwest::Method::GET, &path, None, query).await
+    }
+
+    /// List immutable artifacts (newest first)
     pub async fn list_artifacts(&self, query: &[(&str, String)]) -> Result<Value, ApiError> {
         let path = "/v1/artifacts".to_string();
         self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
-    /// Read records from a dataset
+    /// Read records of a dataset version
     pub async fn list_dataset_records(&self, name: &str, query: &[(&str, String)]) -> Result<Value, ApiError> {
         let path = format!("/v1/datasets/{}/records", encode_path_segment(name));
         self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
-    /// List datasets
-    pub async fn list_datasets(&self) -> Result<Value, ApiError> {
+    /// List datasets (newest first)
+    pub async fn list_datasets(&self, query: &[(&str, String)]) -> Result<Value, ApiError> {
         let path = "/v1/datasets".to_string();
-        self.send_json(reqwest::Method::GET, &path, None, &[]).await
+        self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
-    /// List active deployments
-    pub async fn list_deployments(&self) -> Result<Value, ApiError> {
+    /// List deployments
+    pub async fn list_deployments(&self, query: &[(&str, String)]) -> Result<Value, ApiError> {
         let path = "/v1/deployments".to_string();
-        self.send_json(reqwest::Method::GET, &path, None, &[]).await
+        self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
     /// List failing task records from an evaluation run for mining
@@ -328,34 +382,52 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
-    /// List evaluation runs
-    pub async fn list_evals(&self) -> Result<Value, ApiError> {
-        let path = "/v1/evals".to_string();
-        self.send_json(reqwest::Method::GET, &path, None, &[]).await
+    /// Page through generated model outputs (filter by model or by a code scorer that still needs a score)
+    pub async fn list_eval_outputs(&self, id: &str, query: &[(&str, String)]) -> Result<Value, ApiError> {
+        let path = format!("/v1/evals/{}/outputs", encode_path_segment(id));
+        self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
-    /// List trainable base models
+    /// Per-task, per-model results of a completed evaluation
+    pub async fn list_eval_results(&self, id: &str, query: &[(&str, String)]) -> Result<Value, ApiError> {
+        let path = format!("/v1/evals/{}/results", encode_path_segment(id));
+        self.send_json(reqwest::Method::GET, &path, None, query).await
+    }
+
+    /// List evaluation runs
+    pub async fn list_evals(&self, query: &[(&str, String)]) -> Result<Value, ApiError> {
+        let path = "/v1/evals".to_string();
+        self.send_json(reqwest::Method::GET, &path, None, query).await
+    }
+
+    /// List dataset import jobs (newest first)
+    pub async fn list_imports(&self, query: &[(&str, String)]) -> Result<Value, ApiError> {
+        let path = "/v1/imports".to_string();
+        self.send_json(reqwest::Method::GET, &path, None, query).await
+    }
+
+    /// List trainable base models (the server catalog and price source)
     pub async fn list_models(&self) -> Result<Value, ApiError> {
         let path = "/v1/models".to_string();
         self.send_json(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// List checkpoints saved during a run
-    pub async fn list_run_checkpoints(&self, id: &str) -> Result<Value, ApiError> {
+    /// List unexpired checkpoints of a run (best and final never expire)
+    pub async fn list_run_checkpoints(&self, id: &str, query: &[(&str, String)]) -> Result<Value, ApiError> {
         let path = format!("/v1/runs/{}/checkpoints", encode_path_segment(id));
-        self.send_json(reqwest::Method::GET, &path, None, &[]).await
+        self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
-    /// Fetch training step metrics for a run
+    /// Training step metrics as JSON pages, or a live SSE stream
     pub async fn list_run_metrics(&self, id: &str, query: &[(&str, String)]) -> Result<Value, ApiError> {
         let path = format!("/v1/runs/{}/metrics", encode_path_segment(id));
         self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
-    /// List training runs
-    pub async fn list_runs(&self) -> Result<Value, ApiError> {
+    /// List training runs (newest first)
+    pub async fn list_runs(&self, query: &[(&str, String)]) -> Result<Value, ApiError> {
         let path = "/v1/runs".to_string();
-        self.send_json(reqwest::Method::GET, &path, None, &[]).await
+        self.send_json(reqwest::Method::GET, &path, None, query).await
     }
 
     /// Estimate tasks, model/judge calls, and cost before running an eval
@@ -370,13 +442,25 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Promote an intermediate checkpoint into a permanent artifact
+    /// Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing
+    pub async fn post_eval_scores(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
+        let path = format!("/v1/evals/{}/scores", encode_path_segment(id));
+        self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
+    }
+
+    /// Append a batch of parsed records to an import job
+    pub async fn post_import_records(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/records", encode_path_segment(id));
+        self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
+    }
+
+    /// Copy an exportable checkpoint into a new immutable artifact
     pub async fn promote_checkpoint(&self, id: &str, body: Option<&Value>) -> Result<Value, ApiError> {
         let path = format!("/v1/checkpoints/{}/promote", encode_path_segment(id));
         self.send_json(reqwest::Method::POST, &path, body, &[]).await
     }
 
-    /// Create or append records to a dataset
+    /// Append records as a new dataset version (creates the dataset if needed)
     pub async fn push_dataset_records(&self, name: &str, body: &Value) -> Result<Value, ApiError> {
         let path = format!("/v1/datasets/{}/records", encode_path_segment(name));
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
@@ -394,34 +478,40 @@ impl GeneratedClient {
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Upload and register an intermediate checkpoint
+    /// Register an uploaded checkpoint bundle
     pub async fn register_trainer_checkpoint(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
         let path = format!("/v1/trainer-jobs/{}/checkpoints", encode_path_segment(id));
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Preview chat template rendering and loss masks
+    /// Preview chat-template rendering and loss masks (estimated token counts)
     pub async fn render_dataset(&self, name: &str, body: &Value) -> Result<Value, ApiError> {
         let path = format!("/v1/datasets/{}/render", encode_path_segment(name));
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Report training step metrics and renew worker lease
+    /// Report one training step's metrics
     pub async fn report_trainer_progress(&self, id: &str, body: &Value) -> Result<Value, ApiError> {
         let path = format!("/v1/trainer-jobs/{}/progress", encode_path_segment(id));
         self.send_json(reqwest::Method::POST, &path, Some(body), &[]).await
     }
 
-    /// Resume a stopped or failed training run
+    /// Resume a stopped, failed or cancelled run from its latest checkpoint
     pub async fn resume_run(&self, id: &str, body: Option<&Value>) -> Result<Value, ApiError> {
         let path = format!("/v1/runs/{}/resume", encode_path_segment(id));
         self.send_json(reqwest::Method::POST, &path, body, &[]).await
     }
 
-    /// Revoke a scoped API key
+    /// Revoke a workspace API key
     pub async fn revoke_api_key(&self, id: &str) -> Result<Value, ApiError> {
         let path = format!("/v1/keys/{}", encode_path_segment(id));
         self.send_json(reqwest::Method::DELETE, &path, None, &[]).await
+    }
+
+    /// Roll a deployment back to its previous artifact
+    pub async fn rollback_deployment(&self, name: &str) -> Result<Value, ApiError> {
+        let path = format!("/v1/deployments/{}/rollback", encode_path_segment(name));
+        self.send_json(reqwest::Method::POST, &path, None, &[]).await
     }
 
     /// Ask a deployed model router which model to call

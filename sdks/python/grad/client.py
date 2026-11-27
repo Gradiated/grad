@@ -69,8 +69,10 @@ class _DatasetsAPI:
             body["metadata"] = metadata
         return self._wire.push_dataset_records(name, body)
 
-    def records(self, name: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
-        return self._wire.list_dataset_records(name, limit=limit, offset=offset)
+    def records(
+        self, name: str, *, limit: int = 100, cursor: str | None = None
+    ) -> dict[str, Any]:
+        return self._wire.list_dataset_records(name, limit=limit, cursor=cursor)
 
     def render(
         self,
@@ -111,7 +113,7 @@ class _RunsAPI:
         # Dry-run any local Python scorer on a sample record before hitting the server.
         if rubric is not None:
             coerced = coerce_rubric(rubric)
-            sample_slice = self._wire.list_dataset_records(dataset, limit=1, offset=0)
+            sample_slice = self._wire.list_dataset_records(dataset, limit=1)
             sample_rows = sample_slice.get("data") or []
             if sample_rows:
                 coerced.dry_run(sample_rows[0])

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Gradiated Training & Serving API
-  version: 0.1.0
+  version: 0.2.0
 components:
   schemas:
     TrainableModel:
@@ -9,10 +9,32 @@ components:
       properties:
         id:
           type: string
+          minLength: 1
+          maxLength: 160
+        hf_repo:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          maxLength: 200
+        family:
+          type: string
+          enum:
+            - llm
+            - encoder
         adapters:
           type: array
           items:
             type: string
+            enum:
+              - lora
+              - prefix_kv
+              - frozen_head
+              - encoder_full
+        recipes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipeKind"
         default_for:
           type: array
           items:
@@ -25,6 +47,7 @@ components:
           exclusiveMinimum: 0
         template_revision:
           type: string
+          minLength: 1
         calibrated_lrs:
           type: object
           additionalProperties:
@@ -32,7 +55,10 @@ components:
             exclusiveMinimum: 0
       required:
         - id
+        - hf_repo
+        - family
         - adapters
+        - recipes
         - default_for
         - price_per_million_tokens_usd
         - max_context_tokens
@@ -67,7 +93,7 @@ components:
         detail:
           type: string
           minLength: 1
-          maxLength: 2000
+          maxLength: 4000
         code:
           type: string
           minLength: 1
@@ -82,6 +108,16 @@ components:
         - detail
         - code
         - request_id
+    CreatedApiKey:
+      type: object
+      properties:
+        key:
+          $ref: "#/components/schemas/ApiKey"
+        secret:
+          type: string
+      required:
+        - key
+        - secret
     ApiKey:
       type: object
       properties:
@@ -132,7 +168,6 @@ components:
         - deployments:write
         - feedback:write
         - env:serve
-        - trainer:worker
     CreateApiKeyRequest:
       type: object
       properties:
@@ -163,16 +198,15 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        version:
+          type: integer
+          minimum: 0
         record_count:
           type: integer
           minimum: 0
-        storage_key:
-          type: string
-          minLength: 1
         metadata:
           type: object
           additionalProperties: {}
-          default: {}
         created_at:
           type: string
           format: date-time
@@ -183,10 +217,24 @@ components:
         - id
         - workspace_id
         - name
+        - version
         - record_count
-        - storage_key
+        - metadata
         - created_at
         - updated_at
+    CreateDatasetRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        metadata:
+          type: object
+          additionalProperties: {}
+      required:
+        - name
     PushDatasetRequest:
       type: object
       properties:
@@ -204,18 +252,50 @@ components:
     DatasetRecord:
       type: object
       properties:
+        schema:
+          type: string
+          enum:
+            - grad.trajectory/1
         id:
           type: string
           minLength: 1
           maxLength: 160
         session_id:
-          type: string
+          type:
+            - string
+            - "null"
           minLength: 1
           maxLength: 160
         group_id:
-          type: string
+          type:
+            - string
+            - "null"
           minLength: 1
           maxLength: 160
+        role:
+          type:
+            - string
+            - "null"
+          enum:
+            - chosen
+            - rejected
+            - anchor
+            - positive
+            - negative
+            - desirable
+            - undesirable
+            - rollout
+            - null
+        source:
+          type:
+            - string
+            - "null"
+          maxLength: 80
+        timestamp:
+          type:
+            - string
+            - "null"
+          maxLength: 64
         messages:
           type: array
           items:
@@ -225,7 +305,17 @@ components:
           items:
             type: object
             additionalProperties: {}
+        input:
+          $ref: "#/components/schemas/TrajectoryInput"
+        output:
+          $ref: "#/components/schemas/TrajectoryOutput"
         prompt:
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/ChatMessage"
+        completion:
           anyOf:
             - type: string
             - type: array
@@ -267,6 +357,7 @@ components:
         metadata:
           type: object
           additionalProperties: {}
+      additionalProperties: false
     ChatMessage:
       type: object
       properties:
@@ -278,9 +369,13 @@ components:
             - assistant
             - tool
         content:
-          type:
-            - string
-            - "null"
+          anyOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                additionalProperties: {}
+            - type: "null"
         tool_calls:
           type: array
           items:
@@ -294,6 +389,68 @@ components:
           type: boolean
       required:
         - role
+      additionalProperties: {}
+    TrajectoryInput:
+      type: object
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        tools:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        media:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        features:
+          type: object
+          additionalProperties: {}
+        payload: {}
+      additionalProperties: {}
+    TrajectoryOutput:
+      type:
+        - object
+        - "null"
+      properties:
+        turns:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        payload: {}
+      additionalProperties: {}
+    DatasetRecordsPage:
+      type: object
+      properties:
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        version:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 0
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatasetRecord"
+        next_cursor:
+          type:
+            - string
+            - "null"
+      required:
+        - dataset
+        - version
+        - total
+        - data
+        - next_cursor
     RenderDatasetResponse:
       type: object
       properties:
@@ -306,6 +463,10 @@ components:
           type: string
         template_revision:
           type: string
+        token_counts:
+          type: string
+          enum:
+            - estimated
         examples:
           type: array
           items:
@@ -352,6 +513,7 @@ components:
         - dataset
         - model
         - template_revision
+        - token_counts
         - examples
     RenderDatasetRequest:
       type: object
@@ -382,11 +544,263 @@ components:
           minimum: 1
           maximum: 20
           default: 3
+    UploadTicket:
+      type: object
+      properties:
+        upload_id:
+          type: string
+          minLength: 1
+        method:
+          type: string
+          enum:
+            - PUT
+        url:
+          type: string
+          minLength: 1
+          description: Absolute presigned URL, or a path relative to the API base URL (local storage).
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+      required:
+        - upload_id
+        - method
+        - url
+        - headers
+        - expires_at
+    CreateUploadRequest:
+      type: object
+      properties:
+        purpose:
+          type: string
+          enum:
+            - dataset_import
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+        size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 5368709120
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      required:
+        - purpose
+        - filename
+        - size_bytes
+        - sha256
+    ImportJob:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        status:
+          $ref: "#/components/schemas/ImportStatus"
+        source:
+          type: object
+          additionalProperties: {}
+        connector:
+          type: string
+          enum:
+            - auto
+            - grad_trajectories
+            - openai_chat
+            - gradiated
+            - otel
+            - langfuse
+            - posthog
+            - braintrust
+            - langsmith
+        attempt:
+          type: integer
+          minimum: 0
+        imported_count:
+          type: integer
+          minimum: 0
+        dropped_count:
+          type: integer
+          minimum: 0
+        detected_scores:
+          type: array
+          items:
+            type: string
+        dataset_version:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        error:
+          type:
+            - string
+            - "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - dataset
+        - status
+        - source
+        - connector
+        - attempt
+        - imported_count
+        - dropped_count
+        - detected_scores
+        - dataset_version
+        - error
+        - created_at
+        - updated_at
+    ImportStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - completed
+        - failed
+    CreateImportRequest:
+      type: object
+      properties:
+        source:
+          $ref: "#/components/schemas/ImportSource"
+        connector:
+          type: string
+          enum:
+            - auto
+            - grad_trajectories
+            - openai_chat
+            - gradiated
+            - otel
+            - langfuse
+            - posthog
+            - braintrust
+            - langsmith
+          default: auto
+      required:
+        - source
+    ImportSource:
+      oneOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - upload
+            upload_id:
+              type: string
+              minLength: 1
+              maxLength: 160
+            format:
+              type: string
+              enum:
+                - auto
+                - jsonl
+                - json
+                - parquet
+              default: auto
+          required:
+            - kind
+            - upload_id
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - hf
+            repo:
+              type: string
+              minLength: 1
+              maxLength: 200
+              pattern: ^[A-Za-z0-9][\w.-]*(\/[\w.-]+)?$
+            split:
+              type: string
+              minLength: 1
+              maxLength: 64
+              default: train
+            config:
+              type: string
+              minLength: 1
+              maxLength: 128
+            revision:
+              type: string
+              minLength: 1
+              maxLength: 128
+            columns:
+              $ref: "#/components/schemas/HfColumnMapping"
+            limit:
+              type: integer
+              minimum: 1
+              maximum: 10000000
+          required:
+            - kind
+            - repo
+    HfColumnMapping:
+      type: object
+      properties:
+        messages:
+          type: string
+          minLength: 1
+          maxLength: 128
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 128
+        completion:
+          type: string
+          minLength: 1
+          maxLength: 128
+        chosen:
+          type: string
+          minLength: 1
+          maxLength: 128
+        rejected:
+          type: string
+          minLength: 1
+          maxLength: 128
+        answer:
+          type: string
+          minLength: 1
+          maxLength: 128
+        query:
+          type: string
+          minLength: 1
+          maxLength: 128
+        positive:
+          type: string
+          minLength: 1
+          maxLength: 128
+      default: {}
     PlanRunResponse:
       type: object
       properties:
         resolved_config:
           $ref: "#/components/schemas/ResolvedRunConfig"
+        dataset_version:
+          type: integer
+          minimum: 0
+        usable_records:
+          type: integer
+          minimum: 0
+        total_records:
+          type: integer
+          minimum: 0
         estimated_steps:
           type: integer
           minimum: 0
@@ -396,6 +810,9 @@ components:
         estimated_cost_usd:
           type: number
           minimum: 0
+        price_per_million_tokens:
+          type: number
+          exclusiveMinimum: 0
         trained_token_fraction:
           type: number
           minimum: 0
@@ -406,9 +823,13 @@ components:
             type: string
       required:
         - resolved_config
+        - dataset_version
+        - usable_records
+        - total_records
         - estimated_steps
         - estimated_tokens
         - estimated_cost_usd
+        - price_per_million_tokens
         - trained_token_fraction
         - warnings
     ResolvedRunConfig:
@@ -421,6 +842,9 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        dataset_version:
+          type: integer
+          minimum: 0
         name:
           type: string
           minLength: 1
@@ -563,6 +987,7 @@ components:
       required:
         - rule_version
         - dataset
+        - dataset_version
         - name
         - recipe_kind
         - model
@@ -700,8 +1125,10 @@ components:
           maximum: 0.5
         context_text:
           type: string
+          maxLength: 4000000
         context_uri:
           type: string
+          maxLength: 2048
         num_tokens:
           type: integer
           minimum: 16
@@ -807,6 +1234,9 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        dataset_version:
+          type: integer
+          minimum: 0
         recipe_kind:
           $ref: "#/components/schemas/RecipeKind"
         status:
@@ -817,6 +1247,9 @@ components:
           type:
             - number
             - "null"
+          exclusiveMinimum: 0
+        price_per_million_tokens:
+          type: number
           exclusiveMinimum: 0
         tokens_processed:
           type: integer
@@ -830,10 +1263,14 @@ components:
         total_steps:
           type: integer
           minimum: 0
-        metrics_history:
-          type: array
-          items:
-            $ref: "#/components/schemas/MetricPoint"
+        attempt:
+          type: integer
+          minimum: 0
+        max_attempts:
+          type: integer
+          minimum: 1
+        latest_metric:
+          $ref: "#/components/schemas/MetricPoint"
         eval_report:
           type:
             - object
@@ -847,20 +1284,16 @@ components:
           type:
             - string
             - "null"
-        worker_id:
-          type:
-            - string
-            - "null"
-        lease_expires_at:
-          type:
-            - string
-            - "null"
-          format: date-time
         created_at:
           type: string
           format: date-time
         updated_at:
           type: string
+          format: date-time
+        finished_at:
+          type:
+            - string
+            - "null"
           format: date-time
       required:
         - id
@@ -868,50 +1301,70 @@ components:
         - name
         - dataset_id
         - dataset_name
+        - dataset_version
         - recipe_kind
         - status
         - resolved_config
         - max_cost_usd
+        - price_per_million_tokens
         - tokens_processed
         - cost_usd
         - current_step
         - total_steps
-        - metrics_history
+        - attempt
+        - max_attempts
+        - latest_metric
         - eval_report
         - artifact_id
         - error
-        - worker_id
-        - lease_expires_at
         - created_at
         - updated_at
+        - finished_at
     RunStatus:
       type: string
       enum:
         - queued
         - running
-        - paused
         - completed
         - failed
         - cancelled
         - stopped_budget
     MetricPoint:
-      type: object
+      type:
+        - object
+        - "null"
       properties:
+        seq:
+          type: integer
+          minimum: 1
+        attempt:
+          type: integer
+          minimum: 1
         step:
           type: integer
           minimum: 0
         loss:
           type: number
         eval_loss:
-          type: number
+          type:
+            - number
+            - "null"
         eval_metric:
-          type: number
+          type:
+            - number
+            - "null"
         grad_norm:
-          type: number
+          type:
+            - number
+            - "null"
         lr:
-          type: number
+          type:
+            - number
+            - "null"
         tokens_per_sec:
-          type: number
+          type:
+            - number
+            - "null"
         tokens:
           type: integer
           minimum: 0
@@ -922,11 +1375,34 @@ components:
           type: string
           format: date-time
       required:
+        - seq
+        - attempt
         - step
         - loss
         - tokens
         - cost_usd
         - timestamp
+      additionalProperties: {}
+    MetricsPage:
+      type: object
+      properties:
+        run_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricPoint"
+        next_cursor:
+          type:
+            - string
+            - "null"
+      required:
+        - run_id
+        - status
+        - data
+        - next_cursor
     ResumeRunRequest:
       type: object
       properties:
@@ -945,6 +1421,9 @@ components:
         run_id:
           type: string
           minLength: 1
+        attempt:
+          type: integer
+          minimum: 1
         step:
           type: integer
           minimum: 0
@@ -952,19 +1431,21 @@ components:
           type:
             - number
             - "null"
-        storage_key:
-          type: string
-          minLength: 1
+        format:
+          $ref: "#/components/schemas/ArtifactFormat"
         sha256:
           type: string
-          minLength: 64
-          maxLength: 64
+          pattern: ^[0-9a-f]{64}$
         size_bytes:
           type: integer
           minimum: 0
         metadata:
           type: object
           additionalProperties: {}
+        best:
+          type: boolean
+        final:
+          type: boolean
         expires_at:
           type:
             - string
@@ -977,14 +1458,31 @@ components:
         - id
         - workspace_id
         - run_id
+        - attempt
         - step
         - eval_score
-        - storage_key
+        - format
         - sha256
         - size_bytes
         - metadata
+        - best
+        - final
         - expires_at
         - created_at
+    ArtifactFormat:
+      type:
+        - string
+        - "null"
+      enum:
+        - peft_lora
+        - prefix_kv
+        - cartridge
+        - encoder_safetensors
+        - router_bundle
+        - decision_bundle
+        - reference
+        - null
+      description: Artifact format when this checkpoint is exportable (promotable); null for training state only.
     Artifact:
       type: object
       properties:
@@ -1017,13 +1515,9 @@ components:
           $ref: "#/components/schemas/RecipeKind"
         format:
           $ref: "#/components/schemas/ArtifactFormat"
-        storage_key:
-          type: string
-          minLength: 1
         sha256:
           type: string
-          minLength: 64
-          maxLength: 64
+          pattern: ^[0-9a-f]{64}$
         size_bytes:
           type: integer
           minimum: 0
@@ -1048,20 +1542,11 @@ components:
         - base_model
         - recipe_kind
         - format
-        - storage_key
         - sha256
         - size_bytes
         - manifest
         - eval_report
         - created_at
-    ArtifactFormat:
-      type: string
-      enum:
-        - peft_lora
-        - cartridge
-        - encoder_safetensors
-        - router_bundle
-        - decision_bundle
     PromoteCheckpointRequest:
       type: object
       properties:
@@ -1070,6 +1555,165 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+    ClaimJobResponse:
+      type: object
+      properties:
+        protocol:
+          type: string
+          enum:
+            - grad.trainer-protocol/1
+        job:
+          $ref: "#/components/schemas/TrainerJob"
+      required:
+        - protocol
+        - job
+    TrainerJob:
+      type:
+        - object
+        - "null"
+      properties:
+        id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/JobKind"
+        attempt:
+          type: integer
+          minimum: 1
+        lease_seconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+        lease_expires_at:
+          type: string
+          format: date-time
+        run:
+          type:
+            - object
+            - "null"
+          properties:
+            id:
+              type: string
+              minLength: 1
+            workspace_id:
+              type: string
+              minLength: 1
+            name:
+              type: string
+              minLength: 1
+            recipe_kind:
+              $ref: "#/components/schemas/RecipeKind"
+            resolved_config:
+              $ref: "#/components/schemas/ResolvedRunConfig"
+            total_steps:
+              type: integer
+              minimum: 0
+          required:
+            - id
+            - workspace_id
+            - name
+            - recipe_kind
+            - resolved_config
+            - total_steps
+        import:
+          type:
+            - object
+            - "null"
+          properties:
+            id:
+              type: string
+              minLength: 1
+            workspace_id:
+              type: string
+              minLength: 1
+            dataset:
+              type: string
+              minLength: 1
+            source:
+              type: object
+              additionalProperties: {}
+            connector:
+              type: string
+              enum:
+                - auto
+                - grad_trajectories
+                - openai_chat
+                - gradiated
+                - otel
+                - langfuse
+                - posthog
+                - braintrust
+                - langsmith
+          required:
+            - id
+            - workspace_id
+            - dataset
+            - source
+            - connector
+        price_per_million_tokens:
+          type:
+            - number
+            - "null"
+          exclusiveMinimum: 0
+        max_cost_usd:
+          type:
+            - number
+            - "null"
+          minimum: 0
+          description: Remaining budget for this attempt (the run cap minus cost billed by earlier attempts).
+        dataset:
+          type:
+            - object
+            - "null"
+          properties:
+            version:
+              type: integer
+              minimum: 0
+            record_count:
+              type: integer
+              minimum: 0
+            download_url:
+              type: string
+              minLength: 1
+          required:
+            - version
+            - record_count
+            - download_url
+        resume:
+          type:
+            - object
+            - "null"
+          properties:
+            checkpoint_id:
+              type: string
+              minLength: 1
+            step:
+              type: integer
+              minimum: 0
+            download_url:
+              type: string
+              minLength: 1
+          required:
+            - checkpoint_id
+            - step
+            - download_url
+      required:
+        - id
+        - kind
+        - attempt
+        - lease_seconds
+        - lease_expires_at
+        - run
+        - import
+        - price_per_million_tokens
+        - max_cost_usd
+        - dataset
+        - resume
+    JobKind:
+      type: string
+      enum:
+        - train
+        - import
     ClaimJobRequest:
       type: object
       properties:
@@ -1077,35 +1721,235 @@ components:
           type: string
           minLength: 1
           maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
         lease_seconds:
           type: integer
           minimum: 30
           maximum: 3600
           default: 180
+        kinds:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobKind"
+          minItems: 1
+          default:
+            - train
+            - import
+        recipes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipeKind"
+          minItems: 1
+          description: Recipe kinds this worker can run; train jobs for other recipes are left queued.
       required:
         - worker_id
-    ReportRunProgress:
+    TrainerQueueStats:
+      type: object
+      properties:
+        queued:
+          type: integer
+          minimum: 0
+        running:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 0
+        by_kind:
+          type: object
+          properties:
+            train:
+              type: object
+              properties:
+                queued:
+                  type: integer
+                running:
+                  type: integer
+              required:
+                - queued
+                - running
+            import:
+              type: object
+              properties:
+                queued:
+                  type: integer
+                running:
+                  type: integer
+              required:
+                - queued
+                - running
+          required:
+            - train
+            - import
+      required:
+        - queued
+        - running
+        - total
+        - by_kind
+    TrainerHeartbeatResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        should_stop:
+          type: boolean
+        stop_reason:
+          type:
+            - string
+            - "null"
+          enum:
+            - cancelled
+            - budget
+            - null
+        lease_expires_at:
+          type: string
+          format: date-time
+      required:
+        - status
+        - should_stop
+        - stop_reason
+        - lease_expires_at
+    TrainerHeartbeatRequest:
       type: object
       properties:
         worker_id:
           type: string
           minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
+        lease_seconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+      required:
+        - worker_id
+        - attempt
+    ReportTrainerProgressResponse:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        should_stop:
+          type: boolean
+        stop_reason:
+          type:
+            - string
+            - "null"
+          enum:
+            - cancelled
+            - budget
+            - null
+        cost_usd:
+          type: number
+          minimum: 0
+      required:
+        - status
+        - should_stop
+        - stop_reason
+        - cost_usd
+    ReportTrainerProgressRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
         metric:
-          $ref: "#/components/schemas/MetricPoint"
-        lease_seconds:
-          type: integer
-          minimum: 30
-          maximum: 3600
-          default: 180
+          $ref: "#/components/schemas/MetricPointInput"
       required:
         - worker_id
+        - attempt
         - metric
-    RegisterCheckpointRequest:
+    MetricPointInput:
+      type: object
+      properties:
+        step:
+          type: integer
+          minimum: 0
+        loss:
+          type: number
+        eval_loss:
+          type:
+            - number
+            - "null"
+        eval_metric:
+          type:
+            - number
+            - "null"
+        grad_norm:
+          type:
+            - number
+            - "null"
+        lr:
+          type:
+            - number
+            - "null"
+        tokens_per_sec:
+          type:
+            - number
+            - "null"
+        tokens:
+          type: integer
+          minimum: 0
+        cost_usd:
+          type: number
+          minimum: 0
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - step
+        - loss
+        - tokens
+        - timestamp
+      additionalProperties: {}
+    TrainerUploadRequest:
       type: object
       properties:
         worker_id:
           type: string
           minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          enum:
+            - checkpoint
+            - artifact
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 5368709120
+      required:
+        - worker_id
+        - attempt
+        - kind
+        - sha256
+        - size_bytes
+    RegisterTrainerCheckpointRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
         step:
           type: integer
           minimum: 0
@@ -1113,53 +1957,160 @@ components:
           type:
             - number
             - "null"
-        payload_base64:
+        upload_id:
           type: string
           minLength: 1
-          maxLength: 33554432
+          maxLength: 160
+        format:
+          $ref: "#/components/schemas/ArtifactFormat"
         metadata:
           type: object
           additionalProperties: {}
           default: {}
       required:
         - worker_id
+        - attempt
         - step
-        - payload_base64
-    CompleteRunRequest:
+        - upload_id
+    PostImportRecordsResponse:
+      type: object
+      properties:
+        accepted:
+          type: integer
+          minimum: 0
+        rejected:
+          type: integer
+          minimum: 0
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+                minimum: 0
+              error:
+                type: string
+            required:
+              - index
+              - error
+      required:
+        - accepted
+        - rejected
+        - errors
+    PostImportRecordsRequest:
       type: object
       properties:
         worker_id:
           type: string
           minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
+        records:
+          type: array
+          items: {}
+          minItems: 1
+          maxItems: 10000
+      required:
+        - worker_id
+        - attempt
+        - records
+    CompleteTrainerJobResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+        kind:
+          $ref: "#/components/schemas/JobKind"
+        status:
+          type: string
+        run:
+          allOf:
+            - $ref: "#/components/schemas/Run"
+            - type:
+                - object
+                - "null"
+        artifact:
+          allOf:
+            - $ref: "#/components/schemas/Artifact"
+            - type:
+                - object
+                - "null"
+        import:
+          allOf:
+            - $ref: "#/components/schemas/ImportJob"
+            - type:
+                - object
+                - "null"
+      required:
+        - job_id
+        - kind
+        - status
+        - run
+        - artifact
+        - import
+    CompleteTrainerJobRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
         status:
           type: string
           enum:
             - completed
-            - failed
             - stopped_budget
-        format:
-          $ref: "#/components/schemas/ArtifactFormat"
-        artifact_base64:
+            - failed
+            - cancelled
+            - abandoned
+          description: "`abandoned` releases the lease (worker shutdown) and requeues the job without counting a failure."
+        upload_id:
           type: string
           minLength: 1
-          maxLength: 33554432
+          maxLength: 160
+        format:
+          $ref: "#/components/schemas/ArtifactFormat"
         manifest:
           type: object
           additionalProperties: {}
+          default: {}
         eval_report:
-          type: object
+          type:
+            - object
+            - "null"
           additionalProperties: {}
         tokens_processed:
           type: integer
           minimum: 0
-        cost_usd:
-          type: number
-          minimum: 0
+          default: 0
         error:
           type: string
           maxLength: 4000
+        import_summary:
+          type: object
+          properties:
+            dropped_count:
+              type: integer
+              minimum: 0
+              default: 0
+            detected_scores:
+              type: array
+              items:
+                type: string
+                maxLength: 160
+              maxItems: 1000
+              default: []
       required:
         - worker_id
+        - attempt
         - status
     Deployment:
       type: object
@@ -1238,6 +2189,22 @@ components:
           default: 0
       required:
         - artifact
+    DeploymentStatus:
+      type: object
+      properties:
+        deployment:
+          $ref: "#/components/schemas/Deployment"
+        feedback_count:
+          type: integer
+          minimum: 0
+        average_score:
+          type:
+            - number
+            - "null"
+      required:
+        - deployment
+        - feedback_count
+        - average_score
     RouteResponse:
       type: object
       properties:
@@ -1341,17 +2308,39 @@ components:
         model:
           type: string
           minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Name of a deployed embedding artifact.
         input:
           anyOf:
             - type: string
+              minLength: 1
             - type: array
               items:
                 type: string
+                minLength: 1
               minItems: 1
               maxItems: 256
       required:
         - model
         - input
+    RecordFeedbackResponse:
+      type: object
+      properties:
+        accepted:
+          type: integer
+          minimum: 0
+        deduplicated:
+          type: integer
+          minimum: 0
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/FeedbackRecord"
+      required:
+        - accepted
+        - deduplicated
+        - records
     FeedbackRecord:
       type: object
       properties:
@@ -1447,8 +2436,9 @@ components:
           type: string
           enum:
             - dataset
-            - env
-            - benchmarks
+        dataset_version:
+          type: integer
+          minimum: 0
         estimated_tasks:
           type: integer
           minimum: 0
@@ -1465,17 +2455,28 @@ components:
           type: array
           items:
             type: string
+        local_scorers:
+          type: array
+          items:
+            type: string
+        pass_threshold:
+          type: number
+          minimum: 0
+          maximum: 1
         warnings:
           type: array
           items:
             type: string
       required:
         - task_source_kind
+        - dataset_version
         - estimated_tasks
         - estimated_model_calls
         - estimated_judge_calls
         - estimated_cost_usd
         - judge_models
+        - local_scorers
+        - pass_threshold
         - warnings
     PlanEvalRequest:
       type: object
@@ -1491,16 +2492,21 @@ components:
           items:
             type: string
             minLength: 1
+            maxLength: 200
           minItems: 1
           maxItems: 16
         baseline:
           type: string
           minLength: 1
+          maxLength: 200
         dataset:
           type: string
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        dataset_version:
+          type: integer
+          minimum: 1
         env_name:
           type: string
           minLength: 1
@@ -1521,6 +2527,7 @@ components:
           items:
             $ref: "#/components/schemas/EvalRubricItem"
           minItems: 1
+          maxItems: 32
           default:
             - name: non_empty
               kind: validator
@@ -1531,11 +2538,28 @@ components:
           minimum: 1
           maximum: 32
           default: 1
-        pass_threshold:
+        temperature:
           type: number
           minimum: 0
+          maximum: 2
+          default: 0.7
+        max_tokens:
+          type: integer
+          minimum: 1
+          maximum: 32768
+          default: 1024
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100000
+        pass_threshold:
+          type:
+            - number
+            - "null"
+          minimum: 0
           maximum: 1
-          default: 0.8
+          default: null
+          description: Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.
         max_cost_usd:
           type: number
           exclusiveMinimum: 0
@@ -1567,6 +2591,7 @@ components:
           type: string
           minLength: 1
           maxLength: 80
+          pattern: ^[A-Za-z0-9_.:-]+$
         kind:
           type: string
           enum:
@@ -1581,6 +2606,10 @@ components:
         pattern:
           type: string
           maxLength: 256
+        flags:
+          type: string
+          maxLength: 4
+          pattern: ^[imsu]*$
         validator:
           type: string
           enum:
@@ -1593,7 +2622,13 @@ components:
           maxLength: 160
         prompt:
           type: string
-          maxLength: 4000
+          maxLength: 8000
+        runtime:
+          type: string
+          enum:
+            - local
+          description: Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK
+            posts their scores.
       required:
         - name
         - kind
@@ -1612,10 +2647,7 @@ components:
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
         status:
-          type: string
-          enum:
-            - completed
-            - failed
+          $ref: "#/components/schemas/EvalStatus"
         models:
           type: array
           items:
@@ -1626,12 +2658,35 @@ components:
             - "null"
         task_source:
           type: object
-          additionalProperties: {}
+          properties:
+            kind:
+              type: string
+              enum:
+                - dataset
+            dataset:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+            version:
+              type: integer
+              minimum: 0
+          required:
+            - kind
+            - dataset
+            - version
         rubric:
           type: array
           items:
             $ref: "#/components/schemas/EvalRubricItem"
         samples:
+          type: integer
+          minimum: 1
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        max_tokens:
           type: integer
           minimum: 1
         pass_threshold:
@@ -1642,19 +2697,47 @@ components:
           type: array
           items:
             type: string
+        local_scorers:
+          type: array
+          items:
+            type: string
+        progress:
+          type: object
+          properties:
+            total_outputs:
+              type: integer
+              minimum: 0
+            generated:
+              type: integer
+              minimum: 0
+            pending_local_scores:
+              type: integer
+              minimum: 0
+          required:
+            - total_outputs
+            - generated
+            - pending_local_scores
         summary:
           type: array
           items:
             $ref: "#/components/schemas/EvalModelSummary"
-        results:
-          type: array
-          items:
-            $ref: "#/components/schemas/EvalTaskOutcome"
         total_cost_usd:
           type: number
           minimum: 0
+        error:
+          type:
+            - string
+            - "null"
         created_at:
           type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type:
+            - string
+            - "null"
           format: date-time
       required:
         - id
@@ -1666,12 +2749,27 @@ components:
         - task_source
         - rubric
         - samples
+        - temperature
+        - max_tokens
         - pass_threshold
         - judge_models
+        - local_scorers
+        - progress
         - summary
-        - results
         - total_cost_usd
+        - error
         - created_at
+        - updated_at
+        - completed_at
+    EvalStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - awaiting_scores
+        - completed
+        - failed
+        - cancelled
     EvalModelSummary:
       type: object
       properties:
@@ -1702,10 +2800,18 @@ components:
             - delta
             - ci_low
             - ci_high
+        tasks:
+          type: integer
+          minimum: 0
+        errors:
+          type: integer
+          minimum: 0
         tokens_per_task:
           type: number
         cost_per_1k_tasks_usd:
-          type: number
+          type:
+            - number
+            - "null"
       required:
         - model
         - overall
@@ -1713,8 +2819,113 @@ components:
         - ci_high
         - pass_at_k
         - vs_baseline
+        - tasks
+        - errors
         - tokens_per_task
         - cost_per_1k_tasks_usd
+    EvalOutput:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        eval_id:
+          type: string
+          minLength: 1
+        task_id:
+          type: string
+          minLength: 1
+        model:
+          type: string
+          minLength: 1
+        sample_index:
+          type: integer
+          minimum: 0
+        input:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        output:
+          type:
+            - string
+            - "null"
+        expected_output: {}
+        record:
+          $ref: "#/components/schemas/DatasetRecord"
+        scores:
+          type: object
+          additionalProperties:
+            type: number
+        error:
+          type:
+            - string
+            - "null"
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+              minimum: 0
+            completion_tokens:
+              type: integer
+              minimum: 0
+          required:
+            - prompt_tokens
+            - completion_tokens
+      required:
+        - id
+        - eval_id
+        - task_id
+        - model
+        - sample_index
+        - input
+        - output
+        - record
+        - scores
+        - error
+        - usage
+    PostEvalScoresResponse:
+      type: object
+      properties:
+        accepted:
+          type: integer
+          minimum: 0
+        status:
+          $ref: "#/components/schemas/EvalStatus"
+        pending_local_scores:
+          type: integer
+          minimum: 0
+      required:
+        - accepted
+        - status
+        - pending_local_scores
+    PostEvalScoresRequest:
+      type: object
+      properties:
+        scores:
+          type: array
+          items:
+            type: object
+            properties:
+              output_id:
+                type: string
+                minLength: 1
+              scorer:
+                type: string
+                minLength: 1
+                maxLength: 80
+              score:
+                type: number
+                minimum: 0
+                maximum: 1
+            required:
+              - output_id
+              - scorer
+              - score
+          minItems: 1
+          maxItems: 10000
+      required:
+        - scores
     EvalTaskOutcome:
       type: object
       properties:
@@ -1817,7 +3028,7 @@ paths:
   /v1/models:
     get:
       operationId: listModels
-      summary: List trainable base models
+      summary: List trainable base models (the server catalog and price source)
       tags:
         - Models
       responses:
@@ -1835,7 +3046,7 @@ paths:
                 required:
                   - data
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -1870,10 +3081,22 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/keys:
     post:
       operationId: createApiKey
-      summary: Create a scoped API key
+      summary: Create a scoped workspace API key (trainer worker keys are platform config, not keys)
       tags:
         - Keys
       requestBody:
@@ -1888,17 +3111,9 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  key:
-                    $ref: "#/components/schemas/ApiKey"
-                  secret:
-                    type: string
-                required:
-                  - key
-                  - secret
+                $ref: "#/components/schemas/CreatedApiKey"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -1933,11 +3148,39 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
     get:
       operationId: listApiKeys
-      summary: List scoped API keys
+      summary: List workspace API keys
       tags:
         - Keys
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
       responses:
         "200":
           description: Workspace keys.
@@ -1950,10 +3193,15 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ApiKey"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -1988,16 +3236,29 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/keys/{id}:
     delete:
       operationId: revokeApiKey
-      summary: Revoke a scoped API key
+      summary: Revoke a workspace API key
       tags:
         - Keys
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -2009,7 +3270,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiKey"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2044,12 +3305,40 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/datasets:
     get:
       operationId: listDatasets
-      summary: List datasets
-      tags:
+      summary: List datasets (newest first)
+      tags: &a1
         - Datasets
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
       responses:
         "200":
           description: Datasets.
@@ -2062,10 +3351,15 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Dataset"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2100,12 +3394,88 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      operationId: createDataset
+      summary: Create an empty dataset
+      tags: *a1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDatasetRequest"
+      responses:
+        "201":
+          description: Created dataset (version 0).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dataset"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/datasets/{name}:
     get:
       operationId: getDataset
       summary: Get a dataset by name
-      tags:
-        - Datasets
+      tags: *a1
       parameters:
         - schema:
             type: string
@@ -2123,7 +3493,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Dataset"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2158,12 +3528,23 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/datasets/{name}/records:
     post:
       operationId: pushDatasetRecords
-      summary: Create or append records to a dataset
-      tags:
-        - Datasets
+      summary: Append records as a new dataset version (creates the dataset if needed)
+      tags: *a1
       parameters:
         - schema:
             type: string
@@ -2187,7 +3568,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Dataset"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2222,11 +3603,22 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
     get:
       operationId: listDatasetRecords
-      summary: Read records from a dataset
-      tags:
-        - Datasets
+      summary: Read records of a dataset version
+      tags: *a1
       parameters:
         - schema:
             type: string
@@ -2237,48 +3629,37 @@ paths:
           name: name
           in: path
         - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+          required: false
+          name: version
+          in: query
+        - schema:
             type: integer
             minimum: 1
-            maximum: 10000
+            maximum: 1000
             default: 100
           required: false
           name: limit
           in: query
         - schema:
-            type:
-              - integer
-              - "null"
-            minimum: 0
-            default: 0
+            type: string
+            minLength: 1
+            maxLength: 512
           required: false
-          name: offset
+          name: cursor
           in: query
       responses:
         "200":
-          description: Dataset records slice.
+          description: Dataset records page.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  dataset:
-                    type: string
-                    minLength: 1
-                    maxLength: 64
-                    pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
-                  total:
-                    type: integer
-                    minimum: 0
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/DatasetRecord"
-                required:
-                  - dataset
-                  - total
-                  - data
+                $ref: "#/components/schemas/DatasetRecordsPage"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2313,12 +3694,23 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/datasets/{name}/render:
     post:
       operationId: renderDataset
-      summary: Preview chat template rendering and loss masks
-      tags:
-        - Datasets
+      summary: Preview chat-template rendering and loss masks (estimated token counts)
+      tags: *a1
       parameters:
         - schema:
             type: string
@@ -2342,7 +3734,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RenderDatasetResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2377,11 +3769,320 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/uploads:
+    post:
+      operationId: createUpload
+      summary: Get an upload URL for a file to import (PUT the bytes, then create an import)
+      tags: *a1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUploadRequest"
+      responses:
+        "201":
+          description: Upload ticket.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadTicket"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets/{name}/imports:
+    post:
+      operationId: createDatasetImport
+      summary: Import an uploaded file or a Hugging Face dataset into a dataset (async job)
+      tags: *a1
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateImportRequest"
+      responses:
+        "202":
+          description: Queued import job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportJob"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/imports:
+    get:
+      operationId: listImports
+      summary: List dataset import jobs (newest first)
+      tags: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+      responses:
+        "200":
+          description: Import jobs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ImportJob"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - data
+                  - next_cursor
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/imports/{id}:
+    get:
+      operationId: getImport
+      summary: Get a dataset import job
+      tags: *a1
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Import job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportJob"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/runs/plan:
     post:
       operationId: planRun
       summary: Dry-run a training recipe at zero cost
-      tags:
+      tags: &a2
         - Runs
       requestBody:
         required: true
@@ -2397,7 +4098,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/PlanRunResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2432,12 +4133,23 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/runs:
     post:
       operationId: createRun
-      summary: Create and enqueue a training run
-      tags:
-        - Runs
+      summary: Create and enqueue a training run (pins the dataset version)
+      tags: *a2
       requestBody:
         required: true
         content:
@@ -2452,7 +4164,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Run"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2487,11 +4199,38 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
     get:
       operationId: listRuns
-      summary: List training runs
-      tags:
-        - Runs
+      summary: List training runs (newest first)
+      tags: *a2
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
       responses:
         "200":
           description: Training runs.
@@ -2504,10 +4243,15 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Run"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2542,16 +4286,28 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/runs/{id}:
     get:
       operationId: getRun
       summary: Get a training run
-      tags:
-        - Runs
+      tags: *a2
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -2563,7 +4319,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Run"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2594,6 +4350,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -2601,47 +4369,54 @@ paths:
   /v1/runs/{id}/metrics:
     get:
       operationId: listRunMetrics
-      summary: Fetch training step metrics for a run
-      tags:
-        - Runs
+      summary: Training step metrics as JSON pages, or a live SSE stream
+      description: "With `Accept: text/event-stream` the response is a Server-Sent Events stream of `metric` events (event id
+        = `seq`) followed by one `status` event carrying the final Run; reconnect with `Last-Event-ID` to resume.
+        Otherwise returns a JSON page; pass `next_cursor` back as `cursor` to poll for newer points."
+      tags: *a2
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
         - schema:
             type:
               - integer
               - "null"
             minimum: -1
-            default: -1
           required: false
           name: after_step
           in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+          required: false
+          name: limit
+          in: query
       responses:
         "200":
-          description: Training step metrics.
+          description: Metric points.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  run_id:
-                    type: string
-                  status:
-                    $ref: "#/components/schemas/RunStatus"
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/MetricPoint"
-                required:
-                  - run_id
-                  - status
-                  - data
+                $ref: "#/components/schemas/MetricsPage"
+            text/event-stream:
+              schema:
+                type: string
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2676,16 +4451,28 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/runs/{id}/cancel:
     post:
       operationId: cancelRun
-      summary: Cancel a training run
-      tags:
-        - Runs
+      summary: Cancel a training run (a running attempt is stopped and billed)
+      tags: *a2
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -2697,7 +4484,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Run"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2732,16 +4519,28 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/runs/{id}/resume:
     post:
       operationId: resumeRun
-      summary: Resume a stopped or failed training run
-      tags:
-        - Runs
+      summary: Resume a stopped, failed or cancelled run from its latest checkpoint
+      tags: *a2
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -2759,7 +4558,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Run"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2794,22 +4593,50 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/runs/{id}/checkpoints:
     get:
       operationId: listRunCheckpoints
-      summary: List checkpoints saved during a run
-      tags:
+      summary: List unexpired checkpoints of a run (best and final never expire)
+      tags: &a3
         - Checkpoints
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
       responses:
         "200":
-          description: Checkpoints.
+          description: Checkpoints by step.
           content:
             application/json:
               schema:
@@ -2819,10 +4646,15 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Checkpoint"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2857,16 +4689,28 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/checkpoints/{id}/promote:
     post:
       operationId: promoteCheckpoint
-      summary: Promote an intermediate checkpoint into a permanent artifact
-      tags:
-        - Checkpoints
+      summary: Copy an exportable checkpoint into a new immutable artifact
+      tags: *a3
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -2884,7 +4728,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Artifact"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2919,11 +4763,23 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/trainer-jobs/claim:
     post:
       operationId: claimTrainerJob
-      summary: Claim the next queued training run for execution
-      tags:
+      summary: Claim the next queued train or import job (trainer:worker)
+      tags: &a4
         - TrainerJobs
       requestBody:
         required: true
@@ -2933,26 +4789,13 @@ paths:
               $ref: "#/components/schemas/ClaimJobRequest"
       responses:
         "200":
-          description: Claimed run and dataset records, or null when idle.
+          description: Claimed job, or null when idle.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  run:
-                    allOf:
-                      - $ref: "#/components/schemas/Run"
-                      - type:
-                          - object
-                          - "null"
-                  records:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/DatasetRecord"
-                required:
-                  - run
+                $ref: "#/components/schemas/ClaimJobResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -2983,6 +4826,152 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/queue:
+    get:
+      operationId: getTrainerQueueStats
+      summary: "Queue depth for autoscaling: queued plus running jobs (trainer:worker)"
+      tags: *a4
+      responses:
+        "200":
+          description: Queue depth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainerQueueStats"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/heartbeat:
+    post:
+      operationId: heartbeatTrainerJob
+      summary: Renew the job lease; reports whether the worker should stop
+      tags: *a4
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TrainerHeartbeatRequest"
+      responses:
+        "200":
+          description: Lease renewed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainerHeartbeatResponse"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -2990,13 +4979,13 @@ paths:
   /v1/trainer-jobs/{id}/progress:
     post:
       operationId: reportTrainerProgress
-      summary: Report training step metrics and renew worker lease
-      tags:
-        - TrainerJobs
+      summary: Report one training step's metrics
+      tags: *a4
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -3005,24 +4994,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ReportRunProgress"
+              $ref: "#/components/schemas/ReportTrainerProgressRequest"
       responses:
         "200":
-          description: Updated run and stop flag.
+          description: Stop flag and server-side cost.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  run:
-                    $ref: "#/components/schemas/Run"
-                  should_stop:
-                    type: boolean
-                required:
-                  - run
-                  - should_stop
+                $ref: "#/components/schemas/ReportTrainerProgressResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3053,6 +5034,92 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/uploads:
+    post:
+      operationId: createTrainerUpload
+      summary: Get an upload URL for a checkpoint or artifact bundle
+      tags: *a4
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TrainerUploadRequest"
+      responses:
+        "201":
+          description: Upload ticket.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadTicket"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3060,13 +5127,13 @@ paths:
   /v1/trainer-jobs/{id}/checkpoints:
     post:
       operationId: registerTrainerCheckpoint
-      summary: Upload and register an intermediate checkpoint
-      tags:
-        - TrainerJobs
+      summary: Register an uploaded checkpoint bundle
+      tags: *a4
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -3075,16 +5142,22 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RegisterCheckpointRequest"
+              $ref: "#/components/schemas/RegisterTrainerCheckpointRequest"
       responses:
+        "200":
+          description: Existing identical checkpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
         "201":
-          description: Stored checkpoint.
+          description: Registered checkpoint.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Checkpoint"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3115,6 +5188,92 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/records:
+    post:
+      operationId: postImportRecords
+      summary: Append a batch of parsed records to an import job
+      tags: *a4
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostImportRecordsRequest"
+      responses:
+        "200":
+          description: Accepted and rejected counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostImportRecordsResponse"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3122,13 +5281,13 @@ paths:
   /v1/trainer-jobs/{id}/complete:
     post:
       operationId: completeTrainerJob
-      summary: Finish a training run and publish its immutable artifact
-      tags:
-        - TrainerJobs
+      summary: "Finish a job attempt: publish its artifact, bill it, release the lease"
+      tags: *a4
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -3137,28 +5296,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CompleteRunRequest"
+              $ref: "#/components/schemas/CompleteTrainerJobRequest"
       responses:
         "200":
-          description: Completed run and optional artifact.
+          description: Final job state.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  run:
-                    $ref: "#/components/schemas/Run"
-                  artifact:
-                    allOf:
-                      - $ref: "#/components/schemas/Artifact"
-                      - type:
-                          - object
-                          - "null"
-                required:
-                  - run
-                  - artifact
+                $ref: "#/components/schemas/CompleteTrainerJobResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3193,13 +5340,114 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/dataset:
+    get:
+      operationId: downloadTrainerDataset
+      summary: Stream the pinned dataset version of a claimed train job as JSONL
+      tags: *a4
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+          required: true
+          name: attempt
+          in: query
+      responses:
+        "200":
+          description: Dataset records (JSON Lines).
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/artifacts:
     get:
       operationId: listArtifacts
-      summary: List immutable artifacts
-      tags:
+      summary: List immutable artifacts (newest first)
+      tags: &a5
         - Artifacts
       parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
         - schema:
             type: string
             minLength: 1
@@ -3220,10 +5468,15 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Artifact"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3258,16 +5511,28 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/artifacts/{id}:
     get:
       operationId: getArtifact
-      summary: Get an artifact by ID or name@latest
-      tags:
-        - Artifacts
+      summary: Get an artifact by id or name@latest
+      tags: *a5
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -3279,7 +5544,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Artifact"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3310,6 +5575,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3317,26 +5594,26 @@ paths:
   /v1/artifacts/{id}/download:
     get:
       operationId: downloadArtifact
-      summary: Download an artifact archive
-      tags:
-        - Artifacts
+      summary: Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256
+      tags: *a5
       parameters:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
       responses:
         "200":
-          description: Artifact binary archive.
+          description: Artifact bundle.
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3367,6 +5644,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3391,7 +5680,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Deployment"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3426,17 +5715,45 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "501":
-          description: Deploy disabled in self-hosted mode.
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
     get:
       operationId: listDeployments
-      summary: List active deployments
+      summary: List deployments
       tags:
         - Deployments
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
       responses:
         "200":
           description: Deployments.
@@ -3449,10 +5766,15 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Deployment"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3483,6 +5805,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3508,23 +5842,9 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  deployment:
-                    $ref: "#/components/schemas/Deployment"
-                  feedback_count:
-                    type: integer
-                    minimum: 0
-                  average_score:
-                    type:
-                      - number
-                      - "null"
-                required:
-                  - deployment
-                  - feedback_count
-                  - average_score
+                $ref: "#/components/schemas/DeploymentStatus"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3555,6 +5875,94 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/deployments/{name}/rollback:
+    post:
+      operationId: rollbackDeployment
+      summary: Roll a deployment back to its previous artifact
+      tags:
+        - Deployments
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+      responses:
+        "200":
+          description: Rolled-back deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3579,7 +5987,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RouteResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3610,6 +6018,24 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3628,13 +6054,13 @@ paths:
               $ref: "#/components/schemas/EmbedRequest"
       responses:
         "200":
-          description: Normalized embeddings.
+          description: Embeddings.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/EmbedResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3665,6 +6091,24 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3683,28 +6127,13 @@ paths:
               $ref: "#/components/schemas/RecordFeedbackRequest"
       responses:
         "200":
-          description: Recorded feedback events.
+          description: Recorded feedback.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accepted:
-                    type: integer
-                    minimum: 0
-                  deduplicated:
-                    type: integer
-                    minimum: 0
-                  records:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/FeedbackRecord"
-                required:
-                  - accepted
-                  - deduplicated
-                  - records
+                $ref: "#/components/schemas/RecordFeedbackResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3735,6 +6164,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3759,7 +6200,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/PlanEvalResponse"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3794,10 +6235,28 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/evals:
     post:
       operationId: createEval
-      summary: Run a standalone evaluation across models, tasks, and a rubric
+      summary: Queue an evaluation across models on a pinned dataset version (executed by the server)
       tags:
         - Evals
       requestBody:
@@ -3807,14 +6266,14 @@ paths:
             schema:
               $ref: "#/components/schemas/PlanEvalRequest"
       responses:
-        "201":
-          description: Completed evaluation run.
+        "202":
+          description: Queued evaluation run.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/EvalRun"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3849,11 +6308,45 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
     get:
       operationId: listEvals
       summary: List evaluation runs
       tags:
         - Evals
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
       responses:
         "200":
           description: Evaluation runs.
@@ -3866,10 +6359,15 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/EvalRun"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3900,6 +6398,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -3914,6 +6424,7 @@ paths:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
@@ -3925,7 +6436,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/EvalRun"
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -3960,6 +6471,306 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals/{id}/outputs:
+    get:
+      operationId: listEvalOutputs
+      summary: Page through generated model outputs (filter by model or by a code scorer that still needs a score)
+      tags:
+        - Evals
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: false
+          name: model
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 80
+          required: false
+          name: missing_scorer
+          in: query
+      responses:
+        "200":
+          description: Eval outputs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvalOutput"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - data
+                  - next_cursor
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals/{id}/scores:
+    post:
+      operationId: postEvalScores
+      summary: Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing
+      tags:
+        - Evals
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostEvalScoresRequest"
+      responses:
+        "200":
+          description: Accepted scores.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostEvalScoresResponse"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals/{id}/results:
+    get:
+      operationId: listEvalResults
+      summary: Per-task, per-model results of a completed evaluation
+      tags:
+        - Evals
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: false
+          name: model
+          in: query
+      responses:
+        "200":
+          description: Task outcomes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvalTaskOutcome"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - data
+                  - next_cursor
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/evals/{id}/failures:
     get:
       operationId: listEvalFailures
@@ -3970,11 +6781,29 @@ paths:
         - schema:
             type: string
             minLength: 1
+            maxLength: 200
           required: true
           name: id
           in: path
         - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          required: false
+          name: limit
+          in: query
+        - schema:
             type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
           required: false
           name: model
           in: query
@@ -3984,7 +6813,6 @@ paths:
               - "null"
             minimum: 0
             maximum: 1
-            default: 0.8
           required: false
           name: threshold
           in: query
@@ -4002,11 +6830,16 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/EvalTaskOutcome"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - eval_id
                   - data
+                  - next_cursor
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -4037,6 +6870,87 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/evals/{id}/cancel:
+    post:
+      operationId: cancelEval
+      summary: Cancel a queued, running or awaiting_scores evaluation
+      tags:
+        - Evals
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Cancelled evaluation run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvalRun"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -4078,7 +6992,7 @@ paths:
                   - concurrency
                   - last_heartbeat_at
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -4109,6 +7023,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -4151,7 +7077,7 @@ paths:
                   - status
                   - active_workers
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -4182,6 +7108,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -4234,7 +7172,7 @@ paths:
                 required:
                   - task
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -4265,6 +7203,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -4297,7 +7247,7 @@ paths:
                 type: object
                 additionalProperties: {}
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -4328,6 +7278,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:
@@ -4354,7 +7316,7 @@ paths:
                 type: object
                 additionalProperties: {}
         "400":
-          description: Bad request.
+          description: Malformed request.
           content:
             application/problem+json:
               schema:
@@ -4385,6 +7347,18 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
           content:
             application/problem+json:
               schema:

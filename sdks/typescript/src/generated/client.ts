@@ -23,7 +23,7 @@ export type ApiKey = {
   revoked_at: string | null;
 };
 
-export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:read" | "runs:write" | "artifacts:read" | "artifacts:write" | "deployments:write" | "feedback:write" | "env:serve" | "trainer:worker";
+export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:read" | "runs:write" | "artifacts:read" | "artifacts:write" | "deployments:write" | "feedback:write" | "env:serve";
 
 export type Artifact = {
   id: string;
@@ -35,7 +35,6 @@ export type Artifact = {
   base_model: string;
   recipe_kind: RecipeKind;
   format: ArtifactFormat;
-  storage_key: string;
   sha256: string;
   size_bytes: number;
   manifest: Record<string, unknown>;
@@ -43,7 +42,7 @@ export type Artifact = {
   created_at: string;
 };
 
-export type ArtifactFormat = "peft_lora" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle";
+export type ArtifactFormat = "peft_lora" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference" | null;
 
 export type BenchmarkSpec = {
   name: "ifeval" | "gsm8k" | "mmlu-pro" | "gpqa-diamond" | "humaneval" | "livecodebench";
@@ -52,7 +51,7 @@ export type BenchmarkSpec = {
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
-  content?: string | null;
+  content?: string | Array<Record<string, unknown>> | null;
   tool_calls?: Array<Record<string, unknown>>;
   tool_call_id?: string;
   name?: string;
@@ -63,12 +62,15 @@ export type Checkpoint = {
   id: string;
   workspace_id: string;
   run_id: string;
+  attempt: number;
   step: number;
   eval_score: number | null;
-  storage_key: string;
+  format: ArtifactFormat;
   sha256: string;
   size_bytes: number;
   metadata: Record<string, unknown>;
+  best: boolean;
+  final: boolean;
   expires_at: string | null;
   created_at: string;
 };
@@ -76,18 +78,38 @@ export type Checkpoint = {
 export type ClaimJobRequest = {
   worker_id: string;
   lease_seconds?: number;
+  kinds?: Array<JobKind>;
+  recipes?: Array<RecipeKind>;
 };
 
-export type CompleteRunRequest = {
+export type ClaimJobResponse = {
+  protocol: "grad.trainer-protocol/1";
+  job: TrainerJob;
+};
+
+export type CompleteTrainerJobRequest = {
   worker_id: string;
-  status: "completed" | "failed" | "stopped_budget";
+  attempt: number;
+  status: "completed" | "stopped_budget" | "failed" | "cancelled" | "abandoned";
+  upload_id?: string;
   format?: ArtifactFormat;
-  artifact_base64?: string;
   manifest?: Record<string, unknown>;
-  eval_report?: Record<string, unknown>;
+  eval_report?: Record<string, unknown> | null;
   tokens_processed?: number;
-  cost_usd?: number;
   error?: string;
+  import_summary?: {
+  dropped_count?: number;
+  detected_scores?: Array<string>;
+};
+};
+
+export type CompleteTrainerJobResponse = {
+  job_id: string;
+  kind: JobKind;
+  status: string;
+  run: Run & Record<string, unknown> | null;
+  artifact: Artifact & Record<string, unknown> | null;
+  import: ImportJob & Record<string, unknown> | null;
 };
 
 export type CreateApiKeyRequest = {
@@ -95,24 +117,53 @@ export type CreateApiKeyRequest = {
   scopes: Array<ApiKeyScope>;
 };
 
+export type CreateDatasetRequest = {
+  name: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type CreateImportRequest = {
+  source: ImportSource;
+  connector?: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
+};
+
+export type CreateUploadRequest = {
+  purpose: "dataset_import";
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+};
+
+export type CreatedApiKey = {
+  key: ApiKey;
+  secret: string;
+};
+
 export type Dataset = {
   id: string;
   workspace_id: string;
   name: string;
+  version: number;
   record_count: number;
-  storage_key: string;
-  metadata?: Record<string, unknown>;
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
 
 export type DatasetRecord = {
+  schema?: "grad.trajectory/1";
   id?: string;
-  session_id?: string;
-  group_id?: string;
+  session_id?: string | null;
+  group_id?: string | null;
+  role?: "chosen" | "rejected" | "anchor" | "positive" | "negative" | "desirable" | "undesirable" | "rollout" | null;
+  source?: string | null;
+  timestamp?: string | null;
   messages?: Array<ChatMessage>;
   tools?: Array<Record<string, unknown>>;
+  input?: TrajectoryInput;
+  output?: TrajectoryOutput;
   prompt?: string | Array<ChatMessage>;
+  completion?: string | Array<ChatMessage>;
   chosen?: string | Array<ChatMessage>;
   rejected?: string | Array<ChatMessage>;
   query?: string;
@@ -124,6 +175,14 @@ export type DatasetRecord = {
   scores?: Record<string, number>;
   metrics?: Record<string, number>;
   metadata?: Record<string, unknown>;
+};
+
+export type DatasetRecordsPage = {
+  dataset: string;
+  version: number;
+  total: number;
+  data: Array<DatasetRecord>;
+  next_cursor: string | null;
 };
 
 export type DeployArtifactRequest = {
@@ -145,6 +204,12 @@ export type Deployment = {
   status: "active" | "disabled";
   created_at: string;
   updated_at: string;
+};
+
+export type DeploymentStatus = {
+  deployment: Deployment;
+  feedback_count: number;
+  average_score: number | null;
 };
 
 export type EmbedRequest = {
@@ -197,8 +262,28 @@ export type EvalModelSummary = {
   ci_low: number;
   ci_high: number;
 } | null;
+  tasks: number;
+  errors: number;
   tokens_per_task: number;
-  cost_per_1k_tasks_usd: number;
+  cost_per_1k_tasks_usd: number | null;
+};
+
+export type EvalOutput = {
+  id: string;
+  eval_id: string;
+  task_id: string;
+  model: string;
+  sample_index: number;
+  input: Array<ChatMessage>;
+  output: string | null;
+  expected_output?: unknown;
+  record: DatasetRecord;
+  scores: Record<string, number>;
+  error: string | null;
+  usage: {
+  prompt_tokens: number;
+  completion_tokens: number;
+};
 };
 
 export type EvalRubricItem = {
@@ -206,28 +291,46 @@ export type EvalRubricItem = {
   kind: "regex" | "validator" | "code" | "judge";
   weight?: number;
   pattern?: string;
+  flags?: string;
   validator?: "json" | "non_empty" | "exact_match";
   model?: string;
   prompt?: string;
+  runtime?: "local";
 };
 
 export type EvalRun = {
   id: string;
   workspace_id: string;
   name: string;
-  status: "completed" | "failed";
+  status: EvalStatus;
   models: Array<string>;
   baseline: string | null;
-  task_source: Record<string, unknown>;
+  task_source: {
+  kind: "dataset";
+  dataset: string;
+  version: number;
+};
   rubric: Array<EvalRubricItem>;
   samples: number;
+  temperature: number;
+  max_tokens: number;
   pass_threshold: number;
   judge_models: Array<string>;
-  summary: Array<EvalModelSummary>;
-  results: Array<EvalTaskOutcome>;
-  total_cost_usd: number;
-  created_at: string;
+  local_scorers: Array<string>;
+  progress: {
+  total_outputs: number;
+  generated: number;
+  pending_local_scores: number;
 };
+  summary: Array<EvalModelSummary>;
+  total_cost_usd: number;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type EvalStatus = "queued" | "running" | "awaiting_scores" | "completed" | "failed" | "cancelled";
 
 export type EvalTaskOutcome = {
   task_id: string;
@@ -262,17 +365,85 @@ export type FeedbackRecord = {
   created_at: string;
 };
 
+export type HfColumnMapping = {
+  messages?: string;
+  prompt?: string;
+  completion?: string;
+  chosen?: string;
+  rejected?: string;
+  answer?: string;
+  query?: string;
+  positive?: string;
+};
+
+export type ImportJob = {
+  id: string;
+  workspace_id: string;
+  dataset: string;
+  status: ImportStatus;
+  source: Record<string, unknown>;
+  connector: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
+  attempt: number;
+  imported_count: number;
+  dropped_count: number;
+  detected_scores: Array<string>;
+  dataset_version: number | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ImportSource = {
+  kind: "upload";
+  upload_id: string;
+  format?: "auto" | "jsonl" | "json" | "parquet";
+} | {
+  kind: "hf";
+  repo: string;
+  split?: string;
+  config?: string;
+  revision?: string;
+  columns?: HfColumnMapping;
+  limit?: number;
+};
+
+export type ImportStatus = "queued" | "running" | "completed" | "failed";
+
+export type JobKind = "train" | "import";
+
 export type MetricPoint = {
+  seq: number;
+  attempt: number;
   step: number;
   loss: number;
-  eval_loss?: number;
-  eval_metric?: number;
-  grad_norm?: number;
-  lr?: number;
-  tokens_per_sec?: number;
+  eval_loss?: number | null;
+  eval_metric?: number | null;
+  grad_norm?: number | null;
+  lr?: number | null;
+  tokens_per_sec?: number | null;
   tokens: number;
   cost_usd: number;
   timestamp: string;
+} | null;
+
+export type MetricPointInput = {
+  step: number;
+  loss: number;
+  eval_loss?: number | null;
+  eval_metric?: number | null;
+  grad_norm?: number | null;
+  lr?: number | null;
+  tokens_per_sec?: number | null;
+  tokens: number;
+  cost_usd?: number;
+  timestamp: string;
+};
+
+export type MetricsPage = {
+  run_id: string;
+  status: RunStatus;
+  data: Array<MetricPoint>;
+  next_cursor: string | null;
 };
 
 export type PlanEvalRequest = {
@@ -280,22 +451,29 @@ export type PlanEvalRequest = {
   models: Array<string>;
   baseline?: string;
   dataset?: string;
+  dataset_version?: number;
   env_name?: string;
   tasks?: Array<Record<string, unknown>>;
   benchmarks?: Array<BenchmarkSpec>;
   rubric?: Array<EvalRubricItem>;
   samples?: number;
-  pass_threshold?: number;
+  temperature?: number;
+  max_tokens?: number;
+  limit?: number;
+  pass_threshold?: number | null;
   max_cost_usd?: number;
 };
 
 export type PlanEvalResponse = {
-  task_source_kind: "dataset" | "env" | "benchmarks";
+  task_source_kind: "dataset";
+  dataset_version: number;
   estimated_tasks: number;
   estimated_model_calls: number;
   estimated_judge_calls: number;
   estimated_cost_usd: number;
   judge_models: Array<string>;
+  local_scorers: Array<string>;
+  pass_threshold: number;
   warnings: Array<string>;
 };
 
@@ -309,11 +487,44 @@ export type PlanRunRequest = {
 
 export type PlanRunResponse = {
   resolved_config: ResolvedRunConfig;
+  dataset_version: number;
+  usable_records: number;
+  total_records: number;
   estimated_steps: number;
   estimated_tokens: number;
   estimated_cost_usd: number;
+  price_per_million_tokens: number;
   trained_token_fraction: number;
   warnings: Array<string>;
+};
+
+export type PostEvalScoresRequest = {
+  scores: Array<{
+  output_id: string;
+  scorer: string;
+  score: number;
+}>;
+};
+
+export type PostEvalScoresResponse = {
+  accepted: number;
+  status: EvalStatus;
+  pending_local_scores: number;
+};
+
+export type PostImportRecordsRequest = {
+  worker_id: string;
+  attempt: number;
+  records: Array<unknown>;
+};
+
+export type PostImportRecordsResponse = {
+  accepted: number;
+  rejected: number;
+  errors: Array<{
+  index: number;
+  error: string;
+}>;
 };
 
 export type Problem = {
@@ -368,11 +579,19 @@ export type RecordFeedbackRequest = {
   events: Array<FeedbackEventInput>;
 };
 
-export type RegisterCheckpointRequest = {
+export type RecordFeedbackResponse = {
+  accepted: number;
+  deduplicated: number;
+  records: Array<FeedbackRecord>;
+};
+
+export type RegisterTrainerCheckpointRequest = {
   worker_id: string;
+  attempt: number;
   step: number;
   eval_score?: number | null;
-  payload_base64: string;
+  upload_id: string;
+  format?: ArtifactFormat;
   metadata?: Record<string, unknown>;
 };
 
@@ -388,6 +607,7 @@ export type RenderDatasetResponse = {
   dataset: string;
   model: string;
   template_revision: string;
+  token_counts: "estimated";
   examples: Array<{
   record_id: string;
   template_revision: string;
@@ -402,15 +622,23 @@ export type RenderDatasetResponse = {
 }>;
 };
 
-export type ReportRunProgress = {
+export type ReportTrainerProgressRequest = {
   worker_id: string;
-  metric: MetricPoint;
-  lease_seconds?: number;
+  attempt: number;
+  metric: MetricPointInput;
+};
+
+export type ReportTrainerProgressResponse = {
+  status: RunStatus;
+  should_stop: boolean;
+  stop_reason: "cancelled" | "budget" | null;
+  cost_usd: number;
 };
 
 export type ResolvedRunConfig = {
   rule_version: string;
   dataset: string;
+  dataset_version: number;
   name: string;
   recipe_kind: RecipeKind;
   model: string;
@@ -478,25 +706,28 @@ export type Run = {
   name: string;
   dataset_id: string;
   dataset_name: string;
+  dataset_version: number;
   recipe_kind: RecipeKind;
   status: RunStatus;
   resolved_config: ResolvedRunConfig;
   max_cost_usd: number | null;
+  price_per_million_tokens: number;
   tokens_processed: number;
   cost_usd: number;
   current_step: number;
   total_steps: number;
-  metrics_history: Array<MetricPoint>;
+  attempt: number;
+  max_attempts: number;
+  latest_metric: MetricPoint;
   eval_report: Record<string, unknown> | null;
   artifact_id: string | null;
   error: string | null;
-  worker_id: string | null;
-  lease_expires_at: string | null;
   created_at: string;
   updated_at: string;
+  finished_at: string | null;
 };
 
-export type RunStatus = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled" | "stopped_budget";
+export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopped_budget";
 
 export type SplitSpec = {
   strategy?: "by_session" | "by_group" | "random";
@@ -506,12 +737,108 @@ export type SplitSpec = {
 
 export type TrainableModel = {
   id: string;
-  adapters: Array<string>;
+  hf_repo: string | null;
+  family: "llm" | "encoder";
+  adapters: Array<"lora" | "prefix_kv" | "frozen_head" | "encoder_full">;
+  recipes: Array<RecipeKind>;
   default_for: Array<RecipeKind>;
   price_per_million_tokens_usd: number;
   max_context_tokens: number;
   template_revision: string;
   calibrated_lrs: Record<string, number>;
+};
+
+export type TrainerHeartbeatRequest = {
+  worker_id: string;
+  attempt: number;
+  lease_seconds?: number;
+};
+
+export type TrainerHeartbeatResponse = {
+  status: string;
+  should_stop: boolean;
+  stop_reason: "cancelled" | "budget" | null;
+  lease_expires_at: string;
+};
+
+export type TrainerJob = {
+  id: string;
+  kind: JobKind;
+  attempt: number;
+  lease_seconds: number;
+  lease_expires_at: string;
+  run: {
+  id: string;
+  workspace_id: string;
+  name: string;
+  recipe_kind: RecipeKind;
+  resolved_config: ResolvedRunConfig;
+  total_steps: number;
+} | null;
+  import: {
+  id: string;
+  workspace_id: string;
+  dataset: string;
+  source: Record<string, unknown>;
+  connector: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
+} | null;
+  price_per_million_tokens: number | null;
+  max_cost_usd: number | null;
+  dataset: {
+  version: number;
+  record_count: number;
+  download_url: string;
+} | null;
+  resume: {
+  checkpoint_id: string;
+  step: number;
+  download_url: string;
+} | null;
+} | null;
+
+export type TrainerQueueStats = {
+  queued: number;
+  running: number;
+  total: number;
+  by_kind: {
+  train: {
+  queued: number;
+  running: number;
+};
+  import: {
+  queued: number;
+  running: number;
+};
+};
+};
+
+export type TrainerUploadRequest = {
+  worker_id: string;
+  attempt: number;
+  kind: "checkpoint" | "artifact";
+  sha256: string;
+  size_bytes: number;
+};
+
+export type TrajectoryInput = {
+  messages?: Array<ChatMessage>;
+  tools?: Array<Record<string, unknown>>;
+  media?: Array<Record<string, unknown>>;
+  features?: Record<string, unknown>;
+  payload?: unknown;
+};
+
+export type TrajectoryOutput = {
+  turns?: Array<ChatMessage>;
+  payload?: unknown;
+} | null;
+
+export type UploadTicket = {
+  upload_id: string;
+  method: "PUT";
+  url: string;
+  headers: Record<string, string>;
+  expires_at: string;
 };
 
 export class GradApiError extends Error {
@@ -644,7 +971,12 @@ export class GeneratedApiClient {
     return { bytes: buf, headers: response.headers };
   }
 
-  /** Cancel a training run */
+  /** Cancel a queued, running or awaiting_scores evaluation */
+  cancelEval(id: string): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+
+  /** Cancel a training run (a running attempt is stopped and billed) */
   cancelRun(id: string): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
   }
@@ -654,7 +986,7 @@ export class GeneratedApiClient {
     return this.requestJson(`/v1/env-workers/${encodeURIComponent(name)}/claim`, { method: "POST", body });
   }
 
-  /** Claim the next queued training run for execution */
+  /** Claim the next queued train or import job (trainer:worker) */
   claimTrainerJob(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/trainer-jobs/claim`, { method: "POST", body });
   }
@@ -664,14 +996,24 @@ export class GeneratedApiClient {
     return this.requestJson(`/v1/env-workers/tasks/${encodeURIComponent(id)}/complete`, { method: "POST", body });
   }
 
-  /** Finish a training run and publish its immutable artifact */
+  /** Finish a job attempt: publish its artifact, bill it, release the lease */
   completeTrainerJob(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/complete`, { method: "POST", body });
   }
 
-  /** Create a scoped API key */
+  /** Create a scoped workspace API key (trainer worker keys are platform config, not keys) */
   createApiKey(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/keys`, { method: "POST", body });
+  }
+
+  /** Create an empty dataset */
+  createDataset(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/datasets`, { method: "POST", body });
+  }
+
+  /** Import an uploaded file or a Hugging Face dataset into a dataset (async job) */
+  createDatasetImport(name: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/imports`, { method: "POST", body });
   }
 
   /** Generate embeddings from a deployed embedding artifact */
@@ -679,14 +1021,24 @@ export class GeneratedApiClient {
     return this.requestJson(`/v1/embeddings`, { method: "POST", body });
   }
 
-  /** Run a standalone evaluation across models, tasks, and a rubric */
+  /** Queue an evaluation across models on a pinned dataset version (executed by the server) */
   createEval(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/evals`, { method: "POST", body });
   }
 
-  /** Create and enqueue a training run */
+  /** Create and enqueue a training run (pins the dataset version) */
   createRun(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/runs`, { method: "POST", body });
+  }
+
+  /** Get an upload URL for a checkpoint or artifact bundle */
+  createTrainerUpload(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/uploads`, { method: "POST", body });
+  }
+
+  /** Get an upload URL for a file to import (PUT the bytes, then create an import) */
+  createUpload(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/uploads`, { method: "POST", body });
   }
 
   /** Deploy or update an artifact under a stable model name */
@@ -699,12 +1051,17 @@ export class GeneratedApiClient {
     return this.requestJson(`/v1/env-workers/tasks`, { method: "POST", body });
   }
 
-  /** Download an artifact archive */
+  /** Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256 */
   downloadArtifact(id: string): Promise<{ bytes: Uint8Array; headers: Headers }> {
     return this.requestBytes(`/v1/artifacts/${encodeURIComponent(id)}/download`, { method: "GET" });
   }
 
-  /** Get an artifact by ID or name@latest */
+  /** Stream the pinned dataset version of a claimed train job as JSONL */
+  downloadTrainerDataset(id: string, query?: { attempt?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/dataset`, { method: "GET", query });
+  }
+
+  /** Get an artifact by id or name@latest */
   getArtifact(id: string): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/artifacts/${encodeURIComponent(id)}`, { method: "GET" });
   }
@@ -729,64 +1086,94 @@ export class GeneratedApiClient {
     return this.requestJson(`/v1/evals/${encodeURIComponent(id)}`, { method: "GET" });
   }
 
+  /** Get a dataset import job */
+  getImport(id: string): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/imports/${encodeURIComponent(id)}`, { method: "GET" });
+  }
+
   /** Get a training run */
   getRun(id: string): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/runs/${encodeURIComponent(id)}`, { method: "GET" });
   }
 
-  /** List scoped API keys */
-  listApiKeys(): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/keys`, { method: "GET" });
+  /** Queue depth for autoscaling: queued plus running jobs (trainer:worker) */
+  getTrainerQueueStats(): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/trainer-jobs/queue`, { method: "GET" });
   }
 
-  /** List immutable artifacts */
-  listArtifacts(query?: { name?: string | number | boolean }): Promise<Record<string, unknown>> {
+  /** Renew the job lease; reports whether the worker should stop */
+  heartbeatTrainerJob(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/heartbeat`, { method: "POST", body });
+  }
+
+  /** List workspace API keys */
+  listApiKeys(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/keys`, { method: "GET", query });
+  }
+
+  /** List immutable artifacts (newest first) */
+  listArtifacts(query?: { limit?: string | number | boolean; cursor?: string | number | boolean; name?: string | number | boolean }): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/artifacts`, { method: "GET", query });
   }
 
-  /** Read records from a dataset */
-  listDatasetRecords(name: string, query?: { limit?: string | number | boolean; offset?: string | number | boolean }): Promise<Record<string, unknown>> {
+  /** Read records of a dataset version */
+  listDatasetRecords(name: string, query?: { version?: string | number | boolean; limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/records`, { method: "GET", query });
   }
 
-  /** List datasets */
-  listDatasets(): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/datasets`, { method: "GET" });
+  /** List datasets (newest first) */
+  listDatasets(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/datasets`, { method: "GET", query });
   }
 
-  /** List active deployments */
-  listDeployments(): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/deployments`, { method: "GET" });
+  /** List deployments */
+  listDeployments(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/deployments`, { method: "GET", query });
   }
 
   /** List failing task records from an evaluation run for mining */
-  listEvalFailures(id: string, query?: { model?: string | number | boolean; threshold?: string | number | boolean }): Promise<Record<string, unknown>> {
+  listEvalFailures(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean; model?: string | number | boolean; threshold?: string | number | boolean }): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/failures`, { method: "GET", query });
   }
 
-  /** List evaluation runs */
-  listEvals(): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/evals`, { method: "GET" });
+  /** Page through generated model outputs (filter by model or by a code scorer that still needs a score) */
+  listEvalOutputs(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean; model?: string | number | boolean; missing_scorer?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/outputs`, { method: "GET", query });
   }
 
-  /** List trainable base models */
+  /** Per-task, per-model results of a completed evaluation */
+  listEvalResults(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean; model?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/results`, { method: "GET", query });
+  }
+
+  /** List evaluation runs */
+  listEvals(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/evals`, { method: "GET", query });
+  }
+
+  /** List dataset import jobs (newest first) */
+  listImports(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/imports`, { method: "GET", query });
+  }
+
+  /** List trainable base models (the server catalog and price source) */
   listModels(): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/models`, { method: "GET" });
   }
 
-  /** List checkpoints saved during a run */
-  listRunCheckpoints(id: string): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/checkpoints`, { method: "GET" });
+  /** List unexpired checkpoints of a run (best and final never expire) */
+  listRunCheckpoints(id: string, query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/checkpoints`, { method: "GET", query });
   }
 
-  /** Fetch training step metrics for a run */
-  listRunMetrics(id: string, query?: { after_step?: string | number | boolean }): Promise<Record<string, unknown>> {
+  /** Training step metrics as JSON pages, or a live SSE stream */
+  listRunMetrics(id: string, query?: { cursor?: string | number | boolean; after_step?: string | number | boolean; limit?: string | number | boolean }): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/metrics`, { method: "GET", query });
   }
 
-  /** List training runs */
-  listRuns(): Promise<Record<string, unknown>> {
-    return this.requestJson(`/v1/runs`, { method: "GET" });
+  /** List training runs (newest first) */
+  listRuns(query?: { limit?: string | number | boolean; cursor?: string | number | boolean }): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/runs`, { method: "GET", query });
   }
 
   /** Estimate tasks, model/judge calls, and cost before running an eval */
@@ -799,12 +1186,22 @@ export class GeneratedApiClient {
     return this.requestJson(`/v1/runs/plan`, { method: "POST", body });
   }
 
-  /** Promote an intermediate checkpoint into a permanent artifact */
+  /** Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing */
+  postEvalScores(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/evals/${encodeURIComponent(id)}/scores`, { method: "POST", body });
+  }
+
+  /** Append a batch of parsed records to an import job */
+  postImportRecords(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/records`, { method: "POST", body });
+  }
+
+  /** Copy an exportable checkpoint into a new immutable artifact */
   promoteCheckpoint(id: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/checkpoints/${encodeURIComponent(id)}/promote`, { method: "POST", body });
   }
 
-  /** Create or append records to a dataset */
+  /** Append records as a new dataset version (creates the dataset if needed) */
   pushDatasetRecords(name: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/records`, { method: "POST", body });
   }
@@ -819,29 +1216,34 @@ export class GeneratedApiClient {
     return this.requestJson(`/v1/env-workers/register`, { method: "POST", body });
   }
 
-  /** Upload and register an intermediate checkpoint */
+  /** Register an uploaded checkpoint bundle */
   registerTrainerCheckpoint(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/checkpoints`, { method: "POST", body });
   }
 
-  /** Preview chat template rendering and loss masks */
+  /** Preview chat-template rendering and loss masks (estimated token counts) */
   renderDataset(name: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/datasets/${encodeURIComponent(name)}/render`, { method: "POST", body });
   }
 
-  /** Report training step metrics and renew worker lease */
+  /** Report one training step's metrics */
   reportTrainerProgress(id: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/trainer-jobs/${encodeURIComponent(id)}/progress`, { method: "POST", body });
   }
 
-  /** Resume a stopped or failed training run */
+  /** Resume a stopped, failed or cancelled run from its latest checkpoint */
   resumeRun(id: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/runs/${encodeURIComponent(id)}/resume`, { method: "POST", body });
   }
 
-  /** Revoke a scoped API key */
+  /** Revoke a workspace API key */
   revokeApiKey(id: string): Promise<Record<string, unknown>> {
     return this.requestJson(`/v1/keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  /** Roll a deployment back to its previous artifact */
+  rollbackDeployment(name: string): Promise<Record<string, unknown>> {
+    return this.requestJson(`/v1/deployments/${encodeURIComponent(name)}/rollback`, { method: "POST" });
   }
 
   /** Ask a deployed model router which model to call */
