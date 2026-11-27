@@ -1,0 +1,85 @@
+# Local grad stack used by `grad local up` (embedded in the grad binary).
+# Published images; the API listens on 127.0.0.1 only. `grad local up` sets
+# GRAD_ADMIN_API_KEY_HASH / GRAD_TRAINER_API_KEY from the 'local' profile so
+# authentication is on. Override images with GRAD_SERVER_IMAGE / GRAD_TRAINER_IMAGE.
+name: grad-local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: grad
+      POSTGRES_PASSWORD: ${GRAD_POSTGRES_PASSWORD:-grad_local_dev_only}
+      POSTGRES_DB: grad
+    # Not published: only grad-server talks to it, over the compose network.
+    volumes:
+      - grad-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grad -d grad"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  grad-server:
+    image: ${GRAD_SERVER_IMAGE:-ghcr.io/gradiated/grad-server:__GRAD_VERSION__}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      DATABASE_URL: "postgres://grad:${GRAD_POSTGRES_PASSWORD:-grad_local_dev_only}@postgres:5432/grad"
+      AUTH_MODE: "${GRAD_AUTH_MODE:-api_key}"
+      ADMIN_API_KEY_HASH: "${GRAD_ADMIN_API_KEY_HASH:-}"
+      TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
+      DEPLOY_MODE: "${GRAD_DEPLOY_MODE:-disabled}"
+      INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-}"
+      INFERENCE_API_KEY: "${GRAD_INFERENCE_API_KEY:-}"
+      STORAGE_DIR: "/var/lib/grad"
+    ports:
+      - "127.0.0.1:${GRAD_PORT:-8787}:8787"
+    volumes:
+      - grad-storage:/var/lib/grad
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8787/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  grad-trainer:
+    image: ${GRAD_TRAINER_IMAGE:-ghcr.io/gradiated/grad-trainer:__GRAD_VERSION__}
+    depends_on:
+      grad-server:
+        condition: service_healthy
+    environment:
+      GRAD_SERVER_URL: "http://grad-server:8787"
+      TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
+      GRAD_WORKER_ID: "local-cpu-trainer"
+      GRAD_POLL_INTERVAL_S: "1.0"
+    restart: unless-stopped
+
+  grad-trainer-gpu:
+    profiles: ["gpu"]
+    image: ${GRAD_TRAINER_GPU_IMAGE:-ghcr.io/gradiated/grad-trainer:__GRAD_VERSION__-gpu}
+    depends_on:
+      grad-server:
+        condition: service_healthy
+    environment:
+      GRAD_SERVER_URL: "http://grad-server:8787"
+      TRAINER_API_KEY: "${GRAD_TRAINER_API_KEY:-}"
+      GRAD_WORKER_ID: "local-gpu-trainer"
+      GRAD_POLL_INTERVAL_S: "1.0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  grad-pgdata:
+  grad-storage:
