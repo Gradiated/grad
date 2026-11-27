@@ -51,6 +51,9 @@ def _networks(value: str | Iterable[str] | None) -> tuple[Network, ...]:
     return tuple(ipaddress.ip_network(v.strip(), strict=False) for v in items if v.strip())
 
 
+_EMBEDS_IPV4 = (ipaddress.IPv6Network("64:ff9b::/96"), ipaddress.IPv6Network("::/96"))
+
+
 @dataclass(frozen=True)
 class EgressPolicy:
     """Which addresses a source may reach. ``deny`` wins over ``allow``; anything not
@@ -66,6 +69,10 @@ class EgressPolicy:
     def allowed(self, ip: IPAddress) -> bool:
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
             ip = ip.ipv4_mapped
+        elif isinstance(ip, ipaddress.IPv6Address) and any(ip in net for net in _EMBEDS_IPV4):
+            # NAT64 (64:ff9b::a9fe:a9fe reaches 169.254.169.254 through DNS64/NAT64) and
+            # IPv4-compatible addresses: judge the IPv4 address they carry.
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFF_FFFF)
         if any(ip in net for net in self.deny):
             return False
         if any(ip in net for net in self.allow):

@@ -79,9 +79,12 @@ class EgressTests(unittest.TestCase):
     def test_blocked_addresses(self) -> None:
         policy = EgressPolicy()
         for ip in ("169.254.169.254", "10.0.0.5", "172.16.1.1", "192.168.1.1", "127.0.0.1", "100.100.100.200",
-                   "::1", "fd00:ec2::254", "::ffff:169.254.169.254", "224.0.0.1", "0.0.0.0"):  # fmt: skip
+                   "::1", "fd00:ec2::254", "::ffff:169.254.169.254", "224.0.0.1", "0.0.0.0",
+                   # r8 P2-23: NAT64 and IPv4-compatible forms of blocked IPv4 addresses
+                   "64:ff9b::a9fe:a9fe", "64:ff9b::7f00:1", "64:ff9b::a00:5", "::7f00:1", "::a9fe:a9fe", "::"):  # fmt: skip
             self.assertFalse(policy.allowed(ipaddress.ip_address(ip)), ip)
-        self.assertTrue(policy.allowed(ipaddress.ip_address("93.184.216.34")))
+        for ip in ("93.184.216.34", "64:ff9b::5db8:d822", "2606:2800:220:1::1"):
+            self.assertTrue(policy.allowed(ipaddress.ip_address(ip)), ip)
 
     def test_allow_and_deny_lists(self) -> None:
         policy = EgressPolicy.from_env({"GRAD_SOURCES_EGRESS_ALLOW": "10.40.0.0/16, 127.0.0.1/32", "GRAD_SOURCES_EGRESS_DENY": "10.40.9.0/24,93.184.216.0/24"})
