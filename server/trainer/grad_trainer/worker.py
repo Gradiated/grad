@@ -116,14 +116,53 @@ def backoff_delays(base_s: float, cap_s: float) -> Any:
         delay = min(cap_s, delay * 2)
 
 
+class FileToken:
+    """GRAD_WORKER_TOKEN_FILE: the worker token, re-read on every request so a rotated
+    token (a projected service-account token, a re-minted lease token) is picked up.
+    Never logs or reprs the token itself."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self._warned = False
+
+    def __call__(self) -> str | None:
+        try:
+            token = self.path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            if not self._warned:
+                self._warned = True
+                _log(f"cannot read GRAD_WORKER_TOKEN_FILE {self.path}: {exc.strerror or exc}")
+            return None
+        self._warned = False
+        return token or None
+
+    def __repr__(self) -> str:
+        return f"FileToken({str(self.path)!r})"
+
+
+TokenSource = Callable[[], "str | None"]
+
+
+def worker_token_from_env(env: Mapping[str, str]) -> str | TokenSource | None:
+    """GRAD_WORKER_TOKEN, else GRAD_WORKER_TOKEN_FILE (re-read per request), else the
+    static key names (TRAINER_API_KEY, GRAD_API_KEY, GRADIATED_API_KEY)."""
+    token = (env.get("GRAD_WORKER_TOKEN") or "").strip()
+    if token:
+        return token
+    path = (env.get("GRAD_WORKER_TOKEN_FILE") or "").strip()
+    if path:
+        return FileToken(path)
+    return env.get("TRAINER_API_KEY") or env.get("GRAD_API_KEY") or env.get("GRADIATED_API_KEY")
+
+
 class ProtocolClient:
     """Stdlib HTTP client that never follows redirects and only sends the worker
-    key to the grad-server origin."""
+    token to the grad-server origin."""
 
     def __init__(
         self,
         base_url: str,
-        api_key: str | None,
+        api_key: str | TokenSource | None,
         *,
         timeout_s: float = 60.0,
         retry_base_s: float = 0.5,
@@ -137,7 +176,8 @@ class ProtocolClient:
             )
         self.base_url = base_url.rstrip("/")
         self._origin = (parsed.scheme, parsed.netloc.lower())
-        self.api_key = api_key
+        self._token: TokenSource = api_key if callable(api_key) else (lambda: api_key)
+        self._rotating = callable(api_key)
         self.timeout_s = timeout_s
         self.retry_base_s = retry_base_s
         self.retry_cap_s = retry_cap_s
@@ -165,23 +205,34 @@ class ProtocolClient:
         headers: dict[str, str] | None = None,
     ) -> Any:
         full = self.resolve(url)
-        hdrs = dict(headers or {})
-        if self._same_origin(full):
-            if self.api_key:
-                hdrs["Authorization"] = f"Bearer {self.api_key}"
-            if self.traceparent:
-                hdrs["traceparent"] = self.traceparent
-        req = urllib.request.Request(full, data=data, headers=hdrs, method=method)
+        same_origin = self._same_origin(full)
         # Errors reach the tenant (run and import errors): never quote a query string
         # (presigned credentials and signatures) or a storage response body.
         shown = urllib.parse.urlparse(full)._replace(query="", fragment="").geturl()
-        try:
-            return self._opener.open(req, timeout=self.timeout_s)
-        except urllib.error.HTTPError as exc:
-            body = exc.read() if self._same_origin(full) else b""
-            raise _parse_problem(exc.code, body, shown) from None
-        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-            raise ServerUnreachable(f"{shown}: {getattr(exc, 'reason', exc)}") from exc
+        token = self._token() if same_origin else None
+        for retry_401 in (True, False):
+            hdrs = dict(headers or {})
+            if same_origin:
+                if token:
+                    hdrs["Authorization"] = f"Bearer {token}"
+                if self.traceparent:
+                    hdrs["traceparent"] = self.traceparent
+            req = urllib.request.Request(full, data=data, headers=hdrs, method=method)
+            try:
+                return self._opener.open(req, timeout=self.timeout_s)
+            except urllib.error.HTTPError as exc:
+                body = exc.read() if same_origin else b""
+                # A token file rotated between the read and the request: one retry
+                # with the new token (a body stream cannot be re-sent).
+                if exc.code == 401 and retry_401 and self._rotating and not hasattr(data, "read"):
+                    fresh = self._token()
+                    if fresh and fresh != token:
+                        token = fresh
+                        continue
+                raise _parse_problem(exc.code, body, shown) from None
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+                raise ServerUnreachable(f"{shown}: {getattr(exc, 'reason', exc)}") from exc
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def post_json(
         self, path: str, payload: dict[str, Any], *, attempts: int = 1
@@ -356,7 +407,7 @@ class TrainerWorker:
         self,
         *,
         server_url: str,
-        api_key: str | None = None,
+        api_key: str | TokenSource | None = None,
         worker_id: str | None = None,
         lease_seconds: int = 180,
         poll_interval_s: float = 1.0,
@@ -634,9 +685,10 @@ class TrainerWorker:
                 result = self.run_once()
             except WorkerAuthError as exc:
                 _log(
-                    f"the server rejected the worker key (HTTP {exc.status}: {exc.detail}). "
-                    "Set TRAINER_API_KEY to the platform trainer key configured on the server "
-                    "(TRAINER_API_KEY / TRAINER_API_KEY_HASH); workspace and admin keys cannot run jobs."
+                    f"the server rejected the worker token (HTTP {exc.status}: {exc.detail}). "
+                    "Set GRAD_WORKER_TOKEN or GRAD_WORKER_TOKEN_FILE (a lease or service-account token), "
+                    "or TRAINER_API_KEY (a static key from the server's TRAINER_KEYS_JSON / "
+                    "TRAINER_API_KEY_HASH); workspace and admin keys cannot run jobs."
                 )
                 return 2
             except ServerUnreachable as exc:
@@ -1175,11 +1227,7 @@ def worker_from_env(env: Mapping[str, str]) -> TrainerWorker:
         or env.get("GRADIATED_BASE_URL")
         or "http://127.0.0.1:8787"
     )
-    api_key = (
-        env.get("TRAINER_API_KEY")
-        or env.get("GRAD_API_KEY")
-        or env.get("GRADIATED_API_KEY")
-    )
+    api_key = worker_token_from_env(env)
     kinds = [k.strip() for k in env.get("GRAD_WORKER_KINDS", "").split(",") if k.strip()]
     telemetry = WorkerTelemetry()
     port = env.get("GRAD_WORKER_METRICS_PORT", "").strip()

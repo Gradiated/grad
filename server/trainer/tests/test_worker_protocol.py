@@ -22,11 +22,13 @@ from fixtures.stub_runners import StubImporter, StubRunner
 from grad_trainer import worker as worker_module
 from grad_trainer.bundles import bundle_directory, extract_bundle
 from grad_trainer.worker import (
+    FileToken,
     ProtocolClient,
     ServerError,
     TrainerWorker,
     WorkerAuthError,
     worker_from_env,
+    worker_token_from_env,
 )
 
 KEY = "grad_worker_key"
@@ -549,7 +551,7 @@ class WorkerProtocolTests(unittest.TestCase):
         with contextlib.redirect_stderr(stderr):
             code = worker.serve_forever()
         self.assertEqual(code, 2)
-        self.assertIn("rejected the worker key (HTTP 401", stderr.getvalue())
+        self.assertIn("rejected the worker token (HTTP 401", stderr.getvalue())
         self.assertIn("TRAINER_API_KEY", stderr.getvalue())
         with self.assertRaises(WorkerAuthError):
             worker.claim()
@@ -763,3 +765,77 @@ class WorkerProtocolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkerTokenTests(unittest.TestCase):
+    """GRAD_WORKER_TOKEN / GRAD_WORKER_TOKEN_FILE (rotation) and keeping tokens out of logs."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "token"
+
+    def server(self, key: str) -> FakeProtocolServer:
+        srv = FakeProtocolServer(api_key=key)
+        srv.__enter__()
+        self.addCleanup(srv.__exit__)
+        return srv
+
+    def test_token_precedence(self) -> None:
+        self.path.write_text("from-file\n")
+        file_env = {"GRAD_WORKER_TOKEN_FILE": str(self.path), "TRAINER_API_KEY": "static"}
+        self.assertEqual(worker_token_from_env({"GRAD_WORKER_TOKEN": " tok ", **file_env}), "tok")
+        source = worker_token_from_env(file_env)
+        self.assertIsInstance(source, FileToken)
+        self.assertEqual(source(), "from-file")  # type: ignore[operator]
+        self.assertEqual(worker_token_from_env({"TRAINER_API_KEY": "static"}), "static")
+        self.assertEqual(worker_token_from_env({"GRADIATED_API_KEY": "g"}), "g")
+        self.assertIsNone(worker_token_from_env({}))
+
+    def test_token_file_is_reread_on_every_request(self) -> None:
+        self.path.write_text("tok-1")
+        srv = self.server("tok-1")
+        worker = worker_from_env({"GRAD_SERVER_URL": srv.base_url, "GRAD_WORKER_TOKEN_FILE": str(self.path)})
+        self.assertIsNone(worker.claim())
+        self.path.write_text("tok-2\n")
+        srv.api_key = "tok-2"
+        self.assertIsNone(worker.claim())
+        self.assertEqual(
+            [c.headers["authorization"] for c in srv.calls("claim")],
+            ["Bearer tok-1", "Bearer tok-2"],
+        )
+
+    def test_a_401_rereads_a_rotated_token_once(self) -> None:
+        srv = self.server("new")
+        reads = iter(["old", "new", "new"])
+        client = ProtocolClient(srv.base_url, lambda: next(reads))
+        self.assertEqual(client.post_json("/v1/trainer-jobs/claim", {"worker_id": "w"}), {"protocol": mock.ANY, "job": None})
+        self.assertEqual(
+            [c.headers["authorization"] for c in srv.calls("claim")],
+            ["Bearer old", "Bearer new"],
+        )
+        # An unchanged token is not retried: the 401 stands.
+        stale = ProtocolClient(srv.base_url, lambda: "old")
+        with self.assertRaises(WorkerAuthError):
+            stale.post_json("/v1/trainer-jobs/claim", {"worker_id": "w"})
+        self.assertEqual(len(srv.calls("claim")), 3)
+
+    def test_rejected_and_missing_tokens_never_reach_the_log(self) -> None:
+        self.path.write_text("gradwt_secret_token_value")
+        srv = self.server("something-else")
+        worker = worker_from_env({"GRAD_SERVER_URL": srv.base_url, "GRAD_WORKER_TOKEN_FILE": str(self.path)})
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(worker.serve_forever(), 2)
+        self.assertIn("GRAD_WORKER_TOKEN_FILE", stderr.getvalue())
+        self.assertNotIn("gradwt_secret_token_value", stderr.getvalue())
+        self.assertNotIn("gradwt_secret", repr(worker.client._token))
+
+        missing = FileToken(Path(self.tmp.name) / "absent")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertIsNone(missing())
+            self.assertIsNone(missing())
+        self.assertEqual(stderr.getvalue().count("cannot read GRAD_WORKER_TOKEN_FILE"), 1)
+        (Path(self.tmp.name) / "absent").write_text("  ")
+        self.assertIsNone(missing())

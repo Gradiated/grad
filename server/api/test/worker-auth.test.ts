@@ -39,6 +39,7 @@ import {
   workerIdMatchesHost,
   type WorkerAuthenticator,
 } from "../src/worker-auth/principal.js";
+import { workerTokenSource } from "../src/worker-auth/token-source.js";
 import { ManualClock } from "./fixtures/clock.js";
 
 const jwt = (payload: Record<string, unknown>): string =>
@@ -659,5 +660,31 @@ describe("worker-auth configuration", () => {
     expect(warnings).toMatch(/K8S_SERVICE_ACCOUNTS is ignored/);
     expect(warnings).toMatch(/ORCHESTRATOR_KEYS_JSON is ignored/);
     expect(warnings).toMatch(/cannot mint them/);
+  });
+});
+
+describe("the TypeScript worker's token source", () => {
+  it("prefers GRAD_WORKER_TOKEN, re-reads GRAD_WORKER_TOKEN_FILE, falls back to TRAINER_API_KEY", () => {
+    const dir = mkdtempSync(join(tmpdir(), "grad-wt-"));
+    const path = join(dir, "token");
+    writeFileSync(path, "one\n");
+    expect(
+      workerTokenSource({
+        GRAD_WORKER_TOKEN: " fixed ",
+        GRAD_WORKER_TOKEN_FILE: path,
+      })(),
+    ).toBe("fixed");
+    const fromFile = workerTokenSource({
+      GRAD_WORKER_TOKEN_FILE: path,
+      TRAINER_API_KEY: "static",
+    });
+    expect(fromFile()).toBe("one");
+    writeFileSync(path, "two");
+    expect(fromFile()).toBe("two");
+    expect(
+      workerTokenSource({ GRAD_WORKER_TOKEN_FILE: join(dir, "absent") })(),
+    ).toBeUndefined();
+    expect(workerTokenSource({ TRAINER_API_KEY: "static" })()).toBe("static");
+    expect(workerTokenSource({})()).toBeUndefined();
   });
 });
