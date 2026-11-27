@@ -26,7 +26,7 @@ import (
 )
 
 // SDKVersion is the version reported in the User-Agent header.
-const SDKVersion = "0.2.0-alpha.1"
+const SDKVersion = "0.2.0-alpha.2"
 
 // Defaults for the transport.
 const (

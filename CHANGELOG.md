@@ -7,6 +7,8 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+## [0.2.0-alpha.2] - 2026-11-27
+
 ### Security
 
 - The trainer image installs from hash-pinned locks resolved from PyPI only (CPU torch is
@@ -29,6 +31,9 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   (`server/docker-compose.yml` sets it; its port is published on loopback only).
 
 ### Changed
+
+- The Rust SDK is imported as `grad` (`use grad::Client`); it is still published as `grad-sdk`
+  on crates.io, where `grad` is taken.
 
 - The eval endpoint settings are `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY`,
   `GRAD_JUDGE_BASE_URL` and `GRAD_JUDGE_API_KEY` everywhere (server, compose, Helm, docs).

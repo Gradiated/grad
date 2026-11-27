@@ -46,7 +46,7 @@ api:
   replicaCount: 2
   image:
     repository: ghcr.io/gradiated/grad-server
-    tag: "0.2.0-alpha.1"
+    tag: "0.2.0-alpha.2"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -137,7 +137,7 @@ workers:
     kinds: [train]
     replicaCount: 1
     image:
-      tag: "0.2.0-alpha.1-gpu"
+      tag: "0.2.0-alpha.2-gpu"
     gpuCount: 1
     # On SIGTERM a worker releases its attempt, which is billed, requeued and
     # resumed from the latest checkpoint.
@@ -158,7 +158,7 @@ workers:
     kinds: [import]
     replicaCount: 1
     image:
-      tag: "0.2.0-alpha.1"
+      tag: "0.2.0-alpha.2"
     gpuCount: 0
     terminationGracePeriodSeconds: 60
     env: {}
