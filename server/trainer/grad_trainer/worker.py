@@ -1,62 +1,304 @@
-"""HTTP trainer worker daemon claiming runs from grad-server."""
+"""grad-server trainer worker: protocol v1 client (``grad.trainer-protocol/1``).
+
+The worker claims ``train`` and ``import`` jobs, keeps the lease alive from a
+background heartbeat thread, moves weights through upload tickets (presigned
+S3 PUTs or the server's streaming blob proxy), and finishes every attempt with
+``/complete`` so the server can bill it.
+"""
 
 from __future__ import annotations
 
-import base64
 import json
 import os
+import random
+import secrets
+import shutil
 import signal
 import socket
+import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, BinaryIO, Callable
 
-from .recipes import RunCallbacks, get_recipe_runner
+from .bundles import bundle_directory, extract_bundle
+from .protocol import (
+    Budget,
+    ImportRunner,
+    RecipeRunner,
+    ResumeState,
+    RunCallbacks,
+    resolve_import_runner,
+    resolve_recipe_runner,
+    supported_recipe_kinds,
+)
+
+PROTOCOL_VERSION = "grad.trainer-protocol/1"
+RECORDS_BATCH_LIMIT = 10_000
+_CHUNK = 1024 * 1024
 
 
-class TrainerHttpClient:
-    """Minimal stdlib JSON HTTP client for grad-server trainer job endpoints."""
+def _log(message: str) -> None:
+    print(f"[grad-trainer] {message}", file=sys.stderr, flush=True)
+
+
+# --- transport -------------------------------------------------------------------
+
+
+class ServerError(Exception):
+    """HTTP error from grad-server or object storage, parsed from problem+json."""
+
+    def __init__(self, status: int, code: str, detail: str, url: str) -> None:
+        super().__init__(f"HTTP {status} {code} from {url}: {detail}")
+        self.status = status
+        self.code = code
+        self.detail = detail
+
+    @property
+    def transient(self) -> bool:
+        return self.status == 429 or self.status >= 500
+
+
+class WorkerAuthError(ServerError):
+    """The server rejected the worker key (401/403); retrying cannot help."""
+
+
+class ServerUnreachable(Exception):
+    """Connection-level failure (refused, DNS, timeout)."""
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+def _parse_problem(status: int, body: bytes, url: str) -> ServerError:
+    code, detail = f"http_{status}", body.decode("utf-8", errors="replace")[:1000]
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            code = str(parsed.get("code") or code)
+            detail = str(parsed.get("detail") or parsed.get("title") or detail)
+    except ValueError:
+        pass
+    if 300 <= status < 400:
+        code, detail = "redirect", "redirects are refused by the trainer worker"
+    cls = WorkerAuthError if status in (401, 403) else ServerError
+    return cls(status, code, detail or f"HTTP {status}", url)
+
+
+def backoff_delays(base_s: float, cap_s: float) -> Any:
+    """Exponential backoff with full jitter: base, 2·base, ... capped at cap."""
+    delay = base_s
+    while True:
+        yield random.uniform(delay / 2, delay)
+        delay = min(cap_s, delay * 2)
+
+
+class ProtocolClient:
+    """Stdlib HTTP client that never follows redirects and only sends the worker
+    key to the grad-server origin."""
 
     def __init__(
         self,
         base_url: str,
-        api_key: str | None = None,
-        timeout_s: float = 30.0,
+        api_key: str | None,
+        *,
+        timeout_s: float = 60.0,
+        retry_base_s: float = 0.5,
+        retry_cap_s: float = 30.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         parsed = urllib.parse.urlparse(base_url)
-        if parsed.scheme not in ("http", "https"):
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(
-                f"Invalid grad-server URL scheme '{parsed.scheme}'; expected http or https."
+                f"Invalid grad-server URL {base_url!r}; expected http(s)://host[:port]."
             )
         self.base_url = base_url.rstrip("/")
+        self._origin = (parsed.scheme, parsed.netloc.lower())
         self.api_key = api_key
         self.timeout_s = timeout_s
+        self.retry_base_s = retry_base_s
+        self.retry_cap_s = retry_cap_s
+        self.sleep = sleep
+        self._opener = urllib.request.build_opener(_RefuseRedirects)
 
-    def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        req = urllib.request.Request(
-            f"{self.base_url}{path}",
-            data=body,
-            headers=headers,
-            method="POST",
-        )
+    def resolve(self, url: str) -> str:
+        """Absolute URLs pass through; server paths are joined to the base URL."""
+        if urllib.parse.urlparse(url).scheme:
+            return url
+        return f"{self.base_url}/{url.lstrip('/')}"
+
+    def _same_origin(self, url: str) -> bool:
+        parsed = urllib.parse.urlparse(url)
+        return (parsed.scheme, parsed.netloc.lower()) == self._origin
+
+    def _open(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: bytes | BinaryIO | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        full = self.resolve(url)
+        hdrs = dict(headers or {})
+        if self.api_key and self._same_origin(full):
+            hdrs["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(full, data=data, headers=hdrs, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+            return self._opener.open(req, timeout=self.timeout_s)
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:1000]
-            raise RuntimeError(
-                f"grad-server POST {path} failed with HTTP {exc.code}: {detail}"
-            ) from exc
+            raise _parse_problem(exc.code, exc.read(), full) from None
+        except (urllib.error.URLError, OSError) as exc:
+            raise ServerUnreachable(f"{full}: {getattr(exc, 'reason', exc)}") from exc
+
+    def post_json(
+        self, path: str, payload: dict[str, Any], *, attempts: int = 1
+    ) -> dict[str, Any]:
+        """POST JSON; retries connection errors, 429 and 5xx up to ``attempts`` times."""
+        body = json.dumps(payload).encode("utf-8")
+        delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
+        for attempt in range(1, attempts + 1):
+            try:
+                with self._open(
+                    "POST",
+                    path,
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                ) as resp:
+                    raw = resp.read()
+                return json.loads(raw) if raw else {}
+            except (ServerError, ServerUnreachable) as exc:
+                retryable = isinstance(exc, ServerUnreachable) or exc.transient
+                if not retryable or attempt == attempts:
+                    raise
+                self.sleep(next(delays))
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def download(self, url: str, dest: Path, *, attempts: int = 3) -> None:
+        delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
+        for attempt in range(1, attempts + 1):
+            try:
+                with self._open("GET", url) as resp, dest.open("wb") as out:
+                    shutil.copyfileobj(resp, out, _CHUNK)
+                return
+            except (ServerError, ServerUnreachable) as exc:
+                retryable = isinstance(exc, ServerUnreachable) or exc.transient
+                if not retryable or attempt == attempts:
+                    raise
+                self.sleep(next(delays))
+
+    def put_file(
+        self, url: str, path: Path, headers: dict[str, str], *, attempts: int = 3
+    ) -> None:
+        delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
+        size = path.stat().st_size
+        for attempt in range(1, attempts + 1):
+            hdrs = {"Content-Type": "application/octet-stream", **headers}
+            hdrs["Content-Length"] = str(size)
+            try:
+                with (
+                    path.open("rb") as fh,
+                    self._open("PUT", url, data=fh, headers=hdrs) as resp,
+                ):
+                    resp.read()
+                return
+            except (ServerError, ServerUnreachable) as exc:
+                retryable = isinstance(exc, ServerUnreachable) or exc.transient
+                if not retryable or attempt == attempts:
+                    raise
+                self.sleep(next(delays))
+
+
+# --- job execution -------------------------------------------------------------
+
+
+class LeaseLost(Exception):
+    """Another claim owns the job now; this attempt must not complete."""
+
+
+class _StopImport(Exception):
+    pass
+
+
+@dataclass
+class _JobState:
+    job_id: str
+    attempt: int
+    stop: threading.Event = field(default_factory=threading.Event)
+    stop_reason: str | None = None
+    lease_lost: bool = False
+    auth_error: WorkerAuthError | None = None
+    max_tokens: int = 0
+
+    def request_stop(self, reason: str) -> None:
+        if self.stop_reason is None:
+            self.stop_reason = reason
+        self.stop.set()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class _Heartbeat(threading.Thread):
+    def __init__(
+        self, worker: "TrainerWorker", state: _JobState, interval_s: float
+    ) -> None:
+        super().__init__(name=f"heartbeat-{state.job_id}", daemon=True)
+        self.worker = worker
+        self.state = state
+        self.interval_s = interval_s
+        self.done = threading.Event()
+
+    def run(self) -> None:
+        while not self.done.wait(self.interval_s):
+            try:
+                resp = self.worker.client.post_json(
+                    f"/v1/trainer-jobs/{self.state.job_id}/heartbeat",
+                    {
+                        "worker_id": self.worker.worker_id,
+                        "attempt": self.state.attempt,
+                        "lease_seconds": self.worker.lease_seconds,
+                    },
+                )
+            except WorkerAuthError as exc:
+                self.state.auth_error = exc
+                self.state.request_stop("auth")
+                return
+            except ServerError as exc:
+                if exc.status in (404, 409):
+                    _log(f"lease lost for {self.state.job_id}: {exc.detail}")
+                    self.state.lease_lost = True
+                    self.state.request_stop("lease_lost")
+                    return
+                _log(f"heartbeat failed ({exc}); retrying")
+                continue
+            except ServerUnreachable as exc:
+                _log(f"heartbeat failed ({exc}); retrying")
+                continue
+            if resp.get("should_stop"):
+                self.state.request_stop(str(resp.get("stop_reason") or "cancelled"))
+
+
+def _parse_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                records.append(json.loads(line))
+    return records
 
 
 class TrainerWorker:
-    """Claims queued runs from grad-server, executes recipes, and uploads artifacts."""
+    """Claims jobs from grad-server and runs them through the recipe-runner seam."""
 
     def __init__(
         self,
@@ -66,138 +308,450 @@ class TrainerWorker:
         worker_id: str | None = None,
         lease_seconds: int = 180,
         poll_interval_s: float = 1.0,
+        workdir: str | os.PathLike[str] | None = None,
+        recipe_runner_factory: Callable[[str], RecipeRunner] = resolve_recipe_runner,
+        import_runner: ImportRunner
+        | Callable[[], ImportRunner | None]
+        | None = resolve_import_runner,
+        recipes: list[str] | None = None,
+        heartbeat_interval_s: float | None = None,
+        client: ProtocolClient | None = None,
+        complete_attempts: int = 8,
     ) -> None:
-        self.client = TrainerHttpClient(server_url, api_key=api_key)
-        self.worker_id = worker_id or f"trainer-{socket.gethostname()}-{os.getpid()}"
+        self.client = client or ProtocolClient(server_url, api_key)
+        self.worker_id = worker_id or (
+            f"trainer-{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(3)}"
+        )
         self.lease_seconds = lease_seconds
         self.poll_interval_s = poll_interval_s
-        self._stop = False
+        self.workdir = (
+            Path(workdir) if workdir else Path(tempfile.gettempdir()) / "grad-trainer"
+        )
+        self.recipe_runner_factory = recipe_runner_factory
+        self._import_runner = import_runner
+        self.recipes = (
+            recipes
+            if recipes is not None
+            else (
+                supported_recipe_kinds()
+                if recipe_runner_factory is resolve_recipe_runner
+                else None
+            )
+        )
+        self.heartbeat_interval_s = heartbeat_interval_s or max(1.0, lease_seconds / 3)
+        self.complete_attempts = complete_attempts
+        self._shutdown = threading.Event()
+        self._current: _JobState | None = None
+
+    # -- public API ---------------------------------------------------------
+
+    def request_shutdown(self) -> None:
+        """Stop claiming and ask the running job to stop at its next step."""
+        self._shutdown.set()
+        if self._current is not None:
+            self._current.request_stop("shutdown")
+
+    def claim(self) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {
+            "worker_id": self.worker_id,
+            "lease_seconds": self.lease_seconds,
+            "kinds": ["train", "import"],
+        }
+        if self.recipes:
+            payload["recipes"] = self.recipes
+        resp = self.client.post_json("/v1/trainer-jobs/claim", payload, attempts=5)
+        protocol = resp.get("protocol")
+        if protocol not in (None, PROTOCOL_VERSION):
+            raise RuntimeError(
+                f"Unsupported trainer protocol {protocol!r}; expected {PROTOCOL_VERSION}."
+            )
+        job = resp.get("job")
+        return job if isinstance(job, dict) else None
 
     def run_once(self) -> dict[str, Any] | None:
-        """Claim and execute at most one run. Returns completion response or None if idle."""
-        claimed = self.client.post_json(
-            "/v1/trainer-jobs/claim",
-            {"worker_id": self.worker_id, "lease_seconds": self.lease_seconds},
-        )
-        run = claimed.get("run")
-        if not run:
+        """Claim and execute at most one job. Returns the /complete response,
+        ``{"job_id", "status": "lease_lost"}``, or None when idle."""
+        job = self.claim()
+        if job is None:
             return None
 
-        run_id = str(run["id"])
-        records = claimed.get("records") or []
-        config = dict(run["resolved_config"])
-        max_cost_usd = run.get("max_cost_usd")
-        cancelled = False
+        state = _JobState(job_id=str(job["id"]), attempt=int(job["attempt"]))
+        if self._shutdown.is_set():
+            state.request_stop("shutdown")
+        self._current = state
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        job_dir = Path(tempfile.mkdtemp(prefix=f"{state.job_id}-", dir=self.workdir))
+        heartbeat = _Heartbeat(self, state, self.heartbeat_interval_s)
+        heartbeat.start()
+        try:
+            if job.get("kind") == "import":
+                return self._run_import(job, state, job_dir)
+            return self._run_train(job, state, job_dir)
+        except LeaseLost:
+            return {"job_id": state.job_id, "status": "lease_lost"}
+        finally:
+            heartbeat.done.set()
+            heartbeat.join(timeout=5)
+            self._current = None
+            shutil.rmtree(job_dir, ignore_errors=True)
+            if state.auth_error is not None:
+                raise state.auth_error
+
+    def serve_forever(self) -> int:
+        """Run until a shutdown signal; returns a process exit code."""
+
+        def _handle(signum: int, _frame: Any) -> None:
+            if self._shutdown.is_set():
+                _log("second signal received; exiting immediately")
+                raise SystemExit(128 + signum)
+            _log("shutdown requested; finishing the current step")
+            self.request_shutdown()
+
+        signal.signal(signal.SIGTERM, _handle)
+        signal.signal(signal.SIGINT, _handle)
+        delays = backoff_delays(max(self.poll_interval_s, 0.5), 30.0)
+        while not self._shutdown.is_set():
+            try:
+                result = self.run_once()
+            except WorkerAuthError as exc:
+                _log(
+                    f"the server rejected the worker key (HTTP {exc.status}: {exc.detail}). "
+                    "Set TRAINER_API_KEY to the platform trainer key configured on the server "
+                    "(TRAINER_API_KEY / TRAINER_API_KEY_HASH); workspace and admin keys cannot run jobs."
+                )
+                return 2
+            except ServerUnreachable as exc:
+                wait = next(delays)
+                _log(
+                    f"grad-server unreachable at {self.client.base_url} ({exc}), retrying in {wait:.1f}s"
+                )
+                self._shutdown.wait(wait)
+                continue
+            except Exception as exc:  # keep the daemon alive across bad jobs
+                wait = next(delays)
+                _log(f"job error: {exc}; retrying in {wait:.1f}s")
+                self._shutdown.wait(wait)
+                continue
+            delays = backoff_delays(max(self.poll_interval_s, 0.5), 30.0)
+            if result is None:
+                self._shutdown.wait(self.poll_interval_s)
+        return 0
+
+    # -- shared helpers -------------------------------------------------------
+
+    def _ref(self, state: _JobState) -> dict[str, Any]:
+        return {"worker_id": self.worker_id, "attempt": state.attempt}
+
+    def _post(
+        self,
+        state: _JobState,
+        suffix: str,
+        payload: dict[str, Any],
+        *,
+        attempts: int = 3,
+    ) -> dict[str, Any]:
+        if state.lease_lost:
+            raise LeaseLost()
+        try:
+            return self.client.post_json(
+                f"/v1/trainer-jobs/{state.job_id}/{suffix}",
+                {**self._ref(state), **payload},
+                attempts=attempts,
+            )
+        except WorkerAuthError:
+            raise
+        except ServerError as exc:
+            if exc.status in (404, 409) and suffix in (
+                "progress",
+                "records",
+                "complete",
+                "uploads",
+            ):
+                state.lease_lost = True
+                state.request_stop("lease_lost")
+                raise LeaseLost() from exc
+            raise
+
+    def _upload(
+        self, state: _JobState, kind: str, path: Path, sha256: str, size: int
+    ) -> str:
+        ticket = self._post(
+            state, "uploads", {"kind": kind, "sha256": sha256, "size_bytes": size}
+        )
+        if ticket.get("method", "PUT") != "PUT":
+            raise RuntimeError(f"Unsupported upload method {ticket.get('method')!r}.")
+        headers = {str(k): str(v) for k, v in (ticket.get("headers") or {}).items()}
+        self.client.put_file(str(ticket["url"]), path, headers)
+        return str(ticket["upload_id"])
+
+    def _complete(self, state: _JobState, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post(state, "complete", payload, attempts=self.complete_attempts)
+
+    # -- train jobs -----------------------------------------------------------
+
+    def _run_train(
+        self, job: dict[str, Any], state: _JobState, job_dir: Path
+    ) -> dict[str, Any]:
+        run = job.get("run") or {}
+        try:
+            records = self._load_dataset(job, job_dir)
+            resume = self._load_resume(job, job_dir)
+            runner = self.recipe_runner_factory(str(run["recipe_kind"]))
+        except (LeaseLost, WorkerAuthError):
+            raise
+        except Exception as exc:
+            return self._complete(
+                state, {"status": "failed", "error": f"setup failed: {exc}"[:4000]}
+            )
 
         def on_step(metric: dict[str, Any]) -> bool:
-            nonlocal cancelled
-            resp = self.client.post_json(
-                f"/v1/trainer-jobs/{run_id}/progress",
-                {
-                    "worker_id": self.worker_id,
-                    "metric": metric,
-                    "lease_seconds": self.lease_seconds,
-                },
-            )
-            if resp.get("run", {}).get("status") == "cancelled":
-                cancelled = True
-            return bool(resp.get("should_stop")) or self._stop
+            if state.stop.is_set():
+                return True
+            point = {**metric}
+            point.setdefault("timestamp", _now_iso())
+            tokens = point.get("tokens")
+            if isinstance(tokens, (int, float)):
+                state.max_tokens = max(state.max_tokens, int(tokens))
+            try:
+                resp = self._post(state, "progress", {"metric": point}, attempts=2)
+            except WorkerAuthError:
+                raise
+            except (ServerError, ServerUnreachable) as exc:
+                _log(f"progress report skipped: {exc}")
+                return state.stop.is_set()
+            if resp.get("should_stop"):
+                state.request_stop(str(resp.get("stop_reason") or "cancelled"))
+            return state.stop.is_set()
 
         def on_checkpoint(
             step: int,
             eval_score: float | None,
-            payload_bytes: bytes,
+            checkpoint_dir: Path,
             metadata: dict[str, Any],
         ) -> None:
-            if cancelled:
+            if state.stop_reason == "lease_lost":
                 return
-            self.client.post_json(
-                f"/v1/trainer-jobs/{run_id}/checkpoints",
+            bundle = job_dir / f"checkpoint-{step}.grad.tar.gz"
+            try:
+                fmt = metadata.get("artifact_format")
+                sha, size = bundle_directory(
+                    checkpoint_dir,
+                    bundle,
+                    manifest={
+                        "kind": "checkpoint",
+                        "step": step,
+                        "format": fmt,
+                        "metadata": metadata,
+                    },
+                )
+                upload_id = self._upload(state, "checkpoint", bundle, sha, size)
+                self._post(
+                    state,
+                    "checkpoints",
+                    {
+                        "step": step,
+                        "eval_score": eval_score,
+                        "upload_id": upload_id,
+                        "format": fmt,
+                        "metadata": metadata,
+                    },
+                )
+            except (LeaseLost, WorkerAuthError):
+                raise
+            except ServerError as exc:
+                level = "ignored" if exc.status == 409 else "failed"
+                _log(f"checkpoint step {step} {level}: {exc}")
+            except Exception as exc:
+                _log(f"checkpoint step {step} failed: {exc}")
+            finally:
+                bundle.unlink(missing_ok=True)
+
+        work = job_dir / "work"
+        work.mkdir()
+        try:
+            output = runner.run(
+                dict(run.get("resolved_config") or {}),
+                records,
+                budget=Budget(
+                    job.get("max_cost_usd"),
+                    float(job.get("price_per_million_tokens") or 0.0),
+                ),
+                callbacks=RunCallbacks(on_step=on_step, on_checkpoint=on_checkpoint),
+                resume=resume,
+                workdir=work,
+            )
+        except (LeaseLost, WorkerAuthError):
+            raise
+        except Exception as exc:
+            if state.lease_lost:
+                raise LeaseLost() from exc
+            return self._complete(
+                state,
                 {
-                    "worker_id": self.worker_id,
-                    "step": step,
-                    "eval_score": eval_score,
-                    "payload_base64": base64.b64encode(payload_bytes).decode("ascii"),
-                    "metadata": metadata,
+                    "status": "failed",
+                    "error": str(exc)[:4000] or type(exc).__name__,
+                    "tokens_processed": state.max_tokens,
                 },
             )
 
-        # Scope try/except strictly to recipe execution so /complete errors never double-POST.
-        try:
-            runner = get_recipe_runner(str(run["recipe_kind"]))
-            output = runner.run(
-                config,
-                records,
-                max_cost_usd=max_cost_usd,
-                callbacks=RunCallbacks(on_step=on_step, on_checkpoint=on_checkpoint),
+        if state.lease_lost:
+            raise LeaseLost()
+        tokens = max(int(output.tokens_processed or 0), state.max_tokens)
+        status = str(output.status)
+        if status == "cancelled" and state.stop_reason == "shutdown":
+            status = "abandoned"
+        elif status == "cancelled" and state.stop_reason == "budget":
+            status = "stopped_budget"
+
+        if status in ("cancelled", "abandoned", "failed"):
+            payload: dict[str, Any] = {"status": status, "tokens_processed": tokens}
+            if status == "failed":
+                payload["error"] = str(
+                    (output.eval_report or {}).get("error") or "recipe reported failure"
+                )[:4000]
+            return self._complete(state, payload)
+
+        payload = {
+            "status": status,
+            "format": output.artifact_format,
+            "manifest": output.manifest,
+            "eval_report": output.eval_report or None,
+            "tokens_processed": tokens,
+        }
+        artifact_dir = Path(output.artifact_dir)
+        if artifact_dir.is_dir() and any(artifact_dir.iterdir()):
+            bundle = job_dir / "artifact.grad.tar.gz"
+            sha, size = bundle_directory(
+                artifact_dir,
+                bundle,
+                manifest={**output.manifest, "format": output.artifact_format},
+                eval_report=output.eval_report or None,
             )
-        except Exception as exc:
-            if not cancelled:
-                try:
-                    self.client.post_json(
-                        f"/v1/trainer-jobs/{run_id}/complete",
-                        {
-                            "worker_id": self.worker_id,
-                            "status": "failed",
-                            "error": str(exc)[:4000],
-                        },
-                    )
-                except Exception:
-                    pass
+            payload["upload_id"] = self._upload(state, "artifact", bundle, sha, size)
+        return self._complete(state, payload)
+
+    def _load_dataset(self, job: dict[str, Any], job_dir: Path) -> list[dict[str, Any]]:
+        dataset = job.get("dataset")
+        if not dataset:
+            return []
+        path = job_dir / "dataset.jsonl"
+        self.client.download(str(dataset["download_url"]), path)
+        return _parse_jsonl(path)
+
+    def _load_resume(self, job: dict[str, Any], job_dir: Path) -> ResumeState | None:
+        resume = job.get("resume")
+        if not resume:
+            return None
+        archive = job_dir / "resume.grad.tar.gz"
+        self.client.download(str(resume["download_url"]), archive)
+        target = job_dir / "resume"
+        extract_bundle(archive, target)
+        archive.unlink(missing_ok=True)
+        return ResumeState(step=int(resume["step"]), checkpoint_dir=target)
+
+    # -- import jobs ----------------------------------------------------------
+
+    def _resolve_import_runner(self) -> ImportRunner | None:
+        runner = self._import_runner
+        if runner is None or hasattr(runner, "run"):
+            return runner  # type: ignore[return-value]
+        return runner()
+
+    def _run_import(
+        self, job: dict[str, Any], state: _JobState, job_dir: Path
+    ) -> dict[str, Any]:
+        spec = job.get("import") or {}
+        runner = self._resolve_import_runner()
+        if runner is None:
+            return self._complete(
+                state,
+                {
+                    "status": "failed",
+                    "error": "This trainer image has no dataset import runner (grad_trainer.imports); upgrade the trainer.",
+                },
+            )
+        source = dict(spec.get("source") or {})
+        connector = spec.get("connector")
+        try:
+            if source.get("kind") == "upload":
+                path = job_dir / "import-input"
+                self.client.download(str(source["download_url"]), path)
+                source = {
+                    "kind": "file",
+                    "path": str(path),
+                    "format": source.get("format", "auto"),
+                }
+        except (LeaseLost, WorkerAuthError):
             raise
+        except Exception as exc:
+            return self._complete(
+                state, {"status": "failed", "error": f"download failed: {exc}"[:4000]}
+            )
 
-        if cancelled or output.status == "cancelled":
-            return {"run": run, "artifact": None, "cancelled": True}
+        def emit_batch(records: list[dict[str, Any]]) -> None:
+            if state.stop.is_set():
+                raise _StopImport()
+            for start in range(0, len(records), RECORDS_BATCH_LIMIT):
+                self._post(
+                    state,
+                    "records",
+                    {"records": records[start : start + RECORDS_BATCH_LIMIT]},
+                )
 
-        return self.client.post_json(
-            f"/v1/trainer-jobs/{run_id}/complete",
+        work = job_dir / "work"
+        work.mkdir()
+        try:
+            summary = runner.run(
+                source,
+                None if connector in (None, "auto") else str(connector),
+                emit_batch=emit_batch,
+                workdir=work,
+            )
+        except (LeaseLost, WorkerAuthError):
+            raise
+        except _StopImport:
+            if state.lease_lost:
+                raise LeaseLost() from None
+            return self._complete(state, {"status": "abandoned"})
+        except Exception as exc:
+            return self._complete(
+                state,
+                {"status": "failed", "error": str(exc)[:4000] or type(exc).__name__},
+            )
+        return self._complete(
+            state,
             {
-                "worker_id": self.worker_id,
-                "status": output.status,
-                "format": output.artifact_format,
-                "artifact_base64": base64.b64encode(output.artifact_bytes).decode(
-                    "ascii"
-                ),
-                "manifest": output.manifest,
-                "eval_report": output.eval_report,
-                "tokens_processed": output.tokens_processed,
-                "cost_usd": output.cost_usd,
+                "status": "completed",
+                "import_summary": {
+                    "dropped_count": int(summary.dropped_count),
+                    "detected_scores": [str(s) for s in summary.detected_scores],
+                },
             },
         )
 
-    def serve_forever(self) -> None:
-        def _handle_signal(_signum: int, _frame: Any) -> None:
-            self._stop = True
-
-        signal.signal(signal.SIGTERM, _handle_signal)
-        signal.signal(signal.SIGINT, _handle_signal)
-
-        while not self._stop:
-            try:
-                result = self.run_once()
-                if result is None:
-                    time.sleep(self.poll_interval_s)
-            except Exception as exc:
-                print(f"[grad-trainer] job error: {exc}", flush=True)
-                time.sleep(self.poll_interval_s)
-
 
 def main() -> None:
-    server_url = os.environ.get("GRAD_SERVER_URL", "http://127.0.0.1:8080")
-    api_key = os.environ.get("GRAD_API_KEY")
-    worker_id = os.environ.get("GRAD_WORKER_ID")
-    poll_s = float(os.environ.get("GRAD_POLL_INTERVAL_S", "1.0"))
+    env = os.environ
+    server_url = (
+        env.get("GRAD_SERVER_URL")
+        or env.get("GRADIATED_BASE_URL")
+        or "http://127.0.0.1:8787"
+    )
+    api_key = (
+        env.get("TRAINER_API_KEY")
+        or env.get("GRAD_API_KEY")
+        or env.get("GRADIATED_API_KEY")
+    )
     worker = TrainerWorker(
         server_url=server_url,
         api_key=api_key,
-        worker_id=worker_id,
-        poll_interval_s=poll_s,
+        worker_id=env.get("GRAD_WORKER_ID") or None,
+        lease_seconds=int(env.get("GRAD_LEASE_SECONDS", "180")),
+        poll_interval_s=float(env.get("GRAD_POLL_INTERVAL_S", "1.0")),
+        workdir=env.get("GRAD_WORKDIR") or None,
     )
-    print(
-        f"[grad-trainer] worker '{worker.worker_id}' polling {server_url}",
-        flush=True,
-    )
-    worker.serve_forever()
+    _log(f"worker '{worker.worker_id}' polling {worker.client.base_url}")
+    sys.exit(worker.serve_forever())
 
 
 if __name__ == "__main__":

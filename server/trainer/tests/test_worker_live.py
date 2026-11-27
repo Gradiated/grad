@@ -1,10 +1,10 @@
-"""Live HTTP E2E test: TrainerWorker running against a real server/api process."""
+"""Live protocol test: TrainerWorker against a real server/api process."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import shutil
 import socket
 import subprocess
 import tempfile
@@ -13,8 +13,23 @@ import unittest
 import urllib.request
 from pathlib import Path
 
-from grad_trainer.bundles import read_artifact_bundle
+from fixtures.stub_runners import StubRunner
+
 from grad_trainer.worker import TrainerWorker
+
+TINY_MODELS = [
+    {
+        "id": "test/tiny-qwen3",
+        "hf_repo": None,
+        "family": "llm",
+        "adapters": ["lora"],
+        "default_for": [],
+        "price_per_million_tokens_usd": 1,
+        "max_context_tokens": 2048,
+        "template_revision": "qwen3@3",
+        "calibrated_lrs": {"sft": 1e-3},
+    }
+]
 
 
 def _free_port() -> int:
@@ -23,120 +38,122 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def _http_json(
+def _http(
     url: str, method: str = "GET", payload: dict | None = None
-) -> tuple[int, dict]:
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+) -> tuple[int, bytes, dict]:
+    data = json.dumps(payload).encode() if payload is not None else None
     headers = {"Content-Type": "application/json"} if data is not None else {}
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=15) as resp:
-        return resp.status, json.loads(resp.read().decode("utf-8"))
+        return resp.status, resp.read(), dict(resp.headers)
 
 
-class LiveWorkerE2ETest(unittest.TestCase):
-    def test_worker_claims_trains_and_publishes_artifact_against_live_server(
-        self,
-    ) -> None:
-        repo_root = Path(__file__).resolve().parents[3]
-        api_dir = repo_root / "server" / "api"
+class LiveWorkerTest(unittest.TestCase):
+    def test_worker_trains_and_publishes_artifact_against_live_server(self) -> None:
+        api_dir = Path(__file__).resolve().parents[2] / "api"
         tsx_bin = api_dir / "node_modules" / ".bin" / "tsx"
         if not tsx_bin.exists():
             self.skipTest("server/api node_modules not installed")
 
+        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
+        self.addCleanup(tmp.cleanup)
+        log_path = Path(tmp.name) / "server.log"
         port = _free_port()
-        storage_dir = tempfile.mkdtemp(prefix="grad-trainer-e2e-")
         env = {
             **os.environ,
             "PORT": str(port),
             "HOST": "127.0.0.1",
             "AUTH_MODE": "none",
-            "DEPLOY_MODE": "local",
-            "STORAGE_DIR": storage_dir,
+            "DEPLOY_MODE": "disabled",
+            "STORAGE_DIR": str(Path(tmp.name) / "storage"),
+            "GRAD_EXTRA_MODELS_JSON": json.dumps(TINY_MODELS),
+            "EVAL_EXECUTOR": "false",
         }
-        proc = subprocess.Popen(
-            [str(tsx_bin), "src/main.ts"],
-            cwd=str(api_dir),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        base_url = f"http://127.0.0.1:{port}"
+        with log_path.open("wb") as log:
+            proc = subprocess.Popen(
+                [str(tsx_bin), "src/main.ts"],
+                cwd=str(api_dir),
+                env=env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        self.addCleanup(proc.wait, 10)
+        self.addCleanup(proc.terminate)
+        base = f"http://127.0.0.1:{port}"
         try:
-            deadline = time.time() + 15.0
-            while time.time() < deadline:
-                try:
-                    status, _ = _http_json(f"{base_url}/health/ready")
-                    if status == 200:
-                        break
-                except Exception:
-                    time.sleep(0.15)
-            else:
-                raise RuntimeError("grad-server did not become ready in time")
-
-            # Push dataset
+            self._wait_ready(base, proc)
             records = [
                 {
-                    "session_id": f"s_{i}",
+                    "session_id": f"s{i}",
                     "messages": [
-                        {"role": "user", "content": f"Question {i}"},
-                        {"role": "assistant", "content": f"Answer {i}"},
+                        {"role": "user", "content": f"q{i}"},
+                        {"role": "assistant", "content": f"a{i}"},
                     ],
                 }
-                for i in range(6)
+                for i in range(8)
             ]
-            status, ds = _http_json(
-                f"{base_url}/v1/datasets/live-sft/records",
-                method="POST",
-                payload={"records": records},
-            )
-            self.assertEqual(status, 200)
-            self.assertEqual(ds["record_count"], 6)
-
-            # Enqueue SFT run
-            status, run = _http_json(
-                f"{base_url}/v1/runs",
-                method="POST",
-                payload={
-                    "dataset": "live-sft",
-                    "name": "live-sft-model",
-                    "recipe": {"kind": "sft", "batch_size": 2, "epochs": 1},
+            _http(f"{base}/v1/datasets/live/records", "POST", {"records": records})
+            status, body, _ = _http(
+                f"{base}/v1/runs",
+                "POST",
+                {
+                    "dataset": "live",
+                    "name": "live-sft",
+                    "recipe": {
+                        "kind": "sft",
+                        "model": "test/tiny-qwen3",
+                        "batch_size": 1,
+                    },
                 },
             )
             self.assertEqual(status, 202)
-            run_id = run["id"]
+            run_id = json.loads(body)["id"]
 
-            # Execute single worker cycle
-            worker = TrainerWorker(server_url=base_url, worker_id="test-worker-1")
-            completed = worker.run_once()
-            self.assertIsNotNone(completed)
-            assert completed is not None
-            self.assertEqual(completed["run"]["status"], "completed")
-            artifact_id = completed["artifact"]["id"]
+            runner = StubRunner(steps=3, checkpoint_at=2)
+            worker = TrainerWorker(
+                server_url=base,
+                worker_id="live-worker",
+                workdir=Path(tmp.name) / "work",
+                recipe_runner_factory=lambda _kind: runner,
+                recipes=["sft"],
+            )
+            result = worker.run_once()
+            self.assertIsNotNone(result)
+            self.assertEqual(len(runner.calls[0]["records"]), 8)
 
-            # Verify run status and download artifact bundle
-            _, fetched_run = _http_json(f"{base_url}/v1/runs/{run_id}")
-            self.assertEqual(fetched_run["status"], "completed")
-            self.assertEqual(fetched_run["artifact_id"], artifact_id)
+            _, body, _ = _http(f"{base}/v1/runs/{run_id}")
+            run = json.loads(body)
+            self.assertEqual(run["status"], "completed")
+            self.assertGreater(run["cost_usd"], 0)
+            artifact_id = run["artifact_id"]
 
-            with urllib.request.urlopen(
-                f"{base_url}/v1/artifacts/{artifact_id}/download", timeout=10
-            ) as dl:
-                bundle_bytes = dl.read()
-            manifest, files = read_artifact_bundle(bundle_bytes)
-            self.assertEqual(manifest["recipe"], "sft")
-            self.assertIn("adapter_model.safetensors", files)
-        finally:
-            proc.terminate()
+            _, body, _ = _http(
+                f"{base}/v1/artifacts/{urllib.request.quote(artifact_id)}"
+            )
+            artifact = json.loads(body)
+            _, blob, headers = _http(
+                f"{base}/v1/artifacts/{urllib.request.quote(artifact_id)}/download"
+            )
+            self.assertEqual(hashlib.sha256(blob).hexdigest(), artifact["sha256"])
+            self.assertEqual(headers.get("X-Artifact-Sha256"), artifact["sha256"])
+
+            _, body, _ = _http(f"{base}/v1/runs/{run_id}/checkpoints")
+            self.assertEqual([c["step"] for c in json.loads(body)["data"]], [2])
+        except Exception:
+            print(log_path.read_text(errors="replace")[-4000:])
+            raise
+
+    def _wait_ready(self, base: str, proc: subprocess.Popen) -> None:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                raise RuntimeError("grad-server exited during startup")
             try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-            if proc.stdout:
-                proc.stdout.close()
-            if proc.stderr:
-                proc.stderr.close()
-            shutil.rmtree(storage_dir, ignore_errors=True)
+                if _http(f"{base}/health/ready")[0] == 200:
+                    return
+            except Exception:
+                time.sleep(0.2)
+        raise RuntimeError("grad-server did not become ready")
 
 
 if __name__ == "__main__":
