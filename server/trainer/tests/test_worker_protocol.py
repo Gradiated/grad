@@ -137,6 +137,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 "lease_seconds": 180,
                 "kinds": ["train", "import"],
                 "recipes": ["sft"],
+                "device": "cpu",
             },
         )
         call = runner.calls[0]
@@ -423,6 +424,11 @@ class WorkerProtocolTests(unittest.TestCase):
         srv = self.server(jobs=[train_job()])
         self.worker(srv, gpu={"name": "L4", "memory_gb": 22.5}).run_once()
         self.assertEqual(srv.bodies("claim")[0]["gpu"], {"name": "L4", "memory_gb": 22.5})
+        self.assertEqual(srv.bodies("claim")[0]["device"], "gpu")
+        cpu = self.server(jobs=[])
+        self.worker(cpu, gpu=None).run_once()
+        self.assertEqual(cpu.bodies("claim")[0]["device"], "cpu")
+        self.assertNotIn("gpu", cpu.bodies("claim")[0])
 
     def test_cuda_oom_hands_the_attempt_back_for_a_retry(self) -> None:
         srv = self.server(jobs=[train_job()])

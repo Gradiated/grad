@@ -539,6 +539,8 @@ class TrainerWorker:
         if self.recipes:
             payload["recipes"] = self.recipes
         gpu = self._gpu_info() if "train" in self.kinds else None
+        # A GPU worker gets only runs whose min_gpu_memory_gb fits gpu.memory_gb.
+        payload["device"] = "gpu" if gpu else "cpu"
         if gpu:
             payload["gpu"] = gpu
         resp = self.client.post_json("/v1/trainer-jobs/claim", payload, attempts=5)
