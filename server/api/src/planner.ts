@@ -14,10 +14,12 @@ import {
   type TrainableModel,
 } from "./contracts.js";
 import { invalid } from "./errors.js";
+import { resolveRecipeParams } from "./recipe-params.js";
 import {
   assessRecipeUsability,
   recordConversation,
   recordShapeHelp,
+  type RecipeUsability,
 } from "./records.js";
 
 export const AUTO_RULE_VERSION = "auto@2";
@@ -290,6 +292,48 @@ const resolveAdapter = (
   return adapter;
 };
 
+/** Router candidates (explicit or discovered) checked against fallback and pricing. */
+const resolveRouterCandidates = (
+  recipe: PlanRunRequest["recipe"],
+  usability: RecipeUsability,
+  records: readonly DatasetRecord[],
+  warnings: string[],
+): string[] => {
+  const candidates = recipe.models ?? usability.discoveredModels ?? [];
+  if (candidates.length < 2) {
+    throw invalid(
+      "router_candidates_required",
+      "Router training needs scores for at least two candidate models: pass recipe.models or include scored responses from two or more models.",
+    );
+  }
+  if (recipe.fallback !== undefined && !candidates.includes(recipe.fallback)) {
+    throw invalid(
+      "router_fallback_not_candidate",
+      `recipe.fallback '${recipe.fallback}' is not one of the candidates (${candidates.join(", ")}).`,
+    );
+  }
+  const unknownPrices = Object.keys(recipe.pricing ?? {}).filter(
+    (m) => !candidates.includes(m),
+  );
+  if (unknownPrices.length > 0) {
+    throw invalid(
+      "router_pricing_not_candidate",
+      `recipe.pricing names models that are not candidates: ${unknownPrices.join(", ")}.`,
+    );
+  }
+  const unpriced = candidates.filter((m) => recipe.pricing?.[m] === undefined);
+  const loggedCosts = records.some(
+    (r) => typeof r.metrics?.cost_usd === "number",
+  );
+  if (unpriced.length > 0 && !loggedCosts) {
+    warnings.push(
+      `No price for ${unpriced.join(", ")} (recipe.pricing or metrics.cost_usd on your records): the router maximizes offload rate and cost_savings_pct is null.`,
+    );
+  }
+
+  return candidates;
+};
+
 export interface PlanContext {
   catalog: ModelCatalog;
   datasetVersion: number;
@@ -314,6 +358,15 @@ export const planRun = (
 
   const model = resolveModel(request, context.catalog);
   const adapter = resolveAdapter(request, model);
+  if (
+    recipe.teacher !== undefined &&
+    context.catalog.find(recipe.teacher)?.family !== model.family
+  ) {
+    throw invalid(
+      "unknown_model",
+      `Teacher '${recipe.teacher}' is not a ${model.family} model in the trainable catalog; see GET /v1/models.`,
+    );
+  }
 
   if (
     recipe.kind === "cartridge" &&
@@ -333,7 +386,10 @@ export const planRun = (
     );
   }
 
-  const usability = assessRecipeUsability(recipe.kind, records);
+  const usability = assessRecipeUsability(recipe.kind, records, {
+    rubric: recipe.rubric,
+    candidates: recipe.models,
+  });
   if (usability.usable === 0) {
     throw invalid(
       "no_usable_records",
@@ -351,18 +407,15 @@ export const planRun = (
     );
   }
 
-  const recipeParams: Record<string, unknown> = {};
+  const resolvedParams = resolveRecipeParams(recipe);
+  const recipeParams = resolvedParams.params;
   if (recipe.kind === "router") {
-    const candidates = recipe.models ?? usability.discoveredModels ?? [];
-    if (candidates.length < 2) {
-      throw invalid(
-        "router_candidates_required",
-        "Router training needs at least two candidate models: pass recipe.models or include per-model scores for two or more models in each record.",
-      );
-    }
-    recipeParams.models = candidates;
-  } else if (recipe.models !== undefined) {
-    recipeParams.models = recipe.models;
+    recipeParams.models = resolveRouterCandidates(
+      recipe,
+      usability,
+      records,
+      warnings,
+    );
   }
 
   const defaultBatch = recipe.kind === "grpo" ? 32 : 128;
@@ -398,6 +451,7 @@ export const planRun = (
     lrSource = "explicit";
   }
 
+  const reduction = resolvedParams.reduction;
   const renderOptions: RenderOptions = {
     templateRevision: model.template_revision,
     train_on: recipe.train_on,
@@ -448,19 +502,16 @@ export const planRun = (
     );
   }
 
-  const optional = {
-    beta: recipe.beta,
-    max_quality_drop: recipe.max_quality_drop,
-    context_text: recipe.context_text,
-    context_uri: recipe.context_uri,
-    num_tokens: recipe.num_tokens,
-    temp: recipe.temp,
-    teacher: recipe.teacher,
-    env_name: recipe.env_name,
-    group_size: recipe.group_size,
-  };
-  for (const [key, value] of Object.entries(optional)) {
-    if (value !== undefined) recipeParams[key] = value;
+  const checkpointEvery = Math.max(
+    1,
+    Math.min(20, Math.floor(estimatedSteps * 0.1)),
+  );
+  const evalEvery =
+    recipe.eval_every === "auto" ? checkpointEvery : recipe.eval_every;
+  if (evalEvery > estimatedSteps) {
+    warnings.push(
+      `eval_every=${evalEvery} is more than the ${estimatedSteps} estimated steps; the held-out split is evaluated only at the end.`,
+    );
   }
 
   const resolvedConfig: ResolvedRunConfig = {
@@ -481,12 +532,11 @@ export const planRun = (
     train_on: recipe.train_on,
     thinking: recipe.thinking,
     preserve_thinking: recipe.preserve_thinking,
-    reduction: recipe.reduction,
+    reduction,
     select: recipe.select,
-    checkpoint_every_steps: Math.max(
-      1,
-      Math.min(20, Math.floor(estimatedSteps * 0.1)),
-    ),
+    checkpoint_every_steps: checkpointEvery,
+    eval_every_steps: evalEvery,
+    optimizer: resolvedParams.optimizer,
     checkpoint_ttl_days: recipe.checkpoint_ttl_days,
     split: {
       strategy: splitStrategy,

@@ -190,7 +190,10 @@ describe("planRun", () => {
       records.map((_, i) => ({ prompt: `p${i}`, chosen: "a", rejected: "b" })),
     );
     expect(dpo.resolved_config.split.strategy).toBe("by_group");
-    expect(dpo.resolved_config.recipe_params.beta).toBe(0.2);
+    expect(dpo.resolved_config.recipe_params.loss).toEqual({
+      kind: "dpo",
+      beta: 0.2,
+    });
   });
 
   it("rejects unknown models even with an explicit lr (no misleading lr hint)", () => {
@@ -291,10 +294,11 @@ describe("planRun", () => {
       () => plan({ kind: "router" }, oneModel),
       "router_candidates_required",
     );
-    expect(
-      plan({ kind: "router", models: ["a/b", "c/d"] }, oneModel).resolved_config
-        .recipe_params.models,
-    ).toEqual(["a/b", "c/d"]);
+    // Candidates the records never score leave nothing to train on.
+    expectCode(
+      () => plan({ kind: "router", models: ["a/b", "c/d"] }, oneModel),
+      "no_usable_records",
+    );
     expectCode(
       () => plan({ kind: "cartridge" }, records),
       "cartridge_context_required",

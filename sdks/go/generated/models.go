@@ -924,6 +924,35 @@ type ListRunsResponse struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
+// LossSpec is a union of object shapes; set the fields of exactly one variant.
+type LossSpec struct {
+	Kind      LossSpecKind       `json:"kind"`
+	Reduction *LossSpecReduction `json:"reduction,omitempty"`
+	Beta      *float64           `json:"beta,omitempty"`
+	Temp      *float64           `json:"temp,omitempty"`
+	TopK      *int               `json:"top_k,omitempty"`
+}
+
+// LossSpecKind is an enumeration of allowed values.
+type LossSpecKind string
+
+// Values of LossSpecKind.
+const (
+	LossSpecKindCrossEntropy  LossSpecKind = "cross_entropy"
+	LossSpecKindDpo           LossSpecKind = "dpo"
+	LossSpecKindInfonce       LossSpecKind = "infonce"
+	LossSpecKindTopKKLDistill LossSpecKind = "top_k_kl_distill"
+)
+
+// LossSpecReduction is an enumeration of allowed values.
+type LossSpecReduction string
+
+// Values of LossSpecReduction.
+const (
+	LossSpecReductionPerExample LossSpecReduction = "per_example"
+	LossSpecReductionPerToken   LossSpecReduction = "per_token"
+)
+
 // MetricPoint is generated from the OpenAPI schema.
 type MetricPoint struct {
 	Seq          int      `json:"seq"`
@@ -1038,6 +1067,23 @@ type MetricsPage struct {
 	NextCursor *string       `json:"next_cursor"`
 }
 
+// OptimizerSpec is generated from the OpenAPI schema.
+type OptimizerSpec struct {
+	Kind        *OptimizerSpecKind `json:"kind,omitempty"`
+	Betas       []any              `json:"betas,omitempty"`
+	WeightDecay *float64           `json:"weight_decay,omitempty"`
+	// GradClip Max global gradient norm; 0 disables clipping.
+	GradClip *float64 `json:"grad_clip,omitempty"`
+}
+
+// OptimizerSpecKind is an enumeration of allowed values.
+type OptimizerSpecKind string
+
+// Values of OptimizerSpecKind.
+const (
+	OptimizerSpecKindAdamw OptimizerSpecKind = "adamw"
+)
+
 // PlanEvalRequest is generated from the OpenAPI schema.
 type PlanEvalRequest struct {
 	Name           *string          `json:"name,omitempty"`
@@ -1102,6 +1148,20 @@ type PlanRunResponse struct {
 	TrainedTokenFraction  float64           `json:"trained_token_fraction"`
 	Warnings              []string          `json:"warnings"`
 }
+
+// PoolingSpec is generated from the OpenAPI schema.
+type PoolingSpec struct {
+	Kind PoolingSpecKind `json:"kind"`
+}
+
+// PoolingSpecKind is an enumeration of allowed values.
+type PoolingSpecKind string
+
+// Values of PoolingSpecKind.
+const (
+	PoolingSpecKindMean PoolingSpecKind = "mean"
+	PoolingSpecKindCls  PoolingSpecKind = "cls"
+)
 
 // PostEvalScoresRequest is generated from the OpenAPI schema.
 type PostEvalScoresRequest struct {
@@ -1181,18 +1241,19 @@ const (
 
 // RecipeSpec is generated from the OpenAPI schema.
 type RecipeSpec struct {
-	Kind              RecipeKind           `json:"kind"`
-	Model             *string              `json:"model,omitempty"`
-	Adapter           *AdapterSpec         `json:"adapter,omitempty"`
-	LR                any                  `json:"lr,omitempty"`
-	LRScale           *float64             `json:"lr_scale,omitempty"`
-	BatchSize         *int                 `json:"batch_size,omitempty"`
-	Epochs            *int                 `json:"epochs,omitempty"`
-	Schedule          *RecipeSpecSchedule  `json:"schedule,omitempty"`
-	Warmup            *float64             `json:"warmup,omitempty"`
-	TrainOn           *RecipeSpecTrainOn   `json:"train_on,omitempty"`
-	Thinking          *RecipeSpecThinking  `json:"thinking,omitempty"`
-	PreserveThinking  *bool                `json:"preserve_thinking,omitempty"`
+	Kind             RecipeKind          `json:"kind"`
+	Model            *string             `json:"model,omitempty"`
+	Adapter          *AdapterSpec        `json:"adapter,omitempty"`
+	LR               any                 `json:"lr,omitempty"`
+	LRScale          *float64            `json:"lr_scale,omitempty"`
+	BatchSize        *int                `json:"batch_size,omitempty"`
+	Epochs           *int                `json:"epochs,omitempty"`
+	Schedule         *RecipeSpecSchedule `json:"schedule,omitempty"`
+	Warmup           *float64            `json:"warmup,omitempty"`
+	TrainOn          *RecipeSpecTrainOn  `json:"train_on,omitempty"`
+	Thinking         *RecipeSpecThinking `json:"thinking,omitempty"`
+	PreserveThinking *bool               `json:"preserve_thinking,omitempty"`
+	// Reduction Default per_example.
 	Reduction         *RecipeSpecReduction `json:"reduction,omitempty"`
 	Select            *RecipeSpecSelect    `json:"select,omitempty"`
 	CheckpointTTLDays *int                 `json:"checkpoint_ttl_days,omitempty"`
@@ -1206,9 +1267,24 @@ type RecipeSpec struct {
 	Teacher           *string              `json:"teacher,omitempty"`
 	EnvName           *string              `json:"env_name,omitempty"`
 	GroupSize         *int                 `json:"group_size,omitempty"`
+	Optimizer         *OptimizerSpec       `json:"optimizer,omitempty"`
+	// EvalEvery Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+	EvalEvery any          `json:"eval_every,omitempty"`
+	Loss      *LossSpec    `json:"loss,omitempty"`
+	Pool      *PoolingSpec `json:"pool,omitempty"`
+	// Rubric RouterRecipe: the score name on your records that measures quality (scores[rubric]).
+	Rubric *string `json:"rubric,omitempty"`
+	// Pricing RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
+	Pricing map[string]float64 `json:"pricing,omitempty"`
+	// Fallback RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate).
+	Fallback *string `json:"fallback,omitempty"`
+	// MaxNewTokens CartridgeRecipe: teacher answer length per prompt during distillation (default 256).
+	MaxNewTokens *int `json:"max_new_tokens,omitempty"`
+	// SlotToken CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).
+	SlotToken *string `json:"slot_token,omitempty"`
 }
 
-// RecipeSpecReduction is an enumeration of allowed values.
+// RecipeSpecReduction Default per_example.
 type RecipeSpecReduction string
 
 // Values of RecipeSpecReduction.
@@ -1394,6 +1470,8 @@ type ResolvedRunConfig struct {
 	Reduction            ResolvedRunConfigReduction `json:"reduction"`
 	Select               ResolvedRunConfigSelect    `json:"select"`
 	CheckpointEverySteps int                        `json:"checkpoint_every_steps"`
+	EvalEverySteps       int                        `json:"eval_every_steps"`
+	Optimizer            OptimizerSpec              `json:"optimizer"`
 	CheckpointTTLDays    int                        `json:"checkpoint_ttl_days"`
 	Split                ResolvedRunConfigSplit     `json:"split"`
 	RecipeParams         map[string]any             `json:"recipe_params"`

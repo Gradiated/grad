@@ -959,6 +959,11 @@ components:
         checkpoint_every_steps:
           type: integer
           minimum: 1
+        eval_every_steps:
+          type: integer
+          minimum: 1
+        optimizer:
+          $ref: "#/components/schemas/OptimizerSpec"
         checkpoint_ttl_days:
           type: integer
           minimum: 1
@@ -1011,9 +1016,43 @@ components:
         - reduction
         - select
         - checkpoint_every_steps
+        - eval_every_steps
+        - optimizer
         - checkpoint_ttl_days
         - split
         - recipe_params
+    OptimizerSpec:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - adamw
+          default: adamw
+        betas:
+          type: array
+          prefixItems:
+            - type: number
+              minimum: 0
+              exclusiveMaximum: 1
+            - type: number
+              minimum: 0
+              exclusiveMaximum: 1
+          default:
+            - 0.9
+            - 0.95
+        weight_decay:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+        grad_clip:
+          type: number
+          minimum: 0
+          maximum: 1000
+          default: 1
+          description: Max global gradient norm; 0 disables clipping.
+      additionalProperties: false
     PlanRunRequest:
       type: object
       properties:
@@ -1104,7 +1143,7 @@ components:
           enum:
             - per_example
             - per_token
-          default: per_example
+          description: Default per_example.
         select:
           type: string
           enum:
@@ -1155,8 +1194,52 @@ components:
           type: integer
           minimum: 2
           maximum: 64
+        optimizer:
+          $ref: "#/components/schemas/OptimizerSpec"
+        eval_every:
+          anyOf:
+            - type: string
+              enum:
+                - auto
+            - type: integer
+              minimum: 1
+          default: auto
+          description: Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+        loss:
+          $ref: "#/components/schemas/LossSpec"
+        pool:
+          $ref: "#/components/schemas/PoolingSpec"
+        rubric:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: "RouterRecipe: the score name on your records that measures quality (scores[rubric])."
+        pricing:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+          description: "RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records."
+        fallback:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: "RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring
+            candidate)."
+        max_new_tokens:
+          type: integer
+          minimum: 1
+          maximum: 8192
+          description: "CartridgeRecipe: teacher answer length per prompt during distillation (default 256)."
+        slot_token:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: "CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token
+            that tokenizes atomically)."
       required:
         - kind
+      additionalProperties: false
     AdapterSpec:
       oneOf:
         - type: object
@@ -1201,6 +1284,70 @@ components:
                 - frozen_head
           required:
             - kind
+    LossSpec:
+      oneOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - cross_entropy
+            reduction:
+              type: string
+              enum:
+                - per_example
+                - per_token
+          required:
+            - kind
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - dpo
+            beta:
+              type: number
+              exclusiveMinimum: 0
+          required:
+            - kind
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - infonce
+            temp:
+              type: number
+              exclusiveMinimum: 0
+          required:
+            - kind
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - top_k_kl_distill
+            top_k:
+              type: integer
+              minimum: 1
+              maximum: 256
+          required:
+            - kind
+          additionalProperties: false
+    PoolingSpec:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - mean
+            - cls
+      required:
+        - kind
+      additionalProperties: false
     SplitSpec:
       type: object
       properties:

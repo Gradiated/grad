@@ -3039,6 +3039,140 @@ pub mod models {
         pub next_cursor: Option<String>,
     }
 
+    /// A union of object shapes: set the fields of exactly one variant.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct LossSpec {
+        pub kind: LossSpecKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub reduction: Option<LossSpecReduction>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub beta: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub temp: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub top_k: Option<i64>,
+    }
+
+    /// Allowed values of `LossSpecKind` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum LossSpecKind {
+        /// `"cross_entropy"`
+        CrossEntropy,
+        /// `"dpo"`
+        Dpo,
+        /// `"infonce"`
+        Infonce,
+        /// `"top_k_kl_distill"`
+        TopKKlDistill,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for LossSpecKind {
+        fn default() -> Self {
+            Self::CrossEntropy
+        }
+    }
+
+    impl LossSpecKind {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::CrossEntropy => "cross_entropy",
+                Self::Dpo => "dpo",
+                Self::Infonce => "infonce",
+                Self::TopKKlDistill => "top_k_kl_distill",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for LossSpecKind {
+        fn from(s: &str) -> Self {
+            match s {
+                "cross_entropy" => Self::CrossEntropy,
+                "dpo" => Self::Dpo,
+                "infonce" => Self::Infonce,
+                "top_k_kl_distill" => Self::TopKKlDistill,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for LossSpecKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for LossSpecKind {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for LossSpecKind {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
+    }
+
+    /// Allowed values of `LossSpecReduction` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum LossSpecReduction {
+        /// `"per_example"`
+        PerExample,
+        /// `"per_token"`
+        PerToken,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for LossSpecReduction {
+        fn default() -> Self {
+            Self::PerExample
+        }
+    }
+
+    impl LossSpecReduction {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::PerExample => "per_example",
+                Self::PerToken => "per_token",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for LossSpecReduction {
+        fn from(s: &str) -> Self {
+            match s {
+                "per_example" => Self::PerExample,
+                "per_token" => Self::PerToken,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for LossSpecReduction {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for LossSpecReduction {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for LossSpecReduction {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
+    }
+
     /// Generated from the OpenAPI schema `MetricPoint`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct MetricPoint {
@@ -3096,6 +3230,72 @@ pub mod models {
         pub data: Vec<MetricPoint>,
         #[serde(default)]
         pub next_cursor: Option<String>,
+    }
+
+    /// Generated from the OpenAPI schema `OptimizerSpec`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct OptimizerSpec {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub kind: Option<OptimizerSpecKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub betas: Option<Vec<Value>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub weight_decay: Option<f64>,
+        /// Max global gradient norm; 0 disables clipping.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub grad_clip: Option<f64>,
+    }
+
+    /// Allowed values of `OptimizerSpecKind` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum OptimizerSpecKind {
+        /// `"adamw"`
+        Adamw,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for OptimizerSpecKind {
+        fn default() -> Self {
+            Self::Adamw
+        }
+    }
+
+    impl OptimizerSpecKind {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::Adamw => "adamw",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for OptimizerSpecKind {
+        fn from(s: &str) -> Self {
+            match s {
+                "adamw" => Self::Adamw,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for OptimizerSpecKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for OptimizerSpecKind {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for OptimizerSpecKind {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
     }
 
     /// Generated from the OpenAPI schema `PlanEvalRequest`.
@@ -3225,6 +3425,68 @@ pub mod models {
         pub price_per_million_tokens: f64,
         pub trained_token_fraction: f64,
         pub warnings: Vec<String>,
+    }
+
+    /// Generated from the OpenAPI schema `PoolingSpec`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct PoolingSpec {
+        pub kind: PoolingSpecKind,
+    }
+
+    /// Allowed values of `PoolingSpecKind` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum PoolingSpecKind {
+        /// `"mean"`
+        Mean,
+        /// `"cls"`
+        Cls,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for PoolingSpecKind {
+        fn default() -> Self {
+            Self::Mean
+        }
+    }
+
+    impl PoolingSpecKind {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::Mean => "mean",
+                Self::Cls => "cls",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for PoolingSpecKind {
+        fn from(s: &str) -> Self {
+            match s {
+                "mean" => Self::Mean,
+                "cls" => Self::Cls,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for PoolingSpecKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for PoolingSpecKind {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for PoolingSpecKind {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
     }
 
     /// Generated from the OpenAPI schema `PostEvalScoresRequest`.
@@ -3408,6 +3670,7 @@ pub mod models {
         pub thinking: Option<RecipeSpecThinking>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub preserve_thinking: Option<bool>,
+        /// Default per_example.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub reduction: Option<RecipeSpecReduction>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3434,9 +3697,33 @@ pub mod models {
         pub env_name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub group_size: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub optimizer: Option<OptimizerSpec>,
+        /// Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub eval_every: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub loss: Option<LossSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub pool: Option<PoolingSpec>,
+        /// RouterRecipe: the score name on your records that measures quality (scores[rubric]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub rubric: Option<String>,
+        /// RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub pricing: Option<BTreeMap<String, f64>>,
+        /// RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub fallback: Option<String>,
+        /// CartridgeRecipe: teacher answer length per prompt during distillation (default 256).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub max_new_tokens: Option<i64>,
+        /// CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub slot_token: Option<String>,
     }
 
-    /// Allowed values of `RecipeSpecReduction` (unknown values from newer servers are kept in `Other`).
+    /// Default per_example.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub enum RecipeSpecReduction {
         /// `"per_example"`
@@ -4071,6 +4358,8 @@ pub mod models {
         pub reduction: ResolvedRunConfigReduction,
         pub select: ResolvedRunConfigSelect,
         pub checkpoint_every_steps: i64,
+        pub eval_every_steps: i64,
+        pub optimizer: OptimizerSpec,
         pub checkpoint_ttl_days: i64,
         pub split: ResolvedRunConfigSplit,
         pub recipe_params: BTreeMap<String, Value>,

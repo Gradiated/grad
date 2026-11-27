@@ -87,7 +87,7 @@ class LoopTests(TempDirCase):
     def test_best_selection_restores_weights_but_never_the_meter(self) -> None:
         task = FakeTask(scores=[3.0, 1.0, 2.0, 1.0, 5.0, 4.0, 6.0, 7.0])
         rec = Recorder(self.tmpdir())
-        result = loop(task, self.tmpdir(), recorder=rec, eval_every=1, checkpoint_every_steps=3).run()
+        result = loop(task, self.tmpdir(), recorder=rec, eval_every_steps=1, checkpoint_every_steps=3).run()
         self.assertEqual((result.status, result.step, result.best_step, result.selected_step), ("completed", 8, 4, 4))
         self.assertEqual(task.loaded, [4])  # best weights reloaded; ties go to the later step
         self.assertEqual(result.tokens_total, rec.metrics[-1]["tokens"])

@@ -487,6 +487,8 @@ ImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
 
 JobKind: TypeAlias = "Literal['train', 'import']"
 
+LossSpec: TypeAlias = "dict[str, Any]"
+
 MetricPoint = TypedDict(
     "MetricPoint",
     {
@@ -528,6 +530,16 @@ MetricsPage = TypedDict(
         "status": "RunStatus",
         "data": "list[MetricPoint]",
         "next_cursor": "str | None",
+    },
+)
+
+OptimizerSpec = TypedDict(
+    "OptimizerSpec",
+    {
+        "kind": "NotRequired[Literal['adamw']]",
+        "betas": "NotRequired[list[Any]]",
+        "weight_decay": "NotRequired[float]",
+        "grad_clip": "NotRequired[float]",
     },
 )
 
@@ -592,6 +604,13 @@ PlanRunResponse = TypedDict(
         "price_per_million_tokens": "float",
         "trained_token_fraction": "float",
         "warnings": "list[str]",
+    },
+)
+
+PoolingSpec = TypedDict(
+    "PoolingSpec",
+    {
+        "kind": "Literal['mean', 'cls']",
     },
 )
 
@@ -686,6 +705,15 @@ RecipeSpec = TypedDict(
         "teacher": "NotRequired[str]",
         "env_name": "NotRequired[str]",
         "group_size": "NotRequired[int]",
+        "optimizer": "NotRequired[OptimizerSpec]",
+        "eval_every": "NotRequired[Literal['auto'] | int]",
+        "loss": "NotRequired[LossSpec]",
+        "pool": "NotRequired[PoolingSpec]",
+        "rubric": "NotRequired[str]",
+        "pricing": "NotRequired[dict[str, float]]",
+        "fallback": "NotRequired[str]",
+        "max_new_tokens": "NotRequired[int]",
+        "slot_token": "NotRequired[str]",
     },
 )
 
@@ -782,6 +810,8 @@ ResolvedRunConfig = TypedDict(
         "reduction": "Literal['per_example', 'per_token']",
         "select": "Literal['best', 'last']",
         "checkpoint_every_steps": "int",
+        "eval_every_steps": "int",
+        "optimizer": "OptimizerSpec",
         "checkpoint_ttl_days": "int",
         "split": "dict[str, Any]",
         "recipe_params": "dict[str, Any]",
@@ -1123,10 +1153,12 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "MetricPoint": frozenset({"attempt", "cost_usd", "eval_loss", "eval_metric", "grad_norm", "loss", "lr", "seq", "step", "timestamp", "tokens", "tokens_per_sec"}),
     "MetricPointInput": frozenset({"cost_usd", "eval_loss", "eval_metric", "grad_norm", "loss", "lr", "step", "timestamp", "tokens", "tokens_per_sec"}),
     "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status"}),
+    "OptimizerSpec": frozenset({"betas", "grad_clip", "kind", "weight_decay"}),
     "PlanEvalRequest": frozenset({"baseline", "benchmarks", "dataset", "dataset_version", "env_name", "limit", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "tasks", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
     "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
     "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "price_per_million_tokens", "resolved_config", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
+    "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
     "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
     "PostImportRecordsRequest": frozenset({"attempt", "records", "worker_id"}),
@@ -1134,7 +1166,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
-    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "env_name", "epochs", "group_size", "kind", "lr", "lr_scale", "max_quality_drop", "model", "models", "num_tokens", "preserve_thinking", "reduction", "schedule", "select", "teacher", "temp", "thinking", "train_on", "warmup"}),
+    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "env_name", "epochs", "eval_every", "fallback", "group_size", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
     "RecordFeedbackRequest": frozenset({"events"}),
     "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
@@ -1142,7 +1174,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RenderDatasetResponse": frozenset({"dataset", "examples", "model", "template_revision", "token_counts"}),
     "ReportTrainerProgressRequest": frozenset({"attempt", "metric", "worker_id"}),
     "ReportTrainerProgressResponse": frozenset({"cost_usd", "should_stop", "status", "stop_reason"}),
-    "ResolvedRunConfig": frozenset({"adapter", "batch_size", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "lr", "lr_source", "model", "name", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
+    "ResolvedRunConfig": frozenset({"adapter", "batch_size", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "eval_every_steps", "lr", "lr_source", "model", "name", "optimizer", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
     "ResumeRunRequest": frozenset({"max_cost_usd"}),
     "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),

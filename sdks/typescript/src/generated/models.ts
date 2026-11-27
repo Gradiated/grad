@@ -430,6 +430,20 @@ export type JobKind = "train" | "import";
 
 export const JobKindValues = ["train", "import"] as const;
 
+export type LossSpec = {
+  kind: "cross_entropy";
+  reduction?: "per_example" | "per_token" | undefined;
+} | {
+  kind: "dpo";
+  beta?: number | undefined;
+} | {
+  kind: "infonce";
+  temp?: number | undefined;
+} | {
+  kind: "top_k_kl_distill";
+  topK?: number | undefined;
+};
+
 export interface MetricPoint {
   seq: number;
   attempt: number;
@@ -465,6 +479,14 @@ export interface MetricsPage {
   status: RunStatus;
   data: Array<MetricPoint | null>;
   nextCursor: string | null;
+}
+
+export interface OptimizerSpec {
+  kind?: "adamw" | undefined;
+  betas?: Array<unknown> | undefined;
+  weightDecay?: number | undefined;
+  /** Max global gradient norm; 0 disables clipping. */
+  gradClip?: number | undefined;
 }
 
 export interface PlanEvalRequest {
@@ -518,6 +540,10 @@ export interface PlanRunResponse {
   pricePerMillionTokens: number;
   trainedTokenFraction: number;
   warnings: Array<string>;
+}
+
+export interface PoolingSpec {
+  kind: "mean" | "cls";
 }
 
 export interface PostEvalScoresRequest {
@@ -584,6 +610,7 @@ export interface RecipeSpec {
   trainOn?: "last" | "all_assistant" | undefined;
   thinking?: "auto" | "on" | "off" | undefined;
   preserveThinking?: boolean | undefined;
+  /** Default per_example. */
   reduction?: "per_example" | "per_token" | undefined;
   select?: "best" | "last" | undefined;
   checkpointTtlDays?: number | undefined;
@@ -597,6 +624,21 @@ export interface RecipeSpec {
   teacher?: string | undefined;
   envName?: string | undefined;
   groupSize?: number | undefined;
+  optimizer?: OptimizerSpec | undefined;
+  /** Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval). */
+  evalEvery?: "auto" | number | undefined;
+  loss?: LossSpec | undefined;
+  pool?: PoolingSpec | undefined;
+  /** RouterRecipe: the score name on your records that measures quality (scores[rubric]). */
+  rubric?: string | undefined;
+  /** RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records. */
+  pricing?: Record<string, number> | undefined;
+  /** RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate). */
+  fallback?: string | undefined;
+  /** CartridgeRecipe: teacher answer length per prompt during distillation (default 256). */
+  maxNewTokens?: number | undefined;
+  /** CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically). */
+  slotToken?: string | undefined;
 }
 
 export interface RecordFeedbackRequest {
@@ -692,6 +734,8 @@ export interface ResolvedRunConfig {
   reduction: "per_example" | "per_token";
   select: "best" | "last";
   checkpointEverySteps: number;
+  evalEverySteps: number;
+  optimizer: OptimizerSpec;
   checkpointTtlDays: number;
   split: {
     strategy: "by_session" | "by_group" | "random";

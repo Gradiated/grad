@@ -193,7 +193,7 @@ def parse_train_spec(kind: str, config: Mapping[str, Any]) -> TrainSpec:
         warmup=_num(config.get("warmup", 0.03), "warmup", minimum=0),
         select=_choice(config.get("select", "best"), "select", ("best", "last")),
         checkpoint_every=_optional_int(config, "checkpoint_every_steps"),
-        eval_every=_optional_int(config, "eval_every"),
+        eval_every=_optional_int(config, "eval_every_steps"),
         seed=int(config.get("seed", split.seed)),
         split=split,
         optimizer=_optimizer(config.get("optimizer")),
