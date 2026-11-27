@@ -1,468 +1,353 @@
-"""In-process Trainer primitive (forward_backward, optim_step, save/resume, export)."""
+"""Backend-agnostic training loop: batching, LR schedule, metering, budget, checkpoints, resume.
+
+A recipe supplies a ``TrainingTask`` (the model-specific parts). The loop owns everything that
+must behave the same for every recipe:
+
+- Data order: epoch ``e`` visits train items in a permutation seeded by ``(seed, e)``; step
+  ``s`` is batch ``s % batches_per_epoch`` of epoch ``s // batches_per_epoch``. The data cursor
+  is therefore just the step number, and resuming at step ``k`` replays the same batches.
+- Metering: each step's tokens are known before it runs (``task.item_tokens``). A step runs only
+  if ``(tokens so far + step tokens) * price`` stays within ``max_cost_usd``; otherwise the run
+  stops with ``stopped_budget`` and a final checkpoint. The meter is never rolled back:
+  ``select="best"`` restores weights only.
+- Checkpoints hold the exported artifact files plus ``trainer_state/`` (loop state, task state
+  with optimizer and RNG, current weights, best weights), so a checkpoint is both promotable
+  and resumable.
+- Evaluation runs every ``eval_every`` steps (default: the checkpoint interval) and at the end.
+  With no held-out data, eval metrics are null, ``select`` falls back to ``"last"`` and a
+  warning is recorded.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import re
+import random
+import shutil
+import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Protocol
 
-from .safetensors_io import TensorSpec, encode_safetensors
+from .config import TrainSpec, lr_multiplier
+from .errors import ResumeMismatchError
+from .runner_types import Budget, ResumeState, RunCallbacks, RunStatus
 
-_TOKEN_RE = re.compile(r"[a-z0-9_]+")
-
-
-def hash_features(text: str, dim: int = 64) -> list[float]:
-    """Deterministic L2-normalized hashed bag-of-tokens feature vector."""
-    vec = [0.0] * dim
-    tokens = _TOKEN_RE.findall(text.lower())
-    if not tokens:
-        vec[0] = 1.0
-        return vec
-
-    for token in tokens:
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        idx = int.from_bytes(digest[:4], "big") % dim
-        sign = 1.0 if (digest[4] & 1) == 0 else -1.0
-        vec[idx] += sign
-
-    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-    return [v / norm for v in vec]
-
-
-def dot(a: Sequence[float], b: Sequence[float]) -> float:
-    return sum(x * y for x, y in zip(a, b))
-
-
-def sigmoid(x: float) -> float:
-    clamped = max(-30.0, min(30.0, x))
-    return 1.0 / (1.0 + math.exp(-clamped))
-
-
-@dataclass(frozen=True)
-class StepResult:
-    step: int
-    loss: float
-    grad_norm: float
-    tokens: int
-    cost_usd: float
-    lr: float
+STATE_DIR = "trainer_state"
+LOOP_STATE_FILE = "loop.json"
 
 
 @dataclass
-class TrainingExample:
-    text: str
-    target: float
-    tokens: int
-    aux_text: str | None = None
-    negatives: tuple[str, ...] = ()
-    weight: float = 1.0
+class EvalResult:
+    score: float | None
+    metrics: dict[str, Any]
 
 
-class TrainerBackend(Protocol):
-    def forward_backward(
-        self,
-        batch: Sequence[TrainingExample],
-        *,
-        loss_kind: str = "cross_entropy",
-        beta: float = 0.1,
-        temp: float = 0.05,
-        reduction: str = "per_example",
-    ) -> tuple[float, float, int]: ...
+class TrainingTask(Protocol):
+    kind: str
+    artifact_format: str
+    metric_name: str
+    metric_mode: str  # "min" | "max"
+    warnings: list[str]
 
-    def optim_step(self, lr: float, grad_clip: float = 1.0) -> None: ...
+    def num_train_items(self) -> int: ...
 
-    def evaluate(
-        self,
-        batch: Sequence[TrainingExample],
-        *,
-        loss_kind: str = "cross_entropy",
-        beta: float = 0.1,
-        temp: float = 0.05,
-    ) -> tuple[float, float]: ...
+    def item_tokens(self, index: int) -> int: ...
 
-    def predict(self, text: str) -> float: ...
+    def train_step(self, indices: list[int], lr: float) -> dict[str, float]: ...
 
-    def state_dict(self) -> dict[str, Any]: ...
+    def evaluate(self) -> EvalResult | None: ...
 
-    def load_state_dict(self, state: dict[str, Any]) -> None: ...
+    def save_weights(self, directory: Path) -> None: ...
 
-    def export_weights_safetensors(
-        self, metadata: dict[str, str] | None = None
-    ) -> bytes: ...
+    def load_weights(self, directory: Path) -> None: ...
+
+    def save_state(self, directory: Path) -> None: ...
+
+    def load_state(self, directory: Path) -> None: ...
+
+    def export(self, directory: Path) -> None: ...
+
+    def manifest(self) -> dict[str, Any]: ...
+
+    def final_report(self) -> dict[str, Any]: ...
 
 
-class CpuReferenceBackend:
-    """Fast pure-Python LoRA/linear reference backend with real AdamW gradient updates.
+@dataclass
+class LoopResult:
+    status: RunStatus
+    step: int
+    total_steps: int
+    tokens_total: int
+    tokens_at_start: int
+    selected_step: int
+    best_step: int | None
+    best_score: float | None
+    last_eval: dict[str, Any] | None
+    select: str
+    warnings: list[str] = field(default_factory=list)
 
-    Runs with zero third-party dependencies for CI, unit tests, and `grad local up` CPU mode.
-    """
 
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def cost_usd(tokens: int, budget: Budget) -> float:
+    return tokens * budget.price_per_million_tokens / 1_000_000
+
+
+def default_checkpoint_every(total_steps: int) -> int:
+    # Docs: every 10% of steps, and at least every 20 steps.
+    return max(1, min(20, int(total_steps * 0.1)))
+
+
+def epoch_order(n: int, seed: int, epoch: int) -> list[int]:
+    order = list(range(n))
+    random.Random(f"grad-epoch:{seed}:{epoch}").shuffle(order)
+    return order
+
+
+def _better(score: float | None, best: float | None, mode: str) -> bool:
+    if score is None or (isinstance(score, float) and math.isnan(score)):
+        return False
+    if best is None:
+        return True
+    # Ties go to the later checkpoint (it has seen more data).
+    return score <= best if mode == "min" else score >= best
+
+
+class TrainingLoop:
     def __init__(
         self,
+        task: TrainingTask,
+        spec: TrainSpec,
         *,
-        dim: int = 64,
-        rank: int = 8,
-        seed: int = 42,
-        weight_decay: float = 0.01,
+        budget: Budget,
+        callbacks: RunCallbacks | None,
+        resume: ResumeState | None,
+        workdir: Path,
+        checkpoint_metadata: dict[str, Any],
     ) -> None:
-        self.dim = dim
-        self.rank = max(1, min(rank, dim))
-        self.weight_decay = weight_decay
-        self.weights = [0.0] * dim
-        self.bias = 0.0
-        self._m = [0.0] * dim
-        self._v = [0.0] * dim
-        self._mb = 0.0
-        self._vb = 0.0
-        self._grad_w = [0.0] * dim
-        self._grad_b = 0.0
-        self._step_t = 0
-        self._seed = seed
+        self.task = task
+        self.spec = spec
+        self.budget = budget
+        self.callbacks = callbacks or RunCallbacks()
+        self.resume = resume
+        self.workdir = workdir
+        self.checkpoint_metadata = checkpoint_metadata
+        self.n_items = task.num_train_items()
+        self.batches_per_epoch = max(1, math.ceil(self.n_items / spec.batch_size))
+        self.total_steps = self.batches_per_epoch * spec.epochs
+        self.checkpoint_every = spec.checkpoint_every or default_checkpoint_every(self.total_steps)
+        self.eval_every = spec.eval_every or self.checkpoint_every
+        self.best_dir = workdir / "best"
+        self.step = 0
+        self.tokens_total = 0
+        self.best_score: float | None = None
+        self.best_step: int | None = None
+        self.last_eval: dict[str, Any] | None = None
+        self.last_eval_step: int | None = None
+        self.last_checkpoint_step: int | None = None
+        self._order_cache: tuple[int, list[int]] | None = None
 
-    def _compute_loss_and_grads(
-        self,
-        batch: Sequence[TrainingExample],
-        *,
-        loss_kind: str,
-        beta: float,
-        temp: float,
-        reduction: str,
-        accumulate: bool,
-    ) -> tuple[float, float, int, float]:
-        if not batch:
-            return 0.0, 0.0, 0, 0.0
+    # -- data ---------------------------------------------------------------------------
+    def batch_indices(self, step: int) -> list[int]:
+        epoch, b = divmod(step, self.batches_per_epoch)
+        if self._order_cache is None or self._order_cache[0] != epoch:
+            self._order_cache = (epoch, epoch_order(self.n_items, self.spec.seed, epoch))
+        order = self._order_cache[1]
+        return order[b * self.spec.batch_size : (b + 1) * self.spec.batch_size]
 
-        grad_w = [0.0] * self.dim
-        grad_b = 0.0
-        total_loss = 0.0
-        total_tokens = 0
-        correct = 0
-        denom = 0.0
-
-        for ex in batch:
-            feats = hash_features(ex.text, self.dim)
-            ex_weight = ex.weight * (ex.tokens if reduction == "per_token" else 1.0)
-            denom += ex_weight
-            total_tokens += ex.tokens
-
-            if loss_kind == "dpo" and ex.aux_text is not None:
-                rej_feats = hash_features(ex.aux_text, self.dim)
-                diff = [c - r for c, r in zip(feats, rej_feats)]
-                margin = beta * dot(self.weights, diff)
-                prob = sigmoid(margin)
-                loss = -math.log(max(prob, 1e-7))
-                err = (prob - 1.0) * beta
-                if margin > 0:
-                    correct += 1
-                if accumulate:
-                    for i, d in enumerate(diff):
-                        grad_w[i] += err * d * ex_weight
-            elif loss_kind == "infonce" and ex.aux_text is not None:
-                pos_feats = hash_features(ex.aux_text, self.dim)
-                neg_texts = list(ex.negatives) + [
-                    other.aux_text
-                    for other in batch
-                    if other is not ex and other.aux_text and other.aux_text != ex.aux_text
-                ]
-                scale_w = [1.0 + v for v in self.weights]
-                inv_temp = 1.0 / max(temp, 1e-3)
-                pos_logit = (
-                    sum(scale_w[i] * feats[i] * pos_feats[i] for i in range(self.dim))
-                    * inv_temp
-                )
-                neg_feat_list = [hash_features(nt, self.dim) for nt in neg_texts[:8]]
-                logits = [pos_logit] + [
-                    sum(scale_w[i] * feats[i] * nf[i] for i in range(self.dim))
-                    * inv_temp
-                    for nf in neg_feat_list
-                ]
-                max_logit = max(logits)
-                exps = [math.exp(max(-40.0, min(40.0, lg - max_logit))) for lg in logits]
-                sum_exp = sum(exps) or 1.0
-                probs = [e / sum_exp for e in exps]
-                loss = -math.log(max(probs[0], 1e-7))
-                if pos_logit >= max(logits):
-                    correct += 1
-                if accumulate:
-                    # dL/dw_i = inv_temp * f_i * ((p_0 - 1) * pos_i + sum_k p_k * neg_{k,i})
-                    for i in range(self.dim):
-                        weighted_neg = sum(
-                            probs[k + 1] * neg_feat_list[k][i]
-                            for k in range(len(neg_feat_list))
-                        )
-                        grad_w[i] += (
-                            inv_temp
-                            * feats[i]
-                            * ((probs[0] - 1.0) * pos_feats[i] + weighted_neg)
-                            * ex_weight
-                        )
-            else:
-                logit = dot(self.weights, feats) + self.bias
-                prob = sigmoid(logit)
-                target = max(0.0, min(1.0, ex.target))
-                loss = -(
-                    target * math.log(max(prob, 1e-7))
-                    + (1.0 - target) * math.log(max(1.0 - prob, 1e-7))
-                )
-                err = prob - target
-                if (prob >= 0.5) == (target >= 0.5):
-                    correct += 1
-                if accumulate:
-                    for i, f in enumerate(feats):
-                        grad_w[i] += err * f * ex_weight
-                    grad_b += err * ex_weight
-
-            total_loss += loss * ex_weight
-
-        scale = 1.0 / max(denom, 1e-8)
-        avg_loss = total_loss * scale
-        accuracy = correct / len(batch)
-
-        if accumulate:
-            for i in range(self.dim):
-                self._grad_w[i] += grad_w[i] * scale
-            self._grad_b += grad_b * scale
-            grad_norm = math.sqrt(
-                sum(g * g for g in self._grad_w) + self._grad_b * self._grad_b
-            )
-        else:
-            grad_norm = 0.0
-
-        return avg_loss, grad_norm, total_tokens, accuracy
-
-    def forward_backward(
-        self,
-        batch: Sequence[TrainingExample],
-        *,
-        loss_kind: str = "cross_entropy",
-        beta: float = 0.1,
-        temp: float = 0.05,
-        reduction: str = "per_example",
-    ) -> tuple[float, float, int]:
-        self._grad_w = [0.0] * self.dim
-        self._grad_b = 0.0
-        loss, grad_norm, tokens, _ = self._compute_loss_and_grads(
-            batch,
-            loss_kind=loss_kind,
-            beta=beta,
-            temp=temp,
-            reduction=reduction,
-            accumulate=True,
-        )
-        return loss, grad_norm, tokens
-
-    def optim_step(self, lr: float, grad_clip: float = 1.0) -> None:
-        self._step_t += 1
-        norm = math.sqrt(
-            sum(g * g for g in self._grad_w) + self._grad_b * self._grad_b
-        )
-        clip_scale = grad_clip / norm if norm > grad_clip > 0 else 1.0
-
-        beta1, beta2, eps = 0.9, 0.999, 1e-8
-        bias_c1 = 1.0 - beta1**self._step_t
-        bias_c2 = 1.0 - beta2**self._step_t
-
-        for i in range(self.dim):
-            g = self._grad_w[i] * clip_scale
-            self._m[i] = beta1 * self._m[i] + (1.0 - beta1) * g
-            self._v[i] = beta2 * self._v[i] + (1.0 - beta2) * (g * g)
-            m_hat = self._m[i] / bias_c1
-            v_hat = self._v[i] / bias_c2
-            self.weights[i] *= 1.0 - lr * self.weight_decay
-            self.weights[i] -= lr * m_hat / (math.sqrt(v_hat) + eps)
-
-        gb = self._grad_b * clip_scale
-        self._mb = beta1 * self._mb + (1.0 - beta1) * gb
-        self._vb = beta2 * self._vb + (1.0 - beta2) * (gb * gb)
-        self.bias -= lr * (self._mb / bias_c1) / (math.sqrt(self._vb / bias_c2) + eps)
-
-    def evaluate(
-        self,
-        batch: Sequence[TrainingExample],
-        *,
-        loss_kind: str = "cross_entropy",
-        beta: float = 0.1,
-        temp: float = 0.05,
-    ) -> tuple[float, float]:
-        loss, _, _, acc = self._compute_loss_and_grads(
-            batch,
-            loss_kind=loss_kind,
-            beta=beta,
-            temp=temp,
-            reduction="per_example",
-            accumulate=False,
-        )
-        return loss, acc
-
-    def predict(self, text: str) -> float:
-        return sigmoid(dot(self.weights, hash_features(text, self.dim)) + self.bias)
-
-    def state_dict(self) -> dict[str, Any]:
+    # -- state --------------------------------------------------------------------------
+    def _loop_state(self) -> dict[str, Any]:
         return {
-            "dim": self.dim,
-            "rank": self.rank,
-            "weights": list(self.weights),
-            "bias": self.bias,
-            "m": list(self._m),
-            "v": list(self._v),
-            "mb": self._mb,
-            "vb": self._vb,
-            "step_t": self._step_t,
-        }
-
-    def load_state_dict(self, state: dict[str, Any]) -> None:
-        self.dim = int(state["dim"])
-        self.rank = int(state["rank"])
-        self.weights = [float(x) for x in state["weights"]]
-        self.bias = float(state["bias"])
-        self._m = [float(x) for x in state["m"]]
-        self._v = [float(x) for x in state["v"]]
-        self._mb = float(state["mb"])
-        self._vb = float(state["vb"])
-        self._step_t = int(state["step_t"])
-
-    def export_weights_safetensors(
-        self, metadata: dict[str, str] | None = None
-    ) -> bytes:
-        lora_a = [
-            self.weights[(i + r) % self.dim] * 0.1
-            for r in range(self.rank)
-            for i in range(self.dim)
-        ]
-        lora_b = [self.weights[i] for i in range(self.dim)]
-        return encode_safetensors(
-            [
-                TensorSpec(
-                    name="lora_A.weight",
-                    dtype="F32",
-                    shape=(self.rank, self.dim),
-                    values=tuple(lora_a),
-                ),
-                TensorSpec(
-                    name="lora_B.weight",
-                    dtype="F32",
-                    shape=(self.dim,),
-                    values=tuple(lora_b),
-                ),
-                TensorSpec(
-                    name="head.bias",
-                    dtype="F32",
-                    shape=(1,),
-                    values=(self.bias,),
-                ),
-            ],
-            metadata=metadata,
-        )
-
-
-class TorchLoRABackend:
-    """Optional PyTorch/PEFT GPU backend loaded lazily when `grad-trainer[gpu]` is installed."""
-
-    def __init__(self, model_id: str, rank: int = 32, alpha: int = 32) -> None:
-        try:
-            import torch  # noqa: F401
-        except ImportError as exc:
-            raise ImportError(
-                "TorchLoRABackend requires the optional GPU dependencies: "
-                "install with `pip install 'grad-trainer[gpu]'`."
-            ) from exc
-        self.model_id = model_id
-        self.rank = rank
-        self.alpha = alpha
-
-
-def compute_scheduled_lr(
-    base_lr: float,
-    step: int,
-    total_steps: int,
-    *,
-    schedule: str = "linear",
-    warmup: float = 0.03,
-) -> float:
-    total = max(1, total_steps)
-    warmup_steps = max(0, int(total * warmup))
-    if warmup_steps > 0 and step <= warmup_steps:
-        return base_lr * (step / warmup_steps)
-    if schedule == "constant":
-        return base_lr
-    progress = min(
-        1.0, max(0.0, (step - warmup_steps) / max(1, total - warmup_steps))
-    )
-    if schedule == "cosine":
-        return base_lr * 0.5 * (1.0 + math.cos(math.pi * progress))
-    return base_lr * max(0.05, 1.0 - progress)
-
-
-@dataclass
-class Trainer:
-    """Minimal training loop primitive returning tokens and cost on every step."""
-
-    model: str
-    price_per_million_tokens_usd: float = 0.4
-    backend: TrainerBackend = field(default_factory=CpuReferenceBackend)
-    step: int = 0
-    tokens_processed: int = 0
-    cost_usd: float = 0.0
-
-    def forward_backward(
-        self,
-        batch: Sequence[TrainingExample],
-        *,
-        loss_kind: str = "cross_entropy",
-        beta: float = 0.1,
-        temp: float = 0.05,
-        reduction: str = "per_example",
-        lr: float = 5e-4,
-    ) -> StepResult:
-        loss, grad_norm, tokens = self.backend.forward_backward(
-            batch, loss_kind=loss_kind, beta=beta, temp=temp, reduction=reduction
-        )
-        self.step += 1
-        self.tokens_processed += tokens
-        self.cost_usd = round(
-            (self.tokens_processed / 1_000_000.0) * self.price_per_million_tokens_usd,
-            6,
-        )
-        return StepResult(
-            step=self.step,
-            loss=round(loss, 6),
-            grad_norm=round(grad_norm, 6),
-            tokens=self.tokens_processed,
-            cost_usd=self.cost_usd,
-            lr=lr,
-        )
-
-    def optim_step(self, lr: float, grad_clip: float = 1.0) -> None:
-        self.backend.optim_step(lr, grad_clip=grad_clip)
-
-    def evaluate(
-        self,
-        batch: Sequence[TrainingExample],
-        *,
-        loss_kind: str = "cross_entropy",
-        beta: float = 0.1,
-        temp: float = 0.05,
-    ) -> tuple[float, float]:
-        return self.backend.evaluate(
-            batch, loss_kind=loss_kind, beta=beta, temp=temp
-        )
-
-    def save_state(self) -> bytes:
-        payload = {
-            "model": self.model,
+            "version": 1,
             "step": self.step,
-            "tokens_processed": self.tokens_processed,
-            "cost_usd": self.cost_usd,
-            "backend": self.backend.state_dict(),
+            "tokens_total": self.tokens_total,
+            "best_score": self.best_score,
+            "best_step": self.best_step,
+            "last_eval": self.last_eval,
+            "last_eval_step": self.last_eval_step,
+            "total_steps": self.total_steps,
+            "n_items": self.n_items,
+            "fingerprint": self.spec.fingerprint(),
         }
-        return json.dumps(payload, sort_keys=True).encode("utf-8")
 
-    def resume_state(self, state_bytes: bytes) -> None:
-        payload = json.loads(state_bytes.decode("utf-8"))
-        self.step = int(payload["step"])
-        self.tokens_processed = int(payload["tokens_processed"])
-        self.cost_usd = float(payload["cost_usd"])
-        self.backend.load_state_dict(payload["backend"])
+    def _restore(self, resume: ResumeState) -> None:
+        state_dir = resume.checkpoint_dir / STATE_DIR
+        try:
+            state = json.loads((state_dir / LOOP_STATE_FILE).read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ResumeMismatchError(
+                f"Checkpoint at {resume.checkpoint_dir} has no readable {STATE_DIR}/{LOOP_STATE_FILE}."
+            ) from exc
+        if state.get("fingerprint") != self.spec.fingerprint() or state.get("n_items") != self.n_items:
+            raise ResumeMismatchError(
+                "Checkpoint was written by a different run configuration or dataset version."
+            )
+        if int(state["step"]) != resume.step:
+            raise ResumeMismatchError(
+                f"Checkpoint is at step {state['step']}, but resume asked for step {resume.step}."
+            )
+        self.step = int(state["step"])
+        self.tokens_total = int(state["tokens_total"])
+        self.best_score = state.get("best_score")
+        self.best_step = state.get("best_step")
+        self.last_eval = state.get("last_eval")
+        self.last_eval_step = state.get("last_eval_step")
+        self.last_checkpoint_step = self.step
+        self.task.load_weights(state_dir / "weights")
+        self.task.load_state(state_dir / "task")
+        if (state_dir / "best").is_dir():
+            shutil.rmtree(self.best_dir, ignore_errors=True)
+            shutil.copytree(state_dir / "best", self.best_dir)
+
+    def _write_checkpoint(self) -> None:
+        directory = self.workdir / "checkpoints" / f"step-{self.step:06d}"
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True)
+        self.task.export(directory)
+        state_dir = directory / STATE_DIR
+        state_dir.mkdir()
+        self.task.save_weights(state_dir / "weights")
+        self.task.save_state(state_dir / "task")
+        if self.best_dir.is_dir():
+            shutil.copytree(self.best_dir, state_dir / "best")
+        (state_dir / LOOP_STATE_FILE).write_text(json.dumps(self._loop_state(), sort_keys=True))
+
+        eval_score = self.last_eval_score if self.last_eval_step == self.step else None
+        metadata = {
+            **self.checkpoint_metadata,
+            "step": self.step,
+            "tokens_total": self.tokens_total,
+            "metric_name": self.task.metric_name,
+            "metric_mode": self.task.metric_mode,
+            "eval_metrics": self.last_eval if self.last_eval_step == self.step else None,
+            "manifest": {
+                **self.checkpoint_metadata.get("manifest", {}),
+                "format": self.task.artifact_format,
+                "checkpoint_step": self.step,
+                **self.task.manifest(),
+            },
+        }
+        if self.callbacks.on_checkpoint:
+            self.callbacks.on_checkpoint(self.step, eval_score, directory, metadata)
+        self.last_checkpoint_step = self.step
+        # Only the newest checkpoint is kept on local disk; uploaded copies live on the server.
+        for old in (self.workdir / "checkpoints").iterdir():
+            if old != directory:
+                shutil.rmtree(old, ignore_errors=True)
+
+    @property
+    def last_eval_score(self) -> float | None:
+        return None if self.last_eval is None else self.last_eval.get(self.task.metric_name)
+
+    def _evaluate(self) -> dict[str, Any] | None:
+        result = self.task.evaluate()
+        self.last_eval_step = self.step
+        if result is None:
+            self.last_eval = None
+            return None
+        self.last_eval = {self.task.metric_name: result.score, **result.metrics}
+        if _better(result.score, self.best_score, self.task.metric_mode):
+            self.best_score = result.score
+            self.best_step = self.step
+            shutil.rmtree(self.best_dir, ignore_errors=True)
+            self.task.save_weights(self.best_dir)
+        return self.last_eval
+
+    # -- main ---------------------------------------------------------------------------
+    def run(self) -> LoopResult:
+        warnings: list[str] = []
+        if self.resume is not None:
+            self._restore(self.resume)
+        tokens_at_start = self.tokens_total
+        status: RunStatus = "completed"
+
+        prepare = getattr(self.task, "prepare", None)
+        if prepare is not None:
+            # Recipe preparation that costs compute (cartridge teacher generations) is metered
+            # like training, and is skipped when its planned tokens would exceed the budget.
+            planned = self.task.planned_prep_tokens()  # type: ignore[attr-defined]
+            if (
+                self.budget.max_cost_usd is not None
+                and cost_usd(self.tokens_total + planned, self.budget) > self.budget.max_cost_usd
+            ):
+                status = "stopped_budget"
+            else:
+                self.tokens_total += int(prepare())
+
+        while status == "completed" and self.step < self.total_steps:
+            indices = self.batch_indices(self.step)
+            step_tokens = sum(self.task.item_tokens(i) for i in indices)
+            if (
+                self.budget.max_cost_usd is not None
+                and cost_usd(self.tokens_total + step_tokens, self.budget) > self.budget.max_cost_usd
+            ):
+                status = "stopped_budget"
+                break
+
+            lr = self.spec.lr * lr_multiplier(
+                self.step, self.total_steps, schedule=self.spec.schedule, warmup=self.spec.warmup
+            )
+            started = time.perf_counter()
+            stats = self.task.train_step(indices, lr)
+            elapsed = max(time.perf_counter() - started, 1e-9)
+            self.step += 1
+            self.tokens_total += step_tokens
+
+            eval_metrics = None
+            if self.step % self.eval_every == 0 or self.step == self.total_steps:
+                eval_metrics = self._evaluate()
+
+            metric: dict[str, Any] = {
+                "step": self.step,
+                "epoch": (self.step - 1) // self.batches_per_epoch,
+                **{k: float(v) for k, v in stats.items()},
+                "lr": lr,
+                "tokens": self.tokens_total,
+                "cost_usd": round(cost_usd(self.tokens_total, self.budget), 8),
+                "tokens_per_sec": step_tokens / elapsed,
+                "timestamp": utc_now_iso(),
+            }
+            if eval_metrics is not None:
+                metric["eval_metrics"] = eval_metrics
+            stop_requested = bool(self.callbacks.on_step and self.callbacks.on_step(metric))
+
+            if stop_requested:
+                status = "cancelled"
+                break
+            if self.step % self.checkpoint_every == 0 or self.step == self.total_steps:
+                self._write_checkpoint()
+
+        if self.last_eval_step != self.step:
+            self._evaluate()
+        if self.step > 0 and self.last_checkpoint_step != self.step:
+            self._write_checkpoint()
+
+        select = self.spec.select
+        if self.last_eval is None and self.best_step is None:
+            if select == "best":
+                warnings.append("No held-out examples: eval metrics are null and select='last' was used.")
+            select = "last"
+        selected = self.step
+        if select == "best" and self.best_step is not None and self.best_step != self.step:
+            self.task.load_weights(self.best_dir)
+            selected = self.best_step
+        if status == "stopped_budget" and self.step == 0:
+            warnings.append("The budget did not cover a single optimizer step; the artifact is untrained.")
+
+        return LoopResult(
+            status=status,
+            step=self.step,
+            total_steps=self.total_steps,
+            tokens_total=self.tokens_total,
+            tokens_at_start=tokens_at_start,
+            selected_step=selected,
+            best_step=self.best_step,
+            best_score=self.best_score,
+            last_eval=self.last_eval,
+            select=select,
+            warnings=warnings,
+        )
