@@ -20,6 +20,8 @@ export interface StackInfo {
   trainer_key: string;
   inference_url: string;
   cloud_url: string | null;
+  /** grad-server's internal listener (Cloud: service JWTs from the fake Cloud's /_control/service-token). */
+  internal_url: string;
   workspace_id: string;
   mode: "cloud" | "self_hosted";
   worker: string;

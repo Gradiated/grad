@@ -24,6 +24,12 @@
  *          "langfuse_url","langfuse_secret","ui_url","s3","tiny_lora",
  *          "tiny_lora_invalid"}
  * `eval_worker_pid` is the eval worker, so a chaos test can kill -9 it.
+ * `--cloud` runs grad in AUTH_MODE/BILLING_MODE=cloud against
+ * server/api/test/fixtures/fake-cloud-api.ts at `cloud_url` (auth view in a
+ * schema of the stack's Postgres, JWKS, billing, prices, the gateway in front
+ * of the fake inference server). Its `/_control/*` routes mint console and
+ * service JWTs, add keys and set balances; `internal_url` takes the service
+ * JWTs (workspace state, artifact pins).
  * `ui_url` is the web UI (null in --cloud mode or until `pnpm -C server/ui
  * build` has run); open `<ui_url>#key=<api_key>` to sign in.
  * `langfuse_url` is tests/fixtures/fake-langfuse.ts (drive it via its
@@ -60,7 +66,10 @@ import {
   startDockerSeaweedfs,
   type DockerSeaweedfs,
 } from "../../server/api/test/fixtures/docker-seaweedfs.js";
-import { startFakeCloudApi } from "../../server/api/test/fixtures/fake-cloud-api.js";
+import {
+  startFakeCloudApi,
+  type FakeCloudApi,
+} from "../../server/api/test/fixtures/fake-cloud-api.js";
 import { startFakeOpenAI } from "../../server/api/test/fixtures/fake-openai.js";
 import { startFakeLangfuse } from "../fixtures/fake-langfuse.js";
 import { startFaultProxy, type FaultProxy } from "./fault-proxy.js";
@@ -75,6 +84,12 @@ export const TRAINER_KEY = "grad_e2e_trainer_key";
 /** Mints lease tokens on the first replica's internal port (GRAD_WORKER_AUTH=static,lease). */
 export const ORCHESTRATOR_KEY = "grad_e2e_orchestrator_key";
 export const WORKSPACE_ID = "ws_e2e";
+/** The frontier judges the docs use, priced like an operator would. */
+const JUDGES = [
+  "anthropic/claude-sonnet-5-5",
+  "anthropic/claude-opus-5-5",
+  "openai/gpt-6.1-sol",
+];
 
 export const TINY_MODELS = [
   {
@@ -123,6 +138,15 @@ export const TINY_MODELS = [
     calibrated_lrs: { embedding: 1e-4 },
   },
 ];
+
+/** The fake Cloud price list: the tiny models' training and the judges' inference, in nano-USD per million tokens. */
+const CLOUD_PRICES: Record<string, number> = Object.fromEntries([
+  ...TINY_MODELS.flatMap((m) => [
+    [`train:${m.id}`, m.price_per_million_tokens_usd * 1e9],
+    [`inference:${m.id}`, m.price_per_million_tokens_usd * 1e9],
+  ]),
+  ...JUDGES.map((id) => [`inference:${id}`, 3e9]),
+]);
 
 const { values: args } = parseArgs({
   options: {
@@ -201,9 +225,7 @@ const main = async () => {
   );
   const inference = await startFakeOpenAI({ judgeScore: 0.9 });
   const langfuse = await startFakeLangfuse();
-  const cloud = args.cloud
-    ? await startFakeCloudApi({ serviceToken: "svc_e2e_token" })
-    : undefined;
+  let cloud: FakeCloudApi | undefined;
   let modelPaths: Record<string, string> = {};
   let tinyLoras: { lora: string; lora_invalid: string } | null = null;
   let faultProxy: FaultProxy | undefined;
@@ -260,12 +282,6 @@ const main = async () => {
   process.stdin.resume();
 
   try {
-    if (cloud) {
-      cloud.tokens.set(API_KEY, {
-        workspace_id: WORKSPACE_ID,
-        scopes: ["admin"],
-      });
-    }
     s3 = startDockerSeaweedfs();
     s3.catch(() => undefined); // awaited below, after Postgres
     let databaseUrl = args["database-url"];
@@ -274,6 +290,18 @@ const main = async () => {
       databaseUrl = (await postgres).url;
     }
     const bucket = (await s3).target;
+    if (args.cloud) {
+      // The product side: the auth view (in a schema of the stack's
+      // Postgres), JWKS, billing and prices, and the gateway in front of
+      // the fake inference server.
+      cloud = await startFakeCloudApi({
+        serviceToken: "svc_e2e_token",
+        databaseUrl,
+        gatewayUpstream: inference.baseUrl,
+        prices: CLOUD_PRICES,
+      });
+      await cloud.addKey(API_KEY, { workspace_id: WORKSPACE_ID, role: "admin" });
+    }
     if (stopping) return;
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
@@ -286,11 +314,7 @@ const main = async () => {
       GRAD_EXTRA_MODELS_JSON: JSON.stringify(TINY_MODELS),
       // The frontier judges the docs use, priced like an operator would.
       GRAD_JUDGE_MODELS_JSON: JSON.stringify(
-        [
-          "anthropic/claude-sonnet-5-5",
-          "anthropic/claude-opus-5-5",
-          "openai/gpt-6.1-sol",
-        ].map((id) => ({ id, price_per_million_tokens_usd: 3 })),
+        JUDGES.map((id) => ({ id, price_per_million_tokens_usd: 3 })),
       ),
       // The API only checks an endpoint is set; the eval worker calls it.
       GRAD_INFERENCE_BASE_URL: `${inference.baseUrl}`,
@@ -311,11 +335,20 @@ const main = async () => {
       DATABASE_URL: databaseUrl,
     };
     if (cloud) {
+      // Evals go to the gateway, which bills them (no GRAD_INFERENCE_BASE_URL).
+      delete env.GRAD_INFERENCE_BASE_URL;
       Object.assign(env, {
         AUTH_MODE: "cloud",
         BILLING_MODE: "cloud",
+        GRAD_CLOUD_AUTH_DATABASE_URL: cloud.authDatabaseUrl as string,
+        GRAD_CLOUD_JWKS_URL: cloud.jwksUrl,
+        GRAD_CLOUD_JWT_ISSUER: cloud.issuer,
+        GRAD_CLOUD_BILLING_URL: cloud.billingUrl,
+        GRAD_CLOUD_PRICES_URL: cloud.pricesUrl,
+        GRAD_CLOUD_GATEWAY_URL: cloud.gatewayUrl,
         CLOUD_INTERNAL_API_URL: cloud.url,
         CLOUD_SERVICE_TOKEN: cloud.serviceToken,
+        GRAD_WORKSPACE_PURGE_DELAY_SECONDS: "0",
       });
     } else {
       Object.assign(env, {
@@ -376,8 +409,15 @@ const main = async () => {
           GRAD_POLL_INTERVAL_S: "0.2",
           // Short leases, so a chaos test that kills it resumes quickly.
           GRAD_LEASE_SECONDS: "30",
-          GRAD_INFERENCE_BASE_URL: `${inference.baseUrl}`,
-          GRAD_INFERENCE_API_KEY: "sk-fake-inference",
+          ...(cloud
+            ? {
+                GRAD_CLOUD_GATEWAY_URL: cloud.gatewayUrl,
+                GRAD_CLOUD_GATEWAY_TOKEN: cloud.gatewayToken,
+              }
+            : {
+                GRAD_INFERENCE_BASE_URL: `${inference.baseUrl}`,
+                GRAD_INFERENCE_API_KEY: "sk-fake-inference",
+              }),
         },
         stdio: ["ignore", 2, 2],
       },
