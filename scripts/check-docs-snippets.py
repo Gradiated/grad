@@ -58,11 +58,8 @@ SKIP = [
     ("", "grad local up", "starts Docker Compose (the harness is already a local stack)"),
     ("", "helm upgrade", "needs a Kubernetes cluster"),
     ("", "kubectl ", "needs a Kubernetes cluster"),
-    ("", "sources.", "grad sources/secrets ship later in v0"),
-    ("", "grad sources", "grad sources/secrets ship later in v0"),
     ("integrations/", "datasets.records", "reads a dataset a source synced"),
     ("", "langfuse.create_score", "Langfuse SDK and account"),
-    ("", "grad secrets", "grad sources/secrets ship later in v0"),
     ("", "from langfuse", "Langfuse SDK and account"),
     ("", "/api/public/scores", "Langfuse API and account"),
     ("", "from langsmith", "LangSmith SDK and account"),
@@ -81,6 +78,7 @@ SKIP = [
 CLOUD = re.compile(
     r"\.deploy\(|grad deploy|grad route|grad embed|client\.route\(|deployments\.|embeddings\.create|grad deployments"
     r"|model=\w+\.artifact|model=sft_art|--model [\w-]+@|models=\[[^\]]*@|--models \S*@"
+    r"|sources add gradiated|sources\.Gradiated"
 )
 
 MODELS = {"{{SONNET_MODEL}}": "anthropic/claude-sonnet-5-5", "{{OPUS_MODEL}}": "anthropic/claude-opus-5-5", "{{GPT_MODEL}}": "openai/gpt-6.1-sol"}
@@ -159,6 +157,11 @@ ARTIFACT_REFS = re.compile(r"\b([a-z0-9][a-z0-9-]*)@(?:latest|20\d\d-\d\d-\d\d-\
 DATED_REFS = re.compile(r"\b([a-z0-9][a-z0-9-]*)@(20\d\d-\d\d-\d\d-\d+)")
 RUN_IDS = re.compile(r"\brun_01[0-9A-Z]+\b")
 KEY_IDS = re.compile(r"\bkey_[0-9a-f]{16,}\b")
+# Sources: every provider key is the harness's fake Langfuse key, every Langfuse host the fake Langfuse,
+# and the docs' placeholder source id a source seeded on first use.
+SECRET_REFS = re.compile(r"""secrets\.get\(["']([a-z0-9._-]+)|--secret[ =]([a-z0-9._-]+)""")
+SOURCE_IDS = re.compile(r"\bsrc_01[0-9A-Z]+\b")
+LANGFUSE_HOSTS = ("https://us.cloud.langfuse.com", "https://cloud.langfuse.com")
 
 
 def blocks(docs: Path) -> list[dict]:
@@ -214,10 +217,13 @@ class Stack:
 
 
 class Runner:
-    def __init__(self, base_url: str, api_key: str, cloud: bool, grad_bin: str, work: Path, timeout: int) -> None:
+    def __init__(self, base_url: str, api_key: str, cloud: bool, grad_bin: str, work: Path, timeout: int, info: dict | None = None) -> None:
         from grad import Grad
 
         self.client = Grad(api_key=api_key, base_url=base_url)
+        self.langfuse_url = (info or {}).get("langfuse_url")
+        self.provider_key = (info or {}).get("langfuse_secret") or "pk-lf-docs:sk-lf-docs"
+        self.source_id: str | None = None
         self.base_url, self.cloud, self.work, self.timeout = base_url, cloud, work, timeout
         self.run_id: str | None = None
         bindir = str(Path(grad_bin).resolve().parent)
@@ -240,6 +246,11 @@ class Runner:
             code = code.replace(host, self.base_url)
         for k, v in ALIASES.items():
             code = code.replace(k, v)
+        if self.langfuse_url:
+            for host in LANGFUSE_HOSTS:
+                code = code.replace(host, self.langfuse_url)
+        if self.source_id:
+            code = SOURCE_IDS.sub(self.source_id, code)
         for name in {m[0] for m in DATED_REFS.findall(code)}:  # the k-th oldest dated ref -> the k-th oldest seed version
             dated = sorted({v for nm, v in DATED_REFS.findall(code) if nm == name})
             refs = self.versions(name) if name in ARTIFACTS else []
@@ -301,6 +312,23 @@ class Runner:
                 self.artifact(name, max(1, len({v for nm, v in DATED_REFS.findall(code) if nm == name})))
         if RUN_IDS.search(code) and not self.run_id:
             self.artifact("fast-diff-merge")
+        for m in SECRET_REFS.finditer(code):
+            self.secret(next(g for g in m.groups() if g))
+        if SOURCE_IDS.search(code) and not self.source_id:
+            from grad import sources
+
+            self.dataset("support-prod")
+            self.secret("langfuse-prod")
+            host = self.langfuse_url or LANGFUSE_HOSTS[-1]
+            self.source_id = self.client.sources.create("support-prod", sources.Langfuse(host=host, secret="langfuse-prod")).id
+
+    def secret(self, name: str) -> None:
+        from grad import NotFoundError
+
+        try:
+            self.client.secrets.get(name)
+        except NotFoundError:
+            self.client.secrets.set(name, self.provider_key)
 
     def run(self, block: dict, n: int) -> tuple[bool, str]:
         self.seed(block["code"])
@@ -315,7 +343,9 @@ class Runner:
             code = re.sub(r"^grad login$", 'grad login --api-key "$GRADIATED_API_KEY"', code, flags=re.M)
             cmd = ["bash", "-euo", "pipefail", "-c", code]
         try:
-            p = subprocess.run(cmd, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=self.timeout, stdin=subprocess.DEVNULL)
+            # `grad secrets set NAME` reads the value from stdin.
+            stdin = {"input": self.provider_key + "\n"} if "grad secrets set" in code else {"stdin": subprocess.DEVNULL}
+            p = subprocess.run(cmd, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=self.timeout, **stdin)
         except subprocess.TimeoutExpired:
             return False, f"timed out after {self.timeout}s"
         return p.returncode == 0, (p.stderr or p.stdout).strip()[-1500:]
@@ -352,7 +382,7 @@ def main() -> int:
         args.base_url, args.api_key = stack.info["base_url"], stack.info["api_key"]
     results = {"pass": 0, "fail": 0, "skip": 0}
     try:
-        runner = Runner(args.base_url, args.api_key, args.cloud, args.grad_bin, work, args.timeout)
+        runner = Runner(args.base_url, args.api_key, args.cloud, args.grad_bin, work, args.timeout, stack.info if stack else None)
         for n, b in enumerate(found):
             if b["lang"] == "file":
                 (work / b["name"]).write_text(runner.rewrite(b["code"], n))

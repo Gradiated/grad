@@ -17,7 +17,12 @@
  *
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
  *          "workspace_id","mode","worker","model_paths","fault_url",
- *          "worker_url","replicas":[{"url","pid"}]}
+ *          "worker_url","replicas":[{"url","pid"}],
+ *          "langfuse_url","langfuse_secret"}
+ * `langfuse_url` is tests/fixtures/fake-langfuse.ts (drive it via its
+ * /_control/ routes); store `langfuse_secret` as a grad secret to sync it.
+ * Workers reach it through GRAD_SOURCES_EGRESS_ALLOW=127.0.0.1/32 with the
+ * settle delay off.
  * `fault_url` is the same server behind tests/harness/fault-proxy.ts, which
  * drops the response to the first attempt of every keyed POST (after the
  * server committed it) so live tests can prove Idempotency-Key replays.
@@ -30,7 +35,7 @@
  * the tiny test models from server/trainer/tests/fixtures/tiny_models.py.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -44,6 +49,7 @@ import {
 } from "../../server/api/test/fixtures/docker-postgres.js";
 import { startFakeCloudApi } from "../../server/api/test/fixtures/fake-cloud-api.js";
 import { startFakeOpenAI } from "../../server/api/test/fixtures/fake-openai.js";
+import { startFakeLangfuse } from "../fixtures/fake-langfuse.js";
 import { startFaultProxy, type FaultProxy } from "./fault-proxy.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -165,6 +171,7 @@ const main = async () => {
     join(process.env.TMPDIR ?? tmpdir(), "grad-stack-"),
   );
   const inference = await startFakeOpenAI({ judgeScore: 0.9 });
+  const langfuse = await startFakeLangfuse();
   const cloud = args.cloud
     ? await startFakeCloudApi({ serviceToken: "svc_e2e_token" })
     : undefined;
@@ -197,6 +204,7 @@ const main = async () => {
     await faultProxy?.close();
     await workerProxy?.close();
     await inference.close();
+    await langfuse.close();
     await cloud?.close();
     await postgres?.then(
       (pg) => pg.stop(),
@@ -238,6 +246,7 @@ const main = async () => {
       INFERENCE_API_KEY: "sk-fake-inference",
       TRAINER_API_KEY: TRAINER_KEY,
       MAINTENANCE_INTERVAL_MS: "500",
+      GRAD_SECRETS_KEY: randomBytes(32).toString("base64"),
       DEFAULT_WORKSPACE_ID: WORKSPACE_ID,
       DATABASE_URL: databaseUrl,
     };
@@ -301,6 +310,8 @@ const main = async () => {
           GRAD_MODEL_PATHS: JSON.stringify(modelPaths),
           GRAD_OFFLINE: "1",
           HF_HUB_OFFLINE: "1",
+          GRAD_SOURCES_EGRESS_ALLOW: "127.0.0.1/32",
+          GRAD_SOURCES_SETTLE_SECONDS: "0",
         },
         stdio: ["ignore", 2, 2],
       });
@@ -321,6 +332,8 @@ const main = async () => {
         fault_url: faultProxy.url,
         worker_url: workerUrl,
         replicas,
+        langfuse_url: langfuse.url,
+        langfuse_secret: langfuse.secret,
       })}\n`,
     );
   } catch (error) {
