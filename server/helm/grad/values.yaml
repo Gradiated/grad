@@ -8,6 +8,8 @@ nameOverride: ""
 #   database-url          Postgres URL (API, migrations Job, KEDA)
 #   admin-api-key-hash    sha256 hex of the bootstrap admin key (AUTH_MODE=api_key)
 #   trainer-api-key       the worker key (workers send it; the API hashes it)
+#   trainer-keys-json     per-pool keys scoped by kind: [{"label","sha256","kinds"}]
+#                         (point each workers.<name>.apiKeySecretKey at its own key)
 #   secrets-key           GRAD_SECRETS_KEY, 32 random bytes in base64 (workspace secrets)
 #   inference-api-key     key for evals.inferenceBaseUrl
 #   judge-api-key         key for evals.judgeBaseUrl

@@ -65,6 +65,7 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
    | `database-url` | API, migrations Job, KEDA | Postgres connection string |
    | `admin-api-key-hash` | API | SHA-256 hex of the bootstrap admin key (`AUTH_MODE=api_key`) |
    | `trainer-api-key` | API, workers | The platform worker key (`workerDefaults.apiKeySecretKey`, or per worker `workers.<name>.apiKeySecretKey`) |
+   | `trainer-keys-json` | API | `TRAINER_KEYS_JSON`: per-pool worker keys scoped by job kind, `[{"label": "gpu", "sha256": "<hex>", "kinds": ["train"]}, ...]`. Store each pool's plaintext key under its own Secret key and point `workers.<name>.apiKeySecretKey` at it, so GPU pods can never claim imports or see workspace secrets. |
    | `secrets-key` | API | `GRAD_SECRETS_KEY`: 32 random bytes, base64, encrypting workspace secrets |
    | `inference-api-key`, `judge-api-key` | API | Keys for `evals.inferenceBaseUrl` and `evals.judgeBaseUrl` |
    | `cloud-service-token` | API | Cloud modes only |
