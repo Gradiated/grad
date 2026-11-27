@@ -1381,9 +1381,24 @@ fn sources_api() -> MockServer {
                 "The 'gradiated' source is only available on Gradiated Cloud.",
             ),
             ("GET", "/v1/sources") => {
-                Reply::json(200, json!({"data": [source_obj()], "next_cursor": null}))
+                let mut paused = source_obj();
+                paused["id"] = json!("src_paused");
+                paused["status"] = json!("paused");
+                paused["consecutive_failures"] = json!(10);
+                paused["paused_reason"] = json!("10 syncs in a row failed.");
+                paused["last_error"] = json!("langfuse: 401 Unauthorized (auth failed for ***)");
+                let mut failing = source_obj();
+                failing["id"] = json!("src_failing");
+                failing["consecutive_failures"] = json!(2);
+                failing["last_error"] = json!("x".repeat(80));
+                Reply::json(
+                    200,
+                    json!({"data": [source_obj(), paused, failing], "next_cursor": null}),
+                )
             }
             ("POST", "/v1/sources/src_01J9X/sync") => Reply::json(202, job("queued")),
+            ("POST", "/v1/sources/src_recent/sync") => Reply::json(202, job("completed")),
+            ("POST", "/v1/sources/src_busy/sync") => Reply::json(202, job("running")),
             ("GET", "/v1/imports/imp_7c1d") => {
                 let n = polls.fetch_add(1, Ordering::SeqCst);
                 Reply::json(200, job(if n == 0 { "running" } else { "completed" }))
@@ -1576,6 +1591,33 @@ fn sources_add_list_sync_and_remove() {
     );
     expect(&r, 0);
     assert!(r.stdout.contains("completed (v3)"), "{}", r.stdout);
+    assert!(r.stdout.contains("active (2 failed)"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("langfuse: 401 Unauthorized"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(&format!("{}…", "x".repeat(59))),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("! src_paused is paused: 10 syncs in a row failed."),
+        "{}",
+        r.stdout
+    );
+    let r = run(sb.grad(u), &["sources", "sync", "src_recent"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("at most once a minute"), "{}", r.stdout);
+    let r = run(sb.grad(u), &["sources", "sync", "src_busy", "--full"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("the full sync starts when it ends"),
+        "{}",
+        r.stdout
+    );
     assert!(srv
         .last("GET", "/v1/sources")
         .unwrap()

@@ -121,6 +121,25 @@ fn describe(s: &Source) -> String {
     parts.join(" ")
 }
 
+/// `active`, `active (2 failed)` or `paused`.
+fn status(s: &Source) -> String {
+    match (s.status.as_str(), s.consecutive_failures) {
+        ("paused", _) => "paused".into(),
+        (_, 0) => "active".into(),
+        (_, n) => format!("active ({} failed)", n),
+    }
+}
+
+fn last_error(s: &Source) -> String {
+    match &s.last_error {
+        None => "-".into(),
+        Some(e) if e.chars().count() > 60 => {
+            format!("{}…", e.chars().take(59).collect::<String>())
+        }
+        Some(e) => e.clone(),
+    }
+}
+
 fn last_sync(s: &Source) -> String {
     match &s.last_sync {
         None => "never".into(),
@@ -190,8 +209,10 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                     "dataset",
                     "provider",
                     "schedule",
+                    "status",
                     "last sync",
                     "synced",
+                    "last error",
                 ],
                 res.data
                     .iter()
@@ -201,15 +222,26 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                             s.dataset.clone(),
                             describe(s),
                             s.schedule.clone().unwrap_or_else(|| "-".into()),
+                            status(s),
                             last_sync(s),
                             s.last_synced_at
                                 .as_deref()
                                 .map(when)
                                 .unwrap_or_else(|| "-".into()),
+                            last_error(s),
                         ]
                     })
                     .collect(),
             );
+            for s in res.data.iter().filter(|s| s.status == "paused") {
+                out.line(format!(
+                    "! {} is paused: {}",
+                    s.id,
+                    s.paused_reason
+                        .as_deref()
+                        .unwrap_or("too many failed syncs")
+                ));
+            }
             more_hint(
                 out,
                 "/v1/sources",
@@ -228,13 +260,29 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
             let c = ctx.client()?;
             let job = c.sources().sync(&id, full).await?;
             if !wait {
-                out.line(format!(
-                    "✓ {} sync {} of source {} into {}",
-                    if full { "Full" } else { "Queued" },
-                    job.id,
-                    id,
-                    job.dataset
-                ));
+                match job.status.as_str() {
+                    "queued" => out.line(format!(
+                        "✓ {} sync {} of source {} into {}",
+                        if full { "Full" } else { "Queued" },
+                        job.id,
+                        id,
+                        job.dataset
+                    )),
+                    "running" => out.line(format!(
+                        "✓ Sync {} of source {} is already running{}",
+                        job.id,
+                        id,
+                        if full {
+                            "; the full sync starts when it ends"
+                        } else {
+                            ""
+                        }
+                    )),
+                    other => out.line(format!(
+                        "! Sync {} of source {} started under a minute ago ({}); a source syncs at most once a minute, so try again shortly",
+                        job.id, id, other
+                    )),
+                }
                 out.line(format!("  Check it with: grad imports status {}", job.id));
                 return out.done(&job);
             }

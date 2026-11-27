@@ -258,13 +258,26 @@ export const registerSourceRoutes = (
       operationId: "syncSource",
       summary:
         "Sync now: queue an import of new traces and scores (returns the running one if a sync is in progress)",
+      description:
+        "A source starts at most one sync per minute. Within a minute of the last sync's start this returns that sync with a `Retry-After` header (seconds until a new one may start), so a retried or repeated call is safe. A full sync asked for while an incremental one is queued or running returns the running one and starts right after it (`pending_full` on the source). Syncing a paused source resumes it.",
       tags,
       request: {
         params: IdParamSchema,
         ...optionalJsonBody(SyncSourceRequestSchema),
       },
       responses: {
-        202: jsonResponse(ImportJobSchema, "The sync's import job."),
+        202: {
+          ...jsonResponse(
+            ImportJobSchema,
+            "The sync's import job: new, running, or the last one when it started under a minute ago.",
+          ),
+          headers: z.object({
+            "Retry-After": z.string().optional().openapi({
+              description:
+                "Seconds until a new sync may start; set when the returned job is the last one, not a new one.",
+            }),
+          }),
+        },
         ...defaultErrors,
         ...notImplementedError,
       },
@@ -278,14 +291,14 @@ export const registerSourceRoutes = (
         text.trim() ? JSON.parse(text) : {},
       );
 
-      return c.json(
-        await services.sources.sync(
-          workspaceId,
-          c.req.valid("param").id,
-          input.full,
-        ),
-        202,
+      const { job, retryAfter } = await services.sources.sync(
+        workspaceId,
+        c.req.valid("param").id,
+        input.full,
       );
+      if (retryAfter !== null) c.header("Retry-After", String(retryAfter));
+
+      return c.json(job, 202);
     },
   );
 

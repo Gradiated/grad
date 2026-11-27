@@ -115,7 +115,7 @@ export interface CreateImportRequest {
 
 export interface CreateSourceRequest {
   provider: SourceProvider;
-  /** Five-field cron in UTC (`*\/15 * * * *`). Leave it out to sync only on request. */
+  /** Five-field cron in UTC (`*\/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds field is rejected). Leave it out to sync only on request. */
   schedule?: string | null | undefined;
 }
 
@@ -960,6 +960,7 @@ export interface SetSecretRequest {
   value: string;
 }
 
+/** An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset. */
 export interface Source {
   id: string;
   workspaceId: string;
@@ -972,7 +973,19 @@ export interface Source {
     filters: Record<string, unknown>;
   };
   schedule: string | null;
+  /** When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule backs off: twice its interval per consecutive failure, at most an hour. */
   nextSyncAt: string | null;
+  /** `paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it. */
+  status: "active" | "paused";
+  /** Why the source is paused (null while active). */
+  pausedReason: string | null;
+  /** The error of the last failed sync (provider keys redacted); cleared by a successful sync. */
+  lastError: string | null;
+  lastErrorAt: string | null;
+  /** Failed syncs since the last successful one. */
+  consecutiveFailures: number;
+  /** A full sync was requested while another sync ran; it is queued as soon as that one ends. */
+  pendingFull: boolean;
   /** When the last successful sync finished. */
   lastSyncedAt: string | null;
   lastSync: SourceSync | null;

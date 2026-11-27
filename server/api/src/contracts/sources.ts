@@ -92,7 +92,7 @@ export const CreateSourceRequestSchema = z
     provider: SourceProviderSchema,
     schedule: z.string().min(1).max(120).nullable().optional().openapi({
       description:
-        "Five-field cron in UTC (`*/15 * * * *`). Leave it out to sync only on request.",
+        "Five-field cron in UTC (`*/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds field is rejected). Leave it out to sync only on request.",
     }),
   })
   .openapi("CreateSourceRequest");
@@ -122,7 +122,29 @@ export const SourceSchema = z
       filters: z.record(z.string(), z.unknown()),
     }),
     schedule: z.string().nullable(),
-    next_sync_at: IsoTimestampSchema.nullable(),
+    next_sync_at: IsoTimestampSchema.nullable().openapi({
+      description:
+        "When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule backs off: twice its interval per consecutive failure, at most an hour.",
+    }),
+    status: z.enum(["active", "paused"]).openapi({
+      description:
+        "`paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it.",
+    }),
+    paused_reason: z.string().nullable().openapi({
+      description: "Why the source is paused (null while active).",
+    }),
+    last_error: z.string().nullable().openapi({
+      description:
+        "The error of the last failed sync (provider keys redacted); cleared by a successful sync.",
+    }),
+    last_error_at: IsoTimestampSchema.nullable(),
+    consecutive_failures: z.number().int().min(0).openapi({
+      description: "Failed syncs since the last successful one.",
+    }),
+    pending_full: z.boolean().openapi({
+      description:
+        "A full sync was requested while another sync ran; it is queued as soon as that one ends.",
+    }),
     last_synced_at: IsoTimestampSchema.nullable().openapi({
       description: "When the last successful sync finished.",
     }),
@@ -132,7 +154,10 @@ export const SourceSchema = z
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
   })
-  .openapi("Source");
+  .openapi("Source", {
+    description:
+      "An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset.",
+  });
 
 export type Source = z.infer<typeof SourceSchema>;
 

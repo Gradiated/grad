@@ -134,6 +134,9 @@ export const createImportService = (
     if (!updated) throw leaseLost(job.id);
     if (updated.status === "failed") {
       await deleteObjects(await store.datasets.discardStaged(job.id));
+      if (isSyncPayload(updated.source)) {
+        await collaborators.sources.failSync(updated);
+      }
     }
 
     return updated;

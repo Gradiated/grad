@@ -738,14 +738,32 @@ export interface SourceRecord {
   watermark: Record<string, unknown> | null;
   sync_job_id: string | null;
   last_synced_at: string | null;
+  /** A full sync asked for while another ran: queued when that one ends. */
+  pending_full: boolean;
+  status: SourceStatus;
+  paused_reason: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  consecutive_failures: number;
   created_at: string;
   updated_at: string;
 }
 
+export type SourceStatus = "active" | "paused";
+
 export type SourcePatch = Partial<
   Pick<
     SourceRecord,
-    "next_sync_at" | "watermark" | "sync_job_id" | "last_synced_at"
+    | "next_sync_at"
+    | "watermark"
+    | "sync_job_id"
+    | "last_synced_at"
+    | "pending_full"
+    | "status"
+    | "paused_reason"
+    | "last_error"
+    | "last_error_at"
+    | "consecutive_failures"
   >
 >;
 
@@ -777,8 +795,8 @@ export interface SourceRepository {
     key: string,
   ): Promise<IdempotentHit | null>;
   /**
-   * Scheduled sources due at `now`, locked FOR UPDATE SKIP LOCKED so each
-   * replica's tick takes different ones (call inside a transaction).
+   * Active scheduled sources due at `now`, locked FOR UPDATE SKIP LOCKED so
+   * each replica's tick takes different ones (call inside a transaction).
    */
   lockDue(now: string, limit: number): Promise<SourceRecord[]>;
   /** `expectJobId`: only while that job is still the source's latest sync. */

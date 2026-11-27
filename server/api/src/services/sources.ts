@@ -43,6 +43,51 @@ const TICK_BATCH = 50;
 
 const ACTIVE = new Set(["queued", "running"]);
 
+/** A source starts at most one sync per minute (manual or scheduled). */
+export const MIN_SYNC_INTERVAL_SECONDS = 60;
+/** A failing schedule backs off to at most this. */
+export const MAX_BACKOFF_SECONDS = 3600;
+/** Consecutive failed syncs that pause a source. */
+export const PAUSE_AFTER_FAILURES = 10;
+const MAX_ERROR_LENGTH = 2000;
+
+/**
+ * When a schedule fires next after `failures` consecutive failed syncs: the
+ * cron's next time, pushed out to twice its interval per failure (at most an
+ * hour, at least a minute). Null without a schedule.
+ */
+export const nextScheduledSync = (
+  schedule: string | null,
+  now: Date,
+  failures: number,
+): string | null => {
+  if (!schedule) return null;
+  let cron;
+  try {
+    cron = parseCron(schedule);
+  } catch {
+    return null; // validated at create; an unparseable one stops firing
+  }
+  const next = cron.next(now);
+  if (failures <= 0) return next.toISOString();
+  const interval = cron.next(next).getTime() - next.getTime();
+  const delay = Math.min(
+    Math.max(interval * 2 ** failures, MIN_SYNC_INTERVAL_SECONDS * 1000),
+    MAX_BACKOFF_SECONDS * 1000,
+  );
+
+  return new Date(
+    Math.max(next.getTime(), now.getTime() + delay),
+  ).toISOString();
+};
+
+/** A sync request's job, and how long to wait before asking again. */
+export interface SyncRequest {
+  job: ImportJob;
+  /** Seconds until a new sync may start; null when this one is new or active. */
+  retryAfter: number | null;
+}
+
 export interface SourceService {
   setSecret(workspaceId: string, name: string, value: string): Promise<Secret>;
   getSecret(workspaceId: string, name: string): Promise<Secret>;
@@ -66,19 +111,31 @@ export interface SourceService {
     page: PageRequest,
   ): Promise<Page<Source>>;
   remove(workspaceId: string, id: string): Promise<void>;
-  /** Enqueues a sync, or returns the one already queued or running. */
-  sync(workspaceId: string, id: string, full: boolean): Promise<ImportJob>;
+  /**
+   * Enqueues a sync (resuming a paused source), or returns the one already
+   * queued or running (a full request then runs right after it), or, within
+   * a minute of the last sync's start, that sync with `retryAfter`.
+   */
+  sync(workspaceId: string, id: string, full: boolean): Promise<SyncRequest>;
   /** Enqueues due scheduled syncs (SKIP LOCKED: safe on every replica). */
   tick(now: Date): Promise<number>;
 
   /** The claim-time source of a sync job: provider config, secret, watermark. */
   claimPayload(job: ImportJobRecord): Promise<Record<string, unknown>>;
-  /** In the import's completion transaction: advance the watermark. */
+  /**
+   * In the import's completion transaction: advance the watermark, clear the
+   * failure state, queue a pending full sync.
+   */
   completeSync(
     tx: Repositories,
     job: ImportJobRecord,
     watermark: Record<string, unknown> | null | undefined,
   ): Promise<void>;
+  /**
+   * A sync ended failed: record the error, back the schedule off, pause the
+   * source after PAUSE_AFTER_FAILURES in a row, else queue a pending full sync.
+   */
+  failSync(job: ImportJobRecord): Promise<void>;
   /** The gradiated provider's next page for the job this worker holds (Cloud only). */
   pullTracesFor(
     principal: AuthPrincipal,
@@ -146,6 +203,12 @@ export const createSourceService = (
       },
       schedule: source.schedule,
       next_sync_at: source.next_sync_at,
+      status: source.status,
+      paused_reason: source.paused_reason,
+      last_error: source.last_error,
+      last_error_at: source.last_error_at,
+      consecutive_failures: source.consecutive_failures,
+      pending_full: source.pending_full,
       last_synced_at: source.last_synced_at,
       last_sync: job
         ? {
@@ -170,20 +233,38 @@ export const createSourceService = (
     return source;
   };
 
-  /** Inside a transaction holding the source's row lock. */
+  /**
+   * Inside a transaction holding the source's row lock. At most one sync is
+   * queued or running: asking for a full one meanwhile marks it pending. A new
+   * one starts at most a minute after the last one did, unless `force` (a
+   * pending full sync, queued when the one before it ends).
+   */
   const enqueue = async (
     repos: Repositories,
     source: SourceRecord,
     full: boolean,
-  ): Promise<ImportJobRecord> => {
+    force = false,
+  ): Promise<{ job: ImportJobRecord; retryAfter: number | null }> => {
     const current = await lastSync(repos, source);
-    if (current && ACTIVE.has(current.status)) return current;
+    if (current && ACTIVE.has(current.status)) {
+      if (full && current.source.full !== true && !source.pending_full) {
+        await repos.sources.update(source.id, { pending_full: true });
+      }
+      return { job: current, retryAfter: null };
+    }
+    if (current && !force) {
+      const wait =
+        Date.parse(current.created_at) +
+        MIN_SYNC_INTERVAL_SECONDS * 1000 -
+        clock.now().getTime();
+      if (wait > 0) return { job: current, retryAfter: Math.ceil(wait / 1000) };
+    }
 
     const payload: SyncPayload = {
       kind: "provider",
       source_id: source.id,
       provider: source.provider,
-      full,
+      full: full || source.pending_full,
     };
     const job = await repos.imports.create({
       workspaceId: source.workspace_id,
@@ -194,9 +275,25 @@ export const createSourceService = (
       connector: "auto",
       uploadKey: null,
     });
-    await repos.sources.update(source.id, { sync_job_id: job.id });
+    await repos.sources.update(source.id, {
+      sync_job_id: job.id,
+      pending_full: false,
+    });
 
-    return job;
+    return { job, retryAfter: null };
+  };
+
+  /** Active again, with a fresh failure count and schedule. */
+  const resume = async (repos: Repositories, source: SourceRecord) => {
+    if (source.status !== "paused") return source;
+    const resumed = await repos.sources.update(source.id, {
+      status: "active",
+      paused_reason: null,
+      consecutive_failures: 0,
+      next_sync_at: nextScheduledSync(source.schedule, clock.now(), 0),
+    });
+
+    return resumed ?? source;
   };
 
   const validateProvider = async (
@@ -273,12 +370,22 @@ export const createSourceService = (
   };
 
   return {
-    setSecret: async (workspaceId, name, value) =>
-      store.secrets.put({
+    setSecret: async (workspaceId, name, value) => {
+      const secret = await store.secrets.put({
         workspaceId,
         name,
         sealed: cipher().seal(workspaceId, name, value),
-      }),
+      });
+      // A new key is the usual fix for a paused source: resume its users.
+      for (const id of await store.sources.usingSecret(workspaceId, name)) {
+        await store.transaction(async (tx) => {
+          const locked = await tx.sources.lock(workspaceId, id);
+          if (locked) await resume(tx, locked);
+        });
+      }
+
+      return secret;
+    },
 
     getSecret: async (workspaceId, name) => {
       const secret = await store.secrets.get(workspaceId, name);
@@ -368,30 +475,29 @@ export const createSourceService = (
       if (source.provider === "gradiated" && !deps.traces)
         throw sourceUnavailable();
 
-      const job = await store.transaction(async (tx) => {
+      const { job, retryAfter } = await store.transaction(async (tx) => {
         const locked = await tx.sources.lock(workspaceId, id);
         if (!locked) throw notFound("source", id);
 
-        return enqueue(tx, locked, full);
+        return enqueue(tx, await resume(tx, locked), full);
       });
 
-      return toPublicImport(job);
+      return { job: toPublicImport(job), retryAfter };
     },
 
     tick: async (now) =>
       store.transaction(async (tx) => {
         const due = await tx.sources.lockDue(now.toISOString(), TICK_BATCH);
         for (const source of due) {
-          let next: string | null = null;
-          try {
-            next = source.schedule
-              ? parseCron(source.schedule).next(now).toISOString()
-              : null;
-          } catch {
-            next = null; // validated at create; an unparseable one stops firing
-          }
+          // Queued, running or started under a minute ago: this firing is skipped.
           await enqueue(tx, source, false);
-          await tx.sources.update(source.id, { next_sync_at: next });
+          await tx.sources.update(source.id, {
+            next_sync_at: nextScheduledSync(
+              source.schedule,
+              now,
+              source.consecutive_failures,
+            ),
+          });
         }
 
         return due.length;
@@ -431,16 +537,55 @@ export const createSourceService = (
 
     completeSync: async (tx, job, watermark) => {
       const payload = job.source as unknown as SyncPayload;
-      await tx.sources.update(
-        payload.source_id,
-        {
-          last_synced_at: clock.now().toISOString(),
-          ...(watermark !== undefined && watermark !== null
-            ? { watermark }
-            : {}),
-        },
-        job.id,
-      );
+      const source = await tx.sources.lock(job.workspace_id, payload.source_id);
+      if (!source || source.sync_job_id !== job.id) return;
+      const now = clock.now();
+      const updated = await tx.sources.update(source.id, {
+        last_synced_at: now.toISOString(),
+        ...(watermark !== undefined && watermark !== null ? { watermark } : {}),
+        last_error: null,
+        last_error_at: null,
+        consecutive_failures: 0,
+        // A backed-off schedule returns to its own pace.
+        ...(source.consecutive_failures > 0 && source.status === "active"
+          ? { next_sync_at: nextScheduledSync(source.schedule, now, 0) }
+          : {}),
+      });
+      if (updated?.pending_full) await enqueue(tx, updated, true, true);
+    },
+
+    failSync: async (job) => {
+      const payload = job.source as unknown as SyncPayload;
+      await store.transaction(async (tx) => {
+        const source = await tx.sources.lock(
+          job.workspace_id,
+          payload.source_id,
+        );
+        if (!source || source.sync_job_id !== job.id) return;
+        const now = clock.now();
+        const failures = source.consecutive_failures + 1;
+        const paused = failures >= PAUSE_AFTER_FAILURES;
+        const updated = await tx.sources.update(source.id, {
+          consecutive_failures: failures,
+          // Worker errors are redacted (provider keys never reach them).
+          last_error: (job.error ?? "The sync failed.").slice(
+            0,
+            MAX_ERROR_LENGTH,
+          ),
+          last_error_at: now.toISOString(),
+          ...(paused
+            ? {
+                status: "paused" as const,
+                paused_reason: `${failures} syncs in a row failed. Fix the cause (often the provider key: 'grad secrets set NAME' resumes the source), or run 'grad sources sync ${source.id}' to resume it.`,
+                next_sync_at: null,
+                pending_full: false,
+              }
+            : {
+                next_sync_at: nextScheduledSync(source.schedule, now, failures),
+              }),
+        });
+        if (updated?.pending_full) await enqueue(tx, updated, true, true);
+      });
     },
 
     pullTracesFor: async (principal, jobId, { worker_id, attempt, cursor }) => {

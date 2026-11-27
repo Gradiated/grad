@@ -169,6 +169,9 @@ type SourceParams struct {
 }
 
 // Source is an observability provider synced into a dataset; each sync adds a dataset version.
+// A source feeds exactly one dataset; a dataset can have several sources, and deleting the
+// dataset deletes them. Status is "paused" after 10 failed syncs in a row (PausedReason and
+// LastError say why); Sync or a new value for its secret resumes it.
 type Source struct {
 	generated.Source
 	c *Client
@@ -180,7 +183,9 @@ type SyncOption func(*bool)
 // FullSync rebuilds the dataset from the provider as a new version.
 func FullSync() SyncOption { return func(full *bool) { *full = true } }
 
-// Sync syncs now (a sync in progress is returned as is). Wait on the handle to block.
+// Sync syncs now (a sync in progress is returned as is; a FullSync then runs right after it).
+// A source starts at most one sync a minute: within a minute of the last start this returns
+// that sync. It resumes a paused source. Wait on the handle to block.
 func (s *Source) Sync(ctx context.Context, opts ...SyncOption) *ImportHandle {
 	return s.c.Sources.Sync(ctx, s.ID, opts...)
 }
@@ -213,7 +218,8 @@ type SourcesService struct{ c *Client }
 
 var errNoProvider = errors.New("grad: SourceParams.Provider is required (for example grad.LangfuseSource{...})")
 
-// Create connects p.Provider to dataset.
+// Create connects p.Provider to dataset (created if missing). A source feeds exactly one
+// dataset; a dataset can have several sources.
 func (s *SourcesService) Create(ctx context.Context, dataset DatasetRef, p SourceParams) (*Source, error) {
 	if p.Provider == nil {
 		return nil, errNoProvider
@@ -267,7 +273,8 @@ func (s *SourcesService) List(ctx context.Context, dataset DatasetRef) iter.Seq2
 	})
 }
 
-// Sync queues a sync of source id (or returns the one in progress).
+// Sync queues a sync of source id, or returns the one in progress (a FullSync then runs right
+// after it), or the last one if it started under a minute ago. It resumes a paused source.
 func (s *SourcesService) Sync(ctx context.Context, id string, opts ...SyncOption) *ImportHandle {
 	full := false
 	for _, opt := range opts {

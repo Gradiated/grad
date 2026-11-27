@@ -4,8 +4,39 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { TracesAdapter } from "../src/adapters.js";
 import { createSecretsCipher } from "../src/secrets.js";
+import {
+  MAX_BACKOFF_SECONDS,
+  nextScheduledSync,
+  PAUSE_AFTER_FAILURES,
+} from "../src/services/sources.js";
 import { ADMIN_KEY, makeTestApp, type TestApp } from "./fixtures/app.js";
-import { FakeWorker, type ClaimedJob } from "./fixtures/worker.js";
+import {
+  createSftRun,
+  FakeWorker,
+  type ClaimedJob,
+} from "./fixtures/worker.js";
+
+describe("nextScheduledSync", () => {
+  const at = new Date("2026-11-27T10:07:00Z");
+  const after = (schedule: string, failures: number) =>
+    nextScheduledSync(schedule, at, failures);
+
+  it("doubles the interval per consecutive failure, capped at an hour", () => {
+    expect(after("*/15 * * * *", 0)).toBe("2026-11-27T10:15:00.000Z");
+    expect(after("*/15 * * * *", 1)).toBe("2026-11-27T10:37:00.000Z");
+    expect(after("*/15 * * * *", 2)).toBe("2026-11-27T11:07:00.000Z");
+    expect(after("*/15 * * * *", 9)).toBe("2026-11-27T11:07:00.000Z");
+    expect(after("* * * * *", 1)).toBe("2026-11-27T10:09:00.000Z");
+    expect(after("* * * * *", 3)).toBe("2026-11-27T10:15:00.000Z");
+    expect(MAX_BACKOFF_SECONDS).toBe(3600);
+  });
+
+  it("never fires sooner than the schedule itself, and not without one", () => {
+    expect(after("0 9 * * *", 5)).toBe("2026-11-28T09:00:00.000Z");
+    expect(nextScheduledSync(null, at, 3)).toBeNull();
+    expect(nextScheduledSync("not a cron", at, 0)).toBeNull();
+  });
+});
 
 const KEY = "pk-lf-test:sk-lf-very-secret";
 const LANGFUSE = {
@@ -296,7 +327,19 @@ describe("sources", () => {
     expect(after.body.last_synced_at).not.toBeNull();
     expect(JSON.stringify(after.body)).not.toContain("sk-lf");
 
+    // Within a minute of the last start: that sync again, with Retry-After.
+    t.clock.advanceSeconds(20);
+    const soon = await t.json<{ id: string }>(`/v1/sources/${source.id}/sync`, {
+      body: {},
+    });
+    expect(soon.status).toBe(202);
+    expect(soon.body.id).toBe(job.id);
+    expect(Number(soon.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(Number(soon.headers.get("retry-after"))).toBeLessThanOrEqual(40);
+    expect(sync.headers.get("retry-after")).toBeNull();
+
     // The next sync starts from the stored watermark.
+    t.clock.advanceSeconds(61);
     await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
     const second = await claimImport();
     expect(second.import?.source.watermark).toEqual({
@@ -335,6 +378,7 @@ describe("sources", () => {
     );
     expect(v1.body.data.map((r) => r.scores)).toEqual([undefined, undefined]);
     // A null watermark keeps the stored one.
+    t.clock.advanceSeconds(61);
     await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
     const third = await claimImport();
     expect(third.import?.source.watermark).toEqual({
@@ -348,6 +392,7 @@ describe("sources", () => {
       (await t.json<Record<string, any>>(`/v1/sources/${source.id}`)).body
         .last_sync.status,
     ).toBe("failed");
+    t.clock.advanceSeconds(61);
     await t.json(`/v1/sources/${source.id}/sync`, { body: { full: true } });
     const full = await claimImport();
     expect(full.import?.source).toMatchObject({ full: true, watermark: null });
@@ -355,6 +400,7 @@ describe("sources", () => {
       traces: "2026-11-27T11:00:00Z",
       scores: "2026-11-27T11:00:00Z",
     });
+    t.clock.advanceSeconds(61);
     await t.json(`/v1/sources/${source.id}/sync`, { body: {} });
     expect((await claimImport()).import?.source.watermark).toEqual({
       traces: "2026-11-27T11:00:00Z",
@@ -380,8 +426,7 @@ describe("sources", () => {
         status: "completed",
         import_summary: { watermark: null },
       });
-      return (done.body as unknown as { import: { imported_count: number } })
-        .import;
+      return done.body.import as unknown as { imported_count: number };
     };
     const dataset = async () =>
       (await t.json<{ record_count: number }>("/v1/datasets/support-prod")).body
@@ -417,6 +462,201 @@ describe("sources", () => {
     );
     expect(await dataset()).toBe(2);
     expect(await total()).toBe(2);
+  });
+
+  const syncNow = async (id: string, full = false) => {
+    t.clock.advanceSeconds(61);
+    return t.json<{ id: string; source: Record<string, unknown> }>(
+      `/v1/sources/${id}/sync`,
+      { body: { full } },
+    );
+  };
+  const getSource = async (id: string) =>
+    (await t.json<Record<string, any>>(`/v1/sources/${id}`)).body;
+  const failNext = async (error = "langfuse: 401 auth failed for ***") => {
+    const job = await claimImport();
+    expect(
+      (await worker.complete(job, { status: "failed", error })).status,
+    ).toBe(200);
+    return job;
+  };
+
+  it("queues a full sync asked for during an incremental one when that one ends", async () => {
+    const source = (await addSource()).body;
+    const incremental = await syncNow(source.id);
+    const asked = await t.json<{ id: string }>(
+      `/v1/sources/${source.id}/sync`,
+      { body: { full: true } },
+    );
+    // The running sync comes back; the full one is remembered, not lost.
+    expect(asked.body.id).toBe(incremental.body.id);
+    expect(asked.headers.get("retry-after")).toBeNull();
+    expect((await getSource(source.id)).pending_full).toBe(true);
+
+    const job = await claimImport();
+    expect(job.import?.source.full).toBe(false);
+    await finish(job, ["t1"], { traces: "2026-11-27T10:00:00Z" });
+    // Queued at once (no minute wait): full, from no watermark.
+    const after = await getSource(source.id);
+    expect(after.pending_full).toBe(false);
+    expect(after.last_sync).toMatchObject({ status: "queued", full: true });
+    const full = await claimImport();
+    expect(full.import?.source).toMatchObject({ full: true, watermark: null });
+
+    // The same when the incremental one fails.
+    await finish(full, ["t1"], { traces: "2026-11-27T11:00:00Z" });
+    await syncNow(source.id);
+    await t.json(`/v1/sources/${source.id}/sync`, { body: { full: true } });
+    await failNext();
+    expect((await claimImport()).import?.source.full).toBe(true);
+  });
+
+  it("records a failed sync, backs the schedule off, and clears it all on success", async () => {
+    const source = (
+      await addSource({ provider: LANGFUSE, schedule: "*/15 * * * *" })
+    ).body;
+    expect(await getSource(source.id)).toMatchObject({
+      status: "active",
+      last_error: null,
+      last_error_at: null,
+      consecutive_failures: 0,
+      paused_reason: null,
+    });
+
+    await syncNow(source.id);
+    await failNext();
+    let s = await getSource(source.id);
+    expect(s).toMatchObject({
+      status: "active",
+      consecutive_failures: 1,
+      last_error: "langfuse: 401 auth failed for ***",
+      last_error_at: t.clock.now().toISOString(),
+    });
+    expect(s.next_sync_at).toBe(
+      nextScheduledSync("*/15 * * * *", t.clock.now(), 1),
+    );
+    expect(Date.parse(s.next_sync_at) - t.clock.now().getTime()).toBe(
+      30 * 60_000,
+    );
+
+    await syncNow(source.id);
+    await failNext();
+    s = await getSource(source.id);
+    expect(s.consecutive_failures).toBe(2);
+    expect(Date.parse(s.next_sync_at) - t.clock.now().getTime()).toBe(
+      60 * 60_000,
+    );
+
+    await syncNow(source.id);
+    await finish(await claimImport(), ["t1"], { traces: "x" });
+    s = await getSource(source.id);
+    expect(s).toMatchObject({
+      status: "active",
+      consecutive_failures: 0,
+      last_error: null,
+      last_error_at: null,
+    });
+    expect(s.next_sync_at).toBe(
+      nextScheduledSync("*/15 * * * *", t.clock.now(), 0),
+    );
+  });
+
+  it("pauses after 10 failures in a row; a manual sync or a new secret value resumes it", async () => {
+    const source = (
+      await addSource({ provider: LANGFUSE, schedule: "* * * * *" })
+    ).body;
+    for (let i = 0; i < PAUSE_AFTER_FAILURES; i += 1) {
+      await syncNow(source.id);
+      await failNext(`langfuse: 401 (try ${i + 1})`);
+    }
+    let s = await getSource(source.id);
+    expect(s).toMatchObject({
+      status: "paused",
+      consecutive_failures: 10,
+      last_error: "langfuse: 401 (try 10)",
+      next_sync_at: null,
+    });
+    expect(s.paused_reason).toContain("10 syncs in a row failed");
+    // Paused: the schedule no longer fires.
+    t.clock.advanceSeconds(7200);
+    expect(await t.services.sources.tick(t.clock.now())).toBe(0);
+
+    // A manual sync resumes it (and runs).
+    const resumed = await syncNow(source.id);
+    expect(resumed.status).toBe(202);
+    s = await getSource(source.id);
+    expect(s).toMatchObject({ status: "active", consecutive_failures: 0 });
+    expect(s.last_error).toBe("langfuse: 401 (try 10)");
+    expect(s.next_sync_at).not.toBeNull();
+    for (let i = 0; i < PAUSE_AFTER_FAILURES; i += 1) {
+      if (i > 0) await syncNow(source.id);
+      await failNext();
+    }
+    expect((await getSource(source.id)).status).toBe("paused");
+
+    // So does a new value for its secret (the usual fix).
+    await t.json("/v1/secrets", {
+      body: { name: "langfuse-prod", value: "pk-lf-new:sk-lf-new" },
+    });
+    s = await getSource(source.id);
+    expect(s).toMatchObject({
+      status: "active",
+      consecutive_failures: 0,
+      paused_reason: null,
+    });
+    t.clock.advanceSeconds(120);
+    expect(await t.services.sources.tick(t.clock.now())).toBe(1);
+    expect((await getSource(source.id)).last_sync.status).toBe("queued");
+  });
+
+  it("a failing source never delays another source's sync or a training job", async () => {
+    const failing = (
+      await addSource({ provider: LANGFUSE, schedule: "* * * * *" })
+    ).body;
+    const healthy = (
+      await t.json<{ id: string }>("/v1/datasets/other/sources", {
+        body: { provider: LANGFUSE, schedule: "* * * * *" },
+      })
+    ).body;
+    await createSftRun(t);
+
+    for (let i = 0; i < 3; i += 1) {
+      t.clock.advanceSeconds(3600);
+      expect(await t.services.sources.tick(t.clock.now())).toBe(2);
+      // The failing source's sync is queued and fails; the run and the other
+      // source's sync are claimed regardless.
+      if (i === 0) {
+        const trainer = new FakeWorker(t, "trainer-1");
+        expect((await trainer.claim({ kinds: ["train"] }))?.kind).toBe("train");
+      }
+      for (const n of [1, 2]) {
+        const w = new FakeWorker(t, `importer-${i}-${n}`);
+        const job = await w.claim({ kinds: ["import"] });
+        if (!job) throw new Error("expected an import job");
+        if (job.import?.source.source_id === failing.id) {
+          await w.complete(job, { status: "failed", error: "401" });
+          continue;
+        }
+        await w.call(`/v1/trainer-jobs/${job.id}/records`, {
+          ...w.ref(job),
+          seq: 0,
+          records: [record(`h${i}`)],
+        });
+        await w.complete(job, {
+          status: "completed",
+          import_summary: { watermark: { traces: `w${i}` } },
+        });
+      }
+    }
+    expect(await getSource(failing.id)).toMatchObject({
+      consecutive_failures: 3,
+      status: "active",
+    });
+    expect(await getSource(healthy.id)).toMatchObject({
+      consecutive_failures: 0,
+      last_error: null,
+      last_sync: { status: "completed", dataset_version: 3 },
+    });
   });
 
   it("fails a queued sync whose source was removed", async () => {

@@ -4081,6 +4081,37 @@ components:
             - string
             - "null"
           format: date-time
+          description: "When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule
+            backs off: twice its interval per consecutive failure, at most an hour."
+        status:
+          type: string
+          enum:
+            - active
+            - paused
+          description: "`paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new
+            value for the source's secret, resumes it."
+        paused_reason:
+          type:
+            - string
+            - "null"
+          description: Why the source is paused (null while active).
+        last_error:
+          type:
+            - string
+            - "null"
+          description: The error of the last failed sync (provider keys redacted); cleared by a successful sync.
+        last_error_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        consecutive_failures:
+          type: integer
+          minimum: 0
+          description: Failed syncs since the last successful one.
+        pending_full:
+          type: boolean
+          description: A full sync was requested while another sync ran; it is queued as soon as that one ends.
         last_synced_at:
           type:
             - string
@@ -4102,10 +4133,18 @@ components:
         - provider
         - schedule
         - next_sync_at
+        - status
+        - paused_reason
+        - last_error
+        - last_error_at
+        - consecutive_failures
+        - pending_full
         - last_synced_at
         - last_sync
         - created_at
         - updated_at
+      description: An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have
+        several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset.
     SourceSync:
       type:
         - object
@@ -4160,7 +4199,8 @@ components:
             - "null"
           minLength: 1
           maxLength: 120
-          description: Five-field cron in UTC (`*/15 * * * *`). Leave it out to sync only on request.
+          description: Five-field cron in UTC (`*/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds
+            field is rejected). Leave it out to sync only on request.
       required:
         - provider
     SourceProvider:
@@ -9116,6 +9156,10 @@ paths:
     post:
       operationId: syncSource
       summary: "Sync now: queue an import of new traces and scores (returns the running one if a sync is in progress)"
+      description: A source starts at most one sync per minute. Within a minute of the last sync's start this returns that
+        sync with a `Retry-After` header (seconds until a new one may start), so a retried or repeated call is safe. A
+        full sync asked for while an incremental one is queued or running returns the running one and starts right after
+        it (`pending_full` on the source). Syncing a paused source resumes it.
       tags: *a7
       parameters:
         - schema:
@@ -9134,7 +9178,14 @@ paths:
               $ref: "#/components/schemas/SyncSourceRequest"
       responses:
         "202":
-          description: The sync's import job.
+          description: "The sync's import job: new, running, or the last one when it started under a minute ago."
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds until a new sync may start; set when the returned job is the last one, not a new one.
+              required: false
+              description: Seconds until a new sync may start; set when the returned job is the last one, not a new one.
           content:
             application/json:
               schema:

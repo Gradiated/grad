@@ -239,7 +239,7 @@ const (
 // CreateSourceRequest is generated from the OpenAPI schema.
 type CreateSourceRequest struct {
 	Provider SourceProvider `json:"provider"`
-	// Schedule Five-field cron in UTC (`*/15 * * * *`). Leave it out to sync only on request.
+	// Schedule Five-field cron in UTC (`*/15 * * * *`); minute resolution, so it fires at most once a minute (a seconds field is rejected). Leave it out to sync only on request.
 	Schedule *string `json:"schedule,omitempty"`
 }
 
@@ -1992,14 +1992,26 @@ type SetSecretRequest struct {
 	Value string `json:"value"`
 }
 
-// Source is generated from the OpenAPI schema.
+// Source An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset.
 type Source struct {
 	ID          string             `json:"id"`
 	WorkspaceID string             `json:"workspace_id"`
 	Dataset     string             `json:"dataset"`
 	Provider    SourceProviderType `json:"provider"`
 	Schedule    *string            `json:"schedule"`
-	NextSyncAt  *string            `json:"next_sync_at"`
+	// NextSyncAt When the schedule fires next (null without a schedule or while paused). After a failed sync the schedule backs off: twice its interval per consecutive failure, at most an hour.
+	NextSyncAt *string `json:"next_sync_at"`
+	// Status `paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it.
+	Status SourceStatus `json:"status"`
+	// PausedReason Why the source is paused (null while active).
+	PausedReason *string `json:"paused_reason"`
+	// LastError The error of the last failed sync (provider keys redacted); cleared by a successful sync.
+	LastError   *string `json:"last_error"`
+	LastErrorAt *string `json:"last_error_at"`
+	// ConsecutiveFailures Failed syncs since the last successful one.
+	ConsecutiveFailures int `json:"consecutive_failures"`
+	// PendingFull A full sync was requested while another sync ran; it is queued as soon as that one ends.
+	PendingFull bool `json:"pending_full"`
 	// LastSyncedAt When the last successful sync finished.
 	LastSyncedAt *string     `json:"last_synced_at"`
 	LastSync     *SourceSync `json:"last_sync"`
@@ -2041,6 +2053,15 @@ const (
 	SourceProviderTypeKindPosthog    SourceProviderTypeKind = "posthog"
 	SourceProviderTypeKindPhoenix    SourceProviderTypeKind = "phoenix"
 	SourceProviderTypeKindGradiated  SourceProviderTypeKind = "gradiated"
+)
+
+// SourceStatus `paused` after 10 consecutive failed syncs: the schedule stops firing. A manual sync, or setting a new value for the source's secret, resumes it.
+type SourceStatus string
+
+// Values of SourceStatus.
+const (
+	SourceStatusActive SourceStatus = "active"
+	SourceStatusPaused SourceStatus = "paused"
 )
 
 // SourceSync The most recent sync, running or finished.

@@ -365,7 +365,13 @@ class SecretRef(APIObject):
 
 @dataclass(kw_only=True, repr=False, eq=False)
 class Source(APIObject):
-    """An observability provider synced into a dataset; each sync adds a dataset version."""
+    """An observability provider synced into a dataset; each sync adds a dataset version.
+
+    A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset
+    deletes its sources. A source starts at most one sync a minute. ``status`` is ``"paused"``
+    after 10 failed syncs in a row (``paused_reason`` says why, ``last_error`` holds the last
+    error); ``sync()`` or a new value for its secret resumes it.
+    """
 
     id: str
     dataset: str
@@ -373,6 +379,12 @@ class Source(APIObject):
     workspace_id: str | None = None
     schedule: str | None = None
     next_sync_at: str | None = None
+    status: str = "active"
+    paused_reason: str | None = None
+    last_error: str | None = None
+    last_error_at: str | None = None
+    consecutive_failures: int = 0
+    pending_full: bool = False
     last_synced_at: str | None = None
     last_sync: AttrDict | None = None
     created_at: str | None = None
@@ -393,7 +405,9 @@ class Source(APIObject):
 
     def sync(self, *, full: bool = False) -> ImportJob:
         """Sync now (``.wait()`` on the result to block). ``full=True`` rebuilds the dataset
-        from the provider as a new version. Returns the running sync if one is in progress."""
+        from the provider as a new version. Returns the running sync if one is in progress
+        (a full request then runs right after it), or the last one if it started under a minute
+        ago. Resumes a paused source."""
         job: ImportJob = self._need_client().sources.sync(self.id, full=full)
         return job
 

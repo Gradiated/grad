@@ -71,4 +71,11 @@ describe("parseCron", () => {
       parseCron("0 0 30 2 *").next(at("2026-01-01T00:00:00Z")),
     ).toThrow(/never fires/);
   });
+
+  it("has minute resolution: a seconds field is rejected, so nothing fires more than once a minute", () => {
+    expect(() => parseCron("*/10 * * * * *")).toThrow(CronError);
+    expect(next("* * * * *", "2026-11-27T10:07:59Z")).toBe(
+      "2026-11-27T10:08:00.000Z",
+    );
+  });
 });

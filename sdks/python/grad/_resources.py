@@ -450,10 +450,14 @@ class Secrets(_Resource):
 
 
 class Sources(_Resource):
-    """Observability sources that sync traces and feedback into datasets."""
+    """Observability sources that sync traces and feedback into datasets.
+
+    A source feeds exactly one dataset; a dataset can have several sources (one per provider or
+    project). Deleting a dataset deletes its sources."""
 
     def create(self, dataset: Any, provider: Any, *, schedule: str | None = None, idempotency_key: str | None = None) -> Source:
-        """Connect ``provider`` (``grad.sources.Langfuse(...)``, ...) to ``dataset``."""
+        """Connect ``provider`` (``grad.sources.Langfuse(...)``, ...) to ``dataset`` (created if
+        missing). ``schedule`` is a five-field UTC cron, so it fires at most once a minute."""
         body: dict[str, Any] = {"provider": provider_body(provider)}
         if schedule is not None:
             body["schedule"] = schedule
@@ -471,7 +475,11 @@ class Sources(_Resource):
         return self._page(Source, lambda cursor: self._wire.list_sources(limit=limit, cursor=cursor, dataset=name))
 
     def sync(self, source: Any, *, full: bool = False) -> ImportJob:
-        """Queue a sync (or get the one in progress); ``.wait()`` on the job to block."""
+        """Queue a sync (or get the one in progress); ``.wait()`` on the job to block.
+
+        A source starts at most one sync a minute: within a minute of the last start this
+        returns that sync. ``full=True`` while an incremental sync runs returns the running one
+        and queues the full sync right after it. Syncing a paused source resumes it."""
         source_id = source.id if isinstance(source, Source) else str(source)
         return ImportJob.from_api(self._wire.sync_source(source_id, {"full": full}), self._client)
 

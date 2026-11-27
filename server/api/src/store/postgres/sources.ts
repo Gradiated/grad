@@ -126,13 +126,24 @@ const toSource = (r: Row): SourceRecord => ({
   watermark: (r.watermark as Record<string, unknown> | null) ?? null,
   sync_job_id: sn(r.sync_job_id),
   last_synced_at: isoN(r.last_synced_at),
+  pending_full: r.pending_full === true,
+  status: r.status === "paused" ? "paused" : "active",
+  paused_reason: sn(r.paused_reason),
+  last_error: sn(r.last_error),
+  last_error_at: isoN(r.last_error_at),
+  consecutive_failures: Number(r.consecutive_failures ?? 0),
   created_at: iso(r.created_at),
   updated_at: iso(r.updated_at),
 });
 
 const SOURCE_COLUMNS = {
   json: new Set(["watermark"]),
-  timestamps: new Set(["next_sync_at", "last_synced_at", "updated_at"]),
+  timestamps: new Set([
+    "next_sync_at",
+    "last_synced_at",
+    "last_error_at",
+    "updated_at",
+  ]),
 };
 
 export const createSourceRepository = (
@@ -241,7 +252,7 @@ export const createSourceRepository = (
       ),
     lockDue: (now, limit) =>
       locked(
-        "next_sync_at IS NOT NULL AND next_sync_at <= $1::timestamptz",
+        "status = 'active' AND next_sync_at IS NOT NULL AND next_sync_at <= $1::timestamptz",
         [now, limit],
         " ORDER BY next_sync_at, id LIMIT $2 FOR UPDATE SKIP LOCKED",
       ),

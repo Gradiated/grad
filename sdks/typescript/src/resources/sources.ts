@@ -85,11 +85,16 @@ export const sources = {
 
 export interface AddSourceOptions extends RequestOptions {
   provider: SourceProvider;
-  /** Five-field UTC cron; leave it out to sync only on request. */
+  /** Five-field UTC cron (fires at most once a minute); leave it out to sync only on request. */
   schedule?: string;
 }
 
-/** An observability provider synced into a dataset; each sync adds a dataset version. */
+/**
+ * An observability provider synced into a dataset; each sync adds a dataset version. A source
+ * feeds exactly one dataset; a dataset can have several sources, and deleting the dataset deletes
+ * them. `status` is `"paused"` after 10 failed syncs in a row (`pausedReason`, `lastError` say
+ * why); `sync()` or a new value for its secret resumes it.
+ */
 export interface Source extends SourceData {}
 export class Source {
   readonly #core: Core;
@@ -106,7 +111,9 @@ export class Source {
 
   /**
    * Syncs now; `await source.sync().wait()` blocks until the new version exists.
-   * `full: true` rebuilds the dataset from the provider. A sync in progress is returned as is.
+   * `full: true` rebuilds the dataset from the provider. A sync in progress is returned as is
+   * (a full request then runs right after it); within a minute of the last sync's start, that
+   * sync is returned. Resumes a paused source.
    */
   sync(options: { full?: boolean } & RequestOptions = {}): PendingImport {
     return new Pending(syncSource(this.#core, this.id, options));
@@ -170,7 +177,10 @@ export class SecretsResource {
 export class SourcesResource {
   constructor(private readonly core: Core) {}
 
-  /** Connects `provider` to `dataset` (see also `dataset.addSource`). */
+  /**
+   * Connects `provider` to `dataset` (see also `dataset.addSource`). A source feeds one dataset;
+   * a dataset can have several sources.
+   */
   create(dataset: DatasetRef, options: AddSourceOptions): Promise<Source> {
     return addSource(this.core, dataset, options);
   }

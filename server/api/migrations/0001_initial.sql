@@ -313,9 +313,14 @@ CREATE TABLE grad_secrets (
 CREATE INDEX grad_secrets_workspace_idx
   ON grad_secrets (workspace_id, created_at DESC, id COLLATE "C" DESC);
 
--- Observability sources syncing into a dataset. A sync is an import job;
--- sync_job_id is the latest one (at most one queued or running per source),
--- and watermark only advances when that job completes.
+-- Observability sources syncing into a dataset. A source feeds exactly one
+-- dataset (a dataset may have several sources) and is deleted with it. A
+-- sync is an import job; sync_job_id is the latest one (at most one queued or
+-- running per source, and at most one started per minute), and watermark
+-- only advances when that job completes. pending_full: a full sync was asked
+-- for while another sync ran; it is queued when that one ends. Failed syncs
+-- set last_error and back the schedule off; after 10 in a row the source is
+-- paused until a manual sync or a new value for its secret.
 CREATE TABLE grad_sources (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -330,6 +335,12 @@ CREATE TABLE grad_sources (
   watermark JSONB,
   sync_job_id TEXT REFERENCES grad_jobs (id) ON DELETE SET NULL,
   last_synced_at TIMESTAMPTZ,
+  pending_full BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused')),
+  paused_reason TEXT,
+  last_error TEXT,
+  last_error_at TIMESTAMPTZ,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_failures >= 0),
   idempotency_key TEXT,
   request_hash TEXT,
   created_at TIMESTAMPTZ NOT NULL,

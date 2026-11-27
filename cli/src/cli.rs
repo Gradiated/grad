@@ -241,7 +241,15 @@ Examples:
   grad sources sync src_01J9X --full     # rebuild the dataset as a new version
 
 Providers: langfuse, langsmith, braintrust, posthog, phoenix, gradiated (Cloud).
-braintrust and posthog need --project.")]
+braintrust and posthog need --project.
+
+A source feeds exactly one dataset; a dataset can have several sources.
+Deleting the dataset deletes its sources. A source starts at most one sync a
+minute (schedules have minute resolution). A failed sync shows in the status
+and last error columns of `grad sources list` and backs the schedule off
+(twice the interval per failure, at most an hour); after 10 failures in a row
+the source is paused. `grad sources sync ID` or `grad secrets set NAME` (a new
+key) resumes it.")]
     Sources {
         #[command(subcommand)]
         action: SourcesCmd,
@@ -905,7 +913,7 @@ pub enum SourcesCmd {
     Add {
         /// langfuse, langsmith, braintrust, posthog, phoenix or gradiated
         provider: String,
-        /// Dataset to sync into (created if missing)
+        /// Dataset to sync into (created if missing); a source feeds one dataset
         #[arg(long)]
         dataset: String,
         /// Provider API host (default: the provider's public host)
@@ -917,7 +925,7 @@ pub enum SourcesCmd {
         /// Provider project (required for braintrust and posthog)
         #[arg(long)]
         project: Option<String>,
-        /// Five-field UTC cron; without it the source syncs only on request
+        /// Five-field UTC cron (at most once a minute); without it the source syncs only on request
         #[arg(long, value_name = "CRON")]
         schedule: Option<String>,
         /// Provider filter KEY=VALUE (VALUE may be JSON; repeatable)
@@ -927,7 +935,7 @@ pub enum SourcesCmd {
         #[arg(long, value_name = "KEY")]
         idempotency_key: Option<String>,
     },
-    /// List sources
+    /// List sources with their status and last error
     List {
         /// Only this dataset's sources
         #[arg(long)]
@@ -935,7 +943,7 @@ pub enum SourcesCmd {
         #[command(flatten)]
         page: PageArgs,
     },
-    /// Sync a source now (returns the running sync if one is in progress)
+    /// Sync a source now (returns the running sync if one is in progress; resumes a paused source)
     Sync {
         /// Source id
         id: String,

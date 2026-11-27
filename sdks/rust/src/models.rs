@@ -369,6 +369,9 @@ pub struct SourceSync {
 }
 
 /// An observability provider synced into a dataset; each sync adds a dataset version.
+///
+/// A source feeds exactly one dataset; a dataset can have several sources, and deleting the
+/// dataset deletes them. A source starts at most one sync a minute.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Source {
@@ -377,7 +380,19 @@ pub struct Source {
     pub dataset: String,
     pub provider: SourceProvider,
     pub schedule: Option<String>,
+    /// Null without a schedule or while paused; backs off after failed syncs.
     pub next_sync_at: Option<String>,
+    /// `active`, or `paused` after 10 failed syncs in a row (a manual sync or a new value for
+    /// its secret resumes it).
+    pub status: String,
+    pub paused_reason: Option<String>,
+    /// The last failed sync's error (provider keys redacted); cleared by a successful sync.
+    pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
+    /// Failed syncs since the last successful one.
+    pub consecutive_failures: u32,
+    /// A full sync asked for while another ran; it starts when that one ends.
+    pub pending_full: bool,
     pub last_synced_at: Option<String>,
     pub last_sync: Option<SourceSync>,
     pub created_at: String,

@@ -689,8 +689,10 @@ impl Secrets<'_> {
 }
 
 impl Sources<'_> {
-    /// Connect `provider` to `dataset`. `schedule` is a five-field UTC cron;
-    /// without one the source syncs only on request.
+    /// Connect `provider` to `dataset`. A source feeds exactly one dataset; a
+    /// dataset can have several sources, and deleting it deletes them.
+    /// `schedule` is a five-field UTC cron (at most once a minute); without one
+    /// the source syncs only on request.
     pub async fn create(
         &self,
         dataset: &str,
@@ -735,8 +737,11 @@ impl Sources<'_> {
         collect_all(self.c, "/v1/sources", LIST_SOURCES_LIMIT_MAX, extra).await
     }
 
-    /// Queue a sync, or get the one already in progress; wait on it with
-    /// [`Imports::wait`]. `full` rebuilds the dataset from the provider as a new version.
+    /// Queue a sync, or get the one already in progress (a `full` request then
+    /// runs right after it); wait on it with [`Imports::wait`]. `full` rebuilds
+    /// the dataset from the provider as a new version. A source starts at most
+    /// one sync a minute: within a minute of the last start this returns that
+    /// sync. Syncing a paused source resumes it.
     pub async fn sync(&self, id: &str, full: bool) -> Result<ImportJob> {
         check_path_param("source id", id)?;
         get(
