@@ -318,7 +318,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
            ), pick AS (
              SELECT h.id FROM heads h
              LEFT JOIN running r ON r.workspace_id = h.workspace_id AND r.kind = h.kind
-             WHERE coalesce(r.n, 0) < ($5::jsonb ->> h.kind)::int
+             WHERE coalesce(r.n, 0) < coalesce(($5::jsonb ->> h.kind)::int, 1000000000)
              ORDER BY coalesce(r.n, 0), h.created_at, h.id COLLATE "C"
              LIMIT 1
            ), locked AS (
