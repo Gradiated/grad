@@ -69,6 +69,7 @@ SKIP = [
     ("", "posthog.capture", "PostHog SDK and project"),
     ("", "--follow", "streams until the run ends; covered by `grad train --wait`"),
     ("self-hosting.mdx", "GRADIATED_PROFILE=local", "uses the profile `grad local up` writes"),
+    ("self-hosting.mdx", "grad --profile local ui", "opens a browser on the `grad local up` profile (cli/tests/cli.rs covers grad ui)"),
     ("recipes/reward-models.mdx", "from peft import", "needs torch, peft and the reward model's base weights"),
     ("recipes/decision-model.mdx", "deploy", "a deployable decision model needs a linden-1 or Qwen3-0.6B backbone; the harness has no tiny one"),
 ]
