@@ -1,4 +1,8 @@
-"""DPO: LoRA policy against the frozen base (adapter disabled) as the reference.
+"""DPO: a LoRA policy against a frozen reference, the starting point of the run.
+
+The reference is the base model with the adapter disabled or, when the run continues an
+earlier artifact (for example SFT then DPO), that artifact's adapter, scored once before
+any update.
 
 Loss (``losses.DPO(beta)``, sigmoid form)::
 
@@ -17,6 +21,7 @@ Pairs always stay on the same side of the split (``by_session`` is applied ``by_
 
 from __future__ import annotations
 
+import contextlib
 import math
 from pathlib import Path
 from typing import Any
@@ -28,6 +33,7 @@ from ..backends import torch_common as tc
 from ..backends.torch_task import TorchTask
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
+from ..runner_types import BaseArtifact
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .data import TRAJECTORY_SCHEMA, as_messages, common_prefix, record_id, trajectory_messages
@@ -128,14 +134,21 @@ class DPOTask(TorchTask):
     metric_mode = "max"
     artifact_format = "peft_lora"
 
-    def __init__(self, spec: TrainSpec, train: list[dict[str, Any]], held_out: list[dict[str, Any]], workdir: Path) -> None:
+    def __init__(
+        self,
+        spec: TrainSpec,
+        train: list[dict[str, Any]],
+        held_out: list[dict[str, Any]],
+        workdir: Path,
+        base: BaseArtifact | None = None,
+    ) -> None:
         super().__init__(spec, workdir)
         self.beta = resolve_beta(spec.params)
         self.resolved = self.resolve(spec.model, "causal_lm")
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
-        base = tc.load_causal_lm(self.resolved, self.device)
-        self.max_len = tc.model_max_len(base, spec)
+        base_lm = tc.load_causal_lm(self.resolved, self.device)
+        self.max_len = tc.model_max_len(base_lm, spec)
         self.truncated = 0
         train_pairs, dropped_train = extract_pairs(train)
         eval_pairs, dropped_eval = extract_pairs(held_out)
@@ -149,13 +162,18 @@ class DPOTask(TorchTask):
             )
         if self.dropped:
             self.warnings.append(f"{self.dropped} records were not usable as preference pairs and were dropped.")
-        self.lora = tc.lora_settings(spec.adapter)
-        torch.manual_seed(spec.seed)
-        self.model = tc.apply_lora(base, spec.adapter, tc.use_gradient_checkpointing(spec, self.device))
+        self.model, self.lora = self.lora_model(base_lm, self.resolved, base)
         self.lm = tc.base_causal_lm(self.model)
         self.init_optimizer(self.model)
         self.pad_id = int(self.tokenizer.pad_token_id)
         self._ref_cache: dict[tuple[str, int], tuple[float, float]] = {}
+        # The reference model is the starting point: the base model with the adapter
+        # disabled, or the starting artifact's adapter, scored before any update.
+        self.reference_model = "base model (adapter disabled)"
+        if base is not None:
+            self.reference_model = f"starting artifact {base.artifact_id}"
+            self._score_reference("train", self.train_pairs)
+            self._score_reference("eval", self.eval_pairs)
 
     def _encode_side(self, prompt: list[dict[str, Any]], completion: list[dict[str, Any]], rid: str) -> tuple[tuple[int, ...], tuple[bool, ...]] | None:
         messages = [{**m, "train": False} if m.get("role") == "assistant" else dict(m) for m in prompt]
@@ -194,11 +212,18 @@ class DPOTask(TorchTask):
         rows = torch.arange(ids.shape[0], device=self.device)[:, None].expand_as(target)[target]
         return torch.zeros(ids.shape[0], device=self.device).index_add(0, rows, token_logp)
 
-    def _reference(self, split: str, indices: list[int], pairs: list[Any]) -> tuple[torch.Tensor, torch.Tensor]:
+    def _score_reference(self, split: str, pairs: list[Any]) -> None:
+        lengths = [max(len(c[0]), len(r[0])) for c, r in pairs]
+        for chunk in tc.chunk_by_tokens(range(len(pairs)), lengths, max(1, self.spec.micro_batch_tokens // 2)):
+            self._reference(split, chunk, pairs, adapter=True)
+
+    def _reference(
+        self, split: str, indices: list[int], pairs: list[Any], *, adapter: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         missing = [i for i in indices if (split, i) not in self._ref_cache]
         if missing:
             seqs = [s for i in missing for s in pairs[i]]
-            with torch.no_grad(), self.model.disable_adapter():
+            with torch.no_grad(), contextlib.nullcontext() if adapter else self.model.disable_adapter():
                 logps = self._sequence_logps(seqs).tolist()
             for k, i in enumerate(missing):
                 self._ref_cache[(split, i)] = (logps[2 * k], logps[2 * k + 1])
@@ -255,7 +280,7 @@ class DPOTask(TorchTask):
         return {
             **self.base_manifest(self.resolved),
             "loss": {"kind": "dpo", "beta": self.beta},
-            "reference_model": "base model (adapter disabled)",
+            "reference_model": self.reference_model,
             "max_seq_len": self.max_len,
             "adapter": {**self.lora, "kind": "lora"},
         }
@@ -278,10 +303,11 @@ class DPOTask(TorchTask):
 
 class DPORunner(RecipeRunner):
     kind = "dpo"
+    continues_adapters = True
 
     def split_strategy(self, spec: TrainSpec) -> str:
         # Keep both sides of a pair together: by_group falls back to session_id, then id.
         return "by_group" if spec.split.strategy == "by_session" else spec.split.strategy
 
-    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
-        return DPOTask(spec, train, held_out, workdir)
+    def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
+        return DPOTask(spec, train, held_out, workdir, base)

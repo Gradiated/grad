@@ -75,12 +75,29 @@ type ArtifactFormat string
 // Values of ArtifactFormat.
 const (
 	ArtifactFormatPeftLora           ArtifactFormat = "peft_lora"
+	ArtifactFormatMergedSafetensors  ArtifactFormat = "merged_safetensors"
 	ArtifactFormatPrefixKv           ArtifactFormat = "prefix_kv"
 	ArtifactFormatCartridge          ArtifactFormat = "cartridge"
 	ArtifactFormatEncoderSafetensors ArtifactFormat = "encoder_safetensors"
 	ArtifactFormatRouterBundle       ArtifactFormat = "router_bundle"
 	ArtifactFormatDecisionBundle     ArtifactFormat = "decision_bundle"
 	ArtifactFormatReference          ArtifactFormat = "reference"
+)
+
+// BaseArtifact Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
+type BaseArtifact struct {
+	ID         string             `json:"id"`
+	RecipeKind RecipeKind         `json:"recipe_kind"`
+	Format     BaseArtifactFormat `json:"format"`
+	SHA256     string             `json:"sha256"`
+}
+
+// BaseArtifactFormat is an enumeration of allowed values.
+type BaseArtifactFormat string
+
+// Values of BaseArtifactFormat.
+const (
+	BaseArtifactFormatPeftLora BaseArtifactFormat = "peft_lora"
 )
 
 // BenchmarkSpec is generated from the OpenAPI schema.
@@ -727,10 +744,12 @@ type EvalRun struct {
 	Progress      EvalRunProgress    `json:"progress"`
 	Summary       []EvalModelSummary `json:"summary"`
 	TotalCostUSD  float64            `json:"total_cost_usd"`
-	Error         *string            `json:"error"`
-	CreatedAt     string             `json:"created_at"`
-	UpdatedAt     string             `json:"updated_at"`
-	CompletedAt   *string            `json:"completed_at"`
+	// MaxCostUSD Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial results.
+	MaxCostUSD  *float64 `json:"max_cost_usd"`
+	Error       *string  `json:"error"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+	CompletedAt *string  `json:"completed_at"`
 }
 
 // EvalRunProgress is generated from the OpenAPI schema.
@@ -764,6 +783,7 @@ const (
 	EvalStatusRunning        EvalStatus = "running"
 	EvalStatusAwaitingScores EvalStatus = "awaiting_scores"
 	EvalStatusCompleted      EvalStatus = "completed"
+	EvalStatusStoppedBudget  EvalStatus = "stopped_budget"
 	EvalStatusFailed         EvalStatus = "failed"
 	EvalStatusCancelled      EvalStatus = "cancelled"
 )
@@ -1078,6 +1098,35 @@ type ListRunsResponse struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
+// LossSpec is a union of object shapes; set the fields of exactly one variant.
+type LossSpec struct {
+	Kind      LossSpecKind       `json:"kind"`
+	Reduction *LossSpecReduction `json:"reduction,omitempty"`
+	Beta      *float64           `json:"beta,omitempty"`
+	Temp      *float64           `json:"temp,omitempty"`
+	TopK      *int               `json:"top_k,omitempty"`
+}
+
+// LossSpecKind is an enumeration of allowed values.
+type LossSpecKind string
+
+// Values of LossSpecKind.
+const (
+	LossSpecKindCrossEntropy  LossSpecKind = "cross_entropy"
+	LossSpecKindDpo           LossSpecKind = "dpo"
+	LossSpecKindInfonce       LossSpecKind = "infonce"
+	LossSpecKindTopKKLDistill LossSpecKind = "top_k_kl_distill"
+)
+
+// LossSpecReduction is an enumeration of allowed values.
+type LossSpecReduction string
+
+// Values of LossSpecReduction.
+const (
+	LossSpecReductionPerExample LossSpecReduction = "per_example"
+	LossSpecReductionPerToken   LossSpecReduction = "per_token"
+)
+
 // MetricPoint is generated from the OpenAPI schema.
 type MetricPoint struct {
 	Seq      int      `json:"seq"`
@@ -1145,6 +1194,23 @@ type MetricsPage struct {
 	TailCursor string `json:"tail_cursor"`
 }
 
+// OptimizerSpec is generated from the OpenAPI schema.
+type OptimizerSpec struct {
+	Kind        *OptimizerSpecKind `json:"kind,omitempty"`
+	Betas       []any              `json:"betas,omitempty"`
+	WeightDecay *float64           `json:"weight_decay,omitempty"`
+	// GradClip Max global gradient norm; 0 disables clipping.
+	GradClip *float64 `json:"grad_clip,omitempty"`
+}
+
+// OptimizerSpecKind is an enumeration of allowed values.
+type OptimizerSpecKind string
+
+// Values of OptimizerSpecKind.
+const (
+	OptimizerSpecKindAdamw OptimizerSpecKind = "adamw"
+)
+
 // PlanEvalRequest is generated from the OpenAPI schema.
 type PlanEvalRequest struct {
 	Name           *string          `json:"name,omitempty"`
@@ -1162,7 +1228,8 @@ type PlanEvalRequest struct {
 	Limit          *int             `json:"limit,omitempty"`
 	// PassThreshold Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.
 	PassThreshold *float64 `json:"pass_threshold,omitempty"`
-	MaxCostUSD    *float64 `json:"max_cost_usd,omitempty"`
+	// MaxCostUSD Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget).
+	MaxCostUSD *float64 `json:"max_cost_usd,omitempty"`
 }
 
 // PlanEvalResponse is generated from the OpenAPI schema.
@@ -1194,6 +1261,8 @@ type PlanRunRequest struct {
 	Recipe     RecipeSpec `json:"recipe"`
 	Split      *SplitSpec `json:"split,omitempty"`
 	MaxCostUSD *float64   `json:"max_cost_usd,omitempty"`
+	// DependsOn Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model.
+	DependsOn *string `json:"depends_on,omitempty"`
 }
 
 // PlanRunResponse is generated from the OpenAPI schema.
@@ -1207,8 +1276,31 @@ type PlanRunResponse struct {
 	EstimatedCostUSD      float64           `json:"estimated_cost_usd"`
 	PricePerMillionTokens float64           `json:"price_per_million_tokens"`
 	TrainedTokenFraction  float64           `json:"trained_token_fraction"`
-	Warnings              []string          `json:"warnings"`
+	// Labeling Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+	Labeling *PlanRunResponseLabeling `json:"labeling"`
+	Warnings []string                 `json:"warnings"`
 }
+
+// PlanRunResponseLabeling Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+type PlanRunResponseLabeling struct {
+	EstimatedModelCalls int     `json:"estimated_model_calls"`
+	EstimatedJudgeCalls int     `json:"estimated_judge_calls"`
+	EstimatedCostUSD    float64 `json:"estimated_cost_usd"`
+}
+
+// PoolingSpec is generated from the OpenAPI schema.
+type PoolingSpec struct {
+	Kind PoolingSpecKind `json:"kind"`
+}
+
+// PoolingSpecKind is an enumeration of allowed values.
+type PoolingSpecKind string
+
+// Values of PoolingSpecKind.
+const (
+	PoolingSpecKindMean PoolingSpecKind = "mean"
+	PoolingSpecKindCls  PoolingSpecKind = "cls"
+)
 
 // PostEvalScoresRequest is generated from the OpenAPI schema.
 type PostEvalScoresRequest struct {
@@ -1258,18 +1350,19 @@ const (
 
 // RecipeSpec is generated from the OpenAPI schema.
 type RecipeSpec struct {
-	Kind              RecipeKind           `json:"kind"`
-	Model             *string              `json:"model,omitempty"`
-	Adapter           *AdapterSpec         `json:"adapter,omitempty"`
-	LR                any                  `json:"lr,omitempty"`
-	LRScale           *float64             `json:"lr_scale,omitempty"`
-	BatchSize         *int                 `json:"batch_size,omitempty"`
-	Epochs            *int                 `json:"epochs,omitempty"`
-	Schedule          *RecipeSpecSchedule  `json:"schedule,omitempty"`
-	Warmup            *float64             `json:"warmup,omitempty"`
-	TrainOn           *RecipeSpecTrainOn   `json:"train_on,omitempty"`
-	Thinking          *RecipeSpecThinking  `json:"thinking,omitempty"`
-	PreserveThinking  *bool                `json:"preserve_thinking,omitempty"`
+	Kind             RecipeKind          `json:"kind"`
+	Model            *string             `json:"model,omitempty"`
+	Adapter          *AdapterSpec        `json:"adapter,omitempty"`
+	LR               any                 `json:"lr,omitempty"`
+	LRScale          *float64            `json:"lr_scale,omitempty"`
+	BatchSize        *int                `json:"batch_size,omitempty"`
+	Epochs           *int                `json:"epochs,omitempty"`
+	Schedule         *RecipeSpecSchedule `json:"schedule,omitempty"`
+	Warmup           *float64            `json:"warmup,omitempty"`
+	TrainOn          *RecipeSpecTrainOn  `json:"train_on,omitempty"`
+	Thinking         *RecipeSpecThinking `json:"thinking,omitempty"`
+	PreserveThinking *bool               `json:"preserve_thinking,omitempty"`
+	// Reduction Default per_example.
 	Reduction         *RecipeSpecReduction `json:"reduction,omitempty"`
 	Select            *RecipeSpecSelect    `json:"select,omitempty"`
 	CheckpointTTLDays *int                 `json:"checkpoint_ttl_days,omitempty"`
@@ -1283,9 +1376,24 @@ type RecipeSpec struct {
 	Teacher           *string              `json:"teacher,omitempty"`
 	EnvName           *string              `json:"env_name,omitempty"`
 	GroupSize         *int                 `json:"group_size,omitempty"`
+	Optimizer         *OptimizerSpec       `json:"optimizer,omitempty"`
+	// EvalEvery Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+	EvalEvery any          `json:"eval_every,omitempty"`
+	Loss      *LossSpec    `json:"loss,omitempty"`
+	Pool      *PoolingSpec `json:"pool,omitempty"`
+	// Rubric RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.
+	Rubric any `json:"rubric,omitempty"`
+	// Pricing RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
+	Pricing map[string]float64 `json:"pricing,omitempty"`
+	// Fallback RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate).
+	Fallback *string `json:"fallback,omitempty"`
+	// MaxNewTokens CartridgeRecipe: teacher answer length per prompt during distillation (default 256).
+	MaxNewTokens *int `json:"max_new_tokens,omitempty"`
+	// SlotToken CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).
+	SlotToken *string `json:"slot_token,omitempty"`
 }
 
-// RecipeSpecReduction is an enumeration of allowed values.
+// RecipeSpecReduction Default per_example.
 type RecipeSpecReduction string
 
 // Values of RecipeSpecReduction.
@@ -1374,11 +1482,12 @@ const (
 
 // RenderDatasetResponse is generated from the OpenAPI schema.
 type RenderDatasetResponse struct {
-	Dataset          string                              `json:"dataset"`
-	Model            string                              `json:"model"`
-	TemplateRevision string                              `json:"template_revision"`
-	TokenCounts      RenderDatasetResponseTokenCounts    `json:"token_counts"`
-	Examples         []RenderDatasetResponseExamplesItem `json:"examples"`
+	Dataset          string `json:"dataset"`
+	Model            string `json:"model"`
+	TemplateRevision string `json:"template_revision"`
+	// TokenCounts Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
+	TokenCounts RenderDatasetResponseTokenCounts    `json:"token_counts"`
+	Examples    []RenderDatasetResponseExamplesItem `json:"examples"`
 }
 
 // RenderDatasetResponseExamplesItem is generated from the OpenAPI schema.
@@ -1398,7 +1507,7 @@ type RenderDatasetResponseExamplesItemSpansItem struct {
 	Tokens  int    `json:"tokens"`
 }
 
-// RenderDatasetResponseTokenCounts is an enumeration of allowed values.
+// RenderDatasetResponseTokenCounts Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
 type RenderDatasetResponseTokenCounts string
 
 // Values of RenderDatasetResponseTokenCounts.
@@ -1428,9 +1537,14 @@ type ResolvedRunConfig struct {
 	Reduction            ResolvedRunConfigReduction `json:"reduction"`
 	Select               ResolvedRunConfigSelect    `json:"select"`
 	CheckpointEverySteps int                        `json:"checkpoint_every_steps"`
+	EvalEverySteps       int                        `json:"eval_every_steps"`
+	Optimizer            OptimizerSpec              `json:"optimizer"`
 	CheckpointTTLDays    int                        `json:"checkpoint_ttl_days"`
 	Split                ResolvedRunConfigSplit     `json:"split"`
-	RecipeParams         map[string]any             `json:"recipe_params"`
+	// LabelEvalID Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.
+	LabelEvalID  *string        `json:"label_eval_id"`
+	BaseArtifact *BaseArtifact  `json:"base_artifact"`
+	RecipeParams map[string]any `json:"recipe_params"`
 }
 
 // ResolvedRunConfigAdapter is a union of object shapes; set the fields of exactly one variant.
@@ -1615,10 +1729,12 @@ type Run struct {
 	LatestMetric          *MetricPoint      `json:"latest_metric"`
 	EvalReport            *EvalReport       `json:"eval_report"`
 	ArtifactID            *string           `json:"artifact_id"`
-	Error                 *string           `json:"error"`
-	CreatedAt             string            `json:"created_at"`
-	UpdatedAt             string            `json:"updated_at"`
-	FinishedAt            *string           `json:"finished_at"`
+	// DependsOn The run this chained run starts from; it stays queued until that run completes.
+	DependsOn  *string `json:"depends_on"`
+	Error      *string `json:"error"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	FinishedAt *string `json:"finished_at"`
 }
 
 // RunStatus is an enumeration of allowed values.

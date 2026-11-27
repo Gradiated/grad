@@ -151,5 +151,5 @@ class ReferenceRunner(RecipeRunner):
     def __init__(self, kind: str) -> None:
         self.kind = kind
 
-    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+    def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
         return ReferenceTask(self.kind, spec, train, held_out)

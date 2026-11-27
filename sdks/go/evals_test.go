@@ -145,10 +145,14 @@ func TestEvalWaitErrors(t *testing.T) {
 	failed["status"] = "failed"
 	failed["error"] = "inference endpoint returned 500"
 	failed["id"] = "eval_failed"
+	capped := wireMap(t, "eval-completed.json")
+	capped["status"] = "stopped_budget"
+	capped["id"] = "eval_capped"
 	outputs := wireMap(t, "eval-outputs.json")
 	f := newFake(t, map[string]route{
 		"GET /v1/evals/" + id:              jsonValue(200, awaiting),
 		"GET /v1/evals/eval_failed":        jsonValue(200, failed),
+		"GET /v1/evals/eval_capped":        jsonValue(200, capped),
 		"GET /v1/evals/" + id + "/outputs": jsonValue(200, outputs),
 		"POST /v1/evals/" + id + "/scores": jsonBody(200, wire(t, "eval-scores-response.json")),
 		"GET /v1/evals":                    jsonValue(200, map[string]any{"data": []any{failed}, "next_cursor": nil}),
@@ -169,6 +173,9 @@ func TestEvalWaitErrors(t *testing.T) {
 	stuck := grad.Rubric{grad.Scorer{Name: "mentions_menu", Fn: func(context.Context, grad.ScoreInput) (float64, error) { return 1, nil }}}
 	if _, err := c.Evals.Wait(ctx, id, grad.WithRubric(stuck)); err == nil || !strings.Contains(err.Error(), "still lists") {
 		t.Fatalf("server not accepting scores: %v", err)
+	}
+	if ev, err := c.Evals.Wait(ctx, "eval_capped"); err != nil || ev.Status != "stopped_budget" {
+		t.Fatalf("stopped_budget is a finished eval: %v", err)
 	}
 	_, err := c.Evals.Wait(ctx, "eval_failed")
 	var ef *grad.EvalFailedError

@@ -10,6 +10,7 @@ import torch
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
 from ..models import ResolvedModel, describe_model, resolve_model
+from ..runner_types import BaseArtifact
 from ..templates import RenderedChat, TokenizedExample, render_chat, tokenize_rendered
 from . import torch_common as tc
 
@@ -43,6 +44,16 @@ class TorchTask:
         if not self.params:
             raise RecipeConfigError("Nothing to train: the model has no trainable parameters.")
         self.optimizer = tc.make_optimizer(self.params.values(), self.spec)
+
+    def lora_model(
+        self, base_lm: Any, resolved: ResolvedModel, base: BaseArtifact | None
+    ) -> tuple[Any, dict[str, Any]]:
+        """A trainable LoRA model: fresh, or the starting artifact's adapter (continued training)."""
+        torch.manual_seed(self.spec.seed)
+        checkpointing = tc.use_gradient_checkpointing(self.spec, self.device)
+        if base is None:
+            return tc.apply_lora(base_lm, self.spec.adapter, checkpointing), tc.lora_settings(self.spec.adapter)
+        return tc.load_lora(base_lm, base.directory, self.spec.adapter, resolved, checkpointing)
 
     def template_revision(self, resolved: ResolvedModel) -> str:
         return str(self.spec.template_revision or resolved.template_revision)

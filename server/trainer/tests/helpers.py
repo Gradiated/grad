@@ -11,7 +11,7 @@ from typing import Any
 
 from fixtures.tiny_models import BERT_ID, QWEN_ID, QWEN_TEACHER_ID, ensure_tiny_models, torch_available
 
-from grad_trainer.runner_types import Budget, ResumeState, RunCallbacks, RunOutput
+from grad_trainer.runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks, RunOutput
 
 __all__ = ["BERT_ID", "QWEN_ID", "QWEN_TEACHER_ID", "Recorder", "TempDirCase", "TorchCase", "run_recipe"]
 
@@ -72,6 +72,7 @@ def run_recipe(
     price: float = 1.0,
     recorder: Recorder | None = None,
     resume: ResumeState | None = None,
+    base: BaseArtifact | None = None,
 ) -> RunOutput:
     from grad_trainer.recipes import get_recipe_runner
 
@@ -82,4 +83,5 @@ def run_recipe(
         callbacks=recorder.callbacks() if recorder else None,
         resume=resume,
         workdir=workdir,
+        base=base,
     )

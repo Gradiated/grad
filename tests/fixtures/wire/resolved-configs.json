@@ -1,0 +1,270 @@
+{
+  "sft": {
+    "rule_version": "auto@2",
+    "dataset": "ds",
+    "dataset_version": 1,
+    "name": "run",
+    "recipe_kind": "sft",
+    "model": "test/tiny-qwen3",
+    "template_revision": "qwen3@3",
+    "adapter": {
+      "kind": "lora",
+      "rank": 32,
+      "alpha": 32,
+      "merge_on_export": false
+    },
+    "lr": 0.000177,
+    "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+    "batch_size": 4,
+    "epochs": 1,
+    "schedule": "linear",
+    "warmup": 0.03,
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false,
+    "reduction": "per_token",
+    "select": "best",
+    "checkpoint_every_steps": 1,
+    "eval_every_steps": 2,
+    "optimizer": {
+      "kind": "adamw",
+      "betas": [
+        0.8,
+        0.9
+      ],
+      "weight_decay": 0.1,
+      "grad_clip": 0.5
+    },
+    "checkpoint_ttl_days": 30,
+    "split": {
+      "strategy": "by_session",
+      "eval_fraction": 0.1,
+      "seed": 42,
+      "train_records": 20,
+      "eval_records": 4
+    },
+    "label_eval_id": null,
+    "base_artifact": null,
+    "recipe_params": {}
+  },
+  "dpo": {
+    "rule_version": "auto@2",
+    "dataset": "ds",
+    "dataset_version": 1,
+    "name": "run",
+    "recipe_kind": "dpo",
+    "model": "test/tiny-qwen3",
+    "template_revision": "qwen3@3",
+    "adapter": {
+      "kind": "lora",
+      "rank": 32,
+      "alpha": 32,
+      "merge_on_export": false
+    },
+    "lr": 0.0000177,
+    "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+    "batch_size": 4,
+    "epochs": 1,
+    "schedule": "linear",
+    "warmup": 0.03,
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false,
+    "reduction": "per_example",
+    "select": "best",
+    "checkpoint_every_steps": 1,
+    "eval_every_steps": 1,
+    "optimizer": {
+      "kind": "adamw",
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "weight_decay": 0,
+      "grad_clip": 1
+    },
+    "checkpoint_ttl_days": 30,
+    "split": {
+      "strategy": "by_group",
+      "eval_fraction": 0.1,
+      "seed": 42,
+      "train_records": 20,
+      "eval_records": 4
+    },
+    "label_eval_id": null,
+    "base_artifact": null,
+    "recipe_params": {
+      "loss": {
+        "kind": "dpo",
+        "beta": 0.3
+      }
+    }
+  },
+  "router": {
+    "rule_version": "auto@2",
+    "dataset": "ds",
+    "dataset_version": 1,
+    "name": "run",
+    "recipe_kind": "router",
+    "model": "test/tiny-qwen3",
+    "template_revision": "qwen3@3",
+    "adapter": {
+      "kind": "lora",
+      "rank": 32,
+      "alpha": 32,
+      "merge_on_export": false
+    },
+    "lr": 0.000177,
+    "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+    "batch_size": 4,
+    "epochs": 1,
+    "schedule": "linear",
+    "warmup": 0.03,
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false,
+    "reduction": "per_example",
+    "select": "best",
+    "checkpoint_every_steps": 1,
+    "eval_every_steps": 1,
+    "optimizer": {
+      "kind": "adamw",
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "weight_decay": 0,
+      "grad_clip": 1
+    },
+    "checkpoint_ttl_days": 30,
+    "split": {
+      "strategy": "by_session",
+      "eval_fraction": 0.15,
+      "seed": 42,
+      "train_records": 42,
+      "eval_records": 6
+    },
+    "label_eval_id": null,
+    "base_artifact": null,
+    "recipe_params": {
+      "pricing": {
+        "cheap/m": 0.001,
+        "strong/m": 0.01
+      },
+      "fallback": "strong/m",
+      "max_quality_drop": 0.05,
+      "rubric": "ok",
+      "models": [
+        "cheap/m",
+        "strong/m"
+      ]
+    }
+  },
+  "cartridge": {
+    "rule_version": "auto@2",
+    "dataset": "ds",
+    "dataset_version": 1,
+    "name": "run",
+    "recipe_kind": "cartridge",
+    "model": "test/tiny-qwen3",
+    "template_revision": "qwen3@3",
+    "adapter": {
+      "kind": "prefix_kv",
+      "num_tokens": 16
+    },
+    "lr": 0.00177,
+    "lr_source": "auto@2: calibrated for test/tiny-qwen3 at batch 128, sqrt batch scaling",
+    "batch_size": 4,
+    "epochs": 1,
+    "schedule": "linear",
+    "warmup": 0.03,
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false,
+    "reduction": "per_example",
+    "select": "best",
+    "checkpoint_every_steps": 1,
+    "eval_every_steps": 1,
+    "optimizer": {
+      "kind": "adamw",
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "weight_decay": 0,
+      "grad_clip": 1
+    },
+    "checkpoint_ttl_days": 30,
+    "split": {
+      "strategy": "by_session",
+      "eval_fraction": 0.1,
+      "seed": 42,
+      "train_records": 20,
+      "eval_records": 4
+    },
+    "label_eval_id": null,
+    "base_artifact": null,
+    "recipe_params": {
+      "context_text": "The capital of Testland is Tinytown.",
+      "num_tokens": 16,
+      "teacher": "test/tiny-qwen3-teacher",
+      "max_new_tokens": 5,
+      "slot_token": "<|fim_pad|>",
+      "loss": {
+        "kind": "top_k_kl_distill",
+        "top_k": 7
+      }
+    }
+  },
+  "embedding": {
+    "rule_version": "auto@2",
+    "dataset": "ds",
+    "dataset_version": 1,
+    "name": "run",
+    "recipe_kind": "embedding",
+    "model": "test/tiny-bert",
+    "template_revision": "bge@1",
+    "adapter": {
+      "kind": "encoder_full"
+    },
+    "lr": 0.0000177,
+    "lr_source": "auto@2: calibrated for test/tiny-bert at batch 128, sqrt batch scaling",
+    "batch_size": 4,
+    "epochs": 1,
+    "schedule": "linear",
+    "warmup": 0.03,
+    "train_on": "last",
+    "thinking": "auto",
+    "preserve_thinking": false,
+    "reduction": "per_example",
+    "select": "best",
+    "checkpoint_every_steps": 1,
+    "eval_every_steps": 1,
+    "optimizer": {
+      "kind": "adamw",
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "weight_decay": 0,
+      "grad_clip": 1
+    },
+    "checkpoint_ttl_days": 30,
+    "split": {
+      "strategy": "by_session",
+      "eval_fraction": 0.1,
+      "seed": 42,
+      "train_records": 20,
+      "eval_records": 4
+    },
+    "label_eval_id": null,
+    "base_artifact": null,
+    "recipe_params": {
+      "loss": {
+        "kind": "infonce",
+        "temp": 0.1
+      },
+      "pool": "cls"
+    }
+  }
+}

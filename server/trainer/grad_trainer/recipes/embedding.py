@@ -258,5 +258,5 @@ class EmbeddingTask(TorchTask):
 class EmbeddingRunner(RecipeRunner):
     kind = "embedding"
 
-    def build_task(self, spec, train, held_out, workdir):  # type: ignore[no-untyped-def]
+    def build_task(self, spec, train, held_out, workdir, base):  # type: ignore[no-untyped-def]
         return EmbeddingTask(spec, train, held_out, workdir)

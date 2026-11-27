@@ -1170,7 +1170,7 @@ impl Evals<'_> {
                 Ok(ev) => {
                     on_progress(&ev);
                     match ev.status {
-                        EvalStatus::Completed => return Ok(ev),
+                        EvalStatus::Completed | EvalStatus::StoppedBudget => return Ok(ev),
                         EvalStatus::Failed | EvalStatus::Cancelled => {
                             return Err(Error::EvalFailed(Box::new(ev)))
                         }

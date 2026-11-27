@@ -3,7 +3,7 @@
 The worker calls::
 
     runner = get_recipe_runner(kind)
-    output = runner.run(config, records, budget=..., callbacks=..., resume=..., workdir=...)
+    output = runner.run(config, records, budget=..., callbacks=..., resume=..., workdir=..., base=...)
 
 and ``import_runner.run(source, connector, emit_batch=..., workdir=...)`` for import jobs.
 Field names here are part of the worker protocol; keep them stable.
@@ -47,6 +47,14 @@ class ResumeState:
 
     step: int
     checkpoint_dir: Path
+
+
+@dataclass(frozen=True)
+class BaseArtifact:
+    """Continued training: the starting artifact's PEFT LoRA adapter, extracted to ``directory``."""
+
+    artifact_id: str
+    directory: Path
 
 
 @dataclass

@@ -480,11 +480,18 @@ fn usage_errors_exit_2_and_json_mode_wraps_them() {
     let r = run(sb.grad(None), &["secrets", "set", "langfuse-prod"]);
     expect(&r, 2);
     assert!(r.stderr.contains("not available in v0"));
+    assert!(r.stderr.contains("credentials"), "{}", r.stderr);
     let r = run(
         sb.grad(None),
         &["sources", "add", "langfuse", "--dataset", "x"],
     );
     expect(&r, 2);
+    assert!(r.stderr.contains("Langfuse"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains("grad import FILE --dataset NAME"),
+        "{}",
+        r.stderr
+    );
     let r = run(
         sb.grad(None),
         &["--base-url", "localhost:8787", "models", "list"],

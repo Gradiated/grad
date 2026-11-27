@@ -27,6 +27,7 @@ const gatedBilling = () => {
       return { allowed: true };
     },
     recordRunUsage: async () => undefined,
+    recordEvalUsage: async () => undefined,
   };
 
   return {

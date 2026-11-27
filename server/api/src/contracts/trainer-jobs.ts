@@ -101,6 +101,17 @@ export const TrainerJobSchema = z
         download_url: z.string().min(1),
       })
       .nullable(),
+    base: z
+      .object({
+        artifact_id: z.string().min(1),
+        sha256: Sha256HexSchema,
+        download_url: z.string().min(1),
+      })
+      .nullable()
+      .openapi({
+        description:
+          "Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training.",
+      }),
   })
   .openapi("TrainerJob");
 

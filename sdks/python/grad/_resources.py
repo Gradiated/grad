@@ -365,9 +365,16 @@ class Runs(_Resource):
         recipe: Any,
         split: Any = None,
         max_cost_usd: float | None = None,
+        depends_on: Any = None,
     ) -> Run:
-        """Create and enqueue a run (pins the dataset version). Chain ``.wait()``."""
-        body = h.run_body(dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd)
+        """Create and enqueue a run (pins the dataset version). Chain ``.wait()``.
+
+        ``depends_on`` (a Run or run id) queues a chained run that starts from that run's
+        artifact once it completes (see ``Run.then``).
+        """
+        body = h.run_body(
+            dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd, depends_on=depends_on
+        )
         return Run.from_api(self._wire.create_run(body), self._client)
 
     def get(self, run_id: str) -> Run:

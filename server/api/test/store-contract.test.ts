@@ -84,10 +84,14 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       overrides: Partial<{
         recipe: RunRecord["recipe_kind"];
         name: string;
+        dependsOn: string;
+        waitingOn: string;
       }> = {},
     ) => {
       const dataset = await makeDataset(ws);
       return store.runs.create({
+        dependsOn: overrides.dependsOn,
+        waitingOn: overrides.waitingOn,
         workspaceId: ws,
         name: overrides.name ?? "run",
         datasetId: dataset.id,
@@ -126,6 +130,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         pass_threshold: 0.5,
         judge_models: [],
         local_scorers: ["local_fn"],
+        max_cost_usd: 5,
+        estimated_cost_usd: 1.5,
       });
     };
 
@@ -542,6 +548,52 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         attempt_tokens: 0,
         lease_seconds: 45,
       });
+    });
+
+    it("runs: chained runs wait on their dependency until released", async () => {
+      const first = await makeRun();
+      clock.advanceSeconds(1);
+      const chained = await makeRun("ws_a", {
+        dependsOn: first.id,
+        waitingOn: first.id,
+      });
+      const ready = await makeRun("ws_a", {
+        dependsOn: first.id,
+      });
+      expect(chained).toMatchObject({
+        depends_on: first.id,
+        waiting_on: first.id,
+      });
+      expect(ready).toMatchObject({ depends_on: first.id, waiting_on: null });
+      expect(first).toMatchObject({ depends_on: null, waiting_on: null });
+      expect(
+        (await store.runs.listWaitingOn(first.id)).map((r) => r.id),
+      ).toEqual([chained.id]);
+      expect(await store.runs.countActive()).toEqual({ queued: 2, running: 0 });
+
+      const claim = () =>
+        store.runs.claimNext({
+          workerId: "w",
+          leaseSeconds: 30,
+          now: clock.now(),
+        });
+      expect((await claim())?.id).toBe(first.id);
+      expect((await claim())?.id).toBe(ready.id);
+      expect(await claim()).toBeNull();
+
+      const released = await store.runs.update(
+        chained.id,
+        {
+          waiting_on: null,
+          resolved_config: { ...config, base_artifact: { id: "a@1" } } as never,
+        },
+        { status: ["queued"] },
+      );
+      expect(released?.resolved_config).toMatchObject({
+        base_artifact: { id: "a@1" },
+      });
+      expect(await store.runs.listWaitingOn(first.id)).toEqual([]);
+      expect((await claim())?.id).toBe(chained.id);
     });
 
     it("runs: 20 concurrent claimers over 10 queued runs get unique runs", async () => {
@@ -1378,6 +1430,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const input = {
         idempotencyKey: "run-usage:run_1:1",
         workspaceId: "ws_a",
+        kind: "run" as const,
         runId: "run_1",
         attempt: 1,
         tokens: 1000,
@@ -1582,6 +1635,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
             await inner.billing.enqueue({
               idempotencyKey: "nested",
               workspaceId: "ws_t",
+              kind: "run",
               runId: committed!.id,
               attempt: 1,
               tokens: 1,
@@ -1601,6 +1655,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           await inner.billing.enqueue({
             idempotencyKey: "nested-ok",
             workspaceId: "ws_t",
+            kind: "eval",
             runId: committed!.id,
             attempt: 1,
             tokens: 1,
@@ -1610,7 +1665,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         }),
       );
       expect(nested).toBe("ok");
-      expect(await store.billing.listByRun(committed!.id)).toHaveLength(1);
+      const [entry] = await store.billing.listByRun(committed!.id);
+      expect(entry?.kind).toBe("eval");
       expect(await store.ping()).toBe(true);
     });
 
@@ -1687,9 +1743,9 @@ if (url) {
     it("applies on a fresh schema, re-runs as a no-op", async () => {
       const schema = freshSchemaName();
       try {
+        const versions = (await loadMigrations()).map((m) => m.version);
+        expect(versions[0]).toBe("0001");
         await withPool(async (pool) => {
-          const versions = (await loadMigrations()).map((m) => m.version);
-          expect(versions.slice(0, 2)).toEqual(["0001", "0002"]);
           expect(await migrate(pool, { schema })).toEqual(versions);
           expect(await migrate(pool, { schema })).toEqual([]);
           const { rows } = await pool.query(

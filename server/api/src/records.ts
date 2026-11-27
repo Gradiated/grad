@@ -4,6 +4,7 @@ import {
   type DatasetRecord,
   type RecipeKind,
 } from "./contracts.js";
+import { invalid } from "./errors.js";
 
 const asMessages = (
   value: string | ChatMessage[] | undefined,
@@ -123,8 +124,74 @@ export const recordPromptAndReference = (
 const isPreferencePair = (r: DatasetRecord): boolean =>
   r.prompt !== undefined && r.chosen !== undefined && r.rejected !== undefined;
 
-const scoreModels = (r: DatasetRecord): string[] =>
-  Object.keys(r.scores ?? {}).filter((k) => k.includes("/") || k.includes("@"));
+export interface RouterLabelOptions {
+  /** Score name that measures quality (`scores[rubric]`). */
+  rubric?: string | undefined;
+  /** A labeling eval scores the prompts first: records only need a prompt. */
+  labelled?: boolean | undefined;
+  /** Explicit candidate models (lowercase ids). */
+  candidates?: readonly string[] | undefined;
+}
+
+const looksLikeModelId = (key: string): boolean =>
+  key.includes("/") || key.includes("@");
+
+/**
+ * Models a router record scores, mirroring the trainer (recipes/router.py):
+ * one response per record (`metadata.model` + its score) or one prompt per
+ * record with `scores` keyed by model id. Scores must be in [0, 1].
+ */
+export const routerObservations = (
+  r: DatasetRecord,
+  options: RouterLabelOptions,
+): { models: string[]; reason?: string } => {
+  const scores = r.scores ?? {};
+  const model = r.metadata?.model;
+  let observed: Array<[string, number]>;
+
+  if (typeof model === "string" && model.trim()) {
+    const values = Object.entries(scores);
+    let value: number | undefined;
+    if (options.rubric !== undefined) value = scores[options.rubric];
+    else if (values.length === 1) value = values[0]?.[1];
+    else if (values.length > 1) {
+      return {
+        models: [],
+        reason: `record has several scores (${values
+          .map(([k]) => k)
+          .sort()
+          .join(", ")}); pass recipe.rubric with the score name to train on`,
+      };
+    }
+    observed = value === undefined ? [] : [[model.trim().toLowerCase(), value]];
+  } else {
+    observed = Object.entries(scores)
+      .map(([k, v]): [string, number] => [k.trim().toLowerCase(), v])
+      .filter(([k]) => (options.candidates ? true : looksLikeModelId(k)));
+  }
+  if (options.candidates) {
+    observed = observed.filter(([k]) => options.candidates?.includes(k));
+  }
+
+  const outOfRange = observed.find(([, v]) => v < 0 || v > 1);
+  if (outOfRange) {
+    throw invalid(
+      "router_score_out_of_range",
+      `Router scores must be in [0, 1]; record '${r.id ?? "(no id)"}' has ${outOfRange[1]} for '${outOfRange[0]}'.`,
+    );
+  }
+  if (observed.length === 0) {
+    return {
+      models: [],
+      reason:
+        options.rubric !== undefined
+          ? `record has no '${options.rubric}' score for a candidate model`
+          : "record has no per-model scores (scores keyed by model id, or metadata.model plus a score)",
+    };
+  }
+
+  return { models: observed.map(([k]) => k) };
+};
 
 export interface RecipeUsability {
   usable: number;
@@ -139,7 +206,7 @@ const SHAPE_HELP: Record<string, string> = {
   sft: 'SFT needs chat records with an assistant turn: {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}, a grad.trajectory/1 record with input.messages and output.turns, or {"prompt": ..., "completion": ...}.',
   dpo: 'DPO needs preference pairs {"prompt", "chosen", "rejected"} or grad.trajectory/1 records sharing a group_id with role "chosen" and role "rejected".',
   router:
-    'Router training needs per-model scores on each record, e.g. {"messages": [...], "scores": {"qwen/qwen3-8b": 0.4, "qwen/qwen3-32b": 0.9}}.',
+    'Router training needs scored responses: one record per response with {"messages": [...], "metadata": {"model": "qwen/qwen3-8b"}, "scores": {"resolved": 1.0}} (pass recipe.rubric when records carry several scores), or one record per prompt with "scores" keyed by model id, e.g. {"qwen/qwen3-8b": 0.4, "qwen/qwen3-32b": 0.9}.',
   decision:
     'Decision models need a state and a label: {"state": {...} | "messages": [...], "expected_output": {"label": ...}} or "scores".',
   embedding:
@@ -156,6 +223,7 @@ export const recordShapeHelp = (kind: RecipeKind): string =>
 export const assessRecipeUsability = (
   kind: RecipeKind,
   records: readonly DatasetRecord[],
+  routerOptions: RouterLabelOptions = {},
 ): RecipeUsability => {
   const reasons = new Set<string>();
   const note = (reason: string) => {
@@ -211,14 +279,16 @@ export const assessRecipeUsability = (
       ok = hasAssistantTarget(recordConversation(r));
       if (!ok) note("record has no assistant turn to train on");
     } else if (kind === "router") {
-      const scored = scoreModels(r);
-      scored.forEach((m) => models.add(m));
-      ok =
-        scored.length >= 1 &&
-        (recordConversation(r).length > 0 ||
-          typeof r.prompt === "string" ||
-          typeof r.query === "string");
-      if (!ok) note("record has no per-model scores keyed by model id");
+      const hasPrompt =
+        recordConversation(r).length > 0 ||
+        typeof r.prompt === "string" ||
+        typeof r.query === "string";
+      const observed = routerOptions.labelled
+        ? { models: [] }
+        : routerObservations(r, routerOptions);
+      ok = hasPrompt && (routerOptions.labelled || observed.models.length > 0);
+      if (ok) observed.models.forEach((m) => models.add(m));
+      else note(observed.reason ?? "record has no prompt");
     } else if (kind === "decision") {
       const hasState =
         r.state !== undefined ||

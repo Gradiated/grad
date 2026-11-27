@@ -33,6 +33,7 @@ def train_job(
     attempt: int = 1,
     dataset_url: str = "/v1/trainer-jobs/run_1/dataset",
     resume: dict | None = None,
+    base: dict | None = None,
 ) -> dict[str, Any]:
     return {
         "id": job_id,
@@ -53,6 +54,7 @@ def train_job(
         "max_cost_usd": 2.5,
         "dataset": {"version": 1, "record_count": 2, "download_url": dataset_url},
         "resume": resume,
+        "base": base,
     }
 
 
@@ -195,6 +197,28 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(call["resume_files"], ["manifest.json", "optimizer.pt"])
         self.assertEqual(srv.bodies("progress")[0]["metric"]["step"], 11)
         self.assertEqual(srv.bodies("complete")[0]["attempt"], 2)
+
+    def test_continued_training_loads_the_verified_starting_artifact(self) -> None:
+        src = Path(self.tmp.name) / "sft-artifact"
+        src.mkdir()
+        (src / "adapter_config.json").write_text("{}")
+        archive = Path(self.tmp.name) / "sft.tgz"
+        info = bundle_directory(src, archive, manifest={"format": "peft_lora"})
+        base = {"artifact_id": "sft@2026-11-27-1", "sha256": info.sha256, "download_url": "/blobs/base"}
+        srv = self.server(jobs=[train_job(base=base), train_job("run_2", base={**base, "sha256": "0" * 64})])
+        srv.blobs["/blobs/base"] = archive.read_bytes()
+        runner = StubRunner(checkpoint_at=None)
+        self.worker(srv, runner).run_once()
+        call = runner.calls[0]
+        self.assertEqual(call["base"].artifact_id, "sft@2026-11-27-1")
+        self.assertEqual(call["base_files"], ["adapter_config.json", "manifest.json"])
+
+        # A tampered download fails the job before any training.
+        self.worker(srv, runner).run_once()
+        self.assertEqual(len(runner.calls), 1)
+        failed = srv.bodies("complete")[-1]
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("sha256", failed["error"])
 
     def test_cancel_from_progress_completes_cancelled_without_upload(self) -> None:
         srv = self.server(

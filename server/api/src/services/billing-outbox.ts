@@ -6,6 +6,9 @@ import type { Repositories } from "../store/types.js";
 export const usageIdempotencyKey = (runId: string, attempt: number): string =>
   `run-usage:${runId}:${attempt}`;
 
+export const evalUsageIdempotencyKey = (evalId: string): string =>
+  `eval-usage:${evalId}`;
+
 export interface BillingOutbox {
   /** Records an attempt's usage inside the caller's transaction. */
   enqueueUsage(
@@ -14,6 +17,16 @@ export interface BillingOutbox {
       workspaceId: string;
       runId: string;
       attempt: number;
+      tokens: number;
+      costUsd: number;
+    },
+  ): Promise<void>;
+  /** Records a finished eval's total usage (once per eval). */
+  enqueueEvalUsage(
+    repos: Pick<Repositories, "billing">,
+    input: {
+      workspaceId: string;
+      evalId: string;
       tokens: number;
       costUsd: number;
     },
@@ -43,14 +56,19 @@ export const createBillingOutbox = (deps: AppDependencies): BillingOutbox => {
 
       for (const entry of due) {
         try {
-          await billing.recordRunUsage({
+          const usage = {
             workspaceId: entry.workspace_id,
-            runId: entry.run_id,
-            attempt: entry.attempt,
             tokensProcessed: entry.tokens,
             costUsd: entry.cost_usd,
             idempotencyKey: entry.idempotency_key,
-          });
+          };
+          await (entry.kind === "eval"
+            ? billing.recordEvalUsage({ ...usage, evalId: entry.run_id })
+            : billing.recordRunUsage({
+                ...usage,
+                runId: entry.run_id,
+                attempt: entry.attempt,
+              }));
           await store.billing.markSent(entry.id);
           sent += 1;
         } catch (error) {
@@ -79,8 +97,22 @@ export const createBillingOutbox = (deps: AppDependencies): BillingOutbox => {
       await tx.billing.enqueue({
         idempotencyKey: usageIdempotencyKey(input.runId, input.attempt),
         workspaceId: input.workspaceId,
+        kind: "run",
         runId: input.runId,
         attempt: input.attempt,
+        tokens: input.tokens,
+        costUsd: input.costUsd,
+      });
+    },
+    enqueueEvalUsage: async (repos, input) => {
+      if (input.tokens <= 0 && input.costUsd <= 0) return;
+
+      await repos.billing.enqueue({
+        idempotencyKey: evalUsageIdempotencyKey(input.evalId),
+        workspaceId: input.workspaceId,
+        kind: "eval",
+        runId: input.evalId,
+        attempt: 1,
         tokens: input.tokens,
         costUsd: input.costUsd,
       });

@@ -57,7 +57,9 @@ def dataset_name(dataset: Any) -> str:
     raise TypeError(f"dataset= must be a Dataset or a dataset name, got {type(dataset).__name__}.")
 
 
-def run_body(*, dataset: Any, name: str, recipe: Any, split: Any, max_cost_usd: float | None) -> dict[str, Any]:
+def run_body(
+    *, dataset: Any, name: str, recipe: Any, split: Any, max_cost_usd: float | None, depends_on: Any = None
+) -> dict[str, Any]:
     """The ``PlanRunRequest`` body for ``runs.plan`` / ``runs.create``."""
     if dataset is None:
         raise TypeError("runs.plan/create need dataset= (a Dataset or a dataset name).")
@@ -72,6 +74,8 @@ def run_body(*, dataset: Any, name: str, recipe: Any, split: Any, max_cost_usd: 
         if isinstance(max_cost_usd, bool) or not isinstance(max_cost_usd, (int, float)) or not math.isfinite(max_cost_usd) or max_cost_usd <= 0:
             raise ValueError(f"max_cost_usd must be a positive number, got {max_cost_usd!r}.")
         body["max_cost_usd"] = max_cost_usd
+    if depends_on is not None:
+        body["depends_on"] = depends_on if isinstance(depends_on, str) else str(depends_on.id)
     return body
 
 

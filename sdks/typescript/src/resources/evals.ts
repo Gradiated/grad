@@ -19,7 +19,7 @@ import { toRubric, type RubricInput, type ScoreFn } from "../rubrics.js";
 import { artifactRef, type ArtifactRef } from "./artifacts.js";
 import { Dataset, datasetName, pushRecords, type DatasetRef } from "./datasets.js";
 
-export const TERMINAL_EVAL_STATUSES: readonly EvalStatus[] = ["completed", "failed", "cancelled"];
+export const TERMINAL_EVAL_STATUSES: readonly EvalStatus[] = ["completed", "stopped_budget", "failed", "cancelled"];
 
 export interface EvalParams {
   name?: string;
@@ -133,9 +133,10 @@ export class Eval {
   }
 
   /**
-   * Waits for `completed`. While the eval is `awaiting_scores`, pulls the
-   * outputs your local scorers have not scored yet, scores them here and
-   * posts the scores. Throws EvalFailedError on `failed`/`cancelled`.
+   * Waits for `completed` (or `stopped_budget`: generation stopped at
+   * `maxCostUsd`, with partial results). While the eval is `awaiting_scores`,
+   * pulls the outputs your local scorers have not scored yet, scores them here
+   * and posts the scores. Throws EvalFailedError on `failed`/`cancelled`.
    */
   async wait(options: EvalWaitOptions = {}): Promise<this> {
     if (options.rubric !== undefined) {
@@ -157,7 +158,7 @@ export class Eval {
         if (ev.status === "awaiting_scores") await this.scoreLocal(options.signal);
       },
     );
-    if (this.status !== "completed") throw new EvalFailedError(this);
+    if (this.status === "failed" || this.status === "cancelled") throw new EvalFailedError(this);
     return this;
   }
 

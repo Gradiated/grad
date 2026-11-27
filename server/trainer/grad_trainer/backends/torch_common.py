@@ -100,6 +100,11 @@ def lora_settings(adapter: dict[str, Any]) -> dict[str, Any]:
     return {"rank": rank, "alpha": alpha, "target_modules": sorted(str(t) for t in targets)}
 
 
+def _enable_gradient_checkpointing(model: Any) -> None:
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.enable_input_require_grads()
+
+
 def apply_lora(model: Any, adapter: dict[str, Any], gradient_checkpointing: bool = False) -> Any:
     from peft import LoraConfig, get_peft_model
 
@@ -117,9 +122,39 @@ def apply_lora(model: Any, adapter: dict[str, Any], gradient_checkpointing: bool
         task_type="CAUSAL_LM",
     )
     if gradient_checkpointing:
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-        model.enable_input_require_grads()
+        _enable_gradient_checkpointing(model)
     return get_peft_model(model, config)
+
+
+def load_lora(
+    model: Any, adapter_dir: Path, adapter: dict[str, Any], resolved: ResolvedModel, gradient_checkpointing: bool = False
+) -> tuple[Any, dict[str, Any]]:
+    """Continued training: load a saved PEFT LoRA adapter onto its base model, trainable.
+
+    Returns the model and the adapter's LoRA settings (rank, alpha and target modules).
+    """
+    from peft import PeftModel
+
+    try:
+        config = json.loads((adapter_dir / "adapter_config.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecipeConfigError("The starting artifact has no readable adapter_config.json.") from exc
+    expected = lora_settings(adapter)
+    if config.get("peft_type") != "LORA" or (config.get("r"), config.get("lora_alpha")) != (
+        expected["rank"],
+        expected["alpha"],
+    ):
+        raise RecipeConfigError(
+            f"The starting artifact is not a LoRA adapter with rank {expected['rank']} and alpha {expected['alpha']}."
+        )
+    if config.get("base_model_name_or_path") != resolved.repo:
+        raise RecipeConfigError(
+            f"The starting adapter was trained on '{config.get('base_model_name_or_path')}', not '{resolved.repo}'."
+        )
+    if gradient_checkpointing:
+        _enable_gradient_checkpointing(model)
+    peft_model = PeftModel.from_pretrained(model, str(adapter_dir), is_trainable=True)
+    return peft_model, {**expected, "target_modules": sorted(config.get("target_modules") or [])}
 
 
 def use_gradient_checkpointing(spec: TrainSpec, device: torch.device) -> bool:

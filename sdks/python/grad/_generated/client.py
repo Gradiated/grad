@@ -57,7 +57,17 @@ Artifact = TypedDict(
     },
 )
 
-ArtifactFormat: TypeAlias = "Literal['peft_lora', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reference'] | None"
+ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reference'] | None"
+
+BaseArtifact = TypedDict(
+    "BaseArtifact",
+    {
+        "id": "str",
+        "recipe_kind": "RecipeKind",
+        "format": "Literal['peft_lora']",
+        "sha256": "str",
+    },
+)
 
 BenchmarkSpec = TypedDict(
     "BenchmarkSpec",
@@ -455,6 +465,7 @@ EvalRun = TypedDict(
         "progress": "dict[str, Any]",
         "summary": "list[EvalModelSummary]",
         "total_cost_usd": "float",
+        "max_cost_usd": "float | None",
         "error": "str | None",
         "created_at": "str",
         "updated_at": "str",
@@ -462,7 +473,7 @@ EvalRun = TypedDict(
     },
 )
 
-EvalStatus: TypeAlias = "Literal['queued', 'running', 'awaiting_scores', 'completed', 'failed', 'cancelled']"
+EvalStatus: TypeAlias = "Literal['queued', 'running', 'awaiting_scores', 'completed', 'stopped_budget', 'failed', 'cancelled']"
 
 EvalTaskOutcome = TypedDict(
     "EvalTaskOutcome",
@@ -549,6 +560,8 @@ ImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
 
 JobKind: TypeAlias = "Literal['train', 'import']"
 
+LossSpec: TypeAlias = "dict[str, Any]"
+
 MetricPoint = TypedDict(
     "MetricPoint",
     {
@@ -591,6 +604,16 @@ MetricsPage = TypedDict(
         "data": "list[MetricPoint]",
         "next_cursor": "str | None",
         "tail_cursor": "str",
+    },
+)
+
+OptimizerSpec = TypedDict(
+    "OptimizerSpec",
+    {
+        "kind": "NotRequired[Literal['adamw']]",
+        "betas": "NotRequired[list[Any]]",
+        "weight_decay": "NotRequired[float]",
+        "grad_clip": "NotRequired[float]",
     },
 )
 
@@ -639,6 +662,7 @@ PlanRunRequest = TypedDict(
         "recipe": "RecipeSpec",
         "split": "NotRequired[SplitSpec]",
         "max_cost_usd": "NotRequired[float]",
+        "depends_on": "NotRequired[str]",
     },
 )
 
@@ -654,7 +678,15 @@ PlanRunResponse = TypedDict(
         "estimated_cost_usd": "float",
         "price_per_million_tokens": "float",
         "trained_token_fraction": "float",
+        "labeling": "dict[str, Any] | None",
         "warnings": "list[str]",
+    },
+)
+
+PoolingSpec = TypedDict(
+    "PoolingSpec",
+    {
+        "kind": "Literal['mean', 'cls']",
     },
 )
 
@@ -749,6 +781,15 @@ RecipeSpec = TypedDict(
         "teacher": "NotRequired[str]",
         "env_name": "NotRequired[str]",
         "group_size": "NotRequired[int]",
+        "optimizer": "NotRequired[OptimizerSpec]",
+        "eval_every": "NotRequired[Literal['auto'] | int]",
+        "loss": "NotRequired[LossSpec]",
+        "pool": "NotRequired[PoolingSpec]",
+        "rubric": "NotRequired[str | list[EvalRubricItem]]",
+        "pricing": "NotRequired[dict[str, float]]",
+        "fallback": "NotRequired[str]",
+        "max_new_tokens": "NotRequired[int]",
+        "slot_token": "NotRequired[str]",
     },
 )
 
@@ -845,8 +886,12 @@ ResolvedRunConfig = TypedDict(
         "reduction": "Literal['per_example', 'per_token']",
         "select": "Literal['best', 'last']",
         "checkpoint_every_steps": "int",
+        "eval_every_steps": "int",
+        "optimizer": "OptimizerSpec",
         "checkpoint_ttl_days": "int",
         "split": "dict[str, Any]",
+        "label_eval_id": "str | None",
+        "base_artifact": "BaseArtifact",
         "recipe_params": "dict[str, Any]",
     },
 )
@@ -919,6 +964,7 @@ Run = TypedDict(
         "latest_metric": "MetricPoint",
         "eval_report": "EvalReport",
         "artifact_id": "str | None",
+        "depends_on": "str | None",
         "error": "str | None",
         "created_at": "str",
         "updated_at": "str",
@@ -986,6 +1032,7 @@ TrainerJob = TypedDict(
         "max_cost_usd": "float | None",
         "dataset": "dict[str, Any] | None",
         "resume": "dict[str, Any] | None",
+        "base": "dict[str, Any] | None",
     },
 )
 
@@ -1166,6 +1213,7 @@ RegisterEnvWorkerResponse = TypedDict(
 SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ApiKey": frozenset({"created_at", "id", "name", "prefix", "revoked_at", "scopes", "workspace_id"}),
     "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
+    "BaseArtifact": frozenset({"format", "id", "recipe_kind", "sha256"}),
     "BenchmarkSpec": frozenset({"limit", "name"}),
     "ChatMessage": frozenset({"content", "name", "role", "tool_call_id", "tool_calls", "train"}),
     "Checkpoint": frozenset({"attempt", "best", "created_at", "eval_score", "expires_at", "final", "format", "id", "metadata", "run_id", "sha256", "size_bytes", "step", "workspace_id"}),
@@ -1194,7 +1242,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "EvalOutput": frozenset({"error", "eval_id", "expected_output", "id", "input", "model", "output", "record", "sample_index", "scores", "task_id", "usage"}),
     "EvalReport": frozenset({"baseline", "best_step", "beta", "candidates", "corpus_size", "dropped_records", "ece", "eval_examples", "eval_kl", "eval_loss", "eval_pairs", "eval_records", "eval_token_accuracy", "fallback_model", "fallback_quality", "final_step", "heads", "kl_reduction", "metric_name", "mrr", "no_context_kl", "num_tokens", "pareto_summary", "preference_accuracy", "recall_at_1", "recall_at_10", "recall_at_5", "reward_margin", "routes_any_traffic", "selected_step", "selection_examples", "teacher", "train_examples", "train_pairs", "train_records", "trained_token_fraction", "truncated", "warnings"}),
     "EvalRubricItem": frozenset({"flags", "kind", "model", "name", "pattern", "prompt", "runtime", "validator", "weight"}),
-    "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_tokens", "models", "name", "pass_threshold", "progress", "rubric", "samples", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
+    "EvalRun": frozenset({"baseline", "completed_at", "created_at", "error", "id", "judge_models", "local_scorers", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "progress", "rubric", "samples", "status", "summary", "task_source", "temperature", "total_cost_usd", "updated_at", "workspace_id"}),
     "EvalTaskOutcome": frozenset({"judge_model", "model", "passed", "record", "sample_scores", "score", "task_id"}),
     "FeedbackEventInput": frozenset({"deployment_name", "expected_output", "idempotency_key", "inference_id", "metrics", "score", "session_id"}),
     "FeedbackRecord": frozenset({"created_at", "deployment_name", "expected_output", "id", "idempotency_key", "inference_id", "metrics", "score", "session_id", "workspace_id"}),
@@ -1203,10 +1251,12 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "MetricPoint": frozenset({"attempt", "cost_usd", "eval_loss", "eval_metrics", "grad_norm", "loss", "lr", "seq", "step", "timestamp", "tokens", "tokens_per_sec"}),
     "MetricPointInput": frozenset({"cost_usd", "eval_loss", "eval_metrics", "grad_norm", "loss", "lr", "step", "timestamp", "tokens", "tokens_per_sec"}),
     "MetricsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
+    "OptimizerSpec": frozenset({"betas", "grad_clip", "kind", "weight_decay"}),
     "PlanEvalRequest": frozenset({"baseline", "benchmarks", "dataset", "dataset_version", "env_name", "limit", "max_cost_usd", "max_tokens", "models", "name", "pass_threshold", "rubric", "samples", "tasks", "temperature"}),
     "PlanEvalResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_judge_calls", "estimated_model_calls", "estimated_tasks", "judge_models", "local_scorers", "pass_threshold", "task_source_kind", "warnings"}),
-    "PlanRunRequest": frozenset({"dataset", "max_cost_usd", "name", "recipe", "split"}),
-    "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "price_per_million_tokens", "resolved_config", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
+    "PlanRunRequest": frozenset({"dataset", "depends_on", "max_cost_usd", "name", "recipe", "split"}),
+    "PlanRunResponse": frozenset({"dataset_version", "estimated_cost_usd", "estimated_steps", "estimated_tokens", "labeling", "price_per_million_tokens", "resolved_config", "total_records", "trained_token_fraction", "usable_records", "warnings"}),
+    "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
     "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
     "PostImportRecordsRequest": frozenset({"attempt", "records", "worker_id"}),
@@ -1214,7 +1264,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
-    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "env_name", "epochs", "group_size", "kind", "lr", "lr_scale", "max_quality_drop", "model", "models", "num_tokens", "preserve_thinking", "reduction", "schedule", "select", "teacher", "temp", "thinking", "train_on", "warmup"}),
+    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "env_name", "epochs", "eval_every", "fallback", "group_size", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
     "RecordFeedbackRequest": frozenset({"events"}),
     "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
@@ -1222,17 +1272,17 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RenderDatasetResponse": frozenset({"dataset", "examples", "model", "template_revision", "token_counts"}),
     "ReportTrainerProgressRequest": frozenset({"attempt", "metric", "worker_id"}),
     "ReportTrainerProgressResponse": frozenset({"cost_usd", "should_stop", "status", "stop_reason"}),
-    "ResolvedRunConfig": frozenset({"adapter", "batch_size", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "lr", "lr_source", "model", "name", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
+    "ResolvedRunConfig": frozenset({"adapter", "base_artifact", "batch_size", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "eval_every_steps", "label_eval_id", "lr", "lr_source", "model", "name", "optimizer", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
     "ResumeRunRequest": frozenset({"max_cost_usd"}),
     "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
-    "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
+    "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "depends_on", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
-    "TrainerJob": frozenset({"attempt", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "max_cost_usd", "price_per_million_tokens", "resume", "run"}),
+    "TrainerJob": frozenset({"attempt", "base", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "max_cost_usd", "price_per_million_tokens", "resume", "run"}),
     "TrainerQueueStats": frozenset({"by_kind", "queued", "running", "total"}),
     "TrainerUploadRequest": frozenset({"attempt", "kind", "sha256", "size_bytes", "worker_id"}),
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
@@ -1243,8 +1293,8 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
 
 SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "deployments:write", "feedback:write", "env:serve",),
-    "ArtifactFormat": ("peft_lora", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference", None,),
-    "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
+    "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference", None,),
+    "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "stopped_budget", "failed", "cancelled",),
     "ImportStatus": ("queued", "running", "completed", "failed",),
     "JobKind": ("train", "import",),
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),

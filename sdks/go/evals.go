@@ -398,7 +398,8 @@ func (e *Eval) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Wait polls until the eval completes. While it is awaiting_scores it runs the
+// Wait polls until the eval completes (or stops at its max cost with partial
+// results: stopped_budget). While it is awaiting_scores it runs the
 // rubric's local Go scorers on the outputs that lack them and posts the scores.
 // failed and cancelled return *EvalFailedError.
 func (e *Eval) Wait(ctx context.Context, opts ...WaitOption) error {
@@ -426,7 +427,7 @@ func (e *Eval) Wait(ctx context.Context, opts ...WaitOption) error {
 		}
 		e.EvalRun = *fresh
 		switch e.Status {
-		case generated.EvalStatusCompleted:
+		case generated.EvalStatusCompleted, generated.EvalStatusStoppedBudget:
 			return string(e.Status), true, nil
 		case generated.EvalStatusFailed, generated.EvalStatusCancelled:
 			return string(e.Status), true, nil
@@ -440,7 +441,7 @@ func (e *Eval) Wait(ctx context.Context, opts ...WaitOption) error {
 	if err != nil {
 		return err
 	}
-	if e.Status != generated.EvalStatusCompleted {
+	if e.Status != generated.EvalStatusCompleted && e.Status != generated.EvalStatusStoppedBudget {
 		msg := deref(e.Error)
 		if msg == "" {
 			msg = "no error reported"

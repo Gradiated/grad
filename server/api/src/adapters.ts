@@ -37,6 +37,14 @@ export interface BillingAdapter {
     costUsd: number;
     idempotencyKey: string;
   }): Promise<void>;
+  /** An eval's model and judge usage; idempotent on `idempotencyKey`. */
+  recordEvalUsage(input: {
+    workspaceId: string;
+    evalId: string;
+    tokensProcessed: number;
+    costUsd: number;
+    idempotencyKey: string;
+  }): Promise<void>;
 }
 
 export interface DeployAdapter {
@@ -213,6 +221,7 @@ export const createLocalApiKeyAuth = (options: {
 export const createNoopBillingAdapter = (): BillingAdapter => ({
   checkCanStartRun: async () => ({ allowed: true }),
   recordRunUsage: async () => undefined,
+  recordEvalUsage: async () => undefined,
 });
 
 const DEPLOY_HINT =

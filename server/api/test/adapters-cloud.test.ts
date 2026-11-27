@@ -31,7 +31,8 @@ const artifact: ArtifactRecord = {
   sha256: "a".repeat(64),
   size_bytes: 42,
   manifest: {
-    router_config: { candidates: ["qwen/qwen3-8b", "qwen/qwen3-32b"] },
+    candidates: ["qwen/qwen3-8b", "qwen/qwen3-32b"],
+    fallback_model: "qwen/qwen3-32b",
   },
   eval_report: null,
   created_at: "2026-11-27T12:00:00.000Z",
@@ -338,6 +339,21 @@ describe("cloud adapters against the fake Cloud API", () => {
           cost_usd: 9,
         },
       ]);
+
+      await billing.recordEvalUsage({
+        workspaceId: "ws_a",
+        evalId: "eval_1",
+        tokensProcessed: 300,
+        costUsd: 0.25,
+        idempotencyKey: "eval-usage:eval_1",
+      });
+      expect(cloud.usage.at(-1)).toEqual({
+        idempotency_key: "eval-usage:eval_1",
+        workspace_id: "ws_a",
+        eval_id: "eval_1",
+        tokens_processed: 300,
+        cost_usd: 0.25,
+      });
     });
 
     it("throws when usage cannot be recorded so the outbox retries", async () => {

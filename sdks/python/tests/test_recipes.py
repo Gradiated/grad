@@ -86,13 +86,19 @@ class RecipeTests(unittest.TestCase):
         spec = RouterRecipe(model="qwen/qwen3-0.6b", models=["qwen/qwen3-8b", artifact], max_quality_drop=0.05).to_spec()
         self.assertEqual(spec, {"kind": "router", "model": "qwen/qwen3-0.6b", "models": ["qwen/qwen3-8b", "x@1"], "max_quality_drop": 0.05})
         self.assert_contract(spec)
-        with self.assertRaises(grad.NotAvailableInV0Error) as ctx:
+        labelled = RouterRecipe(rubric="resolved", pricing={"cheap/m": 0.001, "strong/m": 1}, fallback="strong/m").to_spec()
+        self.assertEqual(labelled, {"kind": "router", "rubric": "resolved", "pricing": {"cheap/m": 0.001, "strong/m": 1.0}, "fallback": "strong/m"})
+        self.assert_contract(labelled)
+        judged = RouterRecipe(models=["a/b", "c/d"], rubric=grad.Judge(model="m/judge", name="resolved", prompt="Solved?")).to_spec()
+        self.assertEqual(judged["rubric"], [{"name": "resolved", "kind": "judge", "model": "m/judge", "prompt": "Solved?", "weight": 1.0}])
+        self.assert_contract(judged)
+        with self.assertRaises(ValueError):
             RouterRecipe(rubric=grad.Judge(model="m", name="resolved"))
-        self.assertIn("scores", str(ctx.exception))
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            RouterRecipe(rubric=grad.Scorer("x", fn=lambda t: 1.0))
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            RouterRecipe(pricing={"a": 1})
+        with self.assertRaises(grad.NotAvailableInV0Error) as ctx:
+            RouterRecipe(models=["a/b", "c/d"], rubric=grad.Scorer("x", fn=lambda t: 1.0))
+        self.assertIn("sandbox", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            RouterRecipe(pricing={"a/b": -1})
         with self.assertRaises(ValueError):
             RouterRecipe(models=["one"])
         with self.assertRaises(ValueError):
@@ -119,8 +125,11 @@ class RecipeTests(unittest.TestCase):
             CartridgeRecipe()
         with self.assertRaises(TypeError):
             CartridgeRecipe(context=5)  # type: ignore[arg-type]
+        tuned = CartridgeRecipe(context="t", loss=losses.TopKKLDistill(top_k=32), max_new_tokens=64).to_spec()
+        self.assertEqual((tuned["loss"], tuned["max_new_tokens"]), ({"kind": "top_k_kl_distill", "top_k": 32}, 64))
+        self.assert_contract(tuned)
         with self.assertRaises(grad.NotAvailableInV0Error):
-            CartridgeRecipe(context="t", loss=losses.TopKKLDistill(top_k=32))
+            CartridgeRecipe(context="t", loss=losses.InfoNCE())
         with self.assertRaises(ValueError):
             CartridgeRecipe(context="t", num_tokens=8)
 
@@ -139,8 +148,7 @@ class RecipeTests(unittest.TestCase):
     def test_embedding(self) -> None:
         self.assertEqual(EmbeddingRecipe(pool=pooling.Mean(), loss=losses.InfoNCE(temp=0.03)).to_spec(), {"kind": "embedding", "temp": 0.03})
         self.assertEqual(EmbeddingRecipe(temp=0.1).to_spec()["temp"], 0.1)
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            EmbeddingRecipe(pool=pooling.CLS())
+        self.assertEqual(EmbeddingRecipe(pool=pooling.CLS()).to_spec(), {"kind": "embedding", "pool": {"kind": "cls"}})
         with self.assertRaises(grad.NotAvailableInV0Error):
             EmbeddingRecipe(pool=pooling.LastToken())
         with self.assertRaises(grad.NotAvailableInV0Error):
@@ -154,9 +162,13 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(SFTRecipe(optimizer=optim.AdamW(lr=5e-4)).to_spec()["lr"], 5e-4)
         self.assertNotIn("lr", SFTRecipe(optimizer=optim.AdamW()).to_spec())
         self.assertEqual(SFTRecipe(optimizer={"kind": "adamw", "lr": 1e-3}).to_spec()["lr"], 1e-3)
-        with self.assertRaises(grad.NotAvailableInV0Error) as ctx:
-            SFTRecipe(optimizer=optim.AdamW(weight_decay=0.01))
-        self.assertIn("weight_decay=0.0", str(ctx.exception))
+        tuned = SFTRecipe(optimizer=optim.AdamW(betas=(0.8, 0.9), weight_decay=0.01, grad_clip=0.5), eval_every=25).to_spec()
+        self.assertEqual(tuned["optimizer"], {"kind": "adamw", "betas": [0.8, 0.9], "weight_decay": 0.01, "grad_clip": 0.5})
+        self.assertEqual(tuned["eval_every"], 25)
+        self.assert_contract(tuned)
+        self.assertNotIn("eval_every", SFTRecipe(eval_every="auto").to_spec())
+        with self.assertRaises(ValueError):
+            SFTRecipe(eval_every=0)
         with self.assertRaises(grad.NotAvailableInV0Error):
             SFTRecipe(optimizer={"kind": "sgd"})
         with self.assertRaises(ValueError):
@@ -177,8 +189,6 @@ class RecipeTests(unittest.TestCase):
             SFTRecipe(evals=[grad.benchmarks.IFEval(limit=200)])
         with self.assertRaises(grad.NotAvailableInV0Error):
             SFTRecipe(loggers=[grad.loggers.WandB(project="p")])
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            SFTRecipe(eval_every=10)
         self.assertEqual(SFTRecipe(eval_every="auto").to_spec(), {"kind": "sft"})
         with self.assertRaises(grad.NotAvailableInV0Error):
             SFTRecipe(thinking="high")

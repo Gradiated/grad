@@ -360,6 +360,10 @@ func TestLiveCloudRouterWithTorch(t *testing.T) {
 	if decision.InferenceID == "" || decision.ArtifactID != run.Artifact.ID {
 		t.Fatalf("decision %+v", decision.RouteResponse)
 	}
+	// The fake Cloud routes between the candidates the trainer recorded in the manifest.
+	if decision.Model != "cheap/m" && decision.Model != "strong/m" {
+		t.Fatalf("routed to %q, not a trained candidate (manifest %v)", decision.Model, run.Artifact.Manifest["candidates"])
+	}
 	if err := decision.RecordFeedback(ctx, grad.Feedback{Score: 1.0, Metrics: map[string]float64{"latency_ms": 12}}); err != nil {
 		t.Fatal(err)
 	}

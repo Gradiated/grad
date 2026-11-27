@@ -45,9 +45,17 @@ export interface Artifact {
 }
 
 /** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
-export type ArtifactFormat = "peft_lora" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference";
+export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reference";
 
-export const ArtifactFormatValues = ["peft_lora", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference"] as const;
+export const ArtifactFormatValues = ["peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reference"] as const;
+
+/** Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference). */
+export interface BaseArtifact {
+  id: string;
+  recipeKind: RecipeKind;
+  format: "peft_lora";
+  sha256: string;
+}
 
 export interface BenchmarkSpec {
   name: "ifeval" | "gsm8k" | "mmlu-pro" | "gpqa-diamond" | "humaneval" | "livecodebench";
@@ -377,15 +385,17 @@ export interface EvalRun {
   };
   summary: Array<EvalModelSummary>;
   totalCostUsd: number;
+  /** Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial results. */
+  maxCostUsd: number | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
 }
 
-export type EvalStatus = "queued" | "running" | "awaiting_scores" | "completed" | "failed" | "cancelled";
+export type EvalStatus = "queued" | "running" | "awaiting_scores" | "completed" | "stopped_budget" | "failed" | "cancelled";
 
-export const EvalStatusValues = ["queued", "running", "awaiting_scores", "completed", "failed", "cancelled"] as const;
+export const EvalStatusValues = ["queued", "running", "awaiting_scores", "completed", "stopped_budget", "failed", "cancelled"] as const;
 
 export interface EvalTaskOutcome {
   taskId: string;
@@ -468,6 +478,20 @@ export type ImportStatus = "queued" | "running" | "completed" | "failed";
 
 export const ImportStatusValues = ["queued", "running", "completed", "failed"] as const;
 
+export type LossSpec = {
+  kind: "cross_entropy";
+  reduction?: "per_example" | "per_token" | undefined;
+} | {
+  kind: "dpo";
+  beta?: number | undefined;
+} | {
+  kind: "infonce";
+  temp?: number | undefined;
+} | {
+  kind: "top_k_kl_distill";
+  topK?: number | undefined;
+};
+
 export interface MetricPoint {
   seq: number;
   attempt: number;
@@ -495,6 +519,14 @@ export interface MetricsPage {
   tailCursor: string;
 }
 
+export interface OptimizerSpec {
+  kind?: "adamw" | undefined;
+  betas?: Array<unknown> | undefined;
+  weightDecay?: number | undefined;
+  /** Max global gradient norm; 0 disables clipping. */
+  gradClip?: number | undefined;
+}
+
 export interface PlanEvalRequest {
   name?: string | undefined;
   models: Array<string>;
@@ -511,6 +543,7 @@ export interface PlanEvalRequest {
   limit?: number | undefined;
   /** Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise. */
   passThreshold?: number | null | undefined;
+  /** Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget). */
   maxCostUsd?: number | undefined;
 }
 
@@ -533,6 +566,8 @@ export interface PlanRunRequest {
   recipe: RecipeSpec;
   split?: SplitSpec | undefined;
   maxCostUsd?: number | undefined;
+  /** Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model. */
+  dependsOn?: string | undefined;
 }
 
 export interface PlanRunResponse {
@@ -545,7 +580,17 @@ export interface PlanRunResponse {
   estimatedCostUsd: number;
   pricePerMillionTokens: number;
   trainedTokenFraction: number;
+  /** Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd). */
+  labeling: {
+    estimatedModelCalls: number;
+    estimatedJudgeCalls: number;
+    estimatedCostUsd: number;
+  } | null;
   warnings: Array<string>;
+}
+
+export interface PoolingSpec {
+  kind: "mean" | "cls";
 }
 
 export interface PostEvalScoresRequest {
@@ -588,6 +633,7 @@ export interface RecipeSpec {
   trainOn?: "last" | "all_assistant" | undefined;
   thinking?: "auto" | "on" | "off" | undefined;
   preserveThinking?: boolean | undefined;
+  /** Default per_example. */
   reduction?: "per_example" | "per_token" | undefined;
   select?: "best" | "last" | undefined;
   checkpointTtlDays?: number | undefined;
@@ -601,6 +647,21 @@ export interface RecipeSpec {
   teacher?: string | undefined;
   envName?: string | undefined;
   groupSize?: number | undefined;
+  optimizer?: OptimizerSpec | undefined;
+  /** Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval). */
+  evalEvery?: "auto" | number | undefined;
+  loss?: LossSpec | undefined;
+  pool?: PoolingSpec | undefined;
+  /** RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training. */
+  rubric?: string | Array<EvalRubricItem> | undefined;
+  /** RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records. */
+  pricing?: Record<string, number> | undefined;
+  /** RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate). */
+  fallback?: string | undefined;
+  /** CartridgeRecipe: teacher answer length per prompt during distillation (default 256). */
+  maxNewTokens?: number | undefined;
+  /** CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically). */
+  slotToken?: string | undefined;
 }
 
 export interface RecordFeedbackRequest {
@@ -625,6 +686,7 @@ export interface RenderDatasetResponse {
   dataset: string;
   model: string;
   templateRevision: string;
+  /** Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens. */
   tokenCounts: "estimated";
   examples: Array<{
     recordId: string;
@@ -673,6 +735,8 @@ export interface ResolvedRunConfig {
   reduction: "per_example" | "per_token";
   select: "best" | "last";
   checkpointEverySteps: number;
+  evalEverySteps: number;
+  optimizer: OptimizerSpec;
   checkpointTtlDays: number;
   split: {
     strategy: "by_session" | "by_group" | "random";
@@ -681,6 +745,9 @@ export interface ResolvedRunConfig {
     trainRecords: number;
     evalRecords: number;
   };
+  /** Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on. */
+  labelEvalId: string | null;
+  baseArtifact: BaseArtifact | null;
   recipeParams: Record<string, unknown>;
 }
 
@@ -741,6 +808,8 @@ export interface Run {
   latestMetric: MetricPoint | null;
   evalReport: EvalReport | null;
   artifactId: string | null;
+  /** The run this chained run starts from; it stays queued until that run completes. */
+  dependsOn: string | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;

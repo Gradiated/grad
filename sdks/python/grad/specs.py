@@ -178,7 +178,7 @@ class losses:
 
 @dataclass(frozen=True)
 class AdamWSpec(_Spec):
-    """AdamW settings. The v0 trainer always uses these defaults; only ``lr`` is configurable."""
+    """AdamW settings (``betas=(0.9, 0.95)``, ``weight_decay=0.0``, ``grad_clip=1.0`` by default)."""
 
     lr: float | str = "auto"
     betas: tuple[float, float] = (0.9, 0.95)
@@ -282,7 +282,7 @@ class PoolingSpec(_Spec):
 
 
 class pooling:
-    """Embedding pooling. The v0 server trains with mean pooling."""
+    """Embedding pooling: the v0 server trains with ``Mean()`` (default) or ``CLS()``."""
 
     @staticmethod
     def Mean() -> PoolingSpec:

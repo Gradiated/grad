@@ -335,9 +335,20 @@ class AsyncRuns(_AsyncResource):
         plan.max_cost_usd = max_cost_usd
         return plan
 
-    async def create(self, dataset: Any = None, *, name: str, recipe: Any, split: Any = None, max_cost_usd: float | None = None) -> AsyncRun:
-        """Create and enqueue a run; ``await run.wait()``."""
-        body = h.run_body(dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd)
+    async def create(
+        self,
+        dataset: Any = None,
+        *,
+        name: str,
+        recipe: Any,
+        split: Any = None,
+        max_cost_usd: float | None = None,
+        depends_on: Any = None,
+    ) -> AsyncRun:
+        """Create and enqueue a run; ``await run.wait()``. ``depends_on`` chains it (``Run.then``)."""
+        body = h.run_body(
+            dataset=dataset, name=name, recipe=recipe, split=split, max_cost_usd=max_cost_usd, depends_on=depends_on
+        )
         return AsyncRun.from_api(await self._wire.create_run(body), self._client)
 
     async def get(self, run_id: str) -> AsyncRun:

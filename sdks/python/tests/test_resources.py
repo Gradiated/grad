@@ -532,10 +532,22 @@ class RunTests(unittest.TestCase):
         self.assertIn("wait()", str(ctx.exception))
         with self.assertRaises(RuntimeError):
             no_art.download("x")
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            run.then(dataset="x", recipe=SFTRecipe())
         with self.assertRaises(AttributeError):
             run.url  # noqa: B018
+
+
+class ChainTests(unittest.TestCase):
+    def test_then_queues_a_run_that_depends_on_this_one(self) -> None:
+        client, sender, _ = make_client({"POST /v1/runs": json_reply({**RUN_Q, "depends_on": RUN_C["id"]}, 202)})
+        first = grad.Run.from_api(RUN_C, client)
+        second = first.then("prefs", recipe=grad.recipes.DPORecipe(beta=0.3))
+        self.assertEqual(
+            sender.sent[-1].json,
+            {"dataset": "prefs", "name": RUN_C["name"], "recipe": {"kind": "dpo", "beta": 0.3}, "depends_on": RUN_C["id"]},
+        )
+        self.assertEqual(second.depends_on, RUN_C["id"])
+        client.runs.create("prefs", name="dpo", recipe=grad.recipes.DPORecipe(), depends_on=first)
+        self.assertEqual(sender.sent[-1].json["depends_on"], RUN_C["id"])
 
 
 class ServingTests(unittest.TestCase):
@@ -779,6 +791,9 @@ class EvalTests(unittest.TestCase):
         self.assertIn("503", str(ctx.exception))
         self.assertEqual(ctx.exception.eval.status, "failed")
         self.assertEqual(client.evals.wait(eid, raise_on_failure=False).status, "failed")
+        capped = {**completed, "status": "stopped_budget", "max_cost_usd": 0.1}
+        client, _, _ = make_client({f"GET /v1/evals/{eid}": json_reply(capped)})
+        self.assertEqual(client.evals.wait(eid).status, "stopped_budget")
         queued = fixture("python-eval-queued.json")
         client, _, _ = make_client(
             {

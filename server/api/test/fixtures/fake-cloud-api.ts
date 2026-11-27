@@ -14,14 +14,12 @@ export interface FakePrincipal {
   is_platform_admin?: boolean;
 }
 
-export interface UsageEntry {
+export type UsageEntry = {
   idempotency_key: string;
   workspace_id: string;
-  run_id: string;
-  attempt: number;
   tokens_processed: number;
   cost_usd: number;
-}
+} & ({ run_id: string; attempt: number } | { eval_id: string });
 
 export interface LoggedRequest {
   path: string;
@@ -139,17 +137,20 @@ export const startFakeCloudApi = async (
       case "/api/internal/v1/serving/route": {
         const dep = deployments.get(`${ws}:${String(body.deployment)}`);
         if (!dep) return [404, { detail: "deployment not serving" }];
+        // The router recipe's manifest names its candidates and fallback model
+        // (server/trainer/grad_trainer/recipes/router.py `manifest()`).
         const manifest = (artifacts.get(`${ws}:${dep.artifact_id}`)?.manifest ??
-          {}) as { router_config?: { candidates?: string[] } };
-        const candidates = manifest.router_config?.candidates ?? [];
-        const fallback =
-          typeof body.fallback_model === "string" ? body.fallback_model : null;
+          {}) as { candidates?: string[]; fallback_model?: string };
+        const candidates = manifest.candidates ?? [];
+        if (candidates.length < 2) {
+          return [422, { detail: "artifact is not a trained router" }];
+        }
+        const strong = manifest.fallback_model ?? candidates.at(-1) ?? "";
+        const cheap = candidates.find((m) => m !== strong) ?? strong;
         const messages = (body.messages ?? []) as Array<{ content?: unknown }>;
         const length = messages
           .map((m) => (typeof m.content === "string" ? m.content : ""))
           .join("").length;
-        const cheap = candidates[0] ?? fallback ?? dep.model_id;
-        const strong = fallback ?? candidates[candidates.length - 1] ?? cheap;
         const model = length > 200 ? strong : cheap;
         return [
           200,
@@ -225,14 +226,21 @@ export const startFakeCloudApi = async (
         if (!idempotencyKey)
           return send(400, { detail: "Idempotency-Key required" });
         if (!usage.some((u) => u.idempotency_key === idempotencyKey)) {
-          usage.push({
+          const common = {
             idempotency_key: idempotencyKey,
             workspace_id: String(body.workspace_id),
-            run_id: String(body.run_id),
-            attempt: Number(body.attempt),
             tokens_processed: Number(body.tokens_processed),
             cost_usd: Number(body.cost_usd),
-          });
+          };
+          usage.push(
+            body.eval_id !== undefined
+              ? { ...common, eval_id: String(body.eval_id) }
+              : {
+                  ...common,
+                  run_id: String(body.run_id),
+                  attempt: Number(body.attempt),
+                },
+          );
         }
         return send(200, { recorded: true });
       }

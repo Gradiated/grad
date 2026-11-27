@@ -8,6 +8,7 @@ S3 PUTs or the server's streaming blob proxy), and finishes every attempt with
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -29,6 +30,7 @@ from typing import Any, BinaryIO, Callable
 
 from .bundles import bundle_directory, extract_bundle
 from .protocol import (
+    BaseArtifact,
     Budget,
     ImportRunner,
     RecipeRunner,
@@ -496,6 +498,7 @@ class TrainerWorker:
         try:
             records = self._load_dataset(job, job_dir)
             resume = self._load_resume(job, job_dir)
+            base = self._load_base(job, job_dir)
             runner = self.recipe_runner_factory(str(run["recipe_kind"]))
         except (LeaseLost, WorkerAuthError):
             raise
@@ -577,6 +580,7 @@ class TrainerWorker:
                 callbacks=RunCallbacks(on_step=on_step, on_checkpoint=on_checkpoint),
                 resume=resume,
                 workdir=work,
+                base=base,
             )
         except (LeaseLost, WorkerAuthError):
             raise
@@ -648,6 +652,24 @@ class TrainerWorker:
         extract_bundle(archive, target)
         archive.unlink(missing_ok=True)
         return ResumeState(step=int(resume["step"]), checkpoint_dir=target)
+
+    def _load_base(self, job: dict[str, Any], job_dir: Path) -> BaseArtifact | None:
+        """Continued training: download, verify and extract the starting artifact."""
+        base = job.get("base")
+        if not base:
+            return None
+        archive = job_dir / "base.grad.tar.gz"
+        self.client.download(str(base["download_url"]), archive)
+        digest = hashlib.sha256()
+        with archive.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(_CHUNK), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != base["sha256"]:
+            raise ValueError(f"starting artifact '{base['artifact_id']}' failed its sha256 check")
+        target = job_dir / "base"
+        extract_bundle(archive, target)
+        archive.unlink(missing_ok=True)
+        return BaseArtifact(artifact_id=str(base["artifact_id"]), directory=target)
 
     # -- import jobs ----------------------------------------------------------
 

@@ -477,6 +477,8 @@ components:
           type: string
           enum:
             - estimated
+          description: Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer
+            tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
         examples:
           type: array
           items:
@@ -833,6 +835,26 @@ components:
           type: number
           minimum: 0
           maximum: 1
+        labeling:
+          type:
+            - object
+            - "null"
+          properties:
+            estimated_model_calls:
+              type: integer
+              minimum: 0
+            estimated_judge_calls:
+              type: integer
+              minimum: 0
+            estimated_cost_usd:
+              type: number
+              minimum: 0
+          required:
+            - estimated_model_calls
+            - estimated_judge_calls
+            - estimated_cost_usd
+          description: "Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates
+            (billed as an eval, included in estimated_cost_usd)."
         warnings:
           type: array
           items:
@@ -847,6 +869,7 @@ components:
         - estimated_cost_usd
         - price_per_million_tokens
         - trained_token_fraction
+        - labeling
         - warnings
     ResolvedRunConfig:
       type: object
@@ -969,6 +992,11 @@ components:
         checkpoint_every_steps:
           type: integer
           minimum: 1
+        eval_every_steps:
+          type: integer
+          minimum: 1
+        optimizer:
+          $ref: "#/components/schemas/OptimizerSpec"
         checkpoint_ttl_days:
           type: integer
           minimum: 1
@@ -997,6 +1025,13 @@ components:
             - seed
             - train_records
             - eval_records
+        label_eval_id:
+          type:
+            - string
+            - "null"
+          description: "Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on."
+        base_artifact:
+          $ref: "#/components/schemas/BaseArtifact"
         recipe_params:
           type: object
           additionalProperties: {}
@@ -1021,9 +1056,68 @@ components:
         - reduction
         - select
         - checkpoint_every_steps
+        - eval_every_steps
+        - optimizer
         - checkpoint_ttl_days
         - split
+        - label_eval_id
+        - base_artifact
         - recipe_params
+    OptimizerSpec:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - adamw
+          default: adamw
+        betas:
+          type: array
+          prefixItems:
+            - type: number
+              minimum: 0
+              exclusiveMaximum: 1
+            - type: number
+              minimum: 0
+              exclusiveMaximum: 1
+          default:
+            - 0.9
+            - 0.95
+        weight_decay:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+        grad_clip:
+          type: number
+          minimum: 0
+          maximum: 1000
+          default: 1
+          description: Max global gradient norm; 0 disables clipping.
+      additionalProperties: false
+    BaseArtifact:
+      type:
+        - object
+        - "null"
+      properties:
+        id:
+          type: string
+          minLength: 1
+        recipe_kind:
+          $ref: "#/components/schemas/RecipeKind"
+        format:
+          type: string
+          enum:
+            - peft_lora
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      required:
+        - id
+        - recipe_kind
+        - format
+        - sha256
+      description: "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference)."
     PlanRunRequest:
       type: object
       properties:
@@ -1044,6 +1138,12 @@ components:
         max_cost_usd:
           type: number
           exclusiveMinimum: 0
+        depends_on:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: "Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it
+            fails. Omit recipe.model."
       required:
         - dataset
         - name
@@ -1114,7 +1214,7 @@ components:
           enum:
             - per_example
             - per_token
-          default: per_example
+          description: Default per_example.
         select:
           type: string
           enum:
@@ -1165,8 +1265,59 @@ components:
           type: integer
           minimum: 2
           maximum: 64
+        optimizer:
+          $ref: "#/components/schemas/OptimizerSpec"
+        eval_every:
+          anyOf:
+            - type: string
+              enum:
+                - auto
+            - type: integer
+              minimum: 1
+          default: auto
+          description: Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+        loss:
+          $ref: "#/components/schemas/LossSpec"
+        pool:
+          $ref: "#/components/schemas/PoolingSpec"
+        rubric:
+          anyOf:
+            - type: string
+              minLength: 1
+              maxLength: 80
+            - type: array
+              items:
+                $ref: "#/components/schemas/EvalRubricItem"
+              minItems: 1
+              maxItems: 32
+          description: "RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then
+            replays each prompt against recipe.models and scores the answers in a labeling eval before training."
+        pricing:
+          type: object
+          additionalProperties:
+            type: number
+            minimum: 0
+          description: "RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records."
+        fallback:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: "RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring
+            candidate)."
+        max_new_tokens:
+          type: integer
+          minimum: 1
+          maximum: 8192
+          description: "CartridgeRecipe: teacher answer length per prompt during distillation (default 256)."
+        slot_token:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: "CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token
+            that tokenizes atomically)."
       required:
         - kind
+      additionalProperties: false
     AdapterSpec:
       oneOf:
         - type: object
@@ -1211,6 +1362,118 @@ components:
                 - frozen_head
           required:
             - kind
+    LossSpec:
+      oneOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - cross_entropy
+            reduction:
+              type: string
+              enum:
+                - per_example
+                - per_token
+          required:
+            - kind
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - dpo
+            beta:
+              type: number
+              exclusiveMinimum: 0
+          required:
+            - kind
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - infonce
+            temp:
+              type: number
+              exclusiveMinimum: 0
+          required:
+            - kind
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - top_k_kl_distill
+            top_k:
+              type: integer
+              minimum: 1
+              maximum: 256
+          required:
+            - kind
+          additionalProperties: false
+    PoolingSpec:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - mean
+            - cls
+      required:
+        - kind
+      additionalProperties: false
+    EvalRubricItem:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[A-Za-z0-9_.:-]+$
+        kind:
+          type: string
+          enum:
+            - regex
+            - validator
+            - code
+            - judge
+        weight:
+          type: number
+          exclusiveMinimum: 0
+          default: 1
+        pattern:
+          type: string
+          maxLength: 256
+        flags:
+          type: string
+          maxLength: 4
+          pattern: ^[imsu]*$
+        validator:
+          type: string
+          enum:
+            - json
+            - non_empty
+            - exact_match
+        model:
+          type: string
+          minLength: 1
+          maxLength: 160
+        prompt:
+          type: string
+          maxLength: 8000
+        runtime:
+          type: string
+          enum:
+            - local
+          description: Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK
+            posts their scores.
+      required:
+        - name
+        - kind
     SplitSpec:
       type: object
       properties:
@@ -1293,6 +1556,11 @@ components:
           type:
             - string
             - "null"
+        depends_on:
+          type:
+            - string
+            - "null"
+          description: The run this chained run starts from; it stays queued until that run completes.
         error:
           type:
             - string
@@ -1329,6 +1597,7 @@ components:
         - latest_metric
         - eval_report
         - artifact_id
+        - depends_on
         - error
         - created_at
         - updated_at
@@ -1829,6 +2098,7 @@ components:
         - "null"
       enum:
         - peft_lora
+        - merged_safetensors
         - prefix_kv
         - cartridge
         - encoder_safetensors
@@ -2048,6 +2318,25 @@ components:
             - checkpoint_id
             - step
             - download_url
+        base:
+          type:
+            - object
+            - "null"
+          properties:
+            artifact_id:
+              type: string
+              minLength: 1
+            sha256:
+              type: string
+              pattern: ^[0-9a-f]{64}$
+            download_url:
+              type: string
+              minLength: 1
+          required:
+            - artifact_id
+            - sha256
+            - download_url
+          description: "Continued training: the starting artifact's bundle (a PEFT LoRA adapter) to load before training."
       required:
         - id
         - kind
@@ -2060,6 +2349,7 @@ components:
         - max_cost_usd
         - dataset
         - resume
+        - base
     JobKind:
       type: string
       enum:
@@ -2924,6 +3214,8 @@ components:
         max_cost_usd:
           type: number
           exclusiveMinimum: 0
+          description: "Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status
+            stopped_budget)."
       required:
         - models
     BenchmarkSpec:
@@ -2945,54 +3237,6 @@ components:
           default: 200
       required:
         - name
-    EvalRubricItem:
-      type: object
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 80
-          pattern: ^[A-Za-z0-9_.:-]+$
-        kind:
-          type: string
-          enum:
-            - regex
-            - validator
-            - code
-            - judge
-        weight:
-          type: number
-          exclusiveMinimum: 0
-          default: 1
-        pattern:
-          type: string
-          maxLength: 256
-        flags:
-          type: string
-          maxLength: 4
-          pattern: ^[imsu]*$
-        validator:
-          type: string
-          enum:
-            - json
-            - non_empty
-            - exact_match
-        model:
-          type: string
-          minLength: 1
-          maxLength: 160
-        prompt:
-          type: string
-          maxLength: 8000
-        runtime:
-          type: string
-          enum:
-            - local
-          description: Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK
-            posts their scores.
-      required:
-        - name
-        - kind
     EvalRun:
       type: object
       properties:
@@ -3085,6 +3329,13 @@ components:
         total_cost_usd:
           type: number
           minimum: 0
+        max_cost_usd:
+          type:
+            - number
+            - "null"
+          exclusiveMinimum: 0
+          description: Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial
+            results.
         error:
           type:
             - string
@@ -3118,6 +3369,7 @@ components:
         - progress
         - summary
         - total_cost_usd
+        - max_cost_usd
         - error
         - created_at
         - updated_at
@@ -3129,6 +3381,7 @@ components:
         - running
         - awaiting_scores
         - completed
+        - stopped_budget
         - failed
         - cancelled
     EvalModelSummary:

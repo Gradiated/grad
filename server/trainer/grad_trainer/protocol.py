@@ -11,9 +11,10 @@ import importlib
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
-from .runner_types import Budget, ImportSummary, ResumeState, RunCallbacks, RunOutput, RunStatus
+from .runner_types import BaseArtifact, Budget, ImportSummary, ResumeState, RunCallbacks, RunOutput, RunStatus
 
 __all__ = [
+    "BaseArtifact",
     "Budget",
     "ImportRunner",
     "ImportSummary",
@@ -38,6 +39,7 @@ class RecipeRunner(Protocol):
         callbacks: RunCallbacks,
         resume: ResumeState | None,
         workdir: Path,
+        base: BaseArtifact | None = None,
     ) -> RunOutput: ...
 
 

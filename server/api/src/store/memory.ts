@@ -426,6 +426,8 @@ const buildRepositories = (
           latest_metric: null,
           eval_report: null,
           artifact_id: null,
+          depends_on: input.dependsOn ?? null,
+          waiting_on: input.waitingOn ?? null,
           error: null,
           created_at: ts,
           updated_at: ts,
@@ -450,6 +452,12 @@ const buildRepositories = (
             page,
           ),
         ),
+      listWaitingOn: async (runId) =>
+        clone(
+          Array.from(st().runs.values()).filter(
+            (r) => r.waiting_on === runId && r.status === "queued",
+          ),
+        ),
       update: async (id, patch, expect) => {
         const run = st().runs.get(id);
         if (!run || !matches(run, expect)) return null;
@@ -469,6 +477,7 @@ const buildRepositories = (
         const run = oldestQueued(
           st().runs.values(),
           (r) =>
+            r.waiting_on === null &&
             (!workspaceId || r.workspace_id === workspaceId) &&
             (!recipes || recipes.includes(r.recipe_kind)),
         );
@@ -493,7 +502,9 @@ const buildRepositories = (
         const runs = Array.from(st().runs.values());
 
         return {
-          queued: runs.filter((r) => r.status === "queued").length,
+          queued: runs.filter(
+            (r) => r.status === "queued" && r.waiting_on === null,
+          ).length,
           running: runs.filter((r) => r.worker_id !== null).length,
         };
       },
@@ -837,6 +848,7 @@ const buildRepositories = (
           ...clone(input),
           id: newId("eval"),
           status: "queued",
+          budget_stopped: false,
           total_outputs: 0,
           generated: 0,
           summary: [],
@@ -1020,6 +1032,7 @@ const buildRepositories = (
           id: newId("bill"),
           idempotency_key: input.idempotencyKey,
           workspace_id: input.workspaceId,
+          kind: input.kind,
           run_id: input.runId,
           attempt: input.attempt,
           tokens: input.tokens,

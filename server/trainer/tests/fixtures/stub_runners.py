@@ -30,7 +30,7 @@ class StubRunner:
         self.status = status
         self.calls: list[dict[str, Any]] = []
 
-    def run(self, config, records, *, budget, callbacks, resume, workdir):  # type: ignore[no-untyped-def]
+    def run(self, config, records, *, budget, callbacks, resume, workdir, base=None):  # type: ignore[no-untyped-def]
         resume_files = (
             sorted(p.name for p in resume.checkpoint_dir.iterdir()) if resume else None
         )
@@ -41,6 +41,8 @@ class StubRunner:
                 "budget": budget,
                 "resume": resume,
                 "resume_files": resume_files,
+                "base": base,
+                "base_files": sorted(p.name for p in base.directory.iterdir()) if base else None,
             }
         )
         start = resume.step + 1 if resume else 1

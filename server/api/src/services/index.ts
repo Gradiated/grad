@@ -24,9 +24,9 @@ export const createServices = (deps: AppDependencies): Services => {
   const uploads = createUploadService(deps);
   const billing = createBillingOutbox(deps);
   const imports = createImportService(deps, { datasets, uploads });
-  const runs = createRunLifecycle(deps, { datasets, uploads, billing });
+  const evals = createEvalService(deps, datasets, billing);
+  const runs = createRunLifecycle(deps, { datasets, uploads, billing, evals });
   const serving = createServingService(deps);
-  const evals = createEvalService(deps, datasets);
   const maintenance = createMaintenance(deps, {
     runs,
     imports,

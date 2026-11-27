@@ -8,6 +8,7 @@ import {
   SlugSchema,
 } from "./common.js";
 import { EvalReportSchema } from "./eval-report.js";
+import { EvalRubricItemSchema } from "./evals.js";
 
 export const AdapterSpecSchema = z
   .discriminatedUnion("kind", [
@@ -60,6 +61,58 @@ export const ALL_RECIPE_KINDS = [
 export const RecipeKindSchema = z.enum(ALL_RECIPE_KINDS).openapi("RecipeKind");
 export type RecipeKind = z.infer<typeof RecipeKindSchema>;
 
+export const OptimizerSpecSchema = z
+  .object({
+    kind: z.literal("adamw").default("adamw"),
+    betas: z
+      .tuple([z.number().min(0).lt(1), z.number().min(0).lt(1)])
+      .default([0.9, 0.95]),
+    weight_decay: z.number().min(0).max(1).default(0),
+    grad_clip: z.number().min(0).max(1000).default(1.0).openapi({
+      description: "Max global gradient norm; 0 disables clipping.",
+    }),
+  })
+  .strict()
+  .openapi("OptimizerSpec");
+
+export type OptimizerSpec = z.infer<typeof OptimizerSpecSchema>;
+
+export const LossSpecSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("cross_entropy"),
+        reduction: z.enum(["per_example", "per_token"]).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("dpo"),
+        beta: z.number().positive().optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("infonce"),
+        temp: z.number().positive().optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("top_k_kl_distill"),
+        top_k: z.number().int().min(1).max(256).optional(),
+      })
+      .strict(),
+  ])
+  .openapi("LossSpec");
+
+export type LossSpec = z.infer<typeof LossSpecSchema>;
+
+export const PoolingSpecSchema = z
+  .object({ kind: z.enum(["mean", "cls"]) })
+  .strict()
+  .openapi("PoolingSpec");
+
 export const RecipeSpecSchema = z
   .object({
     kind: RecipeKindSchema,
@@ -74,7 +127,9 @@ export const RecipeSpecSchema = z
     train_on: z.enum(["last", "all_assistant"]).default("last"),
     thinking: z.enum(["auto", "on", "off"]).default("auto"),
     preserve_thinking: z.boolean().default(false),
-    reduction: z.enum(["per_example", "per_token"]).default("per_example"),
+    reduction: z.enum(["per_example", "per_token"]).optional().openapi({
+      description: "Default per_example.",
+    }),
     select: z.enum(["best", "last"]).default("best"),
     checkpoint_ttl_days: z.number().int().min(1).max(365).default(30),
     beta: z.number().positive().optional(),
@@ -87,7 +142,44 @@ export const RecipeSpecSchema = z
     teacher: ModelIdSchema.optional(),
     env_name: SlugSchema.optional(),
     group_size: z.number().int().min(2).max(64).optional(),
+    optimizer: OptimizerSpecSchema.optional(),
+    eval_every: z
+      .union([z.literal("auto"), z.number().int().min(1)])
+      .default("auto")
+      .openapi({
+        description:
+          "Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).",
+      }),
+    loss: LossSpecSchema.optional(),
+    pool: PoolingSpecSchema.optional(),
+    rubric: z
+      .union([
+        z.string().min(1).max(80),
+        z.array(EvalRubricItemSchema).min(1).max(32),
+      ])
+      .optional()
+      .openapi({
+        description:
+          "RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.",
+      }),
+    pricing: z.record(ModelIdSchema, z.number().min(0)).optional().openapi({
+      description:
+        "RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.",
+    }),
+    fallback: ModelIdSchema.optional().openapi({
+      description:
+        "RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate).",
+    }),
+    max_new_tokens: z.number().int().min(1).max(8192).optional().openapi({
+      description:
+        "CartridgeRecipe: teacher answer length per prompt during distillation (default 256).",
+    }),
+    slot_token: z.string().min(1).max(64).optional().openapi({
+      description:
+        "CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).",
+    }),
   })
+  .strict()
   .openapi("RecipeSpec");
 
 export type RecipeSpec = z.infer<typeof RecipeSpecSchema>;
@@ -99,6 +191,10 @@ export const PlanRunRequestSchema = z
     recipe: RecipeSpecSchema,
     split: SplitSpecSchema.optional(),
     max_cost_usd: z.number().positive().optional(),
+    depends_on: z.string().min(1).max(80).optional().openapi({
+      description:
+        "Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model.",
+    }),
   })
   .openapi("PlanRunRequest");
 
@@ -110,6 +206,17 @@ export const ResolvedAdapterSchema = z.union([
 ]);
 
 export type ResolvedAdapter = z.infer<typeof ResolvedAdapterSchema>;
+
+export const BaseArtifactSchema = z
+  .object({
+    id: z.string().min(1),
+    recipe_kind: RecipeKindSchema,
+    format: z.literal("peft_lora"),
+    sha256: Sha256HexSchema,
+  })
+  .openapi("BaseArtifact");
+
+export type BaseArtifact = z.infer<typeof BaseArtifactSchema>;
 
 export const ResolvedRunConfigSchema = z
   .object({
@@ -133,6 +240,8 @@ export const ResolvedRunConfigSchema = z
     reduction: z.enum(["per_example", "per_token"]),
     select: z.enum(["best", "last"]),
     checkpoint_every_steps: z.number().int().min(1),
+    eval_every_steps: z.number().int().min(1),
+    optimizer: OptimizerSpecSchema,
     checkpoint_ttl_days: z.number().int().min(1),
     split: z.object({
       strategy: z.enum(["by_session", "by_group", "random"]),
@@ -140,6 +249,14 @@ export const ResolvedRunConfigSchema = z
       seed: z.number().int(),
       train_records: z.number().int().min(0),
       eval_records: z.number().int().min(0),
+    }),
+    label_eval_id: z.string().nullable().openapi({
+      description:
+        "Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.",
+    }),
+    base_artifact: BaseArtifactSchema.nullable().openapi({
+      description:
+        "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).",
     }),
     recipe_params: z.record(z.string(), z.unknown()),
   })
@@ -158,6 +275,17 @@ export const PlanRunResponseSchema = z
     estimated_cost_usd: z.number().min(0),
     price_per_million_tokens: z.number().positive(),
     trained_token_fraction: z.number().min(0).max(1),
+    labeling: z
+      .object({
+        estimated_model_calls: z.number().int().min(0),
+        estimated_judge_calls: z.number().int().min(0),
+        estimated_cost_usd: z.number().min(0),
+      })
+      .nullable()
+      .openapi({
+        description:
+          "Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).",
+      }),
     warnings: z.array(z.string()),
   })
   .openapi("PlanRunResponse");
@@ -246,6 +374,10 @@ export const RunSchema = z
     latest_metric: MetricPointSchema.nullable(),
     eval_report: EvalReportSchema.nullable(),
     artifact_id: z.string().nullable(),
+    depends_on: z.string().nullable().openapi({
+      description:
+        "The run this chained run starts from; it stays queued until that run completes.",
+    }),
     error: z.string().nullable(),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
@@ -277,6 +409,7 @@ export const MetricsPageSchema = z
 export const ArtifactFormatSchema = z
   .enum([
     "peft_lora",
+    "merged_safetensors",
     "prefix_kv",
     "cartridge",
     "encoder_safetensors",

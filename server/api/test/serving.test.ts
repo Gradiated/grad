@@ -40,7 +40,8 @@ const seedArtifact = (
   });
 
 const ROUTER_MANIFEST = {
-  router_config: { candidates: ["qwen/qwen3-8b", "qwen/qwen3-32b"] },
+  candidates: ["qwen/qwen3-8b", "qwen/qwen3-32b"],
+  fallback_model: "qwen/qwen3-32b",
 };
 
 const routeBody = (deployment: string, content = "short question") => ({
@@ -249,11 +250,13 @@ describe("serving (DEPLOY_MODE=cloud) against the fake Cloud API", () => {
       name: "r1",
       recipe: "router",
       format: "router_bundle",
+      manifest: ROUTER_MANIFEST,
     });
     await seedArtifact(t, {
       name: "r2",
       recipe: "router",
       format: "router_bundle",
+      manifest: ROUTER_MANIFEST,
     });
     await t.json("/v1/deployments", { body: { artifact: "r1@latest" } });
     await t.json("/v1/deployments", { body: { artifact: "r2@latest" } });
@@ -466,6 +469,7 @@ describe("serving (DEPLOY_MODE=cloud) against the fake Cloud API", () => {
       name: "mine",
       recipe: "router",
       format: "router_bundle",
+      manifest: ROUTER_MANIFEST,
     });
     await seedArtifact(t, {
       name: "enc",

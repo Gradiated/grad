@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..config import TrainSpec, parse_train_spec
-from ..runner_types import Budget, ResumeState, RunCallbacks, RunOutput
+from ..errors import RecipeConfigError
+from ..runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks, RunOutput
 from ..splits import split_records
 from ..trainer import TrainingLoop, TrainingTask
 
@@ -17,6 +18,8 @@ class RecipeRunner:
 
     kind = ""
     backend = "torch"
+    #: Whether the recipe can start from an earlier artifact's LoRA adapter.
+    continues_adapters = False
 
     def build_task(
         self,
@@ -24,6 +27,7 @@ class RecipeRunner:
         train: list[dict[str, Any]],
         held_out: list[dict[str, Any]],
         workdir: Path,
+        base: BaseArtifact | None,
     ) -> TrainingTask:  # pragma: no cover - abstract
         raise NotImplementedError
 
@@ -43,8 +47,19 @@ class RecipeRunner:
         callbacks: RunCallbacks | None = None,
         resume: ResumeState | None = None,
         workdir: Path,
+        base: BaseArtifact | None = None,
     ) -> RunOutput:
         spec = parse_train_spec(self.kind, config)
+        if (base is not None) != (spec.base_artifact_id is not None):
+            raise RecipeConfigError(
+                "The run config's base_artifact and the starting adapter the worker loaded don't match."
+            )
+        if base is not None and not self.continues_adapters:
+            raise RecipeConfigError(f"Recipe '{self.kind}' can't continue training from an artifact.")
+        if base is not None and base.artifact_id != spec.base_artifact_id:
+            raise RecipeConfigError(
+                f"Worker loaded artifact '{base.artifact_id}', but the run starts from '{spec.base_artifact_id}'."
+            )
         workdir = Path(workdir)
         workdir.mkdir(parents=True, exist_ok=True)
         train, held_out = split_records(
@@ -53,7 +68,7 @@ class RecipeRunner:
             eval_fraction=spec.split.eval_fraction,
             seed=spec.split.seed,
         )
-        task = self.build_task(spec, train, held_out, workdir)
+        task = self.build_task(spec, train, held_out, workdir, base)
 
         common = {
             "recipe": self.kind,
@@ -63,6 +78,7 @@ class RecipeRunner:
             "rule_version": spec.rule_version,
             "seed": spec.seed,
             "select": spec.select,
+            "base_artifact": spec.base_artifact_id,
             **task.manifest(),
         }
         loop = TrainingLoop(

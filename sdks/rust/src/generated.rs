@@ -980,6 +980,8 @@ pub mod models {
     pub enum ArtifactFormat {
         /// `"peft_lora"`
         PeftLora,
+        /// `"merged_safetensors"`
+        MergedSafetensors,
         /// `"prefix_kv"`
         PrefixKv,
         /// `"cartridge"`
@@ -1006,6 +1008,7 @@ pub mod models {
         pub fn as_str(&self) -> &str {
             match self {
                 Self::PeftLora => "peft_lora",
+                Self::MergedSafetensors => "merged_safetensors",
                 Self::PrefixKv => "prefix_kv",
                 Self::Cartridge => "cartridge",
                 Self::EncoderSafetensors => "encoder_safetensors",
@@ -1021,6 +1024,7 @@ pub mod models {
         fn from(s: &str) -> Self {
             match s {
                 "peft_lora" => Self::PeftLora,
+                "merged_safetensors" => Self::MergedSafetensors,
                 "prefix_kv" => Self::PrefixKv,
                 "cartridge" => Self::Cartridge,
                 "encoder_safetensors" => Self::EncoderSafetensors,
@@ -1045,6 +1049,67 @@ pub mod models {
     }
 
     impl<'de> Deserialize<'de> for ArtifactFormat {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
+    }
+
+    /// Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct BaseArtifact {
+        pub id: String,
+        pub recipe_kind: RecipeKind,
+        pub format: BaseArtifactFormat,
+        pub sha256: String,
+    }
+
+    /// Allowed values of `BaseArtifactFormat` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum BaseArtifactFormat {
+        /// `"peft_lora"`
+        PeftLora,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for BaseArtifactFormat {
+        fn default() -> Self {
+            Self::PeftLora
+        }
+    }
+
+    impl BaseArtifactFormat {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::PeftLora => "peft_lora",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for BaseArtifactFormat {
+        fn from(s: &str) -> Self {
+            match s {
+                "peft_lora" => Self::PeftLora,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for BaseArtifactFormat {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for BaseArtifactFormat {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for BaseArtifactFormat {
         fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             let s = String::deserialize(deserializer)?;
             Ok(Self::from(s.as_str()))
@@ -2248,6 +2313,9 @@ pub mod models {
         pub progress: EvalRunProgress,
         pub summary: Vec<EvalModelSummary>,
         pub total_cost_usd: f64,
+        /// Spend cap. Generation stops once outputs cost this much and the eval ends stopped_budget with partial results.
+        #[serde(default)]
+        pub max_cost_usd: Option<f64>,
         #[serde(default)]
         pub error: Option<String>,
         pub created_at: String,
@@ -2335,6 +2403,8 @@ pub mod models {
         AwaitingScores,
         /// `"completed"`
         Completed,
+        /// `"stopped_budget"`
+        StoppedBudget,
         /// `"failed"`
         Failed,
         /// `"cancelled"`
@@ -2356,6 +2426,7 @@ pub mod models {
                 Self::Running => "running",
                 Self::AwaitingScores => "awaiting_scores",
                 Self::Completed => "completed",
+                Self::StoppedBudget => "stopped_budget",
                 Self::Failed => "failed",
                 Self::Cancelled => "cancelled",
                 Self::Other(s) => s.as_str(),
@@ -2370,6 +2441,7 @@ pub mod models {
                 "running" => Self::Running,
                 "awaiting_scores" => Self::AwaitingScores,
                 "completed" => Self::Completed,
+                "stopped_budget" => Self::StoppedBudget,
                 "failed" => Self::Failed,
                 "cancelled" => Self::Cancelled,
                 other => Self::Other(other.to_string()),
@@ -2999,6 +3071,140 @@ pub mod models {
         pub next_cursor: Option<String>,
     }
 
+    /// A union of object shapes: set the fields of exactly one variant.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct LossSpec {
+        pub kind: LossSpecKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub reduction: Option<LossSpecReduction>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub beta: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub temp: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub top_k: Option<i64>,
+    }
+
+    /// Allowed values of `LossSpecKind` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum LossSpecKind {
+        /// `"cross_entropy"`
+        CrossEntropy,
+        /// `"dpo"`
+        Dpo,
+        /// `"infonce"`
+        Infonce,
+        /// `"top_k_kl_distill"`
+        TopKKlDistill,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for LossSpecKind {
+        fn default() -> Self {
+            Self::CrossEntropy
+        }
+    }
+
+    impl LossSpecKind {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::CrossEntropy => "cross_entropy",
+                Self::Dpo => "dpo",
+                Self::Infonce => "infonce",
+                Self::TopKKlDistill => "top_k_kl_distill",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for LossSpecKind {
+        fn from(s: &str) -> Self {
+            match s {
+                "cross_entropy" => Self::CrossEntropy,
+                "dpo" => Self::Dpo,
+                "infonce" => Self::Infonce,
+                "top_k_kl_distill" => Self::TopKKlDistill,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for LossSpecKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for LossSpecKind {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for LossSpecKind {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
+    }
+
+    /// Allowed values of `LossSpecReduction` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum LossSpecReduction {
+        /// `"per_example"`
+        PerExample,
+        /// `"per_token"`
+        PerToken,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for LossSpecReduction {
+        fn default() -> Self {
+            Self::PerExample
+        }
+    }
+
+    impl LossSpecReduction {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::PerExample => "per_example",
+                Self::PerToken => "per_token",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for LossSpecReduction {
+        fn from(s: &str) -> Self {
+            match s {
+                "per_example" => Self::PerExample,
+                "per_token" => Self::PerToken,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for LossSpecReduction {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for LossSpecReduction {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for LossSpecReduction {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
+    }
+
     /// Generated from the OpenAPI schema `MetricPoint`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct MetricPoint {
@@ -3038,6 +3244,72 @@ pub mod models {
         pub tail_cursor: String,
     }
 
+    /// Generated from the OpenAPI schema `OptimizerSpec`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct OptimizerSpec {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub kind: Option<OptimizerSpecKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub betas: Option<Vec<Value>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub weight_decay: Option<f64>,
+        /// Max global gradient norm; 0 disables clipping.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub grad_clip: Option<f64>,
+    }
+
+    /// Allowed values of `OptimizerSpecKind` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum OptimizerSpecKind {
+        /// `"adamw"`
+        Adamw,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for OptimizerSpecKind {
+        fn default() -> Self {
+            Self::Adamw
+        }
+    }
+
+    impl OptimizerSpecKind {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::Adamw => "adamw",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for OptimizerSpecKind {
+        fn from(s: &str) -> Self {
+            match s {
+                "adamw" => Self::Adamw,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for OptimizerSpecKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for OptimizerSpecKind {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for OptimizerSpecKind {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
+    }
+
     /// Generated from the OpenAPI schema `PlanEvalRequest`.
     #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
     pub struct PlanEvalRequest {
@@ -3069,6 +3341,7 @@ pub mod models {
         /// Defaults to 1.0 when every rubric item is binary (regex/validator) and 0.5 otherwise.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub pass_threshold: Option<f64>,
+        /// Spend cap: evals.create rejects plans estimated above it, and execution stops at it (status stopped_budget).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub max_cost_usd: Option<f64>,
     }
@@ -3150,6 +3423,9 @@ pub mod models {
         pub split: Option<SplitSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub max_cost_usd: Option<f64>,
+        /// Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub depends_on: Option<String>,
     }
 
     /// Generated from the OpenAPI schema `PlanRunResponse`.
@@ -3164,7 +3440,80 @@ pub mod models {
         pub estimated_cost_usd: f64,
         pub price_per_million_tokens: f64,
         pub trained_token_fraction: f64,
+        /// Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+        #[serde(default)]
+        pub labeling: Option<PlanRunResponseLabeling>,
         pub warnings: Vec<String>,
+    }
+
+    /// Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct PlanRunResponseLabeling {
+        pub estimated_model_calls: i64,
+        pub estimated_judge_calls: i64,
+        pub estimated_cost_usd: f64,
+    }
+
+    /// Generated from the OpenAPI schema `PoolingSpec`.
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct PoolingSpec {
+        pub kind: PoolingSpecKind,
+    }
+
+    /// Allowed values of `PoolingSpecKind` (unknown values from newer servers are kept in `Other`).
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub enum PoolingSpecKind {
+        /// `"mean"`
+        Mean,
+        /// `"cls"`
+        Cls,
+        /// A value this SDK version does not know.
+        Other(String),
+    }
+
+    impl Default for PoolingSpecKind {
+        fn default() -> Self {
+            Self::Mean
+        }
+    }
+
+    impl PoolingSpecKind {
+        pub fn as_str(&self) -> &str {
+            match self {
+                Self::Mean => "mean",
+                Self::Cls => "cls",
+                Self::Other(s) => s.as_str(),
+            }
+        }
+    }
+
+    impl From<&str> for PoolingSpecKind {
+        fn from(s: &str) -> Self {
+            match s {
+                "mean" => Self::Mean,
+                "cls" => Self::Cls,
+                other => Self::Other(other.to_string()),
+            }
+        }
+    }
+
+    impl std::fmt::Display for PoolingSpecKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.as_str())
+        }
+    }
+
+    impl Serialize for PoolingSpecKind {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(self.as_str())
+        }
+    }
+
+    impl<'de> Deserialize<'de> for PoolingSpecKind {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            Ok(Self::from(s.as_str()))
+        }
     }
 
     /// Generated from the OpenAPI schema `PostEvalScoresRequest`.
@@ -3314,6 +3663,7 @@ pub mod models {
         pub thinking: Option<RecipeSpecThinking>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub preserve_thinking: Option<bool>,
+        /// Default per_example.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub reduction: Option<RecipeSpecReduction>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3340,9 +3690,33 @@ pub mod models {
         pub env_name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub group_size: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub optimizer: Option<OptimizerSpec>,
+        /// Optimizer steps between held-out evaluations; auto = every 10% of steps (the checkpoint interval).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub eval_every: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub loss: Option<LossSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub pool: Option<PoolingSpec>,
+        /// RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub rubric: Option<Value>,
+        /// RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub pricing: Option<BTreeMap<String, f64>>,
+        /// RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub fallback: Option<String>,
+        /// CartridgeRecipe: teacher answer length per prompt during distillation (default 256).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub max_new_tokens: Option<i64>,
+        /// CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub slot_token: Option<String>,
     }
 
-    /// Allowed values of `RecipeSpecReduction` (unknown values from newer servers are kept in `Other`).
+    /// Default per_example.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub enum RecipeSpecReduction {
         /// `"per_example"`
@@ -3781,6 +4155,7 @@ pub mod models {
         pub dataset: String,
         pub model: String,
         pub template_revision: String,
+        /// Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
         pub token_counts: RenderDatasetResponseTokenCounts,
         pub examples: Vec<RenderDatasetResponseExamplesItem>,
     }
@@ -3804,7 +4179,7 @@ pub mod models {
         pub tokens: i64,
     }
 
-    /// Allowed values of `RenderDatasetResponseTokenCounts` (unknown values from newer servers are kept in `Other`).
+    /// Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub enum RenderDatasetResponseTokenCounts {
         /// `"estimated"`
@@ -3879,8 +4254,15 @@ pub mod models {
         pub reduction: ResolvedRunConfigReduction,
         pub select: ResolvedRunConfigSelect,
         pub checkpoint_every_steps: i64,
+        pub eval_every_steps: i64,
+        pub optimizer: OptimizerSpec,
         pub checkpoint_ttl_days: i64,
         pub split: ResolvedRunConfigSplit,
+        /// Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.
+        #[serde(default)]
+        pub label_eval_id: Option<String>,
+        #[serde(default)]
+        pub base_artifact: Option<BaseArtifact>,
         pub recipe_params: BTreeMap<String, Value>,
     }
 
@@ -4402,6 +4784,9 @@ pub mod models {
         pub eval_report: Option<EvalReport>,
         #[serde(default)]
         pub artifact_id: Option<String>,
+        /// The run this chained run starts from; it stays queued until that run completes.
+        #[serde(default)]
+        pub depends_on: Option<String>,
         #[serde(default)]
         pub error: Option<String>,
         pub created_at: String,

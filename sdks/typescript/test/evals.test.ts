@@ -133,6 +133,9 @@ describe("evals", () => {
     expect((err as EvalFailedError).eval.status).toBe("failed");
     expect((err as Error).message).toContain("judge quota");
 
+    const capped = new FakeServer().on("GET", EVAL, json({ ...running, status: "stopped_budget" }));
+    expect((await makeGrad(capped).grad.evals.wait(awaiting.id)).status).toBe("stopped_budget");
+
     const slow = new FakeServer().on("GET", EVAL, json(running));
     await expect(makeGrad(slow).grad.evals.wait(awaiting.id, { timeoutMs: 3_000 })).rejects.toBeInstanceOf(WaitTimeoutError);
 

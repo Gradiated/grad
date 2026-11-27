@@ -93,23 +93,27 @@ impl RunStatus {
 }
 
 string_enum!(
-    /// Evaluation lifecycle status.
+    /// Evaluation lifecycle status (`stopped_budget`: generation stopped at `max_cost_usd`).
     EvalStatus {
         Queued => "queued",
         Running => "running",
         AwaitingScores => "awaiting_scores",
         Completed => "completed",
+        StoppedBudget => "stopped_budget",
         Failed => "failed",
         Cancelled => "cancelled",
     }
 );
 
 impl EvalStatus {
-    /// `completed`, `failed` or `cancelled`.
+    /// `completed`, `stopped_budget`, `failed` or `cancelled`.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            EvalStatus::Completed | EvalStatus::Failed | EvalStatus::Cancelled
+            EvalStatus::Completed
+                | EvalStatus::StoppedBudget
+                | EvalStatus::Failed
+                | EvalStatus::Cancelled
         )
     }
 }
@@ -1057,6 +1061,8 @@ pub struct EvalRun {
     pub progress: EvalProgress,
     pub summary: Vec<EvalModelSummary>,
     pub total_cost_usd: f64,
+    /// Spend cap; generation stops at it (`stopped_budget`).
+    pub max_cost_usd: Option<f64>,
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,

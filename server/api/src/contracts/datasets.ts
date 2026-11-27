@@ -149,7 +149,10 @@ export const RenderDatasetResponseSchema = z
     dataset: SlugSchema,
     model: z.string(),
     template_revision: z.string(),
-    token_counts: z.literal("estimated"),
+    token_counts: z.literal("estimated").openapi({
+      description:
+        "Token counts (total, trained and per span) are estimates (about 4 characters per token); the trainer tokenizes with the model's pinned tokenizer, and the run's metrics report the exact tokens.",
+    }),
     examples: z.array(RenderedExampleSchema),
   })
   .openapi("RenderDatasetResponse");

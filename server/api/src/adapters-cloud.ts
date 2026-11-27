@@ -250,6 +250,22 @@ export const createCloudBillingAdapter = (
   cfg: CloudAdapterConfig,
 ): BillingAdapter => {
   const resolved = validateCloudConfig(cfg);
+  const reportUsage = async (
+    body: Record<string, unknown>,
+    idempotencyKey: string,
+  ): Promise<void> => {
+    const res = await postInternalJson(
+      resolved,
+      "/api/internal/v1/billing/usage",
+      body,
+      idempotencyKey,
+    );
+    if (!isOk(res.status)) {
+      throw new Error(
+        `Cloud billing usage report failed (HTTP ${res.status}): ${detailOf(res)}`,
+      );
+    }
+  };
 
   return {
     checkCanStartRun: async (workspaceId, estimatedCostUsd) => {
@@ -284,10 +300,8 @@ export const createCloudBillingAdapter = (
           : {}),
       };
     },
-    recordRunUsage: async (input) => {
-      const res = await postInternalJson(
-        resolved,
-        "/api/internal/v1/billing/usage",
+    recordRunUsage: (input) =>
+      reportUsage(
         {
           workspace_id: input.workspaceId,
           run_id: input.runId,
@@ -296,13 +310,17 @@ export const createCloudBillingAdapter = (
           cost_usd: input.costUsd,
         },
         input.idempotencyKey,
-      );
-      if (!isOk(res.status)) {
-        throw new Error(
-          `Cloud billing usage report failed (HTTP ${res.status}): ${detailOf(res)}`,
-        );
-      }
-    },
+      ),
+    recordEvalUsage: (input) =>
+      reportUsage(
+        {
+          workspace_id: input.workspaceId,
+          eval_id: input.evalId,
+          tokens_processed: input.tokensProcessed,
+          cost_usd: input.costUsd,
+        },
+        input.idempotencyKey,
+      ),
   };
 };
 
