@@ -129,8 +129,9 @@ version. To release `0.3.0`:
      `sha-<7>` on every push to `main`,
    - the Helm chart to `oci://ghcr.io/gradiated/charts/grad`.
 
-   After that, a second approval creates the GitHub Release with the CHANGELOG notes, the CLI
-   archives, the Python distributions, the chart and `sha256sums.txt`, and a third updates
+   Once the images and the chart are out, a second approval creates the GitHub Release with the
+   CHANGELOG notes, the CLI archives, the Python distributions, the chart and `sha256sums.txt`,
+   and a third updates
    `Formula/grad.rb` in [Gradiated/homebrew-tap](https://github.com/Gradiated/homebrew-tap)
    with the archives' SHA-256 (`scripts/homebrew-formula`, pushed with the
    `HOMEBREW_TAP_DEPLOY_KEY` deploy key).
@@ -140,8 +141,10 @@ and the GitHub Release is marked as a prerelease. On npm, 0.x pre-releases still
 `latest` dist-tag, so `npm i @gradiated/grad` installs the newest alpha; from 1.0 on a
 pre-release gets `next`.
 
-If a publish job fails, fix the cause and re-run the failed jobs; jobs that already succeeded
-don't run again. Registries never accept the same version twice, so a broken release is fixed
+The registry jobs (PyPI, npm, crates.io, Go) don't wait for each other, and the GitHub Release
+and Homebrew don't wait for them: a registry that rejects the upload fails the run but holds
+nothing else back. Fix the cause and re-run the failed jobs; jobs that already succeeded don't
+run again. Registries never accept the same version twice, so a broken release is fixed
 with a new patch version, not by moving the tag.
 
 ### Repository settings
@@ -160,7 +163,9 @@ These are configured on GitHub, not in this repository:
 - npm and crates.io only allow a trusted publisher on a package that already exists. For the
   first release, add `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN` as secrets of the `release`
   environment. Afterwards, configure trusted publishing for `@gradiated/grad`, `grad-sdk` and
-  `grad-cli` with the same workflow and environment, then delete both secrets.
+  `grad-cli` with the same workflow and environment, then delete both secrets. The crates.io
+  job tries Trusted Publishing first and falls back to `CARGO_REGISTRY_TOKEN`, which needs the
+  `publish-update` scope for every release after the first.
 - Docker Hub: the `gradiated` organization's public repositories `grad-server` and
   `grad-trainer`, and the repository secrets `DOCKERHUB_USERNAME` (`gradiated`, the
   organization name, for an organization access token) and `DOCKERHUB_TOKEN` (an organization

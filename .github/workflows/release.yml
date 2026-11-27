@@ -148,7 +148,9 @@ jobs:
           path: grad-${{ matrix.target }}.tar.gz*
 
   # Everything below publishes. Each job runs in the `release` environment, which requires a
-  # maintainer's approval, and starts only after every build above has passed.
+  # maintainer's approval, and starts only after every build above has passed. The registry
+  # jobs (PyPI, npm, crates.io, Go) are independent: one failing fails the run but doesn't hold
+  # back the others, the GitHub Release or Homebrew, and re-running it alone touches nothing else.
 
   pypi:
     name: Publish grad-sdk to PyPI
@@ -239,9 +241,11 @@ jobs:
           # No shared cache in jobs that hold publish credentials.
           cache: false
 
+      # Trusted Publishing first, so a leftover CARGO_REGISTRY_TOKEN can't shadow it once it is
+      # configured; the token is only the fallback for crates.io not trusting this workflow yet.
       - name: Get a short-lived crates.io token (Trusted Publishing)
         id: auth
-        if: env.BOOTSTRAP_TOKEN == ''
+        continue-on-error: ${{ env.BOOTSTRAP_TOKEN != '' }}
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
       # The CLI depends on the exact grad-sdk version, so grad-sdk goes first. cargo waits for
@@ -343,7 +347,8 @@ jobs:
 
   github-release:
     name: Create the GitHub Release
-    needs: [prepare, pypi, npm, crates, go, images, helm]
+    # Not the registry jobs: a failed upload to one of them must not hold back the release.
+    needs: [prepare, python-build, cli-build, images, helm]
     runs-on: ubuntu-latest
     environment:
       name: release
@@ -366,7 +371,9 @@ jobs:
           (cd assets && shasum -a 256 -- *.tar.gz *.whl *.tgz > sha256sums.txt)
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" assets/* \
+          # Named patterns, not assets/*: the image builds upload *.dockerbuild records too.
+          gh release create "$GITHUB_REF_NAME" \
+            assets/*.tar.gz assets/*.tar.gz.sha256 assets/*.whl assets/*.tgz assets/sha256sums.txt \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md "${flags[@]}"
 
