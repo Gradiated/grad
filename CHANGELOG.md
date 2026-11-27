@@ -20,6 +20,10 @@ First public release.
   (`github.com/Gradiated/grad/sdks/go`) and Rust (`grad-sdk`), with transports generated from
   the spec.
 - The `grad` CLI, including `grad local up` for a local stack.
+- Public container images on GHCR (`grad-server`, `grad-trainer`, `grad-trainer:*-gpu`),
+  published as `main` and `sha-<7>` on every push to `main` and as `X.Y.Z`/`latest` on
+  release. `grad local up` pulls its own version (or `main` from a source build);
+  `--image-tag` picks another.
 - A Helm chart with KEDA scale-to-zero for GPU trainers and air-gapped overrides.
 
 ### Changed

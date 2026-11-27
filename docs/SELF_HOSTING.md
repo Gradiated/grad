@@ -10,9 +10,25 @@ Self-hosted `grad` needs only **PostgreSQL** and **S3-compatible object storage*
 grad local up
 # Or with NVIDIA GPU acceleration:
 grad local up --gpu
+# Pull a specific build (see the tags below):
+grad local up --image-tag sha-abc1234
 # Build the images from a source checkout (uses server/docker-compose.yml):
 grad local up --build
 ```
+
+### Images
+
+The images are public on GitHub Container Registry, so pulling them needs no login:
+
+| Image | Platforms | Tags |
+| --- | --- | --- |
+| `ghcr.io/gradiated/grad-server` | linux/amd64, linux/arm64 | `X.Y.Z`, `latest`, `main`, `sha-<7>` |
+| `ghcr.io/gradiated/grad-trainer` (CPU) | linux/amd64, linux/arm64 | `X.Y.Z`, `latest`, `main`, `sha-<7>` |
+| `ghcr.io/gradiated/grad-trainer` (CUDA) | linux/amd64 | `X.Y.Z-gpu`, `latest-gpu`, `main-gpu`, `sha-<7>-gpu` |
+
+Every push to `main` that touches the server or trainer publishes `main` and `sha-<7>` (the commit's short SHA); the CUDA image is rebuilt on `main` only when the trainer changes. Each release publishes `X.Y.Z` and moves `latest` (prereleases don't). Every image carries an SBOM and a provenance attestation.
+
+`grad local up` pulls the images first, so a moving tag like `main` stays current. A `grad` binary from a release (or `cargo install grad-cli`) pulls the images tagged with its own version; one built from a checkout pulls `main`. `--image-tag TAG` overrides that. If GHCR refuses the pull, the error says so: the packages may still be private, so either `docker login ghcr.io -u <github-user>` with a token that has `read:packages`, or build the images with `grad local up --build` in a checkout.
 
 The API listens on `http://127.0.0.1:8787` (published on loopback only; change it with `--port` or `GRAD_PORT`). Authentication is on: the first run generates an admin key, a trainer key and the key that encrypts workspace secrets (`GRAD_SECRETS_KEY`), and saves them in the `local` profile of the `grad` config file (`grad config path`); the server only receives the admin key's SHA-256. `grad local up` waits for `/health/ready` and prints the next steps:
 
@@ -21,7 +37,7 @@ export GRADIATED_PROFILE=local
 grad models list
 ```
 
-`grad local status` shows container status and API health, `grad local logs [SERVICE] [--follow]` prints logs, `grad local down [--volumes]` stops the stack, and `grad local reset` deletes the local data and keys so the next `grad local up` starts fresh. Pass `--file` (or `GRAD_COMPOSE_FILE`) to use your own compose file; repeat `--file` (or separate the paths with `:`) to layer overrides on top, as `docker compose -f` does. `GRAD_SERVER_IMAGE` / `GRAD_TRAINER_IMAGE` override the images, and `GRAD_POSTGRES_MEMORY` / `GRAD_SERVER_MEMORY` / `GRAD_TRAINER_MEMORY` (default `1g` / `1g` / `8g`) cap the containers' memory. Data lives in named volumes (Postgres, artifacts and the trainer's Hugging Face cache), so it survives `grad local down` and is deleted by `grad local down --volumes`.
+`grad local status` shows container status and API health, `grad local logs [SERVICE] [--follow]` prints logs, `grad local down [--volumes]` stops the stack, and `grad local reset` deletes the local data and keys so the next `grad local up` starts fresh. Pass `--file` (or `GRAD_COMPOSE_FILE`) to use your own compose file; repeat `--file` (or separate the paths with `:`) to layer overrides on top, as `docker compose -f` does. `GRAD_SERVER_IMAGE` / `GRAD_TRAINER_IMAGE` / `GRAD_TRAINER_GPU_IMAGE` override the images (then `grad local up` doesn't pull first), and `GRAD_POSTGRES_MEMORY` / `GRAD_SERVER_MEMORY` / `GRAD_TRAINER_MEMORY` (default `1g` / `1g` / `8g`) cap the containers' memory. Data lives in named volumes (Postgres, artifacts and the trainer's Hugging Face cache), so it survives `grad local down` and is deleted by `grad local down --volumes`.
 
 `tests/compose/smoke.sh` boots the stack with `grad local up --build` and runs the quickstart through the CLI and the Python SDK; CI runs it on every push.
 

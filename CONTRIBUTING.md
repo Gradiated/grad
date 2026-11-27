@@ -121,8 +121,10 @@ version. To release `0.3.0`:
    - `grad-sdk`, then `grad-cli`, to crates.io,
    - the Go module, by pushing the tag `sdks/go/v0.3.0` (Go modules in a subdirectory are
      versioned by tags with that prefix, so users run `go get github.com/Gradiated/grad/sdks/go@v0.3.0`),
-   - `ghcr.io/gradiated/grad-server` (amd64 and arm64) and `ghcr.io/gradiated/grad-trainer`
-     (`0.3.0` for CPU, `0.3.0-gpu` for CUDA), with SBOM and provenance attestations,
+   - `ghcr.io/gradiated/grad-server` and `ghcr.io/gradiated/grad-trainer` (`0.3.0` for CPU,
+     `0.3.0-gpu` for CUDA), with SBOM and provenance attestations, through
+     [`images.yml`](.github/workflows/images.yml), the workflow that also publishes `main` and
+     `sha-<7>` on every push to `main`,
    - the Helm chart to `oci://ghcr.io/gradiated/charts/grad`.
 
    After that, a second approval creates the GitHub Release with the CHANGELOG notes, the CLI
