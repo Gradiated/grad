@@ -31,7 +31,7 @@ export interface AuthPrincipal {
   worker?: WorkerPrincipal | undefined;
 }
 
-export const WORKER_JOB_KINDS = ["train", "import"] as const;
+export const WORKER_JOB_KINDS = ["train", "import", "eval"] as const;
 export type WorkerJobKind = (typeof WORKER_JOB_KINDS)[number];
 
 /** One trainer key: `TRAINER_API_KEY(_HASH)` (every kind) or a `TRAINER_KEYS_JSON` entry. */

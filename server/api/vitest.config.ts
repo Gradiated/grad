@@ -14,7 +14,8 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/main.ts"],
+      // The process entrypoints (the live harness runs them).
+      exclude: ["src/main.ts", "src/worker/main.ts"],
       reporter: ["text-summary", "text", "json-summary", "lcov"],
       thresholds: { lines: 90, branches: 80 },
     },

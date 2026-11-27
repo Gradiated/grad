@@ -74,35 +74,42 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
         ...toEvalDomain(row),
       })),
 
-    insertOutput: async (o) => {
-      await db.query(
+    insertOutputs: async (outputs) => {
+      if (outputs.length === 0) return 0;
+      const rows = await db.query(
         `INSERT INTO grad_eval_outputs
            (id, eval_id, attempt, task_index, task_id, model, sample_index, record, input, output,
             expected_output, scores, error, prompt_tokens, completion_tokens, cost_usd, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13,
-                 $14, $15, $16, $17::timestamptz)
-         ON CONFLICT (eval_id, model, task_index, sample_index) DO NOTHING`,
+         SELECT id, eval_id, attempt, task_index, task_id, model, sample_index, record, input, output,
+                expected_output, scores, error, prompt_tokens, completion_tokens, cost_usd, created_at
+         FROM jsonb_to_recordset($1::jsonb) AS o(
+           id TEXT, eval_id TEXT, attempt INTEGER, task_index INTEGER, task_id TEXT, model TEXT,
+           sample_index INTEGER, record JSONB, input JSONB, output TEXT, expected_output JSONB,
+           scores JSONB, error TEXT, prompt_tokens INTEGER, completion_tokens INTEGER,
+           cost_usd DOUBLE PRECISION, created_at TIMESTAMPTZ)
+         ON CONFLICT (eval_id, model, task_index, sample_index) DO NOTHING
+         RETURNING id`,
         [
-          o.id,
-          o.eval_id,
-          o.attempt,
-          o.task_index,
-          o.task_id,
-          o.model,
-          o.sample_index,
-          JSON.stringify(o.record),
-          JSON.stringify(o.input),
-          o.output,
-          JSON.stringify(o.expected_output ?? null),
-          JSON.stringify(o.scores),
-          o.error,
-          o.prompt_tokens,
-          o.completion_tokens,
-          o.cost_usd,
-          o.created_at,
+          JSON.stringify(
+            outputs.map((o) => ({
+              ...o,
+              expected_output: o.expected_output ?? null,
+            })),
+          ),
         ],
       );
+
+      return rows.length;
     },
+    countOutputs: async (evalId) =>
+      Number(
+        first(
+          await db.query(
+            "SELECT count(*) AS n FROM grad_eval_outputs WHERE eval_id = $1",
+            [evalId],
+          ),
+        )?.n ?? 0,
+      ),
     listOutputKeys: async (evalId) =>
       new Set(
         (

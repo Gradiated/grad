@@ -433,7 +433,7 @@ export const createRunLifecycle = (
       ? await store.artifacts.get(workspaceId, request.recipe.model)
       : null;
     const labelRequest = labelingEvalRequest(request, resolved.version.version);
-    if (labelRequest && deps.inference === null) {
+    if (labelRequest && !deps.inferenceConfigured) {
       throw unavailable(
         "inference_unavailable",
         request.recipe.kind === "router"
@@ -799,6 +799,7 @@ export const createRunLifecycle = (
         total_steps: run.total_steps,
       },
       import: null,
+      eval: null,
       price_per_million_tokens: run.price_per_million_tokens,
       max_cost_usd:
         run.max_cost_usd === null

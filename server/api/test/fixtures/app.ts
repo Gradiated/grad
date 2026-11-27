@@ -6,7 +6,6 @@ import {
 import { createGradApp } from "../../src/app.js";
 import { createModelCatalog } from "../../src/catalog.js";
 import type { AppDependencies } from "../../src/deps.js";
-import { createRegexEvaluator } from "../../src/services/evals/regex.js";
 import { ManualClock } from "./clock.js";
 import { createTestStore } from "./postgres.js";
 import { testObjectStore } from "./s3.js";
@@ -106,9 +105,8 @@ export const makeTestApp = async (
     billing: createNoopBillingAdapter(),
     catalog: createModelCatalog(TINY_MODELS_JSON, TEST_JUDGES_JSON),
     clock,
-    inference: null,
-    regex: createRegexEvaluator(),
-    settings: { maxAttempts: 3, evalConcurrency: 4, usageExportLagSeconds: 0 },
+    inferenceConfigured: false,
+    settings: { maxAttempts: 3, usageExportLagSeconds: 0 },
     ...overrides,
   };
   const { app, services } = createGradApp(deps);
@@ -167,7 +165,6 @@ export const makeTestApp = async (
     },
     close: async () => {
       await services.events.close();
-      await deps.regex.close();
       await dispose();
       s3.close();
     },

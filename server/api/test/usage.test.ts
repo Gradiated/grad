@@ -45,7 +45,6 @@ describe("usage ledger: incremental billing while a run trains", () => {
     makeTestApp({
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 2,
         usageExportLagSeconds: 0,
         usageFlushTokens: 1000,
         usageFlushSeconds: 300,
@@ -151,7 +150,6 @@ describe("usage ledger: incremental billing while a run trains", () => {
       }),
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 2,
         usageExportLagSeconds: 0,
         usageFlushTokens: 1000,
       },
@@ -184,7 +182,6 @@ describe("usage ledger: incremental billing while a run trains", () => {
       }),
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 2,
         usageExportLagSeconds: 0,
       },
     });

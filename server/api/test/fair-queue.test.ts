@@ -412,7 +412,6 @@ describe("fair queue over HTTP", () => {
     makeTestApp({
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 2,
         waitingForComputeSeconds: 30,
         queue: {
           maxRunning: { train: queue.maxRunning ?? 8 },

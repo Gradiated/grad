@@ -18,7 +18,6 @@ describe("run lifecycle and worker protocol", () => {
     t = await makeTestApp({
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 2,
         ssePollMs: 5,
       },
     });

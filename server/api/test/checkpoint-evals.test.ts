@@ -90,7 +90,7 @@ describe("recipe evals= on checkpoints", () => {
     await worker.checkpoint(job, 2, "ckpt-2", { format: "peft_lora" });
     await worker.checkpoint(job, 4, "ckpt-4", { format: "reference" });
 
-    await h.t.services.evals.drain();
+    await h.worker.drain();
     // The eval asked the inference endpoint for the checkpoint by id.
     const ckptId = String(served.body.id);
     expect(h.fake.requests.filter((r) => r.model === ckptId)).toHaveLength(2);

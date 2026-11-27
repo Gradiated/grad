@@ -90,7 +90,7 @@ describe("datasets.from_benchmark", () => {
       body: { models: ["qwen/qwen3-8b"], dataset: "gsm8k-2" },
     });
     expect(ev.body.rubric).toEqual(BENCHMARKS.gsm8k.rubric);
-    await h.t.services.evals.drain();
+    await h.worker.drain();
     const done = await h.t.json<{
       summary: Array<{ overall: number }>;
       pass_threshold: number;

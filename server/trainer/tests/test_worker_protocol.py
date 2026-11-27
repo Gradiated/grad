@@ -744,7 +744,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIsNone(worker.claim())
         self.assertEqual(json.loads(srv.calls("claim")[0].body)["kinds"], ["import"])
         self.assertEqual(worker_from_env({"GRAD_SERVER_URL": srv.base_url}).kinds, ["train", "import"])
-        with self.assertRaisesRegex(ValueError, "subset of train, import"):
+        with self.assertRaisesRegex(ValueError, "subset of train, import.*grad-server worker --kinds eval"):
             worker_from_env({"GRAD_WORKER_KINDS": "train,eval"})
 
     def test_two_processes_with_one_configured_id_hold_distinct_leases(self) -> None:

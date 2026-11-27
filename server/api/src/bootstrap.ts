@@ -1,5 +1,3 @@
-import type { Counter } from "@prometheus-io/client";
-
 import {
   createLocalApiKeyAuth,
   createLocalNoneAuth,
@@ -17,65 +15,16 @@ import { createModelCatalog } from "./catalog.js";
 import { createDbAnchoredClock } from "./clock.js";
 import type { AppDependencies } from "./deps.js";
 import type { ServerEnvironment } from "./environment.js";
-import { createOpenAICompatibleClient } from "./services/evals/inference.js";
-import { createRegexEvaluator } from "./services/evals/regex.js";
-import type {
-  ChatCompletionClient,
-  InferenceClients,
-} from "./services/evals/types.js";
 import { assertMigrated } from "./migrations.js";
 import { resolveUiBundle, type UiBundle } from "./ui.js";
 import { S3ObjectStore } from "./storage/s3.js";
 import { createSecretsCipher } from "./secrets.js";
 import { createPostgresStore } from "./store/postgres.js";
 import { log } from "./telemetry/log.js";
-import { metrics } from "./telemetry/metrics.js";
 import { instrumentObjectStore } from "./telemetry/storage.js";
 import { buildWorkerAuthenticator } from "./worker-auth/index.js";
 
 export { log } from "./telemetry/log.js";
-
-/** Counts a client's calls on `counter` by result (ok, error). */
-const countCalls = (
-  client: ChatCompletionClient,
-  counter: Counter<"result">,
-): ChatCompletionClient => ({
-  ...client,
-  complete: async (input) => {
-    try {
-      const reply = await client.complete(input);
-      counter.inc({ result: "ok" });
-
-      return reply;
-    } catch (error) {
-      counter.inc({ result: "error" });
-      throw error;
-    }
-  },
-});
-
-const buildInference = (env: ServerEnvironment): InferenceClients | null => {
-  if (!env.inferenceBaseUrl) return null;
-
-  const models = createOpenAICompatibleClient({
-    baseUrl: env.inferenceBaseUrl,
-    apiKey: env.inferenceApiKey,
-    timeoutMs: 120_000,
-  });
-  const judge =
-    env.judgeBaseUrl && env.judgeBaseUrl !== env.inferenceBaseUrl
-      ? createOpenAICompatibleClient({
-          baseUrl: env.judgeBaseUrl,
-          apiKey: env.judgeApiKey,
-          timeoutMs: 120_000,
-        })
-      : models;
-
-  return {
-    models: countCalls(models, metrics.evalOutputs),
-    judge: countCalls(judge, metrics.judgeCalls),
-  };
-};
 
 export const buildDependencies = async (
   env: ServerEnvironment,
@@ -153,8 +102,7 @@ export const buildDependencies = async (
       env.GRAD_JUDGE_MODELS_JSON,
     ),
     clock,
-    inference: buildInference(env),
-    regex: createRegexEvaluator(),
+    inferenceConfigured: env.inferenceConfigured,
     secrets: createSecretsCipher({
       key: env.GRAD_SECRETS_KEY,
       oldKeys: env.GRAD_SECRETS_KEYS_OLD,
@@ -175,7 +123,6 @@ export const buildDependencies = async (
         },
         maxQueued: env.GRAD_MAX_QUEUED_PER_WORKSPACE,
       },
-      evalConcurrency: env.EVAL_CONCURRENCY,
       ssePollMs: env.SSE_POLL_MS,
       jobEventRetentionDays: env.JOB_EVENT_RETENTION_DAYS,
       orphanBlobDays: env.ORPHAN_BLOB_DAYS,

@@ -2,22 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { hashApiKey } from "../src/adapters.js";
 import { buildDependencies } from "../src/bootstrap.js";
-import { isLoopbackHost, parseServerEnvironment } from "../src/environment.js";
-import { metrics } from "../src/telemetry/metrics.js";
+import {
+  isLoopbackHost,
+  parseEvalWorkerEnvironment,
+  parseServerEnvironment,
+} from "../src/environment.js";
 import { postgresUrl } from "./fixtures/postgres.js";
 import { s3Target } from "./fixtures/s3.js";
-
-const errorCount = async (counter: {
-  get(): Promise<{ values: Array<{ labels: object; value: number }> }>;
-}): Promise<number> =>
-  (await counter.get()).values.find(
-    (v) => (v.labels as { result?: string }).result === "error",
-  )?.value ?? 0;
-
-const counterValues = async () => ({
-  outputs: await errorCount(metrics.evalOutputs),
-  judge: await errorCount(metrics.judgeCalls),
-});
 
 const ADMIN_HASH = hashApiKey("admin");
 const DB = { DATABASE_URL: "postgres://x", S3_BUCKET: "grad" };
@@ -101,37 +92,36 @@ describe("parseServerEnvironment", () => {
     );
   });
 
-  it("resolves judge endpoints with fallbacks", () => {
-    const shared = parseServerEnvironment({
-      ...DB,
-      AUTH_MODE: "none",
+  it("resolves the eval worker's endpoints with fallbacks", () => {
+    const shared = parseEvalWorkerEnvironment({
       INFERENCE_BASE_URL: "http://vllm/v1",
       INFERENCE_API_KEY: "k",
     });
     expect(shared).toMatchObject({
       judgeBaseUrl: "http://vllm/v1",
       judgeApiKey: "k",
+      GRAD_SERVER_URL: "http://127.0.0.1:8787",
+      EVAL_CONCURRENCY: 8,
+      GRAD_LEASE_SECONDS: 180,
     });
     expect(shared.warnings.join(" ")).toMatch(
       /INFERENCE_BASE_URL is deprecated; rename it to GRAD_INFERENCE_BASE_URL/,
     );
-    const helm = parseServerEnvironment({
-      ...DB,
-      AUTH_MODE: "none",
+    const helm = parseEvalWorkerEnvironment({
       GRAD_INFERENCE_BASE_URL: "http://vllm/v1",
       GRAD_INFERENCE_API_KEY: "k",
       GRAD_JUDGE_BASE_URL: "http://judge/v1",
+      EVAL_CONCURRENCY: "16",
     });
     expect(helm).toMatchObject({
       inferenceBaseUrl: "http://vllm/v1",
       inferenceApiKey: "k",
       judgeBaseUrl: "http://judge/v1",
       judgeApiKey: undefined,
+      EVAL_CONCURRENCY: 16,
     });
-    expect(helm.warnings.join(" ")).not.toMatch(/deprecated/);
-    const both = parseServerEnvironment({
-      ...DB,
-      AUTH_MODE: "none",
+    expect(helm.warnings).toEqual([]);
+    const both = parseEvalWorkerEnvironment({
       GRAD_INFERENCE_BASE_URL: "http://new/v1",
       INFERENCE_BASE_URL: "http://old/v1",
       JUDGE_BASE_URL: "http://old-judge/v1",
@@ -145,15 +135,35 @@ describe("parseServerEnvironment", () => {
     expect(both.warnings.join(" ")).toMatch(
       /INFERENCE_BASE_URL is ignored because GRAD_INFERENCE_BASE_URL is set/,
     );
+    // Without an endpoint it still scores with validators, and says so.
+    expect(parseEvalWorkerEnvironment({}).warnings.join(" ")).toMatch(
+      /GRAD_INFERENCE_BASE_URL is not set: this eval worker runs only validators/,
+    );
+    expect(() => parseEvalWorkerEnvironment({ EVAL_CONCURRENCY: "0" })).toThrow(
+      /Invalid eval worker configuration: EVAL_CONCURRENCY/,
+    );
+  });
+
+  it("only checks on the API that an eval endpoint is configured", () => {
+    const api = parseServerEnvironment({
+      ...DB,
+      AUTH_MODE: "none",
+      GRAD_INFERENCE_BASE_URL: "http://vllm/v1",
+      GRAD_INFERENCE_API_KEY: "k",
+      EVAL_CONCURRENCY: "4",
+    });
+    expect(api.inferenceConfigured).toBe(true);
+    expect(api.warnings.join(" ")).toMatch(
+      /GRAD_INFERENCE_API_KEY is ignored by the API: evals run on eval workers.*EVAL_CONCURRENCY is ignored by the API/,
+    );
     expect(
-      parseServerEnvironment({ ...DB, AUTH_MODE: "none", EVAL_EXECUTOR: "0" })
-        .EVAL_EXECUTOR,
+      parseServerEnvironment({ ...DB, AUTH_MODE: "none" }).inferenceConfigured,
     ).toBe(false);
   });
 });
 
 describe("buildDependencies", () => {
-  it("wires local adapters, the trainer key and inference clients", async () => {
+  it("wires local adapters, the trainer key and the eval endpoint flag", async () => {
     const s3 = s3Target();
     const storage = {
       S3_BUCKET: s3.bucket,
@@ -200,8 +210,7 @@ describe("buildDependencies", () => {
       });
       expect(deps.billing.usageExport).toBeUndefined();
       expect(deps.settings.jobEventRetentionDays).toBe(90);
-      expect(deps.inference).not.toBeNull();
-      expect(deps.inference?.judge).not.toBe(deps.inference?.models);
+      expect(deps.inferenceConfigured).toBe(true);
       expect(deps.catalog.find("t/x")).toBeDefined();
       expect(await deps.auth.authenticate("worker-secret")).toMatchObject({
         scopes: ["trainer:worker"],
@@ -209,7 +218,6 @@ describe("buildDependencies", () => {
       expect(await deps.auth.authenticate("admin")).toMatchObject({
         scopes: ["admin"],
       });
-      await deps.regex.close();
       await deps.store.close();
 
       const none = await buildDependencies(
@@ -220,24 +228,10 @@ describe("buildDependencies", () => {
           INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
         }),
       );
-      // One endpoint, two counters: generations and judge calls.
-      const before = await counterValues();
-      const request = {
-        model: "m",
-        workspace: "ws",
-        messages: [{ role: "user" as const, content: "hi" }],
-        temperature: 0,
-        max_tokens: 1,
-      };
-      await expect(none.inference?.models.complete(request)).rejects.toThrow();
-      await expect(none.inference?.judge.complete(request)).rejects.toThrow();
-      const after = await counterValues();
-      expect(after.outputs - before.outputs).toBe(1);
-      expect(after.judge - before.judge).toBe(1);
+      expect(none.inferenceConfigured).toBe(true);
       expect(await none.auth.authenticate(undefined)).toMatchObject({
         kind: "dev",
       });
-      await none.regex.close();
       await none.store.close();
 
       const cloud = await buildDependencies(
@@ -254,11 +248,10 @@ describe("buildDependencies", () => {
         }),
       );
       expect(cloud.billing.usageExport).toBeDefined();
-      expect(cloud.inference).toBeNull();
+      expect(cloud.inferenceConfigured).toBe(false);
       expect(await cloud.auth.authenticate("w")).toMatchObject({
         kind: "worker",
       });
-      await cloud.regex.close();
       await cloud.store.close();
     } finally {
       process.env = saved;

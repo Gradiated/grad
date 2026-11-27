@@ -264,7 +264,7 @@ export const planEvalRequest = async (
   fixedTargets?: ModelTargets,
 ): Promise<ResolvedEvalPlan> => {
   const scoring = mode === "score";
-  if (deps.inference === null && !scoring) {
+  if (!deps.inferenceConfigured && !scoring) {
     throw unavailable("inference_unavailable", INFERENCE_UNAVAILABLE_DETAIL);
   }
 
@@ -275,7 +275,7 @@ export const planEvalRequest = async (
   );
   const rubric = request.rubric ?? datasetRubric(dataset.dataset);
   const judgeItems = rubric.filter((r) => r.kind === "judge");
-  if (deps.inference === null && judgeItems.length > 0) {
+  if (!deps.inferenceConfigured && judgeItems.length > 0) {
     throw unavailable("inference_unavailable", JUDGE_UNAVAILABLE_DETAIL);
   }
 

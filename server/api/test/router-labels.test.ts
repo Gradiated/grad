@@ -120,7 +120,7 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
     });
     expect(await worker.claim()).toBeNull();
 
-    await t.services.evals.drain();
+    await h!.worker.drain();
     const job = await worker.claim();
     expect(job?.id).toBe(created.body.id);
     expect(job?.dataset?.record_count).toBe(12);
@@ -152,7 +152,7 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
     const failed = await t.json<{ id: string }>("/v1/runs", {
       body: routerRequest(),
     });
-    await t.services.evals.drain();
+    await h!.worker.drain();
     const failedRun = await getRun(failed.body.id);
     expect(failedRun.status).toBe("cancelled");
     expect(failedRun.error).toMatch(/labeling eval .* ended failed/);
@@ -230,7 +230,7 @@ describe("off-policy distillation: the teacher answers in a labeling eval", () =
       temperature: 0,
     });
     expect(await worker.claim()).toBeNull();
-    await t.services.evals.drain();
+    await h!.worker.drain();
     const job = await worker.claim();
     const records = await worker.downloadDataset(job!);
     expect(records).toHaveLength(4);

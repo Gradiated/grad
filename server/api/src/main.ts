@@ -9,6 +9,7 @@ import { createInternalApp } from "./routes/internal.js";
 import { runMigrations } from "./migrations.js";
 import { gracefulShutdown } from "./shutdown.js";
 import { startTracing, stopTracing } from "./telemetry/tracing.js";
+import { runWorker } from "./worker/main.js";
 
 // A stray rejection is a bug to log, not a reason to take the replica down.
 process.on("unhandledRejection", (reason: unknown) => {
@@ -26,7 +27,6 @@ const main = async () => {
   const { app, services } = createGradApp(deps);
 
   services.maintenance.start(env.MAINTENANCE_INTERVAL_MS);
-  if (env.EVAL_EXECUTOR && deps.inference) services.evals.start(1000);
 
   const server = serve({
     fetch: app.fetch,
@@ -58,7 +58,9 @@ const main = async () => {
     url: `http://${env.HOST}:${env.PORT}`,
     auth_mode: env.AUTH_MODE,
     storage: env.S3_ENDPOINT ? `s3 ${env.S3_ENDPOINT}` : "s3",
-    inference: deps.inference ? "configured" : "unavailable",
+    evals: deps.inferenceConfigured
+      ? "on eval workers"
+      : "unavailable (no GRAD_INFERENCE_BASE_URL)",
     metrics: env.METRICS_ENABLED
       ? `:${env.METRICS_PORT ?? env.PORT}/metrics`
       : "off",
@@ -77,14 +79,12 @@ const main = async () => {
       server: server as Server,
       stopBackground: async () => {
         await services.maintenance.stop();
-        await services.evals.stop();
         // Ends every SSE stream now; clients resume on another replica with Last-Event-ID.
         await services.events.close();
       },
       closeResources: async () => {
         metricsServer?.close();
         internalServer?.close();
-        await deps.regex.close();
         await deps.store.close();
         await stopTracing();
       },
@@ -101,11 +101,19 @@ const migrateOnly = async () => {
   log("info", "grad-server migrations applied", { applied });
 };
 
-(process.argv[2] === "migrate" ? migrateOnly() : main()).catch(
-  (error: unknown) => {
-    log("error", "grad-server failed to start", {
+const command = process.argv[2];
+(command === "migrate"
+  ? migrateOnly()
+  : command === "worker"
+    ? runWorker(process.argv.slice(3))
+    : main()
+).catch((error: unknown) => {
+  log(
+    "error",
+    `grad-server ${command === "worker" ? "worker " : ""}failed to start`,
+    {
       error: error instanceof Error ? error.message : String(error),
-    });
-    process.exit(1);
-  },
-);
+    },
+  );
+  process.exit(1);
+});

@@ -43,7 +43,7 @@ describe("kind-scoped trainer keys (TRAINER_KEYS_JSON)", () => {
       ],
       [
         JSON.stringify([
-          { label: "a", sha256: hashApiKey("x"), kinds: ["eval"] },
+          { label: "a", sha256: hashApiKey("x"), kinds: ["deploy"] },
         ]),
         /kinds/,
       ],
@@ -63,6 +63,7 @@ describe("kind-scoped trainer keys (TRAINER_KEYS_JSON)", () => {
     expect(matchTrainerKey("grad_platform", all)?.workerKinds).toEqual([
       "train",
       "import",
+      "eval",
     ]);
     const gpu = matchTrainerKey(GPU, all);
     expect(gpu).toMatchObject({

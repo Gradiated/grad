@@ -952,7 +952,6 @@ describe("sources", () => {
       secrets: createSecretsCipher({ key: randomBytes(32).toString("base64") }),
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 4,
         sourceSyncIntervalSeconds: 0,
       },
     });
@@ -1077,7 +1076,6 @@ describe("sources", () => {
       secrets: createSecretsCipher({ key: randomBytes(32).toString("base64") }),
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 1,
         sourceVersionMaxRecords: 3,
       },
     });

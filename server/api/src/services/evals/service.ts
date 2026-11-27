@@ -1,5 +1,6 @@
-import { hostname } from "node:os";
+import type { z } from "@hono/zod-openapi";
 
+import type { AuthPrincipal } from "../../adapters.js";
 import { costForTokens } from "../../catalog.js";
 import { addSeconds } from "../../clock.js";
 import {
@@ -15,7 +16,12 @@ import {
   type PlanEvalRequest,
   type PlanEvalResponse,
   type ScoreDatasetRequest,
+  type TrainerJob,
 } from "../../contracts.js";
+import type {
+  CompleteJobRequestSchema,
+  PostEvalOutputsRequestSchema,
+} from "../../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../../deps.js";
 import {
   ApiError,
@@ -27,15 +33,10 @@ import {
 } from "../../errors.js";
 import { createOnce, type Created } from "../../idempotency.js";
 import { newId } from "../../ids.js";
-import {
-  recordPromptAndReference,
-  recordPromptAndResponse,
-} from "../../records.js";
 import type {
   CheckpointRecord,
   EvalOutputRow,
   EvalRecord,
-  EvalTask,
   IdempotencyInput,
   JobExpectation,
   Page,
@@ -45,23 +46,26 @@ import type {
 } from "../../store/types.js";
 
 const EVAL_DONE: readonly EvalStatus[] = ["completed", "failed", "cancelled"];
-import { writeRecordsPart } from "../dataset-records.js";
+import { streamVersionGzip, writeRecordsPart } from "../dataset-records.js";
 import { datasetPartKey, type DatasetService } from "../datasets.js";
 import {
+  DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
+  holdsLease,
+  leaseLost,
+  observeInterruption,
   queueLimits,
   RELEASE,
   requeuePatch,
   type JobKindHandler,
   type JobQueue,
 } from "../jobs.js";
-import { isDatabaseUnavailable } from "../../store/postgres/db.js";
+import { metrics } from "../../telemetry/metrics.js";
 import { scoreUpdate } from "../record-merge.js";
 import { settleLabelledRuns } from "../router-labels.js";
 import type { UsageService } from "../usage.js";
 import { aggregateEval } from "./aggregate.js";
-import { assertNonEmptyPlan, buildTasks, planEvalRequest } from "./planner.js";
-import { scoreOutput, type ScoringContext } from "./scoring.js";
+import { assertNonEmptyPlan, planEvalRequest } from "./planner.js";
 
 export interface EvalService {
   plan(
@@ -130,10 +134,24 @@ export interface EvalService {
     },
   ): Promise<Page<EvalTaskOutcome>>;
   cancel(workspaceId: string, id: string): Promise<EvalRun>;
-  /** Runs queued eval jobs until none are claimable; returns how many ran. */
-  drain(): Promise<number>;
-  start(intervalMs: number): void;
-  stop(): Promise<void>;
+  /** Eval worker: stores a batch of outputs (once per key), prices and bills them. */
+  postOutputs(
+    principal: AuthPrincipal,
+    id: string,
+    body: z.infer<typeof PostEvalOutputsRequestSchema>,
+  ): Promise<{ accepted: number; generated: number; should_stop: boolean }>;
+  /** Eval worker: ends the attempt (aggregates a completed eval). */
+  complete(
+    principal: AuthPrincipal,
+    id: string,
+    body: z.infer<typeof CompleteJobRequestSchema>,
+  ): Promise<EvalRun>;
+  /** Eval worker: the eval's pinned dataset version as gzip JSONL. */
+  datasetStream(
+    principal: AuthPrincipal,
+    id: string,
+    attempt: number,
+  ): Promise<ReadableStream<Uint8Array>>;
   /** The eval kind's hooks in the job queue. */
   handler: JobKindHandler;
   /**
@@ -146,60 +164,10 @@ export interface EvalService {
 /** An eval no SDK has posted scores to for this long fails. */
 export const AWAITING_SCORES_TIMEOUT_SECONDS = 24 * 3600;
 
-const LEASE_SECONDS = 120;
-
-/** Runs `fn` every `ms` (unref'd); a rejection is logged, never left unhandled. */
-export const backgroundInterval = (
-  fn: () => Promise<unknown>,
-  ms: number,
-  what: string,
-): ReturnType<typeof setInterval> => {
-  const timer = setInterval(() => {
-    fn().catch((error: unknown) => {
-      console.error(
-        JSON.stringify({
-          level: "warn",
-          msg: `${what} failed`,
-          error: errorMessage(error),
-        }),
-      );
-    });
-  }, ms);
-  timer.unref();
-
-  return timer;
-};
-
 /** Thrown inside finalize's transaction when another caller finalized first. */
 class LostRace extends Error {}
-const TASK_PAGE = 200;
-/** Backoff between in-place retries after a database error (about 30 s). */
-export const DB_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const OUTPUT_PAGE = 1000;
 const ACTIVE: readonly EvalStatus[] = ["queued", "running", "awaiting_scores"];
-
-const outputKey = (model: string, taskIndex: number, sample: number): string =>
-  `${model}\u0000${taskIndex}\u0000${sample}`;
-
-const runPool = async <T>(
-  items: readonly T[],
-  concurrency: number,
-  fn: (item: T) => Promise<void>,
-): Promise<void> => {
-  let next = 0;
-  const workers = Array.from(
-    { length: Math.min(concurrency, items.length) },
-    async () => {
-      while (next < items.length) {
-        const item = items[next] as T;
-        next += 1;
-        await fn(item);
-      }
-    },
-  );
-  await Promise.all(workers);
-};
 
 const toPublicOutput = (row: EvalOutputRow): EvalOutput => ({
   id: row.id,
@@ -229,10 +197,6 @@ export const createEvalService = (
 ): EvalService => {
   const { datasets, usage } = collaborators;
   const { store, clock } = deps;
-  const executorId = `eval-executor-${hostname()}-${process.pid}-${newId("x").slice(2, 10)}`;
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let inFlight: Promise<unknown> | null = null;
-  let stopping = false;
 
   const load = async (workspaceId: string, id: string): Promise<EvalRecord> => {
     const record = await store.evals.get(workspaceId, id);
@@ -406,29 +370,6 @@ export const createEvalService = (
       });
   };
 
-  // Per eval: regex items that timed out once are not run again (bounded).
-  const timedOutRegex = new Map<string, Set<string>>();
-  const timedOutRegexFor = (evalId: string): Set<string> => {
-    let set = timedOutRegex.get(evalId);
-    if (!set) {
-      set = new Set();
-      timedOutRegex.set(evalId, set);
-      if (timedOutRegex.size > 1000) {
-        timedOutRegex.delete(timedOutRegex.keys().next().value as string);
-      }
-    }
-    return set;
-  };
-
-  /** A scoring job's output: the record's own answer, scored by the rubric. */
-  const scoringContext = (record: EvalRecord): ScoringContext => ({
-    regex: deps.regex,
-    timedOutRegex: timedOutRegexFor(record.id),
-    judge: deps.inference?.judge ?? null,
-    workspace: record.workspace_id,
-    judgeTargets: record.judge_targets,
-  });
-
   /** A judge's tokens at the price resolved at plan time (judges are always priced). */
   const judgeCost = (record: EvalRecord, judge: string, tokens: number) =>
     costForTokens(
@@ -438,353 +379,383 @@ export const createEvalService = (
         0,
     );
 
-  const scoreOne = async (
+  /** What an output costs: its model's tokens plus its judges', at plan-time prices. */
+  const outputCost = (
     record: EvalRecord,
-    task: EvalTask,
-  ): Promise<EvalOutputRow> => {
-    const parts = recordPromptAndResponse(task.record);
-    const base: EvalOutputRow = {
-      id: newId("evout"),
-      eval_id: record.id,
-      attempt: record.attempt,
-      record: task.record,
-      task_index: task.task_index,
-      task_id: task.task_id,
-      model: RECORD_MODEL,
-      sample_index: 0,
-      input: parts?.prompt ?? [],
-      output: parts?.response ?? null,
-      expected_output: task.record.expected_output ?? null,
-      scores: {},
-      error: null,
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      cost_usd: 0,
-      created_at: clock.now().toISOString(),
-    };
-    if (!parts || parts.response === null) {
-      return { ...base, error: "record has no answer to score" };
+    output: Pick<
+      EvalOutputRow,
+      "model" | "prompt_tokens" | "completion_tokens"
+    > & { judge_tokens: Record<string, number> },
+  ): number => {
+    let cost = costForTokens(
+      output.prompt_tokens + output.completion_tokens,
+      record.model_targets[output.model]?.price_per_million_tokens ?? 0,
+    );
+    for (const [judge, tokens] of Object.entries(output.judge_tokens)) {
+      cost += judgeCost(record, judge, tokens);
     }
 
-    const scored = await scoreOutput(
-      record.rubric,
-      {
-        prompt: parts.prompt,
-        output: parts.response,
-        reference: parts.expected,
-      },
-      scoringContext(record),
-    );
-    let cost = 0;
-    let tokens = 0;
-    for (const [judge, judgeTokens] of Object.entries(scored.judgeTokens)) {
-      tokens += judgeTokens;
-      cost += judgeCost(record, judge, judgeTokens);
-    }
-    const scores = Object.fromEntries(
-      Object.entries(scored.scores).filter(
-        ([name]) => !scored.failed.includes(name),
-      ),
-    );
-
-    return {
-      ...base,
-      scores,
-      error:
-        scored.errors.length > 0
-          ? scored.errors.join("; ").slice(0, 2000)
-          : null,
-      prompt_tokens: tokens,
-      cost_usd: Number(cost.toFixed(8)),
-    };
+    return Number(cost.toFixed(8));
   };
 
-  const generateOne = async (
-    record: EvalRecord,
-    task: EvalTask,
-    model: string,
-    sampleIndex: number,
-  ): Promise<EvalOutputRow> => {
-    if (record.mode === "score") return scoreOne(record, task);
-    const pr = recordPromptAndReference(task.record);
-    const target = record.model_targets[model];
-    const base: EvalOutputRow = {
-      id: newId("evout"),
-      eval_id: record.id,
-      attempt: record.attempt,
-      record: task.record,
-      task_index: task.task_index,
-      task_id: task.task_id,
-      model,
-      sample_index: sampleIndex,
-      input: pr?.prompt ?? [],
-      output: null,
-      expected_output: task.record.expected_output ?? pr?.reference ?? null,
-      scores: {},
-      error: null,
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      cost_usd: 0,
-      created_at: clock.now().toISOString(),
-    };
-    if (!pr || !target || !deps.inference) {
-      return { ...base, error: "record has no usable prompt" };
-    }
-
-    let completion;
-    try {
-      completion = await deps.inference.models.complete({
-        model: target.inference_model,
-        workspace: record.workspace_id,
-        messages: pr.prompt,
-        temperature: record.temperature,
-        max_tokens: record.max_tokens,
-        tools: task.record.tools ?? task.record.input?.tools,
-      });
-    } catch (error) {
-      return { ...base, error: errorMessage(error).slice(0, 2000) };
-    }
-
-    const scored = await scoreOutput(
-      record.rubric,
-      { prompt: pr.prompt, output: completion.text, reference: pr.reference },
-      scoringContext(record),
-    );
-    const tokens =
-      completion.usage.prompt_tokens + completion.usage.completion_tokens;
-    let cost = costForTokens(tokens, target.price_per_million_tokens ?? 0);
-    for (const [judge, judgeTokens] of Object.entries(scored.judgeTokens)) {
-      cost += judgeCost(record, judge, judgeTokens);
-    }
-
-    return {
-      ...base,
-      output: completion.text,
-      scores: scored.scores,
-      error:
-        scored.errors.length > 0
-          ? scored.errors.join("; ").slice(0, 2000)
-          : null,
-      prompt_tokens: completion.usage.prompt_tokens,
-      completion_tokens: completion.usage.completion_tokens,
-      cost_usd: Number(cost.toFixed(8)),
-    };
-  };
-
-  /** The eval's tasks: the usable records of its pinned dataset version. */
-  const tasksOf = async (record: EvalRecord): Promise<EvalTask[]> => {
-    const resolved = await datasets.resolve(
-      record.workspace_id,
-      record.dataset_name,
-      record.dataset_version,
-    );
-
-    return buildTasks(
-      await datasets.readRecords(resolved.version),
-      record.limit ?? undefined,
-      record.mode === "score" ? record.rubric.map((r) => r.name) : null,
-    ).tasks;
-  };
-
-  /** Ends the open attempt as failed: requeued, or failed at max_attempts. */
-  const requeueCounted = async (
+  /**
+   * Ends the open attempt without a result: requeued, or failed at
+   * max_attempts (or, for reclaimed compute, at MAX_PREEMPTIONS).
+   */
+  const requeueAttempt = async (
     row: Parameters<typeof requeuePatch>[0] & { id: string },
     what: string,
     fence: Parameters<typeof store.evals.update>[2],
     now: string,
-  ): Promise<void> => {
-    await store.transaction(async (tx) => {
+    preempted = false,
+  ): Promise<EvalRecord | null> =>
+    store.transaction(async (tx) => {
       const closed = await tx.evals.update(
         row.id,
-        requeuePatch(row, what, now) as Parameters<typeof tx.evals.update>[1],
+        requeuePatch(
+          row,
+          what,
+          now,
+          preempted
+            ? {
+                maxPreemptions:
+                  deps.settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
+              }
+            : undefined,
+        ) as Parameters<typeof tx.evals.update>[1],
         fence,
       );
       if (closed) await billAttempt(tx, { ...closed, attempt: row.attempt });
       if (closed?.status === "failed") await onFinished(closed);
+
+      return closed;
+    });
+
+  /** Ends a cancelled eval's attempt: the lease goes, the outputs it posted bill. */
+  const releaseCancelled = async (
+    row: Pick<EvalRecord, "id" | "attempt">,
+    fence: JobExpectation,
+  ): Promise<void> => {
+    await store.transaction(async (tx) => {
+      const released = await tx.evals.update(row.id, { ...RELEASE }, fence);
+      if (released)
+        await billAttempt(tx, { ...released, attempt: row.attempt });
     });
   };
 
-  const runJob = async (job: EvalRecord): Promise<void> => {
-    const expect = fenceOf(job, ["running"]);
-    let lost = false;
-    const extend = async () => {
-      if (lost) return;
-      if (!(await collaborators.queue().renew(job, LEASE_SECONDS))) lost = true;
-    };
-    // A failed renewal (DB blip) never rejects unhandled: the next one
-    // retries, and a lease that really expired is noticed then.
-    const heartbeat = backgroundInterval(
-      extend,
-      (LEASE_SECONDS * 1000) / 3,
-      `eval ${job.id} lease renewal`,
+  /** Done outputs per model as task_index * samples + sample_index. */
+  const doneOutputs = async (
+    record: EvalRecord,
+  ): Promise<Record<string, number[]>> => {
+    const done: Record<string, number[]> = {};
+    for (const key of await store.evals.listOutputKeys(record.id)) {
+      const [model, task, sample] = key.split("\u0000");
+      (done[model as string] ??= []).push(
+        Number(task) * record.samples + Number(sample),
+      );
+    }
+
+    return done;
+  };
+
+  /** The job an eval worker gets: what to generate, and what is already stored. */
+  const claimJob = async (row: EvalRecord): Promise<TrainerJob> => {
+    const inferenceModels = (
+      targets: Record<string, { inference_model: string }>,
+    ) =>
+      Object.fromEntries(
+        Object.entries(targets).map(([ref, t]) => [
+          ref,
+          { inference_model: t.inference_model },
+        ]),
+      );
+    const resolved = await datasets.resolve(
+      row.workspace_id,
+      row.dataset_name,
+      row.dataset_version,
     );
 
-    const runOnce = async (): Promise<void> => {
-      const existing = await store.evals.listOutputKeys(job.id);
-      let generated = existing.size;
-      const tasks = await tasksOf(job);
-
-      for (let start = 0; start < tasks.length; start += TASK_PAGE) {
-        const work: Array<{ task: EvalTask; model: string; sample: number }> =
-          [];
-        for (const task of tasks.slice(start, start + TASK_PAGE)) {
-          for (const model of job.models) {
-            for (let sample = 0; sample < job.samples; sample += 1) {
-              if (!existing.has(outputKey(model, task.task_index, sample))) {
-                work.push({ task, model, sample });
-              }
-            }
-          }
-        }
-
-        const generate = async (item: (typeof work)[number]) => {
-          if (lost || stopping) return;
-          await store.evals.insertOutput(
-            await generateOne(job, item.task, item.model, item.sample),
-          );
-          generated += 1;
-        };
-        await runPool(work, deps.settings.evalConcurrency, generate);
-
-        await extend();
-        if (lost) {
-          // Cancelled or reaped: outputs that were in flight still bill.
-          await billAttempt(store, job).catch(() => undefined);
-          return;
-        }
-        if (stopping) break;
-        await store.transaction(async (tx) => {
-          const progressed = await tx.evals.update(
-            job.id,
-            { generated },
-            expect,
-          );
-          if (progressed) await billAttempt(tx, progressed, false);
-        });
-      }
-
-      if (stopping) {
-        // A graceful stop hands the eval back without counting an attempt.
-        await store.transaction(async (tx) => {
-          const released = await tx.evals.update(
-            job.id,
-            { ...RELEASE, status: "queued", generated },
-            expect,
-          );
-          if (released) await billAttempt(tx, released);
-        });
-        return;
-      }
-
-      const outputs = await allOutputs(job.id);
-      const firstGenerationError = outputs.find(
-        (o) => o.output === null,
-      )?.error;
-      if (
-        job.mode === "eval" &&
-        outputs.length > 0 &&
-        outputs.every((o) => o.output === null)
-      ) {
-        throw new Error(
-          `Every model call failed; first error: ${firstGenerationError ?? "unknown"}`,
-        );
-      }
-
-      const current = { ...job, generated: outputs.length };
-      if (job.local_scorers.length > 0) {
-        const missing = await store.evals.countMissingScores(
-          job.id,
-          job.local_scorers,
-        );
-        if (missing > 0) {
-          await store.transaction(async (tx) => {
-            const waiting = await tx.evals.update(
-              job.id,
-              {
-                ...RELEASE,
-                status: "awaiting_scores",
-                generated: outputs.length,
-              },
-              expect,
-            );
-            if (waiting) await billAttempt(tx, waiting);
-          });
-          return;
-        }
-      }
-
-      await finalize(current, expect);
+    return {
+      id: row.id,
+      kind: "eval",
+      attempt: row.attempt,
+      lease_seconds: row.lease_seconds,
+      lease_expires_at: row.lease_expires_at as string,
+      run: null,
+      import: null,
+      eval: {
+        id: row.id,
+        workspace_id: row.workspace_id,
+        name: row.name,
+        mode: row.mode,
+        models: row.models,
+        model_targets: inferenceModels(row.model_targets),
+        judge_targets: inferenceModels(row.judge_targets),
+        rubric: row.rubric,
+        samples: row.samples,
+        temperature: row.temperature,
+        max_tokens: row.max_tokens,
+        limit: row.limit,
+        done: await doneOutputs(row),
+      },
+      price_per_million_tokens: null,
+      max_cost_usd: null,
+      dataset: {
+        version: resolved.version.version,
+        record_count: resolved.version.record_count,
+        download_url: `/v1/trainer-jobs/${row.id}/dataset?attempt=${row.attempt}`,
+      },
+      resume: null,
+      base: null,
     };
-
-    try {
-      // A database blip retries in place (outputs already stored are kept)
-      // instead of waiting out the lease (r8 G'); a longer outage requeues.
-      for (let retry = 0; ; retry += 1) {
-        try {
-          await runOnce();
-          return;
-        } catch (error) {
-          if (!isDatabaseUnavailable(error) || lost || stopping) throw error;
-          if (retry >= DB_RETRY_DELAYS_MS.length) {
-            // Counted, so an eval that always hits one bad query fails at
-            // max_attempts instead of looping.
-            await requeueCounted(
-              job,
-              `Eval executor attempt ${job.attempt} kept hitting database errors (${errorMessage(error).slice(0, 200)})`,
-              expect,
-              clock.now().toISOString(),
-            ).catch(() => undefined);
-            return;
-          }
-          await sleep(DB_RETRY_DELAYS_MS[retry] as number);
-        }
-      }
-    } catch (error) {
-      // The status and its bill commit together.
-      await store.transaction(async () => {
-        const failed = await store.evals.update(
-          job.id,
-          {
-            ...RELEASE,
-            status: "failed",
-            error: errorMessage(error).slice(0, 4000),
-            finished_at: clock.now().toISOString(),
-          },
-          expect,
-        );
-        if (failed) await onFinished(failed);
-      });
-    } finally {
-      clearInterval(heartbeat);
-    }
   };
 
   const handler: JobKindHandler = {
-    onLeaseLost: (row, fence, now) =>
-      requeueCounted(
+    onClaim: async (row) => {
+      const record = await store.evals.getById(row.id);
+      if (!record) return null;
+      try {
+        return await claimJob(record);
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        // Unbuildable (its dataset was deleted): fail it, claim the next.
+        await store.transaction(async () => {
+          const failed = await store.evals.update(
+            record.id,
+            {
+              ...RELEASE,
+              status: "failed",
+              error: error.detail,
+              finished_at: clock.now().toISOString(),
+            },
+            fenceOf(record, ["running"]),
+          );
+          if (failed) await onFinished(failed);
+        });
+        return null;
+      }
+    },
+    stopReason: async (row) =>
+      row.status === "cancelled" ? "cancelled" : null,
+    onLeaseLost: async (row, fence, now) => {
+      if (row.status === "cancelled") {
+        await releaseCancelled(row, fence);
+        return;
+      }
+      await requeueAttempt(
         row,
-        `Eval executor attempt ${row.attempt} lost its lease`,
+        `Eval attempt ${row.attempt} lost its lease`,
         fence,
         now.toISOString(),
-      ),
+      );
+    },
   };
 
-  const drain = async (): Promise<number> => {
-    let ran = 0;
-    await collaborators.queue().expireLeases(clock.now());
-    while (!stopping) {
-      const row = await collaborators.queue().claimRow({
-        workerId: executorId,
-        leaseSeconds: LEASE_SECONDS,
-        kinds: ["eval"],
-      });
-      if (!row) break;
-      const job = await store.evals.getById(row.id);
-      if (job) await runJob(job);
-      ran += 1;
+  /** The eval behind a worker write, if this worker holds `attempt`'s lease. */
+  const loadLeased = async (
+    principal: AuthPrincipal,
+    id: string,
+    workerId: string,
+    attempt: number,
+  ): Promise<EvalRecord> => {
+    const row = await collaborators.queue().loadForWorker(principal, id);
+    const record = row.kind === "eval" && (await store.evals.getById(id));
+    if (!record) throw notFound("trainer_job", id);
+    if (!holdsLease(principal, record, workerId, attempt)) throw leaseLost(id);
+
+    return record;
+  };
+
+  /** A completed attempt: aggregate, wait for local scores, or fail. */
+  const completeGenerated = async (
+    job: EvalRecord,
+    expect: JobExpectation,
+  ): Promise<void> => {
+    const outputs = await allOutputs(job.id);
+    if (
+      job.mode === "eval" &&
+      outputs.length > 0 &&
+      outputs.every((o) => o.output === null)
+    ) {
+      const first = outputs.find((o) => o.output === null)?.error;
+      await failAttempt(
+        job,
+        expect,
+        `Every model call failed; first error: ${first ?? "unknown"}`,
+      );
+      return;
     }
 
-    return ran;
+    if (job.local_scorers.length > 0) {
+      const missing = await store.evals.countMissingScores(
+        job.id,
+        job.local_scorers,
+      );
+      if (missing > 0) {
+        await store.transaction(async (tx) => {
+          const waiting = await tx.evals.update(
+            job.id,
+            {
+              ...RELEASE,
+              status: "awaiting_scores",
+              generated: outputs.length,
+            },
+            expect,
+          );
+          if (waiting) await billAttempt(tx, waiting);
+        });
+        return;
+      }
+    }
+
+    await finalize({ ...job, generated: outputs.length }, expect);
+  };
+
+  /** Fails the eval; the status and its bill commit together. */
+  const failAttempt = async (
+    job: EvalRecord,
+    expect: JobExpectation,
+    error: string,
+  ): Promise<void> => {
+    await store.transaction(async () => {
+      const failed = await store.evals.update(
+        job.id,
+        {
+          ...RELEASE,
+          status: "failed",
+          error: error.slice(0, 4000),
+          finished_at: clock.now().toISOString(),
+        },
+        expect,
+      );
+      if (failed) await onFinished(failed);
+    });
+  };
+
+  const postOutputs: EvalService["postOutputs"] = async (
+    principal,
+    id,
+    body,
+  ) => {
+    const job = await loadLeased(principal, id, body.worker_id, body.attempt);
+    const judges = new Set(Object.keys(job.judge_targets));
+    for (const o of body.outputs) {
+      const known =
+        job.models.includes(o.model) &&
+        o.sample_index < job.samples &&
+        Object.keys(o.judge_tokens).every((j) => judges.has(j));
+      if (!known) {
+        throw invalid(
+          "unknown_eval_output",
+          `Output (${o.model}, task ${o.task_index}, sample ${o.sample_index}) is not part of eval '${id}' (models ${job.models.join(", ")}, ${job.samples} sample(s), judges ${[...judges].join(", ") || "none"}).`,
+        );
+      }
+    }
+    const now = clock.now().toISOString();
+    const rows: EvalOutputRow[] = body.outputs.map((o) => ({
+      id: newId("evout"),
+      eval_id: id,
+      attempt: job.attempt,
+      record: o.record as EvalOutputRow["record"],
+      task_index: o.task_index,
+      task_id: o.task_id,
+      model: o.model,
+      sample_index: o.sample_index,
+      input: o.input as EvalOutputRow["input"],
+      output: o.output,
+      expected_output: o.expected_output ?? null,
+      scores: o.scores,
+      error: o.error,
+      prompt_tokens: o.prompt_tokens,
+      completion_tokens: o.completion_tokens,
+      cost_usd: outputCost(job, o),
+      created_at: now,
+    }));
+
+    // The outputs, the progress and the bill commit together, fenced on
+    // the lease: a worker that lost it stores nothing.
+    const result = await store.transaction(async (tx) => {
+      const accepted = await tx.evals.insertOutputs(rows);
+      const generated = await tx.evals.countOutputs(id);
+      const progressed = await tx.evals.update(
+        id,
+        { generated },
+        fenceOf(job, ["running", "cancelled"]),
+      );
+      if (!progressed) throw leaseLost(id);
+      // A cancelled eval's last outputs bill now: its close may never come.
+      await billAttempt(tx, progressed, progressed.status === "cancelled");
+
+      return {
+        accepted,
+        generated,
+        should_stop: progressed.status === "cancelled",
+      };
+    });
+    if (result.accepted > 0 && body.calls) {
+      const c = body.calls;
+      if (c.model_ok) metrics.evalOutputs.inc({ result: "ok" }, c.model_ok);
+      if (c.model_error) {
+        metrics.evalOutputs.inc({ result: "error" }, c.model_error);
+      }
+      if (c.judge_ok) metrics.judgeCalls.inc({ result: "ok" }, c.judge_ok);
+      if (c.judge_error) {
+        metrics.judgeCalls.inc({ result: "error" }, c.judge_error);
+      }
+    }
+
+    return result;
+  };
+
+  const complete: EvalService["complete"] = async (principal, id, body) => {
+    const row = await collaborators.queue().loadForWorker(principal, id);
+    const job = row.kind === "eval" ? await store.evals.getById(id) : null;
+    if (!job) throw notFound("trainer_job", id);
+    if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
+      // Idempotent retry of a completion that already committed.
+      if (
+        job.attempt === body.attempt &&
+        job.worker_id === null &&
+        job.status !== "queued"
+      ) {
+        return toPublic(job);
+      }
+      throw leaseLost(id);
+    }
+    const now = clock.now().toISOString();
+    if (job.status === "cancelled") {
+      // Cancelled while it ran: whatever the worker reports, it ends here.
+      await releaseCancelled(job, fenceOf(job, ["cancelled"]));
+      return toPublic(await load(job.workspace_id, id));
+    }
+    const expect = fenceOf(job, ["running"]);
+
+    if (body.status === "completed") {
+      await completeGenerated(job, expect);
+    } else if (body.status === "abandoned") {
+      const reason = body.reason ?? "worker_error";
+      observeInterruption(job, reason);
+      await requeueAttempt(
+        job,
+        `Eval attempt ${job.attempt} was handed back by its worker${body.error ? ` (${body.error.slice(0, 200)})` : ""}`,
+        expect,
+        now,
+        reason === "compute_reclaimed",
+      );
+    } else if (body.status === "failed") {
+      await failAttempt(
+        job,
+        expect,
+        body.error ?? "The eval worker reported a failure.",
+      );
+    } else {
+      throw invalid(
+        "unsupported_completion",
+        `Eval '${id}' is ${job.status}: its attempt completes as completed, failed or abandoned, not '${body.status}'.`,
+      );
+    }
+
+    return toPublic(await load(job.workspace_id, id));
   };
 
   const resultsPage = async (
@@ -1136,62 +1107,57 @@ export const createEvalService = (
       const record = await load(workspaceId, id);
       // A replayed cancel (lost response, SDK retry) gets the current state.
       if (record.status === "cancelled") return toPublic(record);
+      // A running eval keeps its lease, so the worker can still post (and
+      // bill) the outputs in flight; it stops at its next batch or beat.
+      const leased = record.status === "running" && record.worker_id !== null;
       // The status and its bill commit together.
       const updated = await store.transaction(async () => {
         const cancelled = await store.evals.update(
           id,
           {
             status: "cancelled",
-            ...RELEASE,
+            ...(leased ? {} : RELEASE),
             finished_at: clock.now().toISOString(),
           },
-          { status: ACTIVE },
+          leased
+            ? { status: ["running"], workerId: record.worker_id }
+            : { status: ACTIVE },
         );
         if (cancelled) await onFinished(cancelled);
         return cancelled;
       });
       if (!updated) {
+        const now = await load(workspaceId, id);
+        if (now.status === "cancelled") return toPublic(now);
         throw new ApiError(
           409,
           "eval_not_cancellable",
           "Eval cannot be cancelled",
-          `Eval '${id}' is already ${record.status}.`,
+          `Eval '${id}' is already ${now.status}.`,
         );
       }
 
       return toPublic(updated);
     },
 
-    drain,
+    postOutputs,
 
-    start: (intervalMs) => {
-      if (timer) return;
-      stopping = false;
-      timer = setInterval(() => {
-        if (inFlight) return;
-        inFlight = drain()
-          .catch((error: unknown) => {
-            console.error(
-              JSON.stringify({
-                level: "error",
-                msg: "eval executor failed",
-                error: errorMessage(error),
-              }),
-            );
-          })
-          .finally(() => {
-            inFlight = null;
-          });
-      }, intervalMs);
-      timer.unref();
-    },
+    complete,
 
-    stop: async () => {
-      stopping = true;
-      if (timer) clearInterval(timer);
-      timer = null;
-      await inFlight;
-      stopping = false;
+    datasetStream: async (principal, id, attempt) => {
+      const row = await collaborators.queue().loadForWorker(principal, id);
+      if (row.kind !== "eval") throw notFound("trainer_job", id);
+      if (row.attempt !== attempt || row.worker_id === null) {
+        throw leaseLost(id);
+      }
+      const record = await load(row.workspace_id, id);
+      const resolved = await datasets.resolve(
+        record.workspace_id,
+        record.dataset_name,
+        record.dataset_version,
+      );
+
+      return streamVersionGzip(deps.storage, resolved.version);
     },
 
     settleAwaitingScores: async (now) => {

@@ -170,9 +170,6 @@ export const assertWorkerScope = (
 export const workerKeyOf = (principal: AuthPrincipal): string =>
   `${principal.kind}:${principal.actor}@${principal.workerWorkspaceId ?? "*"}`;
 
-/** The key of the in-process eval executor's leases. */
-export const IN_PROCESS_WORKER_KEY = "in-process";
-
 /** True when `principal` (as `workerId`) holds `attempt`'s lease on `job`. */
 export const holdsLease = (
   principal: AuthPrincipal,
@@ -292,12 +289,6 @@ export interface JobQueue {
       device?: "cpu" | "gpu" | undefined;
     },
   ): Promise<TrainerJob | null>;
-  /** In-process claim (the eval executor): the raw job row. */
-  claimRow(input: {
-    workerId: string;
-    leaseSeconds: number;
-    kinds: readonly JobKind[];
-  }): Promise<JobRow | null>;
   heartbeat(
     principal: AuthPrincipal,
     id: string,
@@ -367,19 +358,6 @@ export const createJobQueue = (
     return closed;
   };
 
-  const claimRow: JobQueue["claimRow"] = async (input) => {
-    const now = clock.now();
-    const job = await store.jobs.claimNext({
-      ...input,
-      workerKey: IN_PROCESS_WORKER_KEY,
-      now,
-      maxRunning: limits.maxRunning,
-    });
-    if (job) observeClaim(job, now);
-
-    return job;
-  };
-
   /** A fresh claim, in a span of the trace that created the job. */
   const build = (job: JobRow, worker: ClaimWorker) =>
     withSpan(
@@ -400,7 +378,7 @@ export const createJobQueue = (
 
   const loadForWorker = async (principal: AuthPrincipal, id: string) => {
     const job = await store.jobs.getById(id);
-    if (!job || job.kind === "eval") throw notFound("trainer_job", id);
+    if (!job) throw notFound("trainer_job", id);
     assertWorkerScope(principal, job.workspace_id, id);
     if (claimableKinds(principal, [job.kind]).length === 0) {
       throw notFound("trainer_job", id);
@@ -460,8 +438,6 @@ export const createJobQueue = (
         if (built) return built;
       }
     },
-
-    claimRow,
 
     heartbeat: async (principal, id, body) => {
       const job = await loadForWorker(principal, id);

@@ -351,7 +351,6 @@ describe("metrics endpoint settings", () => {
     const t = await makeTestApp({
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 1,
         metrics: { enabled: true, token: "scrape-secret" },
       },
     });
@@ -379,7 +378,6 @@ describe("metrics endpoint settings", () => {
       const t = await makeTestApp({
         settings: {
           maxAttempts: 3,
-          evalConcurrency: 1,
           metrics: metricsSettings,
         },
       });
@@ -400,7 +398,6 @@ describe("metrics endpoint settings", () => {
     const t = await makeTestApp({
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 1,
         metrics: { enabled: true, workspaceLabel: true },
       },
     });

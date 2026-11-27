@@ -47,7 +47,7 @@ describe("evals HTTP API", () => {
 
     const created = await createEval({ name: "smoke" });
     expect(created.status).toBe("queued");
-    await h.t.services.evals.drain();
+    await h.worker.drain();
 
     const got = await h.t.json<Json>(`/v1/evals/${created.id}`);
     expect(got.status).toBe(200);
@@ -93,7 +93,7 @@ describe("evals HTTP API", () => {
     const created = await createEval({
       rubric: [{ name: "fn", kind: "code", runtime: "local" }],
     });
-    await h.t.services.evals.drain();
+    await h.worker.drain();
 
     const outputs = await h.t.json<Json>(
       `/v1/evals/${created.id}/outputs?missing_scorer=fn&limit=200`,
@@ -156,7 +156,7 @@ describe("evals HTTP API", () => {
     const created = await createEval({
       rubric: [{ name: "fn", kind: "code" }],
     });
-    await h.t.services.evals.drain();
+    await h.worker.drain();
 
     const other = await h.t.mintKey("ws_b", ["runs:read", "runs:write"]);
     const id = created.id as string;
@@ -251,7 +251,7 @@ describe("eval judges (r8 P1-3)", () => {
       body: judged(TEST_JUDGE),
     });
     expect(ev.status).toBe(202);
-    await h.t.services.evals.drain();
+    await h.worker.drain();
     const done = await h.t.json<Json>(`/v1/evals/${ev.body.id}`, {
       token: other,
     });
@@ -263,7 +263,7 @@ describe("eval judges (r8 P1-3)", () => {
       token: other,
       body: { models: ["test/tiny-qwen3"], dataset: "qa" },
     });
-    await h.t.services.evals.drain();
+    await h.worker.drain();
     const plain = await h.t.json<Json>(`/v1/evals/${unjudged.body.id}`, {
       token: other,
     });

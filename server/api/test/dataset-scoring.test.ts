@@ -13,8 +13,10 @@ import {
   qaRecords,
   seedDataset,
   type EvalHarness,
+  startEvalWorker,
 } from "./fixtures/evals.js";
 import { judgeResponder } from "./fixtures/fake-openai.js";
+import { unconfiguredInference } from "../src/worker/eval-worker.js";
 
 type Json = Record<string, unknown> & {
   id?: string;
@@ -244,7 +246,7 @@ describe("POST /v1/datasets/{name}/score", () => {
       models: ["record"],
       scored_dataset_version: null,
     });
-    await h.t.services.evals.drain();
+    await h.worker.drain();
 
     // Judges saw the stored answer; no model was asked to generate one.
     const judged = h.fake.requests.filter((r) => r.model === "qwen/qwen3-32b");
@@ -281,7 +283,7 @@ describe("POST /v1/datasets/{name}/score", () => {
       body: { rubric: [JUDGE], name: "again" },
     });
     expect(again.status).toBe(202);
-    await h.t.services.evals.drain();
+    await h.worker.drain();
     const noop = await h.t.json<Json>(`/v1/evals/${again.body.id}`);
     expect(noop.body).toMatchObject({
       status: "completed",
@@ -307,7 +309,7 @@ describe("POST /v1/datasets/{name}/score", () => {
     expect([first.status, retry.status]).toEqual([202, 202]);
     expect(retry.body.id).toBe(first.body.id);
     expect(retry.headers.get("Idempotent-Replayed")).toBe("true");
-    await h.t.services.evals.drain();
+    await h.worker.drain();
     expect(h.fake.requests).toHaveLength(2);
     expect((await h.t.json<Json>("/v1/datasets/logs")).body.version).toBe(2);
     const reused = await h.t.json<Json>("/v1/datasets/logs/score", {
@@ -324,7 +326,7 @@ describe("POST /v1/datasets/{name}/score", () => {
     const created = await h.t.json<Json>("/v1/datasets/logs/score", {
       body: { rubric: [JUDGE] },
     });
-    await h.t.services.evals.drain();
+    await h.worker.drain();
     const done = await h.t.json<Json>(`/v1/evals/${created.body.id}`);
     expect(done.body).toMatchObject({
       status: "completed",
@@ -356,7 +358,9 @@ describe("POST /v1/datasets/{name}/score", () => {
         },
       });
       expect(created.status).toBe(202);
-      await t.services.evals.drain();
+      const worker = startEvalWorker(t, unconfiguredInference());
+      await worker.drain();
+      await worker.close();
       const waiting = await t.json<Json>(`/v1/evals/${created.body.id}`);
       expect(waiting.body.status).toBe("awaiting_scores");
 

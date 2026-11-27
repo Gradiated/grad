@@ -10,7 +10,6 @@ import {
 import { buildOpenApiDocument, createApp } from "../src/app.js";
 import { createModelCatalog } from "../src/catalog.js";
 import { systemClock } from "../src/clock.js";
-import { createRegexEvaluator } from "../src/services/evals/regex.js";
 import { S3ObjectStore } from "../src/storage/s3.js";
 import type { Store } from "../src/store/types.js";
 
@@ -50,7 +49,6 @@ const run = async () => {
   const check = process.argv.includes("--check");
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const outPath = path.resolve(scriptDir, "../../../spec/openapi.yaml");
-  const regex = createRegexEvaluator();
 
   const app = createApp({
     store: {} as Store,
@@ -60,14 +58,12 @@ const run = async () => {
     billing: createNoopBillingAdapter(),
     catalog: createModelCatalog(),
     clock: systemClock,
-    inference: null,
-    regex,
-    settings: { maxAttempts: 3, evalConcurrency: 1 },
+    inferenceConfigured: false,
+    settings: { maxAttempts: 3 },
   });
 
   const document = buildOpenApiDocument(app);
   const rendered = YAML.stringify(document, { lineWidth: 120 });
-  await regex.close();
   // The trainer validates the records it writes against the same schema.
   const recordPath = path.resolve(
     scriptDir,

@@ -42,7 +42,6 @@ describe("run lifecycle events", () => {
       settings: {
         maxAttempts: 3,
         maxPreemptions: 20,
-        evalConcurrency: 2,
         ssePollMs: 5,
         waitingForComputeSeconds: 30,
       },
@@ -283,7 +282,7 @@ describe("run lifecycle events", () => {
   it("gives up once reclaims reach their own cap", async () => {
     await t.close();
     t = await makeTestApp({
-      settings: { maxAttempts: 3, maxPreemptions: 2, evalConcurrency: 2 },
+      settings: { maxAttempts: 3, maxPreemptions: 2 },
     });
     worker = new FakeWorker(t);
     const run = await createSftRun(t);
@@ -349,7 +348,6 @@ describe("run lifecycle events", () => {
     t = await makeTestApp({
       settings: {
         maxAttempts: 1,
-        evalConcurrency: 2,
         workerAutoscaling: true,
       },
     });

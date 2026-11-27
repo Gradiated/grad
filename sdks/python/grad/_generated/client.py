@@ -197,6 +197,7 @@ CompleteTrainerJobResponse = TypedDict(
         "run": "Run",
         "artifact": "Artifact",
         "import": "ImportJob",
+        "eval": "NotRequired[EvalRun]",
     },
 )
 
@@ -629,7 +630,7 @@ ImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
 
 InterruptionReason: TypeAlias = "Literal['lease_lost', 'compute_reclaimed', 'worker_error', 'oom']"
 
-JobKind: TypeAlias = "Literal['train', 'import']"
+JobKind: TypeAlias = "Literal['train', 'import', 'eval']"
 
 LogEvent = TypedDict(
     "LogEvent",
@@ -828,6 +829,25 @@ PostEvalScoresResponse = TypedDict(
         "accepted": "int",
         "status": "EvalStatus",
         "pending_local_scores": "int",
+    },
+)
+
+PostTrainerEvalOutputsRequest = TypedDict(
+    "PostTrainerEvalOutputsRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "outputs": "list[TrainerEvalOutput]",
+        "calls": "NotRequired[TrainerEvalCallCounts]",
+    },
+)
+
+PostTrainerEvalOutputsResponse = TypedDict(
+    "PostTrainerEvalOutputsResponse",
+    {
+        "accepted": "int",
+        "generated": "int",
+        "should_stop": "bool",
     },
 )
 
@@ -1290,6 +1310,35 @@ TrainableModel = TypedDict(
     },
 )
 
+TrainerEvalCallCounts = TypedDict(
+    "TrainerEvalCallCounts",
+    {
+        "model_ok": "NotRequired[int]",
+        "model_error": "NotRequired[int]",
+        "judge_ok": "NotRequired[int]",
+        "judge_error": "NotRequired[int]",
+    },
+)
+
+TrainerEvalOutput = TypedDict(
+    "TrainerEvalOutput",
+    {
+        "model": "str",
+        "task_index": "int",
+        "task_id": "str",
+        "sample_index": "int",
+        "record": "dict[str, Any]",
+        "input": "list[dict[str, Any]]",
+        "output": "str | None",
+        "expected_output": "NotRequired[Any]",
+        "scores": "dict[str, float]",
+        "error": "str | None",
+        "prompt_tokens": "int",
+        "completion_tokens": "int",
+        "judge_tokens": "NotRequired[dict[str, int]]",
+    },
+)
+
 TrainerHeartbeatRequest = TypedDict(
     "TrainerHeartbeatRequest",
     {
@@ -1325,6 +1374,7 @@ TrainerJob = TypedDict(
         "dataset": "dict[str, Any] | None",
         "resume": "dict[str, Any] | None",
         "loggers": "NotRequired[list[dict[str, Any]]]",
+        "eval": "dict[str, Any] | None",
         "base": "dict[str, Any] | None",
         "traceparent": "NotRequired[str | None]",
     },
@@ -1608,7 +1658,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ClaimJobRequest": frozenset({"device", "gpu", "kinds", "lease_seconds", "recipes", "worker_id"}),
     "ClaimJobResponse": frozenset({"job", "protocol"}),
     "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "reason", "status", "stop_reason", "tokens_processed", "upload_id", "worker_id"}),
-    "CompleteTrainerJobResponse": frozenset({"artifact", "import", "job_id", "kind", "run", "status"}),
+    "CompleteTrainerJobResponse": frozenset({"artifact", "eval", "import", "job_id", "kind", "run", "status"}),
     "CompletedEvent": frozenset({"attempt", "run", "run_id", "seq", "status", "timestamp", "type"}),
     "CreateApiKeyRequest": frozenset({"name", "scopes"}),
     "CreateDatasetRequest": frozenset({"metadata", "name"}),
@@ -1652,6 +1702,8 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "PoolingSpec": frozenset({"kind"}),
     "PostEvalScoresRequest": frozenset({"scores"}),
     "PostEvalScoresResponse": frozenset({"accepted", "pending_local_scores", "status"}),
+    "PostTrainerEvalOutputsRequest": frozenset({"attempt", "calls", "outputs", "worker_id"}),
+    "PostTrainerEvalOutputsResponse": frozenset({"accepted", "generated", "should_stop"}),
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
@@ -1685,9 +1737,11 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
     "SyncSourceRequest": frozenset({"full"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "min_gpu_memory_gb", "price_per_million_tokens_usd", "recipes", "template_revision"}),
+    "TrainerEvalCallCounts": frozenset({"judge_error", "judge_ok", "model_error", "model_ok"}),
+    "TrainerEvalOutput": frozenset({"completion_tokens", "error", "expected_output", "input", "judge_tokens", "model", "output", "prompt_tokens", "record", "sample_index", "scores", "task_id", "task_index"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "stats", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
-    "TrainerJob": frozenset({"attempt", "base", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "loggers", "max_cost_usd", "price_per_million_tokens", "resume", "run", "traceparent"}),
+    "TrainerJob": frozenset({"attempt", "base", "dataset", "eval", "id", "import", "kind", "lease_expires_at", "lease_seconds", "loggers", "max_cost_usd", "price_per_million_tokens", "resume", "run", "traceparent"}),
     "TrainerUploadRequest": frozenset({"attempt", "kind", "sha256", "size_bytes", "worker_id"}),
     "TrainerWorkerStats": frozenset({"gpu_memory_used_bytes", "gpu_utilization", "phase", "tokens_per_second"}),
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
@@ -1710,7 +1764,7 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
     "ImportStatus": ("queued", "running", "completed", "failed",),
     "InterruptionReason": ("lease_lost", "compute_reclaimed", "worker_error", "oom",),
-    "JobKind": ("train", "import",),
+    "JobKind": ("train", "import", "eval",),
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
     "RunPhase": ("queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing",),
     "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance",),

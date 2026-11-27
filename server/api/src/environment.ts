@@ -19,6 +19,69 @@ const optionalString = z
 const S3_BUCKET_REQUIRED =
   "S3_BUCKET is required: grad-server keeps datasets, checkpoints and artifacts in S3-compatible storage (AWS S3, SeaweedFS, MinIO, R2); set S3_ENDPOINT for a store other than AWS S3";
 
+/** The eval endpoints: eval workers call them; the API only checks they are set. */
+const EndpointShape = {
+  GRAD_INFERENCE_BASE_URL: optionalString,
+  GRAD_INFERENCE_API_KEY: optionalString,
+  GRAD_JUDGE_BASE_URL: optionalString,
+  GRAD_JUDGE_API_KEY: optionalString,
+  /** Deprecated names of the four above (accepted with a warning). */
+  INFERENCE_BASE_URL: optionalString,
+  INFERENCE_API_KEY: optionalString,
+  JUDGE_BASE_URL: optionalString,
+  JUDGE_API_KEY: optionalString,
+};
+
+type EndpointEnv = {
+  [K in keyof typeof EndpointShape]: string | undefined;
+};
+
+export interface EvalEndpoints {
+  /** Eval generations endpoint (GRAD_INFERENCE_BASE_URL). */
+  inferenceBaseUrl: string | undefined;
+  inferenceApiKey: string | undefined;
+  /** Effective judge endpoint (GRAD_JUDGE_BASE_URL, then the inference endpoint). */
+  judgeBaseUrl: string | undefined;
+  judgeApiKey: string | undefined;
+}
+
+/**
+ * One name per setting (GRAD_*), the same in compose, Helm and the docs;
+ * the unprefixed names shipped first and still work, with a warning.
+ */
+const resolveEndpoints = (
+  env: EndpointEnv,
+  warnings: string[],
+): EvalEndpoints => {
+  const named = (current: keyof EndpointEnv, legacy: keyof EndpointEnv) => {
+    const value = env[current];
+    const old = env[legacy];
+    if (old !== undefined) {
+      warnings.push(
+        value === undefined
+          ? `${legacy} is deprecated; rename it to ${current}.`
+          : `${legacy} is ignored because ${current} is set; remove it.`,
+      );
+    }
+
+    return value ?? old;
+  };
+  const inferenceBaseUrl = named(
+    "GRAD_INFERENCE_BASE_URL",
+    "INFERENCE_BASE_URL",
+  );
+  const inferenceApiKey = named("GRAD_INFERENCE_API_KEY", "INFERENCE_API_KEY");
+  const judgeUrl = named("GRAD_JUDGE_BASE_URL", "JUDGE_BASE_URL");
+  const judgeKey = named("GRAD_JUDGE_API_KEY", "JUDGE_API_KEY");
+
+  return {
+    inferenceBaseUrl,
+    inferenceApiKey,
+    judgeBaseUrl: judgeUrl ?? inferenceBaseUrl,
+    judgeApiKey: judgeKey ?? (judgeUrl ? undefined : inferenceApiKey),
+  };
+};
+
 const EnvironmentSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
@@ -56,17 +119,7 @@ const EnvironmentSchema = z.object({
   BILLING_MODE: z.enum(["noop", "cloud"]).default("noop"),
   CLOUD_INTERNAL_API_URL: optionalString,
   CLOUD_SERVICE_TOKEN: optionalString,
-  GRAD_INFERENCE_BASE_URL: optionalString,
-  GRAD_INFERENCE_API_KEY: optionalString,
-  GRAD_JUDGE_BASE_URL: optionalString,
-  GRAD_JUDGE_API_KEY: optionalString,
-  /** Deprecated names of the four above (accepted with a warning). */
-  INFERENCE_BASE_URL: optionalString,
-  INFERENCE_API_KEY: optionalString,
-  JUDGE_BASE_URL: optionalString,
-  JUDGE_API_KEY: optionalString,
-  EVAL_EXECUTOR: booleanFlag("true"),
-  EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
+  ...EndpointShape,
   GRAD_EXTRA_MODELS_JSON: optionalString,
   GRAD_JUDGE_MODELS_JSON: optionalString,
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
@@ -157,7 +210,7 @@ const TrainerKeysSchema = z.array(
     sha256: z
       .string()
       .regex(/^[0-9a-f]{64}$/, "a lowercase SHA-256 hex digest"),
-    kinds: z.array(z.enum(["train", "import"])).min(1),
+    kinds: z.array(z.enum(["train", "import", "eval"])).min(1),
   }),
 );
 
@@ -193,12 +246,8 @@ export interface ServerEnvironment extends RawEnvironment {
   workerAuth: WorkerAuthConfig;
   /** Whether to serve the web UI (UI_ENABLED, default off only for AUTH_MODE=cloud). */
   uiEnabled: boolean;
-  /** Eval generations endpoint (GRAD_INFERENCE_BASE_URL). */
-  inferenceBaseUrl: string | undefined;
-  inferenceApiKey: string | undefined;
-  /** Effective judge endpoint (GRAD_JUDGE_BASE_URL, then the inference endpoint). */
-  judgeBaseUrl: string | undefined;
-  judgeApiKey: string | undefined;
+  /** GRAD_INFERENCE_BASE_URL is set: evals can be created (eval workers call it). */
+  inferenceConfigured: boolean;
   warnings: string[];
 }
 
@@ -260,30 +309,20 @@ export const parseServerEnvironment = (
     );
   }
 
-  // One name per setting (GRAD_*), the same in compose, Helm and the docs;
-  // the unprefixed names shipped first and still work, with a warning.
-  const named = (current: keyof typeof env, legacy: keyof typeof env) => {
-    const value = env[current] as string | undefined;
-    const old = env[legacy] as string | undefined;
-    if (old !== undefined) {
+  const endpoints = resolveEndpoints(env, warnings);
+  // Eval workers (`grad-server worker --kinds eval`) call the endpoints now.
+  for (const name of [
+    "GRAD_INFERENCE_API_KEY",
+    "GRAD_JUDGE_API_KEY",
+    "EVAL_CONCURRENCY",
+    "EVAL_EXECUTOR",
+  ]) {
+    if (raw[name]?.trim()) {
       warnings.push(
-        value === undefined
-          ? `${legacy} is deprecated; rename it to ${current}.`
-          : `${legacy} is ignored because ${current} is set; remove it.`,
+        `${name} is ignored by the API: evals run on eval workers (grad-server worker --kinds eval); set it there.`,
       );
     }
-
-    return value ?? old;
-  };
-  const inferenceBaseUrl = named(
-    "GRAD_INFERENCE_BASE_URL",
-    "INFERENCE_BASE_URL",
-  );
-  const inferenceApiKey = named("GRAD_INFERENCE_API_KEY", "INFERENCE_API_KEY");
-  const judgeUrl = named("GRAD_JUDGE_BASE_URL", "JUDGE_BASE_URL");
-  const judgeKey = named("GRAD_JUDGE_API_KEY", "JUDGE_API_KEY");
-  const judgeBaseUrl = judgeUrl ?? inferenceBaseUrl;
-  const judgeApiKey = judgeKey ?? (judgeUrl ? undefined : inferenceApiKey);
+  }
 
   if (env.METRICS_PORT !== undefined && env.METRICS_PORT === env.PORT) {
     throw new Error("METRICS_PORT must differ from PORT.");
@@ -306,10 +345,42 @@ export const parseServerEnvironment = (
     trainerKeys,
     workerAuth,
     uiEnabled: env.UI_ENABLED ?? env.AUTH_MODE !== "cloud",
-    inferenceBaseUrl,
-    inferenceApiKey,
-    judgeBaseUrl,
-    judgeApiKey,
+    inferenceConfigured: endpoints.inferenceBaseUrl !== undefined,
     warnings,
   };
+};
+
+const WorkerEnvironmentSchema = z.object({
+  GRAD_SERVER_URL: z.string().trim().min(1).default("http://127.0.0.1:8787"),
+  TRAINER_API_KEY: optionalString,
+  GRAD_WORKER_ID: optionalString,
+  GRAD_LEASE_SECONDS: z.coerce.number().int().min(30).max(3600).default(180),
+  GRAD_POLL_INTERVAL_S: z.coerce.number().min(0.05).max(60).default(1),
+  /** Concurrent generations per eval. */
+  EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(256).default(8),
+  ...EndpointShape,
+});
+
+export type EvalWorkerEnvironment = z.infer<typeof WorkerEnvironmentSchema> &
+  EvalEndpoints & { warnings: string[] };
+
+/** Configuration of `grad-server worker --kinds eval`. */
+export const parseEvalWorkerEnvironment = (
+  raw: Record<string, string | undefined> = process.env,
+): EvalWorkerEnvironment => {
+  const parsed = WorkerEnvironmentSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid eval worker configuration: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+    );
+  }
+  const warnings: string[] = [];
+  const endpoints = resolveEndpoints(parsed.data, warnings);
+  if (!endpoints.inferenceBaseUrl) {
+    warnings.push(
+      "GRAD_INFERENCE_BASE_URL is not set: this eval worker runs only validators, regexes and code scorers (dataset.score()). Set it (and GRAD_JUDGE_BASE_URL for judges) here and on grad-server, which checks it when an eval is created.",
+    );
+  }
+
+  return { ...parsed.data, ...endpoints, warnings };
 };

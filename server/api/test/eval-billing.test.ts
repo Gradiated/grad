@@ -77,7 +77,7 @@ describe("eval billing", () => {
     expect(plan.estimated_cost_usd).toBeGreaterThan(0);
 
     const created = await createEval(evals, WORKSPACE_A, request({}));
-    await evals.drain();
+    await h.worker.drain();
     const done = await evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("completed");
     expect(done.total_cost_usd).toBeCloseTo(0.12, 6);
@@ -109,7 +109,7 @@ describe("eval billing", () => {
     fake.setModel("qwen/qwen3-8b", () => ({ ...EXPENSIVE(), delayMs: 200 }));
     const evals = t.services.evals;
     const created = await createEval(evals, WORKSPACE_A, request({}));
-    const running = evals.drain();
+    const running = h.worker.drain();
     // Cancel while all three calls are in flight; they land after it.
     for (let i = 0; i < 100 && fake.requests.length < 3; i += 1) {
       await new Promise((r) => setTimeout(r, 5));
@@ -137,7 +137,7 @@ describe("eval billing", () => {
       WORKSPACE_A,
       request({ rubric: [{ name: "fn", kind: "code", runtime: "local" }] }),
     );
-    await evals.drain();
+    await h.worker.drain();
     const waiting = await evals.get(WORKSPACE_A, local.id);
     expect(waiting).toMatchObject({
       status: "awaiting_scores",
@@ -159,7 +159,7 @@ describe("eval billing", () => {
 
     fake.failNext(100, 400);
     const failed = await createEval(evals, WORKSPACE_A, request({}));
-    await evals.drain();
+    await h.worker.drain();
     expect((await evals.get(WORKSPACE_A, failed.id)).status).toBe("failed");
 
     // Nothing ran for the cancelled and failed evals, so only the scored one bills.

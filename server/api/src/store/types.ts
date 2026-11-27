@@ -784,8 +784,12 @@ export interface EvalRepository {
   /** Evals waiting for SDK-posted scores, least recently touched first. */
   listAwaitingScores(limit: number): Promise<EvalRecord[]>;
 
-  /** First write wins on (eval, model, task, sample): a replay is a no-op. */
-  insertOutput(output: EvalOutputRow): Promise<void>;
+  /**
+   * First write wins on (eval, model, task, sample): a replay is a no-op.
+   * Returns how many rows were new.
+   */
+  insertOutputs(outputs: readonly EvalOutputRow[]): Promise<number>;
+  countOutputs(evalId: string): Promise<number>;
   /** Keys `${model}\u0000${task_index}\u0000${sample_index}` already generated. */
   listOutputKeys(evalId: string): Promise<Set<string>>;
   /** Ordered by (task_index, model, sample_index). */

@@ -1,21 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   PlanEvalRequestSchema,
   type PlanEvalRequest,
 } from "../src/contracts.js";
+import { AWAITING_SCORES_TIMEOUT_SECONDS } from "../src/services/evals/service.js";
+import { createWorkerClient } from "../src/worker/client.js";
+import { makeTestApp, TRAINER_KEY, WORKSPACE_A } from "./fixtures/app.js";
 import {
-  AWAITING_SCORES_TIMEOUT_SECONDS,
-  backgroundInterval,
-  DB_RETRY_DELAYS_MS,
-} from "../src/services/evals/service.js";
-import { makeTestApp, WORKSPACE_A } from "./fixtures/app.js";
-import {
+  appFetch,
+  fakeInference,
   goldResponder,
   makeEvalHarness,
   qaRecords,
   seedArtifact,
   seedDataset,
+  startEvalWorker,
   type EvalHarness,
   createEval,
 } from "./fixtures/evals.js";
@@ -193,7 +193,7 @@ describe("eval service", () => {
       t.services.evals.listResults(WORKSPACE_A, created.id, { limit: 10 }),
     ).rejects.toMatchObject({ status: 409, code: "eval_not_completed" });
 
-    expect(await t.services.evals.drain()).toBe(1);
+    expect(await h.worker.drain()).toBe(1);
     const done = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("completed");
     expect(done.progress.generated).toBe(12);
@@ -263,7 +263,7 @@ describe("eval service", () => {
         ],
       }),
     );
-    await t.services.evals.drain();
+    await h.worker.drain();
     const done = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("completed");
     expect(done.summary[0]?.overall).toBe(0.8);
@@ -299,7 +299,7 @@ describe("eval service", () => {
       ]),
     ).rejects.toMatchObject({ status: 409, code: "eval_not_awaiting_scores" });
 
-    await evals.drain();
+    await h.worker.drain();
     const waiting = await evals.get(WORKSPACE_A, created.id);
     expect(waiting.status).toBe("awaiting_scores");
     expect(waiting.progress.pending_local_scores).toBe(3);
@@ -380,7 +380,7 @@ describe("eval service", () => {
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa", rubric }),
     );
-    await evals.drain();
+    await h.worker.drain();
 
     // Every score stored, then the replica died before finalize.
     const outputs = await evals.listOutputs(WORKSPACE_A, scored.id, {
@@ -416,7 +416,7 @@ describe("eval service", () => {
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
-    await t.services.evals.drain();
+    await h.worker.drain();
     const failed = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(failed.status).toBe("failed");
     expect(failed.error).toMatch(/Every model call failed.*HTTP 500/);
@@ -436,14 +436,24 @@ describe("eval service", () => {
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
-    await t.services.evals.drain();
+    await h.worker.drain();
     const done = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("completed");
     expect(done.summary[0]?.errors).toBe(1);
     expect(done.summary[0]?.overall).toBe(0.5);
   });
 
-  it("recovers an expired executor lease and resumes without regenerating outputs", async () => {
+  /** A worker that claims the eval and then dies (no heartbeats, no complete). */
+  const deadWorker = (t: EvalHarness["t"]) =>
+    createWorkerClient({
+      serverUrl: "http://grad.test",
+      apiKey: TRAINER_KEY,
+      workerId: "dead-worker",
+      fetch: appFetch(t),
+      retryDelaysMs: [],
+    });
+
+  it("recovers an expired worker lease and resumes without regenerating outputs", async () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(4));
@@ -452,22 +462,16 @@ describe("eval service", () => {
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
-    const store = t.deps.store;
-    const crashed = await t.services.queue.claimRow({
-      workerId: "dead-executor",
-      leaseSeconds: 30,
-      kinds: ["eval"],
-    });
+    const dead = deadWorker(t);
+    const crashed = await dead.claim(["eval"], 30);
     expect(crashed?.id).toBe(created.id);
-    await store.evals.insertOutput({
-      id: "evout_pre",
-      eval_id: created.id,
-      attempt: 1,
-      record: { messages: [{ role: "user", content: "question 0" }] },
+    expect(crashed?.eval?.done).toEqual({});
+    const pre = {
+      model: "qwen/qwen3-8b",
       task_index: 0,
       task_id: "q0",
-      model: "qwen/qwen3-8b",
       sample_index: 0,
+      record: { messages: [{ role: "user", content: "question 0" }] },
       input: [{ role: "user", content: "question 0" }],
       output: "pre-generated",
       expected_output: "gold 0",
@@ -475,13 +479,21 @@ describe("eval service", () => {
       error: null,
       prompt_tokens: 1,
       completion_tokens: 1,
-      cost_usd: 0,
-      created_at: t.clock.now().toISOString(),
+    };
+    const ref = { id: created.id, attempt: 1 };
+    expect(await dead.postOutputs(ref, { outputs: [pre] })).toMatchObject({
+      accepted: 1,
+      generated: 1,
+    });
+    // A replayed batch is stored once.
+    expect(await dead.postOutputs(ref, { outputs: [pre] })).toMatchObject({
+      accepted: 0,
+      generated: 1,
     });
 
-    expect(await t.services.evals.drain()).toBe(0);
+    expect(await h.worker.drain()).toBe(0);
     t.clock.advanceSeconds(60);
-    expect(await t.services.evals.drain()).toBe(1);
+    expect(await h.worker.drain()).toBe(1);
 
     const done = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("completed");
@@ -491,9 +503,13 @@ describe("eval service", () => {
     expect(
       fake.requests.filter((r) => r.model === "qwen/qwen3-8b"),
     ).toHaveLength(3);
+    // The dead attempt's late writes are refused: its lease is gone.
+    await expect(dead.postOutputs(ref, { outputs: [pre] })).rejects.toThrow(
+      /HTTP 409/,
+    );
   });
 
-  it("retries a database blip in place instead of waiting out its lease (r8 G')", async () => {
+  it("retries an API blip in place instead of waiting out its lease (r8 G')", async () => {
     h = await makeEvalHarness();
     const { t } = h;
     await seedDataset(t, "qa", qaRecords(3));
@@ -503,40 +519,38 @@ describe("eval service", () => {
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
     const evals = t.deps.store.evals;
-    const insert = evals.insertOutput.bind(evals);
+    const insert = evals.insertOutputs.bind(evals);
     let resets = 2;
-    evals.insertOutput = async (output) => {
+    evals.insertOutputs = async (outputs) => {
       if (resets > 0) {
         resets -= 1;
         throw Object.assign(new Error("terminating connection"), {
           code: "57P01",
         });
       }
-      return insert(output);
+      return insert(outputs);
     };
-    const delays = DB_RETRY_DELAYS_MS.splice(0, Infinity, 5, 5, 5);
     try {
-      expect(await t.services.evals.drain()).toBe(1);
+      expect(await h.worker.drain()).toBe(1);
       const done = await t.services.evals.get(WORKSPACE_A, created.id);
       expect(done).toMatchObject({ status: "completed", error: null });
       expect(done.progress.generated).toBe(3);
       expect((await t.deps.store.jobs.getById(created.id))?.attempt).toBe(1);
 
-      // Errors past the retries end the attempt, counted: a query that
-      // always fails ends at max_attempts instead of looping.
+      // Errors past the retries hand the attempt back, counted: a write
+      // that always fails ends at max_attempts instead of looping.
       const second = await createEval(
         t.services.evals,
         WORKSPACE_A,
         request({ models: ["qwen/qwen3-8b"], dataset: "qa", name: "down" }),
       );
       resets = Infinity;
-      expect(await t.services.evals.drain()).toBe(3);
+      expect(await h.worker.drain()).toBe(3);
       const job = await t.deps.store.jobs.getById(second.id);
       expect(job).toMatchObject({ status: "failed", failed_attempts: 3 });
-      expect(job?.error).toMatch(/kept hitting database errors/);
+      expect(job?.error).toMatch(/handed back by its worker.*HTTP 503/);
     } finally {
-      DB_RETRY_DELAYS_MS.splice(0, Infinity, ...delays);
-      evals.insertOutput = insert;
+      evals.insertOutputs = insert;
     }
   });
 
@@ -549,16 +563,12 @@ describe("eval service", () => {
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
-    await t.services.queue.claimRow({
-      workerId: "dead",
-      leaseSeconds: 30,
-      kinds: ["eval"],
-    });
+    await deadWorker(t).claim(["eval"], 30);
     t.clock.advanceSeconds(41);
     expect(await t.services.queue.expireLeases(t.clock.now())).toBe(1);
     const failed = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(failed.status).toBe("failed");
-    expect(failed.error).toMatch(/max_attempts=1/);
+    expect(failed.error).toMatch(/lost its lease.*max_attempts=1/);
   });
 
   it("cancels active evals once and never runs them", async () => {
@@ -576,7 +586,7 @@ describe("eval service", () => {
     // A replayed cancel (r8 A5) gets the current state, not 409.
     const again = await t.services.evals.cancel(WORKSPACE_A, created.id);
     expect(again).toMatchObject({ id: created.id, status: "cancelled" });
-    expect(await t.services.evals.drain()).toBe(0);
+    expect(await h.worker.drain()).toBe(0);
 
     const page = await t.services.evals.list(WORKSPACE_A, { limit: 10 });
     expect(page.data.map((e) => e.id)).toEqual([created.id]);
@@ -585,7 +595,7 @@ describe("eval service", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it("runs evals in the background executor until stopped", async () => {
+  it("runs evals in the background worker until stopped", async () => {
     h = await makeEvalHarness();
     const { t } = h;
     await seedDataset(t, "qa", qaRecords(2));
@@ -594,19 +604,19 @@ describe("eval service", () => {
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
-    t.services.evals.start(5);
-    t.services.evals.start(5);
+    const running = h.worker.run(5);
     const deadline = Date.now() + 5000;
     let status = "queued";
     while (Date.now() < deadline && status !== "completed") {
       await new Promise((resolve) => setTimeout(resolve, 20));
       status = (await t.services.evals.get(WORKSPACE_A, created.id)).status;
     }
-    await t.services.evals.stop();
+    await h.worker.stop();
+    await running;
     expect(status).toBe("completed");
   });
 
-  it("releases the lease when stopped mid-job so another executor can resume", async () => {
+  it("hands the eval back when stopped mid-job so another worker resumes it", async () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(3));
@@ -616,43 +626,31 @@ describe("eval service", () => {
       WORKSPACE_A,
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
-    t.services.evals.start(5);
+    const running = h.worker.run(5);
     await new Promise((resolve) => setTimeout(resolve, 60));
-    await t.services.evals.stop();
-    const released = await t.services.evals.get(WORKSPACE_A, created.id);
-    expect(released.status).toBe("queued");
+    await h.worker.stop();
+    await running;
+    const released = await t.deps.store.jobs.getById(created.id);
+    // In-flight outputs were posted; a graceful stop counts as reclaimed
+    // compute, never toward max_attempts.
+    expect(released).toMatchObject({
+      status: "queued",
+      failed_attempts: 0,
+      preemptions: 1,
+    });
+    expect(
+      (await t.services.evals.get(WORKSPACE_A, created.id)).progress.generated,
+    ).toBe(3);
 
     fake.setModel("qwen/qwen3-8b", () => ({ content: "fast" }));
-    await t.services.evals.drain();
+    const next = startEvalWorker(t, fakeInference(fake));
+    try {
+      expect(await next.drain()).toBe(1);
+    } finally {
+      await next.close();
+    }
     expect((await t.services.evals.get(WORKSPACE_A, created.id)).status).toBe(
       "completed",
     );
-  });
-});
-
-describe("backgroundInterval", () => {
-  it("logs a rejected tick instead of leaving it unhandled (which would exit Node)", async () => {
-    vi.useFakeTimers();
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      let calls = 0;
-      const timer = backgroundInterval(
-        async () => {
-          calls += 1;
-          throw new Error("connection terminated");
-        },
-        1000,
-        "eval lease renewal",
-      );
-      await vi.advanceTimersByTimeAsync(2500);
-      clearInterval(timer);
-      expect(calls).toBe(2);
-      expect(errors.mock.calls[0]?.[0]).toMatch(
-        /eval lease renewal failed.*connection terminated/,
-      );
-    } finally {
-      errors.mockRestore();
-      vi.useRealTimers();
-    }
   });
 });

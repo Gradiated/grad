@@ -993,20 +993,30 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         created_at: clock.now().toISOString(),
         ...extra,
       });
-      for (const [m, task, sample, attempt] of [
-        ["m1", 0, 0, 1],
-        ["m1", 0, 1, 1],
-        ["m2", 0, 0, 2],
-        ["m1", 1, 0, 2],
-      ] as const) {
-        await store.evals.insertOutput(output(m, task, sample, attempt));
-      }
-      await store.evals.insertOutput(
-        output("m1", 0, 0, 3, { output: "changed" }),
-      );
-      await store.evals.insertOutput(
-        output("m2", 1, 0, 2, { output: null, error: "boom" }),
-      );
+      expect(await store.evals.insertOutputs([])).toBe(0);
+      expect(
+        await store.evals.insertOutputs(
+          (
+            [
+              ["m1", 0, 0, 1],
+              ["m1", 0, 1, 1],
+              ["m2", 0, 0, 2],
+              ["m1", 1, 0, 2],
+            ] as const
+          ).map(([m, task, sample, attempt]) =>
+            output(m, task, sample, attempt),
+          ),
+        ),
+      ).toBe(4);
+      // First write wins: a replayed key (even twice in one batch) adds nothing.
+      expect(
+        await store.evals.insertOutputs([
+          output("m1", 0, 0, 3, { output: "changed" }),
+          output("m2", 1, 0, 2, { output: null, error: "boom" }),
+          output("m2", 1, 0, 2, { output: null, error: "again" }),
+        ]),
+      ).toBe(1);
+      expect(await store.evals.countOutputs(ev.id)).toBe(5);
 
       expect(await store.evals.listOutputKeys(ev.id)).toEqual(
         new Set([

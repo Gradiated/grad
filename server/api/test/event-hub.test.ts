@@ -134,7 +134,6 @@ describe("SSE event hub (one reader per replica)", () => {
     t = await makeTestApp({
       settings: {
         maxAttempts: 3,
-        evalConcurrency: 2,
         // Only notifications deliver within a test unless it says otherwise.
         ssePollMs: 60_000,
         sseStreamsPerKey: 200,
@@ -437,7 +436,7 @@ describe("SSE event hub (one reader per replica)", () => {
     const replicaB = await makeTestApp({
       store: t.deps.store,
       clock: t.clock,
-      settings: { maxAttempts: 3, evalConcurrency: 2, ssePollMs: 60_000 },
+      settings: { maxAttempts: 3, ssePollMs: 60_000 },
     });
     try {
       const stream = await openSse(replicaB, `/v1/runs/${run}/events`);

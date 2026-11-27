@@ -3511,6 +3511,89 @@ components:
             additionalProperties: {}
           description: "Train jobs: the run's recipe.loggers with each workspace secret resolved to `api_key`. A logger whose
             secret is missing is left out (the plan warned)."
+        eval:
+          type:
+            - object
+            - "null"
+          properties:
+            id:
+              type: string
+              minLength: 1
+            workspace_id:
+              type: string
+              minLength: 1
+            name:
+              type: string
+              minLength: 1
+            mode:
+              $ref: "#/components/schemas/EvalMode"
+            models:
+              type: array
+              items:
+                type: string
+                minLength: 1
+              minItems: 1
+            model_targets:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  inference_model:
+                    type: string
+                    minLength: 1
+                required:
+                  - inference_model
+            judge_targets:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  inference_model:
+                    type: string
+                    minLength: 1
+                required:
+                  - inference_model
+            rubric:
+              type: array
+              items:
+                $ref: "#/components/schemas/EvalRubricItem"
+            samples:
+              type: integer
+              minimum: 1
+            temperature:
+              type: number
+            max_tokens:
+              type: integer
+              minimum: 1
+            limit:
+              type:
+                - integer
+                - "null"
+              minimum: 1
+            done:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: integer
+                  minimum: 0
+              description: "Per model, the outputs earlier attempts stored, as task_index * samples + sample_index: skip them."
+          required:
+            - id
+            - workspace_id
+            - name
+            - mode
+            - models
+            - model_targets
+            - judge_targets
+            - rubric
+            - samples
+            - temperature
+            - max_tokens
+            - limit
+            - done
+          description: "Eval jobs: what to generate and score. The tasks are the usable records of `dataset` (merged, then the
+            planner's task rules)."
         base:
           type:
             - object
@@ -3548,12 +3631,16 @@ components:
         - max_cost_usd
         - dataset
         - resume
+        - eval
         - base
     JobKind:
       type: string
       enum:
         - train
         - import
+        - eval
+      description: train (GPU trainer workers), import (imports and source syncs, on CPU trainer workers), eval (evals and
+        dataset.score(), on `grad-server worker --kinds eval`).
     ClaimJobRequest:
       type: object
       properties:
@@ -3967,6 +4054,129 @@ components:
         - records
       description: "A dataset part the worker uploaded with a presigned PUT: grad-server checks the object and stages it,
         without reading the records."
+    PostTrainerEvalOutputsResponse:
+      type: object
+      properties:
+        accepted:
+          type: integer
+          minimum: 0
+          description: Outputs stored by this request (replays are not counted).
+        generated:
+          type: integer
+          minimum: 0
+        should_stop:
+          type: boolean
+          description: "The eval was cancelled: stop generating, post what is in flight, then complete the attempt."
+      required:
+        - accepted
+        - generated
+        - should_stop
+    PostTrainerEvalOutputsRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
+        outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrainerEvalOutput"
+          maxItems: 200
+        calls:
+          $ref: "#/components/schemas/TrainerEvalCallCounts"
+      required:
+        - worker_id
+        - attempt
+        - outputs
+      description: A batch of generated and scored outputs. Stored once per (eval, model, task_index, sample_index), so
+        re-sending a batch whose response was lost is safe; the server prices and bills them.
+    TrainerEvalOutput:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+        task_index:
+          type: integer
+          minimum: 0
+        task_id:
+          type: string
+          minLength: 1
+        sample_index:
+          type: integer
+          minimum: 0
+        record:
+          type: object
+          additionalProperties: {}
+        input:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        output:
+          type:
+            - string
+            - "null"
+        expected_output: {}
+        scores:
+          type: object
+          additionalProperties:
+            type: number
+        error:
+          type:
+            - string
+            - "null"
+          maxLength: 2000
+        prompt_tokens:
+          type: integer
+          minimum: 0
+        completion_tokens:
+          type: integer
+          minimum: 0
+        judge_tokens:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+          default: {}
+          description: Tokens each judge used for this output; the server prices them with the judge prices resolved at plan time.
+      required:
+        - model
+        - task_index
+        - task_id
+        - sample_index
+        - record
+        - input
+        - output
+        - scores
+        - error
+        - prompt_tokens
+        - completion_tokens
+    TrainerEvalCallCounts:
+      type: object
+      properties:
+        model_ok:
+          type: integer
+          minimum: 0
+          default: 0
+        model_error:
+          type: integer
+          minimum: 0
+          default: 0
+        judge_ok:
+          type: integer
+          minimum: 0
+          default: 0
+        judge_error:
+          type: integer
+          minimum: 0
+          default: 0
+      description: Model and judge calls since the worker's last batch (grad_eval_outputs_total, grad_eval_judge_calls_total).
     CompleteTrainerJobResponse:
       type: object
       properties:
@@ -3991,6 +4201,12 @@ components:
         import:
           allOf:
             - $ref: "#/components/schemas/ImportJob"
+            - type:
+                - object
+                - "null"
+        eval:
+          allOf:
+            - $ref: "#/components/schemas/EvalRun"
             - type:
                 - object
                 - "null"
@@ -7370,7 +7586,7 @@ paths:
   /v1/trainer-jobs/claim:
     post:
       operationId: claimTrainerJob
-      summary: Claim the next queued train or import job (trainer:worker)
+      summary: Claim the next queued train, import or eval job (trainer:worker)
       tags: &a4
         - TrainerJobs
       x-internal: true
@@ -7887,6 +8103,81 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/outputs:
+    post:
+      operationId: postTrainerEvalOutputs
+      summary: Store a batch of an eval job's generated and scored outputs (priced and billed by the server)
+      tags: *a4
+      x-internal: true
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostTrainerEvalOutputsRequest"
+      responses:
+        "200":
+          description: Stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostTrainerEvalOutputsResponse"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/trainer-jobs/{id}/complete:
     post:
       operationId: completeTrainerJob
@@ -7965,7 +8256,7 @@ paths:
   /v1/trainer-jobs/{id}/dataset:
     get:
       operationId: downloadTrainerDataset
-      summary: Stream the pinned dataset version of a claimed train job as gzip-compressed JSONL
+      summary: Stream the pinned dataset version of a claimed train or eval job as gzip-compressed JSONL
       tags: *a4
       x-internal: true
       parameters:

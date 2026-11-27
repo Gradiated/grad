@@ -3,6 +3,11 @@ import { z } from "@hono/zod-openapi";
 import { IsoTimestampSchema, Sha256HexSchema } from "./common.js";
 import { EvalReportSchema } from "./eval-report.js";
 import {
+  EvalModeSchema,
+  EvalRubricItemSchema,
+  EvalRunSchema,
+} from "./evals.js";
+import {
   CONNECTOR_NAMES,
   ImportJobSchema,
   MAX_UPLOAD_BYTES,
@@ -23,7 +28,12 @@ import {
 
 export const TRAINER_PROTOCOL_VERSION = "grad.trainer-protocol/1";
 
-export const JobKindSchema = z.enum(["train", "import"]).openapi("JobKind");
+export const JobKindSchema = z
+  .enum(["train", "import", "eval"])
+  .openapi("JobKind", {
+    description:
+      "train (GPU trainer workers), import (imports and source syncs, on CPU trainer workers), eval (evals and dataset.score(), on `grad-server worker --kinds eval`).",
+  });
 export type JobKind = z.infer<typeof JobKindSchema>;
 
 const WorkerIdSchema = z
@@ -115,6 +125,36 @@ export const TrainerJobSchema = z
       description:
         "Train jobs: the run's recipe.loggers with each workspace secret resolved to `api_key`. A logger whose secret is missing is left out (the plan warned).",
     }),
+    eval: z
+      .object({
+        id: z.string().min(1),
+        workspace_id: z.string().min(1),
+        name: z.string().min(1),
+        mode: EvalModeSchema,
+        models: z.array(z.string().min(1)).min(1),
+        model_targets: z.record(
+          z.string(),
+          z.object({ inference_model: z.string().min(1) }),
+        ),
+        judge_targets: z.record(
+          z.string(),
+          z.object({ inference_model: z.string().min(1) }),
+        ),
+        rubric: z.array(EvalRubricItemSchema),
+        samples: z.number().int().min(1),
+        temperature: z.number(),
+        max_tokens: z.number().int().min(1),
+        limit: z.number().int().min(1).nullable(),
+        done: z.record(z.string(), z.array(z.number().int().min(0))).openapi({
+          description:
+            "Per model, the outputs earlier attempts stored, as task_index * samples + sample_index: skip them.",
+        }),
+      })
+      .nullable()
+      .openapi({
+        description:
+          "Eval jobs: what to generate and score. The tasks are the usable records of `dataset` (merged, then the planner's task rules).",
+      }),
     base: z
       .object({
         artifact_id: z.string().min(1),
@@ -304,6 +344,68 @@ export const RegisterImportPartResponseSchema = z
   })
   .openapi("RegisterImportPartResponse");
 
+export const MAX_EVAL_OUTPUTS_PER_BATCH = 200;
+
+export const EvalOutputInputSchema = z
+  .object({
+    model: z.string().min(1),
+    task_index: z.number().int().min(0),
+    task_id: z.string().min(1),
+    sample_index: z.number().int().min(0),
+    record: z.record(z.string(), z.unknown()),
+    input: z.array(z.record(z.string(), z.unknown())),
+    output: z.string().nullable(),
+    expected_output: z.unknown().optional(),
+    scores: z.record(z.string(), z.number()),
+    error: z.string().max(2000).nullable(),
+    prompt_tokens: z.number().int().min(0),
+    completion_tokens: z.number().int().min(0),
+    judge_tokens: z
+      .record(z.string(), z.number().int().min(0))
+      .default({})
+      .openapi({
+        description:
+          "Tokens each judge used for this output; the server prices them with the judge prices resolved at plan time.",
+      }),
+  })
+  .openapi("TrainerEvalOutput");
+
+export const EvalCallCountsSchema = z
+  .object({
+    model_ok: z.number().int().min(0).default(0),
+    model_error: z.number().int().min(0).default(0),
+    judge_ok: z.number().int().min(0).default(0),
+    judge_error: z.number().int().min(0).default(0),
+  })
+  .openapi("TrainerEvalCallCounts", {
+    description:
+      "Model and judge calls since the worker's last batch (grad_eval_outputs_total, grad_eval_judge_calls_total).",
+  });
+
+export const PostEvalOutputsRequestSchema = z
+  .object({
+    ...AttemptRefShape,
+    outputs: z.array(EvalOutputInputSchema).max(MAX_EVAL_OUTPUTS_PER_BATCH),
+    calls: EvalCallCountsSchema.optional(),
+  })
+  .openapi("PostTrainerEvalOutputsRequest", {
+    description:
+      "A batch of generated and scored outputs. Stored once per (eval, model, task_index, sample_index), so re-sending a batch whose response was lost is safe; the server prices and bills them.",
+  });
+
+export const PostEvalOutputsResponseSchema = z
+  .object({
+    accepted: z.number().int().min(0).openapi({
+      description: "Outputs stored by this request (replays are not counted).",
+    }),
+    generated: z.number().int().min(0),
+    should_stop: z.boolean().openapi({
+      description:
+        "The eval was cancelled: stop generating, post what is in flight, then complete the attempt.",
+    }),
+  })
+  .openapi("PostTrainerEvalOutputsResponse");
+
 export const COMPLETION_STATUSES = [
   "completed",
   "stopped_budget",
@@ -365,6 +467,7 @@ export const CompleteJobResponseSchema = z
     run: RunSchema.nullable(),
     artifact: ArtifactSchema.nullable(),
     import: ImportJobSchema.nullable(),
+    eval: EvalRunSchema.nullable().optional(),
   })
   .openapi("CompleteTrainerJobResponse");
 

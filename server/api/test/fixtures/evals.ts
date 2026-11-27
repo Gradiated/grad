@@ -1,40 +1,112 @@
 import type { BillingAdapter } from "../../src/adapters.js";
 import type { DatasetRecord } from "../../src/contracts.js";
 import { createOpenAICompatibleClient } from "../../src/services/evals/inference.js";
+import { createRegexEvaluator } from "../../src/services/evals/regex.js";
 import type { EvalService } from "../../src/services/evals/service.js";
+import type { InferenceClients } from "../../src/services/evals/types.js";
 import type { ArtifactRecord } from "../../src/store/types.js";
-import { makeTestApp, WORKSPACE_A, type TestApp } from "./app.js";
+import {
+  createWorkerClient,
+  type WorkerClient,
+} from "../../src/worker/client.js";
+import {
+  createEvalWorker,
+  type EvalWorker,
+} from "../../src/worker/eval-worker.js";
+import { makeTestApp, TRAINER_KEY, WORKSPACE_A, type TestApp } from "./app.js";
 import { startFakeOpenAI, type FakeOpenAI } from "./fake-openai.js";
 
 export interface EvalHarness {
   t: TestApp;
   fake: FakeOpenAI;
+  /** An eval worker on the test app (over its HTTP routes). */
+  worker: TestEvalWorker;
   close: () => Promise<void>;
 }
 
-/** Test app whose inference + judge clients point at a fake OpenAI-compatible server. */
-export const makeEvalHarness = async (
-  options: { maxAttempts?: number; billing?: BillingAdapter } = {},
-): Promise<EvalHarness> => {
-  const fake = await startFakeOpenAI();
+export interface TestEvalWorker extends EvalWorker {
+  client: WorkerClient;
+  close: () => Promise<void>;
+}
+
+/** The test app's routes as `fetch` (an API restart: point `target.app` elsewhere). */
+export const appFetch =
+  (target: { app: TestApp["app"] }): typeof fetch =>
+  async (input, init) =>
+    target.app.request(
+      input instanceof Request ? input : String(input),
+      init as RequestInit,
+    );
+
+/** An eval worker (`grad-server worker --kinds eval`) wired to `t`'s routes. */
+export const startEvalWorker = (
+  t: Pick<TestApp, "app">,
+  inference: InferenceClients,
+  options: {
+    workerId?: string;
+    batchSize?: number;
+    concurrency?: number;
+    fetch?: typeof fetch;
+  } = {},
+): TestEvalWorker => {
+  const regex = createRegexEvaluator();
+  const client = createWorkerClient({
+    serverUrl: "http://grad.test",
+    apiKey: TRAINER_KEY,
+    workerId: options.workerId ?? "eval-worker-test",
+    fetch: options.fetch ?? appFetch(t),
+    retryDelaysMs: [1, 1, 1],
+  });
+  const worker = createEvalWorker({
+    client,
+    inference,
+    regex,
+    concurrency: options.concurrency ?? 3,
+    batchSize: options.batchSize ?? 2,
+  });
+
+  return {
+    ...worker,
+    client,
+    close: async () => {
+      await worker.stop();
+      await regex.close();
+    },
+  };
+};
+
+/** Inference and judge clients on a fake OpenAI-compatible server. */
+export const fakeInference = (fake: FakeOpenAI): InferenceClients => {
   const client = createOpenAICompatibleClient({
     baseUrl: fake.baseUrl,
     retryDelayMs: 1,
     maxAttempts: 2,
   });
+
+  return { models: client, judge: client };
+};
+
+/** Test app with an eval worker whose inference + judge clients point at a fake OpenAI-compatible server. */
+export const makeEvalHarness = async (
+  options: { maxAttempts?: number; billing?: BillingAdapter } = {},
+): Promise<EvalHarness> => {
+  const fake = await startFakeOpenAI();
   const t = await makeTestApp({
     ...(options.billing ? { billing: options.billing } : {}),
-    inference: { models: client, judge: client },
+    inferenceConfigured: true,
     settings: {
       maxAttempts: options.maxAttempts ?? 3,
-      evalConcurrency: 3,
     },
   });
+
+  const worker = startEvalWorker(t, fakeInference(fake));
 
   return {
     t,
     fake,
+    worker,
     close: async () => {
+      await worker.close();
       await t.close();
       await fake.close();
     },

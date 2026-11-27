@@ -1,6 +1,7 @@
 """grad-server trainer worker: protocol v1 client (``grad.trainer-protocol/1``).
 
-The worker claims ``train`` and ``import`` jobs (GRAD_WORKER_KINDS narrows that), keeps the lease alive from a
+The worker claims ``train`` and ``import`` jobs (GRAD_WORKER_KINDS narrows that; ``eval`` jobs run on
+``grad-server worker --kinds eval``), keeps the lease alive from a
 background heartbeat thread, moves weights through upload tickets (presigned
 S3 PUTs or the server's streaming blob proxy), and finishes every attempt with
 ``/complete`` so the server can bill it.
@@ -374,8 +375,13 @@ class TrainerWorker:
     ) -> None:
         unknown = sorted(set(kinds) - set(JOB_KINDS))
         if not kinds or unknown:
+            hint = (
+                " Eval jobs run on the grad-server image: `grad-server worker --kinds eval`."
+                if "eval" in unknown
+                else ""
+            )
             raise ValueError(
-                f"Job kinds must be a non-empty subset of {', '.join(JOB_KINDS)}; got {list(kinds)}."
+                f"Job kinds must be a non-empty subset of {', '.join(JOB_KINDS)}; got {list(kinds)}.{hint}"
             )
         self.kinds = [k for k in JOB_KINDS if k in kinds]
         self.client = client or ProtocolClient(server_url, api_key)

@@ -2,10 +2,6 @@ import type { AuthAdapter, BillingAdapter, TracesAdapter } from "./adapters.js";
 import type { ModelCatalog } from "./catalog.js";
 import type { Clock } from "./clock.js";
 import type { SecretsCipher } from "./secrets.js";
-import type {
-  InferenceClients,
-  RegexEvaluator,
-} from "./services/evals/types.js";
 import type { ObjectStore } from "./storage/types.js";
 import type { Store } from "./store/types.js";
 import type { UiBundle } from "./ui.js";
@@ -19,7 +15,6 @@ export interface AppSettings {
   waitingForComputeSeconds?: number;
   /** Workers scale from zero (KEDA): waiting runs say a worker is starting. */
   workerAutoscaling?: boolean;
-  evalConcurrency: number;
   /** The SSE event hub's safety poll interval (SSE_POLL_MS, default 2000 ms). */
   ssePollMs?: number;
   /** Event streams one API key may hold open per replica (default 20). */
@@ -68,9 +63,11 @@ export interface AppDependencies {
   billing: BillingAdapter;
   catalog: ModelCatalog;
   clock: Clock;
-  /** Null when GRAD_INFERENCE_BASE_URL is not configured (evals → inference_unavailable). */
-  inference: InferenceClients | null;
-  regex: RegexEvaluator;
+  /**
+   * GRAD_INFERENCE_BASE_URL is set, so eval workers have a model endpoint
+   * (false: evals → inference_unavailable). The API makes no model calls.
+   */
+  inferenceConfigured: boolean;
   settings: AppSettings;
   /** Null or absent when GRAD_SECRETS_KEY is unset (secret writes → 501). */
   secrets?: SecretsCipher | null | undefined;

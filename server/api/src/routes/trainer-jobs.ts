@@ -8,6 +8,8 @@ import {
   CompleteJobResponseSchema,
   HeartbeatRequestSchema,
   HeartbeatResponseSchema,
+  PostEvalOutputsRequestSchema,
+  PostEvalOutputsResponseSchema,
   RegisterImportPartRequestSchema,
   RegisterImportPartResponseSchema,
   RegisterCheckpointRequestSchema,
@@ -32,6 +34,17 @@ import {
 import { assertClaimAllowed } from "../worker-auth/principal.js";
 
 const isImportJob = (id: string): boolean => id.startsWith("imp_");
+const isEvalJob = (id: string): boolean => id.startsWith("eval_");
+
+/** Train-only endpoints refuse import and eval jobs. */
+const assertTrainJob = (id: string, what: string): void => {
+  if (isImportJob(id) || isEvalJob(id)) {
+    throw conflict(
+      "wrong_job_kind",
+      `${isImportJob(id) ? "Import" : "Eval"} jobs do not ${what}.`,
+    );
+  }
+};
 
 const body = <T extends z.ZodType>(schema: T) => ({
   body: { required: true, content: { "application/json": { schema } } },
@@ -49,7 +62,8 @@ export const registerTrainerJobRoutes = (
       method: "post",
       path: "/v1/trainer-jobs/claim",
       operationId: "claimTrainerJob",
-      summary: "Claim the next queued train or import job (trainer:worker)",
+      summary:
+        "Claim the next queued train, import or eval job (trainer:worker)",
       tags,
       "x-internal": true,
       request: body(ClaimJobRequestSchema),
@@ -138,8 +152,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      if (isImportJob(id))
-        throw conflict("wrong_job_kind", "Import jobs do not report events.");
+      assertTrainJob(id, "report events");
       await services.runs.reportEvent(principal, id, c.req.valid("json"));
 
       return c.body(null, 204);
@@ -166,8 +179,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      if (isImportJob(id))
-        throw conflict("wrong_job_kind", "Import jobs do not report progress.");
+      assertTrainJob(id, "report progress");
 
       return c.json(
         await services.runs.progress(principal, id, c.req.valid("json")),
@@ -195,6 +207,9 @@ export const registerTrainerJobRoutes = (
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
       const input = c.req.valid("json");
+      if (isEvalJob(id)) {
+        throw conflict("wrong_job_kind", "Eval jobs upload nothing.");
+      }
       if (isImportJob(id) !== (input.kind === "records")) {
         throw conflict(
           "wrong_job_kind",
@@ -230,8 +245,7 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
-      if (isImportJob(id))
-        throw conflict("wrong_job_kind", "Import jobs have no checkpoints.");
+      assertTrainJob(id, "have checkpoints");
       const { checkpoint, created } = await services.runs.registerCheckpoint(
         principal,
         id,
@@ -276,6 +290,37 @@ export const registerTrainerJobRoutes = (
   app.openapi(
     createRoute({
       method: "post",
+      path: "/v1/trainer-jobs/{id}/outputs",
+      operationId: "postTrainerEvalOutputs",
+      summary:
+        "Store a batch of an eval job's generated and scored outputs (priced and billed by the server)",
+      tags,
+      "x-internal": true,
+      request: {
+        params: IdParamSchema,
+        ...body(PostEvalOutputsRequestSchema),
+      },
+      responses: {
+        200: jsonResponse(PostEvalOutputsResponseSchema, "Stored."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const principal = requireScope(c, "trainer:worker");
+      const { id } = c.req.valid("param");
+      if (!isEvalJob(id))
+        throw conflict("wrong_job_kind", "Only eval jobs post outputs.");
+
+      return c.json(
+        await services.evals.postOutputs(principal, id, c.req.valid("json")),
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
       path: "/v1/trainer-jobs/{id}/complete",
       operationId: "completeTrainerJob",
       summary:
@@ -292,6 +337,23 @@ export const registerTrainerJobRoutes = (
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
       const input = c.req.valid("json");
+
+      if (isEvalJob(id)) {
+        const ev = await services.evals.complete(principal, id, input);
+
+        return c.json(
+          {
+            job_id: id,
+            kind: "eval" as const,
+            status: ev.status,
+            run: null,
+            artifact: null,
+            import: null,
+            eval: ev,
+          },
+          200,
+        );
+      }
 
       if (isImportJob(id)) {
         const job = await services.imports.complete(principal, id, input);
@@ -335,7 +397,7 @@ export const registerTrainerJobRoutes = (
       path: "/v1/trainer-jobs/{id}/dataset",
       operationId: "downloadTrainerDataset",
       summary:
-        "Stream the pinned dataset version of a claimed train job as gzip-compressed JSONL",
+        "Stream the pinned dataset version of a claimed train or eval job as gzip-compressed JSONL",
       tags,
       "x-internal": true,
       request: {
@@ -355,11 +417,10 @@ export const registerTrainerJobRoutes = (
       const principal = requireScope(c, "trainer:worker");
       const { id } = c.req.valid("param");
       if (isImportJob(id)) throw notFound("trainer_job", id);
-      const stream = await services.runs.datasetStream(
-        principal,
-        id,
-        c.req.valid("query").attempt,
-      );
+      const { attempt } = c.req.valid("query");
+      const stream = isEvalJob(id)
+        ? await services.evals.datasetStream(principal, id, attempt)
+        : await services.runs.datasetStream(principal, id, attempt);
 
       return new Response(stream, {
         status: 200,

@@ -240,6 +240,7 @@ export const createImportService = (
           source,
           connector: job.connector,
         },
+        eval: null,
         price_per_million_tokens: null,
         max_cost_usd: null,
         dataset: null,
