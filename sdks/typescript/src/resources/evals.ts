@@ -1,5 +1,4 @@
 import type {
-  BenchmarkSpec,
   DatasetRecord,
   EvalOutput,
   EvalRun,
@@ -19,7 +18,7 @@ import { toRubric, type RubricInput, type ScoreFn } from "../rubrics.js";
 import { artifactRef, type ArtifactRef } from "./artifacts.js";
 import { Dataset, datasetName, pushRecords, type DatasetRef } from "./datasets.js";
 
-export const TERMINAL_EVAL_STATUSES: readonly EvalStatus[] = ["completed", "stopped_budget", "failed", "cancelled"];
+export const TERMINAL_EVAL_STATUSES: readonly EvalStatus[] = ["completed", "failed", "cancelled"];
 
 export interface EvalParams {
   name?: string;
@@ -34,8 +33,6 @@ export interface EvalParams {
   maxTokens?: number;
   limit?: number;
   passThreshold?: number | null;
-  maxCostUsd?: number;
-  benchmarks?: BenchmarkSpec[];
 }
 
 export interface EvalWaitOptions extends WaitOptions {
@@ -60,8 +57,6 @@ const buildEvalBody = (params: EvalParams): { body: PlanEvalRequest; local: Map<
       ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
       ...(params.limit !== undefined ? { limit: params.limit } : {}),
       ...(params.passThreshold !== undefined ? { passThreshold: params.passThreshold } : {}),
-      ...(params.maxCostUsd !== undefined ? { maxCostUsd: params.maxCostUsd } : {}),
-      ...(params.benchmarks !== undefined ? { benchmarks: params.benchmarks } : {}),
     },
     local: rubric?.local ?? new Map(),
   };
@@ -133,8 +128,7 @@ export class Eval {
   }
 
   /**
-   * Waits for `completed` (or `stopped_budget`: generation stopped at
-   * `maxCostUsd`, with partial results). While the eval is `awaiting_scores`,
+   * Waits for `completed`. While the eval is `awaiting_scores`,
    * pulls the outputs your local scorers have not scored yet, scores them here
    * and posts the scores. Throws EvalFailedError on `failed`/`cancelled`.
    */

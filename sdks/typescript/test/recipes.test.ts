@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { adapters, Context, GradUsageError, Judge, losses, Recipe, recipes, Rubric, Scorer, splits, Trajectory, validators, type ScoreInput } from "../src/index.js";
+import { adapters, Context, GradUsageError, Judge, losses, optim, pooling, Recipe, recipes, Rubric, Scorer, splits, Trajectory, validators, type ScoreInput } from "../src/index.js";
 
 const spec = (recipe: Recipe) => recipe.toSpec();
 
@@ -69,14 +69,15 @@ describe("recipes", () => {
     expect(await spec(recipes.embedding({ temp: 0.05 }))).toEqual({ kind: "embedding", temp: 0.05 });
     expect(await spec(recipes.embedding({ loss: losses.infoNCE({ temp: 0.1 }) }))).toEqual({ kind: "embedding", temp: 0.1 });
     expect(await spec(recipes.embedding())).toEqual({ kind: "embedding" });
-    expect(await spec(recipes.rewardModel({ model: "qwen/qwen3-8b" }))).toEqual({ kind: "reward", model: "qwen/qwen3-8b" });
-    expect(await spec(recipes.grpo({ envName: "gsm8k", groupSize: 8 }))).toEqual({ kind: "grpo", envName: "gsm8k", groupSize: 8 });
-    expect(await spec(recipes.grpo())).toEqual({ kind: "grpo" });
-    expect(await spec(recipes.distill({ teacher: { name: "big", version: "1" }, context: Context.fromUri("s3://b/doc.md") }))).toEqual({
-      kind: "distill",
-      teacher: "big@1",
-      contextUri: "s3://b/doc.md",
+    expect(await spec(recipes.embedding({ pool: pooling.mean() }))).toEqual({ kind: "embedding", pool: { kind: "mean" } });
+    expect(await spec(recipes.sft({ loss: losses.crossEntropy({ reduction: "per_token" }), evalEvery: "auto" }))).toEqual({ kind: "sft", reduction: "per_token" });
+    expect(await spec(recipes.sft({ optimizer: optim.adamW({ lr: 1e-4 }) }))).toEqual({
+      kind: "sft",
+      lr: 1e-4,
+      optimizer: { kind: "adamw", betas: [0.9, 0.95], weightDecay: 0, gradClip: 1 },
     });
+    expect(await spec(recipes.router({ models: ["a", "b"], rubric: "resolved" }))).toEqual({ kind: "router", models: ["a", "b"], rubric: "resolved" });
+    expect(await spec(recipes.cartridge({ context: Context.fromUri("s3://b/doc.md") }))).toEqual({ kind: "cartridge", contextUri: "s3://b/doc.md" });
     expect(
       await spec(recipes.cartridge({ context: Context.fromText("API docs"), numTokens: 512, teacher: "qwen/qwen3-32b", adapter: adapters.prefixKv({ numTokens: 512 }) })),
     ).toEqual({ kind: "cartridge", numTokens: 512, teacher: "qwen/qwen3-32b", adapter: { kind: "prefix_kv", numTokens: 512 }, contextText: "API docs" });
@@ -96,7 +97,11 @@ describe("recipes", () => {
     expect(() => recipes.router({ rubric: {} } as never)).toThrow(GradUsageError);
     expect(() => recipes.cartridge({ context: "text" } as never)).toThrow(/Context.fromText/);
     expect(() => recipes.decisionModel({ models: [] } as never)).toThrow(GradUsageError);
-    expect(() => recipes.rewardModel({ beta: 1 } as never)).toThrow(GradUsageError);
+    expect(() => recipes.dpo({ beta: 0.1, loss: losses.dpo({ beta: 0.2 }) })).toThrow(/conflicts/);
+    expect(() => recipes.sft({ lr: 1e-3, optimizer: optim.adamW({ lr: 1e-4 }) })).toThrow(/conflicts/);
+    expect(() => recipes.router({ models: ["a", "b"], rubric: new Scorer("mine", { fn: () => 1 }) })).toThrow(/sandbox/);
+    expect(() => recipes.router({ rubric: new Judge({ name: "j", model: "m" }) })).toThrow(/pass models/);
+    expect((recipes as Record<string, unknown>).grpo).toBeUndefined();
   });
 
   it("splits carry strategy and options", () => {

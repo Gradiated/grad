@@ -270,9 +270,10 @@ func (a *Artifact) Embed(ctx context.Context, inputs ...string) (*Embeddings, er
 }
 
 type deployConfig struct {
-	name        string
-	fallback    string
-	exploreRate *float64
+	name           string
+	fallback       string
+	exploreRate    *float64
+	idempotencyKey string
 }
 
 // DeployOption configures a deployment.
@@ -289,6 +290,11 @@ func WithExploreRate(rate float64) DeployOption {
 	return func(d *deployConfig) { d.exploreRate = &rate }
 }
 
+// WithDeployIdempotencyKey makes a retried deploy replay the first one.
+func WithDeployIdempotencyKey(key string) DeployOption {
+	return func(d *deployConfig) { d.idempotencyKey = key }
+}
+
 // DeploymentsService manages deployments (Gradiated Cloud).
 type DeploymentsService struct{ c *Client }
 
@@ -302,7 +308,8 @@ func (s *DeploymentsService) Create(ctx context.Context, artifact string, opts .
 	if err != nil {
 		return nil, err
 	}
-	return api.DeployArtifact(ctx, &generated.DeployArtifactRequest{Artifact: artifact, Name: optString(cfg.name), Fallback: optString(cfg.fallback), ExploreRate: cfg.exploreRate})
+	return api.DeployArtifact(ctx, &generated.DeployArtifactRequest{Artifact: artifact, Name: optString(cfg.name), Fallback: optString(cfg.fallback), ExploreRate: cfg.exploreRate},
+		idempotency(cfg.idempotencyKey)...)
 }
 
 // Get returns a deployment with its feedback statistics.

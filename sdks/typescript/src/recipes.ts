@@ -1,8 +1,9 @@
-import type { AdapterSpec, RecipeKind, RecipeSpec, SplitSpec } from "./generated/models.js";
+import type { AdapterSpec, LossSpec, OptimizerSpec, PoolingSpec, RecipeKind, RecipeSpec, SplitSpec } from "./generated/models.js";
 import { isNodeRuntime } from "./core.js";
 import { GradUsageError } from "./errors.js";
+import { toRubric, type RubricInput } from "./rubrics.js";
 
-/** Anything with a name and version (an Artifact) can be a starting model. */
+/** A catalog model id, or an Artifact (`name@version`) to keep training its adapter (SFT and DPO). */
 export type ModelRef = string | { name: string; version: string };
 
 const modelId = (model: ModelRef): string => (typeof model === "string" ? model : `${model.name}@${model.version}`);
@@ -32,24 +33,35 @@ const split =
     ...(options.seed !== undefined ? { seed: options.seed } : {}),
   });
 
-/** Train/eval splits. Default: by session, 10% held out (15% for routers and decision models). */
+/** Train/eval splits (pass as `runs.create({ split })`). Default: by session, 10% held out (15% for routers and decision models). */
 export const splits = {
   bySession: split("by_session"),
   byGroup: split("by_group"),
   random: split("random"),
 };
 
-/** Loss settings that map to recipe fields the server understands. */
+/** The loss each recipe trains with; only its parameters are tunable in v0. */
 export const losses = {
-  dpo: (options: { beta?: number } = {}) => ({ loss: "dpo" as const, ...options }),
-  infoNCE: (options: { temp?: number } = {}) => ({ loss: "info_nce" as const, ...options }),
+  crossEntropy: (options: { reduction?: "per_example" | "per_token" } = {}) => ({ kind: "cross_entropy" as const, ...options }),
+  dpo: (options: { beta?: number } = {}) => ({ kind: "dpo" as const, ...options }),
+  infoNCE: (options: { temp?: number } = {}) => ({ kind: "infonce" as const, ...options }),
+  topKKLDistill: (options: { topK?: number } = {}): LossSpec => ({ kind: "top_k_kl_distill", ...options }),
 };
 
-/** Text baked into a cartridge or distillation run. */
+/** AdamW settings (`lr` here is the same as the recipe's `lr`). */
+export const optim = {
+  adamW: (options: { lr?: number; betas?: [number, number]; weightDecay?: number; gradClip?: number } = {}) => ({ kind: "adamw" as const, ...options }),
+};
+
+/** Embedding pooling. */
+export const pooling = {
+  mean: (): PoolingSpec => ({ kind: "mean" }),
+  cls: (): PoolingSpec => ({ kind: "cls" }),
+};
+
+/** Text baked into a cartridge. */
 export class Context {
-  private constructor(
-    private readonly source: { text: string } | { uri: string } | { file: string },
-  ) {}
+  private constructor(private readonly source: { text: string } | { uri: string } | { file: string }) {}
 
   static fromText(text: string): Context {
     return new Context({ text });
@@ -81,6 +93,7 @@ export interface CommonRecipeOptions {
   adapter?: AdapterSpec;
   lr?: number | "auto";
   lrScale?: number;
+  optimizer?: ReturnType<typeof optim.adamW>;
   batchSize?: number;
   epochs?: number;
   schedule?: "linear" | "cosine" | "constant";
@@ -91,7 +104,14 @@ export interface CommonRecipeOptions {
   reduction?: "per_example" | "per_token";
   select?: "best" | "last";
   checkpointTtlDays?: number;
+  /** "auto" (every 10% of steps) or a number of optimizer steps. */
+  evalEvery?: number | "auto";
 }
+
+const COMMON_KEYS = [
+  "model", "adapter", "lr", "lrScale", "optimizer", "batchSize", "epochs", "schedule", "warmup", "trainOn", "thinking",
+  "preserveThinking", "reduction", "select", "checkpointTtlDays", "evalEvery",
+] as const;
 
 /** A recipe ready to submit; build one with `recipes.*`. */
 export class Recipe {
@@ -108,113 +128,119 @@ export class Recipe {
   }
 }
 
+const usage = (message: string): GradUsageError => new GradUsageError(message, "unsupported_recipe_option");
+
 const common = (options: CommonRecipeOptions): Partial<RecipeSpec> => {
-  const out: Partial<RecipeSpec> = {};
+  const out: Record<string, unknown> = {};
+  for (const key of COMMON_KEYS) if (options[key] !== undefined) out[key] = options[key];
   if (options.model !== undefined) out.model = modelId(options.model);
-  if (options.adapter !== undefined) out.adapter = options.adapter;
-  if (options.lr !== undefined) out.lr = options.lr;
-  if (options.lrScale !== undefined) out.lrScale = options.lrScale;
-  if (options.batchSize !== undefined) out.batchSize = options.batchSize;
-  if (options.epochs !== undefined) out.epochs = options.epochs;
-  if (options.schedule !== undefined) out.schedule = options.schedule;
-  if (options.warmup !== undefined) out.warmup = options.warmup;
-  if (options.trainOn !== undefined) out.trainOn = options.trainOn;
-  if (options.thinking !== undefined) out.thinking = options.thinking;
-  if (options.preserveThinking !== undefined) out.preserveThinking = options.preserveThinking;
-  if (options.reduction !== undefined) out.reduction = options.reduction;
-  if (options.select !== undefined) out.select = options.select;
-  if (options.checkpointTtlDays !== undefined) out.checkpointTtlDays = options.checkpointTtlDays;
-  return out;
+  if (options.evalEvery === "auto") delete out.evalEvery;
+  if (options.optimizer !== undefined) {
+    const { lr, kind, betas, weightDecay, gradClip } = options.optimizer;
+    if (lr !== undefined) {
+      if (options.lr !== undefined && options.lr !== lr) throw usage(`lr ${String(options.lr)} conflicts with optim.adamW({ lr: ${lr} }).`);
+      out.lr = lr;
+    }
+    const optimizer: OptimizerSpec = { kind, betas: betas ?? [0.9, 0.95], weightDecay: weightDecay ?? 0, gradClip: gradClip ?? 1 };
+    out.optimizer = optimizer;
+  }
+  return out as Partial<RecipeSpec>;
 };
 
-const rejectUnknown = (recipe: string, options: object, allowed: readonly string[]): void => {
-  const known = new Set([
-    "model", "adapter", "lr", "lrScale", "batchSize", "epochs", "schedule", "warmup", "trainOn", "thinking",
-    "preserveThinking", "reduction", "select", "checkpointTtlDays", ...allowed,
-  ]);
+const build = <O extends CommonRecipeOptions>(recipe: string, options: O, extra: readonly string[]): Partial<RecipeSpec> => {
+  const known = new Set<string>([...COMMON_KEYS, ...extra]);
   const unknown = Object.keys(options).filter((k) => !known.has(k));
   if (unknown.length > 0) {
-    throw new GradUsageError(
-      `recipes.${recipe}() does not support ${unknown.map((k) => `'${k}'`).join(", ")} on this server version; it would be ignored, so it is rejected.`,
-      "unsupported_recipe_option",
-    );
+    throw usage(`recipes.${recipe}() does not support ${unknown.map((k) => `'${k}'`).join(", ")}; it would be ignored, so it is rejected.`);
   }
+  return common(options);
 };
+
+/** A loss shorthand: `loss` sets the same field as the recipe's own option, which must agree. */
+const fromLoss = <T>(recipe: string, field: string, direct: T | undefined, viaLoss: T | undefined): T | undefined => {
+  if (direct !== undefined && viaLoss !== undefined && direct !== viaLoss) throw usage(`recipes.${recipe}(): ${field} conflicts with loss.${field}.`);
+  return direct ?? viaLoss;
+};
+
+const set = <K extends keyof RecipeSpec>(key: K, value: RecipeSpec[K] | undefined): Partial<RecipeSpec> =>
+  value === undefined ? {} : ({ [key]: value } as Partial<RecipeSpec>);
 
 export const recipes = {
   /** Supervised fine-tuning on chat records. */
-  sft: (options: CommonRecipeOptions & { mergeOnExport?: boolean } = {}): Recipe => {
-    rejectUnknown("sft", options, ["mergeOnExport"]);
-    const fields = common(options);
+  sft: (options: CommonRecipeOptions & { mergeOnExport?: boolean; loss?: ReturnType<typeof losses.crossEntropy> } = {}): Recipe => {
+    const fields = build("sft", options, ["mergeOnExport", "loss"]);
+    const reduction = fromLoss("sft", "reduction", options.reduction, options.loss?.reduction);
     if (options.mergeOnExport !== undefined) {
       const adapter = fields.adapter ?? { kind: "lora" };
-      if (adapter.kind !== "lora") throw new GradUsageError("mergeOnExport needs a LoRA adapter.", "unsupported_recipe_option");
+      if (adapter.kind !== "lora") throw usage("mergeOnExport needs a LoRA adapter.");
       fields.adapter = { ...adapter, mergeOnExport: options.mergeOnExport };
     }
-    return new Recipe("sft", fields);
+    return new Recipe("sft", { ...fields, ...set("reduction", reduction) });
   },
-  /** Direct preference optimization on chosen/rejected pairs. */
+  /** Direct preference optimization on chosen/rejected pairs (pass `model: sftRun.artifact` to continue an SFT run). */
   dpo: (options: CommonRecipeOptions & { beta?: number; loss?: ReturnType<typeof losses.dpo> } = {}): Recipe => {
-    rejectUnknown("dpo", options, ["beta", "loss"]);
-    const beta = options.beta ?? options.loss?.beta;
-    return new Recipe("dpo", { ...common(options), ...(beta !== undefined ? { beta } : {}) });
+    const fields = build("dpo", options, ["beta", "loss"]);
+    return new Recipe("dpo", { ...fields, ...set("beta", fromLoss("dpo", "beta", options.beta, options.loss?.beta)) });
   },
   /** Learned router across candidate models (default backbone qwen/qwen3-0.6b). */
-  router: (options: CommonRecipeOptions & { models?: string[]; maxQualityDrop?: number } = {}): Recipe => {
-    rejectUnknown("router", options, ["models", "maxQualityDrop"]);
+  router: (
+    options: CommonRecipeOptions & {
+      models?: ModelRef[];
+      maxQualityDrop?: number;
+      /** A score name on your records, or Judge/validator items (the server labels your prompts with an eval first). */
+      rubric?: string | RubricInput;
+      /** USD per request for each candidate. */
+      pricing?: Record<string, number>;
+      fallback?: ModelRef;
+    } = {},
+  ): Recipe => {
+    const fields = build("router", options, ["models", "maxQualityDrop", "rubric", "pricing", "fallback"]);
+    let rubric: RecipeSpec["rubric"];
+    if (typeof options.rubric === "string") rubric = options.rubric;
+    else if (options.rubric !== undefined) {
+      const { wire, local } = toRubric(options.rubric);
+      if (local.size > 0) throw usage("recipes.router({ rubric }) cannot run local scorer functions (that needs a sandbox, post-v0); use a Judge or validators.");
+      if (options.models === undefined) throw usage("recipes.router({ rubric: Judge }) replays your prompts against the candidates: pass models.");
+      rubric = wire;
+    }
     return new Recipe("router", {
-      ...common(options),
-      ...(options.models !== undefined ? { models: options.models } : {}),
-      ...(options.maxQualityDrop !== undefined ? { maxQualityDrop: options.maxQualityDrop } : {}),
+      ...fields,
+      ...set("models", options.models?.map(modelId)),
+      ...set("maxQualityDrop", options.maxQualityDrop),
+      ...set("rubric", rubric),
+      ...set("pricing", options.pricing),
+      ...set("fallback", options.fallback === undefined ? undefined : modelId(options.fallback)),
     });
   },
   /** Decision model (default backbone gradiated/linden-1). */
-  decisionModel: (options: CommonRecipeOptions = {}): Recipe => {
-    rejectUnknown("decisionModel", options, []);
-    return new Recipe("decision", common(options));
-  },
+  decisionModel: (options: CommonRecipeOptions = {}): Recipe => new Recipe("decision", build("decisionModel", options, [])),
   /** Context cartridge: compress a document into trainable prefix KV tokens. */
-  cartridge: (options: CommonRecipeOptions & { context: Context; numTokens?: number; teacher?: ModelRef }): Recipe => {
-    rejectUnknown("cartridge", options, ["context", "numTokens", "teacher"]);
-    if (!(options.context instanceof Context)) {
-      throw new GradUsageError("recipes.cartridge() needs context: Context.fromText/fromFile/fromUri(...).", "invalid_recipe");
-    }
+  cartridge: (
+    options: CommonRecipeOptions & { context: Context; numTokens?: number; teacher?: ModelRef; loss?: LossSpec; maxNewTokens?: number },
+  ): Recipe => {
+    const fields = build("cartridge", options, ["context", "numTokens", "teacher", "loss", "maxNewTokens"]);
+    if (!(options.context instanceof Context)) throw new GradUsageError("recipes.cartridge() needs context: Context.fromText/fromFile/fromUri(...).", "invalid_recipe");
     return new Recipe(
       "cartridge",
       {
-        ...common(options),
-        ...(options.numTokens !== undefined ? { numTokens: options.numTokens } : {}),
-        ...(options.teacher !== undefined ? { teacher: modelId(options.teacher) } : {}),
+        ...fields,
+        ...set("numTokens", options.numTokens),
+        ...set("teacher", options.teacher === undefined ? undefined : modelId(options.teacher)),
+        ...set("loss", options.loss),
+        ...set("maxNewTokens", options.maxNewTokens),
       },
       options.context,
     );
   },
   /** Embedding model (full encoder fine-tune; default baai/bge-small-en-v1.5). */
-  embedding: (options: CommonRecipeOptions & { temp?: number; loss?: ReturnType<typeof losses.infoNCE> } = {}): Recipe => {
-    rejectUnknown("embedding", options, ["temp", "loss"]);
-    const temp = options.temp ?? options.loss?.temp;
-    return new Recipe("embedding", { ...common(options), ...(temp !== undefined ? { temp } : {}) });
-  },
-  /** On-policy distillation from a teacher (Wave 2: the server rejects it unless enabled). */
-  distill: (options: CommonRecipeOptions & { teacher: ModelRef; context?: Context }): Recipe => {
-    rejectUnknown("distill", options, ["teacher", "context"]);
-    return new Recipe("distill", { ...common(options), teacher: modelId(options.teacher) }, options.context);
-  },
-  /** Reward model on preference pairs (Wave 2). */
-  rewardModel: (options: CommonRecipeOptions = {}): Recipe => {
-    rejectUnknown("rewardModel", options, []);
-    return new Recipe("reward", common(options));
-  },
-  /** GRPO reinforcement learning against an environment (Wave 2). */
-  grpo: (options: CommonRecipeOptions & { envName?: string; groupSize?: number } = {}): Recipe => {
-    rejectUnknown("grpo", options, ["envName", "groupSize"]);
-    return new Recipe("grpo", {
-      ...common(options),
-      ...(options.envName !== undefined ? { envName: options.envName } : {}),
-      ...(options.groupSize !== undefined ? { groupSize: options.groupSize } : {}),
+  embedding: (options: CommonRecipeOptions & { temp?: number; loss?: ReturnType<typeof losses.infoNCE>; pool?: PoolingSpec } = {}): Recipe => {
+    const fields = build("embedding", options, ["temp", "loss", "pool"]);
+    return new Recipe("embedding", {
+      ...fields,
+      ...set("temp", fromLoss("embedding", "temp", options.temp, options.loss?.temp)),
+      ...set("pool", options.pool),
     });
   },
 };
 
-export const toRecipeSpec = async (recipe: Recipe | RecipeSpec): Promise<RecipeSpec> =>
-  recipe instanceof Recipe ? recipe.toSpec() : recipe;
+export const toRecipeSpec = async (recipe: Recipe | RecipeSpec): Promise<RecipeSpec> => (recipe instanceof Recipe ? recipe.toSpec() : recipe);

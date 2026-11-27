@@ -44,7 +44,7 @@ func TestRunsPlanCreateWaitDeploy(t *testing.T) {
 	params := grad.RunParams{
 		Dataset:    grad.DatasetName("support-prod"),
 		Name:       "support-sft",
-		Recipe:     grad.SFTRecipe{Model: "test/tiny-qwen3", BatchSize: 1},
+		Recipe:     grad.SFTRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 1}},
 		Split:      grad.BySession{EvalFraction: 0.2},
 		MaxCostUSD: 5,
 	}

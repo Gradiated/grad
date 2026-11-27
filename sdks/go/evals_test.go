@@ -80,9 +80,7 @@ func TestEvalCreateWaitRunsLocalScorers(t *testing.T) {
 		Samples:       2,
 		Temperature:   grad.Float(0),
 		PassThreshold: grad.Float(0.5),
-		Benchmarks:    []grad.Benchmark{{Name: "gsm8k", Limit: 10}},
 		MaxTokens:     256,
-		MaxCostUSD:    3,
 	}
 	plan, err := c.Evals.Plan(ctx, params)
 	if err != nil || plan.EstimatedTasks == 0 {
@@ -145,14 +143,10 @@ func TestEvalWaitErrors(t *testing.T) {
 	failed["status"] = "failed"
 	failed["error"] = "inference endpoint returned 500"
 	failed["id"] = "eval_failed"
-	capped := wireMap(t, "eval-completed.json")
-	capped["status"] = "stopped_budget"
-	capped["id"] = "eval_capped"
 	outputs := wireMap(t, "eval-outputs.json")
 	f := newFake(t, map[string]route{
 		"GET /v1/evals/" + id:              jsonValue(200, awaiting),
 		"GET /v1/evals/eval_failed":        jsonValue(200, failed),
-		"GET /v1/evals/eval_capped":        jsonValue(200, capped),
 		"GET /v1/evals/" + id + "/outputs": jsonValue(200, outputs),
 		"POST /v1/evals/" + id + "/scores": jsonBody(200, wire(t, "eval-scores-response.json")),
 		"GET /v1/evals":                    jsonValue(200, map[string]any{"data": []any{failed}, "next_cursor": nil}),
@@ -173,9 +167,6 @@ func TestEvalWaitErrors(t *testing.T) {
 	stuck := grad.Rubric{grad.Scorer{Name: "mentions_menu", Fn: func(context.Context, grad.ScoreInput) (float64, error) { return 1, nil }}}
 	if _, err := c.Evals.Wait(ctx, id, grad.WithRubric(stuck)); err == nil || !strings.Contains(err.Error(), "still lists") {
 		t.Fatalf("server not accepting scores: %v", err)
-	}
-	if ev, err := c.Evals.Wait(ctx, "eval_capped"); err != nil || ev.Status != "stopped_budget" {
-		t.Fatalf("stopped_budget is a finished eval: %v", err)
 	}
 	_, err := c.Evals.Wait(ctx, "eval_failed")
 	var ef *grad.EvalFailedError
@@ -253,20 +244,21 @@ func TestRecipesSendOnlyUserSetFields(t *testing.T) {
 		want   string
 	}{
 		{grad.SFTRecipe{}, `{"kind":"sft"}`},
-		{grad.SFTRecipe{Model: "qwen/qwen3-8b", MergeOnExport: true}, `{"kind":"sft","model":"qwen/qwen3-8b","adapter":{"kind":"lora","merge_on_export":true}}`},
-		{grad.SFTRecipe{Adapter: grad.LoRA{Rank: 16}, MergeOnExport: true, LR: 1e-4, LRScale: 2, Epochs: 2, Schedule: "cosine", Warmup: 0.1, TrainOn: "all_assistant", Thinking: "off", PreserveThinking: true, Reduction: "per_token", Select: "last", CheckpointTTLDays: 7},
+		{grad.SFTRecipe{Common: grad.Common{Model: "qwen/qwen3-8b"}, MergeOnExport: true}, `{"kind":"sft","model":"qwen/qwen3-8b","adapter":{"kind":"lora","merge_on_export":true}}`},
+		{grad.SFTRecipe{Common: grad.Common{Adapter: grad.LoRA{Rank: 16}, LR: 1e-4, LRScale: 2, Epochs: 2, Schedule: "cosine", Warmup: 0.1, TrainOn: "all_assistant", Thinking: "off", PreserveThinking: true, Reduction: "per_token", Select: "last", CheckpointTTLDays: 7}, MergeOnExport: true},
 			`{"kind":"sft","adapter":{"kind":"lora","rank":16,"merge_on_export":true},"lr":0.0001,"lr_scale":2,"epochs":2,"schedule":"cosine","warmup":0.1,"train_on":"all_assistant","thinking":"off","preserve_thinking":true,"reduction":"per_token","select":"last","checkpoint_ttl_days":7}`},
-		{grad.DPORecipe{Model: "fast-diff-merge@sft-v1", Beta: 0.3}, `{"kind":"dpo","model":"fast-diff-merge@sft-v1","beta":0.3}`},
+		{grad.SFTRecipe{Common: grad.Common{Optimizer: &grad.AdamW{LR: 1e-4}}}, `{"kind":"sft","lr":0.0001,"optimizer":{"kind":"adamw","betas":[0.9,0.95],"weight_decay":0,"grad_clip":1}}`},
+		{grad.DPORecipe{Common: grad.Common{Model: "fast-diff-merge@sft-v1"}, Beta: 0.3}, `{"kind":"dpo","model":"fast-diff-merge@sft-v1","beta":0.3}`},
+		{grad.RouterRecipe{Models: []string{"a", "b"}, Rubric: "resolved"}, `{"kind":"router","models":["a","b"],"rubric":"resolved"}`},
+		{grad.EmbeddingRecipe{Pool: "mean"}, `{"kind":"embedding","pool":{"kind":"mean"}}`},
 		{grad.RouterRecipe{}, `{"kind":"router"}`},
 		{grad.RouterRecipe{Models: []string{"a", "b"}, MaxQualityDrop: 0.05}, `{"kind":"router","models":["a","b"],"max_quality_drop":0.05}`},
 		{grad.DecisionModelRecipe{}, `{"kind":"decision"}`},
-		{grad.CartridgeRecipe{Context: grad.ContextFromText("ctx"), NumTokens: 512, Adapter: grad.PrefixKV{NumTokens: 512}}, `{"kind":"cartridge","adapter":{"kind":"prefix_kv","num_tokens":512},"context_text":"ctx","num_tokens":512}`},
+		{grad.CartridgeRecipe{Context: grad.ContextFromText("ctx"), NumTokens: 512, Common: grad.Common{Adapter: grad.PrefixKV{NumTokens: 512}}}, `{"kind":"cartridge","adapter":{"kind":"prefix_kv","num_tokens":512},"context_text":"ctx","num_tokens":512}`},
 		{grad.CartridgeRecipe{Context: grad.ContextFromFile(ctxFile)}, `{"kind":"cartridge","context_text":"API docs"}`},
 		{grad.CartridgeRecipe{Context: grad.ContextFromURI("s3://b/k")}, `{"kind":"cartridge","context_uri":"s3://b/k"}`},
 		{grad.EmbeddingRecipe{Temp: 0.03}, `{"kind":"embedding","temp":0.03}`},
-		{grad.DistillRecipe{Model: "qwen/qwen3-4b", Teacher: "qwen/qwen3-32b"}, `{"kind":"distill","model":"qwen/qwen3-4b","teacher":"qwen/qwen3-32b"}`},
-		{grad.RewardModelRecipe{Adapter: grad.FrozenHead{}}, `{"kind":"reward","adapter":{"kind":"frozen_head"}}`},
-		{grad.GRPORecipe{EnvName: "sql", GroupSize: 16}, `{"kind":"grpo","env_name":"sql","group_size":16}`},
+		{grad.DecisionModelRecipe{Common: grad.Common{Adapter: grad.FrozenHead{}}}, `{"kind":"decision","adapter":{"kind":"frozen_head"}}`},
 		{grad.RawRecipe{Kind: "sft", BatchSize: grad.Int(8)}, `{"kind":"sft","batch_size":8}`},
 	}
 	for _, tc := range cases {
@@ -275,8 +267,11 @@ func TestRecipesSendOnlyUserSetFields(t *testing.T) {
 		}
 	}
 	for _, bad := range []grad.Recipe{
-		grad.DistillRecipe{},
-		grad.SFTRecipe{MergeOnExport: true, Adapter: grad.PrefixKV{}},
+		grad.SFTRecipe{MergeOnExport: true, Common: grad.Common{Adapter: grad.PrefixKV{}}},
+		grad.SFTRecipe{Common: grad.Common{LR: 1e-3, Optimizer: &grad.AdamW{LR: 1e-4}}},
+		grad.RouterRecipe{Models: []string{"a", "b"}, Rubric: grad.Scorer{Name: "mine", Fn: func(context.Context, grad.ScoreInput) (float64, error) { return 1, nil }}},
+		grad.RouterRecipe{Rubric: grad.Judge{Name: "j", Model: "m"}},
+		grad.RouterRecipe{Rubric: 42},
 		grad.CartridgeRecipe{Context: grad.ContextFromFile(filepath.Join(t.TempDir(), "missing"))},
 	} {
 		if _, err := bad.RecipeSpec(); err == nil {

@@ -88,13 +88,8 @@ export const recipesPages = async () => {
   const dpo = await grad.runs.create({ dataset: "diff-merge-preferences", name: "fast-diff-merge", recipe: recipes.dpo({ model: sftArt }) }).wait();
   console.log(dpo.artifact.id, dpo.evalReport);
   await grad.runs.create({ dataset: "docs-retrieval-triplets", name: "docs-embedder", recipe: recipes.embedding() }).wait();
-  await grad.runs.create({ dataset: "sql-preferences", name: "sql-verifier", recipe: recipes.rewardModel({ model: "qwen/qwen3-8b" }) }).wait();
-  await grad.runs.create({ dataset: "support-prompts", name: "support-4b-distilled", recipe: recipes.distill({ model: "qwen/qwen3-4b", teacher: "qwen/qwen3-32b" }) }).wait();
-  // docs: recipes.router({ models, rubric: new Judge(...) }) -- RecipeSpec has no rubric field yet, so it is rejected rather than ignored.
-  await grad.runs.create({ dataset: "support-traces", name: "support-router", recipe: recipes.router({ models: ["qwen/qwen3-8b", "qwen/qwen3-32b"] }) }).wait();
-  const tasks = await grad.datasets.fromHf("openai/gsm8k", { subset: "main", split: "train", prompt: "question", answer: "answer" });
-  // docs: recipes.grpo({ rubric }) -- GRPO is Wave 2; scoring by rubric is not in the v0 wire contract.
-  await grad.runs.create({ dataset: tasks, name: "gsm8k-grpo", recipe: recipes.grpo({ model: "qwen/qwen3-4b" }) }).wait();
+  const judge = new Judge({ name: "resolved", model: "qwen/qwen3-32b", prompt: "Did the answer resolve the ticket?" });
+  await grad.runs.create({ dataset: "support-traces", name: "support-router", recipe: recipes.router({ models: ["qwen/qwen3-8b", "qwen/qwen3-32b"], rubric: judge }) }).wait();
   void new Scorer("correct", { fn: validators.numericMatch({ field: "answer" }) });
 };
 
