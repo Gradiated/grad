@@ -11,7 +11,8 @@ import {
   type StreamOptions,
   type TransportLike,
 } from "./transport.js";
-import { DEFAULT_BASE_URL, defaultConfigPath, loadProfile, validateBaseURL } from "./config.js";
+import { DEFAULT_BASE_URL, defaultConfigPath, isLoopback, loadProfile, missingKeyMessage, normalizeBaseURL, validateBaseURL } from "./config.js";
+import { GradUsageError } from "./errors.js";
 import type { Core } from "./core.js";
 import { defaultPollContext, type PollContext } from "./polling.js";
 import { Artifact, ArtifactsResource, deployArtifact, DeploymentsResource, type ArtifactRef, type DeployOptions } from "./resources/artifacts.js";
@@ -23,9 +24,9 @@ import { SecretsResource, SourcesResource } from "./resources/sources.js";
 import type { Deployment } from "./generated/models.js";
 
 export interface GradOptions {
-  /** API key (default: GRADIATED_API_KEY, then the `grad login` config file). */
+  /** API key (default: the selected profile, GRADIATED_API_KEY, then the default profile). `""` talks to a server without authentication. */
   apiKey?: string | undefined;
-  /** API root (default: GRADIATED_BASE_URL, then the config file, then https://api.gradiated.com). */
+  /** API root (default: the selected profile, GRADIATED_BASE_URL, the default profile, then https://api.gradiated.com). A trailing /v1 is dropped. */
   baseURL?: string | undefined;
   /** Config-file profile (default: GRADIATED_PROFILE or "default"). */
   profile?: string | undefined;
@@ -49,22 +50,69 @@ export interface ResolvedConfig {
   baseURL: string;
   apiKey: string | undefined;
   apiKeySource: "option" | "env" | "config" | "none";
+  /** Set when no key is configured for a non-loopback server: every request fails with it. */
+  missingKey?: string | undefined;
 }
 
-/** Resolves configuration once: explicit options, then environment, then the CLI config file. */
-const resolveConfig = async (options: GradOptions): Promise<ResolvedConfig> => {
-  let baseURL = options.baseURL ?? readEnv("GRADIATED_BASE_URL");
-  let apiKey = options.apiKey ?? readEnv("GRADIATED_API_KEY");
-  let apiKeySource: ResolvedConfig["apiKeySource"] = options.apiKey !== undefined ? "option" : apiKey !== undefined ? "env" : "none";
-  if (baseURL === undefined || apiKey === undefined) {
-    const profile = await loadProfile(options.configPath ?? defaultConfigPath(), options.profile ?? readEnv("GRADIATED_PROFILE") ?? "default");
-    baseURL ??= profile?.baseURL;
-    if (apiKey === undefined && profile?.apiKey !== undefined) {
-      apiKey = profile.apiKey;
-      apiKeySource = "config";
-    }
+const OPTION_KEYS = new Set<string>([
+  "apiKey", "baseURL", "profile", "configPath", "timeoutMs", "maxRetries", "fetch",
+  "defaultHeaders", "userAgent", "sleep", "now", "random",
+]);
+
+/** Throws on an option the client doesn't know (`baseUrl` would otherwise be silently ignored). */
+const checkOptions = (options: GradOptions): void => {
+  for (const key of Object.keys(options)) {
+    if (OPTION_KEYS.has(key)) continue;
+    const near = [...OPTION_KEYS].find((k) => k.toLowerCase() === key.toLowerCase());
+    throw new GradUsageError(
+      `Unknown Grad option '${key}'${near ? `; did you mean '${near}'?` : ""} (options: ${[...OPTION_KEYS].join(", ")}).`,
+      "unknown_option",
+    );
   }
-  return { baseURL: baseURL ?? DEFAULT_BASE_URL, apiKey: apiKey === "" ? undefined : apiKey, apiKeySource };
+};
+
+/**
+ * Resolves configuration once, with the precedence every SDK and the CLI share:
+ * options, then the selected profile (`profile` or GRADIATED_PROFILE), then
+ * GRADIATED_API_KEY / GRADIATED_BASE_URL, then the `default` profile of the
+ * `grad login` config file, then https://api.gradiated.com. A key saved in a
+ * profile is only sent to that profile's own base URL.
+ */
+const resolveConfig = async (options: GradOptions): Promise<ResolvedConfig> => {
+  const explicit = options.profile ?? readEnv("GRADIATED_PROFILE");
+  const name = explicit ?? "default";
+  const envURL = readEnv("GRADIATED_BASE_URL");
+  const envKey = readEnv("GRADIATED_API_KEY");
+  const covered = (options.baseURL ?? envURL) !== undefined && (options.apiKey ?? envKey) !== undefined;
+  const path = options.configPath ?? defaultConfigPath();
+  const profile = covered && explicit === undefined ? undefined : await loadProfile(path, name);
+  if (explicit !== undefined && profile === undefined) {
+    throw new GradUsageError(
+      `Profile '${name}' not found in ${path ?? "the grad config file"}; create it with \`grad login --profile ${name}\`.`,
+      "profile_not_found",
+    );
+  }
+  const raw =
+    options.baseURL ?? (explicit !== undefined ? profile?.baseURL : undefined) ?? envURL ?? profile?.baseURL ?? DEFAULT_BASE_URL;
+  const baseURL = normalizeBaseURL(raw);
+  // A saved key belongs to its profile's server: never send it anywhere else.
+  const owner = profile?.baseURL !== undefined ? normalizeBaseURL(profile.baseURL, false) : DEFAULT_BASE_URL;
+  const fileKey = profile?.apiKey !== undefined && owner === baseURL ? profile.apiKey : undefined;
+  let apiKey: string | undefined;
+  let apiKeySource: ResolvedConfig["apiKeySource"] = "none";
+  if (options.apiKey !== undefined) [apiKey, apiKeySource] = [options.apiKey, "option"];
+  else if (explicit !== undefined && fileKey !== undefined) [apiKey, apiKeySource] = [fileKey, "config"];
+  else if (envKey !== undefined) [apiKey, apiKeySource] = [envKey, "env"];
+  else if (fileKey !== undefined) [apiKey, apiKeySource] = [fileKey, "config"];
+  let missingKey: string | undefined;
+  if (apiKey === undefined && !isLoopback(baseURL)) {
+    const note =
+      profile?.apiKey !== undefined && fileKey === undefined
+        ? ` (the key saved in profile '${name}' belongs to ${owner}, so it was not sent)`
+        : "";
+    missingKey = missingKeyMessage(baseURL) + note;
+  }
+  return { baseURL, apiKey: apiKey === "" ? undefined : apiKey, apiKeySource, missingKey };
 };
 
 /** Builds the real transport on first use, so configuration can come from a file without blocking the constructor. */
@@ -91,16 +139,23 @@ class LazyTransport implements TransportLike {
     return this.pending;
   }
 
+  /** The transport for an API request; fails before sending when no key is configured for a remote server. */
+  private async ready(): Promise<Transport> {
+    const { transport, config } = await this.resolve();
+    if (config.missingKey !== undefined) throw new GradUsageError(config.missingKey, "missing_api_key");
+    return transport;
+  }
+
   async json(spec: RequestSpec, options?: RequestOptions): Promise<unknown> {
-    return (await this.resolve()).transport.json(spec, options);
+    return (await this.ready()).json(spec, options);
   }
 
   async raw(spec: RequestSpec, options?: StreamOptions): Promise<RawResponse> {
-    return (await this.resolve()).transport.raw(spec, options);
+    return (await this.ready()).raw(spec, options);
   }
 
   async *sse(spec: RequestSpec, options?: SSEOptions): AsyncGenerator<ServerSentEvent, void, undefined> {
-    yield* (await this.resolve()).transport.sse(spec, options);
+    yield* (await this.ready()).sse(spec, options);
   }
 
   /** PUTs to an upload URL without the API key (presigned S3 or the server's signed blob route). */
@@ -151,6 +206,7 @@ export class Grad {
   readonly #core: Core;
 
   constructor(options: GradOptions = {}) {
+    checkOptions(options);
     if (options.baseURL !== undefined) validateBaseURL(options.baseURL);
     this.#transport = new LazyTransport(options);
     this.api = new ApiClient(this.#transport);

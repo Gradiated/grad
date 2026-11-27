@@ -141,6 +141,8 @@ pub(crate) struct Transport {
     pub deferred: Option<String>,
     /// Extra hint appended to 401 errors (why no key was sent).
     pub auth_hint: Option<String>,
+    /// The caller passed an empty key on purpose (a server without authentication).
+    pub no_auth: bool,
 }
 
 pub(crate) fn build_http(connect_timeout: Duration, read_timeout: Duration) -> reqwest::Client {
@@ -207,6 +209,18 @@ impl Transport {
     pub fn url_for(&self, req: &Req) -> Result<Url> {
         if let Some(msg) = &self.deferred {
             return Err(Error::Config(msg.clone()));
+        }
+        if req.auth
+            && !req.absolute
+            && self.api_key.is_none()
+            && !self.no_auth
+            && !crate::config::is_loopback(&self.base_url)
+        {
+            let mut msg = crate::config::missing_key_message(&self.base_url);
+            if let Some(h) = &self.auth_hint {
+                msg.push_str(&format!(" ({})", h));
+            }
+            return Err(Error::Config(msg));
         }
         if req.absolute {
             return Url::parse(&req.path).map_err(|e| Error::Decode {

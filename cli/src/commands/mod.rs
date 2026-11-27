@@ -106,6 +106,56 @@ pub async fn resolve_run(c: &Client, run: &str) -> CliResult<Run> {
     }
 }
 
+/// Resolve a run id or name for a command that changes the run (cancel, resume).
+///
+/// A name never silently picks one of several runs: it must match exactly one
+/// run that `eligible` accepts (or, when none is eligible, exactly one run), unless
+/// `latest` asks for the newest. Otherwise the command fails and lists the ids.
+pub async fn resolve_run_to_change(
+    c: &Client,
+    run: &str,
+    latest: bool,
+    verb: &str,
+    eligible: impl Fn(&Run) -> bool,
+) -> CliResult<Run> {
+    if run.starts_with("run_") {
+        return Ok(c.runs().get(run).await?);
+    }
+    let named: Vec<Run> = c
+        .runs()
+        .list_all()
+        .await?
+        .into_iter()
+        .filter(|r| r.name == run)
+        .collect();
+    if named.is_empty() {
+        return resolve_run(c, run).await;
+    }
+    let active: Vec<&Run> = named.iter().filter(|r| eligible(r)).collect();
+    let pool: Vec<&Run> = if active.is_empty() {
+        named.iter().collect()
+    } else {
+        active
+    };
+    if pool.len() == 1 || latest {
+        return Ok(pool[0].clone());
+    }
+    let ids = pool
+        .iter()
+        .map(|r| format!("{} ({}, created {})", r.id, r.status, r.created_at))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(CliError::new(
+        crate::output::EXIT_CONFLICT,
+        "ambiguous_run_name",
+        format!("{} runs are named '{}': {}", pool.len(), run, ids),
+    )
+    .hint(format!(
+        "Pass a run id (`grad runs {} {}`), or --latest for the newest.",
+        verb, pool[0].id
+    )))
+}
+
 /// Validate a positive, finite float flag.
 pub fn positive(v: Option<f64>, flag: &str) -> CliResult<Option<f64>> {
     match v {

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,6 +120,34 @@ type configFile struct {
 	} `json:"profiles"`
 }
 
+// MissingKeyMessage is the error every SDK and the CLI give when no API key is configured
+// for a remote server.
+func MissingKeyMessage(baseURL string) string {
+	return "No API key for " + baseURL + ": run `grad login`, set GRADIATED_API_KEY, or export GRADIATED_PROFILE=local to use a `grad local up` stack."
+}
+
+func normalizeBaseURL(raw string) string {
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if strings.HasSuffix(u, "/v1") {
+		fmt.Fprintf(os.Stderr, "grad: base URL %q ends in /v1; the SDK adds /v1 itself, so it was dropped.\n", u)
+		u = strings.TrimSuffix(u, "/v1")
+	}
+	return u
+}
+
+func isLoopback(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // DefaultConfigPath is $XDG_CONFIG_HOME/gradiated/config.json (default ~/.config/gradiated/config.json),
 // the file `grad login` writes.
 func DefaultConfigPath(getenv func(string) string) string {
@@ -162,10 +192,13 @@ func readProfile(path, profile string, explicit bool) (baseURL, apiKey string, e
 	return p.BaseURL, p.APIKey, nil
 }
 
-// NewClient builds a client. Precedence for each setting: option, then GRADIATED_API_KEY /
-// GRADIATED_BASE_URL, then the config file written by `grad login`, then the default base URL
-// https://api.gradiated.com. Configuration errors (bad URL, unreadable config file) are
-// returned by the first call rather than here.
+// NewClient builds a client. Every SDK and the CLI share one precedence for each setting:
+// the option, then the selected profile (WithProfile or GRADIATED_PROFILE), then
+// GRADIATED_API_KEY / GRADIATED_BASE_URL, then the default profile of the config file written
+// by `grad login`, then https://api.gradiated.com. A key saved in a profile is only sent to that
+// profile's base URL, and a trailing /v1 on the base URL is dropped. Configuration errors (bad
+// URL, unreadable config file, no API key for a remote server) are returned by the first call
+// rather than here, before anything is sent; WithAPIKey("") talks to a server without auth.
 func NewClient(opts ...Option) *Client {
 	s := &settings{getenv: os.Getenv}
 	for _, opt := range opts {
@@ -205,34 +238,58 @@ func NewClient(opts ...Option) *Client {
 		path = DefaultConfigPath(s.getenv)
 	}
 
-	apiKey := ""
-	baseURL := ""
-	needFile := s.apiKey == nil && s.getenv(EnvAPIKey) == "" || s.baseURL == nil && s.getenv(EnvBaseURL) == ""
+	envKey, envURL := s.getenv(EnvAPIKey), s.getenv(EnvBaseURL)
+	covered := (s.baseURL != nil || envURL != "") && (s.apiKey != nil || envKey != "")
 	var fileBase, fileKey string
-	if needFile || explicitFile || explicitProfile {
+	if !covered || explicitFile || explicitProfile {
 		var err error
 		fileBase, fileKey, err = readProfile(path, profile, explicitFile || explicitProfile)
 		if err != nil {
 			c.configErr = &GradError{Code: "invalid_config", Message: "grad: " + err.Error(), Cause: err}
 		}
 	}
-	switch {
-	case s.apiKey != nil:
-		apiKey = *s.apiKey
-	case s.getenv(EnvAPIKey) != "":
-		apiKey = s.getenv(EnvAPIKey)
-	default:
-		apiKey = fileKey
-	}
+	// Shared precedence: option > selected profile > GRADIATED_* > default profile > Cloud.
+	var baseURL string
 	switch {
 	case s.baseURL != nil:
 		baseURL = *s.baseURL
-	case s.getenv(EnvBaseURL) != "":
-		baseURL = s.getenv(EnvBaseURL)
+	case explicitProfile && fileBase != "":
+		baseURL = fileBase
+	case envURL != "":
+		baseURL = envURL
 	case fileBase != "":
 		baseURL = fileBase
 	default:
 		baseURL = DefaultBaseURL
+	}
+	baseURL = normalizeBaseURL(baseURL)
+	// A saved key belongs to its profile's server: never send it anywhere else.
+	owner := DefaultBaseURL
+	if fileBase != "" {
+		owner = normalizeBaseURL(fileBase)
+	}
+	usableFileKey := ""
+	if owner == baseURL {
+		usableFileKey = fileKey
+	}
+	var apiKey string
+	switch {
+	case s.apiKey != nil:
+		apiKey = *s.apiKey
+	case explicitProfile && usableFileKey != "":
+		apiKey = usableFileKey
+	case envKey != "":
+		apiKey = envKey
+	default:
+		apiKey = usableFileKey
+	}
+	var missingKey error
+	if s.apiKey == nil && apiKey == "" && !isLoopback(baseURL) {
+		msg := MissingKeyMessage(baseURL)
+		if fileKey != "" && usableFileKey == "" {
+			msg += fmt.Sprintf(" (the key saved in profile '%s' belongs to %s, so it was not sent)", profile, owner)
+		}
+		missingKey = &GradError{Code: "missing_api_key", Message: msg}
 	}
 	c.baseURL = strings.TrimRight(baseURL, "/")
 	c.apiKey = apiKey
@@ -257,6 +314,9 @@ func NewClient(opts ...Option) *Client {
 		} else {
 			c.API = generated.NewClient(t)
 		}
+	}
+	if c.configErr == nil {
+		c.configErr = missingKey
 	}
 
 	c.Models = &ModelsService{c: c}

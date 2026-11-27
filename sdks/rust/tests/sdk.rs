@@ -153,6 +153,35 @@ async fn unauthorized_without_a_key_explains_how_to_authenticate() {
 }
 
 #[tokio::test]
+async fn no_key_for_a_remote_server_fails_before_sending() {
+    let c = Client::builder()
+        .ignore_env(true)
+        .ignore_config_file(true)
+        .base_url("https://grad.example.invalid/v1/")
+        .build()
+        .unwrap();
+    assert_eq!(c.base_url(), "https://grad.example.invalid");
+    let e = c.models().list().await.unwrap_err();
+    assert!(matches!(e, Error::Config(_)), "{:?}", e);
+    assert_eq!(
+        e.to_string().trim_start_matches("configuration error: "),
+        grad_sdk::config::missing_key_message("https://grad.example.invalid")
+    );
+    // An explicitly empty key talks to a server without authentication.
+    let open = Client::builder()
+        .ignore_env(true)
+        .ignore_config_file(true)
+        .base_url("https://grad.example.invalid")
+        .api_key("")
+        .max_retries(0)
+        .build()
+        .unwrap();
+    assert!(!open.has_api_key());
+    let e = open.models().list().await.unwrap_err();
+    assert!(!matches!(e, Error::Config(_)), "{:?}", e);
+}
+
+#[tokio::test]
 async fn connection_errors_name_the_url_and_the_cause() {
     let port = {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

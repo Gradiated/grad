@@ -8,7 +8,9 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use super::{in_range, more_hint, on_interrupt, page, positive, resolve_run, Ctx};
+use super::{
+    in_range, more_hint, on_interrupt, page, positive, resolve_run, resolve_run_to_change, Ctx,
+};
 use crate::cli::{RunsCmd, TrainArgs};
 use crate::output::{compact, num, opt, pct, thousands, usd, when, CliError, CliResult, Out};
 use crate::trainfile::{self, RunFile};
@@ -706,23 +708,31 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             let art = report_finished(ctx, &c, &finished).await;
             out.done(&json!({ "run": finished, "artifact": art }))
         }
-        RunsCmd::Cancel { run } => {
-            let r = resolve_run(&c, &run).await?;
+        RunsCmd::Cancel { run, latest } => {
+            let r = resolve_run_to_change(&c, &run, latest, "cancel", |r| !r.status.is_terminal())
+                .await?;
             let r = c.runs().cancel(&r.id).await?;
             out.line(format!("✓ Run {} is {}", r.id, r.status));
             out.done(&r)
         }
         RunsCmd::Resume {
             run,
+            latest,
             max_cost_usd,
             wait,
         } => {
             let cap = positive(max_cost_usd, "--max-cost-usd")?;
-            let r = resolve_run(&c, &run).await?;
+            let r = resolve_run_to_change(&c, &run, latest, "resume", |r| {
+                r.status.is_terminal() && r.status != RunStatus::Completed
+            })
+            .await?;
             let r = c.runs().resume(&r.id, cap).await?;
+            // The next claim starts a new attempt; `attempt` is still the last one.
             out.line(format!(
-                "✓ Resumed run {} (attempt {}, {})",
-                r.id, r.attempt, r.status
+                "✓ Resumed run {} ({}; next attempt {})",
+                r.id,
+                r.status,
+                r.attempt + 1
             ));
             if !wait {
                 return out.done(&r);

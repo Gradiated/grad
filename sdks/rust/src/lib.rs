@@ -170,6 +170,8 @@ impl ClientBuilder {
                 retry_base: self.retry_base.unwrap_or(Duration::from_millis(500)),
                 deferred: None,
                 auth_hint: resolved.note.clone(),
+                no_auth: resolved.api_key.is_none()
+                    && resolved.api_key_source == ConfigSource::Argument,
             },
             resolved,
         })
@@ -206,6 +208,7 @@ impl Client {
                 retry_base: Duration::from_millis(500),
                 deferred: Some(msg),
                 auth_hint: None,
+                no_auth: false,
             },
             resolved: ResolvedConfig {
                 base_url: config::DEFAULT_BASE_URL.into(),

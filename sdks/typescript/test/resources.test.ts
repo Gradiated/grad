@@ -63,10 +63,36 @@ describe("configuration", () => {
     expect(await new Grad({ configPath: file, profile: "staging" }).config()).toEqual({ baseURL: "http://staging", apiKeySource: "config" });
     process.env.GRADIATED_PROFILE = "staging";
     expect((await new Grad({ configPath: file }).config()).baseURL).toBe("http://staging");
+    // A profile selected by name wins over the environment variables (like every SDK and the CLI).
     process.env.GRADIATED_API_KEY = "grad_env";
-    expect(await new Grad({ configPath: file }).config()).toEqual({ baseURL: "http://staging", apiKeySource: "env" });
+    process.env.GRADIATED_BASE_URL = "http://env";
+    expect(await new Grad({ configPath: file }).config()).toEqual({ baseURL: "http://staging", apiKeySource: "config" });
     expect(await new Grad({ configPath: file, apiKey: "grad_opt", baseURL: "http://opt" }).config()).toEqual({ baseURL: "http://opt", apiKeySource: "option" });
-    expect((await new Grad({ configPath: file, profile: "nope" }).config()).baseURL).toBe("https://api.gradiated.com");
+    await expect(new Grad({ configPath: file, profile: "nope" }).config()).rejects.toThrow(/Profile 'nope' not found/);
+    delete process.env.GRADIATED_PROFILE;
+    expect(await new Grad({ configPath: file }).config()).toEqual({ baseURL: "http://env", apiKeySource: "env" });
+  });
+
+  it("only sends a saved key to its profile's server, and fails fast without a key", async () => {
+    delete process.env.GRADIATED_API_KEY;
+    delete process.env.GRADIATED_PROFILE;
+    const { file } = configFile({ default: { base_url: "https://cloud.example", api_key: "grad_saved" } });
+    process.env.GRADIATED_BASE_URL = "https://other.example";
+    const calls: string[] = [];
+    const grad = new Grad({ configPath: file, fetch: (async (u: string) => { calls.push(u); return new Response("{}"); }) as typeof fetch });
+    expect(await grad.config()).toEqual({ baseURL: "https://other.example", apiKeySource: "none" });
+    await expect(grad.models.list()).rejects.toThrow(
+      "No API key for https://other.example: run `grad login`, set GRADIATED_API_KEY, or export GRADIATED_PROFILE=local to use a `grad local up` stack. (the key saved in profile 'default' belongs to https://cloud.example, so it was not sent)",
+    );
+    expect(calls).toEqual([]);
+    delete process.env.GRADIATED_BASE_URL;
+    const none = new Grad({ configPath: path.join(scratch(), "missing.json") });
+    await expect(none.models.list()).rejects.toMatchObject({ code: "missing_api_key" });
+  });
+
+  it("drops a trailing /v1 and rejects unknown options", async () => {
+    expect((await new Grad({ baseURL: "http://localhost:8787/v1/", apiKey: "" }).config()).baseURL).toBe("http://localhost:8787");
+    expect(() => new Grad({ baseUrl: "http://x" } as never)).toThrow(/Unknown Grad option 'baseUrl'; did you mean 'baseURL'\?/);
   });
 
   it("finds the config under XDG_CONFIG_HOME, then HOME", async () => {

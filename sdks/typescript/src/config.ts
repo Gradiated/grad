@@ -70,3 +70,31 @@ export const validateBaseURL = (baseURL: string): void => {
     });
   }
 };
+
+/** The error every SDK and the CLI give when no API key is configured for a remote server. */
+export const missingKeyMessage = (baseURL: string): string =>
+  `No API key for ${baseURL}: run \`grad login\`, set GRADIATED_API_KEY, or export GRADIATED_PROFILE=local to use a \`grad local up\` stack.`;
+
+/** True when the URL points at this machine (local stacks often run without auth). */
+export const isLoopback = (baseURL: string): boolean => {
+  let host: string;
+  try {
+    host = new URL(baseURL).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
+  }
+  return host === "localhost" || host.endsWith(".localhost") || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host);
+};
+
+const warned = new Set<string>();
+
+/** Strips trailing slashes and a trailing `/v1` (the SDK adds it), warning once per URL. */
+export const normalizeBaseURL = (baseURL: string, warn = true): string => {
+  const trimmed = baseURL.trim().replace(/\/+$/, "");
+  if (!trimmed.endsWith("/v1")) return trimmed;
+  if (warn && !warned.has(trimmed)) {
+    warned.add(trimmed);
+    console.warn(`grad: base URL '${trimmed}' ends in /v1; the SDK adds /v1 itself, so it was dropped.`);
+  }
+  return trimmed.slice(0, -3);
+};

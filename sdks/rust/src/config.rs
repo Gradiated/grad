@@ -10,7 +10,10 @@
 //! variables, because the caller asked for it by name.
 //!
 //! A key read from a profile is only ever sent to that profile's own base URL,
-//! so overriding the URL never leaks a saved key to another server.
+//! so overriding the URL never leaks a saved key to another server. Every SDK
+//! and the CLI share this precedence. Without a key for a non-loopback server,
+//! requests fail before anything is sent ([`missing_key_message`]); an
+//! explicitly empty key talks to a server without authentication.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -245,8 +248,32 @@ fn non_empty(v: Option<String>) -> Option<String> {
 }
 
 /// Normalize a base URL for comparisons and requests (`http://h:1/x/` -> `http://h:1/x`).
+/// A trailing `/v1` is dropped: the client adds it to every path.
 pub fn normalize_base_url(url: &str) -> String {
-    url.trim().trim_end_matches('/').to_string()
+    let u = url.trim().trim_end_matches('/');
+    u.strip_suffix("/v1").unwrap_or(u).to_string()
+}
+
+/// The error every SDK and the CLI give when no API key is configured for a remote server.
+pub fn missing_key_message(base_url: &str) -> String {
+    format!(
+        "No API key for {}: run `grad login`, set {}, or export {}=local to use a `grad local up` stack.",
+        base_url, ENV_API_KEY, ENV_PROFILE
+    )
+}
+
+/// True when the URL points at this machine (local stacks often run without auth).
+pub fn is_loopback(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or("");
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Validate a base URL: absolute `http`/`https` with a host.
@@ -342,8 +369,9 @@ pub fn resolve(inputs: &ConfigInputs) -> Result<ResolvedConfig> {
             None
         }
     };
-    let (api_key, api_key_source) = if let Some(k) = non_empty(inputs.api_key.clone()) {
-        (Some(k), Source::Argument)
+    let (api_key, api_key_source) = if let Some(k) = inputs.api_key.clone() {
+        // An explicitly empty key talks to a server without authentication.
+        (non_empty(Some(k)), Source::Argument)
     } else if let (true, Some(k)) = (explicit_profile.is_some(), profile_key_usable(&profile_key)) {
         (Some(k), psrc.clone())
     } else if let Some(k) = env(ENV_API_KEY) {
@@ -402,5 +430,18 @@ mod tests {
         assert!(validate_base_url("http://x?y=1").is_err());
         assert!(validate_base_url("https://api.gradiated.com").is_ok());
         assert_eq!(normalize_base_url("http://a:1/b/ "), "http://a:1/b");
+        assert_eq!(normalize_base_url("http://a:1/v1/"), "http://a:1");
+    }
+
+    #[test]
+    fn loopback_and_missing_key_message() {
+        assert!(is_loopback("http://127.0.0.1:8787"));
+        assert!(is_loopback("http://[::1]:8787"));
+        assert!(is_loopback("http://app.localhost"));
+        assert!(!is_loopback("https://api.gradiated.com"));
+        assert_eq!(
+            missing_key_message("https://x"),
+            "No API key for https://x: run `grad login`, set GRADIATED_API_KEY, or export GRADIATED_PROFILE=local to use a `grad local up` stack."
+        );
     }
 }

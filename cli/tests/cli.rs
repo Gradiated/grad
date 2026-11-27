@@ -494,6 +494,24 @@ fn usage_errors_exit_2_and_json_mode_wraps_them() {
     );
     expect(&r, 2);
     assert!(r.stderr.contains("http://localhost:8787"), "{}", r.stderr);
+    // No key for a remote server: fail before sending, with the message every SDK gives.
+    let r = run(
+        sb.grad(None),
+        &[
+            "--base-url",
+            "https://grad.example.invalid",
+            "datasets",
+            "list",
+        ],
+    );
+    expect(&r, 2);
+    assert!(
+        r.stderr.contains(
+            "No API key for https://grad.example.invalid: run `grad login`, set GRADIATED_API_KEY, or export GRADIATED_PROFILE=local"
+        ),
+        "{}",
+        r.stderr
+    );
 }
 
 // ---------------------------------------------------------------- login & config
@@ -1163,6 +1181,70 @@ fn runs_commands() {
     assert!(r.stdout.contains("support-router@2026-11-26-1"));
     let r = run(sb.grad(u), &["runs", "inspect", "run_404"]);
     expect(&r, 4);
+}
+
+#[test]
+fn cancel_and_resume_by_name_never_pick_one_of_several_runs() {
+    let srv = MockServer::start(|r| match (r.method.as_str(), r.path()) {
+        ("GET", "/v1/runs") => Reply::json(
+            200,
+            json!({"data": [
+                run_obj("run_new", "dup", "queued"),
+                run_obj("run_old", "dup", "running"),
+                run_obj("run_done", "dup", "completed"),
+                run_obj("run_solo", "solo", "running"),
+                run_obj("run_s1", "stopped", "stopped_budget"),
+                run_obj("run_s2", "stopped", "cancelled"),
+            ], "next_cursor": null}),
+        ),
+        ("GET", p) if p.starts_with("/v1/runs/run_") => {
+            let id = p.trim_start_matches("/v1/runs/");
+            Reply::json(200, run_obj(id, "x", "running"))
+        }
+        ("GET", _) => Reply::problem(404, "run_not_found", "no such run"),
+        ("POST", p) if p.ends_with("/cancel") => {
+            let id = p.split('/').nth(3).unwrap();
+            Reply::json(200, run_obj(id, "dup", "cancelled"))
+        }
+        ("POST", p) if p.ends_with("/resume") => {
+            let id = p.split('/').nth(3).unwrap();
+            Reply::json(200, run_obj(id, "stopped", "queued"))
+        }
+        _ => Reply::problem(404, "not_found", "no route"),
+    });
+    let sb = Sandbox::new("ambiguous");
+    let u = Some(srv.url.as_str());
+    let r = run(sb.grad(u), &["--json", "runs", "cancel", "dup"]);
+    expect(&r, 5);
+    let e = r.err_json();
+    assert_eq!(e["error"]["code"], "ambiguous_run_name");
+    let msg = e["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("run_new") && msg.contains("run_old"),
+        "{}",
+        msg
+    );
+    assert!(!msg.contains("run_done"), "{}", msg);
+    assert!(srv.last("POST", "/v1/runs/run_new/cancel").is_none());
+    let r = run(sb.grad(u), &["runs", "cancel", "dup", "--latest"]);
+    expect(&r, 0);
+    assert!(srv.last("POST", "/v1/runs/run_new/cancel").is_some());
+    // One active run with the name is unambiguous.
+    expect(&run(sb.grad(u), &["runs", "cancel", "solo"]), 0);
+    assert!(srv.last("POST", "/v1/runs/run_solo/cancel").is_some());
+    let r = run(
+        sb.grad(u),
+        &["runs", "resume", "stopped", "--max-cost-usd", "5"],
+    );
+    expect(&r, 5);
+    assert!(
+        r.stderr.contains("run_s1") && r.stderr.contains("run_s2"),
+        "{}",
+        r.stderr
+    );
+    let r = run(sb.grad(u), &["runs", "resume", "run_s2"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("next attempt"), "{}", r.stdout);
 }
 
 // ---------------------------------------------------------------- data

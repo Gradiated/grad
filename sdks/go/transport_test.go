@@ -368,6 +368,10 @@ func TestConfigResolution(t *testing.T) {
 	if got := authOf(grad.NewClient(env(map[string]string{"XDG_CONFIG_HOME": dir}), grad.WithProfile("staging"))); got != "Bearer grad_staging_key" {
 		t.Fatalf("profile option: %q", got)
 	}
+	// A profile selected by name wins over the environment variables (like every SDK and the CLI).
+	if got := authOf(grad.NewClient(env(map[string]string{"XDG_CONFIG_HOME": dir, "GRADIATED_PROFILE": "staging", "GRADIATED_API_KEY": "grad_env_key", "GRADIATED_BASE_URL": "https://env.example"}))); got != "Bearer grad_staging_key" {
+		t.Fatalf("selected profile beats env: %q", got)
+	}
 	if got := authOf(grad.NewClient(env(map[string]string{"XDG_CONFIG_HOME": dir, "GRADIATED_API_KEY": "grad_env_key"}))); got != "Bearer grad_env_key" {
 		t.Fatalf("env wins over file: %q", got)
 	}
@@ -402,6 +406,22 @@ func TestConfigResolution(t *testing.T) {
 	}
 	if _, err := grad.NewClient(env(map[string]string{"XDG_CONFIG_HOME": dir})).Models.List(ctx); err == nil || !strings.Contains(err.Error(), "parsing config file") {
 		t.Fatalf("corrupt config: %v", err)
+	}
+
+	// No key for a remote server: fail before sending anything, with the shared message.
+	noKey := grad.NewClient(env(map[string]string{"HOME": t.TempDir()}))
+	if _, err := noKey.Models.List(ctx); !errors.As(err, &gerr) || gerr.Code != "missing_api_key" ||
+		err.Error() != grad.MissingKeyMessage(grad.DefaultBaseURL) {
+		t.Fatalf("missing key: %v", err)
+	}
+	if grad.MissingKeyMessage("https://x") != "No API key for https://x: run `grad login`, set GRADIATED_API_KEY, or export GRADIATED_PROFILE=local to use a `grad local up` stack." {
+		t.Fatal("shared message drifted")
+	}
+	if _, err := grad.NewClient(env(nil), grad.WithBaseURL("https://other.example"), grad.WithAPIKey("")).Models.List(ctx); err != nil && errors.As(err, &gerr) && gerr.Code == "missing_api_key" {
+		t.Fatalf("WithAPIKey(\"\") must allow auth-less servers: %v", err)
+	}
+	if c := grad.NewClient(env(nil), grad.WithBaseURL(f.srv.URL+"/v1/"), grad.WithAPIKey("k")); c.BaseURL() != f.srv.URL {
+		t.Fatalf("trailing /v1: %s", c.BaseURL())
 	}
 
 	unauth := newFake(t, map[string]route{"GET /v1/base-models": problem(401, "unauthorized")})

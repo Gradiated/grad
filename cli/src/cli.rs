@@ -646,13 +646,19 @@ pub enum RunsCmd {
     },
     /// Cancel a run (a running attempt is stopped and billed)
     Cancel {
-        /// Run id or run name
+        /// Run id or run name (a name must match one queued or running run)
         run: String,
+        /// When several active runs share the name, cancel the newest
+        #[arg(long)]
+        latest: bool,
     },
     /// Resume a stopped, failed or cancelled run from its latest checkpoint
     Resume {
-        /// Run id or run name
+        /// Run id or run name (a name must match one resumable run)
         run: String,
+        /// When several resumable runs share the name, resume the newest
+        #[arg(long)]
+        latest: bool,
         /// New cost cap (needed to resume a stopped_budget run)
         #[arg(long, value_name = "USD")]
         max_cost_usd: Option<f64>,
