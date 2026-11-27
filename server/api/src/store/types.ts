@@ -1,5 +1,6 @@
 import type {
   ApiKey,
+  CheckpointEvalResult,
   ApiKeyScope,
   Artifact,
   ArtifactFormat,
@@ -373,6 +374,7 @@ export interface RunDomain {
   attempt_tokens: number;
   latest_metric: MetricPoint | null;
   eval_report: EvalReport | null;
+  checkpoint_evals: CheckpointEvalResult[];
   artifact_id: string | null;
 }
 
@@ -414,6 +416,8 @@ export interface RunRepository {
     patch: RunPatch,
     expect?: JobExpectation,
   ): Promise<RunRecord | null>;
+  /** Appends a checkpoint eval result once per eval_id (a replay is a no-op). */
+  appendCheckpointEval(id: string, result: CheckpointEvalResult): Promise<void>;
 }
 
 // --- Artifacts: checkpoints and releases --------------------------------------
@@ -519,6 +523,9 @@ export interface EvalDomain {
   mode: EvalMode;
   /** The dataset version a completed scoring job wrote its scores to. */
   scored_dataset_version: number | null;
+  /** recipe.evals: the run and checkpoint step this eval scores. */
+  run_id: string | null;
+  run_step: number | null;
   samples: number;
   temperature: number;
   max_tokens: number;

@@ -125,6 +125,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         judge_models: [],
         local_scorers: ["local_fn"],
         mode: "eval",
+        run_id: null,
+        run_step: null,
       });
     };
 

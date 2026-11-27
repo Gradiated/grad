@@ -84,6 +84,20 @@ export interface Checkpoint {
   createdAt: string;
 }
 
+export interface CheckpointEvalResult {
+  name: string;
+  step: number;
+  checkpointId: string;
+  evalId: string | null;
+  dataset: string;
+  datasetVersion: number;
+  status: "completed" | "failed" | "cancelled";
+  /** The checkpoint's overall rubric score (null unless completed). */
+  score: number | null;
+  costUsd: number;
+  error: string | null;
+}
+
 export interface CreateApiKeyRequest {
   name: string;
   scopes: Array<ApiKeyScope>;
@@ -522,6 +536,26 @@ export type ImportStatus = "queued" | "running" | "completed" | "failed";
 
 export const ImportStatusValues = ["queued", "running", "completed", "failed"] as const;
 
+export type LoggerSpec = {
+  kind: "wandb";
+  project: string;
+  entity?: string | undefined;
+  /** W&B server (default https://api.wandb.ai). */
+  host?: string | undefined;
+  /** Workspace secret holding the W&B API key. */
+  secret: string;
+  /** Tracker run name (default: the grad run name). */
+  runName?: string | undefined;
+} | {
+  kind: "mlflow";
+  trackingUri: string;
+  experiment?: string | undefined;
+  /** Workspace secret holding a bearer token for the tracking server, if it needs one. */
+  secret?: string | undefined;
+  /** Tracker run name (default: the grad run name). */
+  runName?: string | undefined;
+};
+
 export type LossSpec = {
   kind: "cross_entropy";
   reduction?: "per_example" | "per_token" | undefined;
@@ -661,6 +695,18 @@ export interface PushDatasetRequest {
   metadata?: Record<string, unknown> | undefined;
 }
 
+export interface RecipeEval {
+  dataset: string;
+  /** Dataset version (default: the current one, pinned at plan time). */
+  version?: number | undefined;
+  /** Judges, regexes and validators (default: the dataset's own rubric, such as a benchmark's answer check). Code scorers can't run during training. */
+  rubric?: Array<EvalRubricItem> | undefined;
+  /** Evaluate the first N tasks at each checkpoint. */
+  limit?: number | undefined;
+  /** Name of this eval in the report (default: the dataset name). */
+  name?: string | undefined;
+}
+
 export type RecipeKind = "sft" | "dpo" | "router" | "decision" | "cartridge" | "embedding" | "distill" | "reward" | "grpo";
 
 export const RecipeKindValues = ["sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo"] as const;
@@ -706,6 +752,10 @@ export interface RecipeSpec {
   maxNewTokens?: number | undefined;
   /** CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically). */
   slotToken?: string | undefined;
+  /** Extra evals on each checkpoint during training (the eval executor, billed like any eval). Results are in run.checkpoint_evals, the run's checkpoint_eval events and eval_report.checkpoint_evals. */
+  evals?: Array<RecipeEval> | undefined;
+  /** Experiment trackers that receive the run's metrics. A tracker that fails is reported and dropped; it never fails the run. */
+  loggers?: Array<LoggerSpec> | undefined;
 }
 
 export interface RecordFeedbackRequest {
@@ -793,6 +843,15 @@ export interface ResolvedRunConfig {
   labelEvalId: string | null;
   baseArtifact: BaseArtifact | null;
   recipeParams: Record<string, unknown>;
+  /** recipe.evals, with the dataset version and rubric pinned. */
+  checkpointEvals?: Array<{
+    name: string;
+    dataset: string;
+    datasetVersion: number;
+    rubric: Array<EvalRubricItem>;
+    limit: number | null;
+  }> | undefined;
+  loggers?: Array<LoggerSpec> | undefined;
 }
 
 export interface ResumeRunRequest {
@@ -861,6 +920,8 @@ export interface Run {
   maxAttempts: number;
   latestMetric: MetricPoint | null;
   evalReport: EvalReport | null;
+  /** recipe.evals results, one per finished eval: a checkpoint (step) on a dataset. */
+  checkpointEvals: Array<CheckpointEvalResult>;
   artifactId: string | null;
   error: string | null;
   createdAt: string;

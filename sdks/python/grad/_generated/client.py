@@ -102,6 +102,22 @@ Checkpoint = TypedDict(
     },
 )
 
+CheckpointEvalResult = TypedDict(
+    "CheckpointEvalResult",
+    {
+        "name": "str",
+        "step": "int",
+        "checkpoint_id": "str",
+        "eval_id": "str | None",
+        "dataset": "str",
+        "dataset_version": "int",
+        "status": "Literal['completed', 'failed', 'cancelled']",
+        "score": "float | None",
+        "cost_usd": "float",
+        "error": "str | None",
+    },
+)
+
 ClaimJobRequest = TypedDict(
     "ClaimJobRequest",
     {
@@ -551,6 +567,8 @@ ImportStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed']"
 
 JobKind: TypeAlias = "Literal['train', 'import']"
 
+LoggerSpec: TypeAlias = "dict[str, Any]"
+
 LossSpec: TypeAlias = "dict[str, Any]"
 
 MetricPoint = TypedDict(
@@ -739,6 +757,17 @@ PushDatasetRequest = TypedDict(
     },
 )
 
+RecipeEval = TypedDict(
+    "RecipeEval",
+    {
+        "dataset": "str",
+        "version": "NotRequired[int]",
+        "rubric": "NotRequired[list[EvalRubricItem]]",
+        "limit": "NotRequired[int]",
+        "name": "NotRequired[str]",
+    },
+)
+
 RecipeKind: TypeAlias = "Literal['sft', 'dpo', 'router', 'decision', 'cartridge', 'embedding', 'distill', 'reward', 'grpo']"
 
 RecipeSpec = TypedDict(
@@ -776,6 +805,8 @@ RecipeSpec = TypedDict(
         "fallback": "NotRequired[str]",
         "max_new_tokens": "NotRequired[int]",
         "slot_token": "NotRequired[str]",
+        "evals": "NotRequired[list[RecipeEval]]",
+        "loggers": "NotRequired[list[LoggerSpec]]",
     },
 )
 
@@ -879,6 +910,8 @@ ResolvedRunConfig = TypedDict(
         "label_eval_id": "str | None",
         "base_artifact": "BaseArtifact",
         "recipe_params": "dict[str, Any]",
+        "checkpoint_evals": "NotRequired[list[dict[str, Any]]]",
+        "loggers": "NotRequired[list[LoggerSpec]]",
     },
 )
 
@@ -951,6 +984,7 @@ Run = TypedDict(
         "max_attempts": "int",
         "latest_metric": "MetricPoint",
         "eval_report": "EvalReport",
+        "checkpoint_evals": "list[CheckpointEvalResult]",
         "artifact_id": "str | None",
         "error": "str | None",
         "created_at": "str",
@@ -1112,6 +1146,7 @@ TrainerJob = TypedDict(
         "max_cost_usd": "float | None",
         "dataset": "dict[str, Any] | None",
         "resume": "dict[str, Any] | None",
+        "loggers": "NotRequired[list[dict[str, Any]]]",
         "base": "dict[str, Any] | None",
     },
 )
@@ -1300,6 +1335,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "BaseArtifact": frozenset({"format", "id", "recipe_kind", "sha256"}),
     "ChatMessage": frozenset({"content", "name", "role", "tool_call_id", "tool_calls", "train"}),
     "Checkpoint": frozenset({"attempt", "best", "created_at", "eval_score", "expires_at", "final", "format", "id", "metadata", "run_id", "sha256", "size_bytes", "step", "workspace_id"}),
+    "CheckpointEvalResult": frozenset({"checkpoint_id", "cost_usd", "dataset", "dataset_version", "error", "eval_id", "name", "score", "status", "step"}),
     "ClaimJobRequest": frozenset({"kinds", "lease_seconds", "recipes", "worker_id"}),
     "ClaimJobResponse": frozenset({"job", "protocol"}),
     "CompleteTrainerJobRequest": frozenset({"attempt", "error", "eval_report", "format", "import_summary", "manifest", "status", "tokens_processed", "upload_id", "worker_id"}),
@@ -1346,7 +1382,8 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
-    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "epochs", "eval_every", "fallback", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rollout", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
+    "RecipeEval": frozenset({"dataset", "limit", "name", "rubric", "version"}),
+    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "epochs", "eval_every", "evals", "fallback", "kind", "loggers", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rollout", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
     "RecordFeedbackRequest": frozenset({"events"}),
     "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
@@ -1354,12 +1391,12 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RenderDatasetResponse": frozenset({"dataset", "examples", "model", "template_revision", "token_counts"}),
     "ReportTrainerProgressRequest": frozenset({"attempt", "metric", "worker_id"}),
     "ReportTrainerProgressResponse": frozenset({"cost_usd", "should_stop", "status", "stop_reason"}),
-    "ResolvedRunConfig": frozenset({"adapter", "base_artifact", "batch_size", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "eval_every_steps", "label_eval_id", "lr", "lr_source", "model", "name", "optimizer", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
+    "ResolvedRunConfig": frozenset({"adapter", "base_artifact", "batch_size", "checkpoint_evals", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "eval_every_steps", "label_eval_id", "loggers", "lr", "lr_source", "model", "name", "optimizer", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
     "ResumeRunRequest": frozenset({"max_cost_usd"}),
     "RouteRequest": frozenset({"deployment", "messages", "session_id", "tools"}),
     "RouteResponse": frozenset({"artifact_id", "confidence", "deployment", "inference_id", "is_exploration", "model", "scores"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
-    "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
+    "Run": frozenset({"artifact_id", "attempt", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
     "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),
     "Secret": frozenset({"created_at", "name", "updated_at", "workspace_id"}),
     "SetSecretRequest": frozenset({"name", "value"}),
@@ -1373,7 +1410,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
-    "TrainerJob": frozenset({"attempt", "base", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "max_cost_usd", "price_per_million_tokens", "resume", "run"}),
+    "TrainerJob": frozenset({"attempt", "base", "dataset", "id", "import", "kind", "lease_expires_at", "lease_seconds", "loggers", "max_cost_usd", "price_per_million_tokens", "resume", "run"}),
     "TrainerUploadRequest": frozenset({"attempt", "kind", "sha256", "size_bytes", "worker_id"}),
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
     "TrajectoryOutput": frozenset({"payload", "turns"}),

@@ -177,6 +177,31 @@ type Checkpoint struct {
 	CreatedAt   string          `json:"created_at"`
 }
 
+// CheckpointEvalResult is generated from the OpenAPI schema.
+type CheckpointEvalResult struct {
+	Name           string                     `json:"name"`
+	Step           int                        `json:"step"`
+	CheckpointID   string                     `json:"checkpoint_id"`
+	EvalID         *string                    `json:"eval_id"`
+	Dataset        string                     `json:"dataset"`
+	DatasetVersion int                        `json:"dataset_version"`
+	Status         CheckpointEvalResultStatus `json:"status"`
+	// Score The checkpoint's overall rubric score (null unless completed).
+	Score   *float64 `json:"score"`
+	CostUSD float64  `json:"cost_usd"`
+	Error   *string  `json:"error"`
+}
+
+// CheckpointEvalResultStatus is an enumeration of allowed values.
+type CheckpointEvalResultStatus string
+
+// Values of CheckpointEvalResultStatus.
+const (
+	CheckpointEvalResultStatusCompleted CheckpointEvalResultStatus = "completed"
+	CheckpointEvalResultStatusFailed    CheckpointEvalResultStatus = "failed"
+	CheckpointEvalResultStatusCancelled CheckpointEvalResultStatus = "cancelled"
+)
+
 // CreateAPIKeyRequest is generated from the OpenAPI schema.
 type CreateAPIKeyRequest struct {
 	Name   string        `json:"name"`
@@ -1204,6 +1229,30 @@ type ListUsageResponse struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
+// LoggerSpec is a union of object shapes; set the fields of exactly one variant.
+type LoggerSpec struct {
+	Kind    LoggerSpecKind `json:"kind"`
+	Project *string        `json:"project,omitempty"`
+	Entity  *string        `json:"entity,omitempty"`
+	// Host W&B server (default https://api.wandb.ai).
+	Host *string `json:"host,omitempty"`
+	// Secret Workspace secret holding the W&B API key.
+	Secret *string `json:"secret,omitempty"`
+	// RunName Tracker run name (default: the grad run name).
+	RunName     *string `json:"run_name,omitempty"`
+	TrackingURI *string `json:"tracking_uri,omitempty"`
+	Experiment  *string `json:"experiment,omitempty"`
+}
+
+// LoggerSpecKind is an enumeration of allowed values.
+type LoggerSpecKind string
+
+// Values of LoggerSpecKind.
+const (
+	LoggerSpecKindWandb  LoggerSpecKind = "wandb"
+	LoggerSpecKindMlflow LoggerSpecKind = "mlflow"
+)
+
 // LossSpec is a union of object shapes; set the fields of exactly one variant.
 type LossSpec struct {
 	Kind      LossSpecKind       `json:"kind"`
@@ -1442,6 +1491,19 @@ type PushDatasetRequest struct {
 	Metadata map[string]any  `json:"metadata,omitempty"`
 }
 
+// RecipeEval is generated from the OpenAPI schema.
+type RecipeEval struct {
+	Dataset string `json:"dataset"`
+	// Version Dataset version (default: the current one, pinned at plan time).
+	Version *int `json:"version,omitempty"`
+	// Rubric Judges, regexes and validators (default: the dataset's own rubric, such as a benchmark's answer check). Code scorers can't run during training.
+	Rubric []EvalRubricItem `json:"rubric,omitempty"`
+	// Limit Evaluate the first N tasks at each checkpoint.
+	Limit *int `json:"limit,omitempty"`
+	// Name Name of this eval in the report (default: the dataset name).
+	Name *string `json:"name,omitempty"`
+}
+
 // RecipeKind is an enumeration of allowed values.
 type RecipeKind string
 
@@ -1500,6 +1562,10 @@ type RecipeSpec struct {
 	MaxNewTokens *int `json:"max_new_tokens,omitempty"`
 	// SlotToken CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).
 	SlotToken *string `json:"slot_token,omitempty"`
+	// Evals Extra evals on each checkpoint during training (the eval executor, billed like any eval). Results are in run.checkpoint_evals, the run's checkpoint_eval events and eval_report.checkpoint_evals.
+	Evals []RecipeEval `json:"evals,omitempty"`
+	// Loggers Experiment trackers that receive the run's metrics. A tracker that fails is reported and dropped; it never fails the run.
+	Loggers []LoggerSpec `json:"loggers,omitempty"`
 }
 
 // RecipeSpecReduction Default per_example.
@@ -1654,6 +1720,9 @@ type ResolvedRunConfig struct {
 	LabelEvalID  *string        `json:"label_eval_id"`
 	BaseArtifact *BaseArtifact  `json:"base_artifact"`
 	RecipeParams map[string]any `json:"recipe_params"`
+	// CheckpointEvals recipe.evals, with the dataset version and rubric pinned.
+	CheckpointEvals []ResolvedRunConfigCheckpointEvalsItem `json:"checkpoint_evals,omitempty"`
+	Loggers         []LoggerSpec                           `json:"loggers,omitempty"`
 }
 
 // ResolvedRunConfigAdapter is a union of object shapes; set the fields of exactly one variant.
@@ -1675,6 +1744,15 @@ const (
 	ResolvedRunConfigAdapterKindFrozenHead  ResolvedRunConfigAdapterKind = "frozen_head"
 	ResolvedRunConfigAdapterKindEncoderFull ResolvedRunConfigAdapterKind = "encoder_full"
 )
+
+// ResolvedRunConfigCheckpointEvalsItem is generated from the OpenAPI schema.
+type ResolvedRunConfigCheckpointEvalsItem struct {
+	Name           string           `json:"name"`
+	Dataset        string           `json:"dataset"`
+	DatasetVersion int              `json:"dataset_version"`
+	Rubric         []EvalRubricItem `json:"rubric"`
+	Limit          *int             `json:"limit"`
+}
 
 // ResolvedRunConfigReduction is an enumeration of allowed values.
 type ResolvedRunConfigReduction string
@@ -1853,11 +1931,13 @@ type Run struct {
 	MaxAttempts           int               `json:"max_attempts"`
 	LatestMetric          *MetricPoint      `json:"latest_metric"`
 	EvalReport            *EvalReport       `json:"eval_report"`
-	ArtifactID            *string           `json:"artifact_id"`
-	Error                 *string           `json:"error"`
-	CreatedAt             string            `json:"created_at"`
-	UpdatedAt             string            `json:"updated_at"`
-	FinishedAt            *string           `json:"finished_at"`
+	// CheckpointEvals recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.
+	CheckpointEvals []CheckpointEvalResult `json:"checkpoint_evals"`
+	ArtifactID      *string                `json:"artifact_id"`
+	Error           *string                `json:"error"`
+	CreatedAt       string                 `json:"created_at"`
+	UpdatedAt       string                 `json:"updated_at"`
+	FinishedAt      *string                `json:"finished_at"`
 }
 
 // RunStatus is an enumeration of allowed values.

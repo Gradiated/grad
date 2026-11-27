@@ -161,6 +161,8 @@ CREATE TABLE grad_runs (
   attempt_tokens BIGINT NOT NULL DEFAULT 0 CHECK (attempt_tokens >= 0),
   latest_metric JSONB,
   eval_report JSONB,
+  -- recipe.evals results, appended once per finished checkpoint eval.
+  checkpoint_evals JSONB NOT NULL DEFAULT '[]'::jsonb,
   artifact_id TEXT
 );
 
@@ -223,6 +225,9 @@ CREATE TABLE grad_evals (
   -- and, when it completes, writes their scores as the dataset's next version.
   mode TEXT NOT NULL DEFAULT 'eval' CHECK (mode IN ('eval', 'score')),
   scored_dataset_version INTEGER,
+  -- recipe.evals: the run and checkpoint step this eval scores.
+  run_id TEXT REFERENCES grad_runs (id) ON DELETE SET NULL,
+  run_step INTEGER,
   samples INTEGER NOT NULL CHECK (samples >= 1),
   temperature DOUBLE PRECISION NOT NULL,
   max_tokens INTEGER NOT NULL,

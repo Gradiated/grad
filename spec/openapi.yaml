@@ -1444,6 +1444,44 @@ components:
         recipe_params:
           type: object
           additionalProperties: {}
+        checkpoint_evals:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+                maxLength: 64
+                pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+              dataset:
+                type: string
+                minLength: 1
+                maxLength: 64
+                pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+              dataset_version:
+                type: integer
+                minimum: 1
+              rubric:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EvalRubricItem"
+              limit:
+                type:
+                  - integer
+                  - "null"
+                minimum: 1
+            required:
+              - name
+              - dataset
+              - dataset_version
+              - rubric
+              - limit
+          description: recipe.evals, with the dataset version and rubric pinned.
+        loggers:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoggerSpec"
       required:
         - rule_version
         - dataset
@@ -1527,6 +1565,70 @@ components:
         - format
         - sha256
       description: "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference)."
+    LoggerSpec:
+      oneOf:
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - wandb
+            project:
+              type: string
+              minLength: 1
+              maxLength: 128
+            entity:
+              type: string
+              minLength: 1
+              maxLength: 128
+            host:
+              type: string
+              format: uri
+              description: W&B server (default https://api.wandb.ai).
+            secret:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+              description: Workspace secret holding the W&B API key.
+            run_name:
+              type: string
+              minLength: 1
+              maxLength: 128
+              description: "Tracker run name (default: the grad run name)."
+          required:
+            - kind
+            - project
+            - secret
+          additionalProperties: false
+        - type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - mlflow
+            tracking_uri:
+              type: string
+              format: uri
+            experiment:
+              type: string
+              minLength: 1
+              maxLength: 256
+            secret:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+              description: Workspace secret holding a bearer token for the tracking server, if it needs one.
+            run_name:
+              type: string
+              minLength: 1
+              maxLength: 128
+              description: "Tracker run name (default: the grad run name)."
+          required:
+            - kind
+            - tracking_uri
+          additionalProperties: false
     PlanRunRequest:
       type: object
       properties:
@@ -1713,6 +1815,22 @@ components:
           maxLength: 64
           description: "CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token
             that tokenizes atomically)."
+        evals:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipeEval"
+          minItems: 1
+          maxItems: 4
+          description: Extra evals on each checkpoint during training (the eval executor, billed like any eval). Results are in
+            run.checkpoint_evals, the run's checkpoint_eval events and eval_report.checkpoint_evals.
+        loggers:
+          type: array
+          items:
+            $ref: "#/components/schemas/LoggerSpec"
+          minItems: 1
+          maxItems: 4
+          description: Experiment trackers that receive the run's metrics. A tracker that fails is reported and dropped; it never
+            fails the run.
       required:
         - kind
       additionalProperties: false
@@ -1861,6 +1979,40 @@ components:
       required:
         - kind
       additionalProperties: false
+    RecipeEval:
+      type: object
+      properties:
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        version:
+          type: integer
+          minimum: 1
+          description: "Dataset version (default: the current one, pinned at plan time)."
+        rubric:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalRubricItem"
+          minItems: 1
+          maxItems: 32
+          description: "Judges, regexes and validators (default: the dataset's own rubric, such as a benchmark's answer check).
+            Code scorers can't run during training."
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: Evaluate the first N tasks at each checkpoint.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: "Name of this eval in the report (default: the dataset name)."
+      required:
+        - dataset
+      additionalProperties: false
     SplitSpec:
       type: object
       properties:
@@ -1939,6 +2091,11 @@ components:
           $ref: "#/components/schemas/MetricPoint"
         eval_report:
           $ref: "#/components/schemas/EvalReport"
+        checkpoint_evals:
+          type: array
+          items:
+            $ref: "#/components/schemas/CheckpointEvalResult"
+          description: "recipe.evals results, one per finished eval: a checkpoint (step) on a dataset."
         artifact_id:
           type:
             - string
@@ -1978,6 +2135,7 @@ components:
         - max_attempts
         - latest_metric
         - eval_report
+        - checkpoint_evals
         - artifact_id
         - error
         - created_at
@@ -2405,6 +2563,57 @@ components:
         - ece
         - temperature
       additionalProperties: {}
+    CheckpointEvalResult:
+      type: object
+      properties:
+        name:
+          type: string
+        step:
+          type: integer
+          minimum: 0
+        checkpoint_id:
+          type: string
+        eval_id:
+          type:
+            - string
+            - "null"
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        dataset_version:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum:
+            - completed
+            - failed
+            - cancelled
+        score:
+          type:
+            - number
+            - "null"
+          description: The checkpoint's overall rubric score (null unless completed).
+        cost_usd:
+          type: number
+          minimum: 0
+        error:
+          type:
+            - string
+            - "null"
+      required:
+        - name
+        - step
+        - checkpoint_id
+        - eval_id
+        - dataset
+        - dataset_version
+        - status
+        - score
+        - cost_usd
+        - error
     MetricsPage:
       type: object
       properties:
@@ -2724,6 +2933,13 @@ components:
             - checkpoint_id
             - step
             - download_url
+        loggers:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: "Train jobs: the run's recipe.loggers with each workspace secret resolved to `api_key`. A logger whose
+            secret is missing is left out (the plan warned)."
         base:
           type:
             - object

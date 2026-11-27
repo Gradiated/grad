@@ -220,6 +220,32 @@ pub struct Checkpoint {
     pub created_at: String,
 }
 
+/// Generated from the OpenAPI schema `CheckpointEvalResult`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CheckpointEvalResult {
+    pub name: String,
+    pub step: i64,
+    pub checkpoint_id: String,
+    pub eval_id: Option<String>,
+    pub dataset: String,
+    pub dataset_version: i64,
+    pub status: CheckpointEvalResultStatus,
+    /// The checkpoint's overall rubric score (null unless completed).
+    pub score: Option<f64>,
+    pub cost_usd: f64,
+    pub error: Option<String>,
+}
+
+string_enum! {
+    /// Allowed values of `CheckpointEvalResultStatus`.
+    CheckpointEvalResultStatus {
+        Completed => "completed",
+        Failed => "failed",
+        Cancelled => "cancelled",
+    }
+}
+
 /// Generated from the OpenAPI schema `CreateImportRequest`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -939,6 +965,38 @@ string_enum! {
 /// A union of object shapes: set the fields of exactly one variant.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
+pub struct LoggerSpec {
+    pub kind: LoggerSpecKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+    /// W&B server (default https://api.wandb.ai).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Workspace secret holding the W&B API key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Tracker run name (default: the grad run name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracking_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<String>,
+}
+
+string_enum! {
+    /// Allowed values of `LoggerSpecKind`.
+    LoggerSpecKind {
+        Wandb => "wandb",
+        Mlflow => "mlflow",
+    }
+}
+
+/// A union of object shapes: set the fields of exactly one variant.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LossSpec {
     pub kind: LossSpecKind,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1174,6 +1232,25 @@ pub struct PostEvalScoresResponse {
     pub pending_local_scores: i64,
 }
 
+/// Generated from the OpenAPI schema `RecipeEval`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecipeEval {
+    pub dataset: String,
+    /// Dataset version (default: the current one, pinned at plan time).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+    /// Judges, regexes and validators (default: the dataset's own rubric, such as a benchmark's answer check). Code scorers can't run during training.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rubric: Option<Vec<EvalRubricItem>>,
+    /// Evaluate the first N tasks at each checkpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+    /// Name of this eval in the report (default: the dataset name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 string_enum! {
     /// Allowed values of `RecipeKind`.
     RecipeKind {
@@ -1264,11 +1341,17 @@ pub struct RecipeSpec {
     /// CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slot_token: Option<String>,
+    /// Extra evals on each checkpoint during training (the eval executor, billed like any eval). Results are in run.checkpoint_evals, the run's checkpoint_eval events and eval_report.checkpoint_evals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evals: Option<Vec<RecipeEval>>,
+    /// Experiment trackers that receive the run's metrics. A tracker that fails is reported and dropped; it never fails the run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loggers: Option<Vec<LoggerSpec>>,
 }
 
 impl RecipeSpec {
     /// Every property name in the schema.
-    pub const FIELDS: &'static [&'static str] = &["kind", "model", "adapter", "lr", "lr_scale", "batch_size", "epochs", "schedule", "warmup", "train_on", "thinking", "preserve_thinking", "reduction", "select", "checkpoint_ttl_days", "beta", "models", "max_quality_drop", "context_text", "num_tokens", "temp", "teacher", "rollout", "optimizer", "eval_every", "loss", "pool", "rubric", "pricing", "fallback", "max_new_tokens", "slot_token"];
+    pub const FIELDS: &'static [&'static str] = &["kind", "model", "adapter", "lr", "lr_scale", "batch_size", "epochs", "schedule", "warmup", "train_on", "thinking", "preserve_thinking", "reduction", "select", "checkpoint_ttl_days", "beta", "models", "max_quality_drop", "context_text", "num_tokens", "temp", "teacher", "rollout", "optimizer", "eval_every", "loss", "pool", "rubric", "pricing", "fallback", "max_new_tokens", "slot_token", "evals", "loggers"];
 }
 
 string_enum! {
@@ -1418,6 +1501,11 @@ pub struct ResolvedRunConfig {
     pub label_eval_id: Option<String>,
     pub base_artifact: Option<BaseArtifact>,
     pub recipe_params: BTreeMap<String, Value>,
+    /// recipe.evals, with the dataset version and rubric pinned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_evals: Option<Vec<ResolvedRunConfigCheckpointEvalsItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loggers: Option<Vec<LoggerSpec>>,
 }
 
 /// A union of object shapes: set the fields of exactly one variant.
@@ -1443,6 +1531,17 @@ string_enum! {
         FrozenHead => "frozen_head",
         EncoderFull => "encoder_full",
     }
+}
+
+/// Generated from the OpenAPI schema `ResolvedRunConfigCheckpointEvalsItem`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResolvedRunConfigCheckpointEvalsItem {
+    pub name: String,
+    pub dataset: String,
+    pub dataset_version: i64,
+    pub rubric: Vec<EvalRubricItem>,
+    pub limit: Option<i64>,
 }
 
 string_enum! {
@@ -1567,6 +1666,8 @@ pub struct Run {
     pub max_attempts: i64,
     pub latest_metric: Option<MetricPoint>,
     pub eval_report: Option<EvalReport>,
+    /// recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.
+    pub checkpoint_evals: Vec<CheckpointEvalResult>,
     pub artifact_id: Option<String>,
     pub error: Option<String>,
     pub created_at: String,

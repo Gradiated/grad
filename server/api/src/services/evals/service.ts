@@ -2,7 +2,10 @@ import { hostname } from "node:os";
 
 import { addSeconds } from "../../clock.js";
 import {
+  NON_DEPLOYABLE_FORMATS,
+  PlanEvalRequestSchema,
   RECORD_MODEL,
+  type CheckpointEvalResult,
   type EvalMode,
   type EvalOutput,
   type EvalRun,
@@ -27,6 +30,7 @@ import {
   recordPromptAndResponse,
 } from "../../records.js";
 import type {
+  CheckpointRecord,
   EvalOutputRow,
   EvalRecord,
   EvalTask,
@@ -35,7 +39,10 @@ import type {
   Page,
   PageRequest,
   Repositories,
+  RunRecord,
 } from "../../store/types.js";
+
+const EVAL_DONE: readonly EvalStatus[] = ["completed", "failed", "cancelled"];
 import { writeRecordsPart } from "../dataset-records.js";
 import { datasetPartKey, type DatasetService } from "../datasets.js";
 import {
@@ -76,6 +83,11 @@ export interface EvalService {
     workspaceId: string,
     request: PlanEvalRequest,
   ): Promise<EvalRecord>;
+  /** recipe.evals: queues the run's checkpoint evals on a new checkpoint. */
+  evaluateCheckpoint(
+    run: Pick<RunRecord, "id" | "workspace_id" | "name" | "resolved_config">,
+    checkpoint: Pick<CheckpointRecord, "id" | "step" | "format">,
+  ): Promise<void>;
   get(workspaceId: string, id: string): Promise<EvalRun>;
   list(workspaceId: string, page: PageRequest): Promise<Page<EvalRun>>;
   listOutputs(
@@ -307,6 +319,9 @@ export const createEvalService = (
   ): Promise<void> => {
     await billAttempt(store, record);
     await settleLabelledRuns(store, record, clock.now().toISOString());
+    const full = await store.evals.getById(record.id);
+    const result = full && checkpointResult(full);
+    if (result && full?.run_id) await recordCheckpointEval(full.run_id, result);
   };
 
   /**
@@ -733,6 +748,11 @@ export const createEvalService = (
     request: PlanEvalRequest,
     idempotency?: IdempotencyInput,
     mode: EvalMode = "eval",
+    checkpoint?: {
+      runId: string;
+      step: number;
+      targets: EvalRecord["model_targets"];
+    },
   ): Promise<EvalRecord> => {
     const plan = await planEvalRequest(
       deps,
@@ -740,6 +760,7 @@ export const createEvalService = (
       workspaceId,
       request,
       mode,
+      checkpoint?.targets,
     );
     if (mode === "eval") assertNonEmptyPlan(plan);
 
@@ -763,8 +784,116 @@ export const createEvalService = (
       pass_threshold: plan.passThreshold,
       judge_models: plan.judgeModels,
       local_scorers: plan.localScorers,
+      run_id: checkpoint?.runId ?? null,
+      run_step: checkpoint?.step ?? null,
       totalOutputs: plan.tasks.length * request.models.length * request.samples,
     });
+  };
+
+  /** Records a recipe.evals result on its run: in run.checkpoint_evals and a job event. */
+  const recordCheckpointEval = async (
+    runId: string,
+    result: CheckpointEvalResult,
+  ): Promise<void> => {
+    await store.runs.appendCheckpointEval(runId, result);
+    await store.jobs.appendEvent({
+      jobId: runId,
+      attempt: 0,
+      type: `checkpoint_eval:${result.name}`,
+      step: result.step,
+      payload: result,
+    });
+  };
+
+  const checkpointResult = (
+    record: EvalRecord,
+  ): CheckpointEvalResult | null => {
+    if (record.run_id === null || record.run_step === null) return null;
+    if (!EVAL_DONE.includes(record.status)) return null;
+
+    return {
+      name: record.name,
+      step: record.run_step,
+      checkpoint_id: record.models[0] ?? "",
+      eval_id: record.id,
+      dataset: record.dataset_name,
+      dataset_version: record.dataset_version,
+      status: record.status as CheckpointEvalResult["status"],
+      score:
+        record.status === "completed"
+          ? (record.summary[0]?.overall ?? null)
+          : null,
+      cost_usd: record.total_cost_usd,
+      error: record.error,
+    };
+  };
+
+  /**
+   * recipe.evals: queues one eval per spec on a new checkpoint (served by
+   * the inference endpoint under the checkpoint id). A checkpoint that can't
+   * be served, or an eval that can't be created, is recorded as failed; the
+   * run itself never fails for it.
+   */
+  const evaluateCheckpoint = async (
+    run: Pick<RunRecord, "id" | "workspace_id" | "name" | "resolved_config">,
+    checkpoint: Pick<CheckpointRecord, "id" | "step" | "format">,
+  ): Promise<void> => {
+    for (const spec of run.resolved_config.checkpoint_evals ?? []) {
+      const failed = (error: string): CheckpointEvalResult => ({
+        name: spec.name,
+        step: checkpoint.step,
+        checkpoint_id: checkpoint.id,
+        eval_id: null,
+        dataset: spec.dataset,
+        dataset_version: spec.dataset_version,
+        status: "failed",
+        score: null,
+        cost_usd: 0,
+        error,
+      });
+      if (
+        checkpoint.format === null ||
+        NON_DEPLOYABLE_FORMATS.includes(checkpoint.format)
+      ) {
+        await recordCheckpointEval(
+          run.id,
+          failed(
+            `Checkpoint ${checkpoint.id} has format '${checkpoint.format ?? "none"}', which an inference endpoint can't serve.`,
+          ),
+        );
+        continue;
+      }
+      try {
+        await createRecord(
+          run.workspace_id,
+          PlanEvalRequestSchema.parse({
+            name: spec.name,
+            models: [checkpoint.id],
+            dataset: spec.dataset,
+            dataset_version: spec.dataset_version,
+            rubric: spec.rubric,
+            samples: 1,
+            temperature: 0,
+            ...(spec.limit !== null ? { limit: spec.limit } : {}),
+          }),
+          undefined,
+          "eval",
+          {
+            runId: run.id,
+            step: checkpoint.step,
+            targets: {
+              [checkpoint.id]: {
+                inference_model: checkpoint.id,
+                price_per_million_tokens:
+                  deps.catalog.priceFor(run.resolved_config.model) ?? null,
+              },
+            },
+          },
+        );
+      } catch (error) {
+        await recordCheckpointEval(run.id, failed(errorMessage(error)));
+      }
+    }
   };
 
   return {
@@ -781,6 +910,8 @@ export const createEvalService = (
       ),
 
     createRecord,
+
+    evaluateCheckpoint,
 
     scoreDataset: async (workspaceId, dataset, request) =>
       toPublic(

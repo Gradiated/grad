@@ -113,6 +113,7 @@ export const toRunDomain = (r: Row): RunDomain => ({
   attempt_tokens: n(r.attempt_tokens),
   latest_metric: j<MetricPoint | null>(r.latest_metric, null),
   eval_report: j<EvalReport | null>(r.eval_report, null),
+  checkpoint_evals: j(r.checkpoint_evals, []),
   artifact_id: sn(r.artifact_id),
 });
 
@@ -127,6 +128,8 @@ export const toEvalDomain = (r: Row): EvalDomain => ({
   rubric: j(r.rubric, []),
   mode: (sn(r.mode) ?? "eval") as EvalDomain["mode"],
   scored_dataset_version: nn(r.scored_dataset_version),
+  run_id: sn(r.run_id),
+  run_step: nn(r.run_step),
   samples: n(r.samples),
   temperature: n(r.temperature),
   max_tokens: n(r.max_tokens),

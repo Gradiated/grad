@@ -3,6 +3,8 @@ import { costForTokens } from "../catalog.js";
 import { addDays } from "../clock.js";
 import {
   ArtifactFormatSchema,
+  PlanEvalRequestSchema,
+  type CheckpointEvalSpec,
   type Artifact,
   type ArtifactFormat,
   type Checkpoint,
@@ -28,6 +30,7 @@ import { conflict, forbidden, invalid, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
+import { assertNonEmptyPlan, planEvalRequest } from "./evals/planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
   ArtifactRecord,
@@ -126,7 +129,11 @@ export const toPublicRun = (run: RunRecord): Run => ({
   attempt: run.attempt,
   max_attempts: run.max_attempts,
   latest_metric: run.latest_metric,
-  eval_report: run.eval_report,
+  eval_report:
+    run.eval_report && run.checkpoint_evals.length > 0
+      ? { ...run.eval_report, checkpoint_evals: run.checkpoint_evals }
+      : run.eval_report,
+  checkpoint_evals: run.checkpoint_evals,
   artifact_id: run.artifact_id,
   error: run.error,
   created_at: run.created_at,
@@ -297,8 +304,80 @@ export const createRunLifecycle = (
       baseArtifact: baseArtifact && toPublicArtifact(baseArtifact),
       labeling,
     });
+    await planCheckpointEvals(workspaceId, request, plan);
+    if (request.recipe.loggers) {
+      plan.resolved_config.loggers = request.recipe.loggers;
+      plan.warnings.push(...(await loggerWarnings(workspaceId, request)));
+    }
 
     return { plan, dataset: resolved.dataset, labelRequest };
+  };
+
+  /**
+   * recipe.evals: pins each eval's dataset version and rubric into the
+   * resolved config (judges need an inference endpoint, code scorers can't
+   * run during training) and warns with the cost per checkpoint.
+   */
+  const planCheckpointEvals = async (
+    workspaceId: string,
+    request: PlanRunRequest,
+    plan: PlanRunResponse,
+  ): Promise<void> => {
+    const specs = request.recipe.evals;
+    if (!specs) return;
+
+    const names = specs.map((s) => s.name ?? s.dataset);
+    if (new Set(names).size !== names.length) {
+      throw invalid(
+        "duplicate_checkpoint_eval",
+        `recipe.evals names must be unique (got ${names.join(", ")}); pass name= to tell evals on the same dataset apart.`,
+      );
+    }
+    const pinned: CheckpointEvalSpec[] = [];
+    let costPerCheckpoint = 0;
+    for (const [i, spec] of specs.entries()) {
+      // Planned against the base model: the checkpoints share its price.
+      const evalPlan = await planEvalRequest(
+        deps,
+        datasets,
+        workspaceId,
+        PlanEvalRequestSchema.parse({
+          name: names[i],
+          models: [plan.resolved_config.model],
+          dataset: spec.dataset,
+          ...(spec.version !== undefined
+            ? { dataset_version: spec.version }
+            : {}),
+          ...(spec.rubric ? { rubric: spec.rubric } : {}),
+          ...(spec.limit !== undefined ? { limit: spec.limit } : {}),
+          samples: 1,
+          temperature: 0,
+        }),
+      );
+      if (evalPlan.localScorers.length > 0) {
+        throw invalid(
+          "checkpoint_eval_code_scorer",
+          `recipe.evals '${names[i]}' has code scorers (${evalPlan.localScorers.join(", ")}); evals during training take judges, regexes and validators. Run code scorers in an eval on run.artifact after training.`,
+        );
+      }
+      assertNonEmptyPlan(evalPlan);
+      pinned.push({
+        name: names[i] as string,
+        dataset: evalPlan.dataset.dataset.name,
+        dataset_version: evalPlan.dataset.version.version,
+        rubric: evalPlan.rubric,
+        limit: spec.limit ?? null,
+      });
+      costPerCheckpoint += evalPlan.response.estimated_cost_usd;
+    }
+    plan.resolved_config.checkpoint_evals = pinned;
+    const points = Math.max(
+      1,
+      Math.ceil(plan.estimated_steps / plan.resolved_config.eval_every_steps),
+    );
+    plan.warnings.push(
+      `recipe.evals run ${pinned.length} eval(s) on each checkpoint (about ${points}), estimated $${costPerCheckpoint.toFixed(4)} per checkpoint, billed as evals and not capped by max_cost_usd.`,
+    );
   };
 
   /** The run's training records: its pinned dataset version, or its labeling eval's answers. */
@@ -453,7 +532,60 @@ export const createRunLifecycle = (
             download_url: await uploads.downloadUrl(base.storage_key),
           }
         : null,
+      ...(run.resolved_config.loggers
+        ? { loggers: await resolveLoggers(run) }
+        : {}),
     };
+  };
+
+  /** The secret a logger names, or null when it can't be read (the plan warned). */
+  const loggerSecret = async (
+    workspaceId: string,
+    name: string,
+  ): Promise<string | null> => {
+    if (!deps.secrets) return null;
+    const sealed = await store.secrets.getSealed(workspaceId, name);
+
+    return sealed ? deps.secrets.open(workspaceId, name, sealed) : null;
+  };
+
+  /** recipe.loggers with their secrets as `api_key`, for the worker only. */
+  const resolveLoggers = async (
+    run: RunRecord,
+  ): Promise<Array<Record<string, unknown>>> => {
+    const out: Array<Record<string, unknown>> = [];
+    for (const { secret, ...logger } of run.resolved_config.loggers ?? []) {
+      if (secret === undefined) {
+        out.push(logger);
+        continue;
+      }
+      const key = await loggerSecret(run.workspace_id, secret);
+      if (key !== null) out.push({ ...logger, api_key: key });
+    }
+
+    return out;
+  };
+
+  /** Plan warnings for loggers whose secret this server can't read. */
+  const loggerWarnings = async (
+    workspaceId: string,
+    request: PlanRunRequest,
+  ): Promise<string[]> => {
+    const warnings: string[] = [];
+    for (const logger of request.recipe.loggers ?? []) {
+      if (logger.secret === undefined) continue;
+      if (!deps.secrets) {
+        warnings.push(
+          `Logger '${logger.kind}' needs secret '${logger.secret}', but workspace secrets are not configured (GRAD_SECRETS_KEY); the run trains without it.`,
+        );
+      } else if (!(await store.secrets.get(workspaceId, logger.secret))) {
+        warnings.push(
+          `Logger '${logger.kind}': no secret named '${logger.secret}' (store it with 'grad secrets set ${logger.secret}'); the run trains without it.`,
+        );
+      }
+    }
+
+    return warnings;
   };
 
   const handler: JobKindHandler = {
@@ -893,6 +1025,7 @@ export const createRunLifecycle = (
         await store.transaction((tx) =>
           usage.flush(tx, run, attemptUsage(run, run.attempt_tokens), true),
         );
+        await evals.evaluateCheckpoint(run, result.checkpoint);
       }
       // A retried registration is that checkpoint; other bytes are a conflict.
       if (!result.created && result.checkpoint.sha256 !== blob.sha256) {

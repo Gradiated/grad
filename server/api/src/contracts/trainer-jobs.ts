@@ -101,6 +101,10 @@ export const TrainerJobSchema = z
         download_url: z.string().min(1),
       })
       .nullable(),
+    loggers: z.array(z.record(z.string(), z.unknown())).optional().openapi({
+      description:
+        "Train jobs: the run's recipe.loggers with each workspace secret resolved to `api_key`. A logger whose secret is missing is left out (the plan warned).",
+    }),
     base: z
       .object({
         artifact_id: z.string().min(1),

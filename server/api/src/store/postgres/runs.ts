@@ -14,7 +14,12 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
     kind: "train",
     table: "grad_runs",
     types: {
-      json: new Set(["latest_metric", "eval_report", "resolved_config"]),
+      json: new Set([
+        "latest_metric",
+        "eval_report",
+        "resolved_config",
+        "checkpoint_evals",
+      ]),
       timestamps: new Set(),
     },
     map: (row) => ({ ...toJob(row), ...toRunDomain(row) }),
@@ -25,6 +30,19 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
     getById: repo.getById,
     list: repo.list,
     update: repo.update,
+    appendCheckpointEval: async (id, result) => {
+      await db.query(
+        `UPDATE grad_runs SET checkpoint_evals = checkpoint_evals || $2::jsonb
+         WHERE id = $1 AND NOT checkpoint_evals @> $3::jsonb`,
+        [
+          id,
+          JSON.stringify([result]),
+          JSON.stringify([
+            { eval_id: result.eval_id, step: result.step, name: result.name },
+          ]),
+        ],
+      );
+    },
     create: (input) =>
       repo.insert(
         {

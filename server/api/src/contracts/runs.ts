@@ -138,6 +138,71 @@ export const PoolingSpecSchema = z
   .strict()
   .openapi("PoolingSpec");
 
+export const MAX_CHECKPOINT_EVALS = 4;
+
+export const RecipeEvalSchema = z
+  .object({
+    dataset: SlugSchema,
+    version: z.number().int().min(1).optional().openapi({
+      description:
+        "Dataset version (default: the current one, pinned at plan time).",
+    }),
+    rubric: z.array(EvalRubricItemSchema).min(1).max(32).optional().openapi({
+      description:
+        "Judges, regexes and validators (default: the dataset's own rubric, such as a benchmark's answer check). Code scorers can't run during training.",
+    }),
+    limit: z.number().int().min(1).max(100_000).optional().openapi({
+      description: "Evaluate the first N tasks at each checkpoint.",
+    }),
+    name: SlugSchema.optional().openapi({
+      description:
+        "Name of this eval in the report (default: the dataset name).",
+    }),
+  })
+  .strict()
+  .openapi("RecipeEval");
+
+export type RecipeEval = z.infer<typeof RecipeEvalSchema>;
+
+const LoggerCommon = {
+  run_name: z.string().min(1).max(128).optional().openapi({
+    description: "Tracker run name (default: the grad run name).",
+  }),
+};
+
+export const LoggerSpecSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z.literal("wandb"),
+        project: z.string().min(1).max(128),
+        entity: z.string().min(1).max(128).optional(),
+        host: z.string().url().optional().openapi({
+          description: "W&B server (default https://api.wandb.ai).",
+        }),
+        secret: SlugSchema.openapi({
+          description: "Workspace secret holding the W&B API key.",
+        }),
+        ...LoggerCommon,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("mlflow"),
+        tracking_uri: z.string().url(),
+        experiment: z.string().min(1).max(256).optional(),
+        secret: SlugSchema.optional().openapi({
+          description:
+            "Workspace secret holding a bearer token for the tracking server, if it needs one.",
+        }),
+        ...LoggerCommon,
+      })
+      .strict(),
+  ])
+  .openapi("LoggerSpec");
+
+export type LoggerSpec = z.infer<typeof LoggerSpecSchema>;
+
 export const RecipeSpecSchema = z
   .object({
     kind: RecipeKindSchema,
@@ -203,6 +268,19 @@ export const RecipeSpecSchema = z
     slot_token: z.string().min(1).max(64).optional().openapi({
       description:
         "CartridgeRecipe: a reserved token that marks where the cartridge goes (default: the first reserved token that tokenizes atomically).",
+    }),
+    evals: z
+      .array(RecipeEvalSchema)
+      .min(1)
+      .max(MAX_CHECKPOINT_EVALS)
+      .optional()
+      .openapi({
+        description:
+          "Extra evals on each checkpoint during training (the eval executor, billed like any eval). Results are in run.checkpoint_evals, the run's checkpoint_eval events and eval_report.checkpoint_evals.",
+      }),
+    loggers: z.array(LoggerSpecSchema).min(1).max(4).optional().openapi({
+      description:
+        "Experiment trackers that receive the run's metrics. A tracker that fails is reported and dropped; it never fails the run.",
     }),
   })
   .strict()
@@ -282,8 +360,28 @@ export const ResolvedRunConfigSchema = z
         "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).",
     }),
     recipe_params: z.record(z.string(), z.unknown()),
+    checkpoint_evals: z
+      .array(
+        z.object({
+          name: SlugSchema,
+          dataset: SlugSchema,
+          dataset_version: z.number().int().min(1),
+          rubric: z.array(EvalRubricItemSchema),
+          limit: z.number().int().min(1).nullable(),
+        }),
+      )
+      .optional()
+      .openapi({
+        description:
+          "recipe.evals, with the dataset version and rubric pinned.",
+      }),
+    loggers: z.array(LoggerSpecSchema).optional(),
   })
   .openapi("ResolvedRunConfig");
+
+export type CheckpointEvalSpec = NonNullable<
+  ResolvedRunConfig["checkpoint_evals"]
+>[number];
 
 export type ResolvedRunConfig = z.infer<typeof ResolvedRunConfigSchema>;
 
@@ -390,6 +488,26 @@ export const MetricPointSchema = z
 
 export type MetricPoint = z.infer<typeof MetricPointSchema>;
 
+export const CheckpointEvalResultSchema = z
+  .object({
+    name: z.string(),
+    step: z.number().int().min(0),
+    checkpoint_id: z.string(),
+    eval_id: z.string().nullable(),
+    dataset: SlugSchema,
+    dataset_version: z.number().int().min(1),
+    status: z.enum(["completed", "failed", "cancelled"]),
+    score: z.number().nullable().openapi({
+      description:
+        "The checkpoint's overall rubric score (null unless completed).",
+    }),
+    cost_usd: z.number().min(0),
+    error: z.string().nullable(),
+  })
+  .openapi("CheckpointEvalResult");
+
+export type CheckpointEvalResult = z.infer<typeof CheckpointEvalResultSchema>;
+
 export const RunSchema = z
   .object({
     id: z.string().min(1),
@@ -411,6 +529,10 @@ export const RunSchema = z
     max_attempts: z.number().int().min(1),
     latest_metric: MetricPointSchema.nullable(),
     eval_report: EvalReportSchema.nullable(),
+    checkpoint_evals: z.array(CheckpointEvalResultSchema).openapi({
+      description:
+        "recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.",
+    }),
     artifact_id: z.string().nullable(),
     error: z.string().nullable(),
     created_at: IsoTimestampSchema,

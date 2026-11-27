@@ -211,6 +211,7 @@ export const planEvalRequest = async (
   workspaceId: string,
   request: PlanEvalRequest,
   mode: EvalMode = "eval",
+  fixedTargets?: ModelTargets,
 ): Promise<ResolvedEvalPlan> => {
   const scoring = mode === "score";
   if (deps.inference === null && !scoring) {
@@ -240,7 +241,8 @@ export const planEvalRequest = async (
           price_per_million_tokens: 0,
         },
       }
-    : await resolveModelTargets(deps, workspaceId, request.models);
+    : (fixedTargets ??
+      (await resolveModelTargets(deps, workspaceId, request.models)));
   const records = await datasets.readRecords(dataset.version);
   const built = buildTasks(records, request.limit, scoring ? names : null);
   const { tasks } = built;
