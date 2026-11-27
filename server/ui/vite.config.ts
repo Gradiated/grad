@@ -25,6 +25,7 @@ export default defineConfig({
   test: {
     environment: "happy-dom",
     include: ["test/**/*.test.{ts,tsx}"],
+    exclude: ["test/live/**", "node_modules/**"],
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],

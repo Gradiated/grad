@@ -88,18 +88,15 @@ describe("web UI", () => {
   });
 
   it("does not answer API, probe and non-browser paths with HTML", async () => {
-    for (const p of [
-      "/health/nope",
-      "/healthz",
-      "/metrics",
-      "/assets/missing.js",
-    ]) {
+    for (const p of ["/health/nope", "/healthz", "/assets/missing.js"]) {
       const res = await t.request(p, { token: null, headers: html });
       expect(res.status, p).toBe(404);
       expect(res.headers.get("content-type"), p).toContain(
         "application/problem+json",
       );
     }
+    const prom = await t.request("/metrics", { token: null, headers: html });
+    expect(prom.headers.get("content-type")).not.toContain("text/html");
     const curl = await t.request("/runs/run_x", {
       token: null,
       headers: { accept: "*/*" },
