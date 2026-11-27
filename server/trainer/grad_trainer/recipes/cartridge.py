@@ -57,11 +57,6 @@ class CartridgeTask(TorchTask):
         params = spec.params
         self.context = params.get("context_text")
         if not isinstance(self.context, str) or not self.context.strip():
-            if params.get("context_uri"):
-                raise RecipeConfigError(
-                    "CartridgeRecipe got context_uri but no context_text; the server must resolve the "
-                    "URI and pass the text (the trainer does not fetch URIs)."
-                )
             raise RecipeConfigError("CartridgeRecipe needs a non-empty context.")
         self.num_tokens = int(spec.adapter.get("num_tokens", params.get("num_tokens", 256)))
         self.separator = str(params.get("separator", DEFAULT_SEPARATOR))

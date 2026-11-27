@@ -252,14 +252,16 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(srv.bodies("uploads"), [])
 
     def test_budget_stop_maps_to_stopped_budget_and_uploads(self) -> None:
-        srv = self.server(
-            jobs=[train_job()],
-            progress_reply=lambda n: {"should_stop": n >= 0, "stop_reason": "budget"},
-        )
-        self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
-        complete = srv.bodies("complete")[0]
-        self.assertEqual(complete["status"], "stopped_budget")
-        self.assertIn("upload_id", complete)
+        for reason in ("budget", "insufficient_balance"):
+            with self.subTest(reason):
+                srv = self.server(
+                    jobs=[train_job()],
+                    progress_reply=lambda n, r=reason: {"should_stop": n >= 0, "stop_reason": r},
+                )
+                self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
+                complete = srv.bodies("complete")[0]
+                self.assertEqual(complete["status"], "stopped_budget")
+                self.assertIn("upload_id", complete)
 
     def test_heartbeat_should_stop_cancels(self) -> None:
         srv = self.server(

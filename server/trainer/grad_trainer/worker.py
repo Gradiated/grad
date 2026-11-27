@@ -665,7 +665,8 @@ class TrainerWorker:
         status = str(output.status)
         if status == "cancelled" and state.stop_reason == "shutdown":
             status = "abandoned"
-        elif status == "cancelled" and state.stop_reason == "budget":
+        elif status == "cancelled" and state.stop_reason in ("budget", "insufficient_balance"):
+            # Out of workspace balance completes like the run's own cap: resumable.
             status = "stopped_budget"
 
         if status in ("cancelled", "abandoned", "failed"):

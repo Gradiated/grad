@@ -82,7 +82,6 @@ class CartridgeTests(TorchCase):
     def test_config_errors(self) -> None:
         params = CARTRIDGE["recipe_params"]
         cases = [
-            ({"recipe_params": {"context_uri": "s3://b/k"}}, "context_uri"),
             ({"recipe_params": {}}, "non-empty context"),
             ({"recipe_params": {**params, "teacher": BERT_ID}}, "causal_lm model"),
             ({"adapter": {"kind": "prefix_kv", "num_tokens": 4096}}, "context length"),
