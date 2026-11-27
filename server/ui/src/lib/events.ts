@@ -143,7 +143,7 @@ export const PHASE_LABEL: Record<RunPhase, string> = {
 
 export const REASON_LABEL: Record<string, string> = {
   lease_lost: "worker lost",
-  preempted: "preempted",
+  preempted: "compute reclaimed",
   worker_error: "worker error",
   oom: "out of memory",
 };

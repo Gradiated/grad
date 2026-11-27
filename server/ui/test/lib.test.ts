@@ -205,7 +205,7 @@ describe("run events", () => {
       "Starting",
       "Training",
       "Checkpoint at step 10",
-      "Attempt 1 interrupted (preempted)",
+      "Attempt 1 interrupted (compute reclaimed)",
       "Attempt 2 resumed from step 10",
       "Training",
       "Warning",

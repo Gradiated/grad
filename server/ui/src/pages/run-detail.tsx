@@ -177,7 +177,7 @@ const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; s
               {int(run.currentStep)}
               <span className="faint"> / {int(run.totalSteps)}</span>
             </span>
-            <span title="Attempts started; preemptions don't count toward the failure cap.">
+            <span title="Attempts started; attempts whose compute was reclaimed don't count toward the failure cap.">
               <span className="muted">Attempt </span>
               {Math.max(run.attempt, 1)}
               <span className="faint"> / {run.maxAttempts}</span>
