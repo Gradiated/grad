@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""Run the Python and CLI code blocks of the v0 training docs against a live local stack.
+
+    python3 scripts/check-docs-snippets.py --docs ../workspace/product/website/src/docs/training
+    python3 scripts/check-docs-snippets.py --docs DOCS --cloud      # deploy/route/embed blocks
+    python3 scripts/check-docs-snippets.py --docs DOCS --list       # show blocks, run nothing
+
+It starts tests/harness/stack.ts (reference worker; with --cloud the fake Cloud API and
+the torch worker, since reference artifacts can't be deployed), extracts every ```python
+and ```bash block from the v0 pages, and runs each one in a scratch directory with
+GRADIATED_BASE_URL/GRADIATED_API_KEY pointing at the stack. Placeholders are filled from
+the fixture maps below (files, seed datasets and artifacts, model and host rewrites).
+Blocks that can't run self-contained are listed in SKIP with a reason. Stdlib + the
+Python SDK only (PYTHONPATH=sdks/python is set for the blocks).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+API_DIR = REPO / "server" / "api"
+sys.path.insert(0, str(REPO / "sdks" / "python"))
+
+# Pages describing Wave 2 features: not run.
+WAVE2 = {
+    "environments.mdx", "custom-loops.mdx", "advanced-objectives.mdx", "recipes/distillation.mdx",
+    "recipes/reward-models.mdx", "recipes/rl-agents.mdx", "recipes/traces-to-environments.mdx",
+}
+
+# (page, text in the block, reason). The first match wins.
+SKIP = [
+    ("", "pip install", "installs a package"),
+    ("", "npm install", "installs a package"),
+    ("", "go get ", "installs a package"),
+    ("", "cargo add", "installs a package"),
+    ("", "cargo install", "installs the CLI"),
+    ("", "from openai import", "needs the openai package and the Gradiated inference gateway"),
+    ("", "/v1/chat/completions", "Gradiated inference gateway, not grad-server"),
+    ("", "/v1/systemone", "Gradiated inference gateway, not grad-server"),
+    ("", "typesafe_sdk", "needs the SystemOne SDK and the Gradiated inference gateway"),
+    ("", "vllm serve", "needs a GPU and vLLM"),
+    ("", "sglang.launch_server", "needs a GPU and SGLang"),
+    ("", "from_hf(", "needs network access to Hugging Face"),
+    ("", "import hf ", "needs network access to Hugging Face"),
+    ("", "grad local up", "starts Docker Compose (the harness is already a local stack)"),
+    ("", "helm upgrade", "needs a Kubernetes cluster"),
+    ("", "kubectl ", "needs a Kubernetes cluster"),
+    ("", "sources.", "grad sources/secrets ship later in v0"),
+    ("", "grad sources", "grad sources/secrets ship later in v0"),
+    ("integrations/", "datasets.records", "reads a dataset a source synced"),
+    ("", "langfuse.create_score", "Langfuse SDK and account"),
+    ("", "grad secrets", "grad sources/secrets ship later in v0"),
+    ("", "from langfuse", "Langfuse SDK and account"),
+    ("", "/api/public/scores", "Langfuse API and account"),
+    ("", "from langsmith", "LangSmith SDK and account"),
+    ("", "from phoenix", "Phoenix SDK and server"),
+    ("", "opentelemetry", "Phoenix SDK and server"),
+    ("", "from posthog", "PostHog SDK and project"),
+    ("", "posthog.capture", "PostHog SDK and project"),
+    ("", "--follow", "streams until the run ends; covered by `grad train --wait`"),
+    ("self-hosting.mdx", "GRADIATED_PROFILE=local", "uses the profile `grad local up` writes"),
+    ("recipes/decision-model.mdx", "deploy", "a deployable decision model needs a linden-1 or Qwen3-0.6B backbone; the harness has no tiny one"),
+]
+
+# Blocks that need hosted serving (deploy, route, embeddings) or a real adapter (continued training,
+# evaluating an artifact; reference-worker artifacts can't be served): only run with --cloud.
+CLOUD = re.compile(
+    r"\.deploy\(|grad deploy|grad route|grad embed|client\.route\(|deployments\.|embeddings\.create|grad deployments"
+    r"|model=\w+\.artifact|model=sft_art|--model [\w-]+@|models=\[[^\]]*@|--models \S*@"
+)
+
+MODELS = {"{{SONNET_MODEL}}": "anthropic/claude-sonnet-5-5", "{{OPUS_MODEL}}": "anthropic/claude-opus-5-5", "{{GPT_MODEL}}": "openai/gpt-6.1-sol"}
+# --cloud trains real (tiny) adapters with the torch worker, so catalog models map to the harness's tiny ones.
+TINY = {"baai/bge-small-en-v1.5": "test/tiny-bert", "gradiated/linden-1": "test/tiny-qwen3"}
+# ... including the recipes' default models, for blocks that don't pass `model=`.
+TINY_DEFAULTS = """
+import grad.recipes as _r
+for _name, _model in {"SFTRecipe": "test/tiny-qwen3", "DPORecipe": "test/tiny-qwen3", "RouterRecipe": "test/tiny-qwen3",
+                      "DecisionModelRecipe": "test/tiny-qwen3", "CartridgeRecipe": "test/tiny-qwen3", "EmbeddingRecipe": "test/tiny-bert"}.items():
+    _cls = getattr(_r, _name)
+    def _init(self, *a, _orig=_cls.__init__, _model=_model, **k):
+        _orig(self, *a, **k)
+        if self.model is None:
+            self.model = _model
+    _cls.__init__ = _init
+"""
+HOSTS = ("https://api.gradiated.com", "https://grad.internal.example")
+
+CHAT = [
+    {"session_id": f"s{i}", "messages": [{"role": "user", "content": f"Count active users from day {i}."},
+                                         {"role": "assistant", "content": f"SELECT count(*) FROM users WHERE day = {i};"}],
+     "scores": {"resolved": 1.0 if i % 3 else 0.5, "tests_passed": 1.0 if i % 3 else 0.0}}
+    for i in range(24)
+]
+ROUTER = [
+    {"session_id": f"s{i}", "messages": [{"role": "user", "content": f"{'hard SQL join' if i % 2 else 'say hello'} {i}"}],
+     "scores": {"qwen/qwen3-8b": 0.0 if i % 2 else 1.0, "qwen/qwen3-32b": 1.0}, "metrics": {"cost_usd": 0.001}}
+    for i in range(40)
+]
+DPO = [{"prompt": f"Fix ticket {i}", "chosen": f"Sure, ticket {i} is fixed.", "rejected": "No."} for i in range(24)]
+_Q = {"category": {"type": "choice", "instructions": "Choose the department.", "criteria": {"billing": "Charges", "other": "Else"}},
+      "urgent": {"type": "noul", "instructions": "Is it urgent?"}}
+DECISION = [{"state": {"ticket": f"ticket {i}"}, "questions": _Q, "expected_output": {"category": "billing" if i % 2 else "other", "urgent": float(i % 2)}}
+            for i in range(24)]
+TRIPLETS = [{"query": f"how do I do thing {i}?", "positive": f"Do thing {i} in Settings.", "negatives": [f"Thing {i + 1} is elsewhere."]} for i in range(24)]
+OTEL = [
+    {"trace_id": f"t{i}", "attributes": {"gen_ai.request.model": "qwen/qwen3-8b", "gen_ai.prompt.0.role": "user", "gen_ai.prompt.0.content": f"Where is invoice {i}?",
+                                        "gen_ai.completion.0.role": "assistant", "gen_ai.completion.0.content": f"Invoice {i} is in Billing."}}
+    for i in range(12)
+]
+PROMPTS = [{"messages": [{"role": "user", "content": f"What does endpoint {i} return?"}]} for i in range(12)]
+
+def _jsonl(rows: list[dict]) -> str:
+    return "".join(json.dumps(r) + "\n" for r in rows)
+
+# Files the blocks read, created in the scratch directory.
+FILES = {
+    "support_traces.jsonl": _jsonl(ROUTER), "train.jsonl": _jsonl(CHAT), "traces.jsonl": _jsonl(ROUTER),
+    "api-docs-bundle.md": "# API docs\n\nGET /v1/users returns the users.\n" * 20,
+    "context.md": "# Context\n\nThe refund window is 30 days.\n" * 20,
+    # Writing Parquet needs pyarrow, so `traces.parquet` is rewritten to the same OTel rows as JSONL.
+    "traces.otel.jsonl": _jsonl(OTEL),
+}
+ALIASES = {"traces.parquet": "traces.otel.jsonl", "grad_...": "$GRADIATED_API_KEY"}
+
+# Seed datasets (created on first use when a block reads them).
+DATASETS = {
+    **{n: CHAT for n in ("support-sft", "support-gold", "diff-merge-prod", "diff-merge-gold", "diff-merge-clean", "my-sft",
+                         "sql-eval-holdout", "sql-staging-sample", "sql-sft", "eval", "clean")},
+    **{n: ROUTER for n in ("support-prod", "support-traces")},
+    **{n: DPO for n in ("support-preferences", "diff-merge-preferences", "prefs")},
+    "ticket-triage": DECISION, "docs-retrieval-triplets": TRIPLETS, "api-docs-qa-prompts": PROMPTS, "api-docs-corpus": PROMPTS,
+}
+# Seed artifacts: name -> (recipe, dataset), trained on first use.
+ARTIFACTS = {
+    "fast-diff-merge": ("sft", "diff-merge-gold"), "sql-agent": ("sft", "sql-eval-holdout"),
+    "support-responder-sft": ("sft", "support-gold"), "support-router": ("router", "support-prod"),
+    "ticket-triage": ("decision-model", "ticket-triage"), "docs-embedder": ("embedding", "docs-retrieval-triplets"),
+    "api-docs-cartridge": ("cartridge", "api-docs-qa-prompts"),
+}
+DATASET_REFS = re.compile(r"""datasets\.get\(["']([a-z0-9._-]+)|--dataset[ =]([a-z0-9._-]+)|^\s*dataset: ([a-z0-9._-]+)|grad render ([a-z0-9._-]+)|/v1/datasets/([a-z0-9._-]+)/""", re.M)
+ARTIFACT_REFS = re.compile(r"\b([a-z0-9][a-z0-9-]*)@(?:latest|20\d\d-\d\d-\d\d-\d+)")
+DATED_REFS = re.compile(r"\b([a-z0-9][a-z0-9-]*)@(20\d\d-\d\d-\d\d-\d+)")
+RUN_IDS = re.compile(r"\brun_01[0-9A-Z]+\b")
+KEY_IDS = re.compile(r"\bkey_[0-9a-f]{16,}\b")
+
+
+def blocks(docs: Path) -> list[dict]:
+    """Every python/bash block of the v0 pages, in page order."""
+    out = []
+    for path in sorted(docs.rglob("*.mdx")):
+        page = path.relative_to(docs).as_posix()
+        if page in WAVE2:
+            continue
+        lines = path.read_text().split("\n")
+        i = 0
+        while i < len(lines):
+            m = re.match(r"^```(python|bash|sh|shell|yaml)\s*$", lines[i])
+            if m:
+                j = next(k for k in range(i + 1, len(lines)) if lines[k].startswith("```"))
+                code = "\n".join(lines[i + 1 : j]) + "\n"
+                if m.group(1) == "yaml":  # a `# name.yaml` block is a file the next blocks read
+                    name = re.match(r"# ([\w.-]+\.ya?ml)\n", code)
+                    if name:
+                        out.append({"page": page, "line": i + 1, "lang": "file", "name": name.group(1), "code": code})
+                    i = j + 1
+                    continue
+                lang = "python" if m.group(1) == "python" else "bash"
+                skip = next((r for p, text, r in SKIP if page.startswith(p) and text in code), None)
+                out.append({"page": page, "line": i + 1, "lang": lang, "code": code, "skip": skip, "cloud": bool(CLOUD.search(code))})
+                i = j
+            i += 1
+    return out
+
+
+class Stack:
+    """tests/harness/stack.ts, stopped by closing its stdin."""
+
+    def __init__(self, cloud: bool, worker: str, log: Path) -> None:
+        args = [str(API_DIR / "node_modules" / ".bin" / "tsx"), "../../tests/harness/stack.ts", "--worker", worker] + (["--cloud"] if cloud else [])
+        self.log = open(log, "wb")
+        self.proc = subprocess.Popen(args, cwd=API_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log)
+        buf, deadline = b"", time.monotonic() + 300
+        while b"\n" not in buf:
+            if self.proc.poll() is not None or time.monotonic() > deadline:
+                raise SystemExit(f"stack did not start; see {log}")
+            if select.select([self.proc.stdout], [], [], 0.5)[0]:
+                buf += os.read(self.proc.stdout.fileno(), 65536)
+        self.info = json.loads(buf.split(b"\n", 1)[0])
+
+    def close(self) -> None:
+        self.proc.stdin.close()
+        try:
+            self.proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.log.close()
+
+
+class Runner:
+    def __init__(self, base_url: str, api_key: str, cloud: bool, grad_bin: str, work: Path, timeout: int) -> None:
+        from grad import Grad
+
+        self.client = Grad(api_key=api_key, base_url=base_url)
+        self.base_url, self.cloud, self.work, self.timeout = base_url, cloud, work, timeout
+        self.run_id: str | None = None
+        bindir = str(Path(grad_bin).resolve().parent)
+        self.env = {
+            **os.environ, "GRADIATED_BASE_URL": base_url, "GRADIATED_API_KEY": api_key, "XDG_CONFIG_HOME": str(work / ".config"),
+            "PYTHONPATH": str(REPO / "sdks" / "python"), "MY_ADMIN_KEY": api_key, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+        }
+        for name, text in FILES.items():
+            (work / name).write_text(text)
+
+    def model(self, model: str) -> str:
+        if not self.cloud:
+            return model
+        return TINY.get(model, "test/tiny-qwen3" if model.startswith("qwen/") else model)
+
+    def rewrite(self, code: str, n: int) -> str:
+        for k, v in MODELS.items():
+            code = code.replace(k, v)
+        for host in HOSTS:
+            code = code.replace(host, self.base_url)
+        for k, v in ALIASES.items():
+            code = code.replace(k, v)
+        for name in {m[0] for m in DATED_REFS.findall(code)}:  # the k-th oldest dated ref -> the k-th oldest seed version
+            dated = sorted({v for nm, v in DATED_REFS.findall(code) if nm == name})
+            refs = self.versions(name) if name in ARTIFACTS else []
+            for v, ref in zip(dated, refs):
+                code = re.sub(rf"\b{re.escape(name)}@{v}\b", ref, code)
+        code = re.sub(r"(@)20\d\d-\d\d-\d\d-\d+", r"\1latest", code)
+        if self.run_id:
+            code = RUN_IDS.sub(self.run_id, code)
+        if KEY_IDS.search(code):  # a placeholder key id: revoke a fresh key instead
+            code = KEY_IDS.sub(self.client.keys.create(name=f"docs-key-{n}", scopes=["artifacts:read"]).key.id, code)
+        if self.cloud:  # the model a recipe trains becomes a tiny one; router/eval candidates stay catalog models
+            code = re.sub(r"""((?:\bmodel=|\bmodel: |--model )["']?)(qwen/qwen3-[0-9.]+b|baai/bge-small-en-v1\.5|gradiated/linden-1)""",
+                          lambda m: m.group(1) + self.model(m.group(2)), code)
+            code = re.sub(r"^(grad train (?!.*(?:--model|-f )).*?)( --wait| --dry-run|$)",
+                          lambda m: f"{m.group(1)} --model {'test/tiny-bert' if '--recipe embedding' in m.group(1) else 'test/tiny-qwen3'}{m.group(2)}",
+                          code, flags=re.M)
+        # A block that creates a dataset gets a fresh name so it never collides with an earlier block.
+        for name in set(re.findall(r"""datasets\.create\(["']([a-z0-9._-]+)""", code)):
+            code = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", f"{name}-b{n}", code)
+        return code
+
+    def dataset(self, name: str) -> None:
+        from grad import NotFoundError
+
+        try:
+            self.client.datasets.get(name)
+        except NotFoundError:
+            if name in DATASETS:
+                self.client.datasets.push(name, DATASETS[name])
+
+    def versions(self, name: str) -> list[str]:
+        return [a.ref for a in self.client.artifacts.list(name=name, limit=50).data][::-1]  # oldest first
+
+    def artifact(self, name: str, count: int = 1) -> None:
+        from grad import recipes as r
+
+        if len(self.versions(name)) >= count:
+            return
+        kind, ds = ARTIFACTS[name]
+        self.dataset(ds)
+        recipe = {
+            "sft": lambda: r.SFTRecipe(model=self.model("qwen/qwen3-8b")),
+            "router": lambda: r.RouterRecipe(model=self.model("qwen/qwen3-0.6b")),
+            "decision-model": lambda: r.DecisionModelRecipe(model=self.model("gradiated/linden-1")),
+            "embedding": lambda: r.EmbeddingRecipe(model=self.model("baai/bge-small-en-v1.5")),
+            "cartridge": lambda: r.CartridgeRecipe(model=self.model("qwen/qwen3-8b"), context=__import__("grad").Context.from_text(FILES["context.md"])),
+        }[kind]()
+        run = self.client.runs.create(dataset=ds, name=name, recipe=recipe).wait(timeout=900)
+        self.run_id = self.run_id or run.id
+        self.artifact(name, count)
+
+    def seed(self, code: str) -> None:
+        for m in DATASET_REFS.finditer(code):
+            self.dataset(next(g for g in m.groups() if g))
+        for name in set(ARTIFACT_REFS.findall(code)):
+            if name in ARTIFACTS and not re.search(rf"""name=["']{name}["']|--name {name}\b|^name: {name}$""", code, re.M):
+                self.artifact(name, max(1, len({v for nm, v in DATED_REFS.findall(code) if nm == name})))
+        if RUN_IDS.search(code) and not self.run_id:
+            self.artifact("fast-diff-merge")
+
+    def run(self, block: dict, n: int) -> tuple[bool, str]:
+        self.seed(block["code"])
+        code = self.rewrite(block["code"], n)
+        if block["lang"] == "python":
+            if "client." in code and "client = " not in code:
+                code = "from grad import Grad\nclient = Grad()\n" + code
+            if self.cloud:
+                code = TINY_DEFAULTS + code
+            cmd = [sys.executable, "-c", code]
+        else:
+            code = re.sub(r"^grad login$", 'grad login --api-key "$GRADIATED_API_KEY"', code, flags=re.M)
+            cmd = ["bash", "-euo", "pipefail", "-c", code]
+        try:
+            p = subprocess.run(cmd, cwd=self.work, env=self.env, capture_output=True, text=True, timeout=self.timeout, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return False, f"timed out after {self.timeout}s"
+        return p.returncode == 0, (p.stderr or p.stdout).strip()[-1500:]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--docs", required=True, type=Path, help="product/website/src/docs/training in the docs repo")
+    ap.add_argument("--cloud", action="store_true", help="run the deploy/route/embed blocks (fake Cloud API, torch worker)")
+    ap.add_argument("--base-url", help="use a running stack instead of starting one (with --api-key)")
+    ap.add_argument("--api-key", default="")
+    ap.add_argument("--grad-bin", default=shutil.which("grad") or str(Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target")) / "debug" / "grad"))
+    ap.add_argument("--only", help="run only pages whose path contains this")
+    ap.add_argument("--timeout", type=int, default=900, help="seconds per block")
+    ap.add_argument("--list", action="store_true", help="list the blocks and exit")
+    args = ap.parse_args()
+
+    found = [b for b in blocks(args.docs) if not args.only or args.only in b["page"]]
+    if args.list:
+        for b in found:
+            if b["lang"] == "file":
+                continue
+            tag = f"skip: {b['skip']}" if b["skip"] else ("cloud" if b["cloud"] else "run")
+            print(f"{b['page']}:{b['line']} {b['lang']} [{tag}]")
+        return 0
+    if not Path(args.grad_bin).exists():
+        raise SystemExit(f"grad binary not found at {args.grad_bin} (build it with `cargo build -p grad-cli` or pass --grad-bin)")
+
+    work = Path(tempfile.mkdtemp(prefix="grad-docs-"))
+    stack = None
+    if not args.base_url:
+        worker = "torch" if args.cloud else "reference"
+        stack = Stack(args.cloud, worker, work / "stack.log")
+        args.base_url, args.api_key = stack.info["base_url"], stack.info["api_key"]
+    results = {"pass": 0, "fail": 0, "skip": 0}
+    try:
+        runner = Runner(args.base_url, args.api_key, args.cloud, args.grad_bin, work, args.timeout)
+        for n, b in enumerate(found):
+            if b["lang"] == "file":
+                (work / b["name"]).write_text(runner.rewrite(b["code"], n))
+                continue
+            where = f"{b['page']}:{b['line']} ({b['lang']})"
+            reason = b["skip"] or (None if b["cloud"] == args.cloud else ("needs --cloud" if b["cloud"] else "runs without --cloud"))
+            if reason:
+                results["skip"] += 1
+                print(f"SKIP {where}: {reason}", flush=True)
+                continue
+            try:
+                ok, out = runner.run(b, n)
+            except Exception as exc:  # a seed failure is a failure of this block
+                ok, out = False, f"fixture setup failed: {exc!r}"
+            results["pass" if ok else "fail"] += 1
+            print(f"{'PASS' if ok else 'FAIL'} {where}", flush=True)
+            if not ok:
+                print("  " + out.replace("\n", "\n  "), flush=True)
+    finally:
+        if stack:
+            stack.close()
+        if results["fail"]:
+            print(f"scratch directory and stack log kept in {work}")
+        else:
+            shutil.rmtree(work, ignore_errors=True)
+    print(f"\n{results['pass']} passed, {results['fail']} failed, {results['skip']} skipped")
+    return 1 if results["fail"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
