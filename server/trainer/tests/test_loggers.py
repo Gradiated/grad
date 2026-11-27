@@ -12,6 +12,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fixtures"))
 
@@ -74,7 +75,16 @@ WANDB_REPLIES = {
 RUN = {"id": "run_1", "name": "sft-x", "config": {"lr": 0.0002, "adapter": {"rank": 16}, "tags": ["a"]}}
 
 
+# The fake trackers listen on loopback, which the egress guard allows only when listed.
+LOOPBACK_ALLOWED = {"GRAD_SOURCES_EGRESS_ALLOW": "127.0.0.1/32"}
+
+
 class LoggerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ, LOOPBACK_ALLOWED)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def tracker(self, replies: dict[str, tuple[int, Any]]) -> FakeTracker:
         fake = FakeTracker(replies)
         self.addCleanup(fake.close)
@@ -145,7 +155,70 @@ class LoggerTests(unittest.TestCase):
         self.assertFalse(any("secret-value" in w for w in warnings))
 
 
+class LoggerEgressTests(unittest.TestCase):
+    """r8 P1-7: tracker hosts go through the source egress guard."""
+
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ, {"GRAD_SOURCES_EGRESS_ALLOW": ""})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_private_hosts_other_schemes_and_cross_origin_redirects_are_refused(self) -> None:
+        internal = FakeTracker(MLFLOW_REPLIES)
+        self.addCleanup(internal.close)
+        # Loopback is not allowed by default: the tracker never sees the key.
+        warnings: list[str] = []
+        loggers.Loggers([{"kind": "mlflow", "tracking_uri": internal.url, "api_key": "TENANT-TOKEN"}], RUN, warnings.append)
+        self.assertEqual(internal.requests, [])
+        self.assertTrue(any("blocked address" in w for w in warnings), warnings)
+        for uri in ("file:///etc/hostname#", "gopher://x.example", "http://169.254.169.254"):
+            warnings = []
+            loggers.Loggers([{"kind": "mlflow", "tracking_uri": uri}], RUN, warnings.append)
+            self.assertTrue(warnings and "disabled: could not start" in warnings[0], (uri, warnings))
+
+        # An allowed front host that redirects elsewhere: the key is not forwarded.
+        with mock.patch.dict(os.environ, {"GRAD_SOURCES_EGRESS_ALLOW": "127.0.0.0/8"}):
+            redirect = _Redirector(internal.url)
+            self.addCleanup(redirect.close)
+            loggers.Loggers(
+                [{"kind": "mlflow", "tracking_uri": redirect.url, "api_key": "TENANT-TOKEN"}], RUN, lambda _m: None
+            )
+        self.assertTrue(internal.requests)
+        self.assertFalse(any(h.get("Authorization") for _m, _p, h, _b in internal.requests))
+
+
+class _Redirector:
+    """Redirects every request to ``target`` (another origin)."""
+
+    def __init__(self, target: str) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args: Any) -> None:
+                return
+
+            def _go(self) -> None:
+                self.send_response(307)
+                self.send_header("Location", target + self.path)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_GET = _go
+            do_POST = _go
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.2", 0), Handler)
+        self.url = f"http://127.0.0.2:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
 class WorkerLoggerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ, LOOPBACK_ALLOWED)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_worker_streams_metrics_and_finishes_with_the_run_status(self) -> None:
         fake = FakeTracker(MLFLOW_REPLIES)
         self.addCleanup(fake.close)

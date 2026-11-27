@@ -7,6 +7,16 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+### Security
+
+- The trainer image installs from hash-pinned locks resolved from PyPI only (CPU torch is
+  pinned to its one wheel on the PyTorch index), with `pip install --require-hashes`.
+- Source syncs have wall-clock limits: 120 s per provider response however slowly a host
+  sends it, and `GRAD_SOURCES_SYNC_MAX_SECONDS` (default 3600) per sync.
+- Recipe `loggers=` (W&B, MLflow) go through the source egress guard: https only, no private
+  or metadata addresses unless `GRAD_SOURCES_EGRESS_ALLOW` lists them, every redirect hop
+  re-checked and the tracker key never sent to another origin.
+
 ### Changed
 
 - The eval endpoint settings are `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY`,
