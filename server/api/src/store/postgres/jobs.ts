@@ -28,6 +28,7 @@ const JOB_FIELDS: Readonly<Record<string, string>> = {
   failed_attempts: "failed_attempts",
   max_attempts: "max_attempts",
   worker_id: "worker_id",
+  worker_key: "worker_key",
   lease_expires_at: "lease_expires_at",
   lease_seconds: "lease_seconds",
   waiting_on: "waiting_on",
@@ -143,6 +144,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
   },
   claimNext: async ({
     workerId,
+    workerKey,
     leaseSeconds,
     now,
     kinds,
@@ -152,7 +154,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
     const row = first(
       await db.query(
         `UPDATE grad_jobs
-         SET status = 'running', attempt = attempt + 1, worker_id = $1,
+         SET status = 'running', attempt = attempt + 1, worker_id = $1, worker_key = $8,
              lease_expires_at = $2::timestamptz, lease_seconds = $3, updated_at = $4::timestamptz,
              billed_through = 0, billed_cost = 0, billed_at = $4::timestamptz
          WHERE id = (
@@ -173,19 +175,22 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
           [...kinds],
           workspaceId ?? null,
           recipes ? [...recipes] : null,
+          workerKey,
         ],
       ),
     );
 
     return row ? toJob(row) : null;
   },
-  heldBy: async (workerId, kinds) => {
+  heldBy: async ({ workerId, workerKey, kinds, workspaceId }) => {
     const row = first(
       await db.query(
         `SELECT * FROM grad_jobs
-         WHERE worker_id = $1 AND status IN ('running', 'cancelled') AND kind = ANY($2::text[])
+         WHERE worker_id = $1 AND worker_key = $2
+           AND status IN ('running', 'cancelled') AND kind = ANY($3::text[])
+           AND ($4::text IS NULL OR workspace_id = $4)
          ORDER BY updated_at DESC LIMIT 1`,
-        [workerId, [...kinds]],
+        [workerId, workerKey, [...kinds], workspaceId ?? null],
       ),
     );
 

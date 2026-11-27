@@ -56,6 +56,7 @@ import {
 } from "./router-labels.js";
 import {
   fenceOf,
+  holdsLease,
   leaseLost,
   RELEASE,
   requeuePatch,
@@ -1045,7 +1046,7 @@ export const createRunLifecycle = (
       await collaborators.queue().loadForWorker(principal, id);
       const run = await loadById(id);
 
-      if (run.worker_id !== body.worker_id || run.attempt !== body.attempt) {
+      if (!holdsLease(principal, run, body.worker_id, body.attempt)) {
         // Idempotent retry of a completion that already committed: this
         // attempt was closed with a result (not requeued by the reaper).
         if (

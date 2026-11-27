@@ -60,6 +60,9 @@ CREATE TABLE grad_jobs (
   failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
   max_attempts INTEGER NOT NULL CHECK (max_attempts >= 1),
   worker_id TEXT,
+  -- The key that claimed the open attempt (workerKeyOf): a worker id names a
+  -- process, never an authority, so every lease check matches both.
+  worker_key TEXT,
   lease_expires_at TIMESTAMPTZ,
   lease_seconds INTEGER NOT NULL DEFAULT 0,
   -- What the open attempt has already put in grad_usage (tokens, cost, when):

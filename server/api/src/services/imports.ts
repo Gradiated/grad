@@ -29,6 +29,7 @@ import type {
 import { writeRecordsPart } from "./dataset-records.js";
 import {
   fenceOf,
+  holdsLease,
   leaseLost,
   RELEASE,
   requeuePatch,
@@ -402,7 +403,7 @@ export const createImportService = (
     complete: async (principal, id, body) => {
       const row = await collaborators.queue().loadForWorker(principal, id);
       const job = await load(row.id);
-      if (job.worker_id !== body.worker_id || job.attempt !== body.attempt) {
+      if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
         // Idempotent retry of a completion that already committed.
         if (
           job.attempt === body.attempt &&

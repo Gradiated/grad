@@ -339,6 +339,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       ) =>
         store.jobs.claimNext({
           workerId: "w1",
+          workerKey: "key-a",
           leaseSeconds: 60,
           now: clock.now(),
           kinds: ["train", "import"],
@@ -358,6 +359,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         status: "running",
         attempt: 1,
         worker_id: "w1",
+        worker_key: "key-a",
         lease_seconds: 60,
         billed_through: 0,
       });
@@ -369,8 +371,22 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(await claim({})).toBeNull();
       expect((await claim({ kinds: ["eval"] }))?.id).toBe(ev.id);
 
-      expect((await store.jobs.heldBy("w1", ["import"]))?.id).toBe(imp.id);
-      expect(await store.jobs.heldBy("w2", ["train", "import"])).toBeNull();
+      const held = (input: Partial<Parameters<Store["jobs"]["heldBy"]>[0]>) =>
+        store.jobs.heldBy({
+          workerId: "w1",
+          workerKey: "key-a",
+          kinds: ["import"],
+          ...input,
+        });
+      expect((await held({}))?.id).toBe(imp.id);
+      expect((await held({ workspaceId: "ws_a" }))?.id).toBe(imp.id);
+      expect(
+        await held({ workerId: "w2", kinds: ["train", "import"] }),
+      ).toBeNull();
+      // A worker id is not an authority: another key, or another workspace
+      // scope, reusing "w1" does not get its lease.
+      expect(await held({ workerKey: "key-b" })).toBeNull();
+      expect(await held({ workspaceId: "ws_b" })).toBeNull();
     });
 
     it("jobs: 20 concurrent claimers over 10 queued runs get unique runs", async () => {
@@ -379,6 +395,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         Array.from({ length: 20 }, (_, i) =>
           store.jobs.claimNext({
             workerId: `w${i}`,
+            workerKey: "k",
             leaseSeconds: 60,
             now: clock.now(),
             kinds: ["train"],
@@ -397,6 +414,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(
         await store.jobs.claimNext({
           workerId: "w",
+          workerKey: "k",
           leaseSeconds: 60,
           now: clock.now(),
           kinds: ["train"],
@@ -411,6 +429,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         (
           await store.jobs.claimNext({
             workerId: "w",
+            workerKey: "k",
             leaseSeconds: 60,
             now: clock.now(),
             kinds: ["train"],
@@ -423,6 +442,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const run = await makeRun();
       await store.jobs.claimNext({
         workerId: "w1",
+        workerKey: "k",
         leaseSeconds: 60,
         now: clock.now(),
         kinds: ["train"],
@@ -498,6 +518,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const run = await makeRun();
       await store.jobs.claimNext({
         workerId: "w",
+        workerKey: "k",
         leaseSeconds: 60,
         now: clock.now(),
         kinds: ["train"],

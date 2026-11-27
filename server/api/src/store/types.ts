@@ -190,6 +190,8 @@ export interface JobFields<S extends string = JobStatus> {
   failed_attempts: number;
   max_attempts: number;
   worker_id: string | null;
+  /** The claiming key's identity (`workerKeyOf`), set with worker_id. */
+  worker_key: string | null;
   lease_expires_at: string | null;
   lease_seconds: number;
   /** Not claimable until this job finishes (a router run's labeling eval). */
@@ -229,6 +231,8 @@ export interface JobExpectation<S extends string = JobStatus> {
 
 export interface ClaimInput {
   workerId: string;
+  /** The claiming key's identity (`workerKeyOf`), stored on the lease. */
+  workerKey: string;
   leaseSeconds: number;
   now: Date;
   kinds: readonly JobKind[];
@@ -258,8 +262,16 @@ export interface JobRepository {
    * (FOR UPDATE SKIP LOCKED, one query for every kind).
    */
   claimNext(input: ClaimInput): Promise<JobRow | null>;
-  /** The job `workerId` holds a lease on, if any (a claim retried after a lost response). */
-  heldBy(workerId: string, kinds: readonly JobKind[]): Promise<JobRow | null>;
+  /**
+   * The job `workerId` holds a lease on under the same key, if any (a claim
+   * retried after a lost response). Scoped like a claim: kinds and workspace.
+   */
+  heldBy(input: {
+    workerId: string;
+    workerKey: string;
+    kinds: readonly JobKind[];
+    workspaceId?: string | undefined;
+  }): Promise<JobRow | null>;
   /** Jobs with an open attempt whose lease expired more than lease/3 ago. */
   listExpiredLeases(now: Date, limit: number): Promise<JobRow[]>;
   /**

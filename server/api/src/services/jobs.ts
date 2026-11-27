@@ -56,8 +56,35 @@ export const assertWorkerScope = (
   }
 };
 
+/**
+ * The identity of the key behind a worker request, stored on the lease at
+ * claim time. Worker ids are not secret (Helm uses the pod name, compose a
+ * fixed name), so a worker id alone never authorizes acting on a job: every
+ * lease check matches the key too.
+ */
+export const workerKeyOf = (principal: AuthPrincipal): string =>
+  `${principal.kind}:${principal.actor}@${principal.workerWorkspaceId ?? "*"}`;
+
+/** The key of the in-process eval executor's leases. */
+export const IN_PROCESS_WORKER_KEY = "in-process";
+
+/** True when `principal` (as `workerId`) holds `attempt`'s lease on `job`. */
+export const holdsLease = (
+  principal: AuthPrincipal,
+  job: Pick<JobRow, "worker_id" | "worker_key" | "attempt">,
+  workerId: string,
+  attempt: number,
+): boolean =>
+  job.worker_id === workerId &&
+  job.worker_key === workerKeyOf(principal) &&
+  job.attempt === attempt;
+
 /** Clears the lease: part of every patch that closes an attempt. */
-export const RELEASE = { worker_id: null, lease_expires_at: null } as const;
+export const RELEASE = {
+  worker_id: null,
+  worker_key: null,
+  lease_expires_at: null,
+} as const;
 
 /** The guard for a write by the holder of `job`'s current attempt. */
 export const fenceOf = (
@@ -181,7 +208,11 @@ export const createJobQueue = (
   };
 
   const claimRow: JobQueue["claimRow"] = (input) =>
-    store.jobs.claimNext({ ...input, now: clock.now() });
+    store.jobs.claimNext({
+      ...input,
+      workerKey: IN_PROCESS_WORKER_KEY,
+      now: clock.now(),
+    });
 
   const loadForWorker = async (principal: AuthPrincipal, id: string) => {
     const job = await store.jobs.getById(id);
@@ -198,8 +229,16 @@ export const createJobQueue = (
     claim: async (principal, input) => {
       await expireLeases(clock.now());
 
-      // A worker retrying a claim whose response was lost gets its job back.
-      const held = await store.jobs.heldBy(input.workerId, input.kinds);
+      // A worker retrying a claim whose response was lost gets its job back:
+      // only under the same key, kinds and workspace scope as a fresh claim.
+      const workerKey = workerKeyOf(principal);
+      const workspaceId = principal.workerWorkspaceId ?? undefined;
+      const held = await store.jobs.heldBy({
+        workerId: input.workerId,
+        workerKey,
+        kinds: input.kinds,
+        workspaceId,
+      });
       const renewed = held && (await renew(held, input.leaseSeconds));
       if (renewed) {
         const job = await handlers[renewed.kind].onClaim?.(renewed, true);
@@ -209,11 +248,12 @@ export const createJobQueue = (
       for (;;) {
         const job = await store.jobs.claimNext({
           workerId: input.workerId,
+          workerKey,
           leaseSeconds: input.leaseSeconds,
           now: clock.now(),
           kinds: input.kinds,
           recipes: input.recipes,
-          workspaceId: principal.workerWorkspaceId ?? undefined,
+          workspaceId,
         });
         if (!job) return null;
         const built = await handlers[job.kind].onClaim?.(job, false);
@@ -225,7 +265,7 @@ export const createJobQueue = (
 
     heartbeat: async (principal, id, body) => {
       const job = await loadForWorker(principal, id);
-      if (job.worker_id !== body.worker_id || job.attempt !== body.attempt) {
+      if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
         throw leaseLost(id);
       }
       const updated = await renew(job, body.lease_seconds ?? job.lease_seconds);
@@ -244,9 +284,7 @@ export const createJobQueue = (
 
     loadLeased: async (principal, id, workerId, attempt) => {
       const job = await loadForWorker(principal, id);
-      if (job.worker_id !== workerId || job.attempt !== attempt) {
-        throw leaseLost(id);
-      }
+      if (!holdsLease(principal, job, workerId, attempt)) throw leaseLost(id);
 
       return job;
     },

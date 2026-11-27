@@ -484,4 +484,62 @@ describe("grad-server HTTP API", () => {
     expect(res.status).toBe(404);
     await scoped.close();
   });
+
+  it("never lets a worker id stand in for the key: no claim theft by reusing a worker id (r8 P1-1)", async () => {
+    const worker = (
+      actor: string,
+      workerWorkspaceId: string | null,
+    ): AuthPrincipal => ({
+      kind: "worker",
+      workspaceId: workerWorkspaceId ?? "_platform",
+      actor,
+      scopes: ["trainer:worker"],
+      isPlatformAdmin: false,
+      workerWorkspaceId,
+    });
+    const auth: AuthAdapter = {
+      authenticate: async (token) =>
+        token === TRAINER_KEY
+          ? worker("platform", null)
+          : token === "scoped-b"
+            ? worker("cloud-b", "ws_b")
+            : token === "scoped-a"
+              ? worker("cloud-a", "ws_a")
+              : token === ADMIN_KEY
+                ? {
+                    kind: "workspace",
+                    workspaceId: "ws_a",
+                    actor: "a",
+                    scopes: ["admin"],
+                    isPlatformAdmin: true,
+                    workerWorkspaceId: null,
+                  }
+                : null,
+    };
+    const app = await makeTestApp({ auth });
+    await createSftRun(app);
+    // Worker ids are pod names: public, and the same id in every pool.
+    const victim = new FakeWorker(app, "trainer-gpu-01");
+    const job = await victim.claim();
+    expect(job?.run).toBeTruthy();
+
+    // Another workspace's key, and even another key of the same workspace,
+    // reusing the id get no claim retry: not the run config, not the URLs.
+    for (const token of ["scoped-b", "scoped-a"]) {
+      const thief = new FakeWorker(app, "trainer-gpu-01", token);
+      expect(await thief.claim()).toBeNull();
+      const beat = await thief.heartbeat(job!);
+      expect([404, 409]).toContain(beat.status);
+      const done = await thief.call(`/v1/trainer-jobs/${job!.id}/complete`, {
+        ...thief.ref(job!),
+        status: "failed",
+        error: "stolen",
+      });
+      expect([404, 409]).toContain(done.status);
+    }
+    // The holder's own lost-response retry still gets its job back.
+    expect((await victim.claim())?.id).toBe(job!.id);
+    expect((await victim.heartbeat(job!)).status).toBe(200);
+    await app.close();
+  });
 });

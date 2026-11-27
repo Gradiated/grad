@@ -69,6 +69,7 @@ export const toJob = <S extends string>(r: Row): JobFields<S> => ({
   failed_attempts: n(r.failed_attempts),
   max_attempts: n(r.max_attempts),
   worker_id: sn(r.worker_id),
+  worker_key: sn(r.worker_key),
   lease_expires_at: isoN(r.lease_expires_at),
   lease_seconds: n(r.lease_seconds),
   waiting_on: sn(r.waiting_on),
