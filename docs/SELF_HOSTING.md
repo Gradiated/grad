@@ -100,7 +100,7 @@ To work on it, run the API (for example `grad local up` or the harness) and `pnp
 | `GRAD_WORKER_K8S_SERVICE_ACCOUNTS` | none | `kubernetes` mode: service account to job kinds, `{"grad/grad-train-worker": ["train"], "grad/grad-import-worker": ["import"]}`. Required with `kubernetes`. |
 | `GRAD_ORCHESTRATOR_KEYS_JSON` | none | `lease` mode: who may mint lease tokens, `[{"label": "gpu-fleet", "sha256": "<hex>", "kinds": ["train"]}]`. Accepted only on `INTERNAL_PORT`. |
 | `INTERNAL_PORT` | off | Serve the internal routes (lease-token minting and revocation) on this port only, never on `PORT`. Needs `lease` in `GRAD_WORKER_AUTH` and an orchestrator key. |
-| `DATABASE_URL` | required | PostgreSQL 17 connection string (on AWS, Amazon RDS or Aurora for PostgreSQL 17). Migrations run at boot, versioned in `grad_schema_migrations` under an advisory lock, so several replicas can start at once. |
+| `DATABASE_URL` | required | PostgreSQL 17 connection string (on AWS, Amazon RDS or Aurora for PostgreSQL 17). Migrations run at boot, versioned in `grad_schema_migrations` under an advisory lock, so several replicas can start at once; they run on their own connection with no statement timeout, so a long one, or a replica waiting for another's, never fails the boot. Requests wait at most 5 s for a connection, a statement at most 30 s (35 s on the client, which also covers a failover that left a dead connection without a reset), and the API answers 503 `database_unavailable` with `Retry-After: 1` meanwhile. |
 | `MIGRATE_ON_BOOT` | `true` | `false` skips them and refuses to start while any is pending; run `node dist/main.js migrate` first (the Helm chart's migrations Job does). |
 | `S3_BUCKET` | required | The bucket for datasets, checkpoints and artifacts. Workers and SDKs upload and download through presigned URLs. Objects are written once under unique keys and never overwritten. Credentials come from the AWS SDK's default chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, EKS Pod Identity, IRSA, an instance role). |
 | `S3_REGION`, `S3_ENDPOINT` | AWS default, AWS S3 | `S3_ENDPOINT` points at another S3-compatible store (SeaweedFS, MinIO, R2); path-style addressing is used then. |
@@ -173,6 +173,8 @@ Lease tokens are looked up on every request (they are never cached), so revocati
 ### Object storage
 
 Every upload is a presigned PUT whose signature binds `Content-Length` and `x-amz-checksum-sha256`, so the store refuses any other length or body. To commit an upload, grad-server HEADs the object and checks its SHA-256 itself: it uses the checksum the store reports, or else streams and hashes the object. So even a backend that ignored the checksum header could not commit the wrong bytes. Server writes use `If-None-Match: *`, so an object is never overwritten.
+
+When the store is unreachable, times out or answers 5xx (after the S3 client's 3 attempts), the API answers 503 `storage_unavailable` with `Retry-After: 1`. Each request has a 120 s bound; a streamed read (an artifact download, hashing an upload) is bound by it until the response starts and then between two chunks, so a long download on a slow link finishes and a stalled one ends.
 
 These checks have been verified on two backends:
 
