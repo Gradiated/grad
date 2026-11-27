@@ -366,21 +366,20 @@ class Task:
 
 @dataclass(frozen=True)
 class Context:
-    """The long document a :class:`grad.recipes.CartridgeRecipe` compresses into a prefix."""
+    """The long document a :class:`grad.recipes.CartridgeRecipe` compresses into a prefix.
 
-    text: str | None = None
-    uri: str | None = None
+    It is sent inline as ``context_text``; build one with :meth:`from_text` or :meth:`from_file`.
+    """
+
+    text: str
 
     def __post_init__(self) -> None:
-        if (self.text is None) == (self.uri is None):
-            raise ValueError("Context needs exactly one of text= or uri= (use Context.from_text/from_file/from_uri).")
-        if self.text is not None and not self.text.strip():
+        if not isinstance(self.text, str):
+            raise TypeError(f"Context text must be a str, got {type(self.text).__name__}.")
+        if not self.text.strip():
             raise ValueError("Context text is empty.")
-        if self.text is not None and len(self.text) > MAX_CONTEXT_CHARS:
-            raise ValueError(
-                f"Context is {len(self.text):,} characters; the limit is {MAX_CONTEXT_CHARS:,}. "
-                "Upload it to object storage and use Context.from_uri(...)."
-            )
+        if len(self.text) > MAX_CONTEXT_CHARS:
+            raise ValueError(f"Context is {len(self.text):,} characters; the limit is {MAX_CONTEXT_CHARS:,}. Split the document or shorten it.")
 
     @classmethod
     def from_text(cls, text: str) -> Context:
@@ -392,16 +391,9 @@ class Context:
         """Read a local text file (Markdown, plain text, ...) as the context; it is sent inline."""
         return cls(text=Path(path).read_text(encoding=encoding))
 
-    @classmethod
-    def from_uri(cls, uri: str) -> Context:
-        """Point at a document the trainer can read (``s3://...``, ``https://...``)."""
-        if "://" not in uri:
-            raise ValueError(f"Context.from_uri expects a URI such as s3://bucket/key, got {uri!r}.")
-        return cls(uri=uri)
-
     def to_recipe_fields(self) -> dict[str, str]:
-        """The recipe wire fields (``context_text`` or ``context_uri``)."""
-        return {"context_text": self.text} if self.text is not None else {"context_uri": str(self.uri)}
+        """The recipe wire field (``context_text``)."""
+        return {"context_text": self.text}
 
 
 def coerce_record(item: Any) -> dict[str, Any]:

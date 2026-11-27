@@ -2,7 +2,6 @@ package grad
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -25,8 +24,6 @@ type (
 	Deployment = generated.Deployment
 	// DeploymentStatus is a deployment plus its feedback statistics.
 	DeploymentStatus = generated.DeploymentStatus
-	// Embeddings is an embeddings response.
-	Embeddings = generated.EmbedResponse
 	// TrainableModel is a catalog model.
 	TrainableModel = generated.TrainableModel
 	// APIKey is a scoped API key (without its secret).
@@ -264,11 +261,6 @@ func (a *Artifact) Deploy(ctx context.Context, opts ...DeployOption) (*Deploymen
 	return a.c.Deployments.Create(ctx, a.ID, opts...)
 }
 
-// Embed embeds inputs with this embedding artifact's deployment (deployed under its name).
-func (a *Artifact) Embed(ctx context.Context, inputs ...string) (*Embeddings, error) {
-	return a.c.Embeddings.Create(ctx, a.Name, inputs...)
-}
-
 type deployConfig struct {
 	name           string
 	fallback       string
@@ -345,121 +337,6 @@ func (s *DeploymentsService) Rollback(ctx context.Context, name string) (*Deploy
 	return api.RollbackDeployment(ctx, name)
 }
 
-// RouteInput is the request a router decides on.
-type RouteInput struct {
-	Messages  []Message
-	Tools     []map[string]any
-	SessionID string
-}
-
-// RouteDecision is a router's choice. Call the chosen Model with your own provider client,
-// then report the outcome with RecordFeedback.
-type RouteDecision struct {
-	generated.RouteResponse
-	c *Client
-}
-
-// Route asks a deployed router which model should answer.
-func (c *Client) Route(ctx context.Context, deployment string, in RouteInput) (*RouteDecision, error) {
-	api, err := c.api()
-	if err != nil {
-		return nil, err
-	}
-	resp, err := api.RouteRequest(ctx, &generated.RouteRequest{Deployment: deployment, Messages: in.Messages, Tools: in.Tools, SessionID: optString(in.SessionID)})
-	if err != nil {
-		return nil, err
-	}
-	return &RouteDecision{RouteResponse: *resp, c: c}, nil
-}
-
-// RecordFeedback reports the outcome of this decision (inference id and deployment are filled in).
-func (d *RouteDecision) RecordFeedback(ctx context.Context, f Feedback) error {
-	if f.InferenceID == "" {
-		f.InferenceID = d.InferenceID
-	}
-	if f.DeploymentName == "" {
-		f.DeploymentName = d.Deployment
-	}
-	return d.c.Feedback.Record(ctx, f)
-}
-
-// Feedback is one outcome signal for an inference or session.
-type Feedback struct {
-	InferenceID    string
-	SessionID      string
-	DeploymentName string
-	// IdempotencyKey dedupes retries (default: InferenceID, else a random key).
-	IdempotencyKey string
-	// Score in [0, 1]. Always sent unless OmitScore is set (so 0 is a valid score).
-	Score     float64
-	OmitScore bool
-	// ExpectedOutput is a gold correction (for example {"content": "..."}).
-	ExpectedOutput any
-	Metrics        map[string]float64
-}
-
-func (f Feedback) wire() (generated.FeedbackEventInput, error) {
-	key := f.IdempotencyKey
-	if key == "" {
-		key = f.InferenceID
-	}
-	if key == "" {
-		var b [16]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			return generated.FeedbackEventInput{}, err
-		}
-		key = "fb_" + hex.EncodeToString(b[:])
-	}
-	ev := generated.FeedbackEventInput{InferenceID: optString(f.InferenceID), SessionID: optString(f.SessionID), DeploymentName: optString(f.DeploymentName),
-		IdempotencyKey: key, ExpectedOutput: f.ExpectedOutput, Metrics: f.Metrics}
-	if !f.OmitScore {
-		ev.Score = ptr(f.Score)
-	}
-	return ev, nil
-}
-
-// FeedbackService records outcomes.
-type FeedbackService struct{ c *Client }
-
-// Record sends one feedback event.
-func (s *FeedbackService) Record(ctx context.Context, f Feedback) error {
-	_, err := s.RecordMany(ctx, f)
-	return err
-}
-
-// RecordMany sends several feedback events in one request and reports accepted/deduplicated counts.
-func (s *FeedbackService) RecordMany(ctx context.Context, events ...Feedback) (*generated.RecordFeedbackResponse, error) {
-	api, err := s.c.api()
-	if err != nil {
-		return nil, err
-	}
-	body := &generated.RecordFeedbackRequest{Events: make([]generated.FeedbackEventInput, 0, len(events))}
-	for _, f := range events {
-		ev, err := f.wire()
-		if err != nil {
-			return nil, err
-		}
-		body.Events = append(body.Events, ev)
-	}
-	return api.RecordFeedback(ctx, body)
-}
-
-// EmbeddingsService embeds text with deployed embedding artifacts.
-type EmbeddingsService struct{ c *Client }
-
-// Create embeds inputs with the named embedding deployment.
-func (s *EmbeddingsService) Create(ctx context.Context, model string, inputs ...string) (*Embeddings, error) {
-	api, err := s.c.api()
-	if err != nil {
-		return nil, err
-	}
-	var input any = inputs
-	if len(inputs) == 1 {
-		input = inputs[0]
-	}
-	return api.CreateEmbeddings(ctx, &generated.EmbedRequest{Model: model, Input: input})
-}
-
 // ModelsService lists trainable models.
 type ModelsService struct{ c *Client }
 
@@ -469,7 +346,7 @@ func (s *ModelsService) List(ctx context.Context) ([]TrainableModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := api.ListModels(ctx)
+	resp, err := api.ListBaseModels(ctx)
 	if err != nil {
 		return nil, err
 	}

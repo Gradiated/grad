@@ -2,7 +2,7 @@
 
 They run the docs quickstart snippets nearly verbatim, with only the base URL, key and
 models swapped for the harness and its tiny test models. They skip cleanly when
-``server/api/node_modules`` is missing or ``GRAD_SKIP_LIVE=1``; the Cloud deploy flow
+``server/api/node_modules`` is missing or ``GRAD_SKIP_LIVE=1``; the Cloud torch-worker tests
 also needs ``GRAD_TRAINER_PYTHON`` (a Python with torch, transformers and peft).
 
 Run them memory-capped, e.g. ``/root/grad-work/capped.sh env PYTHONPATH=sdks/python
@@ -27,7 +27,7 @@ from _stack import Stack, live_skip_reason
 
 import grad
 from grad import Grad, Rubric, Scorer, validators
-from grad.recipes import DistillRecipe, OffPolicy, OnPolicy, RewardModelRecipe, RouterRecipe, SFTRecipe
+from grad.recipes import DistillRecipe, OffPolicy, OnPolicy, RewardModelRecipe, SFTRecipe
 
 LLM = "test/tiny-qwen3"
 TEACHER = "test/tiny-qwen3-teacher"
@@ -249,12 +249,12 @@ class SelfHostedLiveTests(_LiveCase):
 
 
 class CloudReferenceLiveTests(_LiveCase):
-    """Cloud mode (fake Cloud API) with the reference worker: auth, billing-backed runs and feedback."""
+    """Cloud mode (fake Cloud API) with the reference worker: auth and billing-backed runs."""
 
     cloud = True
     worker = "reference"
 
-    def test_cloud_run_feedback_and_undeployable_reference_artifact(self) -> None:
+    def test_cloud_run_and_undeployable_reference_artifact(self) -> None:
         client = Grad()
         dataset = client.datasets.push("sql-quickstart", SQL_RECORDS)
         run = client.runs.create(dataset=dataset, name="sql-helper", recipe=SFTRecipe(model=LLM), max_cost_usd=5).wait(timeout=180)
@@ -264,65 +264,15 @@ class CloudReferenceLiveTests(_LiveCase):
         with self.assertRaises(grad.GradAPIError) as ctx:
             run.deploy()
         self.assertIn(ctx.exception.status, {409, 422})
-        # docs: training/index.mdx feedback snippet, keyed by session (no inference id here)
-        res = client.feedback.record(session_id="s-1", idempotency_key="query-s-1", score=1.0)
-        self.assertEqual(res.accepted, 1)
-        self.assertEqual(client.feedback.record(session_id="s-1", idempotency_key="query-s-1", score=1.0).deduplicated, 1)
         with self.assertRaises(grad.AuthenticationError):
             Grad(api_key="grad_not_a_cloud_token").runs.list().to_list()
 
 
 class CloudTorchLiveTests(_LiveCase):
-    """Cloud mode (fake Cloud API) with the torch worker: deploy -> route -> feedback -> rollback."""
+    """Cloud mode (fake Cloud API) with the torch worker: continued training and caller idempotency keys."""
 
     cloud = True
     worker = "torch"
-
-    def test_router_deploy_route_feedback_rollback(self) -> None:
-        client = Grad()
-        traces = []
-        for i in range(60):
-            hard = i % 2 == 0
-            prompt = f"{'hard SQL join query' if hard else 'say hello'} {i}"
-            traces.append({"session_id": f"s{i}", "messages": [{"role": "user", "content": prompt}], "scores": {"cheap/m": 0.0 if hard else 1.0, "strong/m": 1.0}})
-        path = self.tmp / "support_traces.jsonl"
-        path.write_text("".join(json.dumps(t) + "\n" for t in traces))
-
-        # docs: training/index.mdx router quickstart (backbone and candidates swapped for test models)
-        dataset = client.datasets.create("support-prod")
-        dataset.import_file(path).wait(timeout=180)
-        recipe = RouterRecipe(model=LLM, models=["cheap/m", "strong/m"], batch_size=8)
-        self.assertIn("router", str(client.runs.plan(dataset=dataset, name="support-router", recipe=recipe)))
-        run = client.runs.create(dataset=dataset, name="support-router", recipe=recipe).wait(timeout=600)
-        self.assertEqual(run.status, "completed")
-
-        adapter = run.artifact.download(self.tmp / "support-router")
-        self.assertTrue((adapter / "adapter_config.json").is_file())
-        self.assertTrue((adapter / "adapter_model.safetensors").is_file())
-
-        dep = run.deploy()
-        first = dep.active_artifact_id
-        messages = [{"role": "user", "content": "Where is invoice #9941?"}]
-        # docs: training/index.mdx "route and record feedback"
-        decision = client.route("support-router", messages=messages)
-        # The fake Cloud API routes between the candidates the trainer recorded in the manifest.
-        self.assertEqual(run.artifact.manifest["candidates"], ["cheap/m", "strong/m"])
-        self.assertIn(decision.model, {"cheap/m", "strong/m"})
-        self.assertTrue(decision.inference_id)
-        result = decision.record_feedback(score=1.0, metrics={"latency_ms": 12.0, "output_tokens": 3})
-        self.assertEqual(result.accepted, 1)
-        again = decision.record_feedback(score=1.0, metrics={"latency_ms": 12.0, "output_tokens": 3})
-        self.assertEqual((again.accepted, again.deduplicated), (0, 1), "same outcome is deduplicated, never double-counted")
-
-        # A second version (a promoted checkpoint), then roll back to the first.
-        ckpt = run.checkpoints()[0]
-        promoted = ckpt.promote(name="support-router")
-        dep2 = promoted.deploy(name="support-router")
-        self.assertNotEqual(dep2.active_artifact_id, first)
-        rolled = dep2.rollback()
-        self.assertEqual(rolled.active_artifact_id, first)
-        status = rolled.status_summary()
-        self.assertGreaterEqual(status.feedback_count, 1)
 
     def test_continued_training_and_caller_idempotency_key(self) -> None:
         # docs: recipes/dpo.mdx "start from an SFT artifact"; api-reference Idempotency-Key

@@ -1,7 +1,7 @@
 # grad-sdk (Python)
 
 The Python SDK for the Gradiated training platform: push datasets, preview and launch managed
-fine-tuning runs, evaluate models, download PEFT adapters, deploy, route and record feedback.
+fine-tuning runs, evaluate models, download PEFT adapters and deploy them on Gradiated Cloud.
 
 - Python 3.11+, one dependency (`httpx`); a blocking `Grad` client (from asyncio, call it via `asyncio.to_thread`).
 - Typed objects with a `.raw` escape hatch, `py.typed`, typed errors, retries with backoff.

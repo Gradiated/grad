@@ -200,19 +200,6 @@ on vLLM or SGLang instead.")]
         action: DeploymentsCmd,
     },
 
-    /// Ask a deployed router which model should answer a prompt
-    Route(RouteArgs),
-
-    /// Embed text with a deployed embedding artifact
-    Embed {
-        /// Deployed embedding model name
-        #[arg(long)]
-        model: String,
-        /// Text to embed (repeat for several)
-        #[arg(required = true)]
-        input: Vec<String>,
-    },
-
     /// Manage scoped workspace API keys
     Keys {
         #[command(subcommand)]
@@ -818,26 +805,6 @@ pub enum DeploymentsCmd {
     },
 }
 
-#[derive(Args, Debug)]
-pub struct RouteArgs {
-    /// Deployed router name
-    #[arg(long)]
-    pub deployment: String,
-    /// User prompt
-    #[arg(
-        long,
-        conflicts_with = "messages",
-        required_unless_present = "messages"
-    )]
-    pub prompt: Option<String>,
-    /// JSON file with a list of chat messages
-    #[arg(long, value_name = "FILE")]
-    pub messages: Option<PathBuf>,
-    /// Session id for sticky routing and feedback
-    #[arg(long)]
-    pub session_id: Option<String>,
-}
-
 #[derive(Subcommand, Debug)]
 pub enum KeysCmd {
     /// List workspace API keys
@@ -852,7 +819,7 @@ Examples:
   grad keys create --name inference-cd --scopes artifacts:read
 
 Scopes: admin, datasets:read, datasets:write, runs:read, runs:write,
-artifacts:read, artifacts:write, deployments:write, feedback:write")]
+artifacts:read, artifacts:write, deployments:write")]
     Create {
         /// Key name
         #[arg(long)]

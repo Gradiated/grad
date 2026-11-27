@@ -9,7 +9,7 @@ same shapes and the same error-mapping table.
 - `problem-*.json`: problem+json responses captured from a live server.
 - Everything else: response bodies captured from a live self-hosted stack with
   the reference worker (`node tests/fixtures/wire/capture.mjs`). The
-  deployment, route, feedback and embeddings bodies need Cloud serving and are
-  written by hand from `spec/openapi.yaml`.
+  deployment bodies (`deployment*.json`, `deployments-page.json`) need Cloud
+  serving and are written by hand from `spec/openapi.yaml`.
 
 Add language-specific files with a language prefix (`py-`, `rs-`, `go-`, `ts-`).

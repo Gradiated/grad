@@ -99,9 +99,9 @@ export class ConflictError extends APIError {}
 export class ValidationError extends APIError {}
 export class RateLimitError extends APIError {}
 export class ServerError extends APIError {}
-/** 501 `deploy_unavailable`: this server cannot deploy or serve (self-hosted). */
+/** 501 `deploy_unavailable`: this server has no Cloud serving (self-hosted); download the artifact and serve it yourself. */
 export class DeployUnavailableError extends APIError {}
-/** 501 `inference_unavailable`: no inference endpoint is configured. */
+/** 501 `inference_unavailable`: no inference endpoint is configured, so evals cannot generate outputs. */
 export class InferenceUnavailableError extends APIError {}
 
 /** The request never produced an HTTP response (DNS, refused, reset, TLS). */

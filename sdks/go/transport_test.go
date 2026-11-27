@@ -174,12 +174,12 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 			w.Header().Set("Retry-After", "3")
 			problem(429, "rate_limited")(w, nil, nil)
 		}
-		f := newFake(t, map[string]route{"POST /v1/feedback": sequence(limited, jsonBody(200, wire(t, "feedback-response.json")))})
+		f := newFake(t, map[string]route{"POST /v1/deployments": sequence(limited, jsonBody(200, wire(t, "deployment.json")))})
 		c, clk := f.client()
-		if err := c.Feedback.Record(ctx, grad.Feedback{InferenceID: "inf_1", Score: 1}); err != nil {
+		if _, err := c.Deployments.Create(ctx, "a@latest"); err != nil {
 			t.Fatal(err)
 		}
-		if n := f.count("POST", "/v1/feedback"); n != 2 {
+		if n := f.count("POST", "/v1/deployments"); n != 2 {
 			t.Fatalf("POST sent %d times", n)
 		}
 		if got := clk.Sleeps(); len(got) != 1 || got[0] != 3*time.Second {
@@ -187,7 +187,7 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 		}
 	})
 	t.Run("503 GET retried with exponential backoff", func(t *testing.T) {
-		f := newFake(t, map[string]route{"GET /v1/models": sequence(problem(503, "unavailable"), problem(503, "unavailable"), jsonBody(200, wire(t, "models.json")))})
+		f := newFake(t, map[string]route{"GET /v1/base-models": sequence(problem(503, "unavailable"), problem(503, "unavailable"), jsonBody(200, wire(t, "models.json")))})
 		c, clk := f.client()
 		models, err := c.Models.List(ctx)
 		if err != nil || len(models) == 0 {
@@ -256,10 +256,10 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 		}
 	})
 	t.Run("retry budget is configurable", func(t *testing.T) {
-		f := newFake(t, map[string]route{"GET /v1/models": problem(502, "bad_gateway")})
+		f := newFake(t, map[string]route{"GET /v1/base-models": problem(502, "bad_gateway")})
 		c, _ := f.client(grad.WithMaxRetries(0))
-		if _, err := c.Models.List(ctx); err == nil || f.count("GET", "/v1/models") != 1 {
-			t.Fatalf("err = %v, requests = %d", err, f.count("GET", "/v1/models"))
+		if _, err := c.Models.List(ctx); err == nil || f.count("GET", "/v1/base-models") != 1 {
+			t.Fatalf("err = %v, requests = %d", err, f.count("GET", "/v1/base-models"))
 		}
 	})
 	t.Run("POST retried when the connection was refused", func(t *testing.T) {
@@ -281,7 +281,7 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 		}
 	})
 	t.Run("timeout is typed", func(t *testing.T) {
-		f := newFake(t, map[string]route{"GET /v1/models": func(w http.ResponseWriter, _ *http.Request, _ []byte) { time.Sleep(200 * time.Millisecond) }})
+		f := newFake(t, map[string]route{"GET /v1/base-models": func(w http.ResponseWriter, _ *http.Request, _ []byte) { time.Sleep(200 * time.Millisecond) }})
 		c, _ := f.client(grad.WithTimeout(20*time.Millisecond), grad.WithMaxRetries(0))
 		_, err := c.Models.List(ctx)
 		var te *grad.TimeoutError
@@ -294,10 +294,10 @@ func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 
 func TestRedirects(t *testing.T) {
 	ctx := context.Background()
-	other := newFake(t, map[string]route{"GET /v1/models": jsonBody(200, wire(t, "models.json"))})
+	other := newFake(t, map[string]route{"GET /v1/base-models": jsonBody(200, wire(t, "models.json"))})
 	t.Run("cross-origin redirect is refused and the key never leaves", func(t *testing.T) {
-		f := newFake(t, map[string]route{"GET /v1/models": func(w http.ResponseWriter, r *http.Request, _ []byte) {
-			http.Redirect(w, r, other.srv.URL+"/v1/models", http.StatusFound)
+		f := newFake(t, map[string]route{"GET /v1/base-models": func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			http.Redirect(w, r, other.srv.URL+"/v1/base-models", http.StatusFound)
 		}})
 		c, _ := f.client()
 		_, err := c.Models.List(ctx)
@@ -311,26 +311,26 @@ func TestRedirects(t *testing.T) {
 	})
 	t.Run("same-origin GET redirect is followed with credentials", func(t *testing.T) {
 		f := newFake(t, map[string]route{
-			"GET /old/v1/models": func(w http.ResponseWriter, r *http.Request, _ []byte) {
-				http.Redirect(w, r, "/v1/models", http.StatusMovedPermanently)
+			"GET /old/v1/base-models": func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				http.Redirect(w, r, "/v1/base-models", http.StatusMovedPermanently)
 			},
-			"GET /v1/models": jsonBody(200, wire(t, "models.json")),
+			"GET /v1/base-models": jsonBody(200, wire(t, "models.json")),
 		})
 		c, _ := f.client(grad.WithBaseURL(f.srv.URL + "/old"))
 		if _, err := c.Models.List(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if got := f.last("GET", "/v1/models").Header.Get("Authorization"); got != "Bearer grad_test_key" {
+		if got := f.last("GET", "/v1/base-models").Header.Get("Authorization"); got != "Bearer grad_test_key" {
 			t.Fatalf("authorization = %q", got)
 		}
 	})
 	t.Run("POST redirect is refused even on the same origin", func(t *testing.T) {
-		f := newFake(t, map[string]route{"POST /v1/feedback": func(w http.ResponseWriter, r *http.Request, _ []byte) {
-			http.Redirect(w, r, "/v2/feedback", http.StatusTemporaryRedirect)
+		f := newFake(t, map[string]route{"POST /v1/deployments": func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			http.Redirect(w, r, "/v2/deployments", http.StatusTemporaryRedirect)
 		}})
 		c, _ := f.client()
 		var re *grad.RedirectError
-		if err := c.Feedback.Record(ctx, grad.Feedback{InferenceID: "i"}); !errors.As(err, &re) {
+		if _, err := c.Deployments.Create(ctx, "a@latest"); !errors.As(err, &re) {
 			t.Fatalf("err = %v", err)
 		}
 	})
@@ -338,7 +338,7 @@ func TestRedirects(t *testing.T) {
 
 func TestConfigResolution(t *testing.T) {
 	ctx := context.Background()
-	f := newFake(t, map[string]route{"GET /v1/models": jsonBody(200, wire(t, "models.json"))})
+	f := newFake(t, map[string]route{"GET /v1/base-models": jsonBody(200, wire(t, "models.json"))})
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "gradiated", "config.json")
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
@@ -356,7 +356,7 @@ func TestConfigResolution(t *testing.T) {
 		if _, err := c.Models.List(ctx); err != nil {
 			t.Fatal(err)
 		}
-		return f.last("GET", "/v1/models").Header.Get("Authorization")
+		return f.last("GET", "/v1/base-models").Header.Get("Authorization")
 	}
 
 	if got := authOf(grad.NewClient(env(map[string]string{"XDG_CONFIG_HOME": dir}))); got != "Bearer grad_file_key" {
@@ -404,7 +404,7 @@ func TestConfigResolution(t *testing.T) {
 		t.Fatalf("corrupt config: %v", err)
 	}
 
-	unauth := newFake(t, map[string]route{"GET /v1/models": problem(401, "unauthorized")})
+	unauth := newFake(t, map[string]route{"GET /v1/base-models": problem(401, "unauthorized")})
 	_, err := grad.NewClient(grad.WithBaseURL(unauth.srv.URL), env(map[string]string{"HOME": t.TempDir()})).Models.List(ctx)
 	if err == nil || !strings.Contains(err.Error(), "GRADIATED_API_KEY") || !strings.Contains(err.Error(), "grad login") {
 		t.Fatalf("401 without key should explain how to configure one: %v", err)
@@ -412,17 +412,17 @@ func TestConfigResolution(t *testing.T) {
 }
 
 func TestUserAgentAndCancellation(t *testing.T) {
-	f := newFake(t, map[string]route{"GET /v1/models": jsonBody(200, wire(t, "models.json"))})
+	f := newFake(t, map[string]route{"GET /v1/base-models": jsonBody(200, wire(t, "models.json"))})
 	c, _ := f.client()
 	if _, err := c.Models.List(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if ua := f.last("GET", "/v1/models").Header.Get("User-Agent"); !strings.HasPrefix(ua, "grad-go/"+grad.Version) {
+	if ua := f.last("GET", "/v1/base-models").Header.Get("User-Agent"); !strings.HasPrefix(ua, "grad-go/"+grad.Version) {
 		t.Fatalf("user agent %q", ua)
 	}
 	c2, _ := f.client(grad.WithUserAgent("my-app/1"))
 	_, _ = c2.Models.List(context.Background())
-	if ua := f.last("GET", "/v1/models").Header.Get("User-Agent"); ua != "my-app/1" {
+	if ua := f.last("GET", "/v1/base-models").Header.Get("User-Agent"); ua != "my-app/1" {
 		t.Fatalf("custom user agent %q", ua)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

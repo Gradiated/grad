@@ -5,9 +5,8 @@
  *
  *   node tests/fixtures/wire/capture.mjs        # needs `pnpm -C server/api install`
  *
- * Deployment/route/feedback bodies need Cloud serving and a deployable artifact;
- * they are captured from a second `--cloud --worker torch` stack only when
- * GRAD_TRAINER_PYTHON points at the trainer venv, otherwise kept as committed.
+ * The deployment bodies need Cloud serving and a deployable artifact, so they
+ * are written by hand from `spec/openapi.yaml` and kept as committed.
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -67,7 +66,7 @@ const main = async () => {
   };
 
   try {
-    write("models.json", await ok("GET", "/v1/models"));
+    write("models.json", await ok("GET", "/v1/base-models"));
     write("dataset-created.json", await ok("POST", "/v1/datasets", { name: "support-prod", metadata: { team: "support" } }));
     const records = [
       { session_id: "s1", messages: [{ role: "user", content: "Reset my password?" }, { role: "assistant", content: "Settings -> Security." }], scores: { resolved: 1 } },

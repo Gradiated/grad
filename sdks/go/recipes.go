@@ -91,7 +91,6 @@ func (s Random) splitSpec() generated.SplitSpec {
 // Context is the text a cartridge (or distillation) learns to stand in for.
 type Context struct {
 	text string
-	uri  string
 	path string
 }
 
@@ -100,9 +99,6 @@ func ContextFromText(text string) Context { return Context{text: text} }
 
 // ContextFromFile reads the file when the run is planned or created.
 func ContextFromFile(path string) Context { return Context{path: path} }
-
-// ContextFromURI points the trainer at a URI such as s3://bucket/key.
-func ContextFromURI(uri string) Context { return Context{uri: uri} }
 
 func (c Context) apply(spec *RecipeSpec) error {
 	switch {
@@ -114,8 +110,6 @@ func (c Context) apply(spec *RecipeSpec) error {
 		spec.ContextText = ptr(string(raw))
 	case c.text != "":
 		spec.ContextText = ptr(c.text)
-	case c.uri != "":
-		spec.ContextURI = ptr(c.uri)
 	}
 	return nil
 }
@@ -316,7 +310,7 @@ func (r DecisionModelRecipe) RecipeSpec() (RecipeSpec, error) {
 // CartridgeRecipe compresses a long context into a trained KV prefix.
 type CartridgeRecipe struct {
 	Common
-	// Context is required: ContextFromText, ContextFromFile or ContextFromURI.
+	// Context is required: ContextFromText or ContextFromFile.
 	Context Context
 	// NumTokens is the prefix size (default 256).
 	NumTokens int

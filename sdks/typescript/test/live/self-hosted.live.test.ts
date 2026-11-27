@@ -94,7 +94,10 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
     expect(result.sizeBytes).toBe(bytes.byteLength);
 
     // Self-hosted servers have no hosted serving.
-    await expect(run.deploy()).rejects.toBeInstanceOf(DeployUnavailableError);
+    const refused = await run.deploy().catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(DeployUnavailableError);
+    expect((refused as DeployUnavailableError).status).toBe(501);
+    expect((refused as Error).message).toContain("vLLM or SGLang");
 
     const latest = await grad.artifacts.get("support-sft@latest");
     expect(latest.id).toBe(run.artifact.id);

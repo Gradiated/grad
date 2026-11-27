@@ -277,41 +277,6 @@ def hf_dataset_name(repo: str, split: str, config: str | None) -> str:
     return slug[:64].rstrip("-._")
 
 
-def feedback_event(
-    *,
-    inference_id: str | None,
-    session_id: str | None,
-    deployment_name: str | None,
-    score: float | None,
-    expected_output: Any,
-    metrics: Mapping[str, float] | None,
-    idempotency_key: str | None,
-) -> dict[str, Any]:
-    """One ``FeedbackEventInput``. Without ``idempotency_key`` a content hash is used, so a retried
-    call is deduplicated but a different outcome is recorded."""
-    if inference_id is None and session_id is None and deployment_name is None:
-        raise ValueError("feedback needs inference_id=, session_id= or deployment_name= to attach to.")
-    event: dict[str, Any] = {}
-    for key, value in (("inference_id", inference_id), ("session_id", session_id), ("deployment_name", deployment_name)):
-        if value is not None:
-            event[key] = value
-    if score is not None:
-        if isinstance(score, bool):
-            score = 1.0 if score else 0.0
-        if not isinstance(score, (int, float)) or not 0.0 <= score <= 1.0:
-            raise ValueError(f"feedback score must be in [0, 1], got {score!r}.")
-        event["score"] = float(score)
-    if expected_output is not None:
-        event["expected_output"] = expected_output
-    if metrics is not None:
-        event["metrics"] = {str(k): float(v) for k, v in metrics.items()}
-    if idempotency_key is None:
-        digest = hashlib.sha256(json.dumps(event, sort_keys=True, default=str).encode()).hexdigest()[:32]
-        idempotency_key = f"sdk:{digest}"
-    event["idempotency_key"] = idempotency_key
-    return event
-
-
 class Backoff:
     """Polling delays for ``wait()``: 0.5 s growing ×1.5 to a 5 s cap."""
 

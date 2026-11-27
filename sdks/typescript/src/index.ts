@@ -11,16 +11,11 @@ export {
   Artifact,
   ArtifactsResource,
   DeploymentsResource,
-  EmbeddingsResource,
-  FeedbackResource,
-  RouteDecision,
   type ArtifactRef,
   type ArtifactStream,
   type DeployOptions,
   type DownloadOptions,
   type DownloadResult,
-  type FeedbackEvent,
-  type RouteInput,
 } from "./resources/artifacts.js";
 export {
   Dataset,
@@ -69,6 +64,7 @@ export {
   LIST_RUN_CHECKPOINTS_LIMIT_MAX,
   LIST_RUN_METRICS_LIMIT_MAX,
   LIST_RUNS_LIMIT_MAX,
+  LIST_USAGE_LIMIT_MAX,
 } from "./generated/client.js";
 export { newIdempotencyKey, SDK_VERSION, type RawResponse, type RequestOptions, type ServerSentEvent, type SSEOptions, type StreamOptions } from "./transport.js";
 export type * as models from "./generated/models.js";
@@ -81,7 +77,6 @@ export type {
   DatasetRecord,
   Deployment,
   DeploymentStatus,
-  EmbedResponse,
   EvalModelSummary,
   EvalOutput,
   EvalReport,
@@ -90,10 +85,10 @@ export type {
   MetricPoint,
   PlanEvalResponse,
   RecipeSpec,
-  RecordFeedbackResponse,
   ResolvedRunConfig,
   RouterParetoSummary,
   RunStatus,
   SplitSpec,
   TrainableModel,
+  UsageRecord,
 } from "./generated/models.js";

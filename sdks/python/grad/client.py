@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -11,25 +11,10 @@ import httpx
 from . import _resources as r
 from ._config import ResolvedConfig, resolve_config
 from ._generated.client import GeneratedApiClient
-from ._helpers import check_slug
-from ._models import Deployment, RouteDecision
+from ._models import Deployment
 from ._transport import Clock, RetryPolicy, Transport
 
 __all__ = ["Grad"]
-
-
-def _route_body(deployment: Any, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]] | None, session_id: str | None) -> dict[str, Any]:
-    name = deployment if isinstance(deployment, str) else getattr(deployment, "name", None)
-    if not isinstance(name, str):
-        raise TypeError("route() takes a deployment name or a Deployment.")
-    if not messages:
-        raise ValueError("route() needs at least one message.")
-    body: dict[str, Any] = {"deployment": check_slug(name, "deployment name"), "messages": [dict(m) for m in messages]}
-    if tools:
-        body["tools"] = [dict(t) for t in tools]
-    if session_id is not None:
-        body["session_id"] = session_id
-    return body
 
 
 class Grad:
@@ -83,8 +68,6 @@ class Grad:
         self.checkpoints = r.Checkpoints(self)
         self.artifacts = r.Artifacts(self)
         self.deployments = r.Deployments(self)
-        self.embeddings = r.EmbeddingsAPI(self)
-        self.feedback = r.Feedback(self)
         self.evals = r.Evals(self)
         self.keys = r.Keys(self)
 
@@ -111,21 +94,6 @@ class Grad:
         Rolling back is deploying an earlier version (or ``deployments.rollback(name)``).
         """
         return self.deployments.create(artifact, name=name, fallback=fallback, explore_rate=explore_rate, idempotency_key=idempotency_key)
-
-    def route(
-        self,
-        deployment: Any,
-        messages: Sequence[Mapping[str, Any]],
-        *,
-        tools: Sequence[Mapping[str, Any]] | None = None,
-        session_id: str | None = None,
-    ) -> RouteDecision:
-        """Ask a deployed router which model should answer ``messages``.
-
-        Returns a :class:`grad.RouteDecision`: call ``decision.model`` with your own provider
-        client, then ``decision.record_feedback(score=...)`` once you know the outcome.
-        """
-        return RouteDecision.from_api(self.wire.route_request(_route_body(deployment, messages, tools, session_id)), self)
 
     def close(self) -> None:
         """Close pooled connections."""

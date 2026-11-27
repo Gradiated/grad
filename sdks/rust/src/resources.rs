@@ -122,7 +122,6 @@ resource!(Checkpoints);
 resource!(Artifacts);
 resource!(Deployments);
 resource!(Evals);
-resource!(Feedback);
 
 async fn get<T: DeserializeOwned>(c: &Client, req: Req) -> Result<T> {
     c.t().json(req).await
@@ -226,9 +225,9 @@ async fn collect_all<T: DeserializeOwned>(
 }
 
 impl Models<'_> {
-    /// Trainable base models (`GET /v1/models`).
+    /// Trainable base models (`GET /v1/base-models`).
     pub async fn list(&self) -> Result<Vec<TrainableModel>> {
-        let page: Page<TrainableModel> = get(self.c, Req::get("/v1/models")).await?;
+        let page: Page<TrainableModel> = get(self.c, Req::get("/v1/base-models")).await?;
         Ok(page.data)
     }
 }
@@ -1336,16 +1335,5 @@ impl Evals<'_> {
             }
             poll.sleep().await;
         }
-    }
-}
-
-impl Feedback<'_> {
-    /// Record outcome scores and gold corrections (deduplicated by `idempotency_key`).
-    pub async fn record(&self, events: &[FeedbackEventInput]) -> Result<RecordFeedbackResponse> {
-        get(
-            self.c,
-            Req::post("/v1/feedback").json(json!({ "events": events })),
-        )
-        .await
     }
 }

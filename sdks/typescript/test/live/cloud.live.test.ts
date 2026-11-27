@@ -1,11 +1,9 @@
 // Live: Gradiated Cloud mode (fake Cloud control plane + real grad-server).
-// The torch worker trains a real tiny router for deploy -> route -> feedback -> rollback.
-import { writeFileSync } from "node:fs";
-import path from "node:path";
+// The torch worker trains a tiny distilled student and a reward model.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { AuthenticationError, Grad, recipes, rollouts, type DatasetRecord } from "../../src/index.js";
-import { liveSkipReason, scratchHome, Stack } from "./stack.js";
+import { AuthenticationError, Grad, recipes, rollouts } from "../../src/index.js";
+import { liveSkipReason, Stack } from "./stack.js";
 
 const skipReference = liveSkipReason("reference");
 const skipTorch = liveSkipReason("torch");
@@ -38,62 +36,13 @@ describe.skipIf(skipReference !== undefined)("live: cloud auth with the referenc
   });
 });
 
-describe.skipIf(skipTorch !== undefined)("live: cloud router with the torch worker", () => {
+describe.skipIf(skipTorch !== undefined)("live: cloud distillation and reward models with the torch worker", () => {
   let stack: Stack;
-  let home: ReturnType<typeof scratchHome>;
   beforeAll(async () => {
     stack = await Stack.start({ cloud: true, worker: "torch", timeoutMs: 600_000 });
-    home = scratchHome("cloud");
   });
   afterAll(async () => {
     await stack?.stop();
-    home?.cleanup();
-  });
-
-  it("quickstart: import, router .wait(), deploy, route, recordFeedback, promote, rollback", async () => {
-    const traces = path.join(home.dir, "support_traces.jsonl");
-    const records: DatasetRecord[] = Array.from({ length: 60 }, (_, i) => {
-      const hard = i % 2 === 0;
-      return {
-        sessionId: `s${i}`,
-        messages: [{ role: "user", content: `${hard ? "hard SQL join query" : "say hello"} ${i}` }],
-        scores: { "cheap/m": hard ? 0 : 1, "strong/m": 1 },
-      };
-    });
-    writeFileSync(traces, records.map((r) => JSON.stringify({ session_id: r.sessionId, messages: r.messages, scores: r.scores })).join("\n") + "\n");
-
-    const grad = new Grad({ apiKey: stack.apiKey, baseURL: stack.baseURL });
-    const dataset = await grad.datasets.create("support-prod");
-    await dataset.importFile(traces).wait();
-
-    const run = await grad.runs
-      .create({ dataset, name: "support-router", recipe: recipes.router({ model: "test/tiny-qwen3", models: ["cheap/m", "strong/m"], batchSize: 8 }) })
-      .wait({ timeoutMs: 480_000 });
-    const deployment = await run.deploy();
-    expect(deployment.activeArtifactId).toBe(run.artifact.id);
-
-    const messages = [{ role: "user" as const, content: "hard SQL join query 3" }];
-    const decision = await grad.route("support-router", { messages });
-    // The fake Cloud routes between the candidates the trainer recorded in the artifact manifest.
-    expect(run.artifact.manifest.candidates).toEqual(["cheap/m", "strong/m"]);
-    expect(["cheap/m", "strong/m"]).toContain(decision.model);
-    expect(decision.deployment).toBe("support-router");
-    expect(decision.artifactId).toBe(run.artifact.id);
-    const recorded = await decision.recordFeedback({ score: 1.0, metrics: { latency_ms: 12, output_tokens: 0 } });
-    expect(recorded.accepted).toBe(1);
-    const again = await grad.feedback.record({ inferenceId: decision.inferenceId, idempotencyKey: decision.inferenceId, score: 1.0 });
-    expect(again.deduplicated).toBe(1);
-
-    const checkpoints = await run.checkpoints();
-    expect(checkpoints.length).toBeGreaterThan(0);
-    const promoted = await checkpoints[0]!.promote({ name: "support-router" });
-    const second = await promoted.deploy({ name: "support-router" });
-    expect(second.activeArtifactId).not.toBe(deployment.activeArtifactId);
-    const rolledBack = await grad.deployments.rollback("support-router");
-    expect(rolledBack.activeArtifactId).toBe(deployment.activeArtifactId);
-    const status = await grad.deployments.get("support-router");
-    expect(status.feedbackCount).toBeGreaterThanOrEqual(1);
-    expect((await grad.deployments.list().all()).map((d) => d.name)).toContain("support-router");
   });
 
   it("distills a tiny teacher and trains a reward model", async () => {

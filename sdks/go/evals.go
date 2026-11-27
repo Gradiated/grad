@@ -390,8 +390,7 @@ func (e *Eval) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Wait polls until the eval completes (or stops at its max cost with partial
-// results: stopped_budget). While it is awaiting_scores it runs the
+// Wait polls until the eval completes. While it is awaiting_scores it runs the
 // rubric's local Go scorers on the outputs that lack them and posts the scores.
 // failed and cancelled return *EvalFailedError.
 func (e *Eval) Wait(ctx context.Context, opts ...WaitOption) error {

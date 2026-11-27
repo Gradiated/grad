@@ -42,17 +42,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Cloud; a self-hosted server returns *grad.DeployUnavailableError.
-	if _, err := run.Deploy(ctx); err != nil {
-		log.Fatal(err)
-	}
-	decision, err := client.Route(ctx, "support-router", grad.RouteInput{
-		Messages: []grad.Message{{Role: "user", Content: "Where is invoice #9941?"}},
-	})
+	// Cloud; a self-hosted server returns *grad.DeployUnavailableError
+	// (download the artifact and serve it yourself).
+	dep, err := run.Deploy(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	_ = decision.RecordFeedback(ctx, grad.Feedback{Score: 1.0})
+	fmt.Println(dep.ModelID, dep.ActiveArtifactID)
 }
 ```
 
@@ -66,8 +62,10 @@ compiles every Go snippet of the public docs.
 ## Surface
 
 - Services: `client.Datasets`, `Imports`, `Runs`, `Checkpoints`, `Artifacts`,
-  `Deployments`, `Feedback`, `Embeddings`, `Evals`, `Keys`, `Models`, plus
-  `client.Route`. `client.API` is the generated client (one method per operation).
+  `Deployments` (`Create`, `Get`, `List`, `Rollback`), `Evals`, `Keys`,
+  `Models`. `client.API` is the generated client (one method per operation).
+- Inference and feedback are not part of the SDK: call a deployed model through
+  the Gradiated gateway and record scores in your observability tool.
 - Recipes implement `grad.Recipe`: `SFTRecipe`, `DPORecipe`, `RouterRecipe`,
   `DecisionModelRecipe`, `CartridgeRecipe`, `EmbeddingRecipe`, `DistillRecipe`,
   `RewardModelRecipe` and `RawRecipe`.

@@ -676,7 +676,6 @@ export interface RecipeSpec {
   models?: Array<string> | undefined;
   maxQualityDrop?: number | undefined;
   contextText?: string | undefined;
-  contextUri?: string | undefined;
   numTokens?: number | undefined;
   temp?: number | undefined;
   /** CartridgeRecipe and DistillRecipe: the model to learn from. DistillRecipe also takes an artifact (name@version) with rollout off_policy. */
@@ -907,10 +906,27 @@ export interface TrajectoryOutput {
 }
 
 export interface UploadTicket {
+  /** The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless. */
   uploadId: string;
   method: "PUT";
   /** Absolute presigned URL, or a path relative to the API base URL (local storage). */
   url: string;
   headers: Record<string, string>;
   expiresAt: string;
+}
+
+export interface UsageRecord {
+  id: string;
+  kind: "run" | "eval";
+  /** The run or eval this usage belongs to. */
+  refId: string;
+  attempt: number;
+  /** The attempt's tokens this row starts after (usage is billed in increments while an attempt runs). */
+  tokensFrom: number;
+  tokensThrough: number;
+  tokens: number;
+  costUsd: number;
+  priceVersion: string;
+  idempotencyKey: string;
+  createdAt: string;
 }

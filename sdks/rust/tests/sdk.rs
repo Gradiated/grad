@@ -60,7 +60,7 @@ async fn typed_errors_carry_status_code_request_id_and_url() {
         "/v1/runs/conflict/resume" => {
             Reply::problem(409, "run_not_resumable", "Raise max_cost_usd.")
         }
-        "/v1/models" => Reply::bytes(
+        "/v1/base-models" => Reply::bytes(
             500,
             vec![("x-request-id", "req_hdr".into())],
             b"upstream exploded".to_vec(),
@@ -167,7 +167,7 @@ async fn connection_errors_name_the_url_and_the_cause() {
         "{}",
         msg
     );
-    assert!(msg.contains("/v1/models"), "{}", msg);
+    assert!(msg.contains("/v1/base-models"), "{}", msg);
     assert!(msg.to_lowercase().contains("refused"), "{}", msg);
     assert!(msg.contains("grad local up"), "{}", msg);
     assert!(!msg.contains("network_error"));
@@ -194,7 +194,7 @@ async fn idempotent_and_keyed_requests_retry_with_backoff() {
     let hits = Arc::new(AtomicUsize::new(0));
     let h = hits.clone();
     let srv = MockServer::start(move |r| match (r.method.as_str(), r.path()) {
-        ("GET", "/v1/models") => {
+        ("GET", "/v1/base-models") => {
             if h.fetch_add(1, Ordering::SeqCst) < 2 {
                 Reply::problem(503, "store_unavailable", "try again")
             } else {
@@ -212,7 +212,7 @@ async fn idempotent_and_keyed_requests_retry_with_backoff() {
     let c = client(&srv.url);
     let models = c.models().list().await.unwrap();
     assert_eq!(models[0].id, "qwen/qwen3-8b");
-    assert_eq!(srv.count("GET", "/v1/models"), 3);
+    assert_eq!(srv.count("GET", "/v1/base-models"), 3);
 
     let e = c
         .runs()
@@ -260,28 +260,40 @@ async fn posts_retry_on_429_and_honour_retry_after() {
         } else {
             Reply::json(
                 200,
-                json!({"accepted": 1, "deduplicated": 0, "records": []}),
+                json!({"name": "support", "model_id": "ws/support", "active_artifact_id": "art_1"}),
             )
         }
     });
     let c = client(&srv.url);
-    let r = c
-        .feedback()
-        .record(&[FeedbackEventInput {
-            idempotency_key: "k1".into(),
-            score: Some(1.0),
-            ..Default::default()
-        }])
+    let d = c
+        .deployments()
+        .create(
+            &DeployArtifactRequest {
+                artifact: "support-sft@latest".into(),
+                ..Default::default()
+            },
+            None,
+        )
         .await
         .unwrap();
-    assert_eq!(r.accepted, 1);
-    assert_eq!(srv.count("POST", "/v1/feedback"), 2);
-    let body = srv.last("POST", "/v1/feedback").unwrap().json();
-    assert_eq!(body["events"][0]["idempotency_key"], "k1");
-    assert!(
-        body["events"][0].get("session_id").is_none(),
-        "unset fields are not sent"
+    assert_eq!(d.model_id, "ws/support");
+    let sent: Vec<_> = srv
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "POST" && r.path() == "/v1/deployments")
+        .collect();
+    assert_eq!(sent.len(), 2);
+    let key = sent[0]
+        .header("idempotency-key")
+        .expect("POST sends an Idempotency-Key");
+    assert_eq!(
+        sent[1].header("idempotency-key"),
+        Some(key),
+        "retries reuse the key"
     );
+    let body = sent[1].json();
+    assert_eq!(body["artifact"], "support-sft@latest");
+    assert!(body.get("name").is_none(), "unset fields are not sent");
 }
 
 #[tokio::test]
@@ -314,8 +326,10 @@ async fn redirects_same_origin_get_only() {
     let other = MockServer::start(|_| Reply::json(200, json!({"data": []})));
     let other_url = other.url.clone();
     let srv = MockServer::start(move |r| match r.path() {
-        "/v1/models" => Reply::bytes(302, vec![("location", "/v1/models2".into())], vec![]),
-        "/v1/models2" => Reply::json(200, json!({"data": [{"id": "m"}]})),
+        "/v1/base-models" => {
+            Reply::bytes(302, vec![("location", "/v1/base-models2".into())], vec![])
+        }
+        "/v1/base-models2" => Reply::json(200, json!({"data": [{"id": "m"}]})),
         "/v1/datasets" => Reply::bytes(
             302,
             vec![("location", format!("{}/steal", other_url))],
@@ -329,7 +343,7 @@ async fn redirects_same_origin_get_only() {
     let models = c.models().list().await.unwrap();
     assert_eq!(models[0].id, "m");
     assert_eq!(
-        srv.last("GET", "/v1/models2")
+        srv.last("GET", "/v1/base-models2")
             .unwrap()
             .header("authorization"),
         Some("Bearer grad_test_key")
@@ -1030,14 +1044,6 @@ async fn resources_send_documented_wire_shapes() {
             200,
             json!({"deployment": {"name": "support-router"}, "feedback_count": 3, "average_score": 0.9}),
         ),
-        ("POST", "/v1/route") => Reply::json(
-            200,
-            json!({"model": "qwen/qwen3-8b", "confidence": 0.8, "inference_id": "inf_1"}),
-        ),
-        ("POST", "/v1/embeddings") => Reply::json(
-            200,
-            json!({"model": "m", "data": [{"index": 0, "embedding": [0.1, 0.2]}]}),
-        ),
         ("POST", "/v1/checkpoints/ck_1/promote") => Reply::json(
             201,
             json!({"id": "art_9", "name": "n", "version": "2026-11-27-1"}),
@@ -1112,25 +1118,6 @@ async fn resources_send_documented_wire_shapes() {
             .unwrap()
             .feedback_count,
         3
-    );
-    let d = c
-        .route(&RouteRequest {
-            deployment: "support-router".into(),
-            messages: vec![ChatMessage::user("hi")],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(d.model, "qwen/qwen3-8b");
-    assert_eq!(
-        srv.last("POST", "/v1/route").unwrap().json(),
-        json!({"deployment": "support-router", "messages": [{"role": "user", "content": "hi"}]})
-    );
-    assert_eq!(
-        c.embeddings("m", vec!["a".into()]).await.unwrap().data[0]
-            .embedding
-            .len(),
-        2
     );
     assert_eq!(
         c.checkpoints()

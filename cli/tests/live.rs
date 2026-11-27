@@ -1,7 +1,9 @@
 //! Live CLI suite against the real grad-server started by tests/harness/stack.ts.
 //!
 //! Skips cleanly when `server/api/node_modules/.bin/tsx` is missing (run
-//! `pnpm -C server/api install --frozen-lockfile`). The Cloud/torch test also
+//! `pnpm -C server/api install --frozen-lockfile`) or `GRAD_SKIP_LIVE=1` is set.
+//! Hosted serving is Cloud-only, so the self-hosted test only checks that
+//! `grad deploy` exits 6 with the download hint. The torch test also
 //! needs `GRAD_TRAINER_PYTHON` pointing at a Python with the pinned torch stack
 //! (for example /root/grad-work/venv-trainer/bin/python); it skips otherwise.
 
@@ -46,6 +48,10 @@ impl Drop for Stack {
 }
 
 fn start(args: &[&str]) -> Option<Stack> {
+    if std::env::var("GRAD_SKIP_LIVE").as_deref() == Ok("1") {
+        eprintln!("skipping live test: GRAD_SKIP_LIVE=1");
+        return None;
+    }
     let tsx = repo().join("server/api/node_modules/.bin/tsx");
     if !tsx.exists() {
         eprintln!(
@@ -485,17 +491,17 @@ fn torch_python() -> Option<String> {
 }
 
 #[test]
-fn live_cloud_quickstart_with_torch_worker() {
+fn live_router_quickstart_with_torch_worker() {
     if torch_python().is_none() {
         eprintln!(
             "skipping: set GRAD_TRAINER_PYTHON to a Python with torch, transformers and peft"
         );
         return;
     }
-    let Some(stack) = start(&["--cloud", "--worker", "torch"]) else {
+    let Some(stack) = start(&["--worker", "torch"]) else {
         return;
     };
-    let home = Home::new("cloud");
+    let home = Home::new("torch");
     let url = stack.url();
     ok(&grad(
         &home,
@@ -585,68 +591,6 @@ fn live_cloud_quickstart_with_torch_worker() {
         .dir
         .join("support-router/adapter_model.safetensors")
         .is_file());
-
-    let o = grad(&home, &["--json", "deploy", "support-router@latest"], &[]);
-    ok(&o);
-    let first = o.json()["data"]["active_artifact_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let o = grad(
-        &home,
-        &[
-            "--json",
-            "route",
-            "--deployment",
-            "support-router",
-            "--prompt",
-            "hard SQL join query 3",
-        ],
-        &[],
-    );
-    ok(&o);
-    assert!(o.json()["data"]["inference_id"].as_str().is_some());
-    // The fake Cloud routes between the candidates the trainer recorded in the manifest.
-    let model = o.json()["data"]["model"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert!(
-        model == "cheap/m" || model == "strong/m",
-        "routed to {model:?}, not a trained candidate"
-    );
-
-    // A second version (promoted checkpoint), then roll back to the first.
-    let o = grad(
-        &home,
-        &["--json", "runs", "checkpoints", "support-router"],
-        &[],
-    );
-    ok(&o);
-    let ckpt = o.json()["data"]["data"][0]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    ok(&grad(
-        &home,
-        &["runs", "promote", &ckpt, "--name", "support-router"],
-        &[],
-    ));
-    let o = grad(&home, &["--json", "deploy", "support-router@latest"], &[]);
-    ok(&o);
-    assert_ne!(
-        o.json()["data"]["active_artifact_id"].as_str().unwrap(),
-        first
-    );
-    let o = grad(
-        &home,
-        &["--json", "deployments", "rollback", "support-router"],
-        &[],
-    );
-    ok(&o);
-    assert_eq!(o.json()["data"]["active_artifact_id"], first.as_str());
-    let o = grad(&home, &["deployments", "status", "support-router"], &[]);
-    ok(&o);
 
     // docs: recipes/distillation.mdx (YAML) and recipes/reward-models.mdx (flags), tiny models.
     let prompts: String = (0..12)

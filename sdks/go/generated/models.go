@@ -993,6 +993,11 @@ type ListArtifactsResponse struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
+// ListBaseModelsResponse is generated from the OpenAPI schema.
+type ListBaseModelsResponse struct {
+	Data []TrainableModel `json:"data"`
+}
+
 // ListDatasetRecordsParams holds the query and header parameters of ListDatasetRecords.
 type ListDatasetRecordsParams struct {
 	Version *int
@@ -1105,11 +1110,6 @@ type ListImportsResponse struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// ListModelsResponse is generated from the OpenAPI schema.
-type ListModelsResponse struct {
-	Data []TrainableModel `json:"data"`
-}
-
 // ListRunCheckpointsParams holds the query and header parameters of ListRunCheckpoints.
 type ListRunCheckpointsParams struct {
 	// Limit Page size (default 50). Values above 200 are clamped to 200.
@@ -1142,6 +1142,20 @@ type ListRunsParams struct {
 // ListRunsResponse is generated from the OpenAPI schema.
 type ListRunsResponse struct {
 	Data []Run `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
+}
+
+// ListUsageParams holds the query and header parameters of ListUsage.
+type ListUsageParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
+	Limit  *int
+	Cursor *string
+}
+
+// ListUsageResponse is generated from the OpenAPI schema.
+type ListUsageResponse struct {
+	Data []UsageRecord `json:"data"`
 	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
 	NextCursor *string `json:"next_cursor"`
 }
@@ -1422,7 +1436,6 @@ type RecipeSpec struct {
 	Models            []string             `json:"models,omitempty"`
 	MaxQualityDrop    *float64             `json:"max_quality_drop,omitempty"`
 	ContextText       *string              `json:"context_text,omitempty"`
-	ContextURI        *string              `json:"context_uri,omitempty"`
 	NumTokens         *int                 `json:"num_tokens,omitempty"`
 	Temp              *float64             `json:"temp,omitempty"`
 	// Teacher CartridgeRecipe and DistillRecipe: the model to learn from. DistillRecipe also takes an artifact (name@version) with rollout off_policy.
@@ -1955,6 +1968,7 @@ func (m *TrajectoryOutput) UnmarshalJSON(data []byte) error {
 
 // UploadTicket is generated from the OpenAPI schema.
 type UploadTicket struct {
+	// UploadID The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless.
 	UploadID string             `json:"upload_id"`
 	Method   UploadTicketMethod `json:"method"`
 	// URL Absolute presigned URL, or a path relative to the API base URL (local storage).
@@ -1969,4 +1983,30 @@ type UploadTicketMethod string
 // Values of UploadTicketMethod.
 const (
 	UploadTicketMethodPut UploadTicketMethod = "PUT"
+)
+
+// UsageRecord is generated from the OpenAPI schema.
+type UsageRecord struct {
+	ID   string          `json:"id"`
+	Kind UsageRecordKind `json:"kind"`
+	// RefID The run or eval this usage belongs to.
+	RefID   string `json:"ref_id"`
+	Attempt int    `json:"attempt"`
+	// TokensFrom The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).
+	TokensFrom     int     `json:"tokens_from"`
+	TokensThrough  int     `json:"tokens_through"`
+	Tokens         int     `json:"tokens"`
+	CostUSD        float64 `json:"cost_usd"`
+	PriceVersion   string  `json:"price_version"`
+	IdempotencyKey string  `json:"idempotency_key"`
+	CreatedAt      string  `json:"created_at"`
+}
+
+// UsageRecordKind is an enumeration of allowed values.
+type UsageRecordKind string
+
+// Values of UsageRecordKind.
+const (
+	UsageRecordKindRun  UsageRecordKind = "run"
+	UsageRecordKindEval UsageRecordKind = "eval"
 )

@@ -256,7 +256,6 @@ func TestRecipesSendOnlyUserSetFields(t *testing.T) {
 		{grad.DecisionModelRecipe{}, `{"kind":"decision"}`},
 		{grad.CartridgeRecipe{Context: grad.ContextFromText("ctx"), NumTokens: 512, Common: grad.Common{Adapter: grad.PrefixKV{NumTokens: 512}}}, `{"kind":"cartridge","adapter":{"kind":"prefix_kv","num_tokens":512},"context_text":"ctx","num_tokens":512}`},
 		{grad.CartridgeRecipe{Context: grad.ContextFromFile(ctxFile)}, `{"kind":"cartridge","context_text":"API docs"}`},
-		{grad.CartridgeRecipe{Context: grad.ContextFromURI("s3://b/k")}, `{"kind":"cartridge","context_uri":"s3://b/k"}`},
 		{grad.EmbeddingRecipe{Temp: 0.03}, `{"kind":"embedding","temp":0.03}`},
 		{grad.DecisionModelRecipe{Common: grad.Common{Adapter: grad.FrozenHead{}}}, `{"kind":"decision","adapter":{"kind":"frozen_head"}}`},
 		{grad.RawRecipe{Kind: "sft", BatchSize: grad.Int(8)}, `{"kind":"sft","batch_size":8}`},

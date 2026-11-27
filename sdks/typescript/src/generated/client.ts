@@ -52,6 +52,7 @@ import type {
   ScoreDatasetRequest,
   TrainableModel,
   UploadTicket,
+  UsageRecord,
 } from "./models.js";
 
 /** Which wire keys are renamed to camelCase, per schema (user-keyed maps are left verbatim). */
@@ -94,7 +95,7 @@ export const CODEC: CodecTable = {
   "PostEvalScoresRequest": { o: [["scores", "scores", { a: { o: [["outputId", "output_id", 0]] } }]] },
   "PostEvalScoresResponse": { o: [["pendingLocalScores", "pending_local_scores", 0]] },
   "PushDatasetRequest": { o: [["records", "records", { a: "DatasetRecord" }]] },
-  "RecipeSpec": { o: [["adapter", "adapter", "AdapterSpec"], ["lrScale", "lr_scale", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["maxQualityDrop", "max_quality_drop", 0], ["contextText", "context_text", 0], ["contextUri", "context_uri", 0], ["numTokens", "num_tokens", 0], ["rollout", "rollout", "RolloutSpec"], ["optimizer", "optimizer", "OptimizerSpec"], ["evalEvery", "eval_every", 0], ["loss", "loss", "LossSpec"], ["maxNewTokens", "max_new_tokens", 0], ["slotToken", "slot_token", 0]] },
+  "RecipeSpec": { o: [["adapter", "adapter", "AdapterSpec"], ["lrScale", "lr_scale", 0], ["batchSize", "batch_size", 0], ["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0], ["checkpointTtlDays", "checkpoint_ttl_days", 0], ["maxQualityDrop", "max_quality_drop", 0], ["contextText", "context_text", 0], ["numTokens", "num_tokens", 0], ["rollout", "rollout", "RolloutSpec"], ["optimizer", "optimizer", "OptimizerSpec"], ["evalEvery", "eval_every", 0], ["loss", "loss", "LossSpec"], ["maxNewTokens", "max_new_tokens", 0], ["slotToken", "slot_token", 0]] },
   "RecordFeedbackRequest": { o: [["events", "events", { a: "FeedbackEventInput" }]] },
   "RecordFeedbackResponse": { o: [["records", "records", { a: "FeedbackRecord" }]] },
   "RenderDatasetRequest": { o: [["trainOn", "train_on", 0], ["preserveThinking", "preserve_thinking", 0]] },
@@ -111,6 +112,7 @@ export const CODEC: CodecTable = {
   "TrajectoryInput": { o: [["messages", "messages", { a: "ChatMessage" }]] },
   "TrajectoryOutput": { o: [["turns", "turns", { a: "ChatMessage" }]] },
   "UploadTicket": { o: [["uploadId", "upload_id", 0], ["expiresAt", "expires_at", 0]] },
+  "UsageRecord": { o: [["refId", "ref_id", 0], ["tokensFrom", "tokens_from", 0], ["tokensThrough", "tokens_through", 0], ["costUsd", "cost_usd", 0], ["priceVersion", "price_version", 0], ["idempotencyKey", "idempotency_key", 0], ["createdAt", "created_at", 0]] },
 };
 
 export interface ListApiKeysParams {
@@ -136,6 +138,10 @@ export type ListArtifactsResponse = {
   data: Array<Artifact>;
   /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
+};
+
+export type ListBaseModelsResponse = {
+  data: Array<TrainableModel>;
 };
 
 export interface ListDatasetRecordsParams {
@@ -235,10 +241,6 @@ export type ListImportsResponse = {
   nextCursor: string | null;
 };
 
-export type ListModelsResponse = {
-  data: Array<TrainableModel>;
-};
-
 export interface ListRunCheckpointsParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
@@ -270,6 +272,18 @@ export type ListRunsResponse = {
   nextCursor: string | null;
 };
 
+export interface ListUsageParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListUsageResponse = {
+  data: Array<UsageRecord>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
+  nextCursor: string | null;
+};
+
 /** Largest `limit` accepted by `listApiKeys` (the server clamps larger values). */
 export const LIST_API_KEYS_LIMIT_MAX = 200;
 /** Largest `limit` accepted by `listArtifacts` (the server clamps larger values). */
@@ -296,6 +310,8 @@ export const LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200;
 export const LIST_RUN_METRICS_LIMIT_MAX = 5000;
 /** Largest `limit` accepted by `listRuns` (the server clamps larger values). */
 export const LIST_RUNS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listUsage` (the server clamps larger values). */
+export const LIST_USAGE_LIMIT_MAX = 200;
 
 /** Low-level client: one typed method per OpenAPI operation. */
 export class ApiClient {
@@ -501,6 +517,16 @@ export class ApiClient {
   }
 
   /**
+   * List trainable base models (the server catalog and price source)
+   *
+   * `GET /v1/base-models`
+   */
+  async listBaseModels(options?: RequestOptions): Promise<ListBaseModelsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/base-models` }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "TrainableModel" }]] }, data, "decode") as ListBaseModelsResponse;
+  }
+
+  /**
    * Read records of a dataset version
    *
    * `GET /v1/datasets/{name}/records`
@@ -581,16 +607,6 @@ export class ApiClient {
   }
 
   /**
-   * List trainable base models (the server catalog and price source)
-   *
-   * `GET /v1/models`
-   */
-  async listModels(options?: RequestOptions): Promise<ListModelsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/models` }, options);
-    return convertKeys(CODEC, { o: [["data", "data", { a: "TrainableModel" }]] }, data, "decode") as ListModelsResponse;
-  }
-
-  /**
    * List unexpired checkpoints of a run (best and final never expire)
    *
    * `GET /v1/runs/{id}/checkpoints`
@@ -628,6 +644,16 @@ export class ApiClient {
   }
 
   /**
+   * List billed usage, newest first: one record per run or eval attempt
+   *
+   * `GET /v1/usage`
+   */
+  async listUsage(params?: ListUsageParams, options?: RequestOptions): Promise<ListUsageResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/usage`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "UsageRecord" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListUsageResponse;
+  }
+
+  /**
    * Estimate tasks, model/judge calls, and cost before running an eval
    *
    * `POST /v1/evals/plan`
@@ -658,7 +684,7 @@ export class ApiClient {
   }
 
   /**
-   * Copy an exportable checkpoint into a new immutable artifact
+   * Release an exportable checkpoint as a named, versioned artifact (promoting it again under the same name returns that release)
    *
    * `POST /v1/checkpoints/{id}/promote`
    */

@@ -46,6 +46,9 @@ const ListRunMetricsLimitMax = 5000
 // ListRunsLimitMax is the largest limit accepted by ListRuns (the server clamps larger values).
 const ListRunsLimitMax = 200
 
+// ListUsageLimitMax is the largest limit accepted by ListUsage (the server clamps larger values).
+const ListUsageLimitMax = 200
+
 // Client is the generated low-level client: one typed method per OpenAPI operation.
 type Client struct {
 	T *Transport
@@ -382,6 +385,18 @@ func (c *Client) ListArtifacts(ctx context.Context, params *ListArtifactsParams,
 	return &out, nil
 }
 
+// ListBaseModels calls GET /v1/base-models.
+//
+// List trainable base models (the server catalog and price source).
+func (c *Client) ListBaseModels(ctx context.Context, opts ...RequestOption) (*ListBaseModelsResponse, error) {
+	spec := RequestSpec{Method: "GET", Path: "/v1/base-models"}
+	var out ListBaseModelsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListDatasetRecords calls GET /v1/datasets/{name}/records.
 //
 // Read records of a dataset version.
@@ -584,18 +599,6 @@ func (c *Client) ListImports(ctx context.Context, params *ListImportsParams, opt
 	return &out, nil
 }
 
-// ListModels calls GET /v1/models.
-//
-// List trainable base models (the server catalog and price source).
-func (c *Client) ListModels(ctx context.Context, opts ...RequestOption) (*ListModelsResponse, error) {
-	spec := RequestSpec{Method: "GET", Path: "/v1/models"}
-	var out ListModelsResponse
-	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 // ListRunCheckpoints calls GET /v1/runs/{id}/checkpoints.
 //
 // List unexpired checkpoints of a run (best and final never expire).
@@ -692,6 +695,27 @@ func (c *Client) ListRuns(ctx context.Context, params *ListRunsParams, opts ...R
 	return &out, nil
 }
 
+// ListUsage calls GET /v1/usage.
+//
+// List billed usage, newest first: one record per run or eval attempt.
+func (c *Client) ListUsage(ctx context.Context, params *ListUsageParams, opts ...RequestOption) (*ListUsageResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/usage", Query: q}
+	var out ListUsageResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PlanEval calls POST /v1/evals/plan.
 //
 // Estimate tasks, model/judge calls, and cost before running an eval.
@@ -743,7 +767,7 @@ func (c *Client) PostEvalScores(ctx context.Context, id string, body *PostEvalSc
 
 // PromoteCheckpoint calls POST /v1/checkpoints/{id}/promote.
 //
-// Copy an exportable checkpoint into a new immutable artifact.
+// Release an exportable checkpoint as a named, versioned artifact (promoting it again under the same name returns that release).
 func (c *Client) PromoteCheckpoint(ctx context.Context, id string, body *PromoteCheckpointRequest, opts ...RequestOption) (*Artifact, error) {
 	p0, err := EscapePathParam("id", id)
 	if err != nil {

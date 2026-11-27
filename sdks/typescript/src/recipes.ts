@@ -75,7 +75,7 @@ export const pooling = {
 
 /** Text baked into a cartridge. */
 export class Context {
-  private constructor(private readonly source: { text: string } | { uri: string } | { file: string }) {}
+  private constructor(private readonly source: { text: string } | { file: string }) {}
 
   static fromText(text: string): Context {
     return new Context({ text });
@@ -86,15 +86,9 @@ export class Context {
     return new Context({ file: path });
   }
 
-  /** A `s3://`, `gs://` or `https://` URI the trainer fetches. */
-  static fromUri(uri: string): Context {
-    return new Context({ uri });
-  }
-
   /** The RecipeSpec fields for this context. */
-  async toSpec(): Promise<Pick<RecipeSpec, "contextText" | "contextUri">> {
+  async toSpec(): Promise<Pick<RecipeSpec, "contextText">> {
     if ("text" in this.source) return { contextText: this.source.text };
-    if ("uri" in this.source) return { contextUri: this.source.uri };
     if (!isNodeRuntime()) throw new GradUsageError("Context.fromFile needs Node.js; use Context.fromText in a browser.", "node_only");
     const { readTextFile } = await import("./node/files.js");
     return { contextText: await readTextFile(this.source.file) };
@@ -233,7 +227,7 @@ export const recipes = {
     options: CommonRecipeOptions & { context: Context; numTokens?: number; teacher?: ModelRef; loss?: LossSpec; maxNewTokens?: number },
   ): Recipe => {
     const fields = build("cartridge", options, ["context", "numTokens", "teacher", "loss", "maxNewTokens"]);
-    if (!(options.context instanceof Context)) throw new GradUsageError("recipes.cartridge() needs context: Context.fromText/fromFile/fromUri(...).", "invalid_recipe");
+    if (!(options.context instanceof Context)) throw new GradUsageError("recipes.cartridge() needs context: Context.fromText/fromFile(...).", "invalid_recipe");
     return new Recipe(
       "cartridge",
       {

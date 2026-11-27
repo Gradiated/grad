@@ -14,7 +14,7 @@ from grad._transport import USER_AGENT, encode_query, quote_path_param
 
 class RequestShapeTests(unittest.TestCase):
     def test_headers_auth_user_agent_and_request_id(self) -> None:
-        client, sender, _ = make_client({"GET /v1/models": json_reply({"data": []})})
+        client, sender, _ = make_client({"GET /v1/base-models": json_reply({"data": []})})
         client.models.list()
         sent = sender.sent[0]
         self.assertEqual(sent.header("Authorization"), "Bearer grad_test_key")
@@ -24,7 +24,7 @@ class RequestShapeTests(unittest.TestCase):
         self.assertEqual(sent.header("Accept"), "application/json")
 
     def test_no_auth_header_without_key(self) -> None:
-        client, sender, _ = make_client({"GET /v1/models": json_reply({"data": []})}, api_key="", base_url="https://grad.internal")
+        client, sender, _ = make_client({"GET /v1/base-models": json_reply({"data": []})}, api_key="", base_url="https://grad.internal")
         client.models.list()
         self.assertIsNone(sender.sent[0].header("Authorization"))
 
@@ -139,12 +139,12 @@ class ErrorMappingTests(unittest.TestCase):
         self.assertIn("Is base_url pointing at grad-server", str(ctx.exception))
 
     def test_non_json_success_body_is_returned_raw(self) -> None:
-        client, _, _ = make_client({"GET /v1/models": Reply(200, b"plain", {"content-type": "text/plain"})})
-        self.assertEqual(client.wire.list_models(), b"plain")
+        client, _, _ = make_client({"GET /v1/base-models": Reply(200, b"plain", {"content-type": "text/plain"})})
+        self.assertEqual(client.wire.list_base_models(), b"plain")
 
     def test_empty_success_body(self) -> None:
-        client, _, _ = make_client({"GET /v1/models": Reply(204, b"")})
-        self.assertIsNone(client.wire.list_models())
+        client, _, _ = make_client({"GET /v1/base-models": Reply(204, b"")})
+        self.assertIsNone(client.wire.list_base_models())
 
     def test_retry_after_parsing(self) -> None:
         self.assertEqual(parse_retry_after("3"), 3.0)
@@ -159,7 +159,7 @@ class ErrorMappingTests(unittest.TestCase):
 
 class RetryTests(unittest.TestCase):
     def test_get_retries_5xx_with_backoff_then_succeeds(self) -> None:
-        client, sender, clock = make_client({"GET /v1/models": [problem(503, "busy"), problem(502, "bad"), json_reply({"data": []})]})
+        client, sender, clock = make_client({"GET /v1/base-models": [problem(503, "busy"), problem(502, "bad"), json_reply({"data": []})]})
         self.assertEqual(client.models.list(), [])
         self.assertEqual(len(sender.sent), 3)
         self.assertEqual(clock.sleeps, [0.375, 0.75])  # 0.5*2^n * (0.5 + 0.5/2)
@@ -167,22 +167,22 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(len(ids), 1, "a logical request keeps its id across retries")
 
     def test_retries_exhausted(self) -> None:
-        client, sender, _ = make_client({"GET /v1/models": problem(500, "boom")})
+        client, sender, _ = make_client({"GET /v1/base-models": problem(500, "boom")})
         with self.assertRaises(grad.ServerError):
             client.models.list()
         self.assertEqual(len(sender.sent), 3)
 
     def test_max_retries_zero(self) -> None:
-        client, sender, _ = make_client({"GET /v1/models": problem(503, "busy")}, max_retries=0)
+        client, sender, _ = make_client({"GET /v1/base-models": problem(503, "busy")}, max_retries=0)
         with self.assertRaises(grad.ServerError):
             client.models.list()
         self.assertEqual(len(sender.sent), 1)
 
     def test_retry_after_is_honoured(self) -> None:
-        client, _, clock = make_client({"GET /v1/models": [problem(429, "slow", **{"retry-after": "4"}), json_reply({"data": []})]})
+        client, _, clock = make_client({"GET /v1/base-models": [problem(429, "slow", **{"retry-after": "4"}), json_reply({"data": []})]})
         client.models.list()
         self.assertEqual(clock.sleeps, [4.0])
-        client, _, clock = make_client({"GET /v1/models": [problem(503, "slow", **{"retry-after": "9999"}), json_reply({"data": []})]})
+        client, _, clock = make_client({"GET /v1/base-models": [problem(503, "slow", **{"retry-after": "9999"}), json_reply({"data": []})]})
         client.models.list()
         self.assertEqual(clock.sleeps, [60.0])
 
@@ -245,23 +245,23 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(len(sender.sent), 3)
 
     def test_connection_errors_and_timeouts(self) -> None:
-        client, sender, _ = make_client({"GET /v1/models": refused()})
+        client, sender, _ = make_client({"GET /v1/base-models": refused()})
         with self.assertRaises(grad.APIConnectionError) as ctx:
             client.models.list()
         self.assertEqual(len(sender.sent), 3)
         self.assertIn("Cannot reach grad-server at https://api.test", str(ctx.exception))
         self.assertIn("GRADIATED_BASE_URL", str(ctx.exception))
         self.assertNotIsInstance(ctx.exception, grad.APITimeoutError)
-        client, sender, _ = make_client({"GET /v1/models": [timed_out(), json_reply({"data": []})]})
+        client, sender, _ = make_client({"GET /v1/base-models": [timed_out(), json_reply({"data": []})]})
         self.assertEqual(client.models.list(), [])
-        client, _, _ = make_client({"GET /v1/models": timed_out()}, max_retries=0)
+        client, _, _ = make_client({"GET /v1/base-models": timed_out()}, max_retries=0)
         with self.assertRaises(grad.APITimeoutError) as tctx:
             client.models.list()
         self.assertIsInstance(tctx.exception, TimeoutError)
         self.assertIsInstance(tctx.exception, grad.APIConnectionError)
 
     def test_body_read_failure_is_a_connection_error(self) -> None:
-        client, _, _ = make_client({"GET /v1/models": Reply(200, chunks=[b'{"da'], error=ConnectionResetError("reset"))})
+        client, _, _ = make_client({"GET /v1/base-models": Reply(200, chunks=[b'{"da'], error=ConnectionResetError("reset"))})
         with self.assertRaises(grad.APIConnectionError):
             client.models.list()
 
@@ -312,9 +312,9 @@ class SenderContractTests(unittest.TestCase):
             client.models.list()
 
     def test_json_body_rejects_nan(self) -> None:
-        client, _, _ = make_client({"POST /v1/feedback": json_reply({})})
+        client, _, _ = make_client({"POST /v1/deployments": json_reply({})})
         with self.assertRaises(ValueError):
-            client.wire.record_feedback({"events": [{"idempotency_key": "k", "score": float("nan")}]})
+            client.wire.deploy_artifact({"artifact": "a@1", "explore_rate": float("nan")})
         self.assertEqual(json.dumps({"a": 1}), '{"a": 1}')
 
 

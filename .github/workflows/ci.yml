@@ -196,7 +196,7 @@ jobs:
 
       # Unit + mock-server tests, CLI integration tests (assert_cmd) and the live
       # quickstart against tests/harness/stack.ts (server/api deps are installed
-      # above; the torch/Cloud live test skips without GRAD_TRAINER_PYTHON).
+      # above; the torch live test skips without GRAD_TRAINER_PYTHON).
       - name: Test Rust workspace with a coverage gate
         run: |
           rustup component add llvm-tools-preview

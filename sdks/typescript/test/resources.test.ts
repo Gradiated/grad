@@ -16,7 +16,6 @@ import {
   Judge,
   NotFoundError,
   Paginator,
-  RouteDecision,
   Scorer,
   Trajectory,
   ValidationError,
@@ -49,7 +48,7 @@ describe("configuration", () => {
   it("reads GRADIATED_API_KEY and GRADIATED_BASE_URL", async () => {
     process.env.GRADIATED_API_KEY = "grad_env";
     process.env.GRADIATED_BASE_URL = "http://localhost:8787";
-    const server = new FakeServer().on("GET", "/v1/models", json(wire("models.json")));
+    const server = new FakeServer().on("GET", "/v1/base-models", json(wire("models.json")));
     const grad = new Grad({ fetch: (async (u: string, i: RequestInit) => server.fetch(u.replace("http://localhost:8787", BASE), i)) as typeof fetch });
     expect(await grad.config()).toEqual({ baseURL: "http://localhost:8787", apiKeySource: "env" });
     await grad.models.list();
@@ -347,7 +346,7 @@ describe("datasets and imports", () => {
   });
 });
 
-describe("artifacts, deployments, routing, feedback", () => {
+describe("artifacts and deployments", () => {
   const artifactFixture = wire<{ id: string; name: string; version: string; sha256: string }>("artifact.json");
 
   it("gets and lists artifacts and maps 404", async () => {
@@ -397,49 +396,12 @@ describe("artifacts, deployments, routing, feedback", () => {
     expect((e as Error).message).toContain("vLLM or SGLang");
     expect((e as Error).message).toContain("POST http://grad.test/v1/deployments");
   });
-
-  it("routes and records feedback for the decision", async () => {
-    const server = new FakeServer().on("POST", "/v1/route", json(wire("route.json"))).on("POST", "/v1/feedback", json(wire("feedback-response.json")));
-    const { grad } = makeGrad(server);
-    const decision = await grad.route("support-router", { messages: [{ role: "user", content: "Where is invoice #9941?" }], tools: [], sessionId: "s1" });
-    expect(decision).toBeInstanceOf(RouteDecision);
-    expect(decision.model).toBe("qwen/qwen3-8b");
-    expect(server.lastBody("POST", "/v1/route")).toEqual({ deployment: "support-router", messages: [{ role: "user", content: "Where is invoice #9941?" }], tools: [], session_id: "s1" });
-    const fb = await decision.recordFeedback({ score: 1, metrics: { latency_ms: 412 } });
-    expect(fb.accepted).toBe(1);
-    expect(server.lastBody("POST", "/v1/feedback")).toEqual({
-      events: [{ idempotency_key: "inf_5d0c9e8a7b6f", inference_id: "inf_5d0c9e8a7b6f", deployment_name: "support-router", score: 1, metrics: { latency_ms: 412 } }],
-    });
-    expect(decision.toJSON().inferenceId).toBe("inf_5d0c9e8a7b6f");
-  });
-
-  it("records feedback events with documented defaults and validation", async () => {
-    const server = new FakeServer().on("POST", "/v1/feedback", json(wire("feedback-response.json")));
-    const { grad } = makeGrad(server);
-    await grad.feedback.record({ inferenceId: "inf_1", idempotencyKey: "inf_1-ci", score: 0, expectedOutput: { content: "fixed" }, sessionId: "s" });
-    expect(server.lastBody("POST", "/v1/feedback")).toEqual({ events: [{ idempotency_key: "inf_1-ci", inference_id: "inf_1", session_id: "s", score: 0, expected_output: { content: "fixed" } }] });
-    await grad.feedback.record([{ sessionId: "s2", score: 1 }, { deploymentName: "d", metrics: { x: 1 } }]);
-    const events = server.lastBody<{ events: Array<{ idempotency_key: string }> }>("POST", "/v1/feedback").events;
-    expect(events).toHaveLength(2);
-    expect(events[0]?.idempotency_key).toMatch(/[0-9a-f-]{36}/);
-    expect(events[0]?.idempotency_key).not.toBe(events[1]?.idempotency_key);
-    await expect(grad.feedback.record({ score: 2 })).rejects.toThrow(/\[0, 1\]/);
-    await expect(grad.feedback.record([])).rejects.toThrow(/at least one/);
-  });
-
-  it("creates embeddings", async () => {
-    const server = new FakeServer().on("POST", "/v1/embeddings", json(wire("embeddings.json")));
-    const { grad } = makeGrad(server);
-    const out = await grad.embeddings.create({ model: "ws_e2e/docs-embedder", input: ["a", "b"] });
-    expect(out.data).toHaveLength(2);
-    expect(out.usage.promptTokens).toBe(9);
-  });
 });
 
 describe("models, keys, low-level api", () => {
   it("lists models and manages keys", async () => {
     const server = new FakeServer()
-      .on("GET", "/v1/models", json(wire("models.json")))
+      .on("GET", "/v1/base-models", json(wire("models.json")))
       .on("POST", "/v1/keys", json(wire("api-key-created.json"), 201))
       .on("GET", "/v1/keys", json(wire("api-keys-page.json")))
       .on("DELETE", "/v1/keys/key_1", json({ ...wire<{ key: Record<string, unknown> }>("api-key-created.json").key, revoked_at: "2026-11-27T05:00:00Z" }));

@@ -8,7 +8,7 @@ export class ModelsResource {
 
   /** Trainable base models with their adapters, recipes and prices. */
   async list(options?: RequestOptions): Promise<TrainableModel[]> {
-    return (await this.core.api.listModels(options)).data;
+    return (await this.core.api.listBaseModels(options)).data;
   }
 }
 

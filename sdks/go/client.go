@@ -39,8 +39,6 @@ type Client struct {
 	Checkpoints *CheckpointsService
 	Artifacts   *ArtifactsService
 	Deployments *DeploymentsService
-	Feedback    *FeedbackService
-	Embeddings  *EmbeddingsService
 	Evals       *EvalsService
 	Keys        *KeysService
 
@@ -265,8 +263,6 @@ func NewClient(opts ...Option) *Client {
 	c.Checkpoints = &CheckpointsService{c: c}
 	c.Artifacts = &ArtifactsService{c: c}
 	c.Deployments = &DeploymentsService{c: c}
-	c.Feedback = &FeedbackService{c: c}
-	c.Embeddings = &EmbeddingsService{c: c}
 	c.Evals = &EvalsService{c: c}
 	c.Keys = &KeysService{c: c}
 	return c

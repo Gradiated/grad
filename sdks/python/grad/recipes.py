@@ -332,8 +332,8 @@ class CartridgeRecipe(Recipe):
     """Compresses a long document into a trainable PrefixKV cartridge.
 
     Attributes:
-        context: Required. ``Context.from_text(...)``, ``Context.from_file(...)`` or
-            ``Context.from_uri("s3://...")`` (a plain string is read as text).
+        context: Required. ``Context.from_text(...)`` or ``Context.from_file(...)``
+            (a plain string is read as text).
         num_tokens: Size of the prefix (``256``).
         teacher: The model reading the full context (the base model by default).
         loss: ``losses.TopKKLDistill(top_k=20)`` by default.
@@ -350,7 +350,7 @@ class CartridgeRecipe(Recipe):
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.context is None:
-            raise ValueError("CartridgeRecipe needs context=: Context.from_file(path), Context.from_text(...) or Context.from_uri(...).")
+            raise ValueError("CartridgeRecipe needs context=: Context.from_file(path) or Context.from_text(...).")
         if isinstance(self.context, str):
             self.context = Context.from_text(self.context)
         if not isinstance(self.context, Context):

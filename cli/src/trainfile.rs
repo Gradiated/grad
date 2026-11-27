@@ -171,11 +171,9 @@ pub fn parse_str(path: &Path, raw: &str) -> CliResult<RunFile> {
                         rf.params.insert("context_text".into(), Value::String(text));
                     } else if let Some(t) = m.get("text") {
                         rf.params.insert("context_text".into(), t.clone());
-                    } else if let Some(u) = m.get("uri") {
-                        rf.params.insert("context_uri".into(), u.clone());
                     } else {
                         return Err(CliError::usage(format!(
-                            "{}: context needs file, text or uri",
+                            "{}: context needs file or text",
                             path.display()
                         )));
                     }

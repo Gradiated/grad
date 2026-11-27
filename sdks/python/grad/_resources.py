@@ -37,20 +37,17 @@ from ._models import (
     DatasetScoring,
     Deployment,
     DeploymentStatus,
-    Embeddings,
     Eval,
     EvalFailures,
     EvalOutput,
     EvalPlan,
     EvalResult,
-    FeedbackResult,
     ImportJob,
     MetricPoint,
     Model,
     Page,
     Plan,
     RenderPreview,
-    RouteDecision,
     Run,
     TERMINAL_EVAL_STATUSES,
     TERMINAL_IMPORT_STATUSES,
@@ -111,7 +108,7 @@ class Models(_Resource):
 
     def list(self) -> list[Model]:
         """Every trainable base model, with prices and supported recipes."""
-        return [Model.from_api(m, self._client) for m in self._wire.list_models().get("data") or []]
+        return [Model.from_api(m, self._client) for m in self._wire.list_base_models().get("data") or []]
 
     def get(self, model_id: str) -> Model:
         """One catalog model; raises :class:`grad.NotFoundError` if the server does not offer it."""
@@ -125,7 +122,7 @@ class Models(_Resource):
             detail=f"Model {model_id!r} is not in this server's catalog (see client.models.list()).",
             request_id=None,
             method="GET",
-            url=self._client._transport.url("/v1/models"),
+            url=self._client._transport.url("/v1/base-models"),
         )
 
 
@@ -781,47 +778,6 @@ def _artifact_ref(artifact: Any) -> str:
             raise artifact._no_artifact()
         return artifact.artifact_id
     return model_ref(artifact)
-
-
-class EmbeddingsAPI(_Resource):
-    """``client.embeddings``: vectors from a deployed embedding artifact."""
-
-    def create(self, *, model: str, input: str | Sequence[str]) -> Embeddings:
-        """Embed one string or up to 256 strings."""
-        payload: str | list[str] = input if isinstance(input, str) else list(input)
-        return Embeddings.from_api(self._wire.create_embeddings({"model": model, "input": payload}), self._client)
-
-
-class Feedback(_Resource):
-    """``client.feedback``: outcome scores and gold corrections for deployed models."""
-
-    def record(
-        self,
-        *,
-        inference_id: str | None = None,
-        session_id: str | None = None,
-        deployment_name: str | None = None,
-        score: float | None = None,
-        expected_output: Any = None,
-        metrics: Mapping[str, float] | None = None,
-        idempotency_key: str | None = None,
-    ) -> FeedbackResult:
-        """Record one outcome. ``idempotency_key`` defaults to a hash of the event."""
-        event = h.feedback_event(
-            inference_id=inference_id,
-            session_id=session_id,
-            deployment_name=deployment_name,
-            score=score,
-            expected_output=expected_output,
-            metrics=metrics,
-            idempotency_key=idempotency_key,
-        )
-        return FeedbackResult.from_api(self._wire.record_feedback({"events": [event]}), self._client)
-
-    def record_many(self, events: Sequence[Mapping[str, Any]]) -> FeedbackResult:
-        """Record up to 1000 events in one call (each a dict of ``record()``'s keyword arguments)."""
-        built = [h.feedback_event(**{k: e.get(k) for k in ("inference_id", "session_id", "deployment_name", "score", "expected_output", "metrics", "idempotency_key")}) for e in events]
-        return FeedbackResult.from_api(self._wire.record_feedback({"events": built}), self._client)
 
 
 class Keys(_Resource):

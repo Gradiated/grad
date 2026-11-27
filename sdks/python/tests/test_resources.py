@@ -31,7 +31,7 @@ def with_status(run: dict[str, Any], status: str, **extra: Any) -> dict[str, Any
 
 class ModelsAndKeysTests(unittest.TestCase):
     def test_models(self) -> None:
-        client, _, _ = make_client({"GET /v1/models": json_reply(fixture("python-models.json"))})
+        client, _, _ = make_client({"GET /v1/base-models": json_reply(fixture("python-models.json"))})
         models = client.models.list()
         self.assertTrue(any(m.id == "test/tiny-qwen3" for m in models))
         tiny = client.models.get("test/tiny-qwen3")
@@ -643,15 +643,11 @@ class ServingTests(unittest.TestCase):
         "created_at": "t",
         "updated_at": "t",
     }
-    ROUTE = {"inference_id": "inf_1", "deployment": "support-router", "artifact_id": "support-router@2026-11-27-2", "model": "qwen/qwen3-8b", "is_exploration": False, "confidence": 0.91, "scores": {"qwen/qwen3-8b": 0.9}}
 
-    def test_deploy_route_feedback_rollback(self) -> None:
-        fb = fixture("python-feedback-response.json")
+    def test_deploy_status_list_rollback(self) -> None:
         client, sender, _ = make_client(
             {
                 "POST /v1/deployments": json_reply(self.DEPLOYMENT),
-                "POST /v1/route": json_reply(self.ROUTE),
-                "POST /v1/feedback": json_reply(fb),
                 "POST /v1/deployments/support-router/rollback": json_reply({**self.DEPLOYMENT, "active_artifact_id": "support-router@2026-11-27-1"}),
                 "GET /v1/deployments/support-router": json_reply({"deployment": self.DEPLOYMENT, "feedback_count": 1, "average_score": 1.0}),
                 "GET /v1/deployments": json_reply({"data": [self.DEPLOYMENT], "next_cursor": None}),
@@ -660,57 +656,16 @@ class ServingTests(unittest.TestCase):
         art = grad.Artifact.from_api(fixture("python-artifact.json"), client)
         dep = art.deploy(name="support-router", fallback="qwen/qwen3-32b", explore_rate=0.05)
         self.assertEqual(sender.sent[0].json, {"artifact": art.ref, "name": "support-router", "fallback": "qwen/qwen3-32b", "explore_rate": 0.05})
-        decision = client.route("support-router", messages=[{"role": "user", "content": "Where is invoice #9941?"}], tools=[{"type": "function"}], session_id="s1")
-        self.assertEqual(decision.model, "qwen/qwen3-8b")
-        self.assertEqual(sender.sent[1].json["tools"], [{"type": "function"}])
-        result = decision.record_feedback(score=1.0, metrics={"latency_ms": 120})
-        event = sender.sent[2].json["events"][0]
-        self.assertEqual(event["inference_id"], "inf_1")
-        self.assertEqual(event["deployment_name"], "support-router")
-        self.assertTrue(event["idempotency_key"].startswith("sdk:"))
-        self.assertEqual(result.accepted, 1)
-        decision.record_feedback(score=1.0, metrics={"latency_ms": 120})
-        self.assertEqual(sender.sent[3].json["events"][0]["idempotency_key"], event["idempotency_key"], "same outcome -> same key (deduplicated)")
-        decision.record_feedback(score=0.0, idempotency_key="custom")
-        self.assertEqual(sender.sent[4].json["events"][0]["idempotency_key"], "custom")
         self.assertEqual(dep.rollback().active_artifact_id, "support-router@2026-11-27-1")
         status = dep.status_summary()
         self.assertEqual((status.feedback_count, status.average_score), (1, 1.0))
         self.assertIsInstance(status.deployment, grad.Deployment)
         self.assertEqual([d.name for d in client.deployments.list()], ["support-router"])
-        client.route(dep, messages=[{"role": "user", "content": "x"}])
-        with self.assertRaises(ValueError):
-            client.route("support-router", messages=[])
-        with self.assertRaises(TypeError):
-            client.route(5, messages=[{"role": "user", "content": "x"}])
         run = grad.Run.from_api(RUN_C, client)
         client.deploy(run)
         self.assertEqual(sender.sent[-1].json, {"artifact": RUN_C["artifact_id"]})
         with self.assertRaises(RuntimeError):
             client.deploy(grad.Run.from_api(RUN_Q, client))
-
-    def test_feedback_validation_and_batch(self) -> None:
-        client, sender, _ = make_client({"POST /v1/feedback": json_reply(fixture("python-feedback-response.json"))})
-        client.feedback.record(inference_id="inf", idempotency_key="query-inf", score=True, expected_output={"content": "fix"})
-        self.assertEqual(sender.sent[0].json["events"][0], {"inference_id": "inf", "score": 1.0, "expected_output": {"content": "fix"}, "idempotency_key": "query-inf"})
-        client.feedback.record(inference_id="inf", score=1.0, expected_output=None)
-        self.assertNotIn("expected_output", sender.sent[1].json["events"][0])
-        with self.assertRaises(ValueError):
-            client.feedback.record(score=1.0)
-        with self.assertRaises(ValueError):
-            client.feedback.record(session_id="s", score=1.5)
-        res = client.feedback.record_many([{"session_id": "s1", "score": 0.5}, {"deployment_name": "d", "metrics": {"m": 1}}])
-        self.assertEqual(len(sender.sent[-1].json["events"]), 2)
-        self.assertEqual(res.records[0].idempotency_key, "k1")
-
-    def test_embeddings(self) -> None:
-        body = {"model": "docs-embedder", "data": [{"index": 1, "embedding": [0.0, 1.0]}, {"index": 0, "embedding": [1.0, 0.0]}], "usage": {"prompt_tokens": 2, "total_tokens": 2}}
-        client, sender, _ = make_client({"POST /v1/embeddings": json_reply(body)})
-        emb = client.embeddings.create(model="docs-embedder", input=("a", "b"))
-        self.assertEqual(emb.embeddings, [[1.0, 0.0], [0.0, 1.0]])
-        self.assertEqual(sender.sent[0].json["input"], ["a", "b"])
-        client.embeddings.create(model="docs-embedder", input="one")
-        self.assertEqual(sender.sent[1].json["input"], "one")
 
     def test_artifacts_list(self) -> None:
         client, sender, _ = make_client({"GET /v1/artifacts": json_reply(fixture("python-artifacts-page.json"))})
@@ -841,9 +796,6 @@ class EvalTests(unittest.TestCase):
         self.assertIn("503", str(ctx.exception))
         self.assertEqual(ctx.exception.eval.status, "failed")
         self.assertEqual(client.evals.wait(eid, raise_on_failure=False).status, "failed")
-        capped = {**completed, "status": "stopped_budget", "max_cost_usd": 0.1}
-        client, _, _ = make_client({f"GET /v1/evals/{eid}": json_reply(capped)})
-        self.assertEqual(client.evals.wait(eid).status, "stopped_budget")
         queued = fixture("python-eval-queued.json")
         client, _, _ = make_client(
             {

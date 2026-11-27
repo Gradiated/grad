@@ -77,7 +77,6 @@ describe("recipes", () => {
       optimizer: { kind: "adamw", betas: [0.9, 0.95], weightDecay: 0, gradClip: 1 },
     });
     expect(await spec(recipes.router({ models: ["a", "b"], rubric: "resolved" }))).toEqual({ kind: "router", models: ["a", "b"], rubric: "resolved" });
-    expect(await spec(recipes.cartridge({ context: Context.fromUri("s3://b/doc.md") }))).toEqual({ kind: "cartridge", contextUri: "s3://b/doc.md" });
     expect(
       await spec(recipes.cartridge({ context: Context.fromText("API docs"), numTokens: 512, teacher: "qwen/qwen3-32b", adapter: adapters.prefixKv({ numTokens: 512 }) })),
     ).toEqual({ kind: "cartridge", numTokens: 512, teacher: "qwen/qwen3-32b", adapter: { kind: "prefix_kv", numTokens: 512 }, contextText: "API docs" });

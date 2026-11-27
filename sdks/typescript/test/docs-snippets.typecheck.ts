@@ -38,21 +38,6 @@ export const followMetrics = async () => {
   }
 };
 
-export const routeAndFeedback = async () => {
-  const grad = new Grad();
-  const messages = [{ role: "user" as const, content: "Where is invoice #9941?" }];
-  const tools: unknown[] = [];
-  const decision = await grad.route("support-router", { messages, tools });
-  console.log(decision.model);
-  await decision.recordFeedback({ score: 1.0, metrics: { latency_ms: 12, output_tokens: 0 } });
-};
-
-export const feedback = async (inferenceId: string, humanFix: string | null) => {
-  const grad = new Grad();
-  await grad.feedback.record({ inferenceId, idempotencyKey: `${inferenceId}-ci`, score: 1.0 });
-  await new Grad().feedback.record({ inferenceId, score: 0.0, expectedOutput: humanFix ? { content: humanFix } : undefined });
-};
-
 export const deployArtifact = async () => {
   const grad = new Grad();
   const artifact = await grad.artifacts.get("fast-diff-merge@2026-11-26-1");

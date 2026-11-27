@@ -1,10 +1,9 @@
-//! `grad artifacts`, `grad deploy`, `grad deployments`, `grad route`, `grad embed`.
+//! `grad artifacts`, `grad deploy`, `grad deployments`.
 
-use grad_sdk::{Artifact, ChatMessage, DeployArtifactRequest, DownloadOptions, RouteRequest};
-use serde_json::json;
+use grad_sdk::{Artifact, DeployArtifactRequest, DownloadOptions};
 
 use super::{in_range, page, Ctx};
-use crate::cli::{ArtifactsCmd, DeployArgs, DeploymentsCmd, RouteArgs};
+use crate::cli::{ArtifactsCmd, DeployArgs, DeploymentsCmd};
 use crate::output::{num, opt, thousands, when, CliError, CliResult, Out};
 
 fn print_artifact(out: &Out, a: &Artifact) {
@@ -206,58 +205,4 @@ pub async fn deployments(ctx: &Ctx, action: DeploymentsCmd) -> CliResult {
         }
         DeploymentsCmd::Rollback { name } => rollback(ctx, &name).await,
     }
-}
-
-pub async fn route(ctx: &Ctx, a: RouteArgs) -> CliResult {
-    let c = ctx.client()?;
-    let messages: Vec<ChatMessage> = match (&a.prompt, &a.messages) {
-        (Some(p), _) => vec![ChatMessage::user(p.clone())],
-        (None, Some(path)) => {
-            let raw = std::fs::read_to_string(path)
-                .map_err(|e| CliError::usage(format!("--messages {}: {}", path.display(), e)))?;
-            serde_json::from_str(&raw).map_err(|e| {
-                CliError::usage(format!(
-                    "--messages {}: expected a JSON list of {{role, content}}: {}",
-                    path.display(),
-                    e
-                ))
-            })?
-        }
-        (None, None) => return Err(CliError::usage("pass --prompt or --messages")),
-    };
-    let d = c
-        .route(&RouteRequest {
-            deployment: a.deployment,
-            messages,
-            tools: None,
-            session_id: a.session_id,
-        })
-        .await?;
-    ctx.out.line(format!(
-        "{}  (confidence {}, {}inference {})",
-        d.model,
-        num(d.confidence),
-        if d.is_exploration {
-            "exploration, "
-        } else {
-            ""
-        },
-        d.inference_id
-    ));
-    ctx.out.done(&d)
-}
-
-pub async fn embed(ctx: &Ctx, model: &str, input: Vec<String>) -> CliResult {
-    let c = ctx.client()?;
-    let res = c.embeddings(model, input).await?;
-    for e in &res.data {
-        let head: Vec<String> = e.embedding.iter().take(4).map(|x| num(*x)).collect();
-        ctx.out.line(format!(
-            "[{}] dim {}: [{}, ...]",
-            e.index,
-            e.embedding.len(),
-            head.join(", ")
-        ));
-    }
-    ctx.out.done(&json!(res))
 }

@@ -31,7 +31,6 @@ __all__ = [
     "Dataset",
     "Deployment",
     "DeploymentStatus",
-    "Embeddings",
     "Eval",
     "EvalFailures",
     "EvalModelSummary",
@@ -39,21 +38,18 @@ __all__ = [
     "EvalPlan",
     "EvalReport",
     "EvalResult",
-    "FeedbackRecord",
-    "FeedbackResult",
     "ImportJob",
     "MetricPoint",
     "Model",
     "Page",
     "Plan",
     "RenderPreview",
-    "RouteDecision",
     "RouterParetoSummary",
     "Run",
 ]
 
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "stopped_budget"})
-TERMINAL_EVAL_STATUSES = frozenset({"completed", "stopped_budget", "failed", "cancelled"})
+TERMINAL_EVAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 TERMINAL_IMPORT_STATUSES = frozenset({"completed", "failed"})
 
 
@@ -765,94 +761,6 @@ class DeploymentStatus(APIObject):
 
     _repr_fields = ("deployment", "feedback_count", "average_score")
     _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"deployment": _deployment}
-
-
-@dataclass(kw_only=True, repr=False, eq=False)
-class RouteDecision(APIObject):
-    """Which model a router picked; call ``record_feedback(...)`` once you know the outcome."""
-
-    inference_id: str
-    model: str
-    deployment: str | None = None
-    artifact_id: str | None = None
-    is_exploration: bool = False
-    confidence: float | None = None
-    scores: dict[str, float] = field(default_factory=dict)
-
-    _repr_fields = ("model", "confidence", "inference_id")
-
-    def _feedback_kwargs(self, score: float | None, metrics: Mapping[str, float] | None, expected_output: Any, idempotency_key: str | None) -> dict[str, Any]:
-        return {
-            "inference_id": self.inference_id,
-            "deployment_name": self.deployment,
-            "score": score,
-            "metrics": metrics,
-            "expected_output": expected_output,
-            "idempotency_key": idempotency_key,
-        }
-
-
-    def record_feedback(
-        self,
-        *,
-        score: float | None = None,
-        metrics: Mapping[str, float] | None = None,
-        expected_output: Any = None,
-        idempotency_key: str | None = None,
-    ) -> FeedbackResult:
-        """Log the outcome of this routed request (deduplicated by ``idempotency_key``)."""
-        result: FeedbackResult = self._need_client().feedback.record(**self._feedback_kwargs(score, metrics, expected_output, idempotency_key))
-        return result
-
-
-@dataclass(kw_only=True, repr=False, eq=False)
-class Embeddings(APIObject):
-    """Embedding vectors in input order (``.embeddings``)."""
-
-    model: str
-    data: list[dict[str, Any]] = field(default_factory=list)
-    usage: dict[str, int] = field(default_factory=dict)
-
-    _repr_fields = ("model",)
-
-    @property
-    def embeddings(self) -> list[list[float]]:
-        """The vectors, ordered by input index."""
-        return [list(item["embedding"]) for item in sorted(self.data, key=lambda d: d.get("index", 0))]
-
-
-@dataclass(kw_only=True, repr=False, eq=False)
-class FeedbackRecord(APIObject):
-    """A stored feedback event."""
-
-    id: str
-    idempotency_key: str
-    inference_id: str | None = None
-    session_id: str | None = None
-    deployment_name: str | None = None
-    score: float | None = None
-    expected_output: Any = None
-    metrics: dict[str, float] = field(default_factory=dict)
-    workspace_id: str | None = None
-    created_at: str | None = None
-
-    _repr_fields = ("id", "idempotency_key", "score")
-
-
-def _feedback_records(value: Any, client: Any) -> Any:
-    return [FeedbackRecord.from_api(v, client) for v in value] if isinstance(value, list) else value
-
-
-@dataclass(kw_only=True, repr=False, eq=False)
-class FeedbackResult(APIObject):
-    """How many events were accepted vs deduplicated."""
-
-    accepted: int = 0
-    deduplicated: int = 0
-    records: list[FeedbackRecord] = field(default_factory=list)
-
-    _repr_fields = ("accepted", "deduplicated")
-    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"records": _feedback_records}
 
 
 @dataclass(kw_only=True, repr=False, eq=False)

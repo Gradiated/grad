@@ -119,7 +119,6 @@ class RecipeTests(unittest.TestCase):
             doc.write_text("# API\nUse keys.")
             spec = CartridgeRecipe(model="qwen/qwen3-8b", context=Context.from_file(doc), num_tokens=512, teacher="qwen/qwen3-32b").to_spec()
         self.assertEqual(spec, {"kind": "cartridge", "model": "qwen/qwen3-8b", "context_text": "# API\nUse keys.", "num_tokens": 512, "teacher": "qwen/qwen3-32b"})
-        self.assertEqual(CartridgeRecipe(context=Context.from_uri("s3://b/k")).to_spec()["context_uri"], "s3://b/k")
         self.assertEqual(CartridgeRecipe(context="inline text").to_spec()["context_text"], "inline text")
         self.assertEqual(CartridgeRecipe(context=Context.from_text("t"), loss=losses.TopKKLDistill(top_k=20)).to_spec()["kind"], "cartridge")
         with self.assertRaises(ValueError):
@@ -135,14 +134,10 @@ class RecipeTests(unittest.TestCase):
             CartridgeRecipe(context="t", num_tokens=8)
 
     def test_context_validation(self) -> None:
-        with self.assertRaises(ValueError):
-            Context()
-        with self.assertRaises(ValueError):
-            Context(text="a", uri="s3://x")
+        with self.assertRaises(TypeError):
+            Context(text=None)  # type: ignore[arg-type]
         with self.assertRaises(ValueError):
             Context.from_text("   ")
-        with self.assertRaises(ValueError):
-            Context.from_uri("not-a-uri")
         with self.assertRaises(ValueError):
             Context.from_text("x" * (MAX_CONTEXT_CHARS + 1))
 

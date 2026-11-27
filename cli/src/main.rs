@@ -31,8 +31,6 @@ async fn dispatch(cli: Cli, ctx: &Ctx) -> CliResult {
         Command::Artifacts { action } => serve::artifacts(ctx, action).await,
         Command::Deploy(a) => serve::deploy(ctx, a).await,
         Command::Deployments { action } => serve::deployments(ctx, action).await,
-        Command::Route(a) => serve::route(ctx, a).await,
-        Command::Embed { model, input } => serve::embed(ctx, &model, input).await,
         Command::Keys { action } => auth::keys(ctx, action).await,
         Command::Local { action } => local::local(ctx, action).await,
     }

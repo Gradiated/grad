@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from .._transport import Transport
 
-__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -755,7 +755,6 @@ RecipeSpec = TypedDict(
         "models": "NotRequired[list[str]]",
         "max_quality_drop": "NotRequired[float]",
         "context_text": "NotRequired[str]",
-        "context_uri": "NotRequired[str]",
         "num_tokens": "NotRequired[int]",
         "temp": "NotRequired[float]",
         "teacher": "NotRequired[str]",
@@ -837,7 +836,7 @@ ReportTrainerProgressResponse = TypedDict(
     {
         "status": "RunStatus",
         "should_stop": "bool",
-        "stop_reason": "Literal['cancelled', 'budget'] | None",
+        "stop_reason": "Literal['cancelled', 'budget', 'insufficient_balance'] | None",
         "cost_usd": "float",
     },
 )
@@ -1003,7 +1002,7 @@ TrainerHeartbeatResponse = TypedDict(
     {
         "status": "str",
         "should_stop": "bool",
-        "stop_reason": "Literal['cancelled', 'budget'] | None",
+        "stop_reason": "Literal['cancelled', 'budget', 'insufficient_balance'] | None",
         "lease_expires_at": "str",
     },
 )
@@ -1067,6 +1066,23 @@ UploadTicket = TypedDict(
     },
 )
 
+UsageRecord = TypedDict(
+    "UsageRecord",
+    {
+        "id": "str",
+        "kind": "Literal['run', 'eval']",
+        "ref_id": "str",
+        "attempt": "int",
+        "tokens_from": "int",
+        "tokens_through": "int",
+        "tokens": "int",
+        "cost_usd": "float",
+        "price_version": "str",
+        "idempotency_key": "str",
+        "created_at": "str",
+    },
+)
+
 ListApiKeysResponse = TypedDict(
     "ListApiKeysResponse",
     {
@@ -1080,6 +1096,13 @@ ListArtifactsResponse = TypedDict(
     {
         "data": "list[Artifact]",
         "next_cursor": "str | None",
+    },
+)
+
+ListBaseModelsResponse = TypedDict(
+    "ListBaseModelsResponse",
+    {
+        "data": "list[TrainableModel]",
     },
 )
 
@@ -1140,13 +1163,6 @@ ListImportsResponse = TypedDict(
     },
 )
 
-ListModelsResponse = TypedDict(
-    "ListModelsResponse",
-    {
-        "data": "list[TrainableModel]",
-    },
-)
-
 ListRunCheckpointsResponse = TypedDict(
     "ListRunCheckpointsResponse",
     {
@@ -1159,6 +1175,14 @@ ListRunsResponse = TypedDict(
     "ListRunsResponse",
     {
         "data": "list[Run]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListUsageResponse = TypedDict(
+    "ListUsageResponse",
+    {
+        "data": "list[UsageRecord]",
         "next_cursor": "str | None",
     },
 )
@@ -1214,7 +1238,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "Problem": frozenset({"code", "detail", "request_id", "status", "title", "type"}),
     "PromoteCheckpointRequest": frozenset({"name"}),
     "PushDatasetRequest": frozenset({"metadata", "records"}),
-    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "context_uri", "epochs", "eval_every", "fallback", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rollout", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
+    "RecipeSpec": frozenset({"adapter", "batch_size", "beta", "checkpoint_ttl_days", "context_text", "epochs", "eval_every", "fallback", "kind", "loss", "lr", "lr_scale", "max_new_tokens", "max_quality_drop", "model", "models", "num_tokens", "optimizer", "pool", "preserve_thinking", "pricing", "reduction", "rollout", "rubric", "schedule", "select", "slot_token", "teacher", "temp", "thinking", "train_on", "warmup"}),
     "RecordFeedbackRequest": frozenset({"events"}),
     "RecordFeedbackResponse": frozenset({"accepted", "deduplicated", "records"}),
     "RegisterTrainerCheckpointRequest": frozenset({"attempt", "eval_score", "format", "metadata", "step", "upload_id", "worker_id"}),
@@ -1238,6 +1262,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "TrajectoryInput": frozenset({"features", "media", "messages", "payload", "tools"}),
     "TrajectoryOutput": frozenset({"payload", "turns"}),
     "UploadTicket": frozenset({"expires_at", "headers", "method", "upload_id", "url"}),
+    "UsageRecord": frozenset({"attempt", "cost_usd", "created_at", "id", "idempotency_key", "kind", "price_version", "ref_id", "tokens", "tokens_from", "tokens_through"}),
 }
 """Property names of every object schema (for client-side typo checks)."""
 
@@ -1274,6 +1299,7 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "get_run": ("GET", "/v1/runs/{id}"),
     "list_api_keys": ("GET", "/v1/keys"),
     "list_artifacts": ("GET", "/v1/artifacts"),
+    "list_base_models": ("GET", "/v1/base-models"),
     "list_dataset_records": ("GET", "/v1/datasets/{name}/records"),
     "list_datasets": ("GET", "/v1/datasets"),
     "list_deployments": ("GET", "/v1/deployments"),
@@ -1282,10 +1308,10 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "list_eval_results": ("GET", "/v1/evals/{id}/results"),
     "list_evals": ("GET", "/v1/evals"),
     "list_imports": ("GET", "/v1/imports"),
-    "list_models": ("GET", "/v1/models"),
     "list_run_checkpoints": ("GET", "/v1/runs/{id}/checkpoints"),
     "list_run_metrics": ("GET", "/v1/runs/{id}/metrics"),
     "list_runs": ("GET", "/v1/runs"),
+    "list_usage": ("GET", "/v1/usage"),
     "plan_eval": ("POST", "/v1/evals/plan"),
     "plan_run": ("POST", "/v1/runs/plan"),
     "post_eval_scores": ("POST", "/v1/evals/{id}/scores"),
@@ -1315,6 +1341,7 @@ LIST_IMPORTS_LIMIT_MAX = 200
 LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200
 LIST_RUN_METRICS_LIMIT_MAX = 5000
 LIST_RUNS_LIMIT_MAX = 200
+LIST_USAGE_LIMIT_MAX = 200
 
 
 class GeneratedApiClient:
@@ -1403,6 +1430,10 @@ class GeneratedApiClient:
         """List immutable artifacts (newest first)."""
         return cast("ListArtifactsResponse", self._t.request("GET", "/v1/artifacts", query={"limit": limit, "cursor": cursor, "name": name}, timeout=timeout))
 
+    def list_base_models(self, *, timeout: float | None = None) -> ListBaseModelsResponse:
+        """List trainable base models (the server catalog and price source)."""
+        return cast("ListBaseModelsResponse", self._t.request("GET", "/v1/base-models", timeout=timeout))
+
     def list_dataset_records(self, name: str, *, version: int | None = None, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> DatasetRecordsPage:
         """Read records of a dataset version."""
         return cast("DatasetRecordsPage", self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}/records", query={"version": version, "limit": limit, "cursor": cursor}, timeout=timeout))
@@ -1435,10 +1466,6 @@ class GeneratedApiClient:
         """List dataset import jobs (newest first)."""
         return cast("ListImportsResponse", self._t.request("GET", "/v1/imports", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_models(self, *, timeout: float | None = None) -> ListModelsResponse:
-        """List trainable base models (the server catalog and price source)."""
-        return cast("ListModelsResponse", self._t.request("GET", "/v1/models", timeout=timeout))
-
     def list_run_checkpoints(self, id: str, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunCheckpointsResponse:
         """List unexpired checkpoints of a run (best and final never expire)."""
         return cast("ListRunCheckpointsResponse", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/checkpoints", query={"limit": limit, "cursor": cursor}, timeout=timeout))
@@ -1455,6 +1482,10 @@ class GeneratedApiClient:
         """List training runs (newest first)."""
         return cast("ListRunsResponse", self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
+    def list_usage(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListUsageResponse:
+        """List billed usage, newest first: one record per run or eval attempt."""
+        return cast("ListUsageResponse", self._t.request("GET", "/v1/usage", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+
     def plan_eval(self, body: PlanEvalRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> PlanEvalResponse:
         """Estimate tasks, model/judge calls, and cost before running an eval."""
         return cast("PlanEvalResponse", self._t.request("POST", "/v1/evals/plan", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
@@ -1468,7 +1499,7 @@ class GeneratedApiClient:
         return cast("PostEvalScoresResponse", self._t.request("POST", f"/v1/evals/{quote_path_param(id, 'id')}/scores", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def promote_checkpoint(self, id: str, body: PromoteCheckpointRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> Artifact:
-        """Copy an exportable checkpoint into a new immutable artifact."""
+        """Release an exportable checkpoint as a named, versioned artifact (promoting it again under the same name returns that release)."""
         return cast("Artifact", self._t.request("POST", f"/v1/checkpoints/{quote_path_param(id, 'id')}/promote", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
     def push_dataset_records(self, name: str, body: PushDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Dataset:

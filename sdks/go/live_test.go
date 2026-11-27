@@ -3,7 +3,7 @@ package grad_test
 // Live tests: the docs' Go snippets, nearly verbatim, against a real grad-server
 // started by tests/harness/stack.ts. They skip when server/api/node_modules is
 // missing (pnpm -C server/api install --frozen-lockfile), with -short, or with
-// GRAD_SKIP_LIVE=1. The torch test needs GRAD_TRAINER_PYTHON (torch, transformers, peft).
+// GRAD_SKIP_LIVE=1.
 
 import (
 	"bufio"
@@ -39,6 +39,7 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
+// startStack boots the harness and stops it (and only it) when the test ends.
 func torchPython() string {
 	py := os.Getenv("GRAD_TRAINER_PYTHON")
 	if py == "" {
@@ -50,7 +51,6 @@ func torchPython() string {
 	return py
 }
 
-// startStack boots the harness and stops it (and only it) when the test ends.
 func startStack(t *testing.T, args ...string) *liveStack {
 	t.Helper()
 	if testing.Short() || os.Getenv("GRAD_SKIP_LIVE") == "1" {
@@ -229,6 +229,9 @@ func TestLiveSelfHosted(t *testing.T) {
 		if _, err := run.Deploy(ctx); !errors.As(err, &unavailable) {
 			t.Fatalf("deploy: %v", err)
 		}
+		if unavailable.Status != 501 || unavailable.Code != "deploy_unavailable" || !strings.Contains(unavailable.Detail, "download") {
+			t.Fatalf("deploy_unavailable without the self-serve hint: %+v", unavailable.GradError)
+		}
 		latest := must(client.Artifacts.Get(ctx, "support-sft@latest"))(t)
 		if latest.ID != run.Artifact.ID {
 			t.Fatalf("latest %s, run artifact %s", latest.ID, run.Artifact.ID)
@@ -357,7 +360,7 @@ func TestLiveSelfHosted(t *testing.T) {
 	})
 }
 
-func TestLiveCloudRouterWithTorch(t *testing.T) {
+func TestLiveCloudDistillAndRewardWithTorch(t *testing.T) {
 	if torchPython() == "" {
 		t.Skip("skipping: set GRAD_TRAINER_PYTHON to a Python with torch, transformers and peft")
 	}
@@ -365,67 +368,6 @@ func TestLiveCloudRouterWithTorch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	client := grad.NewClient(grad.WithBaseURL(stack.BaseURL), grad.WithAPIKey(stack.APIKey))
-
-	var b strings.Builder
-	for i := 0; i < 60; i++ {
-		hard := i%2 == 0
-		prompt := fmt.Sprintf("say hello %d", i)
-		cheap := 1.0
-		if hard {
-			prompt, cheap = fmt.Sprintf("hard SQL join query %d", i), 0
-		}
-		line, _ := json.Marshal(map[string]any{"session_id": fmt.Sprintf("s%d", i), "messages": []map[string]string{{"role": "user", "content": prompt}}, "scores": map[string]float64{"cheap/m": cheap, "strong/m": 1}})
-		b.Write(line)
-		b.WriteByte('\n')
-	}
-	traces := filepath.Join(t.TempDir(), "support_traces.jsonl")
-	if err := os.WriteFile(traces, []byte(b.String()), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	dataset := must(client.Datasets.Create(ctx, "support-prod"))(t)
-	must(dataset.ImportFile(ctx, traces).Wait(ctx))(t)
-	run := must(client.Runs.Create(ctx, grad.RunParams{
-		Dataset: dataset,
-		Name:    "support-router",
-		Recipe:  grad.RouterRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 8}, Models: []string{"cheap/m", "strong/m"}},
-	}).Wait(ctx))(t)
-	first := must(run.Deploy(ctx))(t)
-	if first.ActiveArtifactID != run.Artifact.ID {
-		t.Fatalf("deployed %s, want %s", first.ActiveArtifactID, run.Artifact.ID)
-	}
-
-	messages := []grad.Message{{Role: "user", Content: "hard SQL join query 3"}}
-	decision := must(client.Route(ctx, "support-router", grad.RouteInput{Messages: messages}))(t)
-	if decision.InferenceID == "" || decision.ArtifactID != run.Artifact.ID {
-		t.Fatalf("decision %+v", decision.RouteResponse)
-	}
-	// The fake Cloud routes between the candidates the trainer recorded in the manifest.
-	if decision.Model != "cheap/m" && decision.Model != "strong/m" {
-		t.Fatalf("routed to %q, not a trained candidate (manifest %v)", decision.Model, run.Artifact.Manifest["candidates"])
-	}
-	if err := decision.RecordFeedback(ctx, grad.Feedback{Score: 1.0, Metrics: map[string]float64{"latency_ms": 12}}); err != nil {
-		t.Fatal(err)
-	}
-	again := must(client.Feedback.RecordMany(ctx, grad.Feedback{InferenceID: decision.InferenceID, IdempotencyKey: decision.InferenceID, Score: 1.0}))(t)
-	if again.Deduplicated != 1 {
-		t.Fatalf("feedback replay %+v", again)
-	}
-
-	checkpoints := must(run.Checkpoints(ctx))(t)
-	promoted := must(checkpoints[0].Promote(ctx, "support-router"))(t)
-	second := must(promoted.Deploy(ctx, grad.WithDeploymentName("support-router")))(t)
-	if second.ActiveArtifactID == first.ActiveArtifactID {
-		t.Fatal("promoted checkpoint did not become active")
-	}
-	rolled := must(client.Deployments.Rollback(ctx, "support-router"))(t)
-	if rolled.ActiveArtifactID != first.ActiveArtifactID {
-		t.Fatalf("rollback active %s, want %s", rolled.ActiveArtifactID, first.ActiveArtifactID)
-	}
-	status := must(client.Deployments.Get(ctx, "support-router"))(t)
-	if status.FeedbackCount < 1 {
-		t.Fatalf("status %+v", status)
-	}
 
 	// docs: recipes/distillation.mdx and recipes/reward-models.mdx (tiny student and teacher)
 	var prompts, pairs []grad.Trajectory

@@ -129,7 +129,6 @@ func TestArtifactsGetListAndHelpers(t *testing.T) {
 		"GET /v1/artifacts":                      jsonBody(200, wire(t, "artifacts-page.json")),
 		"GET /v1/artifacts/" + id + "/download":  bundleRoute(payload, hex.EncodeToString(sum[:])),
 		"POST /v1/deployments":                   jsonBody(200, wire(t, "deployment.json")),
-		"POST /v1/embeddings":                    jsonBody(200, wire(t, "embeddings.json")),
 		"GET /v1/runs/" + art["run_id"].(string): jsonBody(200, wire(t, "run-completed.json")),
 	})
 	c, _ := f.client()
@@ -153,19 +152,6 @@ func TestArtifactsGetListAndHelpers(t *testing.T) {
 	if body := f.last("POST", "/v1/deployments").JSON(t); len(body) != 1 || body["artifact"] != id {
 		t.Fatalf("deploy body %v", body)
 	}
-	emb, err := a.Embed(ctx, "rotate api keys")
-	if err != nil || len(emb.Data) != 2 {
-		t.Fatalf("embed %v", err)
-	}
-	if body := f.last("POST", "/v1/embeddings").JSON(t); body["model"] != art["name"] || body["input"] != "rotate api keys" {
-		t.Fatalf("embed body %v", body)
-	}
-	if _, err := c.Embeddings.Create(ctx, "docs-embedder", "a", "b"); err != nil {
-		t.Fatal(err)
-	}
-	if body := f.last("POST", "/v1/embeddings").JSON(t); len(body["input"].([]any)) != 2 {
-		t.Fatalf("batch embed body %v", body)
-	}
 	run, err := c.Runs.Get(ctx, art["run_id"].(string))
 	if err != nil {
 		t.Fatal(err)
@@ -175,18 +161,16 @@ func TestArtifactsGetListAndHelpers(t *testing.T) {
 	}
 }
 
-func TestDeploymentsRouteFeedbackKeysModels(t *testing.T) {
+func TestDeploymentsKeysModels(t *testing.T) {
 	ctx := context.Background()
 	f := newFake(t, map[string]route{
 		"GET /v1/deployments/support-router":           jsonBody(200, wire(t, "deployment-status.json")),
 		"GET /v1/deployments":                          jsonBody(200, wire(t, "deployments-page.json")),
 		"POST /v1/deployments/support-router/rollback": jsonBody(200, wire(t, "deployment.json")),
-		"POST /v1/route":                               jsonBody(200, wire(t, "route.json")),
-		"POST /v1/feedback":                            jsonBody(200, wire(t, "feedback-response.json")),
 		"POST /v1/keys":                                jsonBody(201, wire(t, "api-key-created.json")),
 		"GET /v1/keys":                                 jsonBody(200, wire(t, "api-keys-page.json")),
 		"DELETE /v1/keys/key_1":                        jsonValue(200, wireMap(t, "api-key-created.json")["key"]),
-		"GET /v1/models":                               jsonBody(200, wire(t, "models.json")),
+		"GET /v1/base-models":                          jsonBody(200, wire(t, "models.json")),
 	})
 	c, _ := f.client()
 	st, err := c.Deployments.Get(ctx, "support-router")
@@ -198,36 +182,6 @@ func TestDeploymentsRouteFeedbackKeysModels(t *testing.T) {
 	}
 	if _, err := c.Deployments.Rollback(ctx, "support-router"); err != nil {
 		t.Fatal(err)
-	}
-
-	messages := []grad.Message{{Role: "user", Content: "Where is invoice #9941?"}}
-	decision, err := c.Route(ctx, "support-router", grad.RouteInput{Messages: messages, Tools: []map[string]any{{"type": "function"}}, SessionID: "s1"})
-	if err != nil || decision.Model != "qwen/qwen3-8b" || decision.InferenceID == "" {
-		t.Fatalf("route %+v %v", decision, err)
-	}
-	if body := f.last("POST", "/v1/route").JSON(t); body["deployment"] != "support-router" || body["session_id"] != "s1" || len(body["tools"].([]any)) != 1 {
-		t.Fatalf("route body %v", body)
-	}
-	if err := decision.RecordFeedback(ctx, grad.Feedback{Score: 0, Metrics: map[string]float64{"latency_ms": 412}}); err != nil {
-		t.Fatal(err)
-	}
-	ev := f.last("POST", "/v1/feedback").JSON(t)["events"].([]any)[0].(map[string]any)
-	if ev["inference_id"] != decision.InferenceID || ev["deployment_name"] != "support-router" || ev["idempotency_key"] != decision.InferenceID || ev["score"] != 0.0 {
-		t.Fatalf("feedback event %v", ev)
-	}
-	if err := c.Feedback.Record(ctx, grad.Feedback{SessionID: "s9", OmitScore: true, ExpectedOutput: map[string]any{"content": "fixed"}}); err != nil {
-		t.Fatal(err)
-	}
-	ev = f.last("POST", "/v1/feedback").JSON(t)["events"].([]any)[0].(map[string]any)
-	if _, has := ev["score"]; has || !strings.HasPrefix(ev["idempotency_key"].(string), "fb_") || ev["expected_output"].(map[string]any)["content"] != "fixed" {
-		t.Fatalf("feedback without score %v", ev)
-	}
-	resp, err := c.Feedback.RecordMany(ctx, grad.Feedback{InferenceID: "a", IdempotencyKey: "k1", Score: 1}, grad.Feedback{InferenceID: "b", Score: 0.5})
-	if err != nil || resp.Accepted != 1 {
-		t.Fatalf("many %v", err)
-	}
-	if evs := f.last("POST", "/v1/feedback").JSON(t)["events"].([]any); len(evs) != 2 || evs[0].(map[string]any)["idempotency_key"] != "k1" {
-		t.Fatalf("many body %v", evs)
 	}
 
 	key, err := c.Keys.Create(ctx, "ci", "runs:read", "datasets:write")
@@ -293,11 +247,6 @@ func TestEverythingSurfacesConfigErrors(t *testing.T) {
 	check("deployment", err)
 	_, err = c.Deployments.Rollback(ctx, "a")
 	check("rollback", err)
-	_, err = c.Route(ctx, "a", grad.RouteInput{})
-	check("route", err)
-	check("feedback", c.Feedback.Record(ctx, grad.Feedback{}))
-	_, err = c.Embeddings.Create(ctx, "m", "x")
-	check("embed", err)
 	_, err = c.Models.List(ctx)
 	check("models", err)
 	_, err = c.Keys.Create(ctx, "k")
@@ -317,16 +266,15 @@ func TestEverythingSurfacesConfigErrors(t *testing.T) {
 	_, err = c.Evals.Failures(ctx, "e", grad.FailureOptions{})
 	check("failures", err)
 	for name, seq := range map[string]func() error{
-		"datasets":    func() error { _, err := grad.Collect(c.Datasets.List(ctx)); return err },
-		"records":     func() error { _, err := grad.Collect(c.Datasets.Records(ctx, "d")); return err },
-		"imports":     func() error { _, err := grad.Collect(c.Imports.List(ctx)); return err },
-		"runs":        func() error { _, err := grad.Collect(c.Runs.List(ctx)); return err },
-		"metrics":     func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", false)); return err },
-		"follow":      func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", true)); return err },
-		"artifacts":   func() error { _, err := grad.Collect(c.Artifacts.List(ctx, "")); return err },
-		"deployments": func() error { _, err := grad.Collect(c.Deployments.List(ctx)); return err },
-		"evals":       func() error { _, err := grad.Collect(c.Evals.List(ctx)); return err },
-		"keys":        func() error { _, err := grad.Collect(c.Keys.List(ctx)); return err },
+		"datasets":  func() error { _, err := grad.Collect(c.Datasets.List(ctx)); return err },
+		"records":   func() error { _, err := grad.Collect(c.Datasets.Records(ctx, "d")); return err },
+		"imports":   func() error { _, err := grad.Collect(c.Imports.List(ctx)); return err },
+		"runs":      func() error { _, err := grad.Collect(c.Runs.List(ctx)); return err },
+		"metrics":   func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", false)); return err },
+		"follow":    func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", true)); return err },
+		"artifacts": func() error { _, err := grad.Collect(c.Artifacts.List(ctx, "")); return err },
+		"evals":     func() error { _, err := grad.Collect(c.Evals.List(ctx)); return err },
+		"keys":      func() error { _, err := grad.Collect(c.Keys.List(ctx)); return err },
 	} {
 		check(name, seq())
 	}

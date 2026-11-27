@@ -39,27 +39,6 @@ func Example_selfHosting() {
 	_ = client
 }
 
-func Example_route() {
-	ctx := context.Background()
-	client := grad.NewClient()
-	messages := []grad.Message{{Role: "user", Content: "Where is invoice #9941?"}}
-
-	decision, err := client.Route(ctx, "support-router", grad.RouteInput{Messages: messages})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(decision.Model)
-
-	userResolved := true
-	score := 0.0
-	if userResolved {
-		score = 1.0
-	}
-	if err := decision.RecordFeedback(ctx, grad.Feedback{Score: score}); err != nil {
-		log.Fatal(err)
-	}
-}
-
 func Example_planAndCreate() {
 	ctx := context.Background()
 	client := grad.NewClient()
@@ -114,17 +93,6 @@ func Example_deployArtifact() {
 	client := grad.NewClient()
 	artifact, _ := client.Artifacts.Get(ctx, "fast-diff-merge@2026-11-26-1")
 	_, _ = artifact.Deploy(ctx)
-}
-
-func Example_feedback() {
-	ctx := context.Background()
-	client := grad.NewClient()
-	inferenceID := "inf_123" // from the x-gradiated-inference-id response header
-	_ = client.Feedback.Record(ctx, grad.Feedback{
-		InferenceID:    inferenceID,
-		IdempotencyKey: inferenceID + "-ci",
-		Score:          1.0,
-	})
 }
 
 func Example_trajectories() {

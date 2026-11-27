@@ -325,26 +325,6 @@ impl Client {
     pub fn evals(&self) -> Evals<'_> {
         Evals { c: self }
     }
-    pub fn feedback(&self) -> Feedback<'_> {
-        Feedback { c: self }
-    }
-
-    /// Ask a deployed router which model should answer (`POST /v1/route`).
-    pub async fn route(&self, req: &RouteRequest) -> Result<RouteResponse> {
-        self.transport
-            .json(transport::Req::post("/v1/route").json(serde_json::to_value(req).map_err(enc)?))
-            .await
-    }
-
-    /// Embed text with a deployed embedding artifact (`POST /v1/embeddings`).
-    pub async fn embeddings(&self, model: &str, input: Vec<String>) -> Result<EmbedResponse> {
-        self.transport
-            .json(
-                transport::Req::post("/v1/embeddings")
-                    .json(serde_json::json!({ "model": model, "input": input })),
-            )
-            .await
-    }
 }
 
 pub(crate) fn enc(e: serde_json::Error) -> Error {

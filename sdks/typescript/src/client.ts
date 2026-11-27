@@ -14,7 +14,7 @@ import {
 import { DEFAULT_BASE_URL, defaultConfigPath, loadProfile, validateBaseURL } from "./config.js";
 import type { Core } from "./core.js";
 import { defaultPollContext, type PollContext } from "./polling.js";
-import { Artifact, ArtifactsResource, deployArtifact, DeploymentsResource, EmbeddingsResource, FeedbackResource, route, type ArtifactRef, type DeployOptions, type RouteDecision, type RouteInput } from "./resources/artifacts.js";
+import { Artifact, ArtifactsResource, deployArtifact, DeploymentsResource, type ArtifactRef, type DeployOptions } from "./resources/artifacts.js";
 import { DatasetsResource, ImportsResource } from "./resources/datasets.js";
 import { EvalsResource } from "./resources/evals.js";
 import { KeysResource, ModelsResource } from "./resources/misc.js";
@@ -141,8 +141,6 @@ export class Grad {
   readonly checkpoints: CheckpointsResource;
   readonly artifacts: ArtifactsResource;
   readonly deployments: DeploymentsResource;
-  readonly feedback: FeedbackResource;
-  readonly embeddings: EmbeddingsResource;
   readonly evals: EvalsResource;
   readonly keys: KeysResource;
   readonly #transport: LazyTransport;
@@ -170,8 +168,6 @@ export class Grad {
     this.checkpoints = new CheckpointsResource(this.#core);
     this.artifacts = new ArtifactsResource(this.#core);
     this.deployments = new DeploymentsResource(this.#core);
-    this.feedback = new FeedbackResource(this.#core);
-    this.embeddings = new EmbeddingsResource(this.#core);
     this.evals = new EvalsResource(this.#core);
     this.keys = new KeysResource(this.#core);
   }
@@ -180,11 +176,6 @@ export class Grad {
   async config(): Promise<{ baseURL: string; apiKeySource: ResolvedConfig["apiKeySource"] }> {
     const { config } = await this.#transport.resolve();
     return { baseURL: config.baseURL, apiKeySource: config.apiKeySource };
-  }
-
-  /** Asks a deployed router which model should answer; record the outcome with `decision.recordFeedback()`. */
-  route(deployment: string, input: RouteInput): Promise<RouteDecision> {
-    return route(this.#core, deployment, input);
   }
 
   /** Deploys an artifact (same as `grad.deployments.create`). */

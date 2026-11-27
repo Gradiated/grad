@@ -441,31 +441,6 @@ string_enum! {
     }
 }
 
-/// Generated from the OpenAPI schema `EmbedResponse`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct EmbedResponse {
-    pub model: String,
-    pub data: Vec<EmbedResponseDataItem>,
-    pub usage: EmbedResponseUsage,
-}
-
-/// Generated from the OpenAPI schema `EmbedResponseDataItem`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct EmbedResponseDataItem {
-    pub index: i64,
-    pub embedding: Vec<f64>,
-}
-
-/// Generated from the OpenAPI schema `EmbedResponseUsage`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct EmbedResponseUsage {
-    pub prompt_tokens: i64,
-    pub total_tokens: i64,
-}
-
 string_enum! {
     /// `eval` generates outputs from `models`; `score` (`dataset.score()`) grades each record's own output (model `record`) and writes the scores to the dataset's next version.
     EvalMode {
@@ -800,42 +775,6 @@ pub struct EvalTaskOutcome {
     pub sample_scores: Vec<f64>,
     pub judge_model: Option<String>,
     pub record: DatasetRecord,
-}
-
-/// Generated from the OpenAPI schema `FeedbackEventInput`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FeedbackEventInput {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub inference_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deployment_name: Option<String>,
-    pub idempotency_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expected_output: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metrics: Option<BTreeMap<String, f64>>,
-}
-
-/// Generated from the OpenAPI schema `FeedbackRecord`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FeedbackRecord {
-    pub id: String,
-    pub workspace_id: String,
-    pub inference_id: Option<String>,
-    pub session_id: Option<String>,
-    pub deployment_name: Option<String>,
-    pub idempotency_key: String,
-    pub score: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expected_output: Option<Value>,
-    pub metrics: BTreeMap<String, f64>,
-    pub created_at: String,
 }
 
 /// Generated from the OpenAPI schema `FilterDatasetRequest`.
@@ -1284,8 +1223,6 @@ pub struct RecipeSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_uri: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub num_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temp: Option<f64>,
@@ -1322,7 +1259,7 @@ pub struct RecipeSpec {
 
 impl RecipeSpec {
     /// Every property name in the schema.
-    pub const FIELDS: &'static [&'static str] = &["kind", "model", "adapter", "lr", "lr_scale", "batch_size", "epochs", "schedule", "warmup", "train_on", "thinking", "preserve_thinking", "reduction", "select", "checkpoint_ttl_days", "beta", "models", "max_quality_drop", "context_text", "context_uri", "num_tokens", "temp", "teacher", "rollout", "optimizer", "eval_every", "loss", "pool", "rubric", "pricing", "fallback", "max_new_tokens", "slot_token"];
+    pub const FIELDS: &'static [&'static str] = &["kind", "model", "adapter", "lr", "lr_scale", "batch_size", "epochs", "schedule", "warmup", "train_on", "thinking", "preserve_thinking", "reduction", "select", "checkpoint_ttl_days", "beta", "models", "max_quality_drop", "context_text", "num_tokens", "temp", "teacher", "rollout", "optimizer", "eval_every", "loss", "pool", "rubric", "pricing", "fallback", "max_new_tokens", "slot_token"];
 }
 
 string_enum! {
@@ -1365,15 +1302,6 @@ string_enum! {
         Last => "last",
         AllAssistant => "all_assistant",
     }
-}
-
-/// Generated from the OpenAPI schema `RecordFeedbackResponse`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RecordFeedbackResponse {
-    pub accepted: i64,
-    pub deduplicated: i64,
-    pub records: Vec<FeedbackRecord>,
 }
 
 /// Generated from the OpenAPI schema `RenderDatasetRequest`.
@@ -1588,31 +1516,6 @@ string_enum! {
     }
 }
 
-/// Generated from the OpenAPI schema `RouteRequest`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RouteRequest {
-    pub deployment: String,
-    pub messages: Vec<ChatMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<BTreeMap<String, Value>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-}
-
-/// Generated from the OpenAPI schema `RouteResponse`.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RouteResponse {
-    pub inference_id: String,
-    pub deployment: String,
-    pub artifact_id: String,
-    pub model: String,
-    pub is_exploration: bool,
-    pub confidence: f64,
-    pub scores: BTreeMap<String, f64>,
-}
-
 /// Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no report prompt was scored for every candidate.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -1780,6 +1683,7 @@ pub struct TrajectoryOutput {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UploadTicket {
+    /// The file's sha256: uploads are content-addressed, so re-uploading the same bytes is harmless.
     pub upload_id: String,
     pub method: UploadTicketMethod,
     /// Absolute presigned URL, or a path relative to the API base URL (local storage).
@@ -1821,3 +1725,5 @@ pub const LIST_RUN_CHECKPOINTS_LIMIT_MAX: u32 = 200;
 pub const LIST_RUN_METRICS_LIMIT_MAX: u32 = 5000;
 /// Largest `limit` accepted by `list_runs` (the server clamps larger values).
 pub const LIST_RUNS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_usage` (the server clamps larger values).
+pub const LIST_USAGE_LIMIT_MAX: u32 = 200;

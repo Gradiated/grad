@@ -1,7 +1,7 @@
 # @gradiated/grad
 
-TypeScript SDK for the Gradiated training and serving platform: import traces,
-train routers and fine-tunes, deploy, route, and record feedback. ESM with
+TypeScript SDK for the Gradiated training platform: import traces, train
+routers and fine-tunes, evaluate them, and deploy to Gradiated Cloud. ESM with
 types, Node 20+. Browser-safe except the file helpers (`importFile`,
 `download`, `Context.fromFile`), which load `node:fs` lazily.
 
@@ -25,11 +25,12 @@ const run = await grad.runs
   .wait({ onMetric: (m) => console.log(m.step, m.loss) });
 
 await run.deploy(); // Cloud; a self-hosted server raises DeployUnavailableError
-const decision = await grad.route("support-router", {
-  messages: [{ role: "user", content: "Where is invoice #9941?" }],
-});
-await decision.recordFeedback({ score: 1.0 });
+await grad.deployments.rollback("support-router"); // back to the previous artifact
 ```
+
+Self-hosted servers do not serve models: `artifact.download(dest)` and serve
+the bundle yourself (vLLM, SGLang). Production feedback reaches training
+through your observability tool and `grad sources`, not through this SDK.
 
 Against a self-hosted server pass the URL explicitly:
 `new Grad({ baseURL: "https://grad.internal.example", apiKey })`.
@@ -45,7 +46,7 @@ real `grad-server` started by `tests/harness/stack.ts`.
 | Runs | `grad.runs.plan/create/get/list/cancel/resume`, `run.wait()`, `run.metrics({ follow: true })` (SSE with reconnect), `run.checkpoints()`, `checkpoint.promote()` |
 | Recipes | `recipes.sft/dpo/router/decisionModel/cartridge/embedding/distill/rewardModel`, `rollouts`, `adapters`, `splits`, `Context` |
 | Artifacts | `grad.artifacts.get/list/stream`, `artifact.download(dest)` (streams to disk, verifies SHA-256) |
-| Serving | `grad.deployments.create/get/list/rollback`, `grad.route()`, `decision.recordFeedback()`, `grad.feedback.record()`, `grad.embeddings.create()` |
+| Deploy (Cloud) | `grad.deploy()` / `run.deploy()` / `artifact.deploy()` (= `grad.deployments.create`), `grad.deployments.get/list/rollback` |
 | Evals | `grad.evals.plan/create/get/list`, `ev.wait()` (runs local scorers), `ev.summaryTable()`, `ev.failures().toDataset()`; `Rubric`, `Scorer`, `Judge`, `validators` |
 | Keys, models | `grad.keys.create/list/revoke`, `grad.models.list()` |
 | Low level | `grad.api`: one typed method per OpenAPI operation |
@@ -59,7 +60,8 @@ that repeats a cursor stops the listing with `PaginationLoopError`.
 Every error extends `GradError` (`status`, `code`, `requestId`). HTTP errors
 map to `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`,
 `NotFoundError`, `ConflictError`, `ValidationError` (`fieldErrors`),
-`RateLimitError`, `ServerError`, `DeployUnavailableError`; waits throw
+`RateLimitError`, `ServerError`, `DeployUnavailableError`,
+`InferenceUnavailableError`; waits throw
 `RunFailedError`, `EvalFailedError`, `ImportFailedError` or
 `WaitTimeoutError`. Requests retry twice on 408/429/5xx with jittered
 backoff that honours `Retry-After`; every POST carries one `Idempotency-Key`

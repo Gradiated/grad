@@ -214,7 +214,7 @@ fn handler(r: &Recorded) -> Reply {
     let sse = r.header("accept") == Some("text/event-stream");
     match (r.method.as_str(), r.path()) {
         ("GET", "/health/ready") => Reply::json(200, json!({"status": "ready"})),
-        ("GET", "/v1/models") => Reply::json(
+        ("GET", "/v1/base-models") => Reply::json(
             200,
             json!({"data": [
                 {"id": "qwen/qwen3-0.6b", "family": "llm", "adapters": ["lora"], "recipes": ["router", "sft"], "max_context_tokens": 32768, "price_per_million_tokens_usd": 0.15},
@@ -333,14 +333,6 @@ fn handler(r: &Recorded) -> Reply {
         ("POST", "/v1/deployments/support-router/rollback") => Reply::json(
             200,
             json!({"name": "support-router", "active_artifact_id": "art_0", "status": "active"}),
-        ),
-        ("POST", "/v1/route") => Reply::json(
-            200,
-            json!({"inference_id": "inf_1", "deployment": "support-router", "model": "qwen/qwen3-8b", "confidence": 0.91, "is_exploration": false, "scores": {}}),
-        ),
-        ("POST", "/v1/embeddings") => Reply::json(
-            200,
-            json!({"model": "docs-embedder", "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}], "usage": {}}),
         ),
         ("POST", "/v1/keys") => Reply::json(
             201,
@@ -542,7 +534,7 @@ fn login_validates_and_writes_a_private_config() {
     let r = run(sb.grad(None), &["models", "list", "--json"]);
     expect(&r, 0);
     assert_eq!(
-        srv.last("GET", "/v1/models")
+        srv.last("GET", "/v1/base-models")
             .unwrap()
             .header("authorization"),
         Some("Bearer grad_good_key_123456")
@@ -659,7 +651,7 @@ fn api_errors_map_to_exit_codes_and_json_envelopes() {
         "/v1/runs/run_9/resume" => {
             Reply::problem(409, "run_not_resumable", "Raise max_cost_usd to resume.")
         }
-        "/v1/models" => Reply::problem(503, "store_unavailable", "Database down."),
+        "/v1/base-models" => Reply::problem(503, "store_unavailable", "Database down."),
         _ => Reply::problem(404, "not_found", "nope"),
     });
     let sb = Sandbox::new("errors");
@@ -719,13 +711,13 @@ fn api_errors_map_to_exit_codes_and_json_envelopes() {
     let r = run(sb.grad(u), &["--json", "models", "list"]);
     expect(&r, 1);
     assert_eq!(r.err_json()["error"]["status"], 503);
-    assert_eq!(srv.count("GET", "/v1/models"), 3, "GETs are retried");
+    assert_eq!(srv.count("GET", "/v1/base-models"), 3, "GETs are retried");
 
     // Connection refused: exit 1, names the URL and the cause, no "[0] network_error".
     let r = run(sb.grad(Some("http://127.0.0.1:9")), &["models", "list"]);
     expect(&r, 1);
     assert!(
-        r.stderr.contains("http://127.0.0.1:9") && r.stderr.contains("/v1/models"),
+        r.stderr.contains("http://127.0.0.1:9") && r.stderr.contains("/v1/base-models"),
         "{}",
         r.stderr
     );
@@ -752,7 +744,7 @@ fn global_flags_work_after_the_subcommand() {
     expect(&r, 0);
     assert_eq!(r.json()["ok"], true);
     assert_eq!(
-        srv.last("GET", "/v1/models")
+        srv.last("GET", "/v1/base-models")
             .unwrap()
             .header("authorization"),
         Some("Bearer grad_flag_key")
@@ -1465,7 +1457,7 @@ fn artifacts_download_extracts_a_verified_peft_directory() {
 }
 
 #[test]
-fn deploy_route_rollback_embed_and_keys() {
+fn deploy_rollback_and_keys() {
     let srv = api();
     let sb = Sandbox::new("serve");
     let u = Some(srv.url.as_str());
@@ -1489,43 +1481,6 @@ fn deploy_route_rollback_embed_and_keys() {
     let r = run(sb.grad(u), &["deployments", "rollback", "support-router"]);
     expect(&r, 0);
     assert!(r.stdout.contains("art_0"));
-    let r = run(
-        sb.grad(u),
-        &[
-            "route",
-            "--deployment",
-            "support-router",
-            "--prompt",
-            "Reset password?",
-        ],
-    );
-    expect(&r, 0);
-    assert!(r.stdout.starts_with("qwen/qwen3-8b"));
-    std::fs::write(sb.path("m.json"), r#"[{"role": "user", "content": "hi"}]"#).unwrap();
-    let r = run(
-        sb.grad(u),
-        &[
-            "--json",
-            "route",
-            "--deployment",
-            "support-router",
-            "--messages",
-            "m.json",
-            "--session-id",
-            "s1",
-        ],
-    );
-    expect(&r, 0);
-    assert_eq!(r.json()["data"]["model"], "qwen/qwen3-8b");
-    assert_eq!(
-        srv.last("POST", "/v1/route").unwrap().json()["session_id"],
-        "s1"
-    );
-    let r = run(sb.grad(u), &["route", "--deployment", "x"]);
-    expect(&r, 2);
-    let r = run(sb.grad(u), &["embed", "--model", "docs-embedder", "hello"]);
-    expect(&r, 0);
-    assert!(r.stdout.contains("dim 3"));
 
     let r = run(
         sb.grad(u),
@@ -1846,7 +1801,7 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     );
     assert!(srv.count("GET", "/health/ready") >= 1);
     assert_eq!(
-        srv.last("GET", "/v1/models")
+        srv.last("GET", "/v1/base-models")
             .unwrap()
             .header("authorization"),
         Some(format!("Bearer {}", admin).as_str())
