@@ -627,7 +627,10 @@ describe("eval service", () => {
       request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
     );
     const running = h.worker.run(5);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    // Stop while all three calls are in flight.
+    for (let i = 0; i < 400 && fake.requests.length < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     await h.worker.stop();
     await running;
     const released = await t.deps.store.jobs.getById(created.id);

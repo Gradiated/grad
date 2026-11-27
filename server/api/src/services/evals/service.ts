@@ -57,6 +57,7 @@ import {
   queueLimits,
   RELEASE,
   requeuePatch,
+  workerKeyOf,
   type JobKindHandler,
   type JobQueue,
 } from "../jobs.js";
@@ -1147,7 +1148,12 @@ export const createEvalService = (
     datasetStream: async (principal, id, attempt) => {
       const row = await collaborators.queue().loadForWorker(principal, id);
       if (row.kind !== "eval") throw notFound("trainer_job", id);
-      if (row.attempt !== attempt || row.worker_id === null) {
+      // Only the credential holding the lease reads the eval's data.
+      if (
+        row.attempt !== attempt ||
+        row.worker_id === null ||
+        row.worker_key !== workerKeyOf(principal)
+      ) {
         throw leaseLost(id);
       }
       const record = await load(row.workspace_id, id);
