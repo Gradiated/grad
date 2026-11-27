@@ -16,23 +16,25 @@ class GradiatedFixture(ProviderFixture):
     name = "gradiated"
     secret = ""
     http = False
-    metadata_keys = ("model", "version")
+    metadata_keys = ("model", "version", "tags", "environment", "name")
 
     def __init__(self) -> None:
         super().__init__()
         self.stream: list[dict[str, Any]] = []  # one append-only stream, as the Cloud API reads it
 
     def add_trace(self, i: int, at: datetime) -> None:
+        p = self.remember(i, at)
+        meta = {k: p[k] for k in ("model", "version", "tags", "environment", "name", "user_id", "tier")}
         self.stream.append(
             {
                 "type": "trace",
                 "trace_id": self.trace_id(i),
-                "session_id": f"sess-{i}",
+                "session_id": p["session_id"],
                 "generation_id": f"gen-{i}",
                 "messages": self.messages(i),
                 "tools": [],
                 "output": {},
-                "metadata": {"model": f"m-{i}", "task": "support", "version": f"v-{i}", "grad_artifact_id": None, "source": "hosted", "started_at": iso(at)},
+                "metadata": {**meta, "task": "support", "grad_artifact_id": None, "source": "hosted", "started_at": iso(at)},
             }
         )
 

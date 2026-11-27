@@ -6,6 +6,10 @@ records (``metadata.score_update = true``: an ``id``, ``scores`` and/or ``expect
 no content). ``merge_records`` folds a dataset's parts, in order, into one record per id:
 later content replaces earlier content, later scores win per name, and an update for a trace
 that never arrives is dropped. The worker applies it before a recipe sees the records.
+
+A source with score filters (``has_feedback``, ``min_score``) can't judge a trace when it syncs
+it, because feedback arrives later. It writes the rule on the record (``metadata.score_filter``)
+and the merge keeps the record only once its merged scores pass (``passes_score_filter``).
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from typing import Any, Iterable
 MAX_DEPTH = 8
 SCORE_UPDATE = "score_update"
 DATASET_RESET = "dataset_reset"
+SCORE_FILTER = "score_filter"
 # A full source sync starts with this record: everything before it is dropped on read.
 RESET_RECORD: dict[str, Any] = {"id": "grad:reset", "metadata": {DATASET_RESET: True}}
 
@@ -221,4 +226,30 @@ def merge_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         by_id[rid] = new
         if rid in pending:
             _apply(new, pending.pop(rid))
-    return out
+    return [_admitted(r) for r in out if passes_score_filter(r)]
+
+
+def passes_score_filter(record: dict[str, Any]) -> bool:
+    """A merged record's ``metadata.score_filter``: ``has_feedback`` (a score or a correction),
+    ``min_score`` as a number (at least one score, every score at least it) or as
+    ``{name: number}`` (each named score present and at least it). No rule passes."""
+    meta = record.get("metadata")
+    rule = meta.get(SCORE_FILTER) if isinstance(meta, dict) else None
+    if not isinstance(rule, dict):
+        return True
+    scores = {k: v for k, v in (record.get("scores") or {}).items() if isinstance(v, (int, float))}
+    if rule.get("has_feedback") is True and not scores and record.get("expected_output") is None:
+        return False
+    minimum = rule.get("min_score")
+    if isinstance(minimum, (int, float)) and not isinstance(minimum, bool):
+        return bool(scores) and all(v >= minimum for v in scores.values())
+    if isinstance(minimum, dict):
+        return all(name in scores and scores[name] >= floor for name, floor in minimum.items())
+    return True
+
+
+def _admitted(record: dict[str, Any]) -> dict[str, Any]:
+    meta = record.get("metadata")
+    if not isinstance(meta, dict) or SCORE_FILTER not in meta:
+        return record
+    return {**record, "metadata": {k: v for k, v in meta.items() if k != SCORE_FILTER}}

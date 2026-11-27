@@ -6,9 +6,11 @@ from __future__ import annotations
 import contextlib
 import io
 import ipaddress
+import json
 import logging
 import unittest
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from fixtures.provider_server import FakeProviderServer
@@ -18,7 +20,8 @@ from fixtures.providers.base import NOW
 from grad_trainer.errors import PaginationLoopError, SourceAuthError
 from grad_trainer.providers import PROVIDERS, SyncEngine, build_provider
 from grad_trainer.providers.http import EgressPolicy
-from grad_trainer.records import RESET_RECORD, is_score_update, merge_records
+from grad_trainer.providers.filters import COMMON_FILTERS, sampled
+from grad_trainer.records import RESET_RECORD, SCORE_FILTER, is_score_update, merge_records
 from grad_trainer.recipes.data import extract_pairs, record_messages
 
 LOOPBACK = EgressPolicy(allow=(ipaddress.ip_network("127.0.0.0/8"),))
@@ -40,22 +43,24 @@ class ProviderContract:
 
     # -- helpers ------------------------------------------------------------------------
 
-    def provider(self, secret: str | None = None) -> Any:
-        source = {"provider": self.fx.name, "project": self.fx.project, "secret": self.fx.secret if secret is None else secret}
+    def provider(self, secret: str | None = None, filters: dict[str, Any] | None = None) -> Any:
+        source = {"provider": self.fx.name, "project": self.fx.project, "secret": self.fx.secret if secret is None else secret, "filters": filters}
         if self.server:
             source["host"] = self.server.url
         provider = build_provider(source, pull=None if self.fx.http else self.fx.pull, policy=LOOPBACK, sleep=self.sleeps.append)
         provider.page_size = 2  # several pages for a handful of traces
         return provider
 
-    def sync(self, watermark: Any = None, *, now: Any = NOW, full: bool = False, secret: str | None = None) -> tuple[list[dict], Any]:
+    def sync(
+        self, watermark: Any = None, *, now: Any = NOW, full: bool = False, secret: str | None = None, filters: dict[str, Any] | None = None, **engine_options: Any
+    ) -> tuple[list[dict], Any]:
         batches: list[list[dict]] = []
-        engine = SyncEngine(self.provider(secret), emit_batch=batches.append, batch_size=3, now=lambda: now)
+        engine = SyncEngine(self.provider(secret, filters), emit_batch=batches.append, batch_size=3, now=lambda: now, **engine_options)
         result = engine.run(watermark, full=full)
         return [r for b in batches for r in b], result
 
     def trace_ids(self, records: list[dict]) -> list[str]:
-        return sorted(r["id"] for r in records if not is_score_update(r))
+        return sorted(r["id"] for r in records if not is_score_update(r) and r != RESET_RECORD)
 
     def all_ids(self) -> list[str]:
         return sorted(self.fx.trace_id(i) for i in range(5))
@@ -183,6 +188,80 @@ class ProviderContract:
         self.assertEqual({k: meta.get(k) for k in self.fx.metadata_keys}, self.fx.expected_metadata(3))
         self.assertTrue(record.get("timestamp"))
 
+    # -- filters, sampling and caps (filters.py) ----------------------------------------
+
+    def filter_cases(self) -> list[tuple[dict[str, Any], list[int]]]:
+        at = lambda i: (NOW - timedelta(hours=2) + timedelta(minutes=i)).isoformat()  # noqa: E731
+        return [
+            ({"model": "m-3"}, [3]),
+            ({"version": ["v-1", "v-2"]}, [1, 2]),
+            ({"tags": ["prod", "beta"]}, [1, 3]),
+            ({"name": "triage"}, [2]),
+            ({"environment": "staging"}, [4]),
+            ({"user_id": "user-0"}, [0]),
+            ({"session_id": "sess-4"}, [4]),
+            ({"metadata": {"tier": "gold"}}, [1, 3]),
+            ({"from": at(1), "to": at(3)}, [1, 2]),
+            ({"model": ["m-1", "m-2", "m-3"], "tags": ["beta"], "environment": ["production"]}, [1, 3]),
+            ({"tags": ["nope"]}, []),
+        ]
+
+    def test_filters_select_traces_and_push_down_what_the_api_supports(self) -> None:
+        pushdown = PROVIDERS[self.fx.name].pushdown_filters
+        for filters, expected in self.filter_cases():
+            with self.subTest(filters=filters):
+                self.fx.served = set()
+                records, result = self.sync(filters=filters)
+                self.assertEqual(self.trace_ids(records), sorted(self.fx.trace_id(i) for i in expected))
+                self.assertEqual(result.filtered + result.traces, len(self.fx.served) if self.fx.http else 5)
+                if self.fx.http and set(filters) <= pushdown:
+                    self.assertEqual(self.fx.served, {self.fx.trace_id(i) for i in expected}, "pushed down: the API sent only matches")
+
+    def test_every_provider_accepts_the_common_filters(self) -> None:
+        cls = PROVIDERS[self.fx.name]
+        self.assertLessEqual(COMMON_FILTERS, cls.filter_keys)
+        self.assertLessEqual(cls.pushdown_filters, cls.filter_keys)
+
+    def test_score_filters_keep_a_trace_once_its_late_feedback_passes(self) -> None:
+        rule = {"min_score": {self.fx.synced_score("resolved"): 0.5}}
+        first, wm = self.sync(filters=rule)
+        self.assertTrue(all(r["metadata"][SCORE_FILTER] == rule for r in first if not is_score_update(r)))
+        self.assertEqual(merge_records(first), [], "no feedback yet: nothing passes")
+        self.fx.add_score(self.fx.trace_id(1), "resolved", 1.0, NOW + timedelta(minutes=20))
+        self.fx.add_score(self.fx.trace_id(2), "resolved", 0.0, NOW + timedelta(minutes=21))
+        second, _ = self.sync(wm.watermark, now=LATER, filters=rule)
+        merged = merge_records(first + second)
+        self.assertEqual([r["id"] for r in merged], [self.fx.trace_id(1)])
+        self.assertNotIn(SCORE_FILTER, merged[0]["metadata"])
+
+    def test_sampling_is_deterministic_per_trace_id(self) -> None:
+        for i in range(5, 40):
+            self.fx.add_trace(i, NOW - timedelta(hours=2) + timedelta(minutes=i))
+        keep = sorted(self.fx.trace_id(i) for i in range(40) if sampled(self.fx.trace_id(i), 0.5))
+        self.assertTrue(0 < len(keep) < 40)
+        records, result = self.sync(sample_rate=0.5)
+        self.assertEqual(self.trace_ids(records), keep)
+        self.assertEqual(result.sampled_out, 40 - len(keep))
+        again, _ = self.sync(sample_rate=0.5, full=True)
+        self.assertEqual(self.trace_ids(again), keep, "a re-sync keeps the same sample")
+        dropped = next(self.fx.trace_id(i) for i in range(40) if self.fx.trace_id(i) not in keep)
+        self.fx.add_score(dropped, "resolved", 1.0, NOW + timedelta(minutes=20))
+        late, _ = self.sync({"traces": None, "scores": None}, now=LATER, sample_rate=0.5)
+        self.assertNotIn(dropped, [r["id"] for r in late if is_score_update(r)], "feedback follows its trace's sample")
+
+    def test_record_cap_bounds_new_traces_but_not_feedback(self) -> None:
+        records, result = self.sync(max_records=2)
+        self.assertEqual(len(self.trace_ids(records)), 2)
+        self.assertEqual((result.traces, result.capped), (2, 3))
+        self.assertIn("over the record cap: 3 traces", result.notes())
+        synced = self.trace_ids(records)[0]
+        self.fx.add_score(synced, "resolved", 1.0, NOW + timedelta(minutes=20))
+        late, after = self.sync(result.watermark, now=LATER, max_records=0)
+        self.assertEqual([r["id"] for r in late if is_score_update(r)], [synced])
+        self.assertEqual(after.traces, 0)
+        merged = {r["id"]: r for r in merge_records(records + late)}
+        self.assertEqual(merged[synced]["scores"], {self.fx.synced_score("resolved"): 1.0})
+
 
 for _fixture in FIXTURES:
     _name = f"{_fixture.__name__.removesuffix('Fixture')}ContractTests"
@@ -192,6 +271,12 @@ for _fixture in FIXTURES:
 class RegistryTests(unittest.TestCase):
     def test_every_provider_has_a_contract_fixture(self) -> None:
         self.assertEqual({f.name for f in FIXTURES}, set(PROVIDERS))
+
+    def test_filter_keys_match_the_servers(self) -> None:
+        # grad-server validates against the same file (server/api/test/sources.test.ts).
+        wire = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "wire" / "source-filter-keys.json"
+        keys = json.loads(wire.read_text())["providers"]
+        self.assertEqual({name: set(cls.filter_keys) for name, cls in PROVIDERS.items()}, {name: set(k) for name, k in keys.items()})
 
 
 if __name__ == "__main__":

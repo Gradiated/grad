@@ -3,6 +3,10 @@ from ``GET /api/public/v3/scores``. The v1 ``GET /api/public/traces`` read API w
 Langfuse Cloud on 2026-11-16; file exports of v1 trace objects still import through
 ``to_record``.
 
+Filters: ``fromStartTime``/``toStartTime``, ``environment`` and the ``filter`` JSON conditions
+(tags all of, traceName/version/userId/sessionId any of, metadata ``=``). ``model`` and
+``release`` have no observation filter column and are applied after fetching.
+
 Secret: ``PUBLIC_KEY:SECRET_KEY`` (HTTP Basic). Keys are scoped to one project.
 Docs: https://langfuse.com/docs/api-and-data-platform/features/public-api
 """
@@ -10,6 +14,7 @@ Docs: https://langfuse.com/docs/api-and-data-platform/features/public-api
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any
 
 from ..errors import SourceAuthError
@@ -17,6 +22,8 @@ from ..records import coerce_messages, coerce_scores, maybe_json, record_metadat
 from .base import Page, Provider, Raw, ScoreUpdate, iso_or_none
 
 OBSERVATION_FIELDS = "core,basic,io,metadata,model,trace_context"
+# grad filter key -> Langfuse v2 observations filter column (stringOptions, any of)
+OPTION_COLUMNS = {"name": "traceName", "version": "version", "user_id": "userId", "session_id": "sessionId"}
 
 
 class LangfuseProvider(Provider):
@@ -24,6 +31,7 @@ class LangfuseProvider(Provider):
     default_host = "https://cloud.langfuse.com"
     page_size = 1000  # v2 observations max; v3 scores max is 100
     requests_per_minute = 30  # the Hobby tier's general API limit (Core 100, Pro 1000)
+    pushdown_filters = frozenset({"tags", "environment", *OPTION_COLUMNS, "metadata", "from", "to"})
 
     def auth_headers(self, secret: str) -> dict[str, str]:
         public, sep, private = secret.partition(":")
@@ -37,10 +45,25 @@ class LangfuseProvider(Provider):
             isRootObservation="true",
             fields=OBSERVATION_FIELDS,
             limit=self.page_size,
-            fromStartTime=since,
+            fromStartTime=self.window_start(since),
+            toStartTime=self.window_end(),
+            environment=list(self.filters.get("environment")) or None,
+            filter=self._conditions(),
             cursor=cursor,
         )
         return Page(self.items(body, "data"), (body.get("meta") or {}).get("cursor"))
+
+    def _conditions(self) -> str | None:
+        f = self.filters
+        conditions: list[dict[str, Any]] = []
+        if f.get("tags"):
+            conditions.append({"type": "arrayOptions", "column": "tags", "operator": "all of", "value": list(f.get("tags"))})
+        for key, column in OPTION_COLUMNS.items():
+            if f.get(key):
+                conditions.append({"type": "stringOptions", "column": column, "operator": "any of", "value": list(f.get(key))})
+        for key, value in f.metadata.items():
+            conditions.append({"type": "stringObject", "column": "metadata", "key": key, "operator": "=", "value": value})
+        return json.dumps(conditions) if conditions else None
 
     def fetch_scores(self, since: str | None, cursor: str | None) -> Page:
         body = self.http.get(
@@ -78,6 +101,8 @@ class LangfuseProvider(Provider):
             release=raw.get("release"),
             tags=raw.get("tags") or None,
             user_id=raw.get("userId"),
+            environment=raw.get("environment"),
+            name=raw.get("traceName") or raw.get("name"),
         )
         return record
 

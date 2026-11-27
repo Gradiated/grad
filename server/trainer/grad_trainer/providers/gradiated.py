@@ -7,6 +7,9 @@ the workspace and service token and forwards to ``POST /api/internal/v1/training
 "cursor": "<opaque>", "has_more": bool}``. The Cloud cursor already covers late scores (it
 reads feedback by ingestion time), so it is the watermark.
 
+Filters: ``models``, ``tasks`` and ``versions`` (lists) go to the Cloud pull; the common keys
+are applied after fetching.
+
 File imports also accept the gateway's export rows (``request``/``response``).
 """
 
@@ -15,6 +18,9 @@ from __future__ import annotations
 from ..errors import SourceUnavailableError
 from ..records import coerce_messages, coerce_scores, record_metadata, score_value
 from .base import Page, Provider, Raw, ScoreUpdate, iso_or_none
+from .filters import COMMON_FILTERS
+
+CLOUD_FILTERS = frozenset({"models", "tasks", "versions"})
 
 
 class GradiatedProvider(Provider):
@@ -22,6 +28,8 @@ class GradiatedProvider(Provider):
     page_size = 500
     rescan_window = None
     cursor_watermark = True
+    filter_keys = COMMON_FILTERS | CLOUD_FILTERS
+    pushdown_filters = CLOUD_FILTERS  # grad-server forwards them with each pull
 
     def auth_headers(self, secret: str) -> dict[str, str]:
         return {}  # the worker authenticates to grad-server

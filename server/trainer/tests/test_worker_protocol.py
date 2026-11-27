@@ -689,6 +689,7 @@ class WorkerProtocolTests(unittest.TestCase):
         records = [r for b in srv.bodies("records") for r in b["records"]]
         self.assertEqual([r["id"] for r in records], ["t1", "t1"])
         self.assertEqual(srv.bodies("complete")[0]["import_summary"]["watermark"], {"traces": "c1", "scores": "c1"})
+        self.assertEqual(srv.bodies("complete")[0]["import_summary"]["traces"], 1)
 
     def test_failed_sync_never_echoes_the_secret(self) -> None:
         class Leaky:

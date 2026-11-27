@@ -8,7 +8,8 @@ Provider (base.py)                      SyncEngine (sync.py)          HttpClient
   name, default_host, page_size,          watermark + re-scan window    egress policy, pinned IP
   requests_per_minute                     settle delay, full rebuild    timeouts, size caps
   auth_headers(secret)          <-------  pagination guards             retries 429/5xx, Retry-After
-  fetch_traces(since, cursor)             dedupe by trace id            redirects, pacing
+  fetch_traces(since, cursor)             filters, sample, record cap   redirects, pacing
+                                          dedupe by trace id
   fetch_scores(since, cursor)             score-update merging          secret redaction
   to_record(raw)                          batches -> emit_batch
   to_score_update(raw)
@@ -39,7 +40,13 @@ the new watermark in the `ImportSummary`.
      `since` already includes the 7-day re-scan window; return `updated_at` so the engine can
      drop feedback it synced before. If the provider merges feedback into the trace row and
      bumps a version (Braintrust), skip both and use `cursor_watermark` with `Page.resume`;
-   - optionally `detect(row)` for file auto-detection.
+   - optionally `detect(row)` for file auto-detection;
+   - filters: send what the API supports from `self.filters` (`get(key)`, `one(key)`,
+     `metadata`, `window_start(since)`, `window_end()`) and list those keys in
+     `pushdown_filters`. Map `name`, `environment`, `model`, `version`, `release`, `tags` and
+     `user_id` into the record's metadata, so the engine can apply the rest. Extra keys
+     (LangSmith `filter`) go into `filter_keys`, and into `SOURCE_FILTER_KEYS` in
+     `server/api/src/contracts/sources.ts`.
    Use `self.http.get/post/request` for every call, never `urllib` directly, and
    `self.items(body, "data")` to read lists so a changed response shape raises
    `SourceAPIChangedError`.
@@ -48,7 +55,9 @@ the new watermark in the `ImportSummary`.
    the provider's endpoints in its documented shapes, plus one line in that package's
    `FIXTURES`. `tests/providers/test_contract.py` then runs the whole contract against it
    (pagination, incremental sync, late scores, full rebuild, retries, cursor loops, auth
-   failure, secret redaction, metadata mapping). Put only quirks in `test_quirks.py`.
+   failure, secret redaction, metadata mapping, every filter key with its push-down, score
+   filters, sampling and the record cap). The fixture stores each trace's `profile(i)` in the
+   provider's native fields and answers pushed-down filters the way the API does. Put only quirks in `test_quirks.py`.
 4. **One docs page**, `product/website/src/docs/training/integrations/<name>.mdx`, with the
    field mapping, the key it needs and its hosts.
 
@@ -58,6 +67,14 @@ the new watermark in the `ImportSummary`.
   Traces are read from `T`; scores from `min(S, now - 7 days)`, so feedback edited later still
   lands. Only rows up to `now - 10 min` are taken (Langfuse documents ~10 minutes before reads
   see new data); the rest wait for the next sync. `full=True` ignores the watermark.
+- **Filters, sampling and caps** (`filters.py`). The engine applies every common filter key to
+  the mapped record after fetching (pushed-down keys too, so a loose API can't widen a sync),
+  keeps a trace when `sample_rate` admits a hash of its id (stable across syncs; its score
+  updates follow it), and stops taking new traces at `max_records` (what is left of the
+  source's per-sync and per-day caps; over the cap, a row's feedback still lands as a score
+  update). Score filters (`has_feedback`, `min_score`) ride on the record as
+  `metadata.score_filter` and are judged when the dataset is merged, because feedback arrives
+  later. The import's drop reasons say how many traces each step left out.
 - **Merging.** Score updates are records with `metadata.score_update = true`. The worker folds
   dataset parts with `records.merge_records` before training: later content replaces earlier
   content, later scores win per name, updates for traces never synced are dropped.

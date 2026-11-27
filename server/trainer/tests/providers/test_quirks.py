@@ -121,7 +121,23 @@ class LangSmithQuirks(Served):
         self.assertIsNone(LangSmithProvider().to_score_update({"key": "k", "score": 1}))
 
 
+    def test_own_filter_expression_is_anded_with_the_rest(self) -> None:
+        fx, server = self.serve(LangSmithFixture(), traces=4)
+        records, _ = self.sync(self.provider(fx, server, filters={"filter": 'has(tags, "beta")', "name": ["answer"]}))
+        self.assertEqual(sorted(r["id"] for r in records), ["tr-1", "tr-3"])
+        body = next(r.body for r in server.requests if r.path == "/api/v2/runs/query")
+        self.assertEqual(body["filter"], 'and(in(name, ["answer"]), has(tags, "beta"))')
+
+
 class BraintrustQuirks(Served):
+    def test_filters_are_quoted_sql(self) -> None:
+        fx, server = self.serve(BraintrustFixture())
+        self.sync(self.provider(fx, server, filters={"tags": ["it's"], "metadata": {"tier": "a'b", "bad key": "x"}}))
+        sql = next(r.body["query"] for r in server.requests if r.path == "/btql")
+        self.assertIn("tags IN ('it''s')", sql)
+        self.assertIn("metadata.tier = 'a''b'", sql)
+        self.assertNotIn("bad key", sql, "a key that isn't an identifier is applied after fetching only")
+
     def test_project_is_required_and_resolved_by_name(self) -> None:
         fx, server = self.serve(BraintrustFixture())
         with self.assertRaisesRegex(SourceUnavailableError, "needs a project"):
@@ -178,6 +194,13 @@ class PostHogQuirks(Served):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["messages"][-1]["content"], "final")
 
+    def test_filters_are_quoted_hogql(self) -> None:
+        fx, server = self.serve(PostHogFixture())
+        self.sync(self.provider(fx, server, filters={"model": ["m-'1"], "to": "2026-11-27T11:30:00Z"}))
+        sql = next(r.body["query"]["query"] for r in server.requests)
+        self.assertIn("properties.$ai_model IN ('m-\\'1')", sql)
+        self.assertIn("timestamp < '2026-11-27 11:30:00.000000'", sql)
+
     def test_unexpected_response_shape_is_typed(self) -> None:
         fx, server = self.serve(PostHogFixture())
         fx.respond = lambda req: (200, {"error": "nope"}, {})
@@ -193,6 +216,13 @@ class PhoenixQuirks(Served):
         rec = p.to_record(span)
         self.assertEqual([m["content"] for m in rec["messages"]], ["q?", "a"])
         self.assertEqual(p.auth_headers(""), {})
+
+    def test_single_value_filters_become_attribute_pairs(self) -> None:
+        fx, server = self.serve(PhoenixFixture(), traces=3)
+        records, _ = self.sync(self.provider(fx, server, filters={"user_id": "user-7", "session_id": ["sess-1", "sess-2"]}))
+        self.assertEqual(sorted(r["id"] for r in records), ["tr-1", "tr-2"])
+        spans = next(r for r in server.requests if r.path.endswith("/spans"))
+        self.assertEqual(spans.query["attribute"], ['user.id:"user-7"'], "two sessions can't be one AND-ed pair")
 
     def test_needs_a_host(self) -> None:
         with self.assertRaisesRegex(SourceUnavailableError, "needs a host"):

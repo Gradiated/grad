@@ -3,17 +3,23 @@
 Secret: an API key with read access (``x-api-key``). ``project`` is a tracing project name or
 UUID (default ``default``). In LangSmith a run's ``session_id`` is the *project*; the
 conversation is ``thread_id`` (or ``metadata.thread_id`` / ``metadata.session_id``).
+
+Filters: ``min_start_time``/``max_start_time`` and a ``filter`` expression (``has(tags, ..)`` for
+each tag, ``in(name, [..])``, plus the source's own ``filter`` key, a LangSmith filter
+expression AND-ed with the rest). The other keys match run metadata after fetching.
 Docs: https://docs.langchain.com/langsmith/smith-api/runs/query-runs
 """
 
 from __future__ import annotations
 
+import json
 from functools import cached_property
 from typing import Any
 
 from ..errors import SourceUnavailableError
 from ..records import coerce_messages, coerce_scores, record_metadata, score_value
 from .base import UUID_RE, Page, Provider, Raw, ScoreUpdate, iso_or_none
+from .filters import COMMON_FILTERS
 
 SELECTS = ["ID", "TRACE_ID", "THREAD_ID", "NAME", "START_TIME", "INPUTS", "OUTPUTS", "METADATA", "TAGS", "FEEDBACK_STATS"]
 EARLIEST = "2000-01-01T00:00:00Z"  # min_start_time defaults to one day ago
@@ -24,6 +30,8 @@ class LangSmithProvider(Provider):
     default_host = "https://api.smith.langchain.com"
     page_size = 100  # runs: up to 1000; feedback: up to 100
     requests_per_minute = 600  # runs query allows 300 per 10 s per key
+    filter_keys = COMMON_FILTERS | {"filter"}
+    pushdown_filters = frozenset({"tags", "name", "from", "to", "filter"})
 
     def auth_headers(self, secret: str) -> dict[str, str]:
         return {"x-api-key": secret}
@@ -44,13 +52,24 @@ class LangSmithProvider(Provider):
             {
                 "project_ids": [self.project_id],
                 "is_root": True,
-                "min_start_time": since or EARLIEST,
+                "min_start_time": self.window_start(since) or EARLIEST,
                 "selects": SELECTS,
                 "page_size": self.page_size,
+                **({"max_start_time": self.window_end()} if self.window_end() else {}),
+                **({"filter": self._filter()} if self._filter() else {}),
                 **({"cursor": cursor} if cursor else {}),
             },
         )
         return Page(self.items(body, "items"), body.get("next_cursor"))
+
+    def _filter(self) -> str | None:
+        f = self.filters
+        terms = [f"has(tags, {json.dumps(tag)})" for tag in f.get("tags")]
+        if f.get("name"):
+            terms.append(f"in(name, {json.dumps(list(f.get('name')))})")
+        if isinstance(f.raw.get("filter"), str) and f.raw["filter"].strip():
+            terms.append(f.raw["filter"].strip())
+        return terms[0] if len(terms) == 1 else f"and({', '.join(terms)})" if terms else None
 
     def fetch_scores(self, since: str | None, cursor: str | None) -> Page:
         offset = int(cursor or 0)
@@ -90,7 +109,11 @@ class LangSmithProvider(Provider):
         if scores:
             record["scores"] = scores
         record["metadata"] = record_metadata(
-            "langsmith", meta, model=meta.get("model") or meta.get("ls_model_name"), tags=raw.get("tags") or None
+            "langsmith",
+            meta,
+            model=meta.get("model") or meta.get("ls_model_name"),
+            tags=raw.get("tags") or None,
+            name=raw.get("name"),
         )
         return record
 

@@ -82,3 +82,4 @@ class ImportSummary:
     errors: list[str] = field(default_factory=list)
     # Source syncs only: the provider watermark to store when the job completes.
     watermark: dict[str, Any] | None = None
+    traces: int = 0  # source syncs: new trace records (what the source's record caps count)

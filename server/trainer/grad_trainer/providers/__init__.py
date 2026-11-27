@@ -31,7 +31,7 @@ PROVIDERS: dict[str, type[Provider]] = {
 def build_provider(
     source: dict[str, Any], *, pull: Callable[[str | None], dict[str, Any]] | None = None, **http_options: Any
 ) -> Provider:
-    """A provider for a source job: ``{provider, host?, secret?, project?}``."""
+    """A provider for a source job: ``{provider, host?, secret?, project?, filters?}``."""
     name = str(source.get("provider") or "")
     cls = PROVIDERS.get(name)
     if cls is None:
@@ -40,6 +40,7 @@ def build_provider(
         host=source.get("host") or None,
         secret=str(source.get("secret") or ""),
         project=str(source["project"]) if source.get("project") else None,
+        filters=dict(source.get("filters") or {}),
         pull=pull,
     )
     return cls(spec, **http_options)

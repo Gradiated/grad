@@ -5,12 +5,18 @@ row's ``_xact_id``, so one stream ordered by ``_xact_id`` returns new spans and 
 feedback alike; the highest ``_xact_id`` is the watermark (Braintrust's documented export
 recipe). Re-emitted rows replace the earlier copy when the dataset is merged.
 
+Filters go into the SQL ``WHERE``: ``tags IN ('..')`` for each tag, ``span_attributes.name``,
+``metadata.<key>`` for model, environment, version, release and the ``metadata`` filter, and a
+``created`` range for from/to. ``user_id`` and ``session_id`` (several metadata fallbacks) are
+applied after fetching.
+
 Secret: an API key (Bearer). ``project`` is the project id or name (required).
 Docs: https://docs.braintrust.dev/reference/btql, https://docs.braintrust.dev/api-reference
 """
 
 from __future__ import annotations
 
+import re
 from functools import cached_property
 
 from ..errors import SourceAPIChangedError, SourceUnavailableError
@@ -22,6 +28,14 @@ def _quote(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
 
 
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+METADATA_KEYS = ("model", "environment", "version", "release")
+
+
+def _in(column: str, values: tuple[str, ...]) -> str:
+    return f"{column} IN ({', '.join(_quote(v) for v in values)})"
+
+
 class BraintrustProvider(Provider):
     name = "braintrust"
     default_host = "https://api.braintrust.dev"
@@ -29,6 +43,7 @@ class BraintrustProvider(Provider):
     requests_per_minute = 20  # BTQL limits are per org and project and not published; be gentle
     rescan_window = None
     cursor_watermark = True
+    pushdown_filters = frozenset({"tags", "name", *METADATA_KEYS, "metadata", "from", "to"})
 
     def auth_headers(self, secret: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {secret}"}
@@ -50,6 +65,8 @@ class BraintrustProvider(Provider):
         sql = f"SELECT * FROM project_logs({_quote(self.project_id)}, shape => 'spans') WHERE is_root"
         if since:
             sql += f" AND _xact_id > {_quote(since)}"
+        for condition in self._where():
+            sql += f" AND {condition}"
         sql += f" ORDER BY _xact_id ASC LIMIT {self.page_size}"
         if cursor:
             sql += f" OFFSET {_quote(cursor)}"
@@ -59,6 +76,21 @@ class BraintrustProvider(Provider):
         xacts = [str(r["_xact_id"]) for r in rows if str(r.get("_xact_id", "")).isdigit()]
         resume = max(xacts, key=lambda x: (len(x), x)) if xacts else None
         return Page(rows, next_cursor if rows else None, resume)
+
+    def _where(self) -> list[str]:
+        f = self.filters
+        where = [_in("tags", (tag,)) for tag in f.get("tags")]
+        if f.get("name"):
+            where.append(_in("span_attributes.name", f.get("name")))
+        for key in METADATA_KEYS:
+            if f.get(key):
+                where.append(_in(f"metadata.{key}", f.get(key)))
+        where += [f"metadata.{k} = {_quote(v)}" for k, v in f.metadata.items() if IDENTIFIER.match(k)]
+        if f.start:
+            where.append(f"created >= {_quote(self.window_start(None) or '')}")
+        if f.end:
+            where.append(f"created < {_quote(self.window_end() or '')}")
+        return where
 
     @classmethod
     def detect(cls, row: Raw) -> bool:
@@ -82,7 +114,12 @@ class BraintrustProvider(Provider):
         scores = coerce_scores(raw.get("scores"))
         if scores:
             record["scores"] = scores
+        attrs = raw.get("span_attributes") if isinstance(raw.get("span_attributes"), dict) else {}
         record["metadata"] = record_metadata(
-            "braintrust", meta, user_id=meta.get("user_id") or meta.get("user"), tags=raw.get("tags") or None
+            "braintrust",
+            meta,
+            user_id=meta.get("user_id") or meta.get("user"),
+            tags=raw.get("tags") or None,
+            name=attrs.get("name"),
         )
         return record

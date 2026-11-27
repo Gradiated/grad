@@ -1085,7 +1085,7 @@ class TrainerWorker:
                 "import_summary": {
                     "dropped_count": int(summary.skipped),
                     "drop_reasons": [str(e)[:1000] for e in summary.errors[:101]],
-                    **({"watermark": summary.watermark} if summary.watermark is not None else {}),
+                    **({"watermark": summary.watermark, "traces": int(summary.traces)} if summary.watermark is not None else {}),
                 },
             },
         )

@@ -5,6 +5,10 @@ The annotations endpoint has no time filter and needs ``span_ids``, so ``fetch_s
 over the root spans in the re-scan window and asks for their annotations; ``updated_at`` then
 drops the ones already synced. Exported span files import with ``--format otel`` instead.
 
+Filters: ``start_time``/``end_time``, ``name`` (the root span name), and ``attribute`` for
+``user.id``, ``session.id`` (one value each) and ``metadata.<key>``. Tags (a list attribute
+Phoenix can't match), model, environment, version and release are applied after fetching.
+
 Secret: a Phoenix API key (Bearer), optional when auth is off. ``project`` is the project name
 or id (default ``default``). Host: the Phoenix URL, including a Cloud space path.
 Docs: https://arize.com/docs/phoenix/sdk-api-reference/rest-api/overview
@@ -12,6 +16,7 @@ Docs: https://arize.com/docs/phoenix/sdk-api-reference/rest-api/overview
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ..formats import otel_attributes, otel_messages
@@ -25,6 +30,7 @@ ANNOTATIONS_LIMIT = 1000
 class PhoenixProvider(Provider):
     name = "phoenix"
     page_size = 100  # spans: up to 1000
+    pushdown_filters = frozenset({"name", "user_id", "session_id", "metadata", "from", "to"})
 
     def auth_headers(self, secret: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {secret}"} if secret else {}
@@ -39,11 +45,21 @@ class PhoenixProvider(Provider):
             parent_id="null",  # root spans only
             sort="start_time",
             order="asc",
-            start_time=since,
+            start_time=self.window_start(since),
+            end_time=self.window_end(),
+            name=list(self.filters.get("name")) or None,
+            attribute=self._attributes() or None,
             limit=self.page_size,
             cursor=cursor,
         )
         return Page(self.items(body, "data"), body.get("next_cursor"))
+
+    def _attributes(self) -> list[str]:
+        """``key:value`` filters (AND-ed); a JSON string value always matches as a string."""
+        f = self.filters
+        pairs = [(attr, f.one(key)) for key, attr in (("user_id", "user.id"), ("session_id", "session.id"))]
+        pairs += [(f"metadata.{k}", v) for k, v in f.metadata.items()]
+        return [f"{attr}:{json.dumps(value)}" for attr, value in pairs if value is not None]
 
     def fetch_scores(self, since: str | None, cursor: str | None) -> Page:
         spans = self.fetch_traces(since, cursor)
@@ -80,6 +96,7 @@ class PhoenixProvider(Provider):
             model=(meta.get("model") if isinstance(meta, dict) else None) or attrs.get("llm.model_name"),
             user_id=attrs.get("user.id"),
             tags=attrs.get("tag.tags") or None,
+            name=raw.get("name"),
         )
         return record
 

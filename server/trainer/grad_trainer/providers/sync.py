@@ -8,6 +8,12 @@ a re-sync of the same window emits nothing new. ``cursor_watermark`` providers k
 opaque cursor instead. ``full=True`` ignores the watermark, re-reads everything and first emits
 the reset marker, so the new dataset version holds only what this sync read.
 
+Before a trace is taken, the source's filters (``filters.py``), its ``sample_rate`` (by a hash of
+the trace id, so a re-sync keeps the same sample; score updates follow their trace) and its
+record budget (``max_records``: what is left of the source's per-sync and per-day caps; score
+updates don't count) apply. Traces past the budget are left out, and the result counts every
+trace each step left out.
+
 Records are deduped by provider trace id within a sync (an identical re-read is dropped, a
 changed one is re-emitted and wins when the parts are merged). Score updates for the same trace
 are merged before they are emitted, latest ``updated_at`` winning.
@@ -24,8 +30,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
 from ..errors import PaginationLoopError, SourceUnreachableError
-from ..records import RESET_RECORD
+from ..records import RESET_RECORD, SCORE_FILTER
 from .base import Page, Provider, ScoreUpdate, iso, parse_time
+from .filters import sampled
 
 # Langfuse documents ~10 min before reads see new data. GRAD_SOURCES_SETTLE_SECONDS overrides
 # it (the live tests' fake providers are consistent at once).
@@ -34,6 +41,7 @@ DEFAULT_BATCH_SIZE = 500
 MAX_PAGES = 100_000
 MAX_EMPTY_PAGES = 20  # some APIs (Langfuse) may return empty pages that still carry a cursor
 MAX_ERRORS = 100
+LEFT_OUT = b""  # _seen marker of a trace the filters, sampling or the cap left out
 # A sync's wall-clock cap, so one slow or huge source can't hold a shared import worker.
 MAX_SYNC_SECONDS = float(os.environ.get("GRAD_SOURCES_SYNC_MAX_SECONDS") or 3600)
 
@@ -44,6 +52,18 @@ class SyncResult:
     skipped: int = 0
     errors: list[str] = field(default_factory=list)
     watermark: dict[str, str | None] = field(default_factory=dict)
+    traces: int = 0  # new trace records taken (what the caps count)
+    filtered: int = 0
+    sampled_out: int = 0
+    capped: int = 0
+
+    def notes(self) -> list[str]:
+        """What the filters, sampling and caps left out, for the import's drop reasons."""
+        return [
+            f"{what}: {n} traces"
+            for what, n in (("filtered out", self.filtered), ("sampled out", self.sampled_out), ("over the record cap", self.capped))
+            if n
+        ]
 
 
 def pages(fetch: Callable[[str | None, str | None], Page], since: str | None, *, max_pages: int = MAX_PAGES) -> Iterator[Page]:
@@ -59,7 +79,9 @@ def pages(fetch: Callable[[str | None, str | None], Page], since: str | None, *,
             return
         if page.cursor in seen:
             raise PaginationLoopError(f"provider returned cursor {page.cursor[:40]!r} twice")
-        empty = 0 if page.items else empty + 1
+        # A page that moved the resume cursor made progress even with nothing for this pass (the
+        # gradiated stream mixes traces and scores).
+        empty = 0 if page.items or page.resume else empty + 1
         if empty >= MAX_EMPTY_PAGES:
             raise PaginationLoopError(f"provider returned {empty} empty pages in a row")
         seen.add(page.cursor)
@@ -82,6 +104,8 @@ class SyncEngine:
         max_pages: int = MAX_PAGES,
         max_seconds: float = MAX_SYNC_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        sample_rate: float = 1.0,
+        max_records: int | None = None,
     ) -> None:
         self.provider = provider
         self.emit_batch = emit_batch
@@ -90,6 +114,8 @@ class SyncEngine:
         self.max_pages = max_pages
         self.max_seconds = max_seconds
         self.clock = clock
+        self.sample_rate = sample_rate
+        self.max_records = max_records
 
     def run(self, watermark: dict[str, Any] | None = None, *, full: bool = False) -> SyncResult:
         p = self.provider
@@ -156,20 +182,49 @@ class SyncEngine:
         if not self._in_window(record.get("timestamp"), since):
             return
         rid = str(record["id"])
+        if self._seen.get(rid) == LEFT_OUT:
+            return  # a page boundary read again
+        filters = self.provider.filters
+        if not filters.matches(record):
+            self._leave_out(rid, "filtered")
+            return
+        if not sampled(rid, self.sample_rate):
+            self._leave_out(rid, "sampled_out")
+            return
+        if rid not in self._seen and self.max_records is not None and self._result.traces >= self.max_records:
+            # Over the budget: no new content, but feedback on a trace synced before still lands.
+            if record.get("scores") or record.get("expected_output") is not None:
+                self._add_score(ScoreUpdate(rid, record.get("scores") or {}, record.get("expected_output"), record.get("timestamp")))
+            self._leave_out(rid, "capped")
+            return
+        rule = filters.score_rule()
+        if rule:
+            record["metadata"] = {**(record.get("metadata") or {}), SCORE_FILTER: rule}
         digest = _digest(record)
         if self._seen.get(rid) == digest:
             return
+        if rid not in self._seen:
+            self._result.traces += 1
         self._seen[rid] = digest
         self._traces.pop(rid, None)
         self._traces[rid] = record
         self._maybe_flush()
 
+    def _leave_out(self, rid: str, why: str) -> None:
+        self._seen[rid] = LEFT_OUT
+        setattr(self._result, why, getattr(self._result, why) + 1)
+
     def _take_score(self, raw: dict[str, Any], since: str | None) -> None:
         update = self.provider.to_score_update(raw)
         if update is None or not (update.scores or update.expected_output is not None):
             return
+        if not sampled(update.trace_id, self.sample_rate):
+            return
         if not self._in_window(update.updated_at, since):
             return
+        self._add_score(update)
+
+    def _add_score(self, update: ScoreUpdate) -> None:
         old = self._scores.get(update.trace_id)
         self._scores[update.trace_id] = old.merge(update) if old else update
         self._maybe_flush()

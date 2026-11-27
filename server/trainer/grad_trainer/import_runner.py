@@ -8,8 +8,9 @@
 - ``{"kind": "hf", "repo": ..., "split": ..., "config": ..., "columns": {field: column},
   "limit": n}`` (column mappings may also be top-level keys, e.g. ``"prompt": "question"``);
 - ``{"kind": "provider", "provider": "langfuse", "host": ..., "secret": ..., "project": ...,
-  "watermark": {...} | None, "full": bool}``: a sync from an observability provider. The
-  summary carries the new ``watermark``; ``source_page`` is the worker's job-scoped page
+  "filters": {...}, "sample_rate": 0..1, "max_records": n | None, "watermark": {...} | None,
+  "full": bool}``: a sync from an observability provider. The summary carries the new
+  ``watermark`` and the number of new ``traces`` (what the source's caps count); ``source_page`` is the worker's job-scoped page
   function for providers that read through grad-server (``gradiated``).
 
 For files and HF, ``connector`` forces one parser (``None`` auto-detects per row). Bad rows are
@@ -77,10 +78,22 @@ def normalize_traces(rows: Iterable[Any], *, source: str = "auto") -> list[dict[
 def _sync(source: dict[str, Any], emit_batch: Callable[[list[dict[str, Any]]], None], source_page: Any) -> ImportSummary:
     provider = build_provider(source, pull=source_page)
     batch_size = int(source.get("batch_size", DEFAULT_BATCH_SIZE))
-    result = SyncEngine(provider, emit_batch=emit_batch, batch_size=batch_size).run(
-        source.get("watermark"), full=bool(source.get("full"))
+    max_records = source.get("max_records")
+    engine = SyncEngine(
+        provider,
+        emit_batch=emit_batch,
+        batch_size=batch_size,
+        sample_rate=float(source.get("sample_rate", 1.0)),
+        max_records=None if max_records is None else int(max_records),
     )
-    return ImportSummary(records=result.records, skipped=result.skipped, errors=result.errors, watermark=result.watermark)
+    result = engine.run(source.get("watermark"), full=bool(source.get("full")))
+    return ImportSummary(
+        records=result.records,
+        skipped=result.skipped,
+        errors=[*result.notes(), *result.errors],
+        watermark=result.watermark,
+        traces=result.traces,
+    )
 
 
 def run(

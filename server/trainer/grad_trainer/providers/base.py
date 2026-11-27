@@ -7,8 +7,9 @@
 - ``fetch_scores(since, cursor)`` + ``to_score_update(raw)``: feedback, scores and corrections,
   including late ones on old traces (optional: skip both when trace rows carry their scores)
 - ``detect(row)``: optional, recognises the provider's export rows for file auto-detection
-- class attributes: ``name``, ``default_host``, ``page_size``, ``requests_per_minute`` and,
-  rarely, ``rescan_window`` / ``cursor_watermark``
+- class attributes: ``name``, ``default_host``, ``page_size``, ``requests_per_minute``,
+  ``filter_keys`` / ``pushdown_filters`` (see ``filters.py``) and, rarely, ``rescan_window`` /
+  ``cursor_watermark``
 
 Everything shared (HTTP, retries, pagination guards, watermark, batching, dedupe, merging)
 lives in ``http.HttpClient`` and ``sync.SyncEngine``.
@@ -25,6 +26,7 @@ from typing import Any, Callable, ClassVar
 
 from ..errors import SourceAPIChangedError, SourceUnavailableError
 from ..records import SCORE_UPDATE
+from .filters import COMMON_FILTERS, Filters
 from .http import HttpClient
 
 Raw = dict[str, Any]
@@ -76,6 +78,7 @@ class SourceSpec:
     host: str | None = None
     secret: str = field(default="", repr=False)
     project: str | None = None
+    filters: dict[str, Any] = field(default_factory=dict)
     pull: Callable[[str | None], dict[str, Any]] | None = field(default=None, repr=False)
 
 
@@ -115,6 +118,10 @@ class Provider(ABC):
     # True: the provider returns Page.resume (an opaque cursor) and the engine stores that as
     # the watermark instead of a timestamp.
     cursor_watermark: ClassVar[bool] = False
+    # The filter keys this provider accepts (grad-server returns 422 for any other), and the
+    # ones it sends to the provider's API. The engine applies every common key after fetching.
+    filter_keys: ClassVar[frozenset[str]] = COMMON_FILTERS
+    pushdown_filters: ClassVar[frozenset[str]] = frozenset()
 
     def __init__(self, spec: SourceSpec | None = None, **http_options: Any) -> None:
         self.spec = spec or SourceSpec()
@@ -144,6 +151,20 @@ class Provider(ABC):
         return Page([])
 
     # -- helpers ------------------------------------------------------------------------
+
+    @cached_property
+    def filters(self) -> Filters:
+        return Filters(self.spec.filters)
+
+    def window_start(self, since: str | None) -> str | None:
+        """Where a time-ordered trace fetch starts: ``since``, raised to the ``from`` filter."""
+        start, at = self.filters.start, parse_time(since)
+        return iso(start) if start and (at is None or at < start) else since
+
+    def window_end(self) -> str | None:
+        """The ``to`` filter (exclusive), for the provider's upper time bound."""
+        end = self.filters.end
+        return iso(end) if end else None
 
     @cached_property
     def http(self) -> HttpClient:

@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from .base import ProviderFixture, Req, iso
+from .base import Condition, ProviderFixture, Req, iso, parse
 
 PROJECT_ID = "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d"
 XACT_BASE = 1000192656880881099
@@ -17,7 +17,7 @@ XACT_BASE = 1000192656880881099
 class BraintrustFixture(ProviderFixture):
     name = "braintrust"
     project = "support-bot"
-    metadata_keys = ("model", "version", "tags", "user_id")
+    metadata_keys = ("model", "version", "tags", "user_id", "environment", "name")
 
     def __init__(self) -> None:
         super().__init__()
@@ -30,6 +30,7 @@ class BraintrustFixture(ProviderFixture):
     def add_trace(self, i: int, at: datetime) -> None:
         user, assistant = self.messages(i)
         span = self.trace_id(i)
+        p = self.remember(i, at)
         self.traces.append(
             {
                 "id": span,
@@ -46,8 +47,9 @@ class BraintrustFixture(ProviderFixture):
                 "output": assistant["content"],
                 "expected": None,
                 "scores": None,
-                "metadata": {"model": f"m-{i}", "version": f"v-{i}", "user_id": "user-7"},
-                "tags": ["prod"],
+                "metadata": {k: p[k] for k in ("model", "version", "user_id", "environment", "session_id", "tier")},
+                "span_attributes": {"name": p["name"], "type": "task"},
+                "tags": p["tags"],
             }
         )
 
@@ -74,5 +76,18 @@ class BraintrustFixture(ProviderFixture):
         limit = int(re.search(r"LIMIT (\d+)", sql).group(1))  # type: ignore[union-attr]
         offset = re.search(r"OFFSET '([^']*)'", sql)
         rows = sorted((r for r in self.traces if not since or int(r["_xact_id"]) > int(since.group(1))), key=lambda r: int(r["_xact_id"]))
+        rows = self.admit(rows, lambda r: r["id"], self.conditions(sql))
         chunk, cursor = self.page(rows, offset.group(1) if offset else None, limit)
+        self.serve(chunk, lambda r: r["id"])
         return 200, {"data": chunk, "schema": {}}, {"x-bt-cursor": cursor} if cursor else {}
+
+    def conditions(self, sql: str) -> list[Condition]:
+        found: list[Condition] = []
+        for column, items in re.findall(r"(\w+(?:\.\w+)?) IN \(([^)]*)\)", sql):
+            values = re.findall(r"'([^']*)'", items)
+            field = column.split(".")[-1]
+            found.append(("tags", "all", values) if column == "tags" else (field, "in", values))
+        found += [(key, "=", value) for key, value in re.findall(r"metadata\.(\w+) = '([^']*)'", sql)]
+        for op, when in re.findall(r"created (>=|<) '([^']*)'", sql):
+            found.append(("start", op, parse(when)))
+        return found

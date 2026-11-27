@@ -8,6 +8,11 @@ keyed by ``$ai_trace_id``. PostHog's LLM feedback survey starts with a thumbs qu
 answer keeps its value under its question id; text answers are not scores. Feedback is filtered on ``created_at`` (ingestion time), so
 a late event with an old client timestamp still lands within the re-scan window.
 
+Filters go into the HogQL ``WHERE``: ``$ai_model``, ``$ai_span_name`` (the trace name),
+``$ai_session_id``, ``distinct_id`` (the user), the ``environment`` and ``release`` custom
+properties, ``properties.<key>`` for the ``metadata`` filter, and ``timestamp`` for from/to.
+Tags and version (custom properties) are applied after fetching.
+
 Secret: a personal API key with Query Read (Bearer). ``project`` is the numeric project id
 (required). Host: the app host (us.posthog.com / eu.posthog.com), not the ``i.`` ingestion host.
 Docs: https://posthog.com/docs/api/queries, https://posthog.com/docs/ai-observability
@@ -15,6 +20,7 @@ Docs: https://posthog.com/docs/api/queries, https://posthog.com/docs/ai-observab
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..errors import SourceAPIChangedError, SourceUnavailableError
@@ -23,6 +29,20 @@ from .base import Page, Provider, Raw, ScoreUpdate, iso_or_none, parse_time
 
 COLUMNS = "uuid, event, timestamp, created_at, distinct_id, properties"
 THUMBS = {1: 1.0, 2: 0.0}
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+# grad filter key -> HogQL expression of the $ai_generation event
+COLUMNS_BY_FILTER = {
+    "model": "properties.$ai_model",
+    "name": "properties.$ai_span_name",
+    "session_id": "properties.$ai_session_id",
+    "user_id": "distinct_id",
+    "environment": "properties.environment",
+    "release": "properties.release",
+}
+
+
+def _quote(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _literal(value: str | None) -> str:
@@ -35,12 +55,21 @@ class PostHogProvider(Provider):
     default_host = "https://us.posthog.com"
     page_size = 500
     requests_per_minute = 40  # 2400 queries per hour per project
+    pushdown_filters = frozenset({*COLUMNS_BY_FILTER, "metadata", "from", "to"})
 
     def auth_headers(self, secret: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {secret}"}
 
     def fetch_traces(self, since: str | None, cursor: str | None) -> Page:
-        return self._events("event = '$ai_generation'", cursor or since)
+        return self._events(" AND ".join(["event = '$ai_generation'", *self._where()]), cursor or self.window_start(since))
+
+    def _where(self) -> list[str]:
+        f = self.filters
+        where = [f"{column} IN ({', '.join(_quote(v) for v in f.get(key))})" for key, column in COLUMNS_BY_FILTER.items() if f.get(key)]
+        where += [f"properties.{k} = {_quote(v)}" for k, v in f.metadata.items() if IDENTIFIER.match(k)]
+        if f.end:
+            where.append(f"timestamp < '{_literal(self.window_end())}'")
+        return where
 
     def fetch_scores(self, since: str | None, cursor: str | None) -> Page:
         return self._events("event = 'survey sent' AND properties.$ai_trace_id IS NOT NULL", cursor or since)
@@ -94,6 +123,7 @@ class PostHogProvider(Provider):
             model=props.get("$ai_model"),
             version=own.get("version") or own.get("model_version"),
             user_id=raw.get("distinct_id"),
+            name=props.get("$ai_span_name"),
         )
         return record
 

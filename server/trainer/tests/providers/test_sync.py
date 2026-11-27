@@ -162,6 +162,62 @@ class ImportSeamTests(unittest.TestCase):
         self.assertEqual(summary.watermark, {"traces": "2", "scores": "2"})
         self.assertEqual(merge_records(batches[0])[0]["scores"], {"thumbs": 1.0})
 
+    def test_filters_sample_rate_and_budget_reach_the_engine(self) -> None:
+        fx = GradiatedFixture()
+        for i in range(5):
+            fx.add_trace(i, NOW)
+        batches: list[list[dict]] = []
+        source = {"kind": "provider", "provider": "gradiated", "filters": {"tags": ["prod"], "environment": "production"}, "sample_rate": 1, "max_records": 2}
+        summary = import_runner.run(source, None, emit_batch=batches.append, workdir=None, source_page=fx.pull)  # type: ignore[arg-type]
+        self.assertEqual((summary.records, summary.traces), (2, 2))
+        self.assertEqual(summary.errors, ["filtered out: 1 traces", "over the record cap: 2 traces"])
+
+
+class FilterTests(unittest.TestCase):
+    def test_values_and_matching(self) -> None:
+        from grad_trainer.providers.filters import Filters
+
+        record = {"id": "t", "session_id": "s1", "timestamp": "2026-11-27T10:00:00Z",
+                  "metadata": {"tags": ["a", "b"], "model": "m", "version": 3, "flag": True}}  # fmt: skip
+        self.assertTrue(Filters({"tags": ["a"], "model": ["x", "m"], "version": "3", "metadata": {"flag": True}}).matches(record))
+        self.assertFalse(Filters({"tags": ["a", "c"]}).matches(record))
+        self.assertFalse(Filters({"environment": "prod"}).matches(record), "a missing field doesn't match")
+        self.assertFalse(Filters({"metadata": {"flag": "false"}}).matches(record))
+        self.assertTrue(Filters({"from": "2026-11-27T10:00:00Z", "to": "2026-11-27T10:00:01Z"}).matches(record))
+        self.assertFalse(Filters({"to": "2026-11-27T10:00:00Z"}).matches(record), "to is exclusive")
+        self.assertFalse(Filters({"from": "2026-11-27T10:00:00Z"}).matches({"id": "t"}), "a time window needs a timestamp")
+        self.assertFalse(Filters({"session_id": "s2"}).matches(record))
+        self.assertIsNone(Filters({"has_feedback": False}).score_rule())
+        self.assertEqual(Filters({"has_feedback": True, "model": "m"}).score_rule(), {"has_feedback": True})
+
+    def test_sampling_rate_is_honoured_and_stable(self) -> None:
+        from grad_trainer.providers.filters import sampled
+
+        kept = [i for i in range(10_000) if sampled(f"trace-{i}", 0.1)]
+        self.assertAlmostEqual(len(kept) / 10_000, 0.1, delta=0.01)
+        self.assertEqual(kept, [i for i in range(10_000) if sampled(f"trace-{i}", 0.1)])
+        self.assertTrue(set(kept) <= {i for i in range(10_000) if sampled(f"trace-{i}", 0.2)}, "a higher rate keeps a superset")
+        self.assertFalse(sampled("x", 0.0))
+        self.assertTrue(sampled("x", 1.0))
+
+    def test_score_filter_rules_on_the_merged_record(self) -> None:
+        from grad_trainer.records import SCORE_FILTER, passes_score_filter
+
+        def rec(rule: dict[str, Any], **fields: Any) -> dict[str, Any]:
+            return {"id": "t", "metadata": {SCORE_FILTER: rule}, **fields}
+
+        self.assertFalse(passes_score_filter(rec({"has_feedback": True})))
+        self.assertTrue(passes_score_filter(rec({"has_feedback": True}, expected_output="fix")))
+        self.assertTrue(passes_score_filter(rec({"min_score": 0.5}, scores={"a": 0.5, "b": 0.9})))
+        self.assertFalse(passes_score_filter(rec({"min_score": 0.5}, scores={"a": 0.4, "b": 0.9})))
+        self.assertFalse(passes_score_filter(rec({"min_score": 0.5})), "a number needs at least one score")
+        self.assertTrue(passes_score_filter(rec({"min_score": {"a": 0.5}}, scores={"a": 0.7, "b": 0.0})))
+        self.assertFalse(passes_score_filter(rec({"min_score": {"a": 0.5}}, scores={"b": 0.9})))
+        self.assertTrue(passes_score_filter({"id": "t"}))
+        late = merge_records([rec({"has_feedback": True}, messages=[{"role": "user", "content": "q"}]),
+                              {"id": "t", "scores": {"a": 1.0}, "metadata": {"score_update": True}}])  # fmt: skip
+        self.assertEqual(late, [{"id": "t", "metadata": {}, "messages": [{"role": "user", "content": "q"}], "scores": {"a": 1.0}}])
+
 
 if __name__ == "__main__":
     unittest.main()
