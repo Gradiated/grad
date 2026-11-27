@@ -5,11 +5,6 @@ import { makeTestApp, type TestApp } from "./fixtures/app.js";
 import { ManualClock } from "./fixtures/clock.js";
 import { s3Target } from "./fixtures/minio.js";
 import {
-  createIsolatedPostgresStore,
-  postgresUrl,
-  type IsolatedPostgresStore,
-} from "./fixtures/postgres.js";
-import {
   createSftRun,
   FakeWorker,
   sftRecords,
@@ -17,27 +12,18 @@ import {
 } from "./fixtures/worker.js";
 
 const target = s3Target();
-const pg = postgresUrl();
-const available = Boolean(target && pg);
-if (!available && process.env.GRAD_REQUIRE_POSTGRES === "1") {
-  throw new Error(
-    "GRAD_REQUIRE_POSTGRES=1 but Postgres is not available for the self-hosted stack test.",
-  );
-}
 
 /**
  * The self-hosted deployment mode end to end: Postgres store + S3 (MinIO)
  * object storage with presigned uploads/downloads and no in-process state.
  */
-describe.skipIf(!available)("self-hosted stack (Postgres + S3)", () => {
+describe.skipIf(!target)("self-hosted stack (Postgres + S3)", () => {
   let t: TestApp;
-  let isolated: IsolatedPostgresStore;
   let storage: S3ObjectStore;
   let worker: FakeWorker;
 
   beforeEach(async () => {
     const clock = new ManualClock(new Date());
-    isolated = await createIsolatedPostgresStore(clock);
     storage = new S3ObjectStore({
       bucket: target!.bucket,
       region: target!.region,
@@ -47,14 +33,13 @@ describe.skipIf(!available)("self-hosted stack (Postgres + S3)", () => {
         secretAccessKey: target!.secretAccessKey,
       },
     });
-    t = await makeTestApp({ store: isolated.store, storage, clock });
+    t = await makeTestApp({ storage, clock });
     worker = new FakeWorker(t);
   });
 
   afterEach(async () => {
     await t.close();
     storage.close();
-    await isolated.dispose();
   });
 
   it("trains, checkpoints, resumes and publishes through presigned S3 URLs", async () => {

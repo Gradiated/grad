@@ -4,7 +4,7 @@ import { Params, type Db, type Row } from "./db.js";
 
 /**
  * Newest-first keyset page over `table` ordered by (created_at DESC,
- * id COLLATE "C" DESC), matching the memory store and cursor encoding.
+ * id COLLATE "C" DESC), matching the cursor encoding.
  */
 export const listNewest = async <T extends { created_at: string; id: string }>(
   db: Db,

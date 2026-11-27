@@ -17,7 +17,7 @@ import { EnvWorkerHub } from "../src/env-hub.js";
 import { createRegexEvaluator } from "../src/services/evals/regex.js";
 import { LocalObjectStore } from "../src/storage/local.js";
 import { createBlobSigner } from "../src/storage/signer.js";
-import { createMemoryStore } from "../src/store/memory.js";
+import type { Store } from "../src/store/types.js";
 
 const run = async () => {
   const check = process.argv.includes("--check");
@@ -26,7 +26,7 @@ const run = async () => {
   const regex = createRegexEvaluator();
 
   const app = createApp({
-    store: createMemoryStore(systemClock),
+    store: {} as Store,
     storage: new LocalObjectStore(
       path.join(os.tmpdir(), "grad-openapi-unused"),
     ),

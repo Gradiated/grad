@@ -39,7 +39,7 @@ export GRAD_TRAINER_API_KEY=$(openssl rand -hex 32)   # shared by grad-server an
 | `AUTH_MODE` | `api_key` | `api_key` requires `ADMIN_API_KEY_HASH` (the server refuses to start without it). `none` must be set explicitly and is for development only. `cloud` delegates to Gradiated Cloud. |
 | `ADMIN_API_KEY_HASH` | none | SHA-256 hex of the bootstrap admin key; use it to mint workspace keys with `POST /v1/keys`. |
 | `TRAINER_API_KEY` or `TRAINER_API_KEY_HASH` | none | The platform trainer-worker key. Worker keys are not workspace keys: `admin` never implies `trainer:worker`, and `/v1/keys` cannot mint it. |
-| `DATABASE_URL` | none (in-memory) | Migrations run at boot, versioned in `grad_schema_migrations` under an advisory lock, so several replicas can start at once. |
+| `DATABASE_URL` | required | Postgres connection string. Migrations run at boot, versioned in `grad_schema_migrations` under an advisory lock, so several replicas can start at once. |
 | `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT` | none (local `STORAGE_DIR`) | Workers and SDKs upload and download through presigned URLs. Objects are written once under unique keys and never overwritten. |
 | `STORAGE_DIR`, `BLOB_SIGNING_SECRET` | `.grad-data`, random | Local storage uses HMAC-signed `/blobs/*` URLs proxied by the server. Set the secret when replicas share a volume. |
 | `DEPLOY_MODE` | `disabled` | `disabled` or `cloud`. The old `local` mode was removed. |

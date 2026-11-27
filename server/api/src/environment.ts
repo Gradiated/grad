@@ -14,7 +14,12 @@ const optionalString = z
 const EnvironmentSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
-  DATABASE_URL: optionalString,
+  DATABASE_URL: z
+    .string({
+      error: "DATABASE_URL is required (a Postgres connection string)",
+    })
+    .trim()
+    .min(1, "DATABASE_URL is required (a Postgres connection string)"),
   STORAGE_DIR: z.string().default(".grad-data"),
   S3_BUCKET: optionalString,
   S3_REGION: optionalString,
@@ -109,12 +114,6 @@ export const parseServerEnvironment = (
   if (env.TRAINER_API_KEY && env.TRAINER_API_KEY_HASH) {
     throw new Error(
       "Set only one of TRAINER_API_KEY and TRAINER_API_KEY_HASH.",
-    );
-  }
-
-  if (!env.DATABASE_URL) {
-    warnings.push(
-      "DATABASE_URL is not set: using the in-memory store; all data is lost on restart and only one replica is supported.",
     );
   }
 

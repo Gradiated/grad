@@ -418,8 +418,7 @@ export interface DeploymentRepository {
   }): Promise<Deployment>;
   /**
    * Serializes deploys of one (workspace, name) for the rest of the current
-   * transaction (Postgres advisory transaction lock; in-memory no-op because
-   * memory transactions are already serialized).
+   * transaction (advisory transaction lock).
    */
   lock(workspaceId: string, name: string): Promise<void>;
 }
@@ -761,10 +760,9 @@ export interface Repositories {
 
 export interface Store extends Repositories {
   /**
-   * Runs `fn` atomically. Postgres: one transaction on one connection.
-   * Memory: serialized with a snapshot restored on error. Nested calls join
-   * the outer transaction; an error thrown inside a nested call rolls back
-   * only that call (Postgres savepoint, memory snapshot).
+   * Runs `fn` atomically: one transaction on one connection. Nested calls
+   * join the outer transaction; an error thrown inside a nested call rolls
+   * back only that call (savepoint).
    */
   transaction<T>(fn: (tx: Repositories) => Promise<T>): Promise<T>;
   migrate(): Promise<void>;

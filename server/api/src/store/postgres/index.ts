@@ -26,9 +26,7 @@ import {
 } from "./serving.js";
 
 export interface PostgresStoreOptions {
-  connectionString?: string;
-  /** Externally owned pool (not ended by `close()`). */
-  pool?: Pool;
+  connectionString: string;
   clock: Clock;
   /** Schema to create and use (search_path); tests isolate with one per case. */
   schema?: string;
@@ -45,32 +43,19 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
   if (options.schema !== undefined && !SCHEMA_RE.test(options.schema)) {
     throw new Error(`Invalid schema name '${options.schema}'.`);
   }
-  if (!options.pool && !options.connectionString) {
-    throw new Error(
-      "createPostgresStore requires a pool or a connectionString.",
+  const pool = new Pool({
+    connectionString: options.connectionString,
+    ...(options.schema ? { options: `-c search_path=${options.schema}` } : {}),
+  });
+  pool.on("error", (error) => {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        msg: "postgres pool error",
+        error: error.message,
+      }),
     );
-  }
-
-  const ownsPool = !options.pool;
-  const pool =
-    options.pool ??
-    new Pool({
-      connectionString: options.connectionString,
-      ...(options.schema
-        ? { options: `-c search_path=${options.schema}` }
-        : {}),
-    });
-  if (ownsPool) {
-    pool.on("error", (error) => {
-      console.error(
-        JSON.stringify({
-          level: "error",
-          msg: "postgres pool error",
-          error: error.message,
-        }),
-      );
-    });
-  }
+  });
 
   const db = createDb(pool);
   const { clock } = options;
@@ -105,8 +90,6 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
         return false;
       }
     },
-    close: async () => {
-      if (ownsPool) await pool.end();
-    },
+    close: () => pool.end(),
   };
 };

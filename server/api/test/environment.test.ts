@@ -6,12 +6,17 @@ import { describe, expect, it } from "vitest";
 import { hashApiKey } from "../src/adapters.js";
 import { buildDependencies } from "../src/bootstrap.js";
 import { isLoopbackHost, parseServerEnvironment } from "../src/environment.js";
+import { postgresUrl } from "./fixtures/postgres.js";
 
 const ADMIN_HASH = hashApiKey("admin");
+const DB = { DATABASE_URL: "postgres://x" };
 
 describe("parseServerEnvironment", () => {
   it("defaults to loopback, api_key auth and disabled deploy", () => {
-    const env = parseServerEnvironment({ ADMIN_API_KEY_HASH: ADMIN_HASH });
+    const env = parseServerEnvironment({
+      ...DB,
+      ADMIN_API_KEY_HASH: ADMIN_HASH,
+    });
     expect(env).toMatchObject({
       HOST: "127.0.0.1",
       PORT: 8787,
@@ -20,28 +25,36 @@ describe("parseServerEnvironment", () => {
       BILLING_MODE: "noop",
       MAX_ATTEMPTS: 3,
     });
-    expect(env.warnings.join(" ")).toMatch(/in-memory store/);
+    expect(env.warnings).toEqual([]);
     expect(isLoopbackHost("::1")).toBe(true);
     expect(isLoopbackHost("0.0.0.0")).toBe(false);
   });
 
   it("fails fast on configurations that can never work or are unsafe by accident", () => {
-    expect(() => parseServerEnvironment({})).toThrow(/ADMIN_API_KEY_HASH/);
+    expect(() => parseServerEnvironment({ AUTH_MODE: "none" })).toThrow(
+      /DATABASE_URL is required/,
+    );
+    expect(() => parseServerEnvironment(DB)).toThrow(/ADMIN_API_KEY_HASH/);
     expect(() =>
-      parseServerEnvironment({ AUTH_MODE: "none", DEPLOY_MODE: "local" }),
+      parseServerEnvironment({
+        ...DB,
+        AUTH_MODE: "none",
+        DEPLOY_MODE: "local",
+      }),
     ).toThrow(/DEPLOY_MODE=local was removed/);
-    expect(() => parseServerEnvironment({ AUTH_MODE: "cloud" })).toThrow(
+    expect(() => parseServerEnvironment({ ...DB, AUTH_MODE: "cloud" })).toThrow(
       /CLOUD_INTERNAL_API_URL/,
     );
     expect(() =>
       parseServerEnvironment({
+        ...DB,
         AUTH_MODE: "none",
         TRAINER_API_KEY: "a",
         TRAINER_API_KEY_HASH: ADMIN_HASH,
       }),
     ).toThrow(/only one/);
     expect(() =>
-      parseServerEnvironment({ AUTH_MODE: "none", PORT: "99999" }),
+      parseServerEnvironment({ ...DB, AUTH_MODE: "none", PORT: "99999" }),
     ).toThrow(/Invalid server configuration/);
   });
 
@@ -64,6 +77,7 @@ describe("parseServerEnvironment", () => {
 
   it("resolves judge endpoints with fallbacks", () => {
     const shared = parseServerEnvironment({
+      ...DB,
       AUTH_MODE: "none",
       INFERENCE_BASE_URL: "http://vllm/v1",
       INFERENCE_API_KEY: "k",
@@ -73,6 +87,7 @@ describe("parseServerEnvironment", () => {
       judgeApiKey: "k",
     });
     const helm = parseServerEnvironment({
+      ...DB,
       AUTH_MODE: "none",
       INFERENCE_BASE_URL: "http://vllm/v1",
       INFERENCE_API_KEY: "k",
@@ -83,7 +98,7 @@ describe("parseServerEnvironment", () => {
       judgeApiKey: undefined,
     });
     expect(
-      parseServerEnvironment({ AUTH_MODE: "none", EVAL_EXECUTOR: "0" })
+      parseServerEnvironment({ ...DB, AUTH_MODE: "none", EVAL_EXECUTOR: "0" })
         .EVAL_EXECUTOR,
     ).toBe(false);
   });
@@ -97,6 +112,7 @@ describe("buildDependencies", () => {
     try {
       const deps = await buildDependencies(
         parseServerEnvironment({
+          DATABASE_URL: postgresUrl(),
           ADMIN_API_KEY_HASH: ADMIN_HASH,
           TRAINER_API_KEY: "worker-secret",
           STORAGE_DIR: dir,
@@ -123,6 +139,7 @@ describe("buildDependencies", () => {
 
       const none = await buildDependencies(
         parseServerEnvironment({
+          DATABASE_URL: postgresUrl(),
           AUTH_MODE: "none",
           STORAGE_DIR: dir,
           INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
@@ -133,9 +150,11 @@ describe("buildDependencies", () => {
         kind: "dev",
       });
       await none.regex.close();
+      await none.store.close();
 
       const cloud = await buildDependencies(
         parseServerEnvironment({
+          DATABASE_URL: postgresUrl(),
           AUTH_MODE: "cloud",
           BILLING_MODE: "cloud",
           DEPLOY_MODE: "cloud",
@@ -156,6 +175,7 @@ describe("buildDependencies", () => {
         kind: "worker",
       });
       await cloud.regex.close();
+      await cloud.store.close();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

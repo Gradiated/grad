@@ -17,26 +17,11 @@ from fixtures.tiny_models import QWEN_ID, ensure_tiny_models, torch_available
 from grad_trainer.bundles import extract_bundle
 from grad_trainer.worker import TrainerWorker
 
-TINY_MODELS = [
-    {
-        "id": QWEN_ID,
-        "hf_repo": None,
-        "family": "llm",
-        "adapters": ["lora"],
-        "default_for": [],
-        "price_per_million_tokens_usd": 1,
-        "max_context_tokens": 2048,
-        "template_revision": "qwen3@3",
-        "calibrated_lrs": {"sft": 1e-3},
-    }
-]
-
-
 @unittest.skipUnless(torch_available(), "torch, transformers and peft are not installed")
 class RealRecipeEndToEndTest(unittest.TestCase):
     def setUp(self) -> None:
         self.models = ensure_tiny_models()
-        self.server = LiveServer(self, TINY_MODELS)
+        self.server = LiveServer(self)
         self.base = self.server.base
         self.worker = TrainerWorker(
             server_url=self.base,

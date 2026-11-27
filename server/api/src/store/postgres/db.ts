@@ -7,7 +7,7 @@ export type Row = Record<string, unknown>;
  * Query executor bound to a pool. Inside `atomic`, every query (including
  * queries issued through the top-level repositories) runs on the ambient
  * transaction's client; a nested `atomic` joins it under a savepoint, so an
- * inner failure rolls back only the inner block (as in the memory store).
+ * inner failure rolls back only the inner block.
  */
 export interface Db {
   query<R extends Row = Row>(

@@ -13,24 +13,10 @@ from fixtures.stub_runners import StubRunner
 
 from grad_trainer.worker import TrainerWorker
 
-TINY_MODELS = [
-    {
-        "id": "test/tiny-qwen3",
-        "hf_repo": None,
-        "family": "llm",
-        "adapters": ["lora"],
-        "default_for": [],
-        "price_per_million_tokens_usd": 1,
-        "max_context_tokens": 2048,
-        "template_revision": "qwen3@3",
-        "calibrated_lrs": {"sft": 1e-3},
-    }
-]
-
 
 class LiveWorkerTest(unittest.TestCase):
     def test_worker_trains_and_publishes_artifact_against_live_server(self) -> None:
-        server = LiveServer(self, TINY_MODELS)
+        server = LiveServer(self)
         base = server.base
         tmp_dir = server.dir
         try:

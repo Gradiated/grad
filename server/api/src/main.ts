@@ -23,7 +23,6 @@ const main = async () => {
     url: `http://${env.HOST}:${env.PORT}`,
     auth_mode: env.AUTH_MODE,
     deploy_mode: env.DEPLOY_MODE,
-    store: env.DATABASE_URL ? "postgres" : "memory",
     storage: deps.storage.kind,
     inference: deps.inference ? "configured" : "unavailable",
   });

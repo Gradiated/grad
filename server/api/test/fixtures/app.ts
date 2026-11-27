@@ -16,8 +16,8 @@ import { EnvWorkerHub } from "../../src/env-hub.js";
 import { createRegexEvaluator } from "../../src/services/evals/regex.js";
 import { LocalObjectStore } from "../../src/storage/local.js";
 import { createBlobSigner } from "../../src/storage/signer.js";
-import { createMemoryStore } from "../../src/store/memory.js";
 import { ManualClock } from "./clock.js";
+import { createTestStore } from "./postgres.js";
 
 export const ADMIN_KEY = "grad_test_bootstrap_admin_key";
 export const TRAINER_KEY = "grad_test_platform_trainer_key";
@@ -66,7 +66,7 @@ export interface TestApp {
   close: () => Promise<void>;
 }
 
-/** Builds an app over the memory store, a temp local object store and a manual clock. */
+/** Builds an app over this test file's (emptied) Postgres schema, a temp local object store and a manual clock. */
 export const makeTestApp = async (
   overrides: Partial<AppDependencies> = {},
 ): Promise<TestApp> => {
@@ -77,7 +77,9 @@ export const makeTestApp = async (
   const storageDir = await mkdtemp(
     path.join(process.env.TMPDIR ?? os.tmpdir(), "grad-api-test-"),
   );
-  const store = overrides.store ?? createMemoryStore(clock);
+  const { store, dispose } = overrides.store
+    ? { store: overrides.store, dispose: async () => undefined }
+    : await createTestStore(clock);
   const deps: AppDependencies = {
     store,
     storage: new LocalObjectStore(storageDir),
@@ -152,6 +154,7 @@ export const makeTestApp = async (
     },
     close: async () => {
       await deps.regex.close();
+      await dispose();
       await rm(storageDir, { recursive: true, force: true });
     },
   };

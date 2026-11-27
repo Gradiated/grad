@@ -10,6 +10,10 @@
  *     [--auth none|api_key] [--worker none|reference|torch]
  *     [--database-url postgres://...]
  *
+ * Without --database-url it starts a throwaway `gradr5-pg-<pid>` Postgres
+ * container on a random loopback port and removes it on exit (stale ones
+ * older than 2 h, left by a SIGKILL, are reaped on the next start).
+ *
  * Output: {"base_url","api_key","trainer_key","inference_url","cloud_url",
  *          "workspace_id","mode","worker","model_paths","fault_url"}
  * `fault_url` is the same server behind tests/harness/fault-proxy.ts, which
@@ -27,6 +31,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import {
+  startDockerPostgres,
+  type DockerPostgres,
+} from "../../server/api/test/fixtures/docker-postgres.js";
 import { startFakeCloudApi } from "../../server/api/test/fixtures/fake-cloud-api.js";
 import { startFakeOpenAI } from "../../server/api/test/fixtures/fake-openai.js";
 import { startFaultProxy, type FaultProxy } from "./fault-proxy.js";
@@ -135,6 +143,7 @@ const main = async () => {
     : undefined;
   let modelPaths: Record<string, string> = {};
   let faultProxy: FaultProxy | undefined;
+  let postgres: Promise<DockerPostgres> | undefined;
 
   let stopping = false;
   const stop = async (code = 0) => {
@@ -160,6 +169,10 @@ const main = async () => {
     await faultProxy?.close();
     await inference.close();
     await cloud?.close();
+    await postgres?.then(
+      (pg) => pg.stop(),
+      () => undefined,
+    );
     rmSync(scratch, { recursive: true, force: true });
     for (const dir of new Set(
       Object.values(modelPaths).map((p) => dirname(p)),
@@ -180,6 +193,12 @@ const main = async () => {
         scopes: ["admin"],
       });
     }
+    let databaseUrl = args["database-url"];
+    if (!databaseUrl) {
+      postgres = startDockerPostgres();
+      databaseUrl = (await postgres).url;
+      if (stopping) return;
+    }
     const port = await freePort();
     const baseUrl = `http://127.0.0.1:${port}`;
     const env: Record<string, string> = {
@@ -193,8 +212,8 @@ const main = async () => {
       TRAINER_API_KEY: TRAINER_KEY,
       MAINTENANCE_INTERVAL_MS: "500",
       DEFAULT_WORKSPACE_ID: WORKSPACE_ID,
+      DATABASE_URL: databaseUrl,
     };
-    if (args["database-url"]) env.DATABASE_URL = args["database-url"];
     if (cloud) {
       Object.assign(env, {
         AUTH_MODE: "cloud",

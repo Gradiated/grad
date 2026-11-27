@@ -3,16 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { MetricPointInput, ResolvedRunConfig } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
-import { createMemoryStore } from "../src/store/memory.js";
 import { loadMigrations, migrate } from "../src/store/migrate.js";
 import type { DatasetPart, RunRecord, Store } from "../src/store/types.js";
 import { ManualClock } from "./fixtures/clock.js";
 import { evalReport } from "./fixtures/eval-report.js";
 import {
-  createIsolatedPostgresStore,
+  createTestStore,
   dropSchema,
   freshSchemaName,
-  postgresSkipReason,
   postgresUrl,
 } from "./fixtures/postgres.js";
 
@@ -1699,11 +1697,6 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
     });
   });
 
-describeStoreContract("memory", async (clock) => ({
-  store: createMemoryStore(clock),
-  dispose: async () => undefined,
-}));
-
 describe("migration files", () => {
   it("refuses two migrations with the same version", async () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
@@ -1721,124 +1714,105 @@ describe("migration files", () => {
   });
 });
 
+describeStoreContract("postgres", createTestStore);
+
 const url = postgresUrl();
 
-if (url) {
-  describeStoreContract("postgres", (clock) =>
-    createIsolatedPostgresStore(clock),
-  );
-
-  describe("postgres migrations", () => {
-    const withPool = async <T>(
-      fn: (pool: pg.Pool) => Promise<T>,
-    ): Promise<T> => {
-      const pool = new pg.Pool({ connectionString: url, max: 10 });
-      try {
-        return await fn(pool);
-      } finally {
-        await pool.end();
-      }
-    };
-
-    it("applies on a fresh schema, re-runs as a no-op", async () => {
-      const schema = freshSchemaName();
-      try {
-        const versions = (await loadMigrations()).map((m) => m.version);
-        expect(versions[0]).toBe("0001");
-        await withPool(async (pool) => {
-          expect(await migrate(pool, { schema })).toEqual(versions);
-          expect(await migrate(pool, { schema })).toEqual([]);
-          const { rows } = await pool.query(
-            `SELECT version FROM "${schema}".grad_schema_migrations ORDER BY version`,
-          );
-          expect(rows).toEqual(versions.map((version) => ({ version })));
-        });
-      } finally {
-        await dropSchema(url, schema);
-      }
-    });
-
-    it("6 concurrent migrate() calls all succeed", async () => {
-      const schema = freshSchemaName();
-      try {
-        await withPool(async (pool) => {
-          const results = await Promise.all(
-            Array.from({ length: 6 }, () => migrate(pool, { schema })),
-          );
-          const versions = (await loadMigrations()).map((m) => m.version);
-          expect(results.flat().sort()).toEqual(versions);
-          const { rows } = await pool.query(
-            `SELECT COUNT(*)::int AS n FROM "${schema}".grad_schema_migrations`,
-          );
-          expect(rows[0]).toEqual({ n: versions.length });
-        });
-      } finally {
-        await dropSchema(url, schema);
-      }
-    });
-
-    it("rolls back a failing migration and reports it", async () => {
-      const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
-      const path = await import("node:path");
-      const dir = await mkdtemp(
-        path.join(process.env.TMPDIR ?? "/tmp", "grad-mig-"),
-      );
-      const schema = freshSchemaName();
-      try {
-        await writeFile(
-          path.join(dir, "0001_ok.sql"),
-          "CREATE TABLE t_ok (id int);",
-        );
-        await writeFile(
-          path.join(dir, "0002_bad.sql"),
-          "CREATE TABLE t_bad (id int); SELECT broken;",
-        );
-        await withPool(async (pool) => {
-          await expect(migrate(pool, { schema, dir })).rejects.toThrow(
-            /0002_bad\.sql failed/,
-          );
-          const { rows } = await pool.query(
-            `SELECT to_regclass('"${schema}".t_bad') AS bad, to_regclass('"${schema}".t_ok') AS ok`,
-          );
-          expect(rows[0]).toMatchObject({ bad: null });
-          expect(rows[0]?.ok).not.toBeNull();
-        });
-      } finally {
-        await dropSchema(url, schema);
-        await rm(dir, { recursive: true, force: true });
-      }
-    });
-  });
-
-  describe("postgres store lifecycle", () => {
-    it("rejects bad options; ping fails after close; external pools are not ended", async () => {
-      const { createPostgresStore } = await import("../src/store/postgres.js");
-      const clock = new ManualClock();
-      expect(() => createPostgresStore({ clock })).toThrow(
-        /pool or a connectionString/,
-      );
-      expect(() =>
-        createPostgresStore({
-          clock,
-          connectionString: url,
-          schema: "Bad-Name",
-        }),
-      ).toThrow(/Invalid schema/);
-
-      const owned = createPostgresStore({ clock, connectionString: url });
-      expect(await owned.ping()).toBe(true);
-      await owned.close();
-      expect(await owned.ping()).toBe(false);
-
-      const pool = new pg.Pool({ connectionString: url });
-      const external = createPostgresStore({ clock, pool });
-      await external.close();
-      expect((await pool.query("SELECT 1 AS one")).rows[0]).toEqual({ one: 1 });
+describe("postgres migrations", () => {
+  const withPool = async <T>(fn: (pool: pg.Pool) => Promise<T>): Promise<T> => {
+    const pool = new pg.Pool({ connectionString: url, max: 10 });
+    try {
+      return await fn(pool);
+    } finally {
       await pool.end();
-    });
+    }
+  };
+
+  it("applies on a fresh schema, re-runs as a no-op", async () => {
+    const schema = freshSchemaName();
+    try {
+      const versions = (await loadMigrations()).map((m) => m.version);
+      expect(versions[0]).toBe("0001");
+      await withPool(async (pool) => {
+        expect(await migrate(pool, { schema })).toEqual(versions);
+        expect(await migrate(pool, { schema })).toEqual([]);
+        const { rows } = await pool.query(
+          `SELECT version FROM "${schema}".grad_schema_migrations ORDER BY version`,
+        );
+        expect(rows).toEqual(versions.map((version) => ({ version })));
+      });
+    } finally {
+      await dropSchema(url, schema);
+    }
   });
-} else {
-  describe.skip(`store contract: postgres (skipped: ${postgresSkipReason() ?? "unavailable"})`, () => {
-    it("requires Postgres", () => undefined);
+
+  it("6 concurrent migrate() calls all succeed", async () => {
+    const schema = freshSchemaName();
+    try {
+      await withPool(async (pool) => {
+        const results = await Promise.all(
+          Array.from({ length: 6 }, () => migrate(pool, { schema })),
+        );
+        const versions = (await loadMigrations()).map((m) => m.version);
+        expect(results.flat().sort()).toEqual(versions);
+        const { rows } = await pool.query(
+          `SELECT COUNT(*)::int AS n FROM "${schema}".grad_schema_migrations`,
+        );
+        expect(rows[0]).toEqual({ n: versions.length });
+      });
+    } finally {
+      await dropSchema(url, schema);
+    }
   });
-}
+
+  it("rolls back a failing migration and reports it", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const dir = await mkdtemp(
+      path.join(process.env.TMPDIR ?? "/tmp", "grad-mig-"),
+    );
+    const schema = freshSchemaName();
+    try {
+      await writeFile(
+        path.join(dir, "0001_ok.sql"),
+        "CREATE TABLE t_ok (id int);",
+      );
+      await writeFile(
+        path.join(dir, "0002_bad.sql"),
+        "CREATE TABLE t_bad (id int); SELECT broken;",
+      );
+      await withPool(async (pool) => {
+        await expect(migrate(pool, { schema, dir })).rejects.toThrow(
+          /0002_bad\.sql failed/,
+        );
+        const { rows } = await pool.query(
+          `SELECT to_regclass('"${schema}".t_bad') AS bad, to_regclass('"${schema}".t_ok') AS ok`,
+        );
+        expect(rows[0]).toMatchObject({ bad: null });
+        expect(rows[0]?.ok).not.toBeNull();
+      });
+    } finally {
+      await dropSchema(url, schema);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("postgres store lifecycle", () => {
+  it("rejects bad schema names; ping fails after close", async () => {
+    const { createPostgresStore } = await import("../src/store/postgres.js");
+    const clock = new ManualClock();
+    expect(() =>
+      createPostgresStore({
+        clock,
+        connectionString: url,
+        schema: "Bad-Name",
+      }),
+    ).toThrow(/Invalid schema/);
+
+    const owned = createPostgresStore({ clock, connectionString: url });
+    expect(await owned.ping()).toBe(true);
+    await owned.close();
+    expect(await owned.ping()).toBe(false);
+  });
+});

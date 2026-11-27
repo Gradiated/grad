@@ -24,9 +24,7 @@ import type { InferenceClients } from "./services/evals/types.js";
 import { LocalObjectStore } from "./storage/local.js";
 import { S3ObjectStore } from "./storage/s3.js";
 import { createBlobSigner } from "./storage/signer.js";
-import { createMemoryStore } from "./store/memory.js";
 import { createPostgresStore } from "./store/postgres.js";
-import type { Store } from "./store/types.js";
 
 export const log = (
   level: "info" | "warn" | "error",
@@ -61,9 +59,10 @@ export const buildDependencies = async (
   env: ServerEnvironment,
 ): Promise<AppDependencies> => {
   const clock = systemClock;
-  const store: Store = env.DATABASE_URL
-    ? createPostgresStore({ connectionString: env.DATABASE_URL, clock })
-    : createMemoryStore(clock);
+  const store = createPostgresStore({
+    connectionString: env.DATABASE_URL,
+    clock,
+  });
   await store.migrate();
 
   const storage = env.S3_BUCKET
