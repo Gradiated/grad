@@ -52,6 +52,18 @@ export const unavailable = (code: string, detail: string): ApiError =>
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+/** 403: Gradiated Cloud suspended or deleted the workspace. */
+export const workspaceInactive = (state: string): ApiError =>
+  state === "deleted"
+    ? forbidden(
+        "workspace_deleted",
+        "This workspace was deleted; its data is being removed.",
+      )
+    : forbidden(
+        "workspace_suspended",
+        "This workspace is suspended, so it cannot start new jobs; running jobs stop at their next checkpoint. Contact the workspace's admin or Gradiated support.",
+      );
+
 /** 429: the workspace already has `limit` queued jobs (GRAD_MAX_QUEUED_PER_WORKSPACE). */
 export const queueLimit = (limit: number): ApiError =>
   new ApiError(

@@ -267,6 +267,13 @@ export const createModelCatalog = (
   };
 };
 
+/** The billing SKU a base model trains at. */
+export const trainSku = (model: string): string => `train:${model}`;
+/** The SKU eval estimates price a gateway model's tokens at (Cloud). */
+export const inferenceSku = (model: string): string => `inference:${model}`;
+/** USD as integer nano-USD (billing's unit). */
+export const nanoUsd = (usd: number): number => Math.round(usd * 1e9);
+
 export const costForTokens = (
   tokens: number,
   pricePerMillion: number,

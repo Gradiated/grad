@@ -1,5 +1,6 @@
 import type {
   Artifact as ArtifactData,
+  ArtifactDownloadUrl,
   ArtifactImport as ArtifactImportData,
   CreateArtifactImportRequest,
   ImportableArtifactFormat,
@@ -252,6 +253,14 @@ export class ArtifactsResource {
 
   download(ref: ArtifactRef, dest: string, options?: DownloadOptions): Promise<DownloadResult> {
     return downloadArtifact(this.core, artifactRef(ref), dest, options);
+  }
+
+  /**
+   * A presigned URL of the bundle (valid 15 minutes): a browser downloads it straight from
+   * storage (`<a href>`) instead of holding the artifact in memory. Verify `sha256`.
+   */
+  downloadUrl(ref: ArtifactRef, options?: RequestOptions): Promise<ArtifactDownloadUrl> {
+    return this.core.api.getArtifactDownloadUrl(artifactRef(ref), options);
   }
 
   /**

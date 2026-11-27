@@ -1164,6 +1164,13 @@ class Artifacts(_Resource):
         """Delete an artifact and its bundle. A pinned one (a published Cloud model version) raises ``ConflictError`` ``artifact_pinned``."""
         self._wire.delete_artifact(model_ref(ref))
 
+    def download_url(self, ref: Any, *, timeout: float | None = None) -> dict[str, Any]:
+        """A presigned URL of the artifact's bundle, valid 15 minutes: ``{url, expires_at, sha256, size_bytes, filename}``.
+
+        Fetch it straight from storage (no API key); verify ``sha256``.
+        """
+        return dict(self._wire.get_artifact_download_url(model_ref(ref), timeout=timeout))
+
     def download(
         self,
         ref: Any,

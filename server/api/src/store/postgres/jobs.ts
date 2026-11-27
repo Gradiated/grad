@@ -1,5 +1,5 @@
 import type { Clock } from "../../clock.js";
-import { queueLimit } from "../../errors.js";
+import { queueLimit, workspaceInactive } from "../../errors.js";
 import { newId } from "../../ids.js";
 import { metricKind, metrics } from "../../telemetry/metrics.js";
 import { currentTraceparent } from "../../telemetry/tracing.js";
@@ -143,6 +143,7 @@ export const insertJob = async (
     minGpuMemoryGb?: number | null | undefined;
   },
 ): Promise<string> => {
+  await assertWorkspaceActive(db, input.workspaceId);
   if (input.maxQueued !== undefined) {
     await assertQueueRoom(db, input.workspaceId, input.kind, input.maxQueued);
   }
@@ -173,6 +174,21 @@ export const insertJob = async (
   );
 
   return id;
+};
+
+/** 403 for a suspended or deleted workspace (Cloud's lifecycle hooks): no new jobs. */
+const assertWorkspaceActive = async (
+  db: Db,
+  workspaceId: string,
+): Promise<void> => {
+  const row = (
+    await db.query(
+      `SELECT state FROM grad_workspace_states
+        WHERE workspace_id = $1 AND state <> 'active'`,
+      [workspaceId],
+    )
+  )[0];
+  if (row) throw workspaceInactive(String(row.state));
 };
 
 /** Advisory lock classes (two-key form): serializing per workspace or kind. */

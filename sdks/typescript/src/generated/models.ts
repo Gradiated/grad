@@ -46,6 +46,15 @@ export interface Artifact {
   createdAt: string;
 }
 
+export interface ArtifactDownloadUrl {
+  /** A presigned GET of the bundle (.grad.tar.gz) straight from storage; no Authorization header. Verify its SHA-256. */
+  url: string;
+  expiresAt: string;
+  sha256: string;
+  sizeBytes: number;
+  filename: string;
+}
+
 /** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
 export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reward_bundle" | "reference";
 
@@ -1276,6 +1285,8 @@ export interface UsageRecord {
   tokens: number;
   costUsd: number;
   priceVersion: string;
+  /** Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice). */
+  billedBy: "grad" | "gateway";
   idempotencyKey: string;
   createdAt: string;
 }

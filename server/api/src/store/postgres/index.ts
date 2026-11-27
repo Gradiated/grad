@@ -12,6 +12,7 @@ import { createImportJobRepository, createRunRepository } from "./runs.js";
 import { createSecretRepository, createSourceRepository } from "./sources.js";
 import { createTelemetryRepository } from "./telemetry.js";
 import { createUsageRepository } from "./usage.js";
+import { createWorkspaceRepository } from "./workspaces.js";
 import { createWorkerTokenRepository } from "./worker-tokens.js";
 import { watchPool } from "../../telemetry/metrics.js";
 
@@ -87,6 +88,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
     secrets: createSecretRepository(db, clock),
     sources: createSourceRepository(db, clock),
     workerTokens: createWorkerTokenRepository(db),
+    workspaces: createWorkspaceRepository(db),
   };
 
   return {

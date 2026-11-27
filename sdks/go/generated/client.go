@@ -306,6 +306,22 @@ func (c *Client) GetArtifact(ctx context.Context, id string, opts ...RequestOpti
 	return &out, nil
 }
 
+// GetArtifactDownloadURL calls GET /v1/artifacts/{id}/download-url.
+//
+// A short-lived presigned URL of an artifact bundle (browsers download straight from storage).
+func (c *Client) GetArtifactDownloadURL(ctx context.Context, id string, opts ...RequestOption) (*ArtifactDownloadURL, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/artifacts/" + p0 + "/download-url"}
+	var out ArtifactDownloadURL
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // GetArtifactImport calls GET /v1/artifact-imports/{id}.
 //
 // Get an artifact import.

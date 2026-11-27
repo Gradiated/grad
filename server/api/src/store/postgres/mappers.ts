@@ -131,6 +131,7 @@ export const toRunDomain = (r: Row): RunDomain => ({
   resolved_config: j(r.resolved_config, {} as RunDomain["resolved_config"]),
   max_cost_usd: nn(r.max_cost_usd),
   price_per_million_tokens: n(r.price_per_million_tokens),
+  price_version: sn(r.price_version),
   total_steps: n(r.total_steps),
   current_step: n(r.current_step),
   billed_tokens: n(r.billed_tokens),
@@ -262,6 +263,7 @@ export const toLedgerRow = (r: Row): LedgerRow => ({
   tokens: n(r.tokens),
   cost_usd: n(r.cost_usd),
   price_version: s(r.price_version),
+  billed_by: r.billed_by === "gateway" ? "gateway" : "grad",
   idempotency_key: s(r.idempotency_key),
   created_at: iso(r.created_at),
 });

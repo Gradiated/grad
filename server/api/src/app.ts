@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 
 import type { AppDependencies } from "./deps.js";
@@ -32,6 +33,22 @@ export const API_VERSION = "0.2.0-alpha.3";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;
+
+/** What a browser may send cross-origin (GRAD_CORS_ORIGINS). */
+export const CORS_REQUEST_HEADERS = [
+  "Authorization",
+  "Content-Type",
+  "Idempotency-Key",
+  "Last-Event-ID",
+  "X-Request-Id",
+];
+/** What it may read back. */
+export const CORS_EXPOSED_HEADERS = [
+  "x-request-id",
+  "Retry-After",
+  "X-Artifact-Sha256",
+  "Content-Disposition",
+];
 
 const parseBearer = (header: string | undefined): string | undefined =>
   header?.match(/^Bearer\s+(\S+)$/i)?.[1];
@@ -180,6 +197,22 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
       "*",
       async (c, next) => serveUiFile(c, ui, c.get("requestId")) ?? next(),
     );
+
+  // Browser clients (the Gradiated console) on allowlisted origins: bearer
+  // tokens only, never cookies, so no credentials mode. Off by default.
+  const corsOrigins = deps.settings.corsOrigins ?? [];
+  if (corsOrigins.length > 0) {
+    app.use(
+      "/v1/*",
+      cors({
+        origin: (origin) => (corsOrigins.includes(origin) ? origin : null),
+        allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allowHeaders: CORS_REQUEST_HEADERS,
+        exposeHeaders: CORS_EXPOSED_HEADERS,
+        maxAge: 600,
+      }),
+    );
+  }
 
   app.use(
     "/v1/*",

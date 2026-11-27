@@ -267,6 +267,14 @@
       }
     },
     {
+      "case": "artifact_download_url",
+      "method": "GET",
+      "path": "/v1/artifacts/support-sft@2026-11-27-1/download-url",
+      "query": {},
+      "idempotency_key": null,
+      "body": null
+    },
+    {
       "case": "delete_artifact",
       "method": "DELETE",
       "path": "/v1/artifacts/support-sft@2026-11-27-1",
@@ -876,6 +884,7 @@
           "tokens": 84,
           "cost_usd": 8.4e-05,
           "price_version": "catalog@1",
+          "billed_by": "grad",
           "idempotency_key": "run-usage:run_015437ae0c01e09a573e4811:1:84",
           "created_at": "2026-11-27T04:35:21.351Z"
         }

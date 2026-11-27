@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { cloudUrl } from "./cloud/http.js";
 import {
   parseWorkerAuthConfig,
   type WorkerAuthConfig,
@@ -21,6 +22,9 @@ const S3_BUCKET_REQUIRED =
 
 /** The eval endpoints: eval workers call them; the API only checks they are set. */
 const EndpointShape = {
+  /** Cloud evals: the inference gateway's OpenAI-compatible base URL and grad's service credential. */
+  GRAD_CLOUD_GATEWAY_URL: optionalString,
+  GRAD_CLOUD_GATEWAY_TOKEN: optionalString,
   GRAD_INFERENCE_BASE_URL: optionalString,
   GRAD_INFERENCE_API_KEY: optionalString,
   GRAD_JUDGE_BASE_URL: optionalString,
@@ -117,9 +121,31 @@ const EnvironmentSchema = z.object({
   GRAD_SECRETS_KEYS_OLD: optionalString,
   DEFAULT_WORKSPACE_ID: z.string().min(1).max(64).default("local"),
   BILLING_MODE: z.enum(["noop", "cloud"]).default("noop"),
+  /** Cloud: the product's internal listener (the `gradiated` source's traces:pull). */
   CLOUD_INTERNAL_API_URL: optionalString,
+  /** Cloud: the bearer grad sends to the product's internal listener (billing, prices, traces). */
   CLOUD_SERVICE_TOKEN: optionalString,
   ...EndpointShape,
+  /** AUTH_MODE=cloud: read-only connection to the product database's auth_principals_v1 view. */
+  GRAD_CLOUD_AUTH_DATABASE_URL: optionalString,
+  /** AUTH_MODE=cloud: the control plane's JWKS (console and service JWTs). */
+  GRAD_CLOUD_JWKS_URL: optionalString,
+  GRAD_CLOUD_JWT_ISSUER: optionalString,
+  GRAD_CLOUD_JWT_AUDIENCE: z.string().trim().min(1).default("training"),
+  /** BILLING_MODE=cloud: billing's base URL (`/check`, `/usage-events`). */
+  GRAD_CLOUD_BILLING_URL: optionalString,
+  /** BILLING_MODE=cloud: the versioned price list. */
+  GRAD_CLOUD_PRICES_URL: optionalString,
+  /** Browser origins (comma-separated, exact `https://host[:port]`) allowed cross-origin on /v1; unset: CORS off. */
+  GRAD_CORS_ORIGINS: optionalString,
+  /** Seconds between a workspace delete and the purge of its data (default 7 days). */
+  GRAD_WORKSPACE_PURGE_DELAY_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(7 * 86_400),
+  /** An AWS KMS key (id, ARN or alias): workspace secrets use envelope encryption under it. */
+  GRAD_SECRETS_KMS_KEY_ID: optionalString,
   GRAD_EXTRA_MODELS_JSON: optionalString,
   GRAD_JUDGE_MODELS_JSON: optionalString,
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
@@ -153,8 +179,6 @@ const EnvironmentSchema = z.object({
   USAGE_FLUSH_TOKENS: z.coerce.number().int().min(1).default(1_000_000),
   /** ...or every this many seconds, whichever comes first. */
   USAGE_FLUSH_SECONDS: z.coerce.number().int().min(1).default(300),
-  /** Cloud: usage rows younger than this are not exported yet. */
-  USAGE_EXPORT_LAG_SECONDS: z.coerce.number().int().min(0).default(60),
   /** A source starts at most one sync per this many seconds (live tests: 0). */
   SOURCE_SYNC_INTERVAL_SECONDS: z.coerce
     .number()
@@ -240,6 +264,8 @@ const parseTrainerKeys = (raw: string | undefined): TrainerKeyConfig[] => {
 };
 
 export interface ServerEnvironment extends RawEnvironment {
+  /** GRAD_CORS_ORIGINS, split. */
+  corsOrigins: string[];
   /** Labelled, kind-scoped trainer keys from TRAINER_KEYS_JSON. */
   trainerKeys: TrainerKeyConfig[];
   /** How workers authenticate (GRAD_WORKER_AUTH and its settings). */
@@ -296,10 +322,66 @@ export const parseServerEnvironment = (
     }
   }
 
-  const usesCloud = env.AUTH_MODE === "cloud" || env.BILLING_MODE === "cloud";
-  if (usesCloud && (!env.CLOUD_INTERNAL_API_URL || !env.CLOUD_SERVICE_TOKEN)) {
+  const requireAll = (mode: string, names: Array<keyof typeof env>) => {
+    const missing = names.filter((n) => !env[n]);
+    if (missing.length > 0) {
+      throw new Error(`${mode} requires ${missing.join(", ")}.`);
+    }
+  };
+  if (env.AUTH_MODE === "cloud") {
+    requireAll("AUTH_MODE=cloud", [
+      "GRAD_CLOUD_AUTH_DATABASE_URL",
+      "GRAD_CLOUD_JWKS_URL",
+      "GRAD_CLOUD_JWT_ISSUER",
+    ]);
+  }
+  if (env.BILLING_MODE === "cloud") {
+    requireAll("BILLING_MODE=cloud", [
+      "GRAD_CLOUD_BILLING_URL",
+      "GRAD_CLOUD_PRICES_URL",
+      "CLOUD_SERVICE_TOKEN",
+    ]);
+  }
+  for (const name of [
+    "CLOUD_INTERNAL_API_URL",
+    "GRAD_CLOUD_JWKS_URL",
+    "GRAD_CLOUD_BILLING_URL",
+    "GRAD_CLOUD_PRICES_URL",
+    "GRAD_CLOUD_GATEWAY_URL",
+  ] as const) {
+    const value = env[name];
+    if (value) cloudUrl(name, value);
+  }
+  const corsOrigins = (env.GRAD_CORS_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  for (const origin of corsOrigins) {
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      parsed = null;
+    }
+    if (
+      !parsed ||
+      parsed.origin !== origin ||
+      (parsed.protocol !== "https:" && !isLoopbackHost(parsed.hostname))
+    ) {
+      throw new Error(
+        `GRAD_CORS_ORIGINS: '${origin}' is not an origin like https://console.example.com (https, no path, no trailing slash; http only for localhost).`,
+      );
+    }
+  }
+  if (env.GRAD_CLOUD_GATEWAY_URL) {
+    requireAll("GRAD_CLOUD_GATEWAY_URL", [
+      "CLOUD_INTERNAL_API_URL",
+      "CLOUD_SERVICE_TOKEN",
+    ]);
+  }
+  if (env.BILLING_MODE === "cloud" && env.GRAD_INFERENCE_BASE_URL) {
     throw new Error(
-      "CLOUD_INTERNAL_API_URL and CLOUD_SERVICE_TOKEN are required when AUTH_MODE or BILLING_MODE is 'cloud'.",
+      "BILLING_MODE=cloud: evals call the Gradiated gateway, which bills their tokens; set GRAD_CLOUD_GATEWAY_URL instead of GRAD_INFERENCE_BASE_URL.",
     );
   }
 
@@ -342,10 +424,13 @@ export const parseServerEnvironment = (
 
   return {
     ...env,
+    corsOrigins,
     trainerKeys,
     workerAuth,
     uiEnabled: env.UI_ENABLED ?? env.AUTH_MODE !== "cloud",
-    inferenceConfigured: endpoints.inferenceBaseUrl !== undefined,
+    inferenceConfigured:
+      endpoints.inferenceBaseUrl !== undefined ||
+      env.GRAD_CLOUD_GATEWAY_URL !== undefined,
     warnings,
   };
 };
@@ -376,7 +461,14 @@ export const parseEvalWorkerEnvironment = (
   }
   const warnings: string[] = [];
   const endpoints = resolveEndpoints(parsed.data, warnings);
-  if (!endpoints.inferenceBaseUrl) {
+  if (parsed.data.GRAD_CLOUD_GATEWAY_URL) {
+    if (!parsed.data.GRAD_CLOUD_GATEWAY_TOKEN) {
+      throw new Error(
+        "GRAD_CLOUD_GATEWAY_URL requires GRAD_CLOUD_GATEWAY_TOKEN (grad's gateway service credential).",
+      );
+    }
+    cloudUrl("GRAD_CLOUD_GATEWAY_URL", parsed.data.GRAD_CLOUD_GATEWAY_URL);
+  } else if (!endpoints.inferenceBaseUrl) {
     warnings.push(
       "GRAD_INFERENCE_BASE_URL is not set: this eval worker runs only validators, regexes and code scorers (dataset.score()). Set it (and GRAD_JUDGE_BASE_URL for judges) here and on grad-server, which checks it when an eval is created.",
     );

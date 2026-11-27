@@ -925,6 +925,7 @@ Examples:
   grad artifacts download fast-diff-merge@latest --output ./fast-diff-merge
   vllm serve Qwen/Qwen3-8B --enable-lora --lora-modules fast-diff-merge=./fast-diff-merge
   grad artifacts download fast-diff-merge@latest --archive ./fast-diff-merge.grad.tar.gz
+  grad artifacts download fast-diff-merge@latest --url    # a presigned URL, valid 15 minutes
 
 The bundle's SHA-256 is verified while streaming, and every file is checked
 against the bundle manifest before the directory is moved into place.")]
@@ -940,6 +941,9 @@ against the bundle manifest before the directory is moved into place.")]
         /// Replace an existing output directory or archive
         #[arg(long)]
         force: bool,
+        /// Print a presigned URL of the bundle (valid 15 minutes) instead of downloading
+        #[arg(long, conflicts_with_all = ["output", "archive", "force"])]
+        url: bool,
     },
     /// Register local weights as an artifact (validated against the format spec)
     #[command(after_help = "\

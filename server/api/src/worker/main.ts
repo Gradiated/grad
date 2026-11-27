@@ -5,6 +5,7 @@ import {
   parseEvalWorkerEnvironment,
   type EvalEndpoints,
 } from "../environment.js";
+import { createGatewayInference } from "../cloud/gateway.js";
 import { createOpenAICompatibleClient } from "../services/evals/inference.js";
 import { createRegexEvaluator } from "../services/evals/regex.js";
 import type { InferenceClients } from "../services/evals/types.js";
@@ -44,9 +45,15 @@ export const runWorker = async (args: readonly string[]): Promise<void> => {
   const env = parseEvalWorkerEnvironment();
   for (const warning of env.warnings) log("warn", warning);
 
-  const inference = env.inferenceBaseUrl
-    ? endpointClients(env.inferenceBaseUrl, env)
-    : unconfiguredInference();
+  // Cloud: every model and judge call goes to the gateway's eval lane.
+  const inference = env.GRAD_CLOUD_GATEWAY_URL
+    ? createGatewayInference({
+        baseUrl: env.GRAD_CLOUD_GATEWAY_URL,
+        token: env.GRAD_CLOUD_GATEWAY_TOKEN as string,
+      })
+    : env.inferenceBaseUrl
+      ? endpointClients(env.inferenceBaseUrl, env)
+      : unconfiguredInference();
   const regex = createRegexEvaluator();
   // A per-process suffix, so a restarted container takes a new attempt.
   const workerId = `${env.GRAD_WORKER_ID ?? hostname()}-${randomBytes(4).toString("hex")}`;

@@ -28,47 +28,49 @@ describe("createSecretsCipher", () => {
     ).toThrow(/GRAD_SECRETS_KEYS_OLD/);
   });
 
-  it("round-trips with a fresh nonce and never stores the plaintext", () => {
+  it("round-trips with a fresh nonce and never stores the plaintext", async () => {
     const cipher = createSecretsCipher({ key: newKey() });
     if (!cipher) throw new Error("expected a cipher");
 
-    const a = cipher.seal("ws_1", "langfuse-prod", "pk-lf-1:sk-lf-2");
-    const b = cipher.seal("ws_1", "langfuse-prod", "pk-lf-1:sk-lf-2");
+    const a = await cipher.seal("ws_1", "langfuse-prod", "pk-lf-1:sk-lf-2");
+    const b = await cipher.seal("ws_1", "langfuse-prod", "pk-lf-1:sk-lf-2");
 
     expect(a.keyId).toBe(cipher.keyId);
     expect(a.nonce).toHaveLength(12);
     expect(a.nonce.equals(b.nonce)).toBe(false);
     expect(a.ciphertext.toString("utf8")).not.toContain("sk-lf-2");
-    expect(cipher.open("ws_1", "langfuse-prod", a)).toBe("pk-lf-1:sk-lf-2");
+    expect(await cipher.open("ws_1", "langfuse-prod", a)).toBe(
+      "pk-lf-1:sk-lf-2",
+    );
   });
 
-  it("binds the value to its workspace and name", () => {
+  it("binds the value to its workspace and name", async () => {
     const cipher = createSecretsCipher({ key: newKey() });
     if (!cipher) throw new Error("expected a cipher");
-    const sealed = cipher.seal("ws_1", "hf-token", "hf_abc");
+    const sealed = await cipher.seal("ws_1", "hf-token", "hf_abc");
 
-    expect(() => cipher.open("ws_2", "hf-token", sealed)).toThrow();
-    expect(() => cipher.open("ws_1", "other", sealed)).toThrow();
+    await expect(cipher.open("ws_2", "hf-token", sealed)).rejects.toThrow();
+    await expect(cipher.open("ws_1", "other", sealed)).rejects.toThrow();
 
     const tampered = Buffer.from(sealed.ciphertext);
     tampered[0] = (tampered[0] ?? 0) ^ 1;
-    expect(() =>
+    await expect(
       cipher.open("ws_1", "hf-token", { ...sealed, ciphertext: tampered }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 
-  it("reads values sealed with a rotated-out key", () => {
+  it("reads values sealed with a rotated-out key", async () => {
     const oldKey = newKey();
     const before = createSecretsCipher({ key: oldKey });
     if (!before) throw new Error("expected a cipher");
-    const sealed = before.seal("ws_1", "hf-token", "hf_abc");
+    const sealed = await before.seal("ws_1", "hf-token", "hf_abc");
 
     const after = createSecretsCipher({ key: newKey(), oldKeys: oldKey });
     expect(after?.keyId).not.toBe(before.keyId);
-    expect(after?.open("ws_1", "hf-token", sealed)).toBe("hf_abc");
+    expect(await after?.open("ws_1", "hf-token", sealed)).toBe("hf_abc");
 
     const forgotten = createSecretsCipher({ key: newKey() });
-    expect(() => forgotten?.open("ws_1", "hf-token", sealed)).toThrow(
+    await expect(forgotten?.open("ws_1", "hf-token", sealed)).rejects.toThrow(
       /neither GRAD_SECRETS_KEY nor in GRAD_SECRETS_KEYS_OLD/,
     );
   });

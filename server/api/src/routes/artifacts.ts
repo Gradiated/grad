@@ -1,6 +1,7 @@
 import { createRoute, type OpenAPIHono, z } from "@hono/zod-openapi";
 
 import {
+  ArtifactDownloadUrlSchema,
   ArtifactImportSchema,
   ArtifactPinSchema,
   ArtifactSchema,
@@ -98,6 +99,49 @@ export const registerArtifactRoutes = (
         ),
         200,
       ),
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/artifacts/{id}/download-url",
+      operationId: "getArtifactDownloadUrl",
+      summary:
+        "A short-lived presigned URL of an artifact bundle (browsers download straight from storage)",
+      tags,
+      request: { params: IdParamSchema },
+      responses: {
+        200: jsonResponse(ArtifactDownloadUrlSchema, "Presigned download."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) => {
+      const artifact = await load(
+        workspaceOf(c, "artifacts:read"),
+        c.req.valid("param").id,
+      );
+      const seconds = 900;
+
+      return c.json(
+        {
+          url: await deps.storage.presignDownload(
+            artifact.storage_key,
+            seconds,
+            {
+              forClient: true,
+            },
+          ),
+          expires_at: new Date(
+            deps.clock.now().getTime() + seconds * 1000,
+          ).toISOString(),
+          sha256: artifact.sha256,
+          size_bytes: artifact.size_bytes,
+          filename: `${artifact.name}-${artifact.version}.grad.tar.gz`,
+        },
+        200,
+        { "Cache-Control": "no-store" },
+      );
+    },
   );
 
   app.openapi(

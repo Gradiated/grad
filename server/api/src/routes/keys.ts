@@ -11,6 +11,15 @@ import {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { ApiError, notFound } from "../errors.js";
+
+const keysManagedByCloud = async (): Promise<Response> => {
+  throw new ApiError(
+    501,
+    "keys_managed_by_cloud",
+    "API keys are managed by Gradiated Cloud",
+    "Create and revoke API keys in the Gradiated console (Settings, API keys); they work for training and inference.",
+  );
+};
 import { createOnce, idempotencyOf } from "../idempotency.js";
 import {
   defaultErrors,
@@ -24,6 +33,12 @@ export const registerModelsAndKeysRoutes = (
   app: OpenAPIHono<AppEnv>,
   deps: AppDependencies,
 ): void => {
+  // AUTH_MODE=cloud: keys live in the Gradiated console, not here.
+  if (deps.settings.keysManagedByCloud) {
+    app.use("/v1/keys", keysManagedByCloud);
+    app.use("/v1/keys/*", keysManagedByCloud);
+  }
+
   app.openapi(
     createRoute({
       method: "get",

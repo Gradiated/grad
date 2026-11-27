@@ -128,6 +128,10 @@ export const UsageRecordSchema = z
     tokens: z.number().int().min(0),
     cost_usd: z.number().min(0),
     price_version: z.string().min(1),
+    billed_by: z.enum(["grad", "gateway"]).openapi({
+      description:
+        "Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).",
+    }),
     idempotency_key: z.string().min(1),
     created_at: IsoTimestampSchema,
   })

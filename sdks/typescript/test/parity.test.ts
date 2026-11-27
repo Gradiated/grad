@@ -142,6 +142,7 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
       secret: "hf-token",
       idempotencyKey: "parity-artifact-import-key",
     }),
+  artifact_download_url: () => grad.artifacts.downloadUrl("support-sft@2026-11-27-1"),
   delete_artifact: () => grad.artifacts.delete("support-sft@2026-11-27-1"),
   set_secret: () => grad.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
   set_secret_hosts: () =>

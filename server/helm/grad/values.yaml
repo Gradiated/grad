@@ -22,7 +22,9 @@ secrets:
   #   secrets-key           GRAD_SECRETS_KEY, 32 random bytes in base64 (workspace secrets)
   #   inference-api-key     key for evals.inferenceBaseUrl
   #   judge-api-key         key for evals.judgeBaseUrl
-  #   cloud-service-token   AUTH/BILLING_MODE=cloud
+  #   cloud-service-token   Cloud: grad's bearer for the product's internal listener (billing, prices, eval versions, traces)
+  #   cloud-auth-database-url  AUTH_MODE=cloud: read-only URL (role grad_auth_reader) of the product DB's auth view
+  #   cloud-gateway-token   Cloud evals: the gateway service credential (eval workers only)
   #   metrics-token         bearer token for /metrics and /metrics/queue (metrics.requireToken)
   #   aws-access-key-id / aws-secret-access-key   static S3 keys (SeaweedFS, MinIO, R2); omit them with Pod Identity or IRSA
   existingSecret: ""
@@ -36,6 +38,8 @@ secrets:
   inferenceApiKey: ""
   judgeApiKey: ""
   cloudServiceToken: ""
+  cloudAuthDatabaseUrl: ""
+  cloudGatewayToken: ""
   # Bearer token for /metrics (metrics.requireToken); empty generates one.
   metricsToken: ""
   # Static S3 keys (SeaweedFS, MinIO, R2); leave empty with Pod Identity or IRSA.
@@ -135,8 +139,22 @@ evals:
       cpu: "1"
       memory: 1Gi
 
+# Gradiated Cloud (api.authMode/billingMode=cloud; docs/CLOUD_MODE.md).
 cloud:
+  # The product's internal listener (eval-only versions, gateway traces).
   internalApiUrl: ""
+  # Console and service JWTs: the control plane's JWKS and issuer.
+  jwksUrl: ""
+  jwtIssuer: ""
+  # Billing base URL (/check, /usage-events) and the price list URL.
+  billingUrl: ""
+  pricesUrl: ""
+  # Evals call the gateway's eval lane (needs secrets cloud-gateway-token).
+  gatewayUrl: ""
+  # Browser origins allowed on /v1 (the console), comma-separated.
+  corsOrigins: ""
+  # An AWS KMS key: workspace secrets use envelope encryption under it.
+  secretsKmsKeyId: ""
 
 models:
   # Weights mirror for air-gapped installs: a directory or s3://bucket/prefix

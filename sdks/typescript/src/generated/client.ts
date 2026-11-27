@@ -14,6 +14,7 @@ import {
 import type {
   ApiKey,
   Artifact,
+  ArtifactDownloadUrl,
   ArtifactImport,
   Checkpoint,
   CreateApiKeyRequest,
@@ -61,6 +62,7 @@ export const CODEC: CodecTable = {
   "AdapterSpec": { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } },
   "ApiKey": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["revokedAt", "revoked_at", 0]] },
   "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["provenance", "provenance", "ArtifactProvenance"], ["evalReport", "eval_report", "EvalReport"], ["createdAt", "created_at", 0]] },
+  "ArtifactDownloadUrl": { o: [["expiresAt", "expires_at", 0], ["sizeBytes", "size_bytes", 0]] },
   "ArtifactImport": { o: [["workspaceId", "workspace_id", 0], ["baseModel", "base_model", 0], ["source", "source", { o: [["uploadId", "upload_id", 0]] }], ["artifactId", "artifact_id", 0], ["errorCode", "error_code", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "ArtifactImportSource": { u: { o: { o: [["uploadId", "upload_id", 0]] } } },
   "ArtifactProvenance": { o: [["runId", "run_id", 0]] },
@@ -128,7 +130,7 @@ export const CODEC: CodecTable = {
   "UploadTicket": { o: [["uploadId", "upload_id", 0], ["expiresAt", "expires_at", 0]] },
   "UsageGroup": { o: [["costUsd", "cost_usd", 0]] },
   "UsageKindTotal": { o: [["costUsd", "cost_usd", 0]] },
-  "UsageRecord": { o: [["refId", "ref_id", 0], ["refName", "ref_name", 0], ["runId", "run_id", 0], ["tokensFrom", "tokens_from", 0], ["tokensThrough", "tokens_through", 0], ["costUsd", "cost_usd", 0], ["priceVersion", "price_version", 0], ["idempotencyKey", "idempotency_key", 0], ["createdAt", "created_at", 0]] },
+  "UsageRecord": { o: [["refId", "ref_id", 0], ["refName", "ref_name", 0], ["runId", "run_id", 0], ["tokensFrom", "tokens_from", 0], ["tokensThrough", "tokens_through", 0], ["costUsd", "cost_usd", 0], ["priceVersion", "price_version", 0], ["billedBy", "billed_by", 0], ["idempotencyKey", "idempotency_key", 0], ["createdAt", "created_at", 0]] },
   "UsageRefTotal": { o: [["costUsd", "cost_usd", 0]] },
   "UsageSummary": { o: [["costUsd", "cost_usd", 0], ["byKind", "by_kind", { a: "UsageKindTotal" }], ["topRuns", "top_runs", { a: "UsageRefTotal" }], ["topEvals", "top_evals", { a: "UsageRefTotal" }], ["groupBy", "group_by", 0], ["groups", "groups", { a: "UsageGroup" }]] },
   "WarningEvent": { o: [["runId", "run_id", 0]] },
@@ -529,6 +531,16 @@ export class ApiClient {
   async getArtifact(id: string, options?: RequestOptions): Promise<Artifact> {
     const data = await this.transport.json({ method: "GET", path: `/v1/artifacts/${encodePathParam(id, "id")}` }, options);
     return convertKeys(CODEC, "Artifact", data, "decode") as Artifact;
+  }
+
+  /**
+   * A short-lived presigned URL of an artifact bundle (browsers download straight from storage)
+   *
+   * `GET /v1/artifacts/{id}/download-url`
+   */
+  async getArtifactDownloadUrl(id: string, options?: RequestOptions): Promise<ArtifactDownloadUrl> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/artifacts/${encodePathParam(id, "id")}/download-url` }, options);
+    return convertKeys(CODEC, "ArtifactDownloadUrl", data, "decode") as ArtifactDownloadUrl;
   }
 
   /**

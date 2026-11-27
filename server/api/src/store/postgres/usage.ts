@@ -91,8 +91,9 @@ export const createUsageRepository = (
       await db.query(
         `INSERT INTO grad_usage
            (idempotency_key, workspace_id, kind, ref_id, attempt, tokens_from, tokens_through,
-            tokens, cost_usd, price_version, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6::bigint, $7::bigint, $7::bigint - $6::bigint, $8, $9, $10::timestamptz)
+            tokens, cost_usd, price_version, created_at, amount_nano_usd, sku, billed_by)
+         VALUES ($1, $2, $3, $4, $5, $6::bigint, $7::bigint, $7::bigint - $6::bigint, $8, $9,
+                 $10::timestamptz, $11::bigint, $12, $13)
          ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
         [
           input.idempotencyKey,
@@ -105,6 +106,9 @@ export const createUsageRepository = (
           input.costUsd,
           input.priceVersion,
           nowIso(clock),
+          input.amountNanoUsd ?? Math.round(input.costUsd * 1e9),
+          input.sku ?? null,
+          input.billedBy ?? "grad",
         ],
       ),
     );
@@ -206,18 +210,74 @@ export const createUsageRepository = (
       ).map((g) => ({ key: g.key, ...sums(g) })),
     } as UsageSummary;
   },
-  listAfter: async (afterSeq, before, limit) =>
-    (
+  exportBatch: (limit, push) =>
+    db.atomic(async () => {
       await db.query(
-        `SELECT * FROM grad_usage WHERE seq > $1 AND created_at <= $2::timestamptz
-         ORDER BY seq LIMIT $3`,
-        [afterSeq, before.toISOString(), limit],
-      )
-    ).map((r) => ({
-      ...toLedgerRow(r),
-      seq: Number(r.seq),
-      workspace_id: String(r.workspace_id),
-    })),
+        `INSERT INTO grad_usage_export (name, txid, seq) VALUES ('cloud', '0', 0)
+         ON CONFLICT (name) DO NOTHING`,
+      );
+      const cursor = first(
+        await db.query(
+          `SELECT txid::text AS txid, seq FROM grad_usage_export
+            WHERE name = 'cloud' FOR UPDATE SKIP LOCKED`,
+        ),
+      );
+      if (!cursor) return null;
+      // Only transactions older than every open one: a slow commit with a
+      // lower seq is read later, never skipped.
+      const rows = await db.query(
+        `SELECT u.seq, u.txid::text AS txid, u.idempotency_key, u.workspace_id, u.kind,
+                u.ref_id, u.attempt, u.tokens, u.amount_nano_usd, u.sku, u.price_version,
+                u.created_at, r.recipe_kind
+           FROM grad_usage u LEFT JOIN grad_runs r ON u.kind = 'run' AND r.id = u.ref_id
+          WHERE u.billed_by = 'grad'
+            AND (u.txid, u.seq) > ($1::xid8, $2::bigint)
+            AND u.txid < pg_snapshot_xmin(pg_current_snapshot())
+          ORDER BY u.txid, u.seq LIMIT $3`,
+        [cursor.txid, cursor.seq, limit],
+      );
+      if (rows.length === 0) return 0;
+      await push(
+        rows.map((r) => ({
+          seq: Number(r.seq),
+          idempotency_key: String(r.idempotency_key),
+          workspace_id: String(r.workspace_id),
+          kind: r.kind === "eval" ? "eval" : "run",
+          ref_id: String(r.ref_id),
+          attempt: Number(r.attempt),
+          tokens: Number(r.tokens),
+          amount_nano_usd: Number(r.amount_nano_usd),
+          sku: r.sku === null ? null : String(r.sku),
+          price_version: String(r.price_version),
+          recipe_kind: r.recipe_kind === null ? null : String(r.recipe_kind),
+          created_at: new Date(r.created_at as string).toISOString(),
+        })),
+      );
+      const last = rows.at(-1) as { txid: string; seq: unknown };
+      await db.query(
+        `UPDATE grad_usage_export SET txid = $1::xid8, seq = $2::bigint, updated_at = now()
+          WHERE name = 'cloud'`,
+        [last.txid, last.seq],
+      );
+
+      return rows.length;
+    }),
+  exportBacklog: async () => {
+    const row = first(
+      await db.query(
+        `SELECT COUNT(*)::int AS rows, MIN(u.created_at) AS oldest
+           FROM grad_usage u
+           LEFT JOIN grad_usage_export c ON c.name = 'cloud'
+          WHERE u.billed_by = 'grad'
+            AND (u.txid, u.seq) > (COALESCE(c.txid, '0'::xid8), COALESCE(c.seq, 0))`,
+      ),
+    );
+
+    return {
+      rows: Number(row?.rows ?? 0),
+      oldest: row?.oldest ? new Date(row.oldest as string) : null,
+    };
+  },
   listByRef: async (refId) =>
     (
       await db.query(

@@ -12,7 +12,13 @@ import {
 } from "../contracts.js";
 import { CronError, parseCron } from "../cron.js";
 import type { AppDependencies } from "../deps.js";
-import { conflict, invalid, notFound, unavailable } from "../errors.js";
+import {
+  conflict,
+  errorMessage,
+  invalid,
+  notFound,
+  unavailable,
+} from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import {
   assertSecretHost,
@@ -29,6 +35,7 @@ import type {
   SourcePatch,
   SourceRecord,
 } from "../store/types.js";
+import { log } from "../telemetry/log.js";
 import { toPublicImport } from "./imports.js";
 import { cloudFilters, effectiveFilters } from "./source-filters.js";
 import type { JobQueue } from "./jobs.js";
@@ -160,6 +167,12 @@ export interface SourceService {
   listSecrets(workspaceId: string, page: PageRequest): Promise<Page<Secret>>;
   deleteSecret(workspaceId: string, name: string): Promise<void>;
   /**
+   * KMS mode: re-seals up to `limit` values sealed under another key (a KMS
+   * key rotated out, or a local GRAD_SECRETS_KEY being migrated onto KMS);
+   * returns how many. A value that fails is logged and retried next pass.
+   */
+  resealSecrets(limit?: number): Promise<number>;
+  /**
    * 422 secret_not_found unless `name` exists (and secrets are configured),
    * 422 secret_host_not_allowed unless it may be sent to `to`.
    */
@@ -253,6 +266,9 @@ export const createSourceService = (
 ): SourceService => {
   const { store, clock, settings } = deps;
 
+  // The re-seal pass's position (by secret id); "" starts a new pass.
+  let resealCursor = "";
+
   const cipher = (): SecretsCipher => {
     if (!deps.secrets) throw secretsUnavailable();
 
@@ -269,7 +285,7 @@ export const createSourceService = (
     if (!secret || !sealed) throw notFound("secret", name);
     assertSecretHost(secret, to.url, to.use);
 
-    return cipher().open(workspaceId, name, sealed);
+    return await cipher().open(workspaceId, name, sealed);
   };
 
   const requireSecret = async (
@@ -511,7 +527,7 @@ export const createSourceService = (
       const secret = await store.secrets.put({
         workspaceId,
         name,
-        sealed: cipher().seal(workspaceId, name, value),
+        sealed: await cipher().seal(workspaceId, name, value),
         allowedHosts: normaliseAllowedHosts(allowedHosts),
       });
       // A new key is the usual fix for a paused source: resume its users.
@@ -545,6 +561,42 @@ export const createSourceService = (
       if (!(await store.secrets.delete(workspaceId, name))) {
         throw notFound("secret", name);
       }
+    },
+
+    resealSecrets: async (limit = 100) => {
+      const secrets = deps.secrets;
+      if (!secrets?.reseals) return 0;
+      const batch = await store.secrets.listSealedNotUnder(
+        secrets.keyId,
+        resealCursor,
+        limit,
+      );
+      resealCursor = batch.length < limit ? "" : (batch.at(-1)?.id ?? "");
+      let done = 0;
+      for (const { workspaceId, name, sealed } of batch) {
+        try {
+          const next = await secrets.reseal(workspaceId, name, sealed);
+          if (
+            await store.secrets.replaceSealed(
+              workspaceId,
+              name,
+              sealed.keyId,
+              next,
+            )
+          ) {
+            done += 1;
+          }
+        } catch (error) {
+          log("error", "could not re-seal a workspace secret", {
+            workspace_id: workspaceId,
+            secret: name,
+            key_id: sealed.keyId,
+            error: errorMessage(error),
+          });
+        }
+      }
+
+      return done;
     },
 
     requireSecret,

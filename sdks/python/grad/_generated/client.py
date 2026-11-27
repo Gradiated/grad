@@ -59,6 +59,17 @@ Artifact = TypedDict(
     },
 )
 
+ArtifactDownloadUrl = TypedDict(
+    "ArtifactDownloadUrl",
+    {
+        "url": "str",
+        "expires_at": "str",
+        "sha256": "str",
+        "size_bytes": "int",
+        "filename": "str",
+    },
+)
+
 ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reward_bundle', 'reference'] | None"
 
 ArtifactImport = TypedDict(
@@ -1427,6 +1438,7 @@ UsageRecord = TypedDict(
         "tokens": "int",
         "cost_usd": "float",
         "price_version": "str",
+        "billed_by": "Literal['grad', 'gateway']",
         "idempotency_key": "str",
         "created_at": "str",
     },
@@ -1587,6 +1599,7 @@ ListUsageResponse = TypedDict(
 SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ApiKey": frozenset({"created_at", "id", "name", "prefix", "revoked_at", "scopes", "workspace_id"}),
     "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "provenance", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
+    "ArtifactDownloadUrl": frozenset({"expires_at", "filename", "sha256", "size_bytes", "url"}),
     "ArtifactImport": frozenset({"artifact_id", "attempt", "base_model", "created_at", "error", "error_code", "format", "id", "name", "source", "status", "updated_at", "workspace_id"}),
     "ArtifactPin": frozenset({"artifact_id", "created_at", "holder", "reason"}),
     "ArtifactProvenance": frozenset({"run_id", "source", "uploader", "uri"}),
@@ -1682,7 +1695,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "UploadTicket": frozenset({"expires_at", "headers", "method", "upload_id", "url"}),
     "UsageGroup": frozenset({"cost_usd", "key", "records", "tokens"}),
     "UsageKindTotal": frozenset({"cost_usd", "kind", "records", "tokens"}),
-    "UsageRecord": frozenset({"attempt", "cost_usd", "created_at", "id", "idempotency_key", "kind", "price_version", "ref_id", "ref_name", "run_id", "tokens", "tokens_from", "tokens_through"}),
+    "UsageRecord": frozenset({"attempt", "billed_by", "cost_usd", "created_at", "id", "idempotency_key", "kind", "price_version", "ref_id", "ref_name", "run_id", "tokens", "tokens_from", "tokens_through"}),
     "UsageRefTotal": frozenset({"cost_usd", "id", "kind", "name", "tokens"}),
     "UsageSummary": frozenset({"by_kind", "cost_usd", "from", "group_by", "groups", "records", "to", "tokens", "top_evals", "top_runs"}),
     "WarningEvent": frozenset({"attempt", "message", "run_id", "seq", "step", "timestamp", "type"}),
@@ -1724,6 +1737,7 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "download_artifact": ("GET", "/v1/artifacts/{id}/download"),
     "filter_dataset": ("POST", "/v1/datasets/{name}/filter"),
     "get_artifact": ("GET", "/v1/artifacts/{id}"),
+    "get_artifact_download_url": ("GET", "/v1/artifacts/{id}/download-url"),
     "get_artifact_import": ("GET", "/v1/artifact-imports/{id}"),
     "get_dataset": ("GET", "/v1/datasets/{name}"),
     "get_eval": ("GET", "/v1/evals/{id}"),
@@ -1852,6 +1866,10 @@ class GeneratedApiClient:
     def get_artifact(self, id: str, *, timeout: float | None = None) -> Artifact:
         """Get an artifact by id or name@latest."""
         return cast("Artifact", self._t.request("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}", timeout=timeout))
+
+    def get_artifact_download_url(self, id: str, *, timeout: float | None = None) -> ArtifactDownloadUrl:
+        """A short-lived presigned URL of an artifact bundle (browsers download straight from storage)."""
+        return cast("ArtifactDownloadUrl", self._t.request("GET", f"/v1/artifacts/{quote_path_param(id, 'id')}/download-url", timeout=timeout))
 
     def get_artifact_import(self, id: str, *, timeout: float | None = None) -> ArtifactImport:
         """Get an artifact import."""

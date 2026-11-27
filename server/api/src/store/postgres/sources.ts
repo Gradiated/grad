@@ -31,6 +31,13 @@ const toSecret = (r: Row): Secret & { id: string } => ({
   updated_at: iso(r.updated_at),
 });
 
+const toSealed = (row: Row): SealedSecretRow => ({
+  keyId: String(row.key_id),
+  nonce: row.nonce as Buffer,
+  ciphertext: row.ciphertext as Buffer,
+  wrappedKey: (row.wrapped_key as Buffer | null) ?? null,
+});
+
 const SECRET_COLUMNS =
   "id, workspace_id, name, allowed_hosts, created_at, updated_at";
 
@@ -47,12 +54,13 @@ export const createSecretRepository = (
     const now = nowIso(clock);
     const rows = await db.query(
       `INSERT INTO grad_secrets
-         (id, workspace_id, name, key_id, nonce, ciphertext, allowed_hosts, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $8::text[], $7::timestamptz, $7::timestamptz)
+         (id, workspace_id, name, key_id, nonce, ciphertext, allowed_hosts, created_at, updated_at,
+          wrapped_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $8::text[], $7::timestamptz, $7::timestamptz, $9)
        ON CONFLICT (workspace_id, name) DO UPDATE
          SET key_id = EXCLUDED.key_id, nonce = EXCLUDED.nonce,
              ciphertext = EXCLUDED.ciphertext, allowed_hosts = EXCLUDED.allowed_hosts,
-             updated_at = EXCLUDED.updated_at
+             wrapped_key = EXCLUDED.wrapped_key, updated_at = EXCLUDED.updated_at
        RETURNING ${SECRET_COLUMNS}`,
       [
         newId("sec"),
@@ -63,6 +71,7 @@ export const createSecretRepository = (
         sealed.ciphertext,
         now,
         [...allowedHosts],
+        sealed.wrappedKey ?? null,
       ],
     );
 
@@ -81,19 +90,42 @@ export const createSecretRepository = (
   getSealed: async (workspaceId, name) => {
     const row = first(
       await db.query(
-        "SELECT key_id, nonce, ciphertext FROM grad_secrets WHERE workspace_id = $1 AND name = $2",
+        "SELECT key_id, nonce, ciphertext, wrapped_key FROM grad_secrets WHERE workspace_id = $1 AND name = $2",
         [workspaceId, name],
       ),
     );
 
-    return row
-      ? ({
-          keyId: String(row.key_id),
-          nonce: row.nonce as Buffer,
-          ciphertext: row.ciphertext as Buffer,
-        } satisfies SealedSecretRow)
-      : null;
+    return row ? toSealed(row) : null;
   },
+  listSealedNotUnder: async (keyId, afterId, limit) =>
+    (
+      await db.query(
+        `SELECT id, workspace_id, name, key_id, nonce, ciphertext, wrapped_key FROM grad_secrets
+          WHERE key_id <> $1 AND id > $2 ORDER BY id LIMIT $3`,
+        [keyId, afterId, limit],
+      )
+    ).map((row) => ({
+      id: String(row.id),
+      workspaceId: String(row.workspace_id),
+      name: String(row.name),
+      sealed: toSealed(row),
+    })),
+  replaceSealed: async (workspaceId, name, fromKeyId, sealed) =>
+    (
+      await db.query(
+        `UPDATE grad_secrets SET key_id = $4, nonce = $5, ciphertext = $6, wrapped_key = $7
+          WHERE workspace_id = $1 AND name = $2 AND key_id = $3 RETURNING id`,
+        [
+          workspaceId,
+          name,
+          fromKeyId,
+          sealed.keyId,
+          sealed.nonce,
+          sealed.ciphertext,
+          sealed.wrappedKey ?? null,
+        ],
+      )
+    ).length > 0,
   list: async (workspaceId, page) => {
     const params = new Params();
     const result = await listNewest(db, {

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createCloudTracesAdapter } from "../src/adapters-cloud.js";
+import { createCloudTracesAdapter } from "../src/cloud/traces.js";
 import { ApiError } from "../src/errors.js";
 import {
   startFakeCloudApi,

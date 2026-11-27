@@ -1,8 +1,10 @@
 /**
  * The internal listener (INTERNAL_PORT, default off): routes an orchestrator
  * calls, never served on the public API port. Today: lease-scoped worker
- * tokens. Callers authenticate with an orchestrator key
- * (GRAD_ORCHESTRATOR_KEYS_JSON); workspace and worker keys are not accepted.
+ * tokens (callers authenticate with an orchestrator key,
+ * GRAD_ORCHESTRATOR_KEYS_JSON) and, on Cloud, the product API's routes in
+ * routes/internal-cloud.ts (service JWTs). Workspace and worker keys are
+ * never accepted.
  *
  *   POST   /internal/v1/worker-tokens {host_id, lease_id, kinds, gpu_memory_gb?, expires_at}
  *          -> 201 {token, host_id, lease_id, kinds, gpu_memory_gb, expires_at}
@@ -28,6 +30,10 @@ import {
   newLeaseToken,
 } from "../worker-auth/lease.js";
 import { problemBody } from "./helpers.js";
+import {
+  createCloudInternalRoutes,
+  type CloudInternalDeps,
+} from "./internal-cloud.js";
 
 const HOST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const LEASE_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -74,6 +80,8 @@ export const createInternalApp = (deps: {
   tokens: WorkerTokenRepository;
   clock: Clock;
   orchestratorKeys: readonly TrainerKey[];
+  /** Cloud: the product API's routes (workspace state, artifact pins). */
+  cloud?: CloudInternalDeps | undefined;
 }): Hono<InternalEnv> => {
   const app = new Hono<InternalEnv>();
 
@@ -118,7 +126,10 @@ export const createInternalApp = (deps: {
         }),
     }),
   );
-  app.use("/internal/*", async (c, next) => {
+  const orchestratorOnly = async (
+    c: Context<InternalEnv>,
+    next: () => Promise<void>,
+  ) => {
     const token = c.req
       .header("authorization")
       ?.match(/^Bearer\s+(\S+)$/i)?.[1];
@@ -133,7 +144,11 @@ export const createInternalApp = (deps: {
     }
     c.set("orchestrator", key);
     await next();
-  });
+  };
+  app.use("/internal/v1/worker-tokens", orchestratorOnly);
+  app.use("/internal/v1/worker-tokens/*", orchestratorOnly);
+  // Gradiated Cloud's routes authenticate with service JWTs instead.
+  if (deps.cloud) app.route("/", createCloudInternalRoutes(deps.cloud));
 
   app.post("/internal/v1/worker-tokens", async (c) => {
     const orchestrator = c.get("orchestrator");

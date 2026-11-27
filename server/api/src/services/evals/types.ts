@@ -9,6 +9,8 @@ export interface ChatCompletionRequest {
    * workspace.
    */
   workspace: string;
+  /** The eval the call is for (the Cloud gateway tags its usage with it). */
+  evalId?: string | undefined;
   messages: readonly ChatMessage[];
   temperature: number;
   max_tokens: number;

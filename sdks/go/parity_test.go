@@ -162,6 +162,10 @@ func TestParityRequests(t *testing.T) {
 				Secret: "hf-token", IdempotencyKey: "parity-artifact-import-key"})
 			return err
 		},
+		"artifact_download_url": func() error {
+			_, err := c.Artifacts.DownloadURL(ctx, "support-sft@2026-11-27-1")
+			return err
+		},
 		"delete_artifact": func() error { return c.Artifacts.Delete(ctx, "support-sft@2026-11-27-1") },
 		"set_secret": func() error {
 			_, err := c.Secrets.Set(ctx, "langfuse-prod", "pk-lf-1:sk-lf-2")

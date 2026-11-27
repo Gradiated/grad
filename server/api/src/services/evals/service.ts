@@ -794,6 +794,32 @@ export const createEvalService = (
     };
   };
 
+  /**
+   * Cloud: artifact targets (`name@version`) are served by the gateway under
+   * the eval-only Version the product publishes for them.
+   */
+  const servedTargets = async <T extends { inference_model: string }>(
+    workspaceId: string,
+    targets: Record<string, T>,
+  ): Promise<Record<string, T>> => {
+    const resolver = deps.evalModels;
+    if (!resolver) return targets;
+    const served: Record<string, T> = {};
+    for (const [ref, target] of Object.entries(targets)) {
+      served[ref] = target.inference_model.includes("@")
+        ? {
+            ...target,
+            inference_model: await resolver.servingModel(
+              workspaceId,
+              target.inference_model,
+            ),
+          }
+        : target;
+    }
+
+    return served;
+  };
+
   const createRecord = async (
     workspaceId: string,
     request: PlanEvalRequest,
@@ -827,6 +853,8 @@ export const createEvalService = (
           `Insufficient balance to start this ${mode === "score" ? "scoring job" : "eval"}.`,
       );
     }
+    const modelTargets = await servedTargets(workspaceId, plan.targets);
+    const judgeTargets = await servedTargets(workspaceId, plan.judgeTargets);
 
     return store.evals.create({
       workspaceId,
@@ -835,7 +863,7 @@ export const createEvalService = (
       idempotency,
       name: request.name,
       models: request.models,
-      model_targets: plan.targets,
+      model_targets: modelTargets,
       baseline: request.baseline ?? null,
       dataset_id: plan.dataset.dataset.id,
       dataset_name: plan.dataset.dataset.name,
@@ -848,7 +876,7 @@ export const createEvalService = (
       limit: request.limit ?? null,
       pass_threshold: plan.passThreshold,
       judge_models: plan.judgeModels,
-      judge_targets: plan.judgeTargets,
+      judge_targets: judgeTargets,
       local_scorers: plan.localScorers,
       run_id: checkpoint?.runId ?? null,
       run_step: checkpoint?.step ?? null,

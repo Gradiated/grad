@@ -148,3 +148,18 @@ export const ArtifactPinSchema = z
   .openapi("ArtifactPin");
 
 export type ArtifactPin = z.infer<typeof ArtifactPinSchema>;
+
+export const ArtifactDownloadUrlSchema = z
+  .object({
+    url: z.string().url().openapi({
+      description:
+        "A presigned GET of the bundle (.grad.tar.gz) straight from storage; no Authorization header. Verify its SHA-256.",
+    }),
+    expires_at: IsoTimestampSchema,
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    size_bytes: z.number().int().min(0),
+    filename: z.string().min(1),
+  })
+  .openapi("ArtifactDownloadUrl");
+
+export type ArtifactDownloadUrl = z.infer<typeof ArtifactDownloadUrlSchema>;

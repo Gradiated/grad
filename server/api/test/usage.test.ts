@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createCloudBillingAdapter } from "../src/adapters-cloud.js";
 import { BALANCE_STOPPED } from "../src/services/runs.js";
 import { makeTestApp, WORKSPACE_A, type TestApp } from "./fixtures/app.js";
+import { ManualClock } from "./fixtures/clock.js";
 import {
-  startFakeCloudApi,
-  type FakeCloudApi,
-} from "./fixtures/fake-cloud-api.js";
+  cloudBillingDeps,
+  startTestCloud,
+  usageCommitted,
+} from "./fixtures/cloud.js";
+import type { FakeCloudApi } from "./fixtures/fake-cloud-api.js";
 import { createSftRun, FakeWorker } from "./fixtures/worker.js";
 
 /** Usage rows of one run, oldest first. */
@@ -45,7 +47,6 @@ describe("usage ledger: incremental billing while a run trains", () => {
     makeTestApp({
       settings: {
         maxAttempts: 3,
-        usageExportLagSeconds: 0,
         usageFlushTokens: 1000,
         usageFlushSeconds: 300,
         ...settings,
@@ -141,61 +142,64 @@ describe("usage ledger: incremental billing while a run trains", () => {
     expectTiled(await ledger(t, run.id), { 1: 600, 2: 1100 });
   });
 
-  it("exports the ledger to Gradiated Cloud from its cursor, once per row", async () => {
-    cloud = await startFakeCloudApi();
+  it("pushes the ledger to Cloud billing as usage events, once per row", async () => {
+    cloud = await startTestCloud();
+    const clock = new ManualClock();
     t = await makeTestApp({
-      billing: createCloudBillingAdapter({
-        internalApiBaseUrl: cloud.url,
-        serviceToken: cloud.serviceToken,
-      }),
-      settings: {
-        maxAttempts: 3,
-        usageExportLagSeconds: 0,
-        usageFlushTokens: 1000,
-      },
+      clock,
+      ...(await cloudBillingDeps(cloud, clock)),
+      settings: { maxAttempts: 3, usageFlushTokens: 1000 },
     });
     const worker = new FakeWorker(t);
     const run = await createSftRun(t);
     const job = (await worker.claim())!;
     await worker.progress(job, 1, 1500);
+    await usageCommitted();
     expect((await t.services.maintenance.tick()).exportedUsage).toBe(1);
     await worker.complete(
       job,
       { status: "completed", tokens_processed: 2000 },
       "a",
     );
+    await usageCommitted();
     expect((await t.services.maintenance.tick()).exportedUsage).toBe(1);
     expect((await t.services.maintenance.tick()).exportedUsage).toBe(0);
-    expect(
-      cloud.usage.map((u) => [u.ref_id, u.attempt, u.tokens_processed]),
-    ).toEqual([
-      [run.id, 1, 1500],
-      [run.id, 1, 500],
+    expect(cloud.usageEvents).toEqual([
+      expect.objectContaining({
+        event_id: `training:run-usage:${run.id}:1:1500`,
+        workspace_id: WORKSPACE_A,
+        product: "training",
+        sku: "train:test/tiny-qwen3",
+        quantity: 1500,
+        amount_nano_usd: 1_500_000,
+        price_version: "pv_1",
+        subject_id: run.id,
+        tags: { attempt: "1", recipe_kind: "sft" },
+      }),
+      expect.objectContaining({
+        event_id: `training:run-usage:${run.id}:1:2000`,
+        quantity: 500,
+        amount_nano_usd: 500_000,
+      }),
     ]);
 
-    // A fresh replica resumes from Cloud's cursor instead of re-sending.
+    // A fresh replica resumes from the shared cursor instead of re-sending.
     const restarted = await makeTestApp({
       store: t.deps.store,
-      billing: createCloudBillingAdapter({
-        internalApiBaseUrl: cloud.url,
-        serviceToken: cloud.serviceToken,
-      }),
-      settings: {
-        maxAttempts: 3,
-        usageExportLagSeconds: 0,
-      },
+      clock,
+      ...(await cloudBillingDeps(cloud, clock)),
     });
     expect((await restarted.services.maintenance.tick()).exportedUsage).toBe(0);
-    expect(cloud.callsTo("/api/internal/v1/billing/usage")).toHaveLength(2);
+    expect(cloud.callsTo("/api/internal/v1/billing/usage-events")).toHaveLength(
+      2,
+    );
+    await restarted.close();
   });
 
   it("stops a run whose workspace ran out of balance, and resumes it after a top-up", async () => {
-    cloud = await startFakeCloudApi();
-    const billing = createCloudBillingAdapter({
-      internalApiBaseUrl: cloud.url,
-      serviceToken: cloud.serviceToken,
-    });
-    t = await makeTestApp({ billing });
+    cloud = await startTestCloud();
+    const clock = new ManualClock();
+    t = await makeTestApp({ clock, ...(await cloudBillingDeps(cloud, clock)) });
     const worker = new FakeWorker(t);
     const run = await createSftRun(t, { maxCostUsd: 50 });
     const job = (await worker.claim())!;
@@ -205,6 +209,8 @@ describe("usage ledger: incremental billing while a run trains", () => {
     });
 
     cloud.balances.set(WORKSPACE_A, -1);
+    // The balance answer is reused for 30 s per workspace.
+    t.clock.advanceSeconds(31);
     expect((await worker.heartbeat(job)).body).toMatchObject({
       should_stop: true,
       stop_reason: "insufficient_balance",
@@ -226,11 +232,12 @@ describe("usage ledger: incremental billing while a run trains", () => {
     expectTiled(await ledger(t, run.id), { 1: 1200 });
 
     // A billing outage never stops a run; a top-up lets it resume as is.
-    cloud.balances.set(WORKSPACE_A, 100);
+    cloud.balances.set(WORKSPACE_A, 100_000_000_000);
     const resumed = await t.json(`/v1/runs/${run.id}/resume`, { body: {} });
     expect(resumed.status).toBe(200);
     expect(resumed.body).toMatchObject({ status: "queued", error: null });
     const again = (await worker.claim())!;
+    t.clock.advanceSeconds(31);
     cloud.failNext(1, 503, "/api/internal/v1/billing/check");
     expect((await worker.heartbeat(again)).body).toMatchObject({
       should_stop: false,

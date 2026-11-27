@@ -217,6 +217,24 @@ export const metrics = {
     "Cost written to the usage ledger in USD, by usage kind (run, eval).",
     ["kind"],
   ),
+  // Gradiated Cloud
+  usageExportPending: gauge(
+    "grad_usage_export_pending_rows",
+    "Cloud: usage ledger rows not yet pushed to billing.",
+  ),
+  usageExportLag: gauge(
+    "grad_usage_export_lag_seconds",
+    "Cloud: age of the oldest usage row not yet pushed to billing (0 when none).",
+  ),
+  usageExportFailures: counter(
+    "grad_usage_export_failures_total",
+    "Cloud: usage pushes to billing that failed (the rows stay and are retried).",
+  ),
+  cloudAuthLookups: counter(
+    "grad_cloud_auth_lookups_total",
+    "Cloud: API-key lookups in the auth view, by result (found, not_found, inactive, error).",
+    ["result"],
+  ),
   checkpoints: counter(
     "grad_checkpoints_total",
     "Checkpoints registered, by recipe and reason (periodic, emergency).",

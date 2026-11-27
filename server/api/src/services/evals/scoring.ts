@@ -34,6 +34,7 @@ export interface ScoringContext {
   judge: ChatCompletionClient | null;
   /** The eval's workspace: sent with every judge call. */
   workspace: string;
+  evalId?: string | undefined;
   /** Judge ref → the model name the endpoint serves it under (resolved at plan). */
   judgeTargets: Readonly<Record<string, { inference_model: string }>>;
 }
@@ -173,6 +174,7 @@ export const scoreOutput = async (
       const reply = await ctx.judge.complete({
         model: ctx.judgeTargets[item.model]?.inference_model ?? item.model,
         workspace: ctx.workspace,
+        evalId: ctx.evalId,
         messages: buildJudgeMessages(item, input),
         temperature: 0,
         max_tokens: 256,

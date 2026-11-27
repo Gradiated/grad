@@ -90,6 +90,12 @@ spec:
             {{- with .Values.cloud.internalApiUrl }}
             - {name: CLOUD_INTERNAL_API_URL, value: {{ . | quote }}}
             {{- end }}
+            {{- range $name, $value := dict "GRAD_CLOUD_JWKS_URL" .Values.cloud.jwksUrl "GRAD_CLOUD_JWT_ISSUER" .Values.cloud.jwtIssuer "GRAD_CLOUD_BILLING_URL" .Values.cloud.billingUrl "GRAD_CLOUD_PRICES_URL" .Values.cloud.pricesUrl "GRAD_CLOUD_GATEWAY_URL" .Values.cloud.gatewayUrl "GRAD_CORS_ORIGINS" .Values.cloud.corsOrigins "GRAD_SECRETS_KMS_KEY_ID" .Values.cloud.secretsKmsKeyId }}
+            {{- with $value }}
+            - {name: {{ $name }}, value: {{ . | quote }}}
+            {{- end }}
+            {{- end }}
+            {{- include "grad.secretEnv" (list . "GRAD_CLOUD_AUTH_DATABASE_URL" "cloud-auth-database-url" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "DATABASE_URL" "database-url" false) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "ADMIN_API_KEY_HASH" "admin-api-key-hash" true) | nindent 12 }}
             - {name: GRAD_WORKER_AUTH, value: {{ include "grad.workerAuth" . | quote }}}

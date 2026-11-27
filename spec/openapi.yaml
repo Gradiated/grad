@@ -4486,6 +4486,32 @@ components:
         - worker_id
         - attempt
         - status
+    ArtifactDownloadUrl:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          description: A presigned GET of the bundle (.grad.tar.gz) straight from storage; no Authorization header. Verify its
+            SHA-256.
+        expires_at:
+          type: string
+          format: date-time
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        size_bytes:
+          type: integer
+          minimum: 0
+        filename:
+          type: string
+          minLength: 1
+      required:
+        - url
+        - expires_at
+        - sha256
+        - size_bytes
+        - filename
     ArtifactPin:
       type: object
       properties:
@@ -4633,6 +4659,14 @@ components:
         price_version:
           type: string
           minLength: 1
+        billed_by:
+          type: string
+          enum:
+            - grad
+            - gateway
+          description: "Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated
+            Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged
+            twice)."
         idempotency_key:
           type: string
           minLength: 1
@@ -4651,6 +4685,7 @@ components:
         - tokens
         - cost_usd
         - price_version
+        - billed_by
         - idempotency_key
         - created_at
     UsageKind:
@@ -8479,6 +8514,74 @@ paths:
       responses:
         "204":
           description: Deleted.
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/artifacts/{id}/download-url:
+    get:
+      operationId: getArtifactDownloadUrl
+      summary: A short-lived presigned URL of an artifact bundle (browsers download straight from storage)
+      tags: *a5
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Presigned download.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactDownloadUrl"
         "400":
           description: Malformed request.
           content:

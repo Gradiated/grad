@@ -14,6 +14,8 @@ export interface OpenAICompatibleOptions {
   maxAttempts?: number;
   retryDelayMs?: number;
   fetchImpl?: typeof fetch;
+  /** Extra headers per call (the Cloud gateway's workspace and lane headers). */
+  headers?: (request: ChatCompletionRequest) => Record<string, string>;
 }
 
 /** Names the workspace of every inference and judge call. */
@@ -82,6 +84,7 @@ export const createOpenAICompatibleClient = (
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       [WORKSPACE_HEADER]: request.workspace,
+      ...options.headers?.(request),
     };
     if (options.apiKey) headers.Authorization = `Bearer ${options.apiKey}`;
 

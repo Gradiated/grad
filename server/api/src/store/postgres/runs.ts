@@ -93,6 +93,7 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
           resolved_config: input.resolvedConfig,
           max_cost_usd: input.maxCostUsd,
           price_per_million_tokens: input.pricePerMillionTokens,
+          price_version: input.priceVersion ?? null,
           total_steps: input.totalSteps,
         },
       ),

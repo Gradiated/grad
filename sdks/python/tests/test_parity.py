@@ -126,6 +126,7 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "import_artifact_hf": lambda: client.artifacts.from_hf(
             "hf://acme/support-lora@v2", base="test/tiny-qwen3", name="support-lora", secret="hf-token", idempotency_key="parity-artifact-import-key"
         ),
+        "artifact_download_url": lambda: client.artifacts.download_url("support-sft@2026-11-27-1"),
         "delete_artifact": lambda: client.artifacts.delete("support-sft@2026-11-27-1"),
         "set_secret": lambda: client.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
         "set_secret_hosts": lambda: client.secrets.set(

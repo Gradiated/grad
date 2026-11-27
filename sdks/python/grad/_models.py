@@ -961,6 +961,8 @@ class UsageRecord(APIObject):
     tokens: int = 0
     cost_usd: float = 0.0
     price_version: str | None = None
+    #: ``grad``, or ``gateway``: on Gradiated Cloud the inference gateway bills eval tokens.
+    billed_by: str = "grad"
     idempotency_key: str | None = None
     created_at: str | None = None
 

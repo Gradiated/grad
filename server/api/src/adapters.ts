@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { ApiKeyScope, Scope } from "./contracts.js";
 import { PLATFORM_SCOPES } from "./contracts.js";
-import type { KeyLookupResult, LedgerRow } from "./store/types.js";
+import type { KeyLookupResult } from "./store/types.js";
 import {
   authenticateWorkerFirst,
   toAuthPrincipal,
@@ -57,8 +57,22 @@ export interface AuthAdapter {
   authenticate(bearerToken: string | undefined): Promise<AuthPrincipal | null>;
 }
 
-/** A usage ledger row as the Cloud exporter sends it. */
-export type ExportedUsage = LedgerRow & { seq: number; workspace_id: string };
+/**
+ * One billed ledger row as Gradiated Cloud's billing ingest takes it (the
+ * `usage_events` schema); `event_id` is the row's idempotency key.
+ */
+export interface UsageEvent {
+  event_id: string;
+  workspace_id: string;
+  product: "training";
+  sku: string;
+  quantity: number;
+  amount_nano_usd: number;
+  price_version: string;
+  occurred_at: string;
+  subject_id: string;
+  tags: Record<string, string>;
+}
 
 export interface BillingAdapter {
   checkCanStartRun(
@@ -71,14 +85,15 @@ export interface BillingAdapter {
    */
   canContinue?(workspaceId: string): Promise<boolean>;
   /**
-   * Cloud only: pushes ledger rows to Cloud billing, each keyed by its
-   * idempotency key (exactly once there). `cursor` is the highest seq Cloud
-   * has. Absent on self-hosted servers: the ledger stays local.
+   * Cloud only: pushes ledger rows to billing (idempotent by event_id; a
+   * replay is free). Absent on self-hosted servers: the ledger stays local.
    */
-  usageExport?: {
-    cursor(): Promise<number>;
-    push(row: ExportedUsage): Promise<void>;
-  };
+  pushUsage?(events: readonly UsageEvent[]): Promise<void>;
+  /**
+   * Cloud only: the inference gateway bills eval model and judge tokens, so
+   * eval ledger rows are recorded `billed_by: gateway` and never pushed.
+   */
+  gatewayBillsEvals?: boolean;
 }
 
 export const hashApiKey = (rawKey: string): string =>

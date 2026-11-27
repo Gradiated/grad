@@ -95,8 +95,12 @@ export interface ObjectStore {
     key: string,
     input: PresignUploadInput,
   ): Promise<PresignedUpload>;
-  /** Presigned GET (for workers). */
-  presignDownload(key: string, expiresInSeconds: number): Promise<string>;
+  /** Presigned GET (for workers; `forClient`: signed for S3_PUBLIC_ENDPOINT). */
+  presignDownload(
+    key: string,
+    expiresInSeconds: number,
+    options?: { forClient?: boolean },
+  ): Promise<string>;
 }
 
 export const validateObjectKey = (key: string): string => {

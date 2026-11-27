@@ -547,6 +547,8 @@ export interface RunDomain {
   resolved_config: ResolvedRunConfig;
   max_cost_usd: number | null;
   price_per_million_tokens: number;
+  /** The price list version the run was created with (null: before 0008). */
+  price_version: string | null;
   total_steps: number;
   current_step: number;
   /** Tokens of closed (billed) attempts; their cost is derived from them. */
@@ -578,6 +580,7 @@ export type RunPatch = JobPatch &
       | "recipe_kind"
       | "resolved_config"
       | "price_per_million_tokens"
+      | "price_version"
     >
   >;
 
@@ -592,6 +595,7 @@ export interface RunRepository {
       resolvedConfig: ResolvedRunConfig;
       maxCostUsd: number | null;
       pricePerMillionTokens: number;
+      priceVersion?: string | null;
       totalSteps: number;
       /** GPU memory (GB) it needs; absent or null: any worker. */
       minGpuMemoryGb?: number | null | undefined;
@@ -908,7 +912,25 @@ export interface LedgerRow {
   tokens: number;
   cost_usd: number;
   price_version: string;
+  /** `gateway`: a Cloud eval's tokens, billed by the inference gateway (never pushed). */
+  billed_by: "grad" | "gateway";
   idempotency_key: string;
+  created_at: string;
+}
+
+/** A ledger row as the Cloud usage exporter reads it. */
+export interface ExportableUsage {
+  seq: number;
+  idempotency_key: string;
+  workspace_id: string;
+  kind: LedgerRow["kind"];
+  ref_id: string;
+  attempt: number;
+  tokens: number;
+  amount_nano_usd: number;
+  sku: string | null;
+  price_version: string;
+  recipe_kind: string | null;
   created_at: string;
 }
 
@@ -932,7 +954,12 @@ export interface UsageRepository {
     tokensFrom: number;
     tokensThrough: number;
     costUsd: number;
+    /** What billing charges for the row, in nano-USD (default: cost_usd's). */
+    amountNanoUsd?: number;
     priceVersion: string;
+    sku?: string | null;
+    /** Default `grad`. */
+    billedBy?: LedgerRow["billed_by"];
   }): Promise<LedgerRow>;
   /** The workspace's rows matching `filter`, newest first, with their kind and names. */
   list(
@@ -946,12 +973,18 @@ export interface UsageRepository {
     period: { from: Date; to: Date },
     groupBy: UsageGroupBy | undefined,
   ): Promise<UsageSummary>;
-  /** Every workspace's rows with seq > afterSeq created at or before `before`, ascending. */
-  listAfter(
-    afterSeq: number,
-    before: Date,
+  /**
+   * Cloud export: under the exporter cursor's row lock (SKIP LOCKED: null
+   * when another replica holds it), passes the next `limit` grad-billed rows
+   * from committed transactions to `push` and advances the cursor past them
+   * once it resolves. A throw leaves the cursor where it was.
+   */
+  exportBatch(
     limit: number,
-  ): Promise<Array<LedgerRow & { seq: number; workspace_id: string }>>;
+    push: (rows: readonly ExportableUsage[]) => Promise<void>,
+  ): Promise<number | null>;
+  /** Grad-billed rows not exported yet, and the oldest one's created_at. */
+  exportBacklog(): Promise<{ rows: number; oldest: Date | null }>;
   listByRef(refId: string): Promise<LedgerRow[]>;
 }
 
@@ -961,6 +994,8 @@ export interface SealedSecretRow {
   keyId: string;
   nonce: Buffer;
   ciphertext: Buffer;
+  /** KMS envelope mode: the wrapped data key. */
+  wrappedKey?: Buffer | null | undefined;
 }
 
 export interface SecretRepository {
@@ -976,6 +1011,26 @@ export interface SecretRepository {
   getSealed(workspaceId: string, name: string): Promise<SealedSecretRow | null>;
   list(workspaceId: string, page: PageRequest): Promise<Page<Secret>>;
   delete(workspaceId: string, name: string): Promise<boolean>;
+  /** Up to `limit` values sealed under a key other than `keyId`, by id after `afterId` (re-seal backlog). */
+  listSealedNotUnder(
+    keyId: string,
+    afterId: string,
+    limit: number,
+  ): Promise<
+    Array<{
+      id: string;
+      workspaceId: string;
+      name: string;
+      sealed: SealedSecretRow;
+    }>
+  >;
+  /** Replaces a value's sealing if it is still sealed under `fromKeyId` (a concurrent write wins). */
+  replaceSealed(
+    workspaceId: string,
+    name: string,
+    fromKeyId: string,
+    sealed: SealedSecretRow,
+  ): Promise<boolean>;
 }
 
 export interface SourceRecord {
@@ -1130,6 +1185,67 @@ export interface Repositories {
   secrets: SecretRepository;
   sources: SourceRepository;
   workerTokens: WorkerTokenRepository;
+  workspaces: WorkspaceRepository;
+}
+
+// --- Workspace lifecycle (Cloud) ---------------------------------------------------
+
+export type WorkspaceStateName = "active" | "suspended" | "deleted";
+
+export interface WorkspaceStateRecord {
+  workspace_id: string;
+  state: WorkspaceStateName;
+  /** Deleted: when the purge may start. */
+  purge_after: string | null;
+  /** Deleted: when the purge finished (null while pending). */
+  purged_at: string | null;
+  last_error: string | null;
+  updated_at: string;
+}
+
+/** What one bounded purge pass deleted, and what still blocks it. */
+export interface PurgePass {
+  deletedRows: number;
+  /** Jobs still running (they stop at their next heartbeat or lease expiry). */
+  runningJobs: number;
+  /** Artifacts kept because a holder (a published model version) pins them. */
+  pinnedArtifacts: number;
+  /** Rows of any kind still left to delete after this pass. */
+  remainingRows: number;
+  /** Storage keys of the artifacts kept: the bucket sweep leaves them. */
+  keepKeys: string[];
+}
+
+export interface WorkspaceRepository {
+  get(workspaceId: string): Promise<WorkspaceStateRecord | null>;
+  /** `active` when the workspace has no row. */
+  state(workspaceId: string): Promise<WorkspaceStateName>;
+  /**
+   * Upserts the state. A deleted workspace stays deleted (returns the
+   * current row). `purgeAfter` is set with `deleted`.
+   */
+  set(
+    workspaceId: string,
+    state: WorkspaceStateName,
+    purgeAfter: Date | null,
+  ): Promise<WorkspaceStateRecord>;
+  /** Pauses the workspace's active sources (`workspace_suspended`), or resumes only those. */
+  pauseSources(workspaceId: string): Promise<number>;
+  resumeSources(workspaceId: string): Promise<number>;
+  /** Open jobs of `kinds` (queued, running, awaiting scores). */
+  openJobs(
+    workspaceId: string,
+    kinds: readonly JobKind[],
+  ): Promise<Array<{ id: string; kind: JobKind; status: string }>>;
+  /** Leases one deleted workspace whose purge is due for `leaseSeconds`; null when none. */
+  claimPurge(now: Date, leaseSeconds: number): Promise<string | null>;
+  /** One bounded pass over the rows (never a pinned artifact, never the usage ledger). */
+  purgeRows(workspaceId: string, limit: number): Promise<PurgePass>;
+  /** Marks the purge done, or schedules the next pass at `nextAt`. */
+  finishPurge(
+    workspaceId: string,
+    outcome: { done: boolean; nextAt: Date; error: string | null; now: Date },
+  ): Promise<void>;
 }
 
 // --- Telemetry -------------------------------------------------------------------

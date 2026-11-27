@@ -22,6 +22,8 @@ import (
 type (
 	// ArtifactProvenance says where an artifact came from: a run, an upload or an HF import.
 	ArtifactProvenance = generated.ArtifactProvenance
+	// ArtifactDownloadURL is a presigned URL of an artifact bundle (DownloadURL).
+	ArtifactDownloadURL = generated.ArtifactDownloadURL
 	// TrainableModel is a catalog model.
 	TrainableModel = generated.TrainableModel
 	// APIKey is a scoped API key (without its secret).
@@ -259,6 +261,16 @@ func (a *Artifact) Download(ctx context.Context, dest string, opts ...DownloadOp
 func (a *Artifact) Delete(ctx context.Context) error { return a.c.Artifacts.Delete(ctx, a.Ref()) }
 
 // Delete deletes an artifact and its bundle; see Artifact.Delete.
+// DownloadURL returns a presigned URL of the artifact's bundle (valid 15 minutes), to
+// download straight from storage; verify the bundle against SHA256.
+func (s *ArtifactsService) DownloadURL(ctx context.Context, ref string) (*ArtifactDownloadURL, error) {
+	api, err := s.c.api()
+	if err != nil {
+		return nil, err
+	}
+	return api.GetArtifactDownloadURL(ctx, ref)
+}
+
 func (s *ArtifactsService) Delete(ctx context.Context, ref string) error {
 	api, err := s.c.api()
 	if err != nil {

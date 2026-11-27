@@ -1947,7 +1947,7 @@ fn secrets_set_reads_stdin_and_never_prints_the_value() {
 fn usage_row(kind: &str, ref_id: &str, name: Option<&str>, tokens: u64) -> Value {
     json!({"id": "use_1", "kind": kind, "ref_id": ref_id, "ref_name": name, "run_id": null,
         "attempt": 2, "tokens_from": 0, "tokens_through": tokens, "tokens": tokens,
-        "cost_usd": 0.000084, "price_version": "catalog@1", "idempotency_key": "k",
+        "cost_usd": 0.000084, "price_version": "catalog@1", "billed_by": "grad", "idempotency_key": "k",
         "created_at": "2026-11-27T04:35:21.351Z"})
 }
 
@@ -3687,6 +3687,14 @@ fn parity_requests_match_the_shared_fixture() {
                 "--secret".into(),
                 body["source"]["secret"].as_str().unwrap().into(),
                 "--no-wait".into(),
+            ],
+            p if p.ends_with("/download-url") => vec![
+                "artifacts".into(),
+                "download".into(),
+                p.trim_start_matches("/v1/artifacts/")
+                    .trim_end_matches("/download-url")
+                    .into(),
+                "--url".into(),
             ],
             p if case["method"] == "DELETE" && p.starts_with("/v1/artifacts/") => vec![
                 "artifacts".into(),

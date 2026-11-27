@@ -49,6 +49,7 @@ const main = async () => {
             tokens: deps.store.workerTokens,
             clock: deps.clock,
             orchestratorKeys,
+            cloud: deps.jwt ? { jwt: deps.jwt, deps, services } : undefined,
           }).fetch,
           hostname: env.HOST,
           port: internalPort,

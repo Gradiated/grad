@@ -140,6 +140,18 @@ pub struct Artifact {
     pub created_at: String,
 }
 
+/// Generated from the OpenAPI schema `ArtifactDownloadUrl`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactDownloadUrl {
+    /// A presigned GET of the bundle (.grad.tar.gz) straight from storage; no Authorization header. Verify its SHA-256.
+    pub url: String,
+    pub expires_at: String,
+    pub sha256: String,
+    pub size_bytes: i64,
+    pub filename: String,
+}
+
 string_enum! {
     /// Artifact format when this checkpoint is exportable (promotable); null for training state only.
     ArtifactFormat {
@@ -2040,8 +2052,18 @@ pub struct UsageRecord {
     pub tokens: i64,
     pub cost_usd: f64,
     pub price_version: String,
+    /// Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).
+    pub billed_by: UsageRecordBilledBy,
     pub idempotency_key: String,
     pub created_at: String,
+}
+
+string_enum! {
+    /// Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).
+    UsageRecordBilledBy {
+        Grad => "grad",
+        Gateway => "gateway",
+    }
 }
 
 /// Generated from the OpenAPI schema `UsageRefTotal`.

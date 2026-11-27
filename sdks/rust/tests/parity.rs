@@ -259,6 +259,11 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             )
             .await
             .map(drop),
+        "artifact_download_url" => c
+            .artifacts()
+            .download_url("support-sft@2026-11-27-1")
+            .await
+            .map(drop),
         "delete_artifact" => c.artifacts().delete("support-sft@2026-11-27-1").await,
         "score_dataset" => {
             let req = ScoreDatasetRequest {

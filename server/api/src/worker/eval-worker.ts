@@ -275,6 +275,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       completion = await inference.models.complete({
         model: target.inference_model,
         workspace: ev.workspace_id,
+        evalId: ev.id,
         messages: pr.prompt,
         temperature: ev.temperature,
         max_tokens: ev.max_tokens,
@@ -371,6 +372,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       timedOutRegex: new Set(),
       judge: inference.judge,
       workspace: ev.workspace_id,
+      evalId: ev.id,
       judgeTargets: ev.judge_targets,
     };
 

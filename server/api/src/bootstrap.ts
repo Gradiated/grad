@@ -5,12 +5,14 @@ import {
   hashApiKey,
   trainerKeysOf,
 } from "./adapters.js";
-import {
-  createCloudAuthAdapter,
-  createCloudBillingAdapter,
-  createCloudTracesAdapter,
-  type CloudAdapterConfig,
-} from "./adapters-cloud.js";
+import { createCloudAuth } from "./cloud/auth.js";
+import { createAuthView } from "./cloud/auth-view.js";
+import { createCloudBilling } from "./cloud/billing.js";
+import { createEvalModelResolver } from "./cloud/gateway.js";
+import { createJwtVerifier } from "./cloud/jwt.js";
+import { createKmsKeyWrapper } from "./cloud/kms.js";
+import { createCloudPrices, pricedCatalog } from "./cloud/prices.js";
+import { createCloudTracesAdapter } from "./cloud/traces.js";
 import { createModelCatalog } from "./catalog.js";
 import { createDbAnchoredClock } from "./clock.js";
 import type { AppDependencies } from "./deps.js";
@@ -59,15 +61,22 @@ export const buildDependencies = async (
     tokens: store.workerTokens,
     clock,
   });
-  const cloud = (): CloudAdapterConfig => ({
-    internalApiBaseUrl: env.CLOUD_INTERNAL_API_URL as string,
-    serviceToken: env.CLOUD_SERVICE_TOKEN as string,
-    workers,
-  });
-
+  const jwt = env.GRAD_CLOUD_JWKS_URL
+    ? createJwtVerifier({
+        jwksUrl: env.GRAD_CLOUD_JWKS_URL,
+        issuer: env.GRAD_CLOUD_JWT_ISSUER as string,
+        audience: env.GRAD_CLOUD_JWT_AUDIENCE,
+        clock,
+      })
+    : null;
   const auth =
     env.AUTH_MODE === "cloud"
-      ? createCloudAuthAdapter(cloud())
+      ? createCloudAuth({
+          view: createAuthView(env.GRAD_CLOUD_AUTH_DATABASE_URL as string),
+          jwt: jwt as NonNullable<typeof jwt>,
+          workers,
+          clock,
+        })
       : env.AUTH_MODE === "api_key"
         ? createLocalApiKeyAuth({
             adminKeyHash: env.ADMIN_API_KEY_HASH,
@@ -88,28 +97,64 @@ export const buildDependencies = async (
     }
   }
 
+  const catalog = createModelCatalog(
+    env.GRAD_EXTRA_MODELS_JSON,
+    env.GRAD_JUDGE_MODELS_JSON,
+  );
+  const prices =
+    env.BILLING_MODE === "cloud"
+      ? createCloudPrices({
+          url: env.GRAD_CLOUD_PRICES_URL as string,
+          token: env.CLOUD_SERVICE_TOKEN as string,
+          clock,
+        })
+      : null;
+  // The first price list before serving; an outage keeps going (creates 503).
+  await prices?.refresh(true);
+
   return {
     store,
     storage,
     ui,
     auth,
-    billing:
-      env.BILLING_MODE === "cloud"
-        ? createCloudBillingAdapter(cloud())
-        : createNoopBillingAdapter(),
-    catalog: createModelCatalog(
-      env.GRAD_EXTRA_MODELS_JSON,
-      env.GRAD_JUDGE_MODELS_JSON,
-    ),
+    jwt,
+    prices,
+    billing: prices
+      ? createCloudBilling({
+          baseUrl: env.GRAD_CLOUD_BILLING_URL as string,
+          token: env.CLOUD_SERVICE_TOKEN as string,
+          prices,
+          clock,
+          gatewayBillsEvals: env.GRAD_CLOUD_GATEWAY_URL !== undefined,
+        })
+      : createNoopBillingAdapter(),
+    evalModels: env.GRAD_CLOUD_GATEWAY_URL
+      ? createEvalModelResolver({
+          internalApiBaseUrl: env.CLOUD_INTERNAL_API_URL as string,
+          serviceToken: env.CLOUD_SERVICE_TOKEN as string,
+        })
+      : null,
+    catalog: prices ? pricedCatalog(catalog, prices) : catalog,
     clock,
     inferenceConfigured: env.inferenceConfigured,
     secrets: createSecretsCipher({
       key: env.GRAD_SECRETS_KEY,
       oldKeys: env.GRAD_SECRETS_KEYS_OLD,
+      kmsKeyId: env.GRAD_SECRETS_KMS_KEY_ID,
+      kms: env.GRAD_SECRETS_KMS_KEY_ID
+        ? createKmsKeyWrapper({ region: env.S3_REGION })
+        : undefined,
     }),
     // The `gradiated` source reads Cloud gateway traces: Cloud only.
     traces:
-      env.AUTH_MODE === "cloud" ? createCloudTracesAdapter(cloud()) : null,
+      env.AUTH_MODE === "cloud" &&
+      env.CLOUD_INTERNAL_API_URL &&
+      env.CLOUD_SERVICE_TOKEN
+        ? createCloudTracesAdapter({
+            internalApiBaseUrl: env.CLOUD_INTERNAL_API_URL,
+            serviceToken: env.CLOUD_SERVICE_TOKEN,
+          })
+        : null,
     settings: {
       maxAttempts: env.MAX_ATTEMPTS,
       maxPreemptions: env.MAX_PREEMPTIONS,
@@ -128,7 +173,9 @@ export const buildDependencies = async (
       orphanBlobDays: env.ORPHAN_BLOB_DAYS,
       usageFlushTokens: env.USAGE_FLUSH_TOKENS,
       usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
-      usageExportLagSeconds: env.USAGE_EXPORT_LAG_SECONDS,
+      workspacePurgeDelaySeconds: env.GRAD_WORKSPACE_PURGE_DELAY_SECONDS,
+      corsOrigins: env.corsOrigins,
+      keysManagedByCloud: env.AUTH_MODE === "cloud",
       sourceSyncIntervalSeconds: env.SOURCE_SYNC_INTERVAL_SECONDS,
       sourceVersionIntervalSeconds: env.SOURCE_VERSION_INTERVAL_SECONDS,
       sourceVersionMaxRecords: env.SOURCE_VERSION_MAX_RECORDS,

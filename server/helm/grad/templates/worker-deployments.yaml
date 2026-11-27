@@ -147,6 +147,10 @@ spec:
             {{- end }}
             {{- include "grad.secretEnv" (list $ "GRAD_INFERENCE_API_KEY" "inference-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list $ "GRAD_JUDGE_API_KEY" "judge-api-key" true) | nindent 12 }}
+            {{- with $.Values.cloud.gatewayUrl }}
+            - {name: GRAD_CLOUD_GATEWAY_URL, value: {{ . | quote }}}
+            {{- include "grad.secretEnv" (list $ "GRAD_CLOUD_GATEWAY_TOKEN" "cloud-gateway-token" false) | nindent 12 }}
+            {{- end }}
             {{- if $k8s }}
             - {name: GRAD_WORKER_TOKEN_FILE, value: /var/run/secrets/grad/worker/token}
             {{- else }}

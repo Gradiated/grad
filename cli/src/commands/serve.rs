@@ -70,9 +70,23 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
         }
         ArtifactsCmd::Download {
             reference,
+            url: true,
+            ..
+        } => {
+            let link = c.artifacts().download_url(&reference).await?;
+            out.line(&link.url);
+            out.note(format!(
+                "Valid until {}; verify sha256 {}",
+                link.expires_at, link.sha256
+            ));
+            out.done(&link)
+        }
+        ArtifactsCmd::Download {
+            reference,
             output,
             archive,
             force,
+            ..
         } => {
             if output.is_none() && archive.is_none() {
                 return Err(CliError::usage(

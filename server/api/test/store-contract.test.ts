@@ -11,6 +11,7 @@ import type {
   Store,
 } from "../src/store/types.js";
 import { ManualClock } from "./fixtures/clock.js";
+import { usageCommitted } from "./fixtures/cloud.js";
 import { evalReport } from "./fixtures/eval-report.js";
 import {
   createTestStore,
@@ -1147,19 +1148,35 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         (await store.usage.listByRef("run_1")).map((u) => u.tokens),
       ).toEqual([10, 20, 5]);
 
-      const future = new Date(clock.now().getTime() + 1000);
-      const all = await store.usage.listAfter(0, future, 10);
-      expect(all.map((u) => [u.idempotency_key, u.workspace_id])).toEqual([
-        ["k1", "ws_a"],
-        ["k2", "ws_a"],
-        ["k3", "ws_b"],
-      ]);
-      expect(await store.usage.listAfter(all[1]!.seq, future, 10)).toHaveLength(
-        1,
-      );
+      // The exporter: batches in commit order from the shared cursor.
+      await usageCommitted();
+      expect(await store.usage.exportBacklog()).toMatchObject({ rows: 3 });
+      const pushed: string[][] = [];
       expect(
-        await store.usage.listAfter(0, new Date(clock.now().getTime() - 1), 10),
-      ).toEqual([]);
+        await store.usage.exportBatch(2, async (rows) => {
+          pushed.push(
+            rows.map((u) => `${u.idempotency_key}:${u.workspace_id}`),
+          );
+        }),
+      ).toBe(2);
+      await expect(
+        store.usage.exportBatch(2, async () => {
+          throw new Error("ingest down");
+        }),
+      ).rejects.toThrow("ingest down");
+      expect(
+        await store.usage.exportBatch(2, async (rows) => {
+          pushed.push(
+            rows.map((u) => `${u.idempotency_key}:${u.workspace_id}`),
+          );
+        }),
+      ).toBe(1);
+      expect(await store.usage.exportBatch(2, async () => undefined)).toBe(0);
+      expect(pushed).toEqual([["k1:ws_a", "k2:ws_a"], ["k3:ws_b"]]);
+      expect(await store.usage.exportBacklog()).toEqual({
+        rows: 0,
+        oldest: null,
+      });
     });
 
     it("transactions: commit, rollback on throw, nested reuse", async () => {

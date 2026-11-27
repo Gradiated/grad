@@ -1,4 +1,7 @@
 import type { AuthAdapter, BillingAdapter, TracesAdapter } from "./adapters.js";
+import type { EvalModelResolver } from "./cloud/gateway.js";
+import type { JwtVerifier } from "./cloud/jwt.js";
+import type { CloudPrices } from "./cloud/prices.js";
 import type { ModelCatalog } from "./catalog.js";
 import type { Clock } from "./clock.js";
 import type { SecretsCipher } from "./secrets.js";
@@ -23,8 +26,12 @@ export interface AppSettings {
   usageFlushTokens?: number;
   /** ... or once this long passed since its last usage row (default 300 s). */
   usageFlushSeconds?: number;
-  /** Cloud usage export lag (default 60 s; tests use 0). */
-  usageExportLagSeconds?: number;
+  /** AUTH_MODE=cloud: /v1/keys answers 501 keys_managed_by_cloud. */
+  keysManagedByCloud?: boolean;
+  /** Browser origins allowed cross-origin on /v1 (GRAD_CORS_ORIGINS; default none). */
+  corsOrigins?: readonly string[];
+  /** Seconds between a workspace delete and its purge (default 7 days). */
+  workspacePurgeDelaySeconds?: number;
   /** A source starts at most one sync per this long (default 60 s; live tests use 0). */
   sourceSyncIntervalSeconds?: number;
   /** A new source's version_interval (default 900 s). */
@@ -71,6 +78,12 @@ export interface AppDependencies {
   settings: AppSettings;
   /** Null or absent when GRAD_SECRETS_KEY is unset (secret writes → 501). */
   secrets?: SecretsCipher | null | undefined;
+  /** Cloud only: the gateway names of artifacts under evaluation (eval-only Versions). */
+  evalModels?: EvalModelResolver | null | undefined;
+  /** Cloud only: verifies control-plane JWTs (the internal listener's service tokens). */
+  jwt?: JwtVerifier | null | undefined;
+  /** Cloud only: the versioned price list (polled by the maintenance tick). */
+  prices?: CloudPrices | null | undefined;
   /** Cloud only: gateway traces for the `gradiated` source. */
   traces?: TracesAdapter | null | undefined;
   /** The built web UI, served at `/` (null or absent: UI disabled or not built). */

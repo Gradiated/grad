@@ -395,9 +395,10 @@ export class S3ObjectStore implements ObjectStore {
   presignDownload = async (
     key: string,
     expiresInSeconds: number,
+    options: { forClient?: boolean } = {},
   ): Promise<string> =>
     getSignedUrl(
-      this.client,
+      options.forClient ? this.publicClient : this.client,
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: validateObjectKey(key),

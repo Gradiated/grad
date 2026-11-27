@@ -51,8 +51,56 @@ describe("parseServerEnvironment", () => {
       }),
     ).toThrow(/BILLING_MODE/);
     expect(() => parseServerEnvironment({ ...DB, AUTH_MODE: "cloud" })).toThrow(
-      /CLOUD_INTERNAL_API_URL/,
+      "AUTH_MODE=cloud requires GRAD_CLOUD_AUTH_DATABASE_URL, GRAD_CLOUD_JWKS_URL, GRAD_CLOUD_JWT_ISSUER.",
     );
+    expect(() =>
+      parseServerEnvironment({
+        ...DB,
+        AUTH_MODE: "none",
+        BILLING_MODE: "cloud",
+      }),
+    ).toThrow(
+      "BILLING_MODE=cloud requires GRAD_CLOUD_BILLING_URL, GRAD_CLOUD_PRICES_URL, CLOUD_SERVICE_TOKEN.",
+    );
+    const billing = {
+      ...DB,
+      AUTH_MODE: "none",
+      BILLING_MODE: "cloud",
+      GRAD_CLOUD_BILLING_URL: "https://api.example.com/billing",
+      GRAD_CLOUD_PRICES_URL: "https://api.example.com/prices",
+      CLOUD_SERVICE_TOKEN: "svc",
+    };
+    expect(() =>
+      parseServerEnvironment({
+        ...billing,
+        GRAD_CLOUD_BILLING_URL: "http://billing.example.com",
+      }),
+    ).toThrow(/GRAD_CLOUD_BILLING_URL must use https/);
+    expect(
+      parseServerEnvironment({
+        ...billing,
+        GRAD_CLOUD_BILLING_URL: "http://api.gradiated.svc:3005/billing",
+      }).GRAD_CLOUD_BILLING_URL,
+    ).toBe("http://api.gradiated.svc:3005/billing");
+    expect(() =>
+      parseServerEnvironment({
+        ...billing,
+        GRAD_INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
+      }),
+    ).toThrow(/set GRAD_CLOUD_GATEWAY_URL instead/);
+    expect(() =>
+      parseServerEnvironment({
+        ...billing,
+        GRAD_CLOUD_GATEWAY_URL: "https://gw.example.com/v1",
+      }),
+    ).toThrow("GRAD_CLOUD_GATEWAY_URL requires CLOUD_INTERNAL_API_URL.");
+    expect(
+      parseServerEnvironment({
+        ...billing,
+        GRAD_CLOUD_GATEWAY_URL: "https://gw.example.com/v1",
+        CLOUD_INTERNAL_API_URL: "https://api.example.com",
+      }).inferenceConfigured,
+    ).toBe(true);
     expect(() =>
       parseServerEnvironment({
         ...DB,
@@ -208,7 +256,7 @@ describe("buildDependencies", () => {
       expect(await deps.storage.head("boot/check")).toMatchObject({
         sizeBytes: 2,
       });
-      expect(deps.billing.usageExport).toBeUndefined();
+      expect(deps.billing.pushUsage).toBeUndefined();
       expect(deps.settings.jobEventRetentionDays).toBe(90);
       expect(deps.inferenceConfigured).toBe(true);
       expect(deps.catalog.find("t/x")).toBeDefined();
@@ -239,7 +287,11 @@ describe("buildDependencies", () => {
           DATABASE_URL: postgresUrl(),
           AUTH_MODE: "cloud",
           BILLING_MODE: "cloud",
-          CLOUD_INTERNAL_API_URL: "http://127.0.0.1:9",
+          GRAD_CLOUD_AUTH_DATABASE_URL: "postgres://127.0.0.1:9/product",
+          GRAD_CLOUD_JWKS_URL: "http://127.0.0.1:9/jwks.json",
+          GRAD_CLOUD_JWT_ISSUER: "https://api.example.com",
+          GRAD_CLOUD_BILLING_URL: "http://127.0.0.1:9/billing",
+          GRAD_CLOUD_PRICES_URL: "http://127.0.0.1:9/prices",
           CLOUD_SERVICE_TOKEN: "svc",
           S3_BUCKET: "b",
           S3_ENDPOINT: "http://127.0.0.1:9",
@@ -247,7 +299,11 @@ describe("buildDependencies", () => {
           TRAINER_API_KEY_HASH: hashApiKey("w"),
         }),
       );
-      expect(cloud.billing.usageExport).toBeDefined();
+      // Billing is down at boot: the server starts, unpriced (no models).
+      expect(cloud.billing.pushUsage).toBeDefined();
+      expect(cloud.prices?.fresh()).toBe(false);
+      expect(cloud.catalog.list()).toEqual([]);
+      expect(cloud.traces).toBeNull();
       expect(cloud.inferenceConfigured).toBe(false);
       expect(await cloud.auth.authenticate("w")).toMatchObject({
         kind: "worker",

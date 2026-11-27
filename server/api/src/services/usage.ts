@@ -7,8 +7,17 @@ import {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { invalid } from "../errors.js";
+import type { UsageEvent } from "../adapters.js";
+import { errorMessage } from "../errors.js";
+import { log } from "../telemetry/log.js";
 import { metrics } from "../telemetry/metrics.js";
-import type { JobRow, LedgerRow, Page, Repositories } from "../store/types.js";
+import type {
+  ExportableUsage,
+  JobRow,
+  LedgerRow,
+  Page,
+  Repositories,
+} from "../store/types.js";
 
 /** A usage row's key: the attempt and the token count it bills through. */
 export const usageKey = (
@@ -22,12 +31,34 @@ export const usageKey = (
 export const DEFAULT_FLUSH_TOKENS = 1_000_000;
 export const DEFAULT_FLUSH_SECONDS = 300;
 
-/**
- * Rows younger than this are not exported yet: a transaction that allocated
- * a lower seq may still be committing, and the cursor must not skip it.
- */
-export const DEFAULT_EXPORT_LAG_SECONDS = 60;
-const EXPORT_BATCH = 200;
+/** Billing ingest takes at most 500 events per request. */
+const EXPORT_BATCH = 500;
+/** Batches per tick: a backlog drains at 10k rows per tick. */
+const EXPORT_BATCHES_PER_TICK = 20;
+/** After a failed push: retry in 15 s, doubling up to 5 min. */
+const EXPORT_BACKOFF_MS = 15_000;
+const EXPORT_BACKOFF_MAX_MS = 300_000;
+
+/** nano-USD for `tokens` at `nanoPerMtok`, rounded half up (billing recomputes it the same way). */
+export const amountNanoUsd = (tokens: number, nanoPerMtok: number): number =>
+  Number((BigInt(tokens) * BigInt(nanoPerMtok) + 500_000n) / 1_000_000n);
+
+/** The usage event billing ingests for a ledger row (`event_id` = its key). */
+export const usageEventOf = (row: ExportableUsage): UsageEvent => ({
+  event_id: `training:${row.idempotency_key}`,
+  workspace_id: row.workspace_id,
+  product: "training",
+  sku: row.sku ?? `${row.kind}:unknown`,
+  quantity: row.tokens,
+  amount_nano_usd: row.amount_nano_usd,
+  price_version: row.price_version,
+  occurred_at: row.created_at,
+  subject_id: row.ref_id,
+  tags: {
+    attempt: String(row.attempt),
+    ...(row.recipe_kind ? { recipe_kind: row.recipe_kind } : {}),
+  },
+});
 
 const monthStart = (at: Date, offset = 0): Date =>
   new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + offset, 1));
@@ -86,17 +117,42 @@ export interface UsageService {
   flush(
     tx: Pick<Repositories, "jobs" | "usage">,
     job: Pick<JobRow, "id" | "kind" | "workspace_id" | "attempt">,
-    total: { tokens: number; costUsd: number },
+    total: AttemptUsage,
     final: boolean,
   ): Promise<void>;
-  /** Cloud: pushes new ledger rows to Cloud billing; returns how many. */
+  /**
+   * Cloud: pushes new ledger rows to billing in batches (idempotent by
+   * event_id), from whichever replica holds the cursor; returns how many.
+   * A failed push backs off and keeps the rows (training goes on).
+   */
   exportPending(): Promise<number>;
+}
+
+/** An open attempt's usage so far, and what it bills at. */
+export interface AttemptUsage {
+  tokens: number;
+  costUsd: number;
+  /** Runs: the SKU and the pinned price (nano-USD per million tokens). */
+  sku?: string | undefined;
+  priceNanoPerMtok?: number | undefined;
+  priceVersion?: string | undefined;
 }
 
 export const createUsageService = (deps: AppDependencies): UsageService => {
   const { store, clock, catalog } = deps;
-  const exporter = deps.billing.usageExport;
-  let cursor: number | null = null;
+  const push = deps.billing.pushUsage;
+  let nextExportAt = 0;
+  let exportFailures = 0;
+
+  const reportBacklog = async () => {
+    const backlog = await store.usage.exportBacklog();
+    metrics.usageExportPending.set(backlog.rows);
+    metrics.usageExportLag.set(
+      backlog.oldest
+        ? Math.max(0, (clock.now().getTime() - backlog.oldest.getTime()) / 1000)
+        : 0,
+    );
+  };
 
   return {
     list: (workspaceId, query) =>
@@ -152,29 +208,62 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
         tokensFrom: state.billed_through,
         tokensThrough: total.tokens,
         costUsd,
-        priceVersion: catalog.priceVersion,
+        amountNanoUsd:
+          total.priceNanoPerMtok === undefined
+            ? Math.round(costUsd * 1e9)
+            : amountNanoUsd(tokens, total.priceNanoPerMtok),
+        priceVersion: total.priceVersion ?? catalog.priceVersion,
+        sku: total.sku ?? null,
+        billedBy:
+          kind === "eval" && deps.billing.gatewayBillsEvals
+            ? "gateway"
+            : "grad",
       });
       metrics.billedTokens.inc({ kind }, tokens);
       metrics.billedCost.inc({ kind }, costUsd);
     },
 
     exportPending: async () => {
-      if (!exporter) return 0;
-      cursor ??= await exporter.cursor();
-      const lag =
-        deps.settings.usageExportLagSeconds ?? DEFAULT_EXPORT_LAG_SECONDS;
-      const before = new Date(clock.now().getTime() - lag * 1000);
-      let sent = 0;
-      for (;;) {
-        const rows = await store.usage.listAfter(cursor, before, EXPORT_BATCH);
-        for (const row of rows) {
-          // Keyed by the row: a re-push after a crash is a replay at Cloud.
-          await exporter.push(row);
-          cursor = row.seq;
-          sent += 1;
-        }
-        if (rows.length < EXPORT_BATCH) return sent;
+      if (!push) return 0;
+      const now = clock.now().getTime();
+      if (now < nextExportAt) {
+        await reportBacklog().catch(() => undefined);
+        return 0;
       }
+      let sent = 0;
+      try {
+        for (let i = 0; i < EXPORT_BATCHES_PER_TICK; i += 1) {
+          const n = await store.usage.exportBatch(EXPORT_BATCH, (rows) =>
+            push(rows.map(usageEventOf)),
+          );
+          // null: another replica holds the cursor this tick.
+          if (n === null) return sent;
+          sent += n;
+          if (n < EXPORT_BATCH) break;
+        }
+        exportFailures = 0;
+      } catch (error) {
+        exportFailures += 1;
+        nextExportAt =
+          now +
+          Math.min(
+            EXPORT_BACKOFF_MAX_MS,
+            EXPORT_BACKOFF_MS * 2 ** (exportFailures - 1),
+          );
+        metrics.usageExportFailures.inc();
+        log(
+          "warn",
+          "usage export to Gradiated Cloud failed; rows stay in the ledger",
+          {
+            error: errorMessage(error),
+            retry_in_s: Math.round((nextExportAt - now) / 1000),
+          },
+        );
+      } finally {
+        await reportBacklog().catch(() => undefined);
+      }
+
+      return sent;
     },
   };
 };

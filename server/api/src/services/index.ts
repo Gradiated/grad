@@ -18,6 +18,10 @@ import { createRunLifecycle, type RunLifecycle } from "./runs.js";
 import { createSourceService, type SourceService } from "./sources.js";
 import { createUploadService, type UploadService } from "./uploads.js";
 import { createUsageService, type UsageService } from "./usage.js";
+import {
+  createWorkspaceLifecycle,
+  type WorkspaceLifecycle,
+} from "./workspaces.js";
 
 export interface Services {
   datasets: DatasetService;
@@ -34,6 +38,8 @@ export interface Services {
   maintenance: Maintenance;
   /** The replica's SSE fan-out (one LISTEN + safety poll for every stream). */
   events: EventHub;
+  /** Cloud's workspace lifecycle hooks (suspend, reinstate, delete and purge). */
+  workspaces: WorkspaceLifecycle;
 }
 
 export const createServices = (deps: AppDependencies): Services => {
@@ -78,7 +84,9 @@ export const createServices = (deps: AppDependencies): Services => {
     workspaceLabel: deps.settings.metrics?.workspaceLabel === true,
     maxRunning: queueLimits(deps.settings).maxRunning,
   });
+  const workspaces = createWorkspaceLifecycle(deps, { runs, evals });
   const maintenance = createMaintenance(deps, {
+    workspaces,
     telemetry,
     queue,
     runs,
@@ -101,6 +109,7 @@ export const createServices = (deps: AppDependencies): Services => {
     sources,
     telemetry,
     maintenance,
+    workspaces,
     events: createEventHub(deps.store, {
       pollMs: deps.settings.ssePollMs ?? 2000,
       clock: deps.clock,

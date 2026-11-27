@@ -187,8 +187,9 @@ describe("UI configuration", () => {
     const cloud = {
       ...base,
       AUTH_MODE: "cloud",
-      CLOUD_INTERNAL_API_URL: "http://c",
-      CLOUD_SERVICE_TOKEN: "t",
+      GRAD_CLOUD_AUTH_DATABASE_URL: "postgres://reader@db/product",
+      GRAD_CLOUD_JWKS_URL: "https://api.example.com/.well-known/jwks.json",
+      GRAD_CLOUD_JWT_ISSUER: "https://api.example.com",
     };
     expect(parseServerEnvironment(cloud).uiEnabled).toBe(false);
     expect(

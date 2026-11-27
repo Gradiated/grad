@@ -1,5 +1,5 @@
 import type { AuthPrincipal } from "../adapters.js";
-import { costForTokens } from "../catalog.js";
+import { costForTokens, nanoUsd, trainSku } from "../catalog.js";
 import { addDays } from "../clock.js";
 import {
   ArtifactFormatSchema,
@@ -36,6 +36,7 @@ import {
   invalid,
   notFound,
   unavailable,
+  workspaceInactive,
 } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { isArtifactRef } from "../continued-training.js";
@@ -94,7 +95,7 @@ import { toPublicArtifact } from "./artifacts.js";
 import { artifactKey, jobBlobKey, type UploadService } from "./uploads.js";
 
 export { toPublicArtifact };
-import type { UsageService } from "./usage.js";
+import type { AttemptUsage, UsageService } from "./usage.js";
 import {
   metrics,
   modelFamily,
@@ -269,6 +270,10 @@ export const metricMode = (
 export const BALANCE_STOPPED =
   "Stopped because the workspace ran out of balance (insufficient_balance); top up, then resume the run.";
 
+/** The error of a run stopped because Gradiated Cloud suspended its workspace (stopped_balance). */
+export const SUSPENDED_STOPPED =
+  "Stopped because the workspace was suspended; once it is active again, resume the run.";
+
 /** The error of a run stopped at its own cost cap (stopped_budget). */
 const budgetStopped = (spent: number, cap: number | null): string =>
   `Stopped at the run's cost cap ($${spent.toFixed(4)} of $${(cap ?? spent).toFixed(4)}); resume with a higher max_cost_usd.`;
@@ -324,6 +329,8 @@ export interface RunLifecycle {
   /** The terminal event once the run is final and released, else null. */
   completedEvent(run: RunRecord, lastSeq: number): Promise<RunEvent | null>;
   cancel(workspaceId: string, id: string): Promise<Run>;
+  /** A queued run of a suspended workspace: stopped_balance (resumable), no attempt spent. */
+  stopForSuspension(id: string): Promise<void>;
   resume(workspaceId: string, id: string, maxCostUsd?: number): Promise<Run>;
   listCheckpoints(
     workspaceId: string,
@@ -613,9 +620,12 @@ export const createRunLifecycle = (
   };
 
   /** The open attempt's usage when it has processed `tokens`. */
-  const attemptUsage = (run: RunRecord, tokens: number) => ({
+  const attemptUsage = (run: RunRecord, tokens: number): AttemptUsage => ({
     tokens,
     costUsd: costForTokens(tokens, run.price_per_million_tokens),
+    sku: trainSku(run.resolved_config.model),
+    priceNanoPerMtok: nanoUsd(run.price_per_million_tokens),
+    priceVersion: run.price_version ?? undefined,
   });
 
   const limits = queueLimits(settings);
@@ -971,7 +981,11 @@ export const createRunLifecycle = (
       const run = await loadById(row.id);
       const reason = stopReason(run);
       if (reason || run.status !== "running") return reason;
-      // Cloud: an exhausted workspace balance stops the run (resumable).
+      // Cloud: a suspended workspace or an exhausted balance stops the run
+      // (resumable, stopped_balance).
+      if ((await store.workspaces.state(run.workspace_id)) !== "active") {
+        return "insufficient_balance";
+      }
       const allowed =
         (await deps.billing.canContinue?.(run.workspace_id)) ?? true;
 
@@ -1014,6 +1028,12 @@ export const createRunLifecycle = (
             workspaceId,
             plan.estimated_cost_usd,
           );
+          // The price and its list version, read together: the run bills
+          // at them whatever the price list says later.
+          const priceVersion = deps.catalog.priceVersion;
+          const price =
+            deps.catalog.priceFor(plan.resolved_config.model) ??
+            plan.price_per_million_tokens;
           if (!check.allowed) {
             throw forbidden(
               "billing_denied",
@@ -1039,7 +1059,8 @@ export const createRunLifecycle = (
                 ? { ...plan.resolved_config, label_eval_id: labels.id }
                 : plan.resolved_config,
               maxCostUsd: request.max_cost_usd ?? null,
-              pricePerMillionTokens: plan.price_per_million_tokens,
+              pricePerMillionTokens: price,
+              priceVersion,
               totalSteps: plan.estimated_steps,
               minGpuMemoryGb: plan.min_gpu_memory_gb,
               maxAttempts: settings.maxAttempts,
@@ -1155,6 +1176,21 @@ export const createRunLifecycle = (
       };
     },
 
+    stopForSuspension: async (id) => {
+      const now = clock.now().toISOString();
+      await store.runs.update(
+        id,
+        {
+          status: "stopped_balance",
+          error: SUSPENDED_STOPPED,
+          waiting_on: null,
+          finished_at: now,
+          updated_at: now,
+        },
+        { status: ["queued"], workerId: null },
+      );
+    },
+
     cancel: async (workspaceId, id) => {
       const run = await loadRun(workspaceId, id);
       if (run.status === "cancelled") return toPublicRun(run);
@@ -1209,6 +1245,9 @@ export const createRunLifecycle = (
           `Run '${id}' is ${run.status}${run.worker_id ? " and its worker is still finalizing" : ""}; only stopped_budget, stopped_balance, failed or cancelled runs can be resumed.`,
         );
       }
+
+      const state = await store.workspaces.state(workspaceId);
+      if (state !== "active") throw workspaceInactive(state);
 
       // A run stopped at its own cap resumes only with a higher one; a
       // balance stop resumes with the same cap once the workspace can pay.
@@ -1504,6 +1543,9 @@ export const createRunLifecycle = (
         (body.stop_reason === "insufficient_balance" ||
           (body.stop_reason === undefined &&
             (await deps.billing.canContinue?.(run.workspace_id)) === false));
+      const suspended =
+        balanceStop &&
+        (await store.workspaces.state(run.workspace_id)) !== "active";
       if (
         run.status !== "cancelled" &&
         body.status === "completed" &&
@@ -1583,7 +1625,9 @@ export const createRunLifecycle = (
                   body.status === "failed"
                     ? (body.error ?? "The trainer reported a failure.")
                     : balanceStop
-                      ? BALANCE_STOPPED
+                      ? suspended
+                        ? SUSPENDED_STOPPED
+                        : BALANCE_STOPPED
                       : body.status === "stopped_budget"
                         ? budgetStopped(runCost(run, tokens), run.max_cost_usd)
                         : null,

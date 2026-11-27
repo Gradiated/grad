@@ -10,6 +10,7 @@ import { compareStrings, parameterMaxima, sanitizeSingleLine, schemaClosure, toP
 export const RUST_MODELS = [
   "ApiKey",
   "Artifact",
+  "ArtifactDownloadUrl",
   "ArtifactImport",
   "ChatMessage",
   "Checkpoint",

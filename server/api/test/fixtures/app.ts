@@ -106,7 +106,7 @@ export const makeTestApp = async (
     catalog: createModelCatalog(TINY_MODELS_JSON, TEST_JUDGES_JSON),
     clock,
     inferenceConfigured: false,
-    settings: { maxAttempts: 3, usageExportLagSeconds: 0 },
+    settings: { maxAttempts: 3 },
     ...overrides,
   };
   const { app, services } = createGradApp(deps);

@@ -75,6 +75,16 @@ type Artifact struct {
 	CreatedAt    string             `json:"created_at"`
 }
 
+// ArtifactDownloadURL is generated from the OpenAPI schema.
+type ArtifactDownloadURL struct {
+	// URL A presigned GET of the bundle (.grad.tar.gz) straight from storage; no Authorization header. Verify its SHA-256.
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expires_at"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int    `json:"size_bytes"`
+	Filename  string `json:"filename"`
+}
+
 // ArtifactFormat Artifact format when this checkpoint is exportable (promotable); null for training state only.
 type ArtifactFormat string
 
@@ -2675,14 +2685,25 @@ type UsageRecord struct {
 	RunID   *string `json:"run_id"`
 	Attempt int     `json:"attempt"`
 	// TokensFrom The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).
-	TokensFrom     int     `json:"tokens_from"`
-	TokensThrough  int     `json:"tokens_through"`
-	Tokens         int     `json:"tokens"`
-	CostUSD        float64 `json:"cost_usd"`
-	PriceVersion   string  `json:"price_version"`
-	IdempotencyKey string  `json:"idempotency_key"`
-	CreatedAt      string  `json:"created_at"`
+	TokensFrom    int     `json:"tokens_from"`
+	TokensThrough int     `json:"tokens_through"`
+	Tokens        int     `json:"tokens"`
+	CostUSD       float64 `json:"cost_usd"`
+	PriceVersion  string  `json:"price_version"`
+	// BilledBy Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).
+	BilledBy       UsageRecordBilledBy `json:"billed_by"`
+	IdempotencyKey string              `json:"idempotency_key"`
+	CreatedAt      string              `json:"created_at"`
 }
+
+// UsageRecordBilledBy Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).
+type UsageRecordBilledBy string
+
+// Values of UsageRecordBilledBy.
+const (
+	UsageRecordBilledByGrad    UsageRecordBilledBy = "grad"
+	UsageRecordBilledByGateway UsageRecordBilledBy = "gateway"
+)
 
 // UsageRefTotal is generated from the OpenAPI schema.
 type UsageRefTotal struct {

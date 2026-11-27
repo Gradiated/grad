@@ -1490,6 +1490,17 @@ impl Artifacts<'_> {
         .await
     }
 
+    /// A presigned URL of the artifact's bundle (valid 15 minutes): download it
+    /// straight from storage, without holding it in memory, and verify `sha256`.
+    pub async fn download_url(&self, reference: &str) -> Result<ArtifactDownloadUrl> {
+        check_path_param("artifact reference", reference)?;
+        get(
+            self.c,
+            Req::get(format!("/v1/artifacts/{}/download-url", seg(reference))),
+        )
+        .await
+    }
+
     /// Delete an artifact and its bundle ([`Error::Conflict`] `artifact_pinned`
     /// while a published model version pins it).
     pub async fn delete(&self, reference: &str) -> Result<()> {

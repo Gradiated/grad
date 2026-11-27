@@ -10,6 +10,7 @@ import type { RunLifecycle } from "./runs.js";
 import type { SourceService } from "./sources.js";
 import { ARTIFACTS_PREFIX, type UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
+import type { WorkspaceLifecycle } from "./workspaces.js";
 
 export const DEFAULT_JOB_EVENT_RETENTION_DAYS = 90;
 export const DEFAULT_ORPHAN_BLOB_DAYS = 7;
@@ -31,8 +32,14 @@ export interface MaintenanceReport {
   /** Workers unseen for a day (and holding no lease) forgotten. */
   prunedWorkers: number;
   deletedWorkerTokens: number;
+  /** Cloud: 1 when the price list is current (polled when due). */
+  refreshedPrices: number;
   exportedUsage: number;
   syncedSources: number;
+  /** KMS mode: secrets re-sealed under the current key. */
+  resealedSecrets: number;
+  /** Cloud: deleted workspaces purged this tick. */
+  purgedWorkspaces: number;
   /** 1 when the metric gauges were refreshed. */
   sampledMetrics: number;
 }
@@ -53,6 +60,7 @@ export const createMaintenance = (
     uploads: UploadService;
     usage: UsageService;
     sources: SourceService;
+    workspaces?: WorkspaceLifecycle | undefined;
     telemetry?: TelemetrySampler;
   },
 ): Maintenance => {
@@ -161,11 +169,21 @@ export const createMaintenance = (
       deletedWorkerTokens: await step("gc_worker_tokens", () =>
         deps.store.workerTokens.deleteExpired(now, 1000),
       ),
+      refreshedPrices: await step("refresh_prices", async () =>
+        (await deps.prices?.refresh()) ? 1 : 0,
+      ),
       exportedUsage: await step("export_usage", () =>
         services.usage.exportPending(),
       ),
       syncedSources: await step("sync_sources", () =>
         services.sources.tick(now),
+      ),
+      resealedSecrets: await step("reseal_secrets", () =>
+        services.sources.resealSecrets(),
+      ),
+      purgedWorkspaces: await step(
+        "purge_workspaces",
+        async () => (await services.workspaces?.purgeDue(now)) ?? 0,
       ),
       // Last: the gauges then reflect this tick's expiries and syncs.
       sampledMetrics: await step("sample_metrics", async () => {
