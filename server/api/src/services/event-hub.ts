@@ -83,6 +83,9 @@ export const createEventHub = (
 ): EventHub => {
   const jobs = new Map<string, Set<Sub>>();
   const dirty = new Set<string>();
+  // Highest seq fetched per job: rows above it are live (timed on
+  // grad_sse_dispatch_latency_seconds), rows below are a backfill.
+  const fetched = new Map<string, number>();
   // Ticks and the listener run in the hub's own async context, not in that
   // of the request whose subscription started them.
   const detached = new AsyncResource("grad-event-hub");
@@ -174,9 +177,19 @@ export const createEventHub = (
       const list = byJob.get(jobId) ?? [];
       list.push(event);
       byJob.set(jobId, list);
+      const high = fetched.get(jobId);
+      if (high === undefined || event.seq <= high) continue;
       metrics.sseDispatchLatency.observe(
         Math.max(0, now - Date.parse(event.created_at)) / 1000,
       );
+    }
+    for (const { jobId } of cursors) {
+      const events = byJob.get(jobId) ?? [];
+      // A job's first caught-up fetch ends its backfill.
+      if (events.length < HUB_BATCH || fetched.has(jobId)) {
+        const last = events.at(-1)?.seq ?? 0;
+        fetched.set(jobId, Math.max(fetched.get(jobId) ?? 0, last));
+      }
     }
 
     for (const { jobId, afterSeq } of cursors) {
@@ -277,6 +290,7 @@ export const createEventHub = (
     if (subs && subs.size === 0) {
       jobs.delete(sub.jobId);
       dirty.delete(sub.jobId);
+      fetched.delete(sub.jobId);
     }
     wake(sub);
   };

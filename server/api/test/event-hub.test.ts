@@ -119,6 +119,11 @@ const untilListening = async (value: 0 | 1) => {
   }
 };
 
+const dispatched = async (): Promise<number> =>
+  (await metrics.sseDispatchLatency.get()).values.find(
+    (v) => v.metricName === "grad_sse_dispatch_latency_seconds_count",
+  )?.value ?? 0;
+
 const openStreams = async (): Promise<number> =>
   (await metrics.sseStreams.get()).values[0]?.value ?? 0;
 
@@ -159,6 +164,7 @@ describe("SSE event hub (one reader per replica)", () => {
     const jobs = await startRuns(5);
     const counts = countQueries(t.deps.store);
     const streamsBefore = await openStreams();
+    const dispatchedBefore = await dispatched();
 
     const streams = await Promise.all(
       Array.from({ length: 100 }, (_, i) =>
@@ -174,6 +180,8 @@ describe("SSE event hub (one reader per replica)", () => {
     expect(await openStreams()).toBe(streamsBefore + 100);
     expect(t.services.events.size()).toEqual({ jobs: 5, subscriptions: 100 });
     const backfillFetches = counts.listEventsSince;
+    // Backfilled rows are not timed as dispatches; live ones are.
+    expect(await dispatched()).toBe(dispatchedBefore);
     expect(backfillFetches).toBeLessThan(20);
 
     for (let step = 1; step <= 5; step += 1) {
@@ -189,6 +197,7 @@ describe("SSE event hub (one reader per replica)", () => {
     expect(counts.listEventsSince - backfillFetches).toBeLessThanOrEqual(25);
     expect(counts.jobStates).toBe(counts.listEventsSince);
     expect(counts.listEvents).toBe(0);
+    expect(await dispatched()).toBe(dispatchedBefore + 25);
 
     for (const { job, worker } of jobs) {
       await worker.complete(
