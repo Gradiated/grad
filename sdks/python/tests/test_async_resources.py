@@ -294,10 +294,11 @@ class AsyncRunTests(unittest.TestCase):
             seen: list[int] = []
             run = await client.runs.wait(RUN_ID, on_metric=lambda m: seen.append(m.step))
             self.assertEqual((seen, run.status), ([1], "completed"))
-            client, sender, _ = make_async_client({f"GET /v1/runs/{RUN_ID}/metrics": [json_reply(page), json_reply({**page, "data": []})]})
+            client, sender, _ = make_async_client({f"GET /v1/runs/{RUN_ID}/metrics": [json_reply({**page, "next_cursor": "c2"}), json_reply(page)]})
             run = grad.AsyncRun.from_api(RUN_C, client)
-            self.assertEqual([p.step async for p in run.metrics()], [1])
-            self.assertEqual(sender.sent[1].query["cursor"], [page["next_cursor"]])
+            self.assertEqual([p.step async for p in run.metrics()], [1, 1])
+            self.assertEqual(len(sender.sent), 2, "next_cursor is null on the last page")
+            self.assertEqual(sender.sent[1].query["cursor"], ["c2"])
 
         arun(main)
 

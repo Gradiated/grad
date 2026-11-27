@@ -72,7 +72,17 @@ class StubRunner:
             artifact_dir=out,
             artifact_format="peft_lora",
             manifest={"recipe": "sft"},
-            eval_report={"eval_loss": 0.1},
+            # Shaped like RecipeRunner's report: the server validates its core fields.
+            eval_report={
+                "metric_name": "eval_loss",
+                "selected_step": start + self.steps - 1,
+                "best_step": None,
+                "final_step": start + self.steps - 1,
+                "train_records": len(records),
+                "eval_records": 0,
+                "warnings": [],
+                "eval_loss": 0.1,
+            },
             tokens_processed=tokens // 2,
         )
 

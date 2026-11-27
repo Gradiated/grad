@@ -465,6 +465,8 @@ class RunTests(unittest.TestCase):
         run = client.runs.wait(RUN_ID, on_metric=lambda m: seen.append(m.step))
         self.assertEqual(seen, [1])
         self.assertEqual(run.status, "completed")
+        cursors = [s.query.get("cursor") for s in sender.sent if s.path.endswith("/metrics")]
+        self.assertIn([page["tail_cursor"]], cursors, "polling tails with tail_cursor")
 
     def test_wait_timeout_while_streaming(self) -> None:
         client, _, clock = make_client({f"GET /v1/runs/{RUN_ID}/metrics": Reply(200, ": ping\n\n", {"content-type": "text/event-stream"}), f"GET /v1/runs/{RUN_ID}": json_reply(RUN_Q)})
@@ -474,11 +476,12 @@ class RunTests(unittest.TestCase):
 
     def test_metrics_pages(self) -> None:
         page = fixture("python-metrics-page.json")
-        client, sender, _ = make_client({f"GET /v1/runs/{RUN_ID}/metrics": [json_reply(page), json_reply({**page, "data": []})]})
+        client, sender, _ = make_client({f"GET /v1/runs/{RUN_ID}/metrics": [json_reply({**page, "next_cursor": "c2"}), json_reply(page)]})
         run = grad.Run.from_api(RUN_C, client)
         points = list(run.metrics())
-        self.assertEqual([p.step for p in points], [1])
-        self.assertEqual(sender.sent[1].query["cursor"], [page["next_cursor"]])
+        self.assertEqual([p.step for p in points], [1, 1])
+        self.assertEqual(len(sender.sent), 2, "next_cursor is null on the last page")
+        self.assertEqual(sender.sent[1].query["cursor"], ["c2"])
         self.assertIn("MetricPoint(", repr(points[0]))
 
     def test_cancel_resume_checkpoints_promote(self) -> None:

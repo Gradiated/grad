@@ -160,7 +160,7 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(
             complete["tokens_processed"], 300
         )  # max(reported 150, metered 300)
-        self.assertEqual(complete["eval_report"], {"eval_loss": 0.1})
+        self.assertEqual(complete["eval_report"]["eval_loss"], 0.1)
 
         bundle = Path(self.tmp.name) / "artifact.tgz"
         bundle.write_bytes(srv.uploads["upl_2"])
