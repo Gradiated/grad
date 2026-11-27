@@ -7,7 +7,7 @@ pub mod eval;
 pub mod serve;
 pub mod train;
 
-use grad_sdk::{Client, Error as SdkError, ListParams, Run};
+use grad_sdk::{Client, CursorTrail, Error as SdkError, ListParams, Run};
 use std::sync::Mutex;
 
 use crate::cli::{Global, PageArgs};
@@ -76,6 +76,23 @@ pub fn page(p: &PageArgs) -> ListParams {
         limit: p.limit,
         cursor: p.cursor.clone(),
     }
+}
+
+/// Print the `--cursor` hint for the next page of a single-page listing.
+/// Fails with `pagination_loop` when the server echoed the cursor it was sent
+/// (following the hint would loop) and prints nothing after an empty page.
+pub fn more_hint(
+    out: &Out,
+    path: &str,
+    p: &PageArgs,
+    items: usize,
+    next: Option<&str>,
+) -> CliResult<()> {
+    let mut trail = CursorTrail::new(path);
+    if let Some(n) = trail.advance(p.cursor.as_deref(), items, next)? {
+        out.note(format!("more: --cursor {}", n));
+    }
+    Ok(())
 }
 
 /// Resolve a run id or a run name to a run.

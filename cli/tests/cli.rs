@@ -2077,3 +2077,41 @@ fn ctrl_c_while_waiting_exits_130_and_says_the_run_continues() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("run_slow keeps going"), "{}", stderr);
 }
+
+/// Regression: a server that echoes the cursor it was sent must not produce a
+/// `--cursor` hint that loops; an empty page must not advertise more pages.
+#[test]
+fn list_cursor_hints_stop_on_repeated_cursor_and_empty_page() {
+    let srv = MockServer::start(|r| match r.path() {
+        "/v1/runs" | "/v1/datasets" => Reply::json(
+            200,
+            json!({"data": [run_obj("run_1", "a", "completed")], "next_cursor": "same"}),
+        ),
+        "/v1/datasets/ds/records" => Reply::json(
+            200,
+            json!({"dataset": "ds", "version": 1, "total": 0, "data": [], "next_cursor": "fresh"}),
+        ),
+        _ => Reply::problem(404, "nf", "nf"),
+    });
+    let sb = Sandbox::new("pagination");
+    let u = Some(srv.url.as_str());
+
+    // First page: the hint is fine.
+    let r = run(sb.grad(u), &["runs", "list"]);
+    expect(&r, 0);
+    assert!(r.stderr.contains("more: --cursor same"), "{}", r.stderr);
+
+    // Following it returns the same cursor: typed error, exit 1.
+    for cmd in [["runs", "list"], ["datasets", "list"]] {
+        let r = run(sb.grad(u), &["--json", cmd[0], cmd[1], "--cursor", "same"]);
+        expect(&r, 1);
+        let e = r.err_json();
+        assert_eq!(e["error"]["code"], "pagination_loop", "{}", r.stderr);
+        assert!(r.stdout.is_empty());
+    }
+
+    // Empty page with a cursor: no hint.
+    let r = run(sb.grad(u), &["datasets", "records", "ds"]);
+    expect(&r, 0);
+    assert!(!r.stderr.contains("more:"), "{}", r.stderr);
+}

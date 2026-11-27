@@ -7,7 +7,7 @@ use grad_sdk::{
 use serde_json::Value;
 use std::time::Duration;
 
-use super::{on_interrupt, page, Ctx};
+use super::{more_hint, on_interrupt, page, Ctx};
 use crate::cli::{
     DatasetImportCmd, DatasetsCmd, ImportArgs, ImportWaitArgs, ImportsCmd, ModelsCmd, RenderArgs,
 };
@@ -140,9 +140,13 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                     })
                     .collect(),
             );
-            if let Some(n) = &res.next_cursor {
-                out.note(format!("more: --cursor {}", n));
-            }
+            more_hint(
+                out,
+                "/v1/datasets",
+                &p,
+                res.data.len(),
+                res.next_cursor.as_deref(),
+            )?;
             out.done(&res)
         }
         DatasetsCmd::Get { name } => {
@@ -208,10 +212,14 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                     thousands(res.total),
                     res.version
                 ));
-                if let Some(n) = &res.next_cursor {
-                    out.note(format!("more: --cursor {}", n));
-                }
             }
+            more_hint(
+                out,
+                &format!("/v1/datasets/{}/records", name),
+                &p,
+                res.data.len(),
+                res.next_cursor.as_deref(),
+            )?;
             out.done(&res)
         }
         DatasetsCmd::Render(a) => render(ctx, a).await,

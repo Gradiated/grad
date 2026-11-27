@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use super::{in_range, on_interrupt, page, positive, resolve_run, Ctx};
+use super::{in_range, more_hint, on_interrupt, page, positive, resolve_run, Ctx};
 use crate::cli::{RunsCmd, TrainArgs};
 use crate::output::{compact, num, opt, pct, thousands, usd, when, CliError, CliResult, Out};
 use crate::trainfile::{self, RunFile};
@@ -579,9 +579,13 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
                 &["id", "name", "recipe", "status", "step", "cost", "created"],
                 run_rows(&res.data),
             );
-            if let Some(n) = &res.next_cursor {
-                out.note(format!("more: --cursor {}", n));
-            }
+            more_hint(
+                out,
+                "/v1/runs",
+                &p,
+                res.data.len(),
+                res.next_cursor.as_deref(),
+            )?;
             out.done(&res)
         }
         RunsCmd::Inspect { run, yaml } => {
