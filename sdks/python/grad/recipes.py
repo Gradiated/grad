@@ -98,7 +98,6 @@ class Recipe:
         checkpoint_ttl_days: Retention of intermediate checkpoints.
         split: Train/eval split (``splits.BySession(0.10)`` by default); sent with the run.
         eval_every: ``"auto"`` (every 10% of steps) or a number of optimizer steps.
-        evals, loggers: Documented, not available in v0 (raise if set).
     """
 
     kind: ClassVar[str] = ""
@@ -119,21 +118,10 @@ class Recipe:
     select: Literal["best", "last"] | None = None
     checkpoint_ttl_days: int | None = None
     split: SplitSpec | Mapping[str, Any] | None = None
-    evals: Sequence[Any] | None = None
-    loggers: Sequence[Any] | None = None
     eval_every: Any = None
 
     def __post_init__(self) -> None:
         name = type(self).__name__
-        if self.evals:
-            raise _unsupported(
-                name,
-                "evals=",
-                "the v0 server does not run extra evaluations during training.",
-                "Run client.evals.create(models=[run.artifact], ...) after the run finishes.",
-            )
-        if self.loggers:
-            raise _unsupported(name, "loggers=", "the v0 server does not forward metrics to experiment trackers.", "Stream run.metrics(follow=True) into your tracker.")
         if self.eval_every not in (None, "auto") and (
             isinstance(self.eval_every, bool) or not isinstance(self.eval_every, int) or self.eval_every < 1
         ):

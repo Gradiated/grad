@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import io
 import json
@@ -12,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from _fakes import Reply, bundle_bytes, fixture, json_reply, make_async_client, make_client
+from _fakes import Reply, bundle_bytes, fixture, json_reply, make_client
 
 import grad
 from grad._helpers import safe_extract_bundle
@@ -250,31 +249,6 @@ class ExtractionSafetyTests(unittest.TestCase):
         self.assert_unsafe(b"not a tarball", "not a valid")
         data = _tar([self.manifest({"a": b"x" * 5000}), _file("a", b"x" * 5000)])
         self.assert_unsafe(data[: len(data) // 2], "Corrupt")
-
-
-class AsyncDownloadTests(unittest.TestCase):
-    def test_async_download_peft_bundle_and_mismatch(self) -> None:
-        bundle = bundle_bytes(PEFT_FILES)
-        ref = f"{ART['name']}@{ART['version']}"
-
-        async def main(tmp: Path) -> None:
-            client, _, _ = make_async_client(routes(bundle))
-            out = await client.artifacts.download(ref, tmp / "peft")
-            self.assertTrue((out / "adapter_config.json").exists())
-            art = await client.artifacts.get(ref)
-            self.assertTrue((await art.download(tmp / "b.grad.tar.gz", format="bundle")).exists())
-            client, _, _ = make_async_client(routes(bundle, header_sha="e" * 64, declared="e" * 64))
-            with self.assertRaises(grad.ChecksumMismatchError):
-                await client.artifacts.download(ref, tmp / "bad")
-            client, _, _ = make_async_client(routes(bundle, error=ConnectionResetError()))
-            with self.assertRaises(grad.APIConnectionError):
-                await client.artifacts.download(ref, tmp / "bad2")
-            self.assertEqual(sorted(p.name for p in tmp.iterdir()), ["b.grad.tar.gz", "peft"])
-            with self.assertRaises(grad.NotAvailableInV0Error):
-                await client.artifacts.merge()
-
-        with tempfile.TemporaryDirectory() as tmp:
-            asyncio.run(main(Path(tmp)))
 
 
 if __name__ == "__main__":

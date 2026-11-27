@@ -1,6 +1,6 @@
 /**
- * Python emitter: typed sync and natively async clients over the SDK's
- * transport (sdks/python/grad/_transport.py). Consumes the flat operation
+ * Python emitter: a typed blocking client over the SDK's transport
+ * (sdks/python/grad/_transport.py). Consumes the flat operation
  * list from ./ir.mjs plus the raw spec for schemas.
  */
 import { toPascal, toSnake } from "./ir.mjs";
@@ -143,7 +143,7 @@ const pyMaxima = (spec, ops) =>
 
 const pyPathParams = (op) => (op.path.match(/\{([^}]+)\}/g) ?? []).map((m) => m.slice(1, -1));
 
-const pyMethod = (spec, op, { isAsync, inlineTypes }) => {
+const pyMethod = (spec, op, inlineTypes) => {
   const name = toSnake(op.operationId);
   const success = pySuccess(spec, op);
   const pathParams = pyPathParams(op);
@@ -166,17 +166,14 @@ const pyMethod = (spec, op, { isAsync, inlineTypes }) => {
   const queryArg = query.length ? `query={${query.map((q) => `${pyString(q.name)}: ${q.ident}`).join(", ")}}, ` : "";
   const bodyArg = `${op.hasBody ? "json_body=body, " : ""}${op.idempotent ? 'headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, ' : ""}`;
   const doc = escapePyDocstring(op.summary || op.operationId);
-  const def = isAsync ? "async def" : "def";
-  const awaitKw = isAsync ? "await " : "";
   const methods = [];
 
   if (success.stream && !success.json) {
-    const ret = isAsync ? "AsyncResponse" : "Response";
     methods.push(
       [
-        `    ${def} ${name}(${sig.join(", ")}) -> ${ret}:`,
+        `    def ${name}(${sig.join(", ")}) -> Response:`,
         `        """${doc} (streams \`${success.stream}\`; read or close the response)."""`,
-        `        return ${awaitKw}self._t.stream(${pyString(op.method)}, ${pathExpr}, ${queryArg}accept=${pyString(success.stream)}, timeout=timeout)`,
+        `        return self._t.stream(${pyString(op.method)}, ${pathExpr}, ${queryArg}accept=${pyString(success.stream)}, timeout=timeout)`,
       ].join("\n"),
     );
     return methods;
@@ -191,35 +188,27 @@ const pyMethod = (spec, op, { isAsync, inlineTypes }) => {
 
   methods.push(
     [
-      `    ${def} ${name}(${sig.join(", ")}) -> ${ret}:`,
+      `    def ${name}(${sig.join(", ")}) -> ${ret}:`,
       `        """${doc}."""`,
       ret === "Any"
-        ? `        return ${awaitKw}self._t.request(${pyString(op.method)}, ${pathExpr}, ${queryArg}${bodyArg}timeout=timeout)`
-        : `        return cast(${pyString(ret)}, ${awaitKw}self._t.request(${pyString(op.method)}, ${pathExpr}, ${queryArg}${bodyArg}timeout=timeout))`,
+        ? `        return self._t.request(${pyString(op.method)}, ${pathExpr}, ${queryArg}${bodyArg}timeout=timeout)`
+        : `        return cast(${pyString(ret)}, self._t.request(${pyString(op.method)}, ${pathExpr}, ${queryArg}${bodyArg}timeout=timeout))`,
     ].join("\n"),
   );
   if (success.sse) {
-    const streamRet = isAsync ? "AsyncResponse" : "Response";
     methods.push(
       [
-        `    ${def} ${name}_stream(${sig.join(", ")}) -> ${streamRet}:`,
+        `    def ${name}_stream(${sig.join(", ")}) -> Response:`,
         `        """${doc} (Server-Sent Events stream; read or close the response)."""`,
-        `        return ${awaitKw}self._t.stream(${pyString(op.method)}, ${pathExpr}, ${queryArg}accept="text/event-stream", timeout=timeout)`,
+        `        return self._t.stream(${pyString(op.method)}, ${pathExpr}, ${queryArg}accept="text/event-stream", timeout=timeout)`,
       ].join("\n"),
     );
   }
   return methods;
 };
 
-const pyClient = (name, doc, ops, spec, { isAsync, inlineTypes }) => {
-  const methods = ops.flatMap((op) => pyMethod(spec, op, { isAsync, inlineTypes }));
-  const transport = isAsync ? "AsyncTransport" : "SyncTransport";
-  return `class ${name}:\n    """${doc}"""\n\n    def __init__(self, transport: ${transport}) -> None:\n        self._t = transport\n\n${methods.join("\n\n")}`;
-};
-
-export const generatePython = (spec, allOps, { internalTags = [] } = {}) => {
+export const generatePython = (spec, allOps) => {
   const ops = allOps.filter((op) => !op.internal);
-  const internalOps = allOps.filter((op) => op.internal && op.tags.some((t) => internalTags.includes(t)));
   const schemas = spec.components?.schemas ?? {};
   const names = Object.keys(schemas).sort();
   const blocks = [];
@@ -238,27 +227,10 @@ export const generatePython = (spec, allOps, { internalTags = [] } = {}) => {
     }
   }
 
-  const syncInline = [];
-  const asyncInline = [];
-  const clients = [
-    pyClient("GeneratedApiClient", "Blocking wire client: one method per public operation in spec/openapi.yaml.", ops, spec, {
-      isAsync: false,
-      inlineTypes: syncInline,
-    }),
-    pyClient("AsyncGeneratedApiClient", "asyncio wire client: one coroutine per public operation in spec/openapi.yaml.", ops, spec, {
-      isAsync: true,
-      inlineTypes: asyncInline,
-    }),
-  ];
-  if (internalOps.length > 0) {
-    const doc = "the SDK's own worker protocols (x-internal operations); not a public API and may change without notice.";
-    clients.push(
-      pyClient("GeneratedInternalApiClient", `Blocking client for ${doc}`, internalOps, spec, { isAsync: false, inlineTypes: syncInline }),
-      pyClient("AsyncGeneratedInternalApiClient", `asyncio client for ${doc}`, internalOps, spec, { isAsync: true, inlineTypes: asyncInline }),
-    );
-  }
-  const exported = ["AsyncGeneratedApiClient", "GeneratedApiClient", "GradApiError", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"];
-  if (internalOps.length > 0) exported.push("AsyncGeneratedInternalApiClient", "GeneratedInternalApiClient");
+  const inlineTypes = [];
+  const methods = ops.flatMap((op) => pyMethod(spec, op, inlineTypes));
+  const client = `class GeneratedApiClient:\n    """Wire client: one method per public operation in spec/openapi.yaml."""\n\n    def __init__(self, transport: Transport) -> None:\n        self._t = transport\n\n${methods.join("\n\n")}`;
+  const exported = ["GeneratedApiClient", "GradApiError", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"];
   const maxima = pyMaxima(spec, ops);
   exported.push(...maxima.map((line) => line.split(" ")[0]));
   exported.sort();
@@ -281,14 +253,15 @@ from .._errors import GradAPIError as GradApiError
 from .._transport import new_idempotency_key, quote_path_param
 
 if TYPE_CHECKING:
-    from .._http import AsyncResponse, Response
-    from .._transport import AsyncTransport, SyncTransport
+    from httpx import Response
+
+    from .._transport import Transport
 
 __all__ = [${exported.map(pyString).join(", ")}]
 
 ${blocks.join("\n\n")}
 
-${syncInline.join("\n\n")}
+${inlineTypes.join("\n\n")}
 
 SCHEMA_FIELDS: dict[str, frozenset[str]] = {
 ${fieldTable.join("\n")}
@@ -306,7 +279,7 @@ ${operations.join("\n")}
 """Public operationId (snake_case) -> (HTTP method, path template)."""
 
 ${maxima.length ? `# Page-size maxima from spec/openapi.yaml (the server clamps larger values).\n${maxima.join("\n")}\n\n` : ""}
-${clients.join("\n\n\n")}
+${client}
 `;
 };
 

@@ -249,16 +249,6 @@ class DatasetTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             client.datasets.get(123)
 
-    def test_documented_but_deferred_dataset_methods(self) -> None:
-        client, _, _ = make_client({})
-        ds = grad.Dataset.from_api(DATASET, client)
-        for call in (lambda: ds.score(Judge(model="m")), lambda: ds.filter(scores={"x": ">=0.8"}), lambda: ds.add_source(), lambda: client.datasets.score()):
-            with self.assertRaises(grad.NotAvailableInV0Error) as ctx:
-                call()
-            self.assertIn("evals", str(ctx.exception))
-        with self.assertRaises(RuntimeError):
-            grad.Dataset.from_api(DATASET).count()
-
     def test_dataset_push_method_updates_in_place(self) -> None:
         client, _, _ = make_client({"POST /v1/datasets/support/records": json_reply({**DATASET, "version": 2, "record_count": 3})})
         ds = grad.Dataset.from_api(DATASET, client)
@@ -536,20 +526,6 @@ class RunTests(unittest.TestCase):
             run.url  # noqa: B018
 
 
-class ChainTests(unittest.TestCase):
-    def test_then_queues_a_run_that_depends_on_this_one(self) -> None:
-        client, sender, _ = make_client({"POST /v1/runs": json_reply({**RUN_Q, "depends_on": RUN_C["id"]}, 202)})
-        first = grad.Run.from_api(RUN_C, client)
-        second = first.then("prefs", recipe=grad.recipes.DPORecipe(beta=0.3))
-        self.assertEqual(
-            sender.sent[-1].json,
-            {"dataset": "prefs", "name": RUN_C["name"], "recipe": {"kind": "dpo", "beta": 0.3}, "depends_on": RUN_C["id"]},
-        )
-        self.assertEqual(second.depends_on, RUN_C["id"])
-        client.runs.create("prefs", name="dpo", recipe=grad.recipes.DPORecipe(), depends_on=first)
-        self.assertEqual(sender.sent[-1].json["depends_on"], RUN_C["id"])
-
-
 class ServingTests(unittest.TestCase):
     DEPLOYMENT = {
         "id": "dep_1",
@@ -633,27 +609,12 @@ class ServingTests(unittest.TestCase):
         client.embeddings.create(model="docs-embedder", input="one")
         self.assertEqual(sender.sent[1].json["input"], "one")
 
-    def test_artifacts_list_and_deferred(self) -> None:
+    def test_artifacts_list(self) -> None:
         client, sender, _ = make_client({"GET /v1/artifacts": json_reply(fixture("python-artifacts-page.json"))})
         arts = list(client.artifacts.list(name="support-sft"))
         self.assertEqual(sender.sent[0].query["name"], ["support-sft"])
         self.assertTrue(arts)
         self.assertEqual(str(arts[0]), arts[0].ref)
-        for call in (lambda: arts[0].infer([]), lambda: arts[0].infer_batch([]), lambda: arts[0].embed([]), lambda: client.artifacts.merge()):
-            with self.assertRaises(grad.NotAvailableInV0Error):
-                call()
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            client.trainers.create(model="qwen/qwen3-8b")
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            client.secrets.get("hf-token")
-
-    def test_environment_dispatch(self) -> None:
-        client, sender, _ = make_client({"POST /v1/env-workers/tasks": json_reply(fixture("python-env-dispatch.json"), 202), "GET /v1/env-workers/tasks/envtask_1": json_reply({"id": "envtask_1", "status": "queued"})})
-        out = client.environments.dispatch("support-app", {"prompt": "hi"}, model_id="m", system_prompt="be brief", timeout_s=30)
-        self.assertEqual(sender.sent[0].json, {"env_name": "support-app", "task": {"prompt": "hi"}, "model_id": "m", "system_prompt": "be brief", "timeout_s": 30})
-        self.assertEqual(out["status"], "queued")
-        self.assertEqual(client.environments.get_task("envtask_1")["status"], "queued")
-
 
 class EvalTests(unittest.TestCase):
     def rubric(self) -> Rubric:
@@ -662,7 +623,7 @@ class EvalTests(unittest.TestCase):
     def test_plan_body_and_readout(self) -> None:
         client, sender, _ = make_client({"POST /v1/evals/plan": json_reply(fixture("python-eval-plan.json"))})
         art = grad.Artifact.from_api(fixture("python-artifact.json"))
-        plan = client.evals.plan(models=["test/tiny-qwen3", art], dataset="support", rubric=self.rubric(), samples=4, temperature=0.7, baseline="test/tiny-qwen3", pass_threshold=0.5, max_tokens=256, limit=10, max_cost_usd=1, name="sql-eval", dataset_version=1)
+        plan = client.evals.plan(models=["test/tiny-qwen3", art], dataset="support", rubric=self.rubric(), samples=4, temperature=0.7, baseline="test/tiny-qwen3", pass_threshold=0.5, max_tokens=256, limit=10, name="sql-eval", dataset_version=1)
         body = sender.sent[0].json
         self.assertEqual(body["models"], ["test/tiny-qwen3", art.ref])
         self.assertEqual(body["rubric"][1], {"name": "short", "kind": "code", "runtime": "local", "weight": 1.0})
@@ -673,27 +634,13 @@ class EvalTests(unittest.TestCase):
 
     def test_eval_inputs(self) -> None:
         client, sender, _ = make_client({"POST /v1/evals/plan": json_reply(fixture("python-eval-plan.json"))})
-        client.evals.plan(models="test/tiny-qwen3", dataset="support", rubric=[{"name": "x", "kind": "validator", "validator": "json"}], benchmarks=[grad.benchmarks.IFEval(limit=200), grad.benchmarks.GSM8K()])
+        client.evals.plan(models="test/tiny-qwen3", dataset="support", rubric=[{"name": "x", "kind": "validator", "validator": "json"}])
         body = sender.sent[0].json
-        self.assertEqual(body["models"], ["test/tiny-qwen3"])
-        self.assertEqual(body["rubric"], [{"name": "x", "kind": "validator", "validator": "json"}])
-        self.assertEqual(body["benchmarks"], [{"name": "ifeval", "limit": 200}, {"name": "gsm8k"}])
-        client.evals.plan(models=["m"], env=grad.environments.Remote("support-app"), tasks=[grad.Task(prompt="x")])
-        self.assertEqual(sender.sent[1].json["env_name"], "support-app")
-        self.assertEqual(sender.sent[1].json["tasks"], [{"prompt": "x"}])
-        for kwargs in ({"max_turns": 3}, {"max_concurrency": 8}):
-            with self.assertRaises(grad.NotAvailableInV0Error):
-                client.evals.plan(models=["m"], dataset="d", **kwargs)  # type: ignore[arg-type]
+        self.assertEqual(body, {"models": ["test/tiny-qwen3"], "dataset": "support", "rubric": [{"name": "x", "kind": "validator", "validator": "json"}]})
         with self.assertRaises(ValueError):
             client.evals.plan(models=[], dataset="d")
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            client.evals.plan(models=["m"], env=object())
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            client.evals.from_inspect("inspect_evals/gpqa_diamond")
-        for name in ("IFEval", "GSM8K", "MMLUPro", "GPQADiamond", "HumanEval", "LiveCodeBench"):
-            self.assertIn("name", getattr(grad.benchmarks, name)())
-        with self.assertRaises(ValueError):
-            grad.benchmarks.IFEval(limit=0)
+        with self.assertRaises(TypeError):
+            client.evals.plan(models=["m"], dataset="d", max_cost_usd=1)  # type: ignore[call-arg]
 
     def test_create_dry_runs_local_scorers_first(self) -> None:
         def broken(traj: grad.Trajectory) -> float:

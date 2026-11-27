@@ -1,4 +1,4 @@
-"""Pure helpers shared by the blocking and asyncio resource classes (no I/O here except files)."""
+"""Pure helpers of the resource classes (no network I/O here; files only)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from ._errors import ChecksumMismatchError, NotAvailableInV0Error, UnsafeArchiveError, ValidationError
+from ._errors import ChecksumMismatchError, UnsafeArchiveError, ValidationError
 from .records import coerce_record
 from .recipes import coerce_recipe
 from .rubrics import Rubric, Scorer, coerce_rubric, model_ref
@@ -57,9 +57,7 @@ def dataset_name(dataset: Any) -> str:
     raise TypeError(f"dataset= must be a Dataset or a dataset name, got {type(dataset).__name__}.")
 
 
-def run_body(
-    *, dataset: Any, name: str, recipe: Any, split: Any, max_cost_usd: float | None, depends_on: Any = None
-) -> dict[str, Any]:
+def run_body(*, dataset: Any, name: str, recipe: Any, split: Any, max_cost_usd: float | None) -> dict[str, Any]:
     """The ``PlanRunRequest`` body for ``runs.plan`` / ``runs.create``."""
     if dataset is None:
         raise TypeError("runs.plan/create need dataset= (a Dataset or a dataset name).")
@@ -74,8 +72,6 @@ def run_body(
         if isinstance(max_cost_usd, bool) or not isinstance(max_cost_usd, (int, float)) or not math.isfinite(max_cost_usd) or max_cost_usd <= 0:
             raise ValueError(f"max_cost_usd must be a positive number, got {max_cost_usd!r}.")
         body["max_cost_usd"] = max_cost_usd
-    if depends_on is not None:
-        body["depends_on"] = depends_on if isinstance(depends_on, str) else str(depends_on.id)
     return body
 
 
@@ -102,19 +98,8 @@ def eval_body(
     max_tokens: int | None,
     limit: int | None,
     pass_threshold: float | None,
-    max_cost_usd: float | None,
-    benchmarks: Sequence[Any] | None,
-    env: Any,
-    tasks: Sequence[Any] | None,
-    max_turns: int | None,
-    max_concurrency: int | None,
 ) -> tuple[dict[str, Any], Rubric | None]:
     """The ``PlanEvalRequest`` body plus the local :class:`Rubric` (for local scorers)."""
-    if max_turns is not None or max_concurrency is not None:
-        raise NotAvailableInV0Error(
-            "evals.create(max_turns=/max_concurrency=)",
-            "environment evals arrive with environments in Wave 2; v0 evals score single-turn outputs on a dataset.",
-        )
     if isinstance(models, (str, bytes)) or not isinstance(models, Sequence):
         models = [models]
     if not models:
@@ -131,21 +116,11 @@ def eval_body(
         ("max_tokens", max_tokens),
         ("limit", limit),
         ("pass_threshold", pass_threshold),
-        ("max_cost_usd", max_cost_usd),
     ):
         if value is not None:
             body[key] = value
     if baseline is not None:
         body["baseline"] = model_ref(baseline)
-    if benchmarks is not None:
-        body["benchmarks"] = [dict(b) for b in benchmarks]
-    if env is not None:
-        env_name = env if isinstance(env, str) else getattr(env, "name", None)
-        if not isinstance(env_name, str):
-            raise NotAvailableInV0Error("evals with a local Environment object", "environment evals arrive in Wave 2.")
-        body["env_name"] = env_name
-    if tasks is not None:
-        body["tasks"] = [coerce_record(t) for t in tasks]
     items, local = rubric_items(rubric)
     if items is not None:
         body["rubric"] = items

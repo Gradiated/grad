@@ -185,10 +185,8 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual((defaults.betas, defaults.weight_decay, defaults.grad_clip), ((0.9, 0.95), 0.0, 1.0))
 
     def test_unsupported_common_settings(self) -> None:
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            SFTRecipe(evals=[grad.benchmarks.IFEval(limit=200)])
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            SFTRecipe(loggers=[grad.loggers.WandB(project="p")])
+        with self.assertRaises(TypeError):
+            SFTRecipe(evals=[{"name": "ifeval"}])  # type: ignore[call-arg]
         self.assertEqual(SFTRecipe(eval_every="auto").to_spec(), {"kind": "sft"})
         with self.assertRaises(grad.NotAvailableInV0Error):
             SFTRecipe(thinking="high")

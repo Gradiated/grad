@@ -203,8 +203,8 @@ class Scorer:
 class StatefulScorer:
     """Scores an environment rollout from its live state: ``fn(traj, handle) -> float``.
 
-    Usable in an :class:`grad.Environment` rubric (scored where the environment runs, e.g.
-    by ``serve_environment``). Evals and training rubrics cannot carry one in v0.
+    Usable in an :class:`grad.Environment` rubric (Wave 2). Evals and training rubrics
+    cannot carry one in v0.
     """
 
     def __init__(
@@ -233,7 +233,7 @@ class StatefulScorer:
         raise NotAvailableInV0Error(
             f"StatefulScorer '{self.name}' in an eval or training rubric",
             "it needs an environment handle, and environment-backed evals and RL arrive in Wave 2.",
-            alternative="Use it in an Environment rubric served with serve_environment, or use a Scorer.",
+            alternative="Use a Scorer in eval rubrics.",
         )
 
     def score(self, traj: Trajectory, handle: Any, *, where: str = "a rollout") -> float:

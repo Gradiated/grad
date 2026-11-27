@@ -6,12 +6,11 @@ Regression for the round-3 host OOM, where a fake endpoint that always returned 
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import unittest
 from typing import Any
 
-from _fakes import FakeSender, fixture, json_reply, make_async_client, make_client
+from _fakes import FakeSender, fixture, json_reply, make_client
 
 import grad
 from grad import PaginationLoopError
@@ -116,60 +115,6 @@ class SyncPaginationTests(unittest.TestCase):
         sender.MAX_REQUESTS = 1
         with self.assertRaises(AssertionError):
             list(client.runs.list())
-
-
-class AsyncPaginationTests(unittest.TestCase):
-    def test_async_list_raises_on_repeated_cursor(self) -> None:
-        async def main() -> int:
-            client, sender, _ = make_async_client({"GET /v1/runs": json_reply(looping(RUNS_PAGE))})
-            async with client:
-                count = 0
-                with self.assertRaises(PaginationLoopError):
-                    async for _ in client.runs.list():
-                        count += 1
-                self.assertEqual(len(sender.sent), 2)
-                return count
-
-        self.assertEqual(asyncio.run(main()), 2 * len(RUNS_PAGE["data"]))
-
-    def test_async_collect_records_metrics_and_empty_page(self) -> None:
-        run_id = "run_x"
-
-        async def main() -> None:
-            client, sender, _ = make_async_client(
-                {
-                    f"GET /v1/runs/{run_id}/checkpoints": json_reply(looping(CKPTS_PAGE)),
-                    "GET /v1/datasets/support/records": json_reply(looping(RECORDS_PAGE)),
-                    f"GET /v1/runs/{run_id}/metrics": json_reply(looping(METRICS_PAGE)),
-                    "GET /v1/evals": [json_reply(with_cursor(fixture("python-eval-results-page.json"), "e1")), json_reply({"data": [], "next_cursor": "e2"})],
-                }
-            )
-            async with client:
-                with self.assertRaises(PaginationLoopError):
-                    await client.runs.checkpoints(run_id)
-                with self.assertRaises(PaginationLoopError):
-                    [r async for r in client.datasets.records("support")]
-                with self.assertRaises(PaginationLoopError):
-                    [m async for m in client.runs.metrics(run_id)]
-                before = len(sender.sent)
-                page = await client.evals.list()
-                pages = [p async for p in page.iter_pages()]
-                self.assertEqual(len(pages), 2)
-                self.assertFalse(pages[-1].has_more)
-                self.assertEqual(len(sender.sent) - before, 2)
-                with self.assertRaises(PaginationLoopError):
-                    await grad.AsyncPager(lambda: _bounded_first(client)).to_list(max_items=1)
-
-        asyncio.run(main())
-
-
-async def _bounded_first(client: Any) -> Any:
-    counter = iter(range(100))
-
-    async def fetch(cursor: str | None) -> Any:
-        return grad.AsyncPage([1, 2], f"c{next(counter)}", fetch)
-
-    return await fetch(None)
 
 
 if __name__ == "__main__":
