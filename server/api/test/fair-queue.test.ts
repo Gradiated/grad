@@ -328,6 +328,7 @@ describe("queueView", () => {
     shares: [],
     ranks: {},
     workerGpus: [],
+    cpuWorkers: 0,
     ...over,
   });
 
@@ -451,6 +452,40 @@ describe("fair queue over HTTP", () => {
     });
     expect(imp.status).toBe(429);
     expect(imp.body.code).toBe("queue_limit");
+  });
+
+  it("warns when only CPU workers are online for a GPU-sized base model", async () => {
+    t = await app({});
+    await t.json("/v1/datasets/support/records", {
+      body: { records: sftRecords(20) },
+    });
+    const warnings = async (model: string) =>
+      (
+        await t.json<{ warnings: string[] }>("/v1/runs/plan", {
+          body: {
+            dataset: "support",
+            name: "p",
+            recipe: { kind: "sft", model, batch_size: 4 },
+          },
+        })
+      ).body.warnings.filter((w) => w.includes("CPU-only"));
+    // No worker online yet: nothing to say.
+    expect(await warnings("qwen/qwen3-8b")).toEqual([]);
+    await new FakeWorker(t, "local-cpu-trainer").claim({
+      kinds: ["train"],
+      device: "cpu",
+    });
+    const [warning] = await warnings("qwen/qwen3-8b");
+    expect(warning).toContain("qwen/qwen3-8b is sized for a GPU");
+    expect(warning).toContain("grad local up --gpu");
+    expect(await warnings("test/tiny-qwen3")).toEqual([]);
+    // A GPU worker online: the run will land there.
+    await new FakeWorker(t, "gpu-1").claim({
+      kinds: ["train"],
+      device: "gpu",
+      gpu: { name: "NVIDIA H100", memory_gb: 80 },
+    });
+    expect(await warnings("qwen/qwen3-8b")).toEqual([]);
   });
 
   it("shows the queue position, the cap reason and the GPU reason on the run", async () => {

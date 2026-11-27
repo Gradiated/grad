@@ -841,6 +841,22 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         ["k2", true, false, null],
         ["k3", false, true, null],
       ]);
+      // A resumed run ends again: the flags move, the earlier pins stay kept.
+      await store.artifacts.pinCheckpoints(run.id, {
+        bestId: k3.id,
+        finalId: k3.id,
+      });
+      expect(
+        (await store.artifacts.allCheckpoints(run.id, clock.now())).map((c) => [
+          c.storage_key,
+          c.best,
+          c.final,
+          c.expires_at,
+        ]),
+      ).toEqual([
+        ["k2", false, false, null],
+        ["k3", true, true, null],
+      ]);
       expect(
         await store.artifacts.deleteExpiredCheckpoints(clock.now(), 10),
       ).toEqual([]);

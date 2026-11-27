@@ -105,11 +105,14 @@ export const createArtifactRepository = (
   },
   pinCheckpoints: async (runId, { bestId, finalId }) => {
     await db.query(
+      // One best and one final per run: a resumed run's new ones take the flags over.
+      // A checkpoint pinned by an earlier attempt keeps expires_at NULL (kept forever).
       `UPDATE grad_artifacts
-       SET best = best OR COALESCE(id = $2::text, FALSE),
-           final = final OR COALESCE(id = $3::text, FALSE),
-           expires_at = NULL
-       WHERE kind = 'checkpoint' AND run_id = $1 AND (id = $2::text OR id = $3::text)`,
+       SET best = COALESCE(id = $2::text, FALSE),
+           final = COALESCE(id = $3::text, FALSE),
+           expires_at = CASE WHEN id = $2::text OR id = $3::text THEN NULL ELSE expires_at END
+       WHERE kind = 'checkpoint' AND run_id = $1
+         AND (best OR final OR id = $2::text OR id = $3::text)`,
       [runId, bestId, finalId],
     );
   },

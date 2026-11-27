@@ -614,7 +614,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
             [[...ids]],
           );
     const workers = await db.query(
-      `SELECT w.gpu_memory_gb FROM ${onlineWorkers("$1", "$2")}`,
+      `SELECT w.gpu_memory_gb, w.device FROM ${onlineWorkers("$1", "$2")}`,
       [kind, now.toISOString()],
     );
 
@@ -636,6 +636,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
           ? null
           : Number(r.gpu_memory_gb),
       ),
+      cpuWorkers: workers.filter((r) => r.device === "cpu").length,
     };
   },
   deleteEventsBefore: async (before, limit) =>

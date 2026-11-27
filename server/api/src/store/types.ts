@@ -320,6 +320,8 @@ export interface QueueSnapshot {
   ranks: Record<string, number>;
   /** GPU memory (GB) of each online worker of the kind (null: a CPU or unreporting worker). */
   workerGpus: (number | null)[];
+  /** How many of those workers said they have no GPU (device "cpu"). */
+  cpuWorkers: number;
 }
 
 /** What a claiming worker said about itself (grad_workers). */

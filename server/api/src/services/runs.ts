@@ -173,6 +173,8 @@ export const sameNameWarning = (
 };
 
 export const CHECKPOINTS_KEPT = 3;
+/** Base models up to this much GPU memory (an encoder) train fine on a CPU worker. */
+const CPU_TRAINABLE_GB = 4;
 
 /**
  * The best checkpoint by eval score, in the direction of the run's metric
@@ -463,6 +465,8 @@ export const createRunLifecycle = (
       20,
     );
     if (active.length > 0) plan.warnings.unshift(sameNameWarning(active));
+    const cpuOnly = await cpuOnlyWarning(plan);
+    if (cpuOnly) plan.warnings.push(cpuOnly);
     if (request.recipe.loggers) {
       plan.resolved_config.loggers = request.recipe.loggers;
       plan.warnings.push(...(await loggerWarnings(workspaceId, request)));
@@ -543,6 +547,23 @@ export const createRunLifecycle = (
     plan.warnings.push(
       `recipe.evals run ${pinned.length} eval(s) on each checkpoint (about ${points}), estimated $${costPerCheckpoint.toFixed(4)} per checkpoint, billed as evals and not capped by max_cost_usd.`,
     );
+  };
+
+  /**
+   * A GPU-sized base model when every online training worker is CPU-only (`grad local up`
+   * without --gpu): the run would download the full model and crawl, or run out of memory.
+   */
+  const cpuOnlyWarning = async (plan: PlanRunResponse): Promise<string | null> => {
+    const need = plan.min_gpu_memory_gb;
+    if (need === null || need <= CPU_TRAINABLE_GB) return null;
+    const { workerGpus, cpuWorkers } = await store.jobs.queueSnapshot(
+      "train",
+      [],
+      clock.now(),
+    );
+    if (workerGpus.length === 0 || cpuWorkers < workerGpus.length) return null;
+    const model = plan.resolved_config.model;
+    return `Every online training worker is CPU-only, and ${model} is sized for a GPU (about ${Math.ceil(need)} GB): on a CPU it downloads the full model and trains very slowly, if it fits in memory at all. Add a GPU worker (\`grad local up --gpu\`), or try the workflow on a dev model (\`grad local up --dev-models\`, then model test/tiny-qwen3).`;
   };
 
   /** The run's training records: its pinned dataset version, or its labeling eval's answers. */
