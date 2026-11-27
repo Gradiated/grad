@@ -28,6 +28,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      # The environment only admits v* tags, and anyone with write access can push one, so
+      # refuse a tag on a commit that never landed on main (fetch-depth 0 fetches origin/main).
+      - name: The tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Every version field matches the tag, and CHANGELOG.md has notes for it
         id: version

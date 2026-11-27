@@ -103,18 +103,19 @@ version. To release `0.3.0`:
    scripts/bump-version 0.3.0
    ```
 
-   Edit the new CHANGELOG section if it needs it, then merge that as a pull request titled
+   Edit the new CHANGELOG section if it needs it, then commit it to `main` as
    `chore: release v0.3.0`.
 
-2. Tag the merge commit on `main` and push the tag:
+2. Tag that commit on `main` and push the tag:
 
    ```bash
    git tag -a v0.3.0 -m v0.3.0 && git push origin v0.3.0
    ```
 
-3. [`release.yml`](.github/workflows/release.yml) checks that the tag matches every version
-   field, builds the Python sdist and wheel and the CLI binaries, then waits for a maintainer to
-   approve the `release` environment. Once approved it publishes:
+3. [`release.yml`](.github/workflows/release.yml) checks that the tagged commit is on `main`
+   and that the tag matches every version field, builds the Python sdist and wheel and the CLI
+   binaries, then waits for a maintainer to approve the `release` environment. Once approved it
+   publishes:
 
    - `grad-sdk` to PyPI and `@gradiated/grad` to npm (with provenance),
    - `grad-sdk`, then `grad-cli`, to crates.io,
@@ -134,9 +135,17 @@ If a publish job fails, fix the cause and re-run the failed jobs; jobs that alre
 don't run again. Registries never accept the same version twice, so a broken release is fixed
 with a new patch version, not by moving the tag.
 
+### Repository settings
+
+These are configured on GitHub, not in this repository:
+
+- The `release` environment requires a maintainer's approval, and only `v*` tags may deploy to
+  it.
+- `main` blocks force pushes and deletion. It doesn't require pull request reviews or status
+  checks yet: commits land on `main` directly, and CI runs after each push.
+
 ### One-time setup
 
-- A `release` environment with required reviewers, limited to `v*` tags.
 - PyPI: a trusted publisher for `grad-sdk` (repository `Gradiated/grad`, workflow
   `release.yml`, environment `release`). PyPI allows this before the project exists.
 - npm and crates.io only allow a trusted publisher on a package that already exists. For the
