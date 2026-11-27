@@ -85,6 +85,18 @@ class OnPolicyDistillTests(TorchCase):
         self.assertGreaterEqual(out.tokens_processed, sum(m["tokens"] for m in rec.metrics[-1:]))
         self.assertNotIn("metered_tokens", rec.metrics[0])
 
+    def test_generation_runs_in_eval_mode_and_restores_train_mode(self) -> None:
+        from grad_trainer.config import parse_train_spec
+        from grad_trainer.recipes.distill import OnPolicyDistillTask
+
+        task = OnPolicyDistillTask(parse_train_spec("distill", DISTILL), PROMPTS[:2], [], self.tmpdir())
+        task.model.train()
+        modes: list[bool] = []
+        generate = task.model.generate
+        task.model.generate = lambda **kw: modes.append(task.model.training) or generate(**kw)  # type: ignore[method-assign]
+        task._generate(task.model, [task.train[0]["student"]], sample=True)
+        self.assertEqual((modes, task.model.training), ([False], True))
+
     def test_context_is_read_by_the_teacher_only_and_resume_continues(self) -> None:
         from grad_trainer.config import parse_train_spec
         from grad_trainer.recipes.distill import OnPolicyDistillTask

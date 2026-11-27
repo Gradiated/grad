@@ -183,8 +183,14 @@ class OnPolicyDistillTask(TorchTask):
             pad_token_id=self.pad_id,
             use_cache=True,
         )
-        with torch.no_grad():
-            out = model.generate(input_ids=ids.to(self.device), attention_mask=mask.to(self.device), generation_config=config)
+        # Gradient checkpointing keeps the student in train mode, which disables the KV cache.
+        training = model.training
+        model.eval()
+        try:
+            with torch.no_grad():
+                out = model.generate(input_ids=ids.to(self.device), attention_mask=mask.to(self.device), generation_config=config)
+        finally:
+            model.train(training)
         answers = []
         for row in out[:, width:].tolist():
             if self.eos_id in row:
