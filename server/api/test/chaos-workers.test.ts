@@ -291,3 +291,120 @@ describe("kubernetes TokenReview outages", () => {
     for (const p of await same) expect(p).not.toBeNull();
   });
 });
+
+describe("eval worker credential faults", () => {
+  let h: EvalHarness | undefined;
+
+  afterEach(async () => {
+    await h?.close();
+    h = undefined;
+  });
+
+  const request = (raw: Record<string, unknown>) =>
+    PlanEvalRequestSchema.parse({
+      models: ["qwen/qwen3-8b"],
+      dataset: "qa",
+      ...raw,
+    });
+
+  const worker = (
+    fake: EvalHarness["fake"],
+    options: { apiKey: () => string | undefined; fetch: typeof fetch },
+  ) => {
+    const regex = createRegexEvaluator();
+    const client: WorkerClient = createWorkerClient({
+      serverUrl: "http://grad.test",
+      apiKey: options.apiKey,
+      workerId: "eval-chaos",
+      fetch: options.fetch,
+      retryDelaysMs: [1, 1, 1],
+    });
+    const w = createEvalWorker({
+      client,
+      inference: fakeInference(fake),
+      regex,
+      concurrency: 2,
+      batchSize: 2,
+    });
+
+    return { ...w, close: async () => (await w.stop(), await regex.close()) };
+  };
+
+  it("a token rotated between read and request is retried once with the new token", async () => {
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(6));
+    fake.setModel("qwen/qwen3-8b", () => ({ content: "answer" }));
+    const created = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      request({}),
+    );
+
+    // After the claim, the next read of the token file returns the old token;
+    // the rotation lands while that request is in flight.
+    let stale = false;
+    const live = appFetch(t);
+    const w = worker(fake, {
+      apiKey: () => (stale ? "grad_old_token" : TRAINER_KEY),
+      fetch: async (input, init) => {
+        const auth = new Headers(init?.headers).get("authorization");
+        if (auth === "Bearer grad_old_token") stale = false;
+        const res = await live(input, init);
+        if (String(input).endsWith("/claim") && !stale) stale = true;
+        return res;
+      },
+    });
+    try {
+      expect(await w.drain()).toBe(1);
+    } finally {
+      await w.close();
+    }
+    const done = await t.services.evals.get(WORKSPACE_A, created.id);
+    expect(done.status).toBe("completed");
+  });
+
+  it("a revoked token never fails the eval, and no model calls follow the rejected post", async () => {
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(40));
+    fake.setModel("qwen/qwen3-8b", () => ({ content: "answer", delayMs: 2 }));
+    const created = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      request({}),
+    );
+
+    // The orchestrator revokes the token after the second batch.
+    let revoked = false;
+    let posts = 0;
+    const live = appFetch(t);
+    const w = worker(fake, {
+      apiKey: () => (revoked ? "grad_revoked" : TRAINER_KEY),
+      fetch: async (input, init) => {
+        if (String(input).endsWith("/outputs") && ++posts === 2) revoked = true;
+        return live(input, init);
+      },
+    });
+    try {
+      // Its next claim is refused too.
+      await expect(w.drain()).rejects.toThrow(/401/);
+    } finally {
+      await w.close();
+    }
+    const calls = fake.requests.length;
+    await new Promise((r) => setTimeout(r, 100));
+    // The other lane stopped with the attempt.
+    expect(fake.requests.length).toBe(calls);
+    expect(calls).toBeLessThan(40);
+
+    // Not failed: the lease expires and another worker takes it.
+    const ev = await t.services.evals.get(WORKSPACE_A, created.id);
+    expect(ev.status).toBe("running");
+    t.clock.advanceSeconds(600);
+    await t.services.queue.expireLeases(t.clock.now());
+    expect((await t.services.evals.get(WORKSPACE_A, created.id)).status).toBe(
+      "queued",
+    );
+  });
+});

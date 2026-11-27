@@ -26,6 +26,9 @@ export class LeaseLost extends Error {}
 /** grad-server stayed unreachable (or 5xx) through every retry. */
 export class ServerUnavailable extends Error {}
 
+/** grad-server refused the worker token (401/403): expired, revoked or wrong. */
+export class WorkerAuthRejected extends Error {}
+
 export interface WorkerClientOptions {
   serverUrl: string;
   /** The bearer token, or a source read on every request (GRAD_WORKER_TOKEN_FILE rotation). */
@@ -92,11 +95,13 @@ export const createWorkerClient = (
     const headers: Record<string, string> = {};
     if (init.body !== undefined) headers["Content-Type"] = "application/json";
     let last = "";
+    let sent: string | undefined;
     for (let i = 0; ; i += 1) {
       const token =
         typeof options.apiKey === "function"
           ? options.apiKey()
           : options.apiKey;
+      sent = token;
       if (token) headers.Authorization = `Bearer ${token}`;
       else delete headers.Authorization;
       let res: Response | null = null;
@@ -119,6 +124,16 @@ export const createWorkerClient = (
         // lease_lost, or a job this key can no longer see.
         if (res.status === 409 || res.status === 404) {
           throw new LeaseLost(`${path}: ${detail}`);
+        }
+        if (res.status === 401 || res.status === 403) {
+          // A token file rotated between the read and the request: once more
+          // with the new token.
+          const fresh =
+            typeof options.apiKey === "function" ? options.apiKey() : sent;
+          if (res.status === 401 && fresh !== sent && i === 0) continue;
+          throw new WorkerAuthRejected(
+            `grad-server refused ${path}: ${detail}`,
+          );
         }
         if (!RETRYABLE.has(res.status)) {
           throw new Error(`grad-server refused ${path}: ${detail}`);

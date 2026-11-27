@@ -168,7 +168,7 @@ The token is returned once; grad-server stores only its SHA-256 (`grad_worker_to
 - The claim's `worker_id` is the `host_id`, or the `host_id` followed by `-` and an alphanumeric suffix of up to 32 characters (`403 worker_host_mismatch`). Start the trainer with `GRAD_WORKER_ID=<host_id>`; it appends a random `-<6 hex>` for each process.
 - The GPU memory the claim reports is no more than `gpu_memory_gb` (`403 gpu_memory_exceeds_token`). Claims are filtered as if the worker had at most that much, including a claim that reports no GPU.
 
-Lease tokens are looked up on every request (they are never cached), so revocation takes effect at once. Revoke after the worker has drained. A revoked token's next request gets a 401 and the worker stops; any lease it still held expires and its job is requeued. The maintenance tick deletes expired tokens.
+Lease tokens are looked up on every request (they are never cached), so revocation takes effect at once. Revoke after the worker has drained. A revoked token's next request gets a 401 and the worker stops (an eval worker leaves the eval to its lease, never fails it); any lease it still held expires and its job is requeued, which counts toward `MAX_ATTEMPTS`. Draining first (SIGTERM the worker) hands the job back as a preemption instead. The maintenance tick deletes expired tokens.
 
 ### Object storage
 

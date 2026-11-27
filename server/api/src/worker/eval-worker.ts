@@ -29,6 +29,7 @@ import { log, withLogContext } from "../telemetry/log.js";
 import {
   LeaseLost,
   ServerUnavailable,
+  WorkerAuthRejected,
   type AttemptRef,
   type WorkerClient,
 } from "./client.js";
@@ -115,23 +116,32 @@ const patient = (
 
 const doneKey = (model: string, index: number) => `${model}\u0000${index}`;
 
+/** Runs `fn` over `items`, `concurrency` at a time; the first failure stops every lane. */
 const runPool = async <T>(
   items: readonly T[],
   concurrency: number,
   fn: (item: T) => Promise<void>,
 ): Promise<void> => {
   let next = 0;
+  let failed = false;
   const workers = Array.from(
     { length: Math.min(concurrency, items.length) },
     async () => {
-      while (next < items.length) {
+      while (next < items.length && !failed) {
         const item = items[next] as T;
         next += 1;
-        await fn(item);
+        try {
+          await fn(item);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
       }
     },
   );
-  await Promise.all(workers);
+  const results = await Promise.allSettled(workers);
+  const rejected = results.find((r) => r.status === "rejected");
+  if (rejected) throw rejected.reason;
 };
 
 const emptyCounts = (): CallCounts => ({
@@ -528,6 +538,9 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       return status;
     } catch (error) {
       if (error instanceof LeaseLost || halt === "lost") return "lease_lost";
+      // A revoked or expired token: the eval isn't at fault. Its lease
+      // expires and another worker resumes it.
+      if (error instanceof WorkerAuthRejected) throw error;
       log("warn", "eval attempt failed", { error });
       // grad-server unreachable: hand the attempt back (counted), or let
       // its lease expire; anything else is the eval's failure.
