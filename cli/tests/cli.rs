@@ -1823,3 +1823,105 @@ fn list_cursor_hints_stop_on_repeated_cursor_and_empty_page() {
     expect(&r, 0);
     assert!(!r.stderr.contains("more:"), "{}", r.stderr);
 }
+
+// ---------------------------------------------------------------- parity
+
+/// JSON numbers compared by value (`5` and `5.0` are the same on the wire).
+fn norm(v: &Value) -> Value {
+    match v {
+        Value::Number(n) => json!(n.as_f64().unwrap()),
+        Value::Array(a) => Value::Array(a.iter().map(norm).collect()),
+        Value::Object(m) => Value::Object(m.iter().map(|(k, v)| (k.clone(), norm(v))).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The CLI sends tests/fixtures/wire/sdk-parity.json's requests: runs through a
+/// `grad train -f` run file (the request body is a valid run file), evals and
+/// deploys through flags, each with --idempotency-key when the fixture has one.
+#[test]
+fn parity_requests_match_the_shared_fixture() {
+    let raw = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/wire/sdk-parity.json"),
+    )
+    .unwrap();
+    let fx: Value = serde_json::from_str(&raw).unwrap();
+    let srv = MockServer::start(|_| {
+        Reply::json(200, json!({"id": "x", "name": "x", "status": "queued"}))
+    });
+    let sb = Sandbox::new("parity");
+    for case in fx["requests"].as_array().unwrap() {
+        let name = case["case"].as_str().unwrap();
+        let path = case["path"].as_str().unwrap();
+        let body = &case["body"];
+        let s = |k: &str| body[k].to_string().trim_matches('"').to_string();
+        let mut args: Vec<String> = match path {
+            "/v1/runs/plan" | "/v1/runs" => {
+                std::fs::write(sb.path("run.yaml"), body.to_string()).unwrap();
+                let mut a = vec!["train".into(), "-f".into(), "run.yaml".into()];
+                if path == "/v1/runs/plan" {
+                    a.push("--dry-run".into());
+                }
+                a
+            }
+            "/v1/evals" => {
+                std::fs::write(sb.path("rubric.yaml"), body["rubric"].to_string()).unwrap();
+                let models: Vec<&str> = body["models"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| m.as_str().unwrap())
+                    .collect();
+                let mut a: Vec<String> = vec![
+                    "eval".into(),
+                    "--models".into(),
+                    models.join(","),
+                    "--rubric".into(),
+                    "rubric.yaml".into(),
+                ];
+                for (flag, key) in [
+                    ("--name", "name"),
+                    ("--dataset", "dataset"),
+                    ("--dataset-version", "dataset_version"),
+                    ("--baseline", "baseline"),
+                    ("--samples", "samples"),
+                    ("--temperature", "temperature"),
+                    ("--max-tokens", "max_tokens"),
+                    ("--limit", "limit"),
+                    ("--pass-threshold", "pass_threshold"),
+                ] {
+                    a.push(flag.into());
+                    a.push(s(key));
+                }
+                a
+            }
+            "/v1/deployments" => vec![
+                "deploy".into(),
+                s("artifact"),
+                "--name".into(),
+                s("name"),
+                "--fallback".into(),
+                s("fallback"),
+                "--explore-rate".into(),
+                s("explore_rate"),
+            ],
+            other => panic!("no CLI command for {}", other),
+        };
+        if let Some(k) = case["idempotency_key"].as_str() {
+            args.push("--idempotency-key".into());
+            args.push(k.into());
+        }
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let r = run(sb.grad(Some(&srv.url)), &argv);
+        expect(&r, 0);
+        let sent = srv
+            .last(case["method"].as_str().unwrap(), path)
+            .unwrap_or_else(|| panic!("{}: nothing sent", name));
+        assert_eq!(norm(&sent.json()), norm(body), "{}", name);
+        let key = sent.header("idempotency-key").unwrap_or_default();
+        match case["idempotency_key"].as_str() {
+            Some(k) => assert_eq!(key, k, "{}", name),
+            None => assert_eq!(key.len(), 36, "{}", name),
+        }
+    }
+}
