@@ -50,7 +50,6 @@ impl Sandbox {
             .env_remove("GRADIATED_PROFILE")
             .env_remove("GRADIATED_API_KEY")
             .env_remove("GRADIATED_BASE_URL")
-            .env_remove("GRAD_API_KEY")
             .env_remove("GRAD_COMPOSE_FILE")
             .env_remove("COMPOSE_PROJECT_NAME")
             .env_remove("GRAD_PORT")
@@ -1517,7 +1516,11 @@ fn eval_commands() {
         &["eval", "--models", "a", "--dataset", "d", "--dry-run"],
     );
     expect(&r, 0);
-    assert!(r.stdout.contains("model calls") && r.stdout.contains("est. cost"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("model calls") && r.stdout.contains("est. cost"),
+        "{}",
+        r.stdout
+    );
     let r = run(
         sb.grad(u),
         &["eval", "plan", "--models", "a", "--dataset", "d"],

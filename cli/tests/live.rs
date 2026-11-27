@@ -574,7 +574,11 @@ fn live_cloud_quickstart_with_torch_worker() {
         o.json()["data"]["active_artifact_id"].as_str().unwrap(),
         first
     );
-    let o = grad(&home, &["--json", "deployments", "rollback", "support-router"], &[]);
+    let o = grad(
+        &home,
+        &["--json", "deployments", "rollback", "support-router"],
+        &[],
+    );
     ok(&o);
     assert_eq!(o.json()["data"]["active_artifact_id"], first.as_str());
     let o = grad(&home, &["deployments", "status", "support-router"], &[]);

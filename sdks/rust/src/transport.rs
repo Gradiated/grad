@@ -365,9 +365,6 @@ impl Transport {
         if status == 401 {
             if self.api_key.is_none() {
                 detail.push_str(" No API key was sent: set GRADIATED_API_KEY, pass --api-key, or run `grad login`.");
-                if std::env::var_os("GRAD_API_KEY").is_some() {
-                    detail.push_str(" (GRAD_API_KEY is set but no longer read; rename it to GRADIATED_API_KEY.)");
-                }
             }
             if let Some(h) = &self.auth_hint {
                 detail.push_str(&format!(" Note: {}.", h));
