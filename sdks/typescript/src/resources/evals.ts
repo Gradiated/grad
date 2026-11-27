@@ -8,6 +8,7 @@ import type {
   PlanEvalRequest,
   PlanEvalResponse,
 } from "../generated/models.js";
+import { LIST_EVAL_OUTPUTS_LIMIT_MAX } from "../generated/client.js";
 import { APIUserAbortError, type RequestOptions } from "../generated/transport.js";
 import type { Core } from "../core.js";
 import { EvalFailedError, GradUsageError } from "../errors.js";
@@ -42,8 +43,6 @@ export interface EvalWaitOptions extends WaitOptions {
   rubric?: RubricInput;
   onStatus?: (status: EvalStatus, evalRun: Eval) => void | Promise<void>;
 }
-
-const SCORE_PAGE = 200;
 
 const buildEvalBody = (params: EvalParams): { body: PlanEvalRequest; local: Map<string, ScoreFn> } => {
   const rubric = params.rubric !== undefined ? toRubric(params.rubric) : undefined;
@@ -175,7 +174,7 @@ export class Eval {
       const scored = new Set<string>();
       while (true) {
         if (signal?.aborted) throw new APIUserAbortError(`Stopped scoring eval ${this.id}.`, { code: "aborted", cause: signal.reason });
-        const page = await this.#core.api.listEvalOutputs(this.id, { missingScorer: name, limit: SCORE_PAGE }, { signal });
+        const page = await this.#core.api.listEvalOutputs(this.id, { missingScorer: name, limit: LIST_EVAL_OUTPUTS_LIMIT_MAX }, { signal });
         if (page.data.length === 0) break;
         if (page.data.some((out) => scored.has(out.id))) {
           throw new GradUsageError(`Eval ${this.id}: the server still lists outputs already scored by '${name}'; stopping instead of re-posting.`, "score_not_recorded");

@@ -108,7 +108,8 @@ describe("low-level ApiClient", () => {
     const { grad } = makeGrad(new FakeServer(), { fetch: fetch as typeof globalThis.fetch, maxRetries: 0 });
     const api = grad.api;
     const names = Object.getOwnPropertyNames(ApiClient.prototype).filter((n) => n !== "constructor");
-    expect(names.length).toBeGreaterThan(50);
+    expect(names.length).toBeGreaterThan(40);
+    expect(names.filter((n) => /TrainerJob|EnvTask|EnvWorker|ImportRecords|TrainerUpload|TrainerCheckpoint|TrainerDataset|TrainerProgress|TrainerQueue/.test(n))).toEqual([]);
     for (const name of names) {
       const method = (api as unknown as Record<string, (...args: unknown[]) => unknown>)[name] as (...args: unknown[]) => unknown;
       const params = /^[^(]*\(([^)]*)\)/.exec(method.toString())?.[1]?.split(",").map((p) => p.trim().split(/[=:\s]/)[0]) ?? [];

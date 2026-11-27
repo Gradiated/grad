@@ -130,10 +130,53 @@ describe("retries", () => {
     expect(clock.sleeps).toEqual([375, 750]);
   });
 
-  it("never retries POST on 5xx (no idempotency key)", async () => {
+  it("never retries an unkeyed POST on 5xx", async () => {
     const server = new FakeServer().on("POST", "/v1/runs", json({}, 500), json({ id: "dup" }));
     await expect(transport(server).json({ method: "POST", path: "/v1/runs", json: {} })).rejects.toBeInstanceOf(ServerError);
     expect(server.calls).toHaveLength(1);
+  });
+
+  it("sends one Idempotency-Key per keyed call and retries it like a GET", async () => {
+    const clock = new FakeClock();
+    let n = 0;
+    const server = new FakeServer().on(
+      "POST",
+      "/v1/runs",
+      json({}, 503),
+      () => {
+        n += 1;
+        throw reset();
+      },
+      json({ id: "run_1" }, 202, { "idempotent-replayed": "true" }),
+    );
+    const t = transport(server, clock);
+    await expect(t.json({ method: "POST", path: "/v1/runs", json: {}, idempotent: true })).resolves.toEqual({ id: "run_1" });
+    const keys = server.calls.map((c) => c.headers.get("idempotency-key"));
+    expect(n).toBe(1);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(1);
+    expect(keys[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+    await t.json({ method: "POST", path: "/v1/runs", json: {}, idempotent: true });
+    await t.json({ method: "POST", path: "/v1/runs", json: {}, idempotent: true }, { idempotencyKey: "mine" });
+    const [, , , second, third] = server.calls.map((c) => c.headers.get("idempotency-key"));
+    expect(second).not.toBe(keys[0]);
+    expect(third).toBe("mine");
+  });
+
+  it("retries a keyed 409 only when the server says the first attempt is in progress", async () => {
+    const clock = new FakeClock();
+    const busy = json({ code: "idempotency_in_progress" }, 409, { "retry-after": "1" });
+    const server = new FakeServer().on("POST", "/v1/runs", busy, json({ id: "run_1" }, 202));
+    await expect(transport(server, clock).json({ method: "POST", path: "/v1/runs", json: {}, idempotent: true })).resolves.toEqual({ id: "run_1" });
+    expect(clock.sleeps).toEqual([1000]);
+
+    const conflict = new FakeServer().on("POST", "/v1/runs", json({ code: "conflict" }, 409), json({}));
+    await expect(transport(conflict).json({ method: "POST", path: "/v1/runs", json: {}, idempotent: true })).rejects.toBeInstanceOf(errors.ConflictError);
+    expect(conflict.calls).toHaveLength(1);
+    const unkeyed = new FakeServer().on("POST", "/v1/runs", busy, json({}));
+    await expect(transport(unkeyed).json({ method: "POST", path: "/v1/runs", json: {} })).rejects.toBeInstanceOf(errors.ConflictError);
+    expect(unkeyed.calls).toHaveLength(1);
   });
 
   it("does not retry 4xx", async () => {

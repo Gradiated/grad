@@ -48,8 +48,23 @@ export {
   type RunParams,
   type RunWaitOptions,
 } from "./resources/runs.js";
-export { ApiClient } from "./generated/client.js";
-export { SDK_VERSION, type RawResponse, type RequestOptions, type ServerSentEvent, type SSEOptions, type StreamOptions } from "./generated/transport.js";
+export {
+  ApiClient,
+  LIST_API_KEYS_LIMIT_MAX,
+  LIST_ARTIFACTS_LIMIT_MAX,
+  LIST_DATASET_RECORDS_LIMIT_MAX,
+  LIST_DATASETS_LIMIT_MAX,
+  LIST_DEPLOYMENTS_LIMIT_MAX,
+  LIST_EVAL_FAILURES_LIMIT_MAX,
+  LIST_EVAL_OUTPUTS_LIMIT_MAX,
+  LIST_EVAL_RESULTS_LIMIT_MAX,
+  LIST_EVALS_LIMIT_MAX,
+  LIST_IMPORTS_LIMIT_MAX,
+  LIST_RUN_CHECKPOINTS_LIMIT_MAX,
+  LIST_RUN_METRICS_LIMIT_MAX,
+  LIST_RUNS_LIMIT_MAX,
+} from "./generated/client.js";
+export { newIdempotencyKey, SDK_VERSION, type RawResponse, type RequestOptions, type ServerSentEvent, type SSEOptions, type StreamOptions } from "./generated/transport.js";
 export type * as models from "./generated/models.js";
 export type {
   AdapterSpec,
@@ -63,6 +78,7 @@ export type {
   EmbedResponse,
   EvalModelSummary,
   EvalOutput,
+  EvalReport,
   EvalRubricItem,
   EvalTaskOutcome,
   MetricPoint,
@@ -70,6 +86,7 @@ export type {
   RecipeSpec,
   RecordFeedbackResponse,
   ResolvedRunConfig,
+  RouterParetoSummary,
   RunStatus,
   SplitSpec,
   TrainableModel,

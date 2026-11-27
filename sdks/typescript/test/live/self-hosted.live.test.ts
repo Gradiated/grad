@@ -150,6 +150,18 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
     }
   });
 
+  it("retries a POST whose response was lost and gets the server's replay", async () => {
+    // The fault proxy lets the server commit the first attempt, then answers 503. The
+    // retry carries the same Idempotency-Key, so the server replays 201 instead of 409.
+    const flaky = new Grad({ apiKey: stack.apiKey, baseURL: stack.info.fault_url });
+    const created = await flaky.datasets.create("ts-idempotent-create");
+    expect(created.name).toBe("ts-idempotent-create");
+    const stats = (await (await fetch(`${stack.info.fault_url}/__fault/stats`)).json()) as { dropped: number; replayed: number };
+    expect(stats.dropped).toBeGreaterThanOrEqual(1);
+    expect(stats.replayed).toBeGreaterThanOrEqual(1);
+    await expect(grad.datasets.create("ts-idempotent-create")).rejects.toBeInstanceOf(ConflictError);
+  });
+
   it("scoped keys and authentication errors", async () => {
     const key = await grad.keys.create({ name: "ci", scopes: ["runs:read"] });
     expect(key.secret).toMatch(/^grad_/);

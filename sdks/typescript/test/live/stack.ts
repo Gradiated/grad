@@ -23,6 +23,8 @@ export interface StackInfo {
   workspace_id: string;
   mode: "cloud" | "self_hosted";
   worker: string;
+  /** The server behind a proxy that drops the first response of every keyed POST. */
+  fault_url: string;
 }
 
 /** A Python with torch, transformers and peft for `--worker torch`, if configured. */

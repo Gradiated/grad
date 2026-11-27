@@ -61,8 +61,10 @@ map to `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`,
 `NotFoundError`, `ConflictError`, `ValidationError` (`fieldErrors`),
 `RateLimitError`, `ServerError`, `DeployUnavailableError`; waits throw
 `RunFailedError`, `EvalFailedError`, `ImportFailedError` or
-`WaitTimeoutError`. Idempotent requests retry twice on 408/429/5xx with
-jittered backoff that honours `Retry-After`. Redirects that leave the API
+`WaitTimeoutError`. Requests retry twice on 408/429/5xx with jittered
+backoff that honours `Retry-After`; every POST carries one `Idempotency-Key`
+(a UUIDv4, or `{ idempotencyKey }`) across its retries, so the server replays
+the first response instead of running it twice. Redirects that leave the API
 origin are refused, so the key is never sent elsewhere. `timeoutMs` (default
 60 s) bounds each attempt; downloads and SSE streams use an idle timeout
 instead. Every call accepts `{ signal }` to abort.

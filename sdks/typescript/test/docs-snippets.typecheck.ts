@@ -27,14 +27,14 @@ export const planAndWait = async () => {
   const run = await grad.runs
     .create({ dataset, name: "support-router", recipe: recipes.router(), maxCostUsd: 20 })
     .wait({ onMetric: (m) => console.log(`step=${m.step} loss=${m.loss.toFixed(4)}`) });
-  console.log(run.artifact.id, run.evalReport);
+  console.log(run.artifact.id, run.evalReport?.paretoSummary?.qualityDropCi95, run.evalReport?.metricName);
 };
 
 export const followMetrics = async () => {
   const grad = new Grad();
   const run = await grad.runs.get("run_01J9X");
   for await (const metric of run.metrics({ follow: true })) {
-    console.log(metric.step, metric.loss, metric.evalMetric); // docs: metric.evalMetrics
+    console.log(metric.step, metric.loss, metric.evalMetrics);
   }
 };
 
