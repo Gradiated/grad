@@ -243,6 +243,70 @@ class ArtifactImportTests(TorchCase):
             )
         self.assertRegex(str(ctx.exception), r"^cartridge.safetensors: hidden size is 7, but test/tiny-qwen3 has hidden_size \d+")
 
+    def run_dir(self, directory: Path, fmt: str, base: str = QWEN_ID) -> Any:
+        archive = tar_of(directory, self.tmpdir() / "a.tar.gz")
+        return artifact_import.run(
+            self.spec({"kind": "upload", "download_url": "u"}, fmt=fmt, base=base),
+            workdir=self.tmpdir(),
+            download=lambda _u, dest: shutil.copyfile(archive, dest),
+        )
+
+    def test_merged_encoder_and_router_uploads(self) -> None:
+        import torch
+        from safetensors.torch import save_file
+
+        from fixtures.tiny_models import ensure_tiny_models
+
+        paths = ensure_tiny_models()
+        # A merged model is the base layout itself: config, weights and tokenizer.
+        merged = self.run_dir(paths[QWEN_ID], "merged_safetensors")
+        self.assertEqual(merged.manifest["recipe_kind"], "sft")
+        self.assertIn("model.safetensors", merged.manifest["files"])
+        # An encoder: the tiny BERT plus grad_embedding.json.
+        encoder = self.tmpdir() / "enc"
+        shutil.copytree(paths[BERT_ID], encoder)
+        hidden = json.loads((encoder / "config.json").read_text())["hidden_size"]
+        embedding = {"format": "encoder_safetensors", "format_version": 2, "pooling": "mean", "normalize": True, "dimensions": hidden, "max_seq_length": 64, "base_model": BERT_ID}
+        (encoder / "grad_embedding.json").write_text(json.dumps(embedding))
+        info = self.run_dir(encoder, "encoder_safetensors", base=BERT_ID)
+        self.assertEqual(info.manifest["recipe_kind"], "embedding")
+        (encoder / "grad_embedding.json").write_text(json.dumps({**embedding, "dimensions": hidden + 1}))
+        with self.assertRaises(InvalidArtifact) as ctx:
+            self.run_dir(encoder, "encoder_safetensors", base=BERT_ID)
+        self.assertTrue(str(ctx.exception).startswith("grad_embedding.json: hidden size"), ctx.exception)
+        # A frozen-head router whose head width is the base's hidden size.
+        width = json.loads((paths[QWEN_ID] / "config.json").read_text())["hidden_size"]
+        router = self.tmpdir() / "router"
+        router.mkdir()
+        config = {
+            "format": "router_bundle", "format_version": 2, "candidates": ["a", "b"], "route_order": ["a"],
+            "fallback_model": "b", "pricing": None, "threshold": None, "temperature": 1.0, "calibrated": False,
+            "max_quality_drop": 0.02, "head_file": "router_head.safetensors", "adapter": {"kind": "frozen_head"},
+            "pooling": "last_token", "hidden_size": width, "max_seq_len": 512, "truncation_side": "left",
+            "chat_template_kwargs": {"add_generation_prompt": True, "enable_thinking": True}, "template_revision": "qwen3@3",
+            "base_model": QWEN_ID, "base_model_repo": QWEN_ID, "base_model_revision": None,
+        }
+        (router / "router_config.json").write_text(json.dumps(config))
+        save_file({"weight": torch.zeros(2, width), "bias": torch.zeros(2)}, str(router / "router_head.safetensors"))
+        self.assertEqual(self.run_dir(router, "router_bundle").manifest["adapter"], {"kind": "frozen_head"})
+        save_file({"weight": torch.zeros(2, width + 1), "bias": torch.zeros(2)}, str(router / "router_head.safetensors"))
+        with self.assertRaises(InvalidArtifact) as ctx:
+            self.run_dir(router, "router_bundle")
+        self.assertTrue(str(ctx.exception).startswith("router_head.safetensors: weight has width"), ctx.exception)
+
+    def test_a_hub_base_fetches_only_its_config(self) -> None:
+        from grad_trainer import models
+
+        snapshot = self.tmpdir() / "snapshots" / ("e" * 40)
+        snapshot.mkdir(parents=True)
+        (snapshot / "config.json").write_text('{"model_type": "qwen3"}')
+        with mock.patch.dict("os.environ", {"GRAD_MODEL_PATHS": "{}", "GRAD_MODELS_MIRROR": ""}), mock.patch(
+            "huggingface_hub.hf_hub_download", return_value=str(snapshot / "config.json")
+        ) as fetch:
+            resolved, config = models.resolve_config("qwen/qwen3-8b")
+        fetch.assert_called_once_with("Qwen/Qwen3-8B", "config.json", local_files_only=mock.ANY)
+        self.assertEqual((resolved.repo, resolved.revision, config["model_type"]), ("Qwen/Qwen3-8B", "e" * 40, "qwen3"))
+
     def test_hf_import_pins_the_commit_and_sends_only_the_workspace_token(self) -> None:
         files = {p.name: p.read_bytes() for p in self.lora.iterdir()}
         hub = FakeHub(files, token="hf_workspace")

@@ -902,6 +902,7 @@ fn live_router_quickstart_with_torch_worker() {
     let o = grad(
         &home,
         &[
+            "--json",
             "train",
             "--dataset",
             "upload-prefs",
@@ -916,7 +917,13 @@ fn live_router_quickstart_with_torch_worker() {
         &[],
     );
     ok(&o);
-    assert!(o.stdout.contains(&uploaded), "{}", o.stdout);
+    let plan: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert_eq!(
+        plan["data"]["resolved_config"]["base_artifact"]["id"],
+        uploaded.as_str(),
+        "{}",
+        o.stdout
+    );
     ok(&grad(&home, &["artifacts", "delete", &uploaded], &[]));
 
     // docs: recipes/distillation.mdx (YAML) and recipes/reward-models.mdx (flags), tiny models.
