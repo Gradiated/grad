@@ -101,7 +101,10 @@ const assertFieldsApply = (recipe: RecipeSpec): void => {
   }
 };
 
-const ROUTER_KEYS = ["rubric", "pricing", "fallback", "max_quality_drop"];
+const ROUTER_KEYS = ["pricing", "fallback", "max_quality_drop"];
+
+/** The score a labeling eval writes on router records (its combined rubric score). */
+export const LABEL_SCORE = "rubric";
 const CARTRIDGE_KEYS = [
   "context_text",
   "num_tokens",
@@ -166,6 +169,10 @@ export const resolveRecipeParams = (
       break;
     case "router":
       copy(ROUTER_KEYS);
+      if (recipe.rubric !== undefined) {
+        params.rubric =
+          typeof recipe.rubric === "string" ? recipe.rubric : LABEL_SCORE;
+      }
       break;
     default:
       copy(WAVE2_KEYS);

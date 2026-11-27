@@ -1169,7 +1169,16 @@ type PlanRunResponse struct {
 	EstimatedCostUSD      float64           `json:"estimated_cost_usd"`
 	PricePerMillionTokens float64           `json:"price_per_million_tokens"`
 	TrainedTokenFraction  float64           `json:"trained_token_fraction"`
-	Warnings              []string          `json:"warnings"`
+	// Labeling Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+	Labeling *PlanRunResponseLabeling `json:"labeling"`
+	Warnings []string                 `json:"warnings"`
+}
+
+// PlanRunResponseLabeling Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+type PlanRunResponseLabeling struct {
+	EstimatedModelCalls int     `json:"estimated_model_calls"`
+	EstimatedJudgeCalls int     `json:"estimated_judge_calls"`
+	EstimatedCostUSD    float64 `json:"estimated_cost_usd"`
 }
 
 // PoolingSpec is generated from the OpenAPI schema.
@@ -1295,8 +1304,8 @@ type RecipeSpec struct {
 	EvalEvery any          `json:"eval_every,omitempty"`
 	Loss      *LossSpec    `json:"loss,omitempty"`
 	Pool      *PoolingSpec `json:"pool,omitempty"`
-	// Rubric RouterRecipe: the score name on your records that measures quality (scores[rubric]).
-	Rubric *string `json:"rubric,omitempty"`
+	// Rubric RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.
+	Rubric any `json:"rubric,omitempty"`
 	// Pricing RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
 	Pricing map[string]float64 `json:"pricing,omitempty"`
 	// Fallback RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate).
@@ -1497,8 +1506,10 @@ type ResolvedRunConfig struct {
 	Optimizer            OptimizerSpec              `json:"optimizer"`
 	CheckpointTTLDays    int                        `json:"checkpoint_ttl_days"`
 	Split                ResolvedRunConfigSplit     `json:"split"`
-	BaseArtifact         *BaseArtifact              `json:"base_artifact"`
-	RecipeParams         map[string]any             `json:"recipe_params"`
+	// LabelEvalID Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.
+	LabelEvalID  *string        `json:"label_eval_id"`
+	BaseArtifact *BaseArtifact  `json:"base_artifact"`
+	RecipeParams map[string]any `json:"recipe_params"`
 }
 
 // ResolvedRunConfigAdapter is a union of object shapes; set the fields of exactly one variant.

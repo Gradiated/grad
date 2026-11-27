@@ -823,6 +823,26 @@ components:
           type: number
           minimum: 0
           maximum: 1
+        labeling:
+          type:
+            - object
+            - "null"
+          properties:
+            estimated_model_calls:
+              type: integer
+              minimum: 0
+            estimated_judge_calls:
+              type: integer
+              minimum: 0
+            estimated_cost_usd:
+              type: number
+              minimum: 0
+          required:
+            - estimated_model_calls
+            - estimated_judge_calls
+            - estimated_cost_usd
+          description: "Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates
+            (billed as an eval, included in estimated_cost_usd)."
         warnings:
           type: array
           items:
@@ -837,6 +857,7 @@ components:
         - estimated_cost_usd
         - price_per_million_tokens
         - trained_token_fraction
+        - labeling
         - warnings
     ResolvedRunConfig:
       type: object
@@ -992,6 +1013,11 @@ components:
             - seed
             - train_records
             - eval_records
+        label_eval_id:
+          type:
+            - string
+            - "null"
+          description: "Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on."
         base_artifact:
           $ref: "#/components/schemas/BaseArtifact"
         recipe_params:
@@ -1022,6 +1048,7 @@ components:
         - optimizer
         - checkpoint_ttl_days
         - split
+        - label_eval_id
         - base_artifact
         - recipe_params
     OptimizerSpec:
@@ -1242,10 +1269,17 @@ components:
         pool:
           $ref: "#/components/schemas/PoolingSpec"
         rubric:
-          type: string
-          minLength: 1
-          maxLength: 80
-          description: "RouterRecipe: the score name on your records that measures quality (scores[rubric])."
+          anyOf:
+            - type: string
+              minLength: 1
+              maxLength: 80
+            - type: array
+              items:
+                $ref: "#/components/schemas/EvalRubricItem"
+              minItems: 1
+              maxItems: 32
+          description: "RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then
+            replays each prompt against recipe.models and scores the answers in a labeling eval before training."
         pricing:
           type: object
           additionalProperties:
@@ -1380,6 +1414,54 @@ components:
       required:
         - kind
       additionalProperties: false
+    EvalRubricItem:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[A-Za-z0-9_.:-]+$
+        kind:
+          type: string
+          enum:
+            - regex
+            - validator
+            - code
+            - judge
+        weight:
+          type: number
+          exclusiveMinimum: 0
+          default: 1
+        pattern:
+          type: string
+          maxLength: 256
+        flags:
+          type: string
+          maxLength: 4
+          pattern: ^[imsu]*$
+        validator:
+          type: string
+          enum:
+            - json
+            - non_empty
+            - exact_match
+        model:
+          type: string
+          minLength: 1
+          maxLength: 160
+        prompt:
+          type: string
+          maxLength: 8000
+        runtime:
+          type: string
+          enum:
+            - local
+          description: Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK
+            posts their scores.
+      required:
+        - name
+        - kind
     SplitSpec:
       type: object
       properties:
@@ -2805,54 +2887,6 @@ components:
           default: 200
       required:
         - name
-    EvalRubricItem:
-      type: object
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 80
-          pattern: ^[A-Za-z0-9_.:-]+$
-        kind:
-          type: string
-          enum:
-            - regex
-            - validator
-            - code
-            - judge
-        weight:
-          type: number
-          exclusiveMinimum: 0
-          default: 1
-        pattern:
-          type: string
-          maxLength: 256
-        flags:
-          type: string
-          maxLength: 4
-          pattern: ^[imsu]*$
-        validator:
-          type: string
-          enum:
-            - json
-            - non_empty
-            - exact_match
-        model:
-          type: string
-          minLength: 1
-          maxLength: 160
-        prompt:
-          type: string
-          maxLength: 8000
-        runtime:
-          type: string
-          enum:
-            - local
-          description: Code scorers always run in the SDK process (`local`); the eval waits in `awaiting_scores` until the SDK
-            posts their scores.
-      required:
-        - name
-        - kind
     EvalRun:
       type: object
       properties:

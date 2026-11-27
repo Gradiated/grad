@@ -83,12 +83,14 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       overrides: Partial<{
         recipe: RunRecord["recipe_kind"];
         name: string;
-        dependsOn: { runId: string; waiting: boolean };
+        dependsOn: string;
+        waitingOn: string;
       }> = {},
     ) => {
       const dataset = await makeDataset(ws);
       return store.runs.create({
         dependsOn: overrides.dependsOn,
+        waitingOn: overrides.waitingOn,
         workspaceId: ws,
         name: overrides.name ?? "run",
         datasetId: dataset.id,
@@ -551,10 +553,11 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const first = await makeRun();
       clock.advanceSeconds(1);
       const chained = await makeRun("ws_a", {
-        dependsOn: { runId: first.id, waiting: true },
+        dependsOn: first.id,
+        waitingOn: first.id,
       });
       const ready = await makeRun("ws_a", {
-        dependsOn: { runId: first.id, waiting: false },
+        dependsOn: first.id,
       });
       expect(chained).toMatchObject({
         depends_on: first.id,

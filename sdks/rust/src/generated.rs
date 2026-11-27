@@ -1,11 +1,5 @@
 // AUTO-GENERATED from spec/openapi.yaml by scripts/generate-sdks.mjs. DO NOT EDIT.
-#![allow(
-    clippy::all,
-    clippy::pedantic,
-    dead_code,
-    unused_imports,
-    non_camel_case_types
-)]
+#![allow(clippy::all, clippy::pedantic, dead_code, unused_imports, non_camel_case_types)]
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -135,15 +129,13 @@ impl ApiError {
         };
         let code = field("code").unwrap_or_else(|| format!("http_{status}"));
         let title = field("title").unwrap_or_else(|| format!("HTTP {status}"));
-        let detail = field("detail")
-            .or_else(|| field("message"))
-            .unwrap_or_else(|| {
-                if problem.is_some() {
-                    String::new()
-                } else {
-                    body.trim().chars().take(500).collect()
-                }
-            });
+        let detail = field("detail").or_else(|| field("message")).unwrap_or_else(|| {
+            if problem.is_some() {
+                String::new()
+            } else {
+                body.trim().chars().take(500).collect()
+            }
+        });
         let request_id = headers
             .get("x-request-id")
             .and_then(|v| v.to_str().ok())
@@ -207,23 +199,13 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-fn parse_field_errors(
-    problem: Option<&serde_json::Map<String, Value>>,
-    detail: &str,
-) -> Vec<FieldError> {
-    if let Some(items) = problem
-        .and_then(|p| p.get("errors"))
-        .and_then(|v| v.as_array())
-    {
+fn parse_field_errors(problem: Option<&serde_json::Map<String, Value>>, detail: &str) -> Vec<FieldError> {
+    if let Some(items) = problem.and_then(|p| p.get("errors")).and_then(|v| v.as_array()) {
         return items
             .iter()
             .filter_map(|item| item.as_object())
             .map(|item| FieldError {
-                field: item
-                    .get("field")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                field: item.get("field").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 message: item
                     .get("message")
                     .or_else(|| item.get("detail"))
@@ -237,17 +219,10 @@ fn parse_field_errors(
         .split("; ")
         .filter_map(|part| {
             let (field, message) = part.split_once(": ")?;
-            if field.is_empty()
-                || !field
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "_.[]-".contains(c))
-            {
+            if field.is_empty() || !field.chars().all(|c| c.is_ascii_alphanumeric() || "_.[]-".contains(c)) {
                 return None;
             }
-            Some(FieldError {
-                field: field.to_string(),
-                message: message.to_string(),
-            })
+            Some(FieldError { field: field.to_string(), message: message.to_string() })
         })
         .collect()
 }
@@ -261,16 +236,8 @@ pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duratio
             }
         }
     }
-    let raw = headers
-        .get("retry-after")?
-        .to_str()
-        .ok()?
-        .trim()
-        .to_string();
-    raw.parse::<f64>()
-        .ok()
-        .filter(|v| *v >= 0.0)
-        .map(Duration::from_secs_f64)
+    let raw = headers.get("retry-after")?.to_str().ok()?.trim().to_string();
+    raw.parse::<f64>().ok().filter(|v| *v >= 0.0).map(Duration::from_secs_f64)
 }
 
 /// Percent-encodes one path segment; rejects empty, `.` and `..`.
@@ -285,9 +252,7 @@ pub fn encode_path_segment(name: &str, input: &str) -> Result<String, ApiError> 
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(byte as char),
             _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
@@ -338,11 +303,7 @@ static JITTER_STATE: AtomicU64 = AtomicU64::new(0);
 fn jitter() -> f64 {
     let mut x = JITTER_STATE.load(Ordering::Relaxed);
     if x == 0 {
-        x = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x9E37_79B9)
-            | 1;
+        x = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9E37_79B9) | 1;
     }
     x ^= x << 13;
     x ^= x >> 7;
@@ -375,10 +336,7 @@ pub struct StreamResponse {
 
 impl fmt::Debug for StreamResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StreamResponse")
-            .field("status", &self.status)
-            .field("url", &self.url)
-            .finish()
+        f.debug_struct("StreamResponse").field("status", &self.status).field("url", &self.url).finish()
     }
 }
 
@@ -394,10 +352,7 @@ impl StreamResponse {
             Err(_) => Err(ApiError {
                 kind: ErrorKind::Timeout,
                 code: "timeout".into(),
-                message: format!(
-                    "{} {}: the stream sent nothing for {:?}",
-                    self.method, self.url, self.idle
-                ),
+                message: format!("{} {}: the stream sent nothing for {:?}", self.method, self.url, self.idle),
                 ..ApiError::local(ErrorKind::Timeout, "timeout", "")
             }),
             Ok(Err(err)) => Err(ApiError {
@@ -474,11 +429,7 @@ impl SseStream {
             if line.is_empty() {
                 if !data.is_empty() || !event.is_empty() {
                     return Ok(Some(SseEvent {
-                        event: if event.is_empty() {
-                            "message".into()
-                        } else {
-                            event
-                        },
+                        event: if event.is_empty() { "message".into() } else { event },
                         data: data.join("\n"),
                         id: self.last_id.clone(),
                         retry,
@@ -540,15 +491,9 @@ impl GeneratedClient {
 
     /// Uses a caller-provided reqwest client. It must not follow redirects (`Policy::none()`),
     /// otherwise reqwest's own redirect handling runs before the same-origin check.
-    pub fn with_http_client(
-        base_url: impl Into<String>,
-        api_key: Option<String>,
-        http: reqwest::Client,
-    ) -> Self {
+    pub fn with_http_client(base_url: impl Into<String>, api_key: Option<String>, http: reqwest::Client) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
-        let origin = reqwest::Url::parse(&base_url)
-            .map(|u| origin_of(&u))
-            .unwrap_or_default();
+        let origin = reqwest::Url::parse(&base_url).map(|u| origin_of(&u)).unwrap_or_default();
         Self {
             base_url,
             origin,
@@ -599,27 +544,16 @@ impl GeneratedClient {
             return Err(ApiError::local(
                 ErrorKind::InvalidRequest,
                 "invalid_base_url",
-                format!(
-                    "invalid base URL '{}': it must be an absolute http(s) URL",
-                    self.base_url
-                ),
+                format!("invalid base URL '{}': it must be an absolute http(s) URL", self.base_url),
             ));
         }
         let method_name = method.as_str().to_string();
-        let idempotent = matches!(
-            method_name.as_str(),
-            "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS"
-        );
+        let idempotent = matches!(method_name.as_str(), "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS");
         let mut url = reqwest::Url::parse(&format!("{}{}", self.base_url, path)).map_err(|e| {
-            ApiError::local(
-                ErrorKind::InvalidRequest,
-                "invalid_request",
-                format!("{method_name} {path}: {e}"),
-            )
+            ApiError::local(ErrorKind::InvalidRequest, "invalid_request", format!("{method_name} {path}: {e}"))
         })?;
         if !query.is_empty() {
-            url.query_pairs_mut()
-                .extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
+            url.query_pairs_mut().extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
         }
         let mut redirects = 0;
         let mut attempt: u32 = 0;
@@ -636,9 +570,7 @@ impl GeneratedClient {
                 req = req.header(*name, value);
             }
             if let Some(payload) = &body {
-                req = req
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .body(payload.clone());
+                req = req.header(reqwest::header::CONTENT_TYPE, "application/json").body(payload.clone());
             }
             let url_text = url.to_string();
             let sent = tokio::time::timeout(self.timeout, req.send()).await;
@@ -650,10 +582,7 @@ impl GeneratedClient {
                         ..ApiError::local(
                             ErrorKind::Timeout,
                             "timeout",
-                            format!(
-                                "{method_name} {url_text} timed out after {:?}",
-                                self.timeout
-                            ),
+                            format!("{method_name} {url_text} timed out after {:?}", self.timeout),
                         )
                     };
                     if attempt < self.max_retries && idempotent {
@@ -694,18 +623,13 @@ impl GeneratedClient {
                     .and_then(|v| v.to_str().ok())
                     .and_then(|loc| url.join(loc).ok());
                 if let Some(next) = &target {
-                    if origin_of(next) == self.origin
-                        && matches!(method_name.as_str(), "GET" | "HEAD")
-                        && redirects < MAX_REDIRECTS
-                    {
+                    if origin_of(next) == self.origin && matches!(method_name.as_str(), "GET" | "HEAD") && redirects < MAX_REDIRECTS {
                         redirects += 1;
                         url = next.clone();
                         continue;
                     }
                 }
-                let where_to = target
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| "an unknown location".into());
+                let where_to = target.map(|t| t.to_string()).unwrap_or_else(|| "an unknown location".into());
                 return Err(ApiError {
                     status,
                     method: method_name.clone(),
@@ -722,21 +646,9 @@ impl GeneratedClient {
             }
             if !(200..300).contains(&status) {
                 let resp_headers = resp.headers().clone();
-                let text = tokio::time::timeout(self.timeout, resp.text())
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .unwrap_or_default();
-                let err = ApiError::from_response(
-                    status,
-                    &resp_headers,
-                    &text,
-                    &method_name,
-                    &url_text,
-                    self.api_key.is_some(),
-                );
-                let retryable = matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
-                    && (idempotent || status == 429);
+                let text = tokio::time::timeout(self.timeout, resp.text()).await.ok().and_then(|r| r.ok()).unwrap_or_default();
+                let err = ApiError::from_response(status, &resp_headers, &text, &method_name, &url_text, self.api_key.is_some());
+                let retryable = matches!(status, 408 | 429 | 500 | 502 | 503 | 504) && (idempotent || status == 429);
                 if retryable && attempt < self.max_retries {
                     let delay = err.retry_after.unwrap_or_else(|| backoff(attempt));
                     if delay <= MAX_RETRY_AFTER {
@@ -752,19 +664,10 @@ impl GeneratedClient {
         }
     }
 
-    fn encode_body<B: Serialize + ?Sized>(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&B>,
-    ) -> Result<Option<Vec<u8>>, ApiError> {
+    fn encode_body<B: Serialize + ?Sized>(&self, method: &str, path: &str, body: Option<&B>) -> Result<Option<Vec<u8>>, ApiError> {
         body.map(|b| {
             serde_json::to_vec(b).map_err(|e| {
-                ApiError::local(
-                    ErrorKind::InvalidRequest,
-                    "invalid_request",
-                    format!("{method} {path}: encoding the request body: {e}"),
-                )
+                ApiError::local(ErrorKind::InvalidRequest, "invalid_request", format!("{method} {path}: encoding the request body: {e}"))
             })
         })
         .transpose()
@@ -781,33 +684,14 @@ impl GeneratedClient {
     ) -> Result<T, ApiError> {
         let method_name = method.as_str().to_string();
         let payload = self.encode_body(&method_name, path, body)?;
-        let (resp, url) = self
-            .send(
-                method,
-                path,
-                query,
-                headers,
-                payload,
-                "application/json",
-                false,
-            )
-            .await?;
+        let (resp, url) = self.send(method, path, query, headers, payload, "application/json", false).await?;
         let status = resp.status().as_u16();
-        let request_id = resp
-            .headers()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+        let request_id = resp.headers().get("x-request-id").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
         let text = match tokio::time::timeout(self.timeout, resp.text()).await {
             Err(_) => {
                 return Err(ApiError {
                     url: url.clone(),
-                    ..ApiError::local(
-                        ErrorKind::Timeout,
-                        "timeout",
-                        format!("{method_name} {url} timed out reading the response body"),
-                    )
+                    ..ApiError::local(ErrorKind::Timeout, "timeout", format!("{method_name} {url} timed out reading the response body"))
                 })
             }
             Ok(Err(e)) => {
@@ -819,11 +703,7 @@ impl GeneratedClient {
             }
             Ok(Ok(text)) => text,
         };
-        let source = if text.trim().is_empty() {
-            "null"
-        } else {
-            text.as_str()
-        };
+        let source = if text.trim().is_empty() { "null" } else { text.as_str() };
         serde_json::from_str::<T>(source).map_err(|e| ApiError {
             status,
             request_id,
@@ -831,9 +711,7 @@ impl GeneratedClient {
             ..ApiError::local(
                 ErrorKind::Decode,
                 "invalid_json",
-                format!(
-                    "{method_name} {url} returned {status} with a body that does not decode: {e}"
-                ),
+                format!("{method_name} {url} returned {status} with a body that does not decode: {e}"),
             )
         })
     }
@@ -850,18 +728,11 @@ impl GeneratedClient {
     ) -> Result<StreamResponse, ApiError> {
         let method_name = method.as_str().to_string();
         let payload = self.encode_body(&method_name, path, body)?;
-        let (resp, url) = self
-            .send(method, path, query, headers, payload, accept, true)
-            .await?;
+        let (resp, url) = self.send(method, path, query, headers, payload, accept, true).await?;
         Ok(StreamResponse {
             status: resp.status().as_u16(),
             headers: resp.headers().clone(),
-            request_id: resp
-                .headers()
-                .get("x-request-id")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .to_string(),
+            request_id: resp.headers().get("x-request-id").and_then(|v| v.to_str().ok()).unwrap_or("").to_string(),
             url,
             response: resp,
             idle: self.idle_timeout,
@@ -881,15 +752,8 @@ impl GeneratedClient {
         if let Some(id) = last_event_id {
             headers.push(("last-event-id", id.to_string()));
         }
-        let response = self
-            .request_stream::<()>(method, path, query, &headers, None, "text/event-stream")
-            .await?;
-        Ok(SseStream {
-            response,
-            buffer: Vec::new(),
-            last_id: last_event_id.map(|s| s.to_string()),
-            done: false,
-        })
+        let response = self.request_stream::<()>(method, path, query, &headers, None, "text/event-stream").await?;
+        Ok(SseStream { response, buffer: Vec::new(), last_id: last_event_id.map(|s| s.to_string()), done: false })
     }
 }
 
@@ -3636,7 +3500,18 @@ pub mod models {
         pub estimated_cost_usd: f64,
         pub price_per_million_tokens: f64,
         pub trained_token_fraction: f64,
+        /// Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+        #[serde(default)]
+        pub labeling: Option<PlanRunResponseLabeling>,
         pub warnings: Vec<String>,
+    }
+
+    /// Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).
+    #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+    pub struct PlanRunResponseLabeling {
+        pub estimated_model_calls: i64,
+        pub estimated_judge_calls: i64,
+        pub estimated_cost_usd: f64,
     }
 
     /// Generated from the OpenAPI schema `PoolingSpec`.
@@ -3918,9 +3793,9 @@ pub mod models {
         pub loss: Option<LossSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub pool: Option<PoolingSpec>,
-        /// RouterRecipe: the score name on your records that measures quality (scores[rubric]).
+        /// RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub rubric: Option<String>,
+        pub rubric: Option<Value>,
         /// RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub pricing: Option<BTreeMap<String, f64>>,
@@ -4574,6 +4449,9 @@ pub mod models {
         pub optimizer: OptimizerSpec,
         pub checkpoint_ttl_days: i64,
         pub split: ResolvedRunConfigSplit,
+        /// Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.
+        #[serde(default)]
+        pub label_eval_id: Option<String>,
         #[serde(default)]
         pub base_artifact: Option<BaseArtifact>,
         pub recipe_params: BTreeMap<String, Value>,
@@ -5790,8 +5668,7 @@ impl GeneratedClient {
     /// `POST /v1/evals/{id}/cancel`
     pub async fn cancel_eval(&self, id: &str) -> Result<EvalRun, ApiError> {
         let path = format!("/v1/evals/{}/cancel", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>).await
     }
 
     /// Cancel a training run (a running attempt is stopped and billed)
@@ -5799,80 +5676,47 @@ impl GeneratedClient {
     /// `POST /v1/runs/{id}/cancel`
     pub async fn cancel_run(&self, id: &str) -> Result<Run, ApiError> {
         let path = format!("/v1/runs/{}/cancel", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>).await
     }
 
     /// Long-poll for the next task assigned to a `grad env serve` worker
     ///
     /// `POST /v1/env-workers/{name}/claim`
-    pub async fn claim_env_task(
-        &self,
-        name: &str,
-        body: &ClaimEnvTaskRequest,
-    ) -> Result<ClaimEnvTaskResponse, ApiError> {
-        let path = format!(
-            "/v1/env-workers/{}/claim",
-            encode_path_segment("name", name)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn claim_env_task(&self, name: &str, body: &ClaimEnvTaskRequest) -> Result<ClaimEnvTaskResponse, ApiError> {
+        let path = format!("/v1/env-workers/{}/claim", encode_path_segment("name", name)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Claim the next queued train or import job (trainer:worker)
     ///
     /// `POST /v1/trainer-jobs/claim`
-    pub async fn claim_trainer_job(
-        &self,
-        body: &ClaimJobRequest,
-    ) -> Result<ClaimJobResponse, ApiError> {
+    pub async fn claim_trainer_job(&self, body: &ClaimJobRequest) -> Result<ClaimJobResponse, ApiError> {
         let path = "/v1/trainer-jobs/claim".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Submit scored trajectory output for an environment task
     ///
     /// `POST /v1/env-workers/tasks/{id}/complete`
-    pub async fn complete_env_task(
-        &self,
-        id: &str,
-        body: &EnvTaskResult,
-    ) -> Result<BTreeMap<String, Value>, ApiError> {
-        let path = format!(
-            "/v1/env-workers/tasks/{}/complete",
-            encode_path_segment("id", id)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn complete_env_task(&self, id: &str, body: &EnvTaskResult) -> Result<BTreeMap<String, Value>, ApiError> {
+        let path = format!("/v1/env-workers/tasks/{}/complete", encode_path_segment("id", id)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Finish a job attempt: publish its artifact, bill it, release the lease
     ///
     /// `POST /v1/trainer-jobs/{id}/complete`
-    pub async fn complete_trainer_job(
-        &self,
-        id: &str,
-        body: &CompleteTrainerJobRequest,
-    ) -> Result<CompleteTrainerJobResponse, ApiError> {
-        let path = format!(
-            "/v1/trainer-jobs/{}/complete",
-            encode_path_segment("id", id)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn complete_trainer_job(&self, id: &str, body: &CompleteTrainerJobRequest) -> Result<CompleteTrainerJobResponse, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/complete", encode_path_segment("id", id)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Create a scoped workspace API key (trainer worker keys are platform config, not keys)
     ///
     /// `POST /v1/keys`
-    pub async fn create_api_key(
-        &self,
-        body: &CreateApiKeyRequest,
-    ) -> Result<CreatedApiKey, ApiError> {
+    pub async fn create_api_key(&self, body: &CreateApiKeyRequest) -> Result<CreatedApiKey, ApiError> {
         let path = "/v1/keys".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Create an empty dataset
@@ -5880,24 +5724,15 @@ impl GeneratedClient {
     /// `POST /v1/datasets`
     pub async fn create_dataset(&self, body: &CreateDatasetRequest) -> Result<Dataset, ApiError> {
         let path = "/v1/datasets".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Import an uploaded file or a Hugging Face dataset into a dataset (async job)
     ///
     /// `POST /v1/datasets/{name}/imports`
-    pub async fn create_dataset_import(
-        &self,
-        name: &str,
-        body: &CreateImportRequest,
-    ) -> Result<ImportJob, ApiError> {
-        let path = format!(
-            "/v1/datasets/{}/imports",
-            encode_path_segment("name", name)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn create_dataset_import(&self, name: &str, body: &CreateImportRequest) -> Result<ImportJob, ApiError> {
+        let path = format!("/v1/datasets/{}/imports", encode_path_segment("name", name)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Generate embeddings from a deployed embedding artifact
@@ -5905,8 +5740,7 @@ impl GeneratedClient {
     /// `POST /v1/embeddings`
     pub async fn create_embeddings(&self, body: &EmbedRequest) -> Result<EmbedResponse, ApiError> {
         let path = "/v1/embeddings".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Queue an evaluation across models on a pinned dataset version (executed by the server)
@@ -5914,8 +5748,7 @@ impl GeneratedClient {
     /// `POST /v1/evals`
     pub async fn create_eval(&self, body: &PlanEvalRequest) -> Result<EvalRun, ApiError> {
         let path = "/v1/evals".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Create and enqueue a training run (pins the dataset version)
@@ -5923,60 +5756,39 @@ impl GeneratedClient {
     /// `POST /v1/runs`
     pub async fn create_run(&self, body: &PlanRunRequest) -> Result<Run, ApiError> {
         let path = "/v1/runs".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Get an upload URL for a checkpoint or artifact bundle
     ///
     /// `POST /v1/trainer-jobs/{id}/uploads`
-    pub async fn create_trainer_upload(
-        &self,
-        id: &str,
-        body: &TrainerUploadRequest,
-    ) -> Result<UploadTicket, ApiError> {
-        let path = format!(
-            "/v1/trainer-jobs/{}/uploads",
-            encode_path_segment("id", id)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn create_trainer_upload(&self, id: &str, body: &TrainerUploadRequest) -> Result<UploadTicket, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/uploads", encode_path_segment("id", id)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Get an upload URL for a file to import (PUT the bytes, then create an import)
     ///
     /// `POST /v1/uploads`
-    pub async fn create_upload(
-        &self,
-        body: &CreateUploadRequest,
-    ) -> Result<UploadTicket, ApiError> {
+    pub async fn create_upload(&self, body: &CreateUploadRequest) -> Result<UploadTicket, ApiError> {
         let path = "/v1/uploads".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Deploy or update an artifact under a stable model name
     ///
     /// `POST /v1/deployments`
-    pub async fn deploy_artifact(
-        &self,
-        body: &DeployArtifactRequest,
-    ) -> Result<Deployment, ApiError> {
+    pub async fn deploy_artifact(&self, body: &DeployArtifactRequest) -> Result<Deployment, ApiError> {
         let path = "/v1/deployments".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Dispatch an evaluation or rollout task to a connected `grad env serve` worker
     ///
     /// `POST /v1/env-workers/tasks`
-    pub async fn dispatch_env_task(
-        &self,
-        body: &EnvTaskDispatch,
-    ) -> Result<DispatchEnvTaskResponse, ApiError> {
+    pub async fn dispatch_env_task(&self, body: &EnvTaskDispatch) -> Result<DispatchEnvTaskResponse, ApiError> {
         let path = "/v1/env-workers/tasks".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Download an artifact bundle (.grad.tar.gz); verify X-Artifact-Sha256
@@ -5984,40 +5796,17 @@ impl GeneratedClient {
     /// `GET /v1/artifacts/{id}/download`
     pub async fn download_artifact(&self, id: &str) -> Result<StreamResponse, ApiError> {
         let path = format!("/v1/artifacts/{}/download", encode_path_segment("id", id)?);
-        self.request_stream(
-            reqwest::Method::GET,
-            &path,
-            &[],
-            &[],
-            None::<&()>,
-            "application/octet-stream",
-        )
-        .await
+        self.request_stream(reqwest::Method::GET, &path, &[], &[], None::<&()>, "application/octet-stream").await
     }
 
     /// Stream the pinned dataset version of a claimed train job as JSONL
     ///
     /// `GET /v1/trainer-jobs/{id}/dataset`
-    pub async fn download_trainer_dataset(
-        &self,
-        id: &str,
-        params: &DownloadTrainerDatasetParams,
-    ) -> Result<StreamResponse, ApiError> {
-        let path = format!(
-            "/v1/trainer-jobs/{}/dataset",
-            encode_path_segment("id", id)?
-        );
+    pub async fn download_trainer_dataset(&self, id: &str, params: &DownloadTrainerDatasetParams) -> Result<StreamResponse, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/dataset", encode_path_segment("id", id)?);
         let mut query: Vec<(&str, String)> = Vec::new();
         query.push(("attempt", params.attempt.query_value()));
-        self.request_stream(
-            reqwest::Method::GET,
-            &path,
-            &query,
-            &[],
-            None::<&()>,
-            "application/x-ndjson",
-        )
-        .await
+        self.request_stream(reqwest::Method::GET, &path, &query, &[], None::<&()>, "application/x-ndjson").await
     }
 
     /// Get an artifact by id or name@latest
@@ -6025,8 +5814,7 @@ impl GeneratedClient {
     /// `GET /v1/artifacts/{id}`
     pub async fn get_artifact(&self, id: &str) -> Result<Artifact, ApiError> {
         let path = format!("/v1/artifacts/{}", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Get a dataset by name
@@ -6034,8 +5822,7 @@ impl GeneratedClient {
     /// `GET /v1/datasets/{name}`
     pub async fn get_dataset(&self, name: &str) -> Result<Dataset, ApiError> {
         let path = format!("/v1/datasets/{}", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Get deployment status and feedback summary
@@ -6043,8 +5830,7 @@ impl GeneratedClient {
     /// `GET /v1/deployments/{name}`
     pub async fn get_deployment(&self, name: &str) -> Result<DeploymentStatus, ApiError> {
         let path = format!("/v1/deployments/{}", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Inspect an environment task and its result
@@ -6052,8 +5838,7 @@ impl GeneratedClient {
     /// `GET /v1/env-workers/tasks/{id}`
     pub async fn get_env_task(&self, id: &str) -> Result<BTreeMap<String, Value>, ApiError> {
         let path = format!("/v1/env-workers/tasks/{}", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Get an evaluation run by ID
@@ -6061,8 +5846,7 @@ impl GeneratedClient {
     /// `GET /v1/evals/{id}`
     pub async fn get_eval(&self, id: &str) -> Result<EvalRun, ApiError> {
         let path = format!("/v1/evals/{}", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Get a dataset import job
@@ -6070,8 +5854,7 @@ impl GeneratedClient {
     /// `GET /v1/imports/{id}`
     pub async fn get_import(&self, id: &str) -> Result<ImportJob, ApiError> {
         let path = format!("/v1/imports/{}", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Get a training run
@@ -6079,8 +5862,7 @@ impl GeneratedClient {
     /// `GET /v1/runs/{id}`
     pub async fn get_run(&self, id: &str) -> Result<Run, ApiError> {
         let path = format!("/v1/runs/{}", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Queue depth for autoscaling: queued plus running jobs (trainer:worker)
@@ -6088,33 +5870,21 @@ impl GeneratedClient {
     /// `GET /v1/trainer-jobs/queue`
     pub async fn get_trainer_queue_stats(&self) -> Result<TrainerQueueStats, ApiError> {
         let path = "/v1/trainer-jobs/queue".to_string();
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// Renew the job lease; reports whether the worker should stop
     ///
     /// `POST /v1/trainer-jobs/{id}/heartbeat`
-    pub async fn heartbeat_trainer_job(
-        &self,
-        id: &str,
-        body: &TrainerHeartbeatRequest,
-    ) -> Result<TrainerHeartbeatResponse, ApiError> {
-        let path = format!(
-            "/v1/trainer-jobs/{}/heartbeat",
-            encode_path_segment("id", id)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn heartbeat_trainer_job(&self, id: &str, body: &TrainerHeartbeatRequest) -> Result<TrainerHeartbeatResponse, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/heartbeat", encode_path_segment("id", id)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// List workspace API keys
     ///
     /// `GET /v1/keys`
-    pub async fn list_api_keys(
-        &self,
-        params: Option<&ListApiKeysParams>,
-    ) -> Result<ListApiKeysResponse, ApiError> {
+    pub async fn list_api_keys(&self, params: Option<&ListApiKeysParams>) -> Result<ListApiKeysResponse, ApiError> {
         let path = "/v1/keys".to_string();
         let default_params = ListApiKeysParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6125,17 +5895,13 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// List immutable artifacts (newest first)
     ///
     /// `GET /v1/artifacts`
-    pub async fn list_artifacts(
-        &self,
-        params: Option<&ListArtifactsParams>,
-    ) -> Result<ListArtifactsResponse, ApiError> {
+    pub async fn list_artifacts(&self, params: Option<&ListArtifactsParams>) -> Result<ListArtifactsResponse, ApiError> {
         let path = "/v1/artifacts".to_string();
         let default_params = ListArtifactsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6149,22 +5915,14 @@ impl GeneratedClient {
         if let Some(v) = &params.name {
             query.push(("name", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// Read records of a dataset version
     ///
     /// `GET /v1/datasets/{name}/records`
-    pub async fn list_dataset_records(
-        &self,
-        name: &str,
-        params: Option<&ListDatasetRecordsParams>,
-    ) -> Result<DatasetRecordsPage, ApiError> {
-        let path = format!(
-            "/v1/datasets/{}/records",
-            encode_path_segment("name", name)?
-        );
+    pub async fn list_dataset_records(&self, name: &str, params: Option<&ListDatasetRecordsParams>) -> Result<DatasetRecordsPage, ApiError> {
+        let path = format!("/v1/datasets/{}/records", encode_path_segment("name", name)?);
         let default_params = ListDatasetRecordsParams::default();
         let params = params.unwrap_or(&default_params);
         let mut query: Vec<(&str, String)> = Vec::new();
@@ -6177,17 +5935,13 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// List datasets (newest first)
     ///
     /// `GET /v1/datasets`
-    pub async fn list_datasets(
-        &self,
-        params: Option<&ListDatasetsParams>,
-    ) -> Result<ListDatasetsResponse, ApiError> {
+    pub async fn list_datasets(&self, params: Option<&ListDatasetsParams>) -> Result<ListDatasetsResponse, ApiError> {
         let path = "/v1/datasets".to_string();
         let default_params = ListDatasetsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6198,17 +5952,13 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// List deployments
     ///
     /// `GET /v1/deployments`
-    pub async fn list_deployments(
-        &self,
-        params: Option<&ListDeploymentsParams>,
-    ) -> Result<ListDeploymentsResponse, ApiError> {
+    pub async fn list_deployments(&self, params: Option<&ListDeploymentsParams>) -> Result<ListDeploymentsResponse, ApiError> {
         let path = "/v1/deployments".to_string();
         let default_params = ListDeploymentsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6219,18 +5969,13 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// List failing task records from an evaluation run for mining
     ///
     /// `GET /v1/evals/{id}/failures`
-    pub async fn list_eval_failures(
-        &self,
-        id: &str,
-        params: Option<&ListEvalFailuresParams>,
-    ) -> Result<ListEvalFailuresResponse, ApiError> {
+    pub async fn list_eval_failures(&self, id: &str, params: Option<&ListEvalFailuresParams>) -> Result<ListEvalFailuresResponse, ApiError> {
         let path = format!("/v1/evals/{}/failures", encode_path_segment("id", id)?);
         let default_params = ListEvalFailuresParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6247,18 +5992,13 @@ impl GeneratedClient {
         if let Some(v) = &params.threshold {
             query.push(("threshold", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// Page through generated model outputs (filter by model or by a code scorer that still needs a score)
     ///
     /// `GET /v1/evals/{id}/outputs`
-    pub async fn list_eval_outputs(
-        &self,
-        id: &str,
-        params: Option<&ListEvalOutputsParams>,
-    ) -> Result<ListEvalOutputsResponse, ApiError> {
+    pub async fn list_eval_outputs(&self, id: &str, params: Option<&ListEvalOutputsParams>) -> Result<ListEvalOutputsResponse, ApiError> {
         let path = format!("/v1/evals/{}/outputs", encode_path_segment("id", id)?);
         let default_params = ListEvalOutputsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6275,18 +6015,13 @@ impl GeneratedClient {
         if let Some(v) = &params.missing_scorer {
             query.push(("missing_scorer", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// Per-task, per-model results of a completed evaluation
     ///
     /// `GET /v1/evals/{id}/results`
-    pub async fn list_eval_results(
-        &self,
-        id: &str,
-        params: Option<&ListEvalResultsParams>,
-    ) -> Result<ListEvalResultsResponse, ApiError> {
+    pub async fn list_eval_results(&self, id: &str, params: Option<&ListEvalResultsParams>) -> Result<ListEvalResultsResponse, ApiError> {
         let path = format!("/v1/evals/{}/results", encode_path_segment("id", id)?);
         let default_params = ListEvalResultsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6300,17 +6035,13 @@ impl GeneratedClient {
         if let Some(v) = &params.model {
             query.push(("model", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// List evaluation runs
     ///
     /// `GET /v1/evals`
-    pub async fn list_evals(
-        &self,
-        params: Option<&ListEvalsParams>,
-    ) -> Result<ListEvalsResponse, ApiError> {
+    pub async fn list_evals(&self, params: Option<&ListEvalsParams>) -> Result<ListEvalsResponse, ApiError> {
         let path = "/v1/evals".to_string();
         let default_params = ListEvalsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6321,17 +6052,13 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// List dataset import jobs (newest first)
     ///
     /// `GET /v1/imports`
-    pub async fn list_imports(
-        &self,
-        params: Option<&ListImportsParams>,
-    ) -> Result<ListImportsResponse, ApiError> {
+    pub async fn list_imports(&self, params: Option<&ListImportsParams>) -> Result<ListImportsResponse, ApiError> {
         let path = "/v1/imports".to_string();
         let default_params = ListImportsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6342,8 +6069,7 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// List trainable base models (the server catalog and price source)
@@ -6351,18 +6077,13 @@ impl GeneratedClient {
     /// `GET /v1/models`
     pub async fn list_models(&self) -> Result<ListModelsResponse, ApiError> {
         let path = "/v1/models".to_string();
-        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &[], &[], None::<&()>).await
     }
 
     /// List unexpired checkpoints of a run (best and final never expire)
     ///
     /// `GET /v1/runs/{id}/checkpoints`
-    pub async fn list_run_checkpoints(
-        &self,
-        id: &str,
-        params: Option<&ListRunCheckpointsParams>,
-    ) -> Result<ListRunCheckpointsResponse, ApiError> {
+    pub async fn list_run_checkpoints(&self, id: &str, params: Option<&ListRunCheckpointsParams>) -> Result<ListRunCheckpointsResponse, ApiError> {
         let path = format!("/v1/runs/{}/checkpoints", encode_path_segment("id", id)?);
         let default_params = ListRunCheckpointsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6373,18 +6094,13 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// Training step metrics as JSON pages, or a live SSE stream
     ///
     /// `GET /v1/runs/{id}/metrics`
-    pub async fn list_run_metrics(
-        &self,
-        id: &str,
-        params: Option<&ListRunMetricsParams>,
-    ) -> Result<MetricsPage, ApiError> {
+    pub async fn list_run_metrics(&self, id: &str, params: Option<&ListRunMetricsParams>) -> Result<MetricsPage, ApiError> {
         let path = format!("/v1/runs/{}/metrics", encode_path_segment("id", id)?);
         let default_params = ListRunMetricsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6398,17 +6114,11 @@ impl GeneratedClient {
         if let Some(v) = &params.limit {
             query.push(("limit", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events; resume with `last_event_id`)
-    pub async fn list_run_metrics_stream(
-        &self,
-        id: &str,
-        params: Option<&ListRunMetricsParams>,
-        last_event_id: Option<&str>,
-    ) -> Result<SseStream, ApiError> {
+    pub async fn list_run_metrics_stream(&self, id: &str, params: Option<&ListRunMetricsParams>, last_event_id: Option<&str>) -> Result<SseStream, ApiError> {
         let path = format!("/v1/runs/{}/metrics", encode_path_segment("id", id)?);
         let default_params = ListRunMetricsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6422,17 +6132,13 @@ impl GeneratedClient {
         if let Some(v) = &params.limit {
             query.push(("limit", v.query_value()));
         }
-        self.request_sse(reqwest::Method::GET, &path, &query, last_event_id)
-            .await
+        self.request_sse(reqwest::Method::GET, &path, &query, last_event_id).await
     }
 
     /// List training runs (newest first)
     ///
     /// `GET /v1/runs`
-    pub async fn list_runs(
-        &self,
-        params: Option<&ListRunsParams>,
-    ) -> Result<ListRunsResponse, ApiError> {
+    pub async fn list_runs(&self, params: Option<&ListRunsParams>) -> Result<ListRunsResponse, ApiError> {
         let path = "/v1/runs".to_string();
         let default_params = ListRunsParams::default();
         let params = params.unwrap_or(&default_params);
@@ -6443,8 +6149,7 @@ impl GeneratedClient {
         if let Some(v) = &params.cursor {
             query.push(("cursor", v.query_value()));
         }
-        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::GET, &path, &query, &[], None::<&()>).await
     }
 
     /// Estimate tasks, model/judge calls, and cost before running an eval
@@ -6452,8 +6157,7 @@ impl GeneratedClient {
     /// `POST /v1/evals/plan`
     pub async fn plan_eval(&self, body: &PlanEvalRequest) -> Result<PlanEvalResponse, ApiError> {
         let path = "/v1/evals/plan".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Dry-run a training recipe at zero cost
@@ -6461,148 +6165,87 @@ impl GeneratedClient {
     /// `POST /v1/runs/plan`
     pub async fn plan_run(&self, body: &PlanRunRequest) -> Result<PlanRunResponse, ApiError> {
         let path = "/v1/runs/plan".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Post scores computed by local (SDK-side) code scorers; the eval completes when none are missing
     ///
     /// `POST /v1/evals/{id}/scores`
-    pub async fn post_eval_scores(
-        &self,
-        id: &str,
-        body: &PostEvalScoresRequest,
-    ) -> Result<PostEvalScoresResponse, ApiError> {
+    pub async fn post_eval_scores(&self, id: &str, body: &PostEvalScoresRequest) -> Result<PostEvalScoresResponse, ApiError> {
         let path = format!("/v1/evals/{}/scores", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Append a batch of parsed records to an import job
     ///
     /// `POST /v1/trainer-jobs/{id}/records`
-    pub async fn post_import_records(
-        &self,
-        id: &str,
-        body: &PostImportRecordsRequest,
-    ) -> Result<PostImportRecordsResponse, ApiError> {
-        let path = format!(
-            "/v1/trainer-jobs/{}/records",
-            encode_path_segment("id", id)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn post_import_records(&self, id: &str, body: &PostImportRecordsRequest) -> Result<PostImportRecordsResponse, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/records", encode_path_segment("id", id)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Copy an exportable checkpoint into a new immutable artifact
     ///
     /// `POST /v1/checkpoints/{id}/promote`
-    pub async fn promote_checkpoint(
-        &self,
-        id: &str,
-        body: Option<&PromoteCheckpointRequest>,
-    ) -> Result<Artifact, ApiError> {
+    pub async fn promote_checkpoint(&self, id: &str, body: Option<&PromoteCheckpointRequest>) -> Result<Artifact, ApiError> {
         let path = format!("/v1/checkpoints/{}/promote", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], body)
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], body).await
     }
 
     /// Append records as a new dataset version (creates the dataset if needed)
     ///
     /// `POST /v1/datasets/{name}/records`
-    pub async fn push_dataset_records(
-        &self,
-        name: &str,
-        body: &PushDatasetRequest,
-    ) -> Result<Dataset, ApiError> {
-        let path = format!(
-            "/v1/datasets/{}/records",
-            encode_path_segment("name", name)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn push_dataset_records(&self, name: &str, body: &PushDatasetRequest) -> Result<Dataset, ApiError> {
+        let path = format!("/v1/datasets/{}/records", encode_path_segment("name", name)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Record deduplicated outcome scores and gold corrections
     ///
     /// `POST /v1/feedback`
-    pub async fn record_feedback(
-        &self,
-        body: &RecordFeedbackRequest,
-    ) -> Result<RecordFeedbackResponse, ApiError> {
+    pub async fn record_feedback(&self, body: &RecordFeedbackRequest) -> Result<RecordFeedbackResponse, ApiError> {
         let path = "/v1/feedback".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Register or heartbeat an outbound `grad env serve` worker
     ///
     /// `POST /v1/env-workers/register`
-    pub async fn register_env_worker(
-        &self,
-        body: &EnvWorkerRegister,
-    ) -> Result<RegisterEnvWorkerResponse, ApiError> {
+    pub async fn register_env_worker(&self, body: &EnvWorkerRegister) -> Result<RegisterEnvWorkerResponse, ApiError> {
         let path = "/v1/env-workers/register".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Register an uploaded checkpoint bundle
     ///
     /// `POST /v1/trainer-jobs/{id}/checkpoints`
-    pub async fn register_trainer_checkpoint(
-        &self,
-        id: &str,
-        body: &RegisterTrainerCheckpointRequest,
-    ) -> Result<Checkpoint, ApiError> {
-        let path = format!(
-            "/v1/trainer-jobs/{}/checkpoints",
-            encode_path_segment("id", id)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn register_trainer_checkpoint(&self, id: &str, body: &RegisterTrainerCheckpointRequest) -> Result<Checkpoint, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/checkpoints", encode_path_segment("id", id)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Preview chat-template rendering and loss masks (estimated token counts)
     ///
     /// `POST /v1/datasets/{name}/render`
-    pub async fn render_dataset(
-        &self,
-        name: &str,
-        body: &RenderDatasetRequest,
-    ) -> Result<RenderDatasetResponse, ApiError> {
+    pub async fn render_dataset(&self, name: &str, body: &RenderDatasetRequest) -> Result<RenderDatasetResponse, ApiError> {
         let path = format!("/v1/datasets/{}/render", encode_path_segment("name", name)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Report one training step's metrics
     ///
     /// `POST /v1/trainer-jobs/{id}/progress`
-    pub async fn report_trainer_progress(
-        &self,
-        id: &str,
-        body: &ReportTrainerProgressRequest,
-    ) -> Result<ReportTrainerProgressResponse, ApiError> {
-        let path = format!(
-            "/v1/trainer-jobs/{}/progress",
-            encode_path_segment("id", id)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+    pub async fn report_trainer_progress(&self, id: &str, body: &ReportTrainerProgressRequest) -> Result<ReportTrainerProgressResponse, ApiError> {
+        let path = format!("/v1/trainer-jobs/{}/progress", encode_path_segment("id", id)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 
     /// Resume a stopped, failed or cancelled run from its latest checkpoint
     ///
     /// `POST /v1/runs/{id}/resume`
-    pub async fn resume_run(
-        &self,
-        id: &str,
-        body: Option<&ResumeRunRequest>,
-    ) -> Result<Run, ApiError> {
+    pub async fn resume_run(&self, id: &str, body: Option<&ResumeRunRequest>) -> Result<Run, ApiError> {
         let path = format!("/v1/runs/{}/resume", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::POST, &path, &[], &[], body)
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], body).await
     }
 
     /// Revoke a workspace API key
@@ -6610,20 +6253,15 @@ impl GeneratedClient {
     /// `DELETE /v1/keys/{id}`
     pub async fn revoke_api_key(&self, id: &str) -> Result<ApiKey, ApiError> {
         let path = format!("/v1/keys/{}", encode_path_segment("id", id)?);
-        self.request_json(reqwest::Method::DELETE, &path, &[], &[], None::<&()>)
-            .await
+        self.request_json(reqwest::Method::DELETE, &path, &[], &[], None::<&()>).await
     }
 
     /// Roll a deployment back to its previous artifact
     ///
     /// `POST /v1/deployments/{name}/rollback`
     pub async fn rollback_deployment(&self, name: &str) -> Result<Deployment, ApiError> {
-        let path = format!(
-            "/v1/deployments/{}/rollback",
-            encode_path_segment("name", name)?
-        );
-        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>)
-            .await
+        let path = format!("/v1/deployments/{}/rollback", encode_path_segment("name", name)?);
+        self.request_json(reqwest::Method::POST, &path, &[], &[], None::<&()>).await
     }
 
     /// Ask a deployed model router which model to call
@@ -6631,7 +6269,6 @@ impl GeneratedClient {
     /// `POST /v1/route`
     pub async fn route_request(&self, body: &RouteRequest) -> Result<RouteResponse, ApiError> {
         let path = "/v1/route".to_string();
-        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body))
-            .await
+        self.request_json(reqwest::Method::POST, &path, &[], &[], Some(body)).await
     }
 }

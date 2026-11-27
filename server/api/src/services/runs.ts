@@ -6,6 +6,8 @@ import {
   type Artifact,
   type ArtifactFormat,
   type Checkpoint,
+  type DatasetRecord,
+  type EvalStatus,
   type MetricPoint,
   type PlanRunRequest,
   type PlanRunResponse,
@@ -30,6 +32,7 @@ import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
   ArtifactRecord,
   CheckpointRecord,
+  DatasetVersion,
   Page,
   PageRequest,
   Repositories,
@@ -39,6 +42,15 @@ import type {
 import type { BillingOutbox } from "./billing-outbox.js";
 import { streamVersionJsonl } from "./dataset-records.js";
 import type { DatasetService } from "./datasets.js";
+import type { EvalService } from "./evals/service.js";
+import {
+  jsonlStream,
+  labelingEvalRequest,
+  labelRecords,
+  settleLabelledRuns,
+  toLabelingPlan,
+} from "./router-labels.js";
+import { cancelWaiting, releaseWaiting } from "./run-waits.js";
 import type { UploadService } from "./uploads.js";
 
 type HeartbeatBody = z.infer<typeof HeartbeatRequestSchema>;
@@ -48,6 +60,13 @@ type CheckpointBody = z.infer<typeof RegisterCheckpointRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
 
 export type StopReason = "cancelled" | "budget" | null;
+
+const EVAL_TERMINAL: readonly EvalStatus[] = [
+  "completed",
+  "stopped_budget",
+  "failed",
+  "cancelled",
+];
 
 const TERMINAL: readonly Run["status"][] = [
   "completed",
@@ -235,10 +254,11 @@ export const createRunLifecycle = (
     datasets: DatasetService;
     uploads: UploadService;
     billing: BillingOutbox;
+    evals: EvalService;
   },
 ): RunLifecycle => {
   const { store, storage, catalog, clock, settings } = deps;
-  const { datasets, uploads, billing } = collaborators;
+  const { datasets, uploads, billing, evals } = collaborators;
 
   const loadRun = async (
     workspaceId: string,
@@ -278,15 +298,65 @@ export const createRunLifecycle = (
     const baseArtifact = artifactRef
       ? await store.artifacts.get(workspaceId, artifactRef)
       : null;
+    const labelRequest = labelingEvalRequest(request, resolved.version.version);
+    const labeling = labelRequest
+      ? toLabelingPlan(await evals.plan(workspaceId, labelRequest))
+      : null;
     const plan = planRun(request, records, {
       catalog,
       datasetVersion: resolved.version.version,
       allowWave2: settings.allowWave2Recipes,
       baseArtifact: baseArtifact && toPublicArtifact(baseArtifact),
       dependency: dependency && toPublicRun(dependency),
+      labeling,
     });
 
-    return { plan, dataset: resolved.dataset, dependency };
+    return { plan, dataset: resolved.dataset, dependency, labelRequest };
+  };
+
+  /** The run's training records: its pinned dataset version, or its labeling eval's answers. */
+  const trainingRecords = async (
+    run: RunRecord,
+  ): Promise<
+    | { kind: "dataset"; version: DatasetVersion }
+    | { kind: "labels"; records: DatasetRecord[] }
+  > => {
+    const evalId = run.resolved_config.label_eval_id;
+    if (evalId) {
+      const labels = await store.evals.getById(evalId);
+      if (!labels) {
+        throw new Error(
+          `Labeling eval '${evalId}' of run '${run.id}' is missing.`,
+        );
+      }
+
+      return { kind: "labels", records: await labelRecords(store, labels) };
+    }
+    const version = await store.datasets.getVersion(
+      run.dataset_id,
+      run.dataset_version,
+    );
+    if (!version) {
+      throw notFound(
+        "dataset_version",
+        `${run.dataset_name}@${run.dataset_version}`,
+      );
+    }
+
+    return { kind: "dataset", version };
+  };
+
+  /** A gate a new run waits on may have finished before the run was inserted. */
+  const settleGate = async (gateId: string): Promise<void> => {
+    const gateRun = await store.runs.getById(gateId);
+    if (gateRun) {
+      await store.transaction((tx) => settleDependents(tx, gateRun));
+      return;
+    }
+    const gateEval = await store.evals.getById(gateId);
+    if (gateEval && EVAL_TERMINAL.includes(gateEval.status)) {
+      await settleLabelledRuns(store, gateEval, clock.now().toISOString());
+    }
   };
 
   /**
@@ -302,48 +372,29 @@ export const createRunLifecycle = (
     if (!TERMINAL.includes(run.status) || run.status === "stopped_budget") {
       return;
     }
-    const waiting = await tx.runs.listWaitingOn(run.id);
-    if (waiting.length === 0) return;
-
     const artifact =
       run.status === "completed" && run.artifact_id
         ? await tx.artifacts.get(run.workspace_id, run.artifact_id)
         : null;
     const now = clock.now().toISOString();
-    for (const dependent of waiting) {
-      if (artifact?.format === "peft_lora") {
-        await tx.runs.update(
-          dependent.id,
-          {
-            waiting_on: null,
-            resolved_config: {
-              ...dependent.resolved_config,
-              base_artifact: toBaseArtifact(toPublicArtifact(artifact)),
-            },
-            updated_at: now,
-          },
-          { status: ["queued"] },
-        );
-        continue;
-      }
-
-      const why =
-        run.status === "completed"
-          ? `its artifact has format '${artifact?.format ?? "none"}', which can't be continued`
-          : `it ended ${run.status}`;
-      const cancelled = await tx.runs.update(
-        dependent.id,
-        {
-          status: "cancelled",
-          waiting_on: null,
-          finished_at: now,
-          updated_at: now,
-          error: `Cancelled because dependency run '${run.id}' did not produce a starting point: ${why}.`,
-        },
-        { status: ["queued"] },
-      );
-      if (cancelled) await settleDependents(tx, cancelled);
+    if (artifact?.format === "peft_lora") {
+      const base = toBaseArtifact(toPublicArtifact(artifact));
+      await releaseWaiting(tx, run.id, now, (dependent) => ({
+        resolved_config: { ...dependent.resolved_config, base_artifact: base },
+      }));
+      return;
     }
+
+    const why =
+      run.status === "completed"
+        ? `its artifact has format '${artifact?.format ?? "none"}', which can't be continued`
+        : `it ended ${run.status}`;
+    await cancelWaiting(
+      tx,
+      run.id,
+      now,
+      `Cancelled because dependency run '${run.id}' did not produce a starting point: ${why}.`,
+    );
   };
 
   const pinCheckpoints = async (
@@ -416,15 +467,7 @@ export const createRunLifecycle = (
   };
 
   const buildJob = async (run: RunRecord): Promise<TrainerJob> => {
-    const datasetVersion = await store.datasets.getVersion(
-      run.dataset_id,
-      run.dataset_version,
-    );
-    if (!datasetVersion) {
-      throw new Error(
-        `Dataset version ${run.dataset_version} of run '${run.id}' is missing.`,
-      );
-    }
+    const training = await trainingRecords(run);
 
     const resume = await store.checkpoints.latestForRun(run.id, clock.now());
     const baseRef = run.resolved_config.base_artifact;
@@ -460,8 +503,11 @@ export const createRunLifecycle = (
               Math.max(0, run.max_cost_usd - run.billed_cost_usd).toFixed(6),
             ),
       dataset: {
-        version: datasetVersion.version,
-        record_count: datasetVersion.record_count,
+        version: run.dataset_version,
+        record_count:
+          training.kind === "dataset"
+            ? training.version.record_count
+            : training.records.length,
         download_url: `/v1/trainer-jobs/${run.id}/dataset?attempt=${run.attempt}`,
       },
       resume: resume
@@ -526,7 +572,10 @@ export const createRunLifecycle = (
       (await planFor(workspaceId, request)).plan,
 
     create: async (workspaceId, request) => {
-      const { plan, dataset, dependency } = await planFor(workspaceId, request);
+      const { plan, dataset, dependency, labelRequest } = await planFor(
+        workspaceId,
+        request,
+      );
       const check = await deps.billing.checkCanStartRun(
         workspaceId,
         plan.estimated_cost_usd,
@@ -538,6 +587,10 @@ export const createRunLifecycle = (
         );
       }
 
+      // Router rubric items: the labeling eval runs first, the run waits on it.
+      const labels = labelRequest
+        ? await evals.create(workspaceId, labelRequest)
+        : null;
       const run = await store.runs.create({
         workspaceId,
         name: request.name,
@@ -545,23 +598,23 @@ export const createRunLifecycle = (
         datasetName: dataset.name,
         datasetVersion: plan.dataset_version,
         recipeKind: request.recipe.kind,
-        resolvedConfig: plan.resolved_config,
+        resolvedConfig: labels
+          ? { ...plan.resolved_config, label_eval_id: labels.id }
+          : plan.resolved_config,
         maxCostUsd: request.max_cost_usd ?? null,
         pricePerMillionTokens: plan.price_per_million_tokens,
         totalSteps: plan.estimated_steps,
         maxAttempts: settings.maxAttempts,
-        dependsOn: dependency
-          ? {
-              runId: dependency.id,
-              waiting: plan.resolved_config.base_artifact === null,
-            }
-          : undefined,
+        dependsOn: dependency?.id ?? null,
+        waitingOn:
+          labels?.id ??
+          (dependency && plan.resolved_config.base_artifact === null
+            ? dependency.id
+            : null),
       });
       if (run.waiting_on === null) return toPublicRun(run);
 
-      // The dependency may have finished between planning and insert.
-      const latest = await store.runs.getById(run.waiting_on);
-      if (latest) await store.transaction((tx) => settleDependents(tx, latest));
+      await settleGate(run.waiting_on);
 
       return toPublicRun((await store.runs.getById(run.id)) ?? run);
     },
@@ -636,6 +689,10 @@ export const createRunLifecycle = (
           "run_state_changed",
           `Run '${id}' changed concurrently; retry.`,
         );
+      const labelEval = run.resolved_config.label_eval_id;
+      if (labelEval !== null && run.waiting_on === labelEval) {
+        await evals.cancel(workspaceId, labelEval).catch(() => undefined);
+      }
 
       return toPublicRun(updated);
     },
@@ -1092,17 +1149,11 @@ export const createRunLifecycle = (
       if (run.attempt !== attempt || run.worker_id === null)
         throw leaseLost(id);
 
-      const version = await store.datasets.getVersion(
-        run.dataset_id,
-        run.dataset_version,
-      );
-      if (!version)
-        throw notFound(
-          "dataset_version",
-          `${run.dataset_name}@${run.dataset_version}`,
-        );
+      const training = await trainingRecords(run);
 
-      return streamVersionJsonl(storage, version);
+      return training.kind === "dataset"
+        ? streamVersionJsonl(storage, training.version)
+        : jsonlStream(training.records);
     },
 
     expireLeases,

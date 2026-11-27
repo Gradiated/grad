@@ -55,8 +55,8 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
         input.totalSteps,
         input.maxAttempts,
         ts,
-        input.dependsOn?.runId ?? null,
-        input.dependsOn?.waiting ? input.dependsOn.runId : null,
+        input.dependsOn ?? null,
+        input.waitingOn ?? null,
       ],
     );
 

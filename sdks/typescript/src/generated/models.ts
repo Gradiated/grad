@@ -552,6 +552,12 @@ export interface PlanRunResponse {
   estimatedCostUsd: number;
   pricePerMillionTokens: number;
   trainedTokenFraction: number;
+  /** Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd). */
+  labeling: {
+    estimatedModelCalls: number;
+    estimatedJudgeCalls: number;
+    estimatedCostUsd: number;
+  } | null;
   warnings: Array<string>;
 }
 
@@ -642,8 +648,8 @@ export interface RecipeSpec {
   evalEvery?: "auto" | number | undefined;
   loss?: LossSpec | undefined;
   pool?: PoolingSpec | undefined;
-  /** RouterRecipe: the score name on your records that measures quality (scores[rubric]). */
-  rubric?: string | undefined;
+  /** RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training. */
+  rubric?: string | Array<EvalRubricItem> | undefined;
   /** RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records. */
   pricing?: Record<string, number> | undefined;
   /** RouterRecipe: the candidate that gets every request the router does not offload (default: the best-scoring candidate). */
@@ -757,6 +763,8 @@ export interface ResolvedRunConfig {
     trainRecords: number;
     evalRecords: number;
   };
+  /** Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on. */
+  labelEvalId: string | null;
   baseArtifact: BaseArtifact | null;
   recipeParams: Record<string, unknown>;
 }

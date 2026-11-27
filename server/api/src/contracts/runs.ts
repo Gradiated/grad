@@ -6,6 +6,7 @@ import {
   Sha256HexSchema,
   SlugSchema,
 } from "./common.js";
+import { EvalRubricItemSchema } from "./evals.js";
 
 export const AdapterSpecSchema = z
   .discriminatedUnion("kind", [
@@ -149,10 +150,16 @@ export const RecipeSpecSchema = z
       }),
     loss: LossSpecSchema.optional(),
     pool: PoolingSpecSchema.optional(),
-    rubric: z.string().min(1).max(80).optional().openapi({
-      description:
-        "RouterRecipe: the score name on your records that measures quality (scores[rubric]).",
-    }),
+    rubric: z
+      .union([
+        z.string().min(1).max(80),
+        z.array(EvalRubricItemSchema).min(1).max(32),
+      ])
+      .optional()
+      .openapi({
+        description:
+          "RouterRecipe: a score name on your records (scores[rubric]), or Judge/validator items: the server then replays each prompt against recipe.models and scores the answers in a labeling eval before training.",
+      }),
     pricing: z.record(ModelIdSchema, z.number().min(0)).optional().openapi({
       description:
         "RouterRecipe: USD per request for each candidate; overrides metrics.cost_usd on your records.",
@@ -241,6 +248,10 @@ export const ResolvedRunConfigSchema = z
       train_records: z.number().int().min(0),
       eval_records: z.number().int().min(0),
     }),
+    label_eval_id: z.string().nullable().openapi({
+      description:
+        "Router runs with a Judge/validator rubric: the labeling eval whose scored answers the router trains on.",
+    }),
     base_artifact: BaseArtifactSchema.nullable().openapi({
       description:
         "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).",
@@ -262,6 +273,17 @@ export const PlanRunResponseSchema = z
     estimated_cost_usd: z.number().min(0),
     price_per_million_tokens: z.number().positive(),
     trained_token_fraction: z.number().min(0).max(1),
+    labeling: z
+      .object({
+        estimated_model_calls: z.number().int().min(0),
+        estimated_judge_calls: z.number().int().min(0),
+        estimated_cost_usd: z.number().min(0),
+      })
+      .nullable()
+      .openapi({
+        description:
+          "Router runs with a Judge/validator rubric: the labeling eval that replays prompts against the candidates (billed as an eval, included in estimated_cost_usd).",
+      }),
     warnings: z.array(z.string()),
   })
   .openapi("PlanRunResponse");

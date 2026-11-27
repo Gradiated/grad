@@ -127,6 +127,8 @@ const isPreferencePair = (r: DatasetRecord): boolean =>
 export interface RouterLabelOptions {
   /** Score name that measures quality (`scores[rubric]`). */
   rubric?: string | undefined;
+  /** A labeling eval scores the prompts first: records only need a prompt. */
+  labelled?: boolean | undefined;
   /** Explicit candidate models (lowercase ids). */
   candidates?: readonly string[] | undefined;
 }
@@ -281,8 +283,10 @@ export const assessRecipeUsability = (
         recordConversation(r).length > 0 ||
         typeof r.prompt === "string" ||
         typeof r.query === "string";
-      const observed = routerObservations(r, routerOptions);
-      ok = hasPrompt && observed.models.length > 0;
+      const observed = routerOptions.labelled
+        ? { models: [] }
+        : routerObservations(r, routerOptions);
+      ok = hasPrompt && (routerOptions.labelled || observed.models.length > 0);
       if (ok) observed.models.forEach((m) => models.add(m));
       else note(observed.reason ?? "record has no prompt");
     } else if (kind === "decision") {

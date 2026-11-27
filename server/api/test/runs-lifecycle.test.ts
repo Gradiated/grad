@@ -781,7 +781,7 @@ describe("run lifecycle and worker protocol", () => {
       `/v1/runs/${run.id}`,
     );
     expect(after.body.status).toBe("failed");
-    expect(after.body.error).toMatch(/missing/);
+    expect(after.body.error).toMatch(/dataset version '.*@99' was not found/);
   });
 
   it("rejects wrong-kind calls on job ids", async () => {

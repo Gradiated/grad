@@ -89,11 +89,14 @@ class RecipeTests(unittest.TestCase):
         labelled = RouterRecipe(rubric="resolved", pricing={"cheap/m": 0.001, "strong/m": 1}, fallback="strong/m").to_spec()
         self.assertEqual(labelled, {"kind": "router", "rubric": "resolved", "pricing": {"cheap/m": 0.001, "strong/m": 1.0}, "fallback": "strong/m"})
         self.assert_contract(labelled)
-        with self.assertRaises(grad.NotAvailableInV0Error) as ctx:
+        judged = RouterRecipe(models=["a/b", "c/d"], rubric=grad.Judge(model="m/judge", name="resolved", prompt="Solved?")).to_spec()
+        self.assertEqual(judged["rubric"], [{"name": "resolved", "kind": "judge", "model": "m/judge", "prompt": "Solved?", "weight": 1.0}])
+        self.assert_contract(judged)
+        with self.assertRaises(ValueError):
             RouterRecipe(rubric=grad.Judge(model="m", name="resolved"))
-        self.assertIn("score name", str(ctx.exception))
-        with self.assertRaises(grad.NotAvailableInV0Error):
-            RouterRecipe(rubric=grad.Scorer("x", fn=lambda t: 1.0))
+        with self.assertRaises(grad.NotAvailableInV0Error) as ctx:
+            RouterRecipe(models=["a/b", "c/d"], rubric=grad.Scorer("x", fn=lambda t: 1.0))
+        self.assertIn("sandbox", str(ctx.exception))
         with self.assertRaises(ValueError):
             RouterRecipe(pricing={"a/b": -1})
         with self.assertRaises(ValueError):

@@ -21,7 +21,7 @@ from typing import Any, ClassVar, Literal
 from ._errors import NotAvailableInV0Error
 from ._generated.client import SCHEMA_FIELDS
 from .records import Context
-from .rubrics import model_ref
+from .rubrics import coerce_rubric, model_ref
 from .specs import AdamWSpec, AdapterSpec, LossSpec, PoolingSpec, SplitSpec, adapters
 
 __all__ = [
@@ -273,8 +273,11 @@ class RouterRecipe(Recipe):
         model: Router backbone, ``"qwen/qwen3-0.6b"`` by default.
         models: Candidate models; by default the models scored in your records.
         max_quality_drop: Quality the router may trade for cost (``0.02``).
-        rubric: The score name on your records that measures quality (``"task_success"``).
-            Judges, rubrics and functions are not available for routers in v0.
+        rubric: How quality is measured: a score name already on your records
+            (``"task_success"``), or a ``Judge``/``Rubric`` of judges and validators, in which
+            case the server replays your prompts against ``models`` and scores the answers
+            (a labeling eval, billed as an eval) before training. Python functions need a
+            sandbox, which is not available in v0.
         pricing: USD per request for each candidate (overrides ``metrics.cost_usd``).
         fallback: The candidate that gets every request the router doesn't offload
             (default: the best-scoring candidate).
@@ -290,14 +293,17 @@ class RouterRecipe(Recipe):
     def __post_init__(self) -> None:
         super().__post_init__()
         if self.rubric is not None and not isinstance(self.rubric, str):
-            raise _unsupported(
-                "RouterRecipe",
-                "rubric=Judge/Rubric/function",
-                "the v0 server trains routers from per-model scores already present on your records; it cannot "
-                "score candidates with a Judge yet, and Python scorers in training recipes need a managed "
-                "sandbox, which is deferred past v0.",
-                'Score your logs first (e.g. with client.evals.create) and pass the score name: rubric="resolved".',
-            )
+            rubric = coerce_rubric(self.rubric)
+            if rubric.local_scorers:
+                raise _unsupported(
+                    "RouterRecipe",
+                    "rubric=Scorer(fn=...)",
+                    "Python scorers in training recipes need a managed sandbox, which is deferred past v0.",
+                    'Use a Judge or validators, or score your logs first and pass the score name: rubric="resolved".',
+                )
+            if self.models is None:
+                raise ValueError("RouterRecipe(rubric=Judge/Rubric) replays your prompts against the candidates: pass models=[...].")
+            self.rubric = rubric.to_wire_items()
         if self.pricing is not None:
             self.pricing = {model_ref(m): float(v) for m, v in self.pricing.items()}
             if any(v < 0 for v in self.pricing.values()):

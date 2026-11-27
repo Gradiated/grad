@@ -29,6 +29,7 @@ import type {
 } from "../../store/types.js";
 import type { BillingOutbox } from "../billing-outbox.js";
 import type { DatasetService } from "../datasets.js";
+import { settleLabelledRuns } from "../router-labels.js";
 import { aggregateEval } from "./aggregate.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./planner.js";
 import { scoreOutput } from "./scoring.js";
@@ -252,11 +253,15 @@ export const createEvalService = (
     return rows;
   };
 
-  /** Bills a finished eval's model and judge usage (idempotent per eval). */
-  const bill = async (
-    record: Pick<EvalRecord, "id" | "workspace_id">,
+  /**
+   * A finished eval: bills its model and judge usage (idempotent per eval) and
+   * starts or cancels the router run waiting on it as a labeling eval.
+   */
+  const onFinished = async (
+    record: Pick<EvalRecord, "id" | "workspace_id" | "status" | "error">,
     outputs?: readonly EvalOutputRow[],
   ): Promise<void> => {
+    await settleLabelledRuns(store, record, clock.now().toISOString());
     const rows = outputs ?? (await allOutputs(record.id));
     await billing.enqueueEvalUsage(store, {
       workspaceId: record.workspace_id,
@@ -295,7 +300,7 @@ export const createEvalService = (
       },
       expect,
     );
-    if (finalized) await bill(finalized, outputs);
+    if (finalized) await onFinished(finalized, outputs);
 
     return finalized;
   };
@@ -531,7 +536,7 @@ export const createEvalService = (
         },
         expect,
       );
-      if (failed) await bill(failed);
+      if (failed) await onFinished(failed);
     } finally {
       clearInterval(heartbeat);
     }
@@ -556,7 +561,7 @@ export const createEvalService = (
         { status: ["running"], workerId: e.worker_id, attempt: e.attempt },
       );
       if (updated) recovered += 1;
-      if (updated?.status === "failed") await bill(updated);
+      if (updated?.status === "failed") await onFinished(updated);
     }
 
     return recovered;
@@ -769,7 +774,7 @@ export const createEvalService = (
           `Eval '${id}' is already ${record.status}.`,
         );
       }
-      await bill(updated);
+      await onFinished(updated);
 
       return toPublic(updated);
     },

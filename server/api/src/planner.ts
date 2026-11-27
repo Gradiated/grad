@@ -342,7 +342,11 @@ const resolveRouterCandidates = (
   return candidates;
 };
 
+export type LabelingPlan = NonNullable<PlanRunResponse["labeling"]>;
+
 export interface PlanContext {
+  /** Router runs with rubric items: the labeling eval's estimate. */
+  labeling?: LabelingPlan | null;
   catalog: ModelCatalog;
   datasetVersion: number;
   allowWave2?: boolean;
@@ -465,8 +469,13 @@ export const planRun = (
     );
   }
 
+  const labelled = Array.isArray(recipe.rubric);
+  if (labelled && !context.labeling) {
+    throw new Error("A router rubric of rubric items needs a labeling plan.");
+  }
   const usability = assessRecipeUsability(recipe.kind, records, {
-    rubric: recipe.rubric,
+    rubric: typeof recipe.rubric === "string" ? recipe.rubric : undefined,
+    labelled,
     candidates: recipe.models,
   });
   if (usability.usable === 0) {
@@ -569,9 +578,18 @@ export const planRun = (
 
   const estimatedTokens = totalTokens * recipe.epochs;
   const price = model.price_per_million_tokens_usd;
+  const labeling = context.labeling ?? null;
   const estimatedCostUsd = Number(
-    ((estimatedTokens / 1_000_000) * price).toFixed(4),
+    (
+      (estimatedTokens / 1_000_000) * price +
+      (labeling?.estimated_cost_usd ?? 0)
+    ).toFixed(4),
   );
+  if (labeling) {
+    warnings.push(
+      `Before training, a labeling eval replays each prompt against ${(recipe.models ?? []).join(", ")} and scores the answers with your rubric: ${labeling.estimated_model_calls} model calls and ${labeling.estimated_judge_calls} judge calls, about $${labeling.estimated_cost_usd.toFixed(4)} (billed as an eval).`,
+    );
+  }
   if (
     request.max_cost_usd !== undefined &&
     estimatedCostUsd > request.max_cost_usd
@@ -624,6 +642,7 @@ export const planRun = (
       train_records: train.length,
       eval_records: evalSet.length,
     },
+    label_eval_id: null,
     base_artifact: base,
     recipe_params: recipeParams,
   };
@@ -639,6 +658,7 @@ export const planRun = (
     price_per_million_tokens: price,
     trained_token_fraction:
       totalTokens > 0 ? Number((trainedTokens / totalTokens).toFixed(4)) : 0,
+    labeling,
     warnings,
   };
 };
