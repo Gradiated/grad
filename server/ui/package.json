@@ -7,9 +7,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "check": "tsc --noEmit && vitest run --coverage",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.stories.json && vitest run --coverage",
     "test": "vitest run",
-    "test:live": "vitest run --config vitest.live.config.ts"
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "storybook": "storybook dev -p 6006 --host 127.0.0.1 --disable-telemetry",
+    "build-storybook": "storybook build --disable-telemetry --output-dir storybook-static"
   },
   "dependencies": {
     "react": "19.3.1",
@@ -17,10 +19,12 @@
     "uplot": "1.6.32"
   },
   "devDependencies": {
+    "@storybook/react-vite": "10.6.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitest/coverage-v8": "4.1.11",
     "happy-dom": "21.0.4",
+    "storybook": "10.6.2",
     "typescript": "5.9.3",
     "vite": "8.3.8",
     "vitest": "4.1.11"

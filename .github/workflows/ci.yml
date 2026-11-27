@@ -54,13 +54,15 @@ jobs:
       - name: Install server/api dependencies
         run: pnpm -C server/api install --frozen-lockfile
 
-      # The web UI: typecheck, component tests with a coverage gate, and a build,
-      # so the server's UI smoke test below runs against the real bundle.
-      - name: Web UI (typecheck, tests with coverage, build)
+      # The web UI: typecheck, component tests with a coverage gate, a build (so
+      # the server's UI smoke test below runs against the real bundle) and the
+      # Storybook build, which renders every component and page state.
+      - name: Web UI (typecheck, tests with coverage, build, Storybook)
         run: |
           pnpm -C server/ui install --frozen-lockfile
           pnpm -C server/ui check
           pnpm -C server/ui exec vite build
+          pnpm -C server/ui build-storybook
 
       - name: Check formatting
         run: pnpm -C server/api format:check
