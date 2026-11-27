@@ -5,21 +5,27 @@ export interface Clock {
 export const systemClock: Clock = { now: () => new Date() };
 
 /**
- * The host clock shifted to agree with the database's `now()`, so every
- * replica writes and compares lease times on one clock however skewed its
- * host is. `sync` measures the offset (midpoint of the round trip).
+ * The database's `now()`, carried forward on the host's monotonic clock, so
+ * every replica writes and compares lease times on one clock: a skewed host
+ * clock, or one that steps (NTP, a VM resume), moves nothing (r8 A8). `sync`
+ * re-reads the database time (the midpoint of the round trip) to correct
+ * drift.
  */
 export const createDbAnchoredClock = (
-  hostNow: () => number = Date.now,
+  monotonicMs: () => number = () => performance.now(),
+  wallMs: () => number = Date.now,
 ): Clock & { sync(dbNow: () => Promise<Date>): Promise<void> } => {
-  let offsetMs = 0;
+  // Until the first sync: the host clock.
+  let anchorMs = wallMs();
+  let anchoredAt = monotonicMs();
 
   return {
-    now: () => new Date(hostNow() + offsetMs),
+    now: () => new Date(anchorMs + (monotonicMs() - anchoredAt)),
     sync: async (dbNow) => {
-      const sent = hostNow();
+      const sent = monotonicMs();
       const db = (await dbNow()).getTime();
-      offsetMs = Math.round(db - (sent + hostNow()) / 2);
+      anchorMs = db;
+      anchoredAt = (sent + monotonicMs()) / 2;
     },
   };
 };
