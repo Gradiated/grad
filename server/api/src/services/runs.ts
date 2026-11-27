@@ -927,12 +927,13 @@ export const createRunLifecycle = (
       await uploads.verify(upload);
 
       const now = clock.now();
+      const consumedBy = `checkpoint:${run.id}:${run.attempt}:${body.step}`;
       const result = await store.transaction(async (tx) => {
-        const consumed = await uploads.consume(
-          tx,
-          upload,
-          `checkpoint:${run.id}:${run.attempt}:${body.step}`,
-        );
+        // A retried registration of the same upload is a no-op.
+        const consumed =
+          upload.consumed_by === consumedBy
+            ? upload
+            : await uploads.consume(tx, upload, consumedBy);
         const inserted = await tx.checkpoints.insert({
           workspaceId: run.workspace_id,
           runId: run.id,

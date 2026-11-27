@@ -283,6 +283,11 @@ describe("datasets, uploads and imports", () => {
       body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
     });
     expect(reuse.status).toBe(409);
+    // An unkeyed retry into the same dataset must not queue a second import.
+    const sameDataset = await t.json("/v1/datasets/traces/imports", {
+      body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
+    });
+    expect(sameDataset.body).toMatchObject({ code: "upload_already_used" });
 
     const job = await worker.claim();
     expect(job?.kind).toBe("import");
