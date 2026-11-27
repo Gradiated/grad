@@ -20,7 +20,7 @@ export default defineConfig({
   },
   server: {
     // `pnpm dev` proxies the API to a local grad-server (grad local up or the harness).
-    proxy: { "/v1": process.env.GRAD_API ?? "http://127.0.0.1:8787", "/health": process.env.GRAD_API ?? "http://127.0.0.1:8787" },
+    proxy: { "/v1": process.env.GRAD_API ?? "http://127.0.0.1:8787", "/health/": process.env.GRAD_API ?? "http://127.0.0.1:8787" },
   },
   test: {
     environment: "happy-dom",

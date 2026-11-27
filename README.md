@@ -234,6 +234,8 @@ The images are public on GHCR: `ghcr.io/gradiated/grad-server` and `ghcr.io/grad
 
 The first run generates an admin key, a trainer key and the workspace-secrets key and saves them to a `local` CLI profile. `grad local status`, `grad local logs` and `grad local down` manage the stack.
 
+`grad-server` also serves a web UI at `http://127.0.0.1:8787/`; `grad ui` opens it signed in. It lists runs with their status, phase, model and cost, and each run page shows live loss, learning-rate, throughput and cost-versus-cap charts, the attempt and phase, the event timeline, checkpoints (promote them there), the eval report, the artifact download and the resolved config. Datasets (versions, records with scores, source syncs), evals (scores with confidence intervals and failures), usage and worker health have pages too. It calls only the public `/v1` API with your key, kept in the browser tab. See [Web UI](docs/SELF_HOSTING.md#web-ui).
+
 For production, create the `grad` Secret described in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) (database URL, admin key hash, trainer key), then install the Helm chart against your own Postgres and S3 bucket. It runs migrations in a Job, two API replicas, a GPU `train` worker pool and a CPU `import` worker pool, with optional KEDA scale-to-zero and NetworkPolicies:
 
 ```bash
@@ -295,6 +297,7 @@ node scripts/generate-sdks.mjs               # regenerate the four SDK transport
 
 pip install -e "sdks/python[dev]" && python3 -m unittest discover -s sdks/python/tests
 pnpm -C sdks/typescript install --frozen-lockfile && pnpm -C sdks/typescript check
+pnpm -C server/ui install --frozen-lockfile && pnpm -C server/ui check   # web UI (pnpm -C server/ui dev to work on it)
 (cd sdks/go && go test ./...)
 cargo test --workspace                       # Rust SDK + CLI
 

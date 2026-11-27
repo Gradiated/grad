@@ -50,6 +50,31 @@ export GRAD_TRAINER_API_KEY=$(openssl rand -hex 32)   # shared by grad-server an
 export GRAD_SECRETS_KEY=$(openssl rand -base64 32)    # encrypts workspace secrets; keep it with the data
 ```
 
+## Web UI
+
+`grad-server` serves a web UI at `/` for watching training, much like the Temporal UI for workflows: `http://127.0.0.1:8787/` after `grad local up` (which prints the URL), `<base_url>/` from the harness (`ui_url`), and the API Service or ingress in Kubernetes. Run `grad ui` to open it signed in with your CLI profile (`grad ui RUN_ID` opens one run).
+
+What it shows (read-mostly):
+
+- **Runs**: every run with its status, phase, recipe, model, dataset version, cost against its cap and age, filterable by status and name.
+- **Run detail**: a header with status, phase and attempt N/M; a lifecycle strip (queued, starting, training, uploading, done) with interruption and "waiting for a worker" notices; live loss and eval-loss, learning-rate, throughput and cost-versus-cap charts; checkpoints with a **Promote** button; the event timeline (phases, attempts, interruptions, resumes, warnings, checkpoints); the eval report for the run's recipe; the artifact with a download button and the `grad artifacts download` command; the resolved config as YAML; **Cancel** and **Resume** (optionally with a new cost cap).
+- **Datasets**: versions, a record preview with merged scores, sources with their schedule, last sync status and last error plus a **Sync** button, and recent imports.
+- **Evals**: summary tables with scores, 95% CIs, pass@k, the delta against the baseline, and failures.
+- **Usage**: the billing ledger with totals by runs and evals.
+- **Health**: server readiness, the training and import worker pools (busy workers, `workers_online` while a run waits, autoscaling from zero) and the queue.
+
+It follows the system light or dark theme and updates live from the run events stream.
+
+How it works and what it can reach:
+
+- It is a static build (`server/ui`, Vite + React + uPlot, about 120 KB gzipped) baked into the image and served from memory: hashed `/assets/*` files are cached forever, `index.html` is revalidated, and any other browser navigation outside `/v1`, `/health/*` and `/metrics` returns `index.html`. Unknown `/v1` paths still answer with problem+json 404s.
+- It calls only the public `/v1` API, with the viewer's API key, so a key sees exactly what it could see through the SDKs. It adds no endpoints.
+- With `AUTH_MODE=none` there is no login. With `api_key`, paste a key on the login page; it is kept in that tab's `sessionStorage` only (never `localStorage` or cookies, so there is no CSRF surface) and is forgotten when the tab closes. `grad ui` hands the profile's key over once in a `#key=` URL fragment, which browsers never send to the server; the page moves it into `sessionStorage` and removes it from the address bar.
+- Every UI response carries a strict Content-Security-Policy (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'`, nothing inline), `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`.
+- `UI_ENABLED=false` turns it off (it is off by default with `AUTH_MODE=cloud`); Helm sets it from `ui.enabled` (default `true`). The UI needs no extra exposure: keep the server on loopback or behind your ingress as before.
+
+To work on it, run the API (for example `grad local up` or the harness) and `pnpm -C server/ui dev`, which proxies `/v1` to `GRAD_API` (default `http://127.0.0.1:8787`). `pnpm -C server/ui check` runs the typecheck and component tests; `pnpm -C server/ui build` writes `server/ui/dist`, which a source checkout's `grad-server` serves too.
+
 ## Server configuration
 
 | Variable | Default | Notes |
@@ -70,6 +95,8 @@ export GRAD_SECRETS_KEY=$(openssl rand -base64 32)    # encrypts workspace secre
 | `MAX_ATTEMPTS` | `10` | Attempts that may end without a result (lease expired, or abandoned by a preempted worker) before a job fails. |
 | `USAGE_FLUSH_TOKENS` / `USAGE_FLUSH_SECONDS` | `1000000` / `300` | A running attempt appends a usage row (GET /v1/usage) whenever this many tokens or seconds are unbilled, at each checkpoint, and when it ends. A worker killed outright is billed up to its last progress report. |
 | `JOB_EVENT_RETENTION_DAYS` | `90` | Days job events (training metrics) are kept; older ones are deleted by the maintenance tick. |
+| `UI_ENABLED` | `true` (`false` with `AUTH_MODE=cloud`) | Serve the [web UI](#web-ui) at `/`. |
+| `UI_DIR` | the image's `/app/ui`, else `server/ui/dist` | A built `server/ui` directory to serve. |
 
 ## Production Kubernetes (Helm)
 
@@ -111,7 +138,7 @@ The chart (`server/helm/grad`) runs two or more API replicas, a migrations Job a
 4. Optional:
    - `keda.enabled=true` (KEDA installed in the cluster) adds a ScaledObject per worker. Its query counts the open jobs of that worker's kinds, queued **and running**, so a scale-down never strands a running job. `keda.workers.train.minReplicaCount=0` scales GPUs to zero.
    - `networkPolicy.enabled=true` lets only this release's workers and `networkPolicy.apiIngressFrom` peers reach the API, and limits worker egress to DNS, the API and `networkPolicy.workerEgress` (default: HTTPS to public addresses only, never private ranges, CGNAT or link-local metadata endpoints). Add your S3 endpoint there if it is private.
-   - `ingress.enabled=true` exposes the API.
+   - `ingress.enabled=true` exposes the API and the [web UI](#web-ui), which share the `/` path on the API Service; `ui.enabled=false` serves only the API.
 5. Serve trained artifacts on vLLM or SGLang by downloading the verified `.grad.tar.gz` bundle:
    ```bash
    grad artifacts download support-sft@latest --output ./support-sft
