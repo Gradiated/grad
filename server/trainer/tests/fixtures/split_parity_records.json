@@ -1,0 +1,4240 @@
+[
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "r0",
+"session_id": "s0"
+},
+{
+"id": "r1",
+"session_id": ""
+},
+{
+"id": "r2"
+},
+{
+"group_id": "g1",
+"id": "r3"
+},
+{
+"session_id": "sess-ü-4",
+"id": ""
+},
+{},
+{
+"id": "r6",
+"session_id": "s2"
+},
+{
+"id": "r7",
+"session_id": ""
+},
+{
+"id": "r8"
+},
+{
+"group_id": "g4",
+"id": "r9"
+},
+{
+"session_id": "sess-ü-10",
+"id": ""
+},
+{},
+{
+"id": "r12",
+"session_id": "s4"
+},
+{
+"id": "r13",
+"session_id": ""
+},
+{
+"id": "r14"
+},
+{
+"group_id": "g7",
+"id": "r15"
+},
+{
+"session_id": "sess-ü-16",
+"id": ""
+},
+{},
+{
+"id": "r18",
+"session_id": "s6"
+},
+{
+"id": "r19",
+"session_id": ""
+},
+{
+"id": "r20"
+},
+{
+"group_id": "g10",
+"id": "r21"
+},
+{
+"session_id": "sess-ü-22",
+"id": ""
+},
+{},
+{
+"id": "r24",
+"session_id": "s8"
+},
+{
+"id": "r25",
+"session_id": ""
+},
+{
+"id": "r26"
+},
+{
+"group_id": "g13",
+"id": "r27"
+},
+{
+"session_id": "sess-ü-28",
+"id": ""
+},
+{},
+{
+"id": "r30",
+"session_id": "s10"
+},
+{
+"id": "r31",
+"session_id": ""
+},
+{
+"id": "r32"
+},
+{
+"group_id": "g16",
+"id": "r33"
+},
+{
+"session_id": "sess-ü-34",
+"id": ""
+},
+{},
+{
+"id": "r36",
+"session_id": "s12"
+},
+{
+"id": "r37",
+"session_id": ""
+},
+{
+"id": "r38"
+},
+{
+"group_id": "g19",
+"id": "r39"
+},
+{
+"session_id": "sess-ü-40",
+"id": ""
+},
+{},
+{
+"id": "r42",
+"session_id": "s14"
+},
+{
+"id": "r43",
+"session_id": ""
+},
+{
+"id": "r44"
+},
+{
+"group_id": "g22",
+"id": "r45"
+},
+{
+"session_id": "sess-ü-46",
+"id": ""
+},
+{},
+{
+"id": "r48",
+"session_id": "s16"
+},
+{
+"id": "r49",
+"session_id": ""
+},
+{
+"id": "r50"
+},
+{
+"group_id": "g25",
+"id": "r51"
+},
+{
+"session_id": "sess-ü-52",
+"id": ""
+},
+{},
+{
+"id": "r54",
+"session_id": "s18"
+},
+{
+"id": "r55",
+"session_id": ""
+},
+{
+"id": "r56"
+},
+{
+"group_id": "g28",
+"id": "r57"
+},
+{
+"session_id": "sess-ü-58",
+"id": ""
+},
+{}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "😀0",
+"session_id": "日本0"
+},
+{
+"id": "😀1",
+"session_id": "日本1"
+},
+{
+"id": "😀2",
+"session_id": "日本2"
+},
+{
+"id": "😀3",
+"session_id": "日本3"
+},
+{
+"id": "😀4",
+"session_id": "日本4"
+},
+{
+"id": "😀5",
+"session_id": "日本0"
+},
+{
+"id": "😀6",
+"session_id": "日本1"
+},
+{
+"id": "😀7",
+"session_id": "日本2"
+},
+{
+"id": "😀8",
+"session_id": "日本3"
+},
+{
+"id": "😀9",
+"session_id": "日本4"
+},
+{
+"id": "😀10",
+"session_id": "日本0"
+},
+{
+"id": "😀11",
+"session_id": "日本1"
+},
+{
+"id": "😀12",
+"session_id": "日本2"
+},
+{
+"id": "😀13",
+"session_id": "日本3"
+},
+{
+"id": "😀14",
+"session_id": "日本4"
+},
+{
+"id": "😀15",
+"session_id": "日本0"
+},
+{
+"id": "😀16",
+"session_id": "日本1"
+},
+{
+"id": "😀17",
+"session_id": "日本2"
+},
+{
+"id": "😀18",
+"session_id": "日本3"
+},
+{
+"id": "😀19",
+"session_id": "日本4"
+},
+{
+"id": "😀20",
+"session_id": "日本0"
+},
+{
+"id": "😀21",
+"session_id": "日本1"
+},
+{
+"id": "😀22",
+"session_id": "日本2"
+},
+{
+"id": "😀23",
+"session_id": "日本3"
+},
+{
+"id": "😀24",
+"session_id": "日本4"
+},
+{
+"id": "😀25",
+"session_id": "日本0"
+},
+{
+"id": "😀26",
+"session_id": "日本1"
+},
+{
+"id": "😀27",
+"session_id": "日本2"
+},
+{
+"id": "😀28",
+"session_id": "日本3"
+},
+{
+"id": "😀29",
+"session_id": "日本4"
+}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "by_group",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.1,
+"seed": 42
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.3,
+"seed": 7
+}
+},
+{
+"records": [
+{
+"id": "only0"
+},
+{
+"id": "only1"
+},
+{
+"id": "only2"
+},
+{
+"id": "only3"
+},
+{
+"id": "only4"
+},
+{
+"id": "only5"
+},
+{
+"id": "only6"
+},
+{
+"id": "only7"
+},
+{
+"id": "only8"
+},
+{
+"id": "only9"
+},
+{
+"id": "only10"
+},
+{
+"id": "only11"
+},
+{
+"id": "only12"
+},
+{
+"id": "only13"
+},
+{
+"id": "only14"
+},
+{
+"id": "only15"
+},
+{
+"id": "only16"
+},
+{
+"id": "only17"
+},
+{
+"id": "only18"
+},
+{
+"id": "only19"
+},
+{
+"id": "only20"
+},
+{
+"id": "only21"
+},
+{
+"id": "only22"
+},
+{
+"id": "only23"
+},
+{
+"id": "only24"
+},
+{
+"id": "only25"
+},
+{
+"id": "only26"
+},
+{
+"id": "only27"
+},
+{
+"id": "only28"
+},
+{
+"id": "only29"
+},
+{
+"id": "only30"
+},
+{
+"id": "only31"
+},
+{
+"id": "only32"
+},
+{
+"id": "only33"
+},
+{
+"id": "only34"
+},
+{
+"id": "only35"
+},
+{
+"id": "only36"
+},
+{
+"id": "only37"
+},
+{
+"id": "only38"
+},
+{
+"id": "only39"
+}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.5,
+"seed": 0
+}
+},
+{
+"records": [
+{
+"id": "a",
+"session_id": "x"
+},
+{
+"id": "b",
+"session_id": "x"
+}
+],
+"options": {
+"strategy": "by_session",
+"eval_fraction": 0.5,
+"seed": 1
+}
+},
+{
+"records": [
+{
+"id": "z0"
+},
+{
+"id": "z1"
+},
+{
+"id": "z2"
+}
+],
+"options": {
+"strategy": "random",
+"eval_fraction": 0.5,
+"seed": 3
+}
+}
+]
