@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MetricPointInput, ResolvedRunConfig } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
 import { createMemoryStore } from "../src/store/memory.js";
-import { migrate } from "../src/store/migrate.js";
+import { loadMigrations, migrate } from "../src/store/migrate.js";
 import type { DatasetPart, RunRecord, Store } from "../src/store/types.js";
 import { ManualClock } from "./fixtures/clock.js";
 import {
@@ -83,10 +83,12 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       overrides: Partial<{
         recipe: RunRecord["recipe_kind"];
         name: string;
+        dependsOn: { runId: string; waiting: boolean };
       }> = {},
     ) => {
       const dataset = await makeDataset(ws);
       return store.runs.create({
+        dependsOn: overrides.dependsOn,
         workspaceId: ws,
         name: overrides.name ?? "run",
         datasetId: dataset.id,
@@ -541,6 +543,51 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         attempt_tokens: 0,
         lease_seconds: 45,
       });
+    });
+
+    it("runs: chained runs wait on their dependency until released", async () => {
+      const first = await makeRun();
+      clock.advanceSeconds(1);
+      const chained = await makeRun("ws_a", {
+        dependsOn: { runId: first.id, waiting: true },
+      });
+      const ready = await makeRun("ws_a", {
+        dependsOn: { runId: first.id, waiting: false },
+      });
+      expect(chained).toMatchObject({
+        depends_on: first.id,
+        waiting_on: first.id,
+      });
+      expect(ready).toMatchObject({ depends_on: first.id, waiting_on: null });
+      expect(first).toMatchObject({ depends_on: null, waiting_on: null });
+      expect(
+        (await store.runs.listWaitingOn(first.id)).map((r) => r.id),
+      ).toEqual([chained.id]);
+      expect(await store.runs.countActive()).toEqual({ queued: 2, running: 0 });
+
+      const claim = () =>
+        store.runs.claimNext({
+          workerId: "w",
+          leaseSeconds: 30,
+          now: clock.now(),
+        });
+      expect((await claim())?.id).toBe(first.id);
+      expect((await claim())?.id).toBe(ready.id);
+      expect(await claim()).toBeNull();
+
+      const released = await store.runs.update(
+        chained.id,
+        {
+          waiting_on: null,
+          resolved_config: { ...config, base_artifact: { id: "a@1" } } as never,
+        },
+        { status: ["queued"] },
+      );
+      expect(released?.resolved_config).toMatchObject({
+        base_artifact: { id: "a@1" },
+      });
+      expect(await store.runs.listWaitingOn(first.id)).toEqual([]);
+      expect((await claim())?.id).toBe(chained.id);
     });
 
     it("runs: 20 concurrent claimers over 10 queued runs get unique runs", async () => {
@@ -1507,13 +1554,15 @@ if (url) {
     it("applies on a fresh schema, re-runs as a no-op", async () => {
       const schema = freshSchemaName();
       try {
+        const versions = (await loadMigrations()).map((m) => m.version);
+        expect(versions[0]).toBe("0001");
         await withPool(async (pool) => {
-          expect(await migrate(pool, { schema })).toEqual(["0001"]);
+          expect(await migrate(pool, { schema })).toEqual(versions);
           expect(await migrate(pool, { schema })).toEqual([]);
           const { rows } = await pool.query(
-            `SELECT version FROM "${schema}".grad_schema_migrations`,
+            `SELECT version FROM "${schema}".grad_schema_migrations ORDER BY version`,
           );
-          expect(rows).toEqual([{ version: "0001" }]);
+          expect(rows).toEqual(versions.map((version) => ({ version })));
         });
       } finally {
         await dropSchema(url, schema);
@@ -1527,11 +1576,12 @@ if (url) {
           const results = await Promise.all(
             Array.from({ length: 6 }, () => migrate(pool, { schema })),
           );
-          expect(results.flat()).toEqual(["0001"]);
+          const versions = (await loadMigrations()).map((m) => m.version);
+          expect(results.flat()).toEqual(versions);
           const { rows } = await pool.query(
             `SELECT COUNT(*)::int AS n FROM "${schema}".grad_schema_migrations`,
           );
-          expect(rows[0]).toEqual({ n: 1 });
+          expect(rows[0]).toEqual({ n: versions.length });
         });
       } finally {
         await dropSchema(url, schema);

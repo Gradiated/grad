@@ -115,6 +115,8 @@ export const toRun = (r: Row): RunRecord => ({
   latest_metric: j<MetricPoint | null>(r.latest_metric, null),
   eval_report: j<Record<string, unknown> | null>(r.eval_report, null),
   artifact_id: sn(r.artifact_id),
+  depends_on: sn(r.depends_on),
+  waiting_on: sn(r.waiting_on),
   error: sn(r.error),
   created_at: iso(r.created_at),
   updated_at: iso(r.updated_at),

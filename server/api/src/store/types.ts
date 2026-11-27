@@ -203,12 +203,17 @@ export interface RunRecord {
   latest_metric: MetricPoint | null;
   eval_report: Record<string, unknown> | null;
   artifact_id: string | null;
+  /** Chained runs: the run whose artifact this run starts from. */
+  depends_on: string | null;
+  /** Set while the dependency has not completed; such runs are not claimable. */
+  waiting_on: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
 }
 
+/** `resolved_config` changes only when a chained run's dependency completes. */
 export type RunPatch = Partial<
   Omit<
     RunRecord,
@@ -219,7 +224,7 @@ export type RunPatch = Partial<
     | "dataset_name"
     | "dataset_version"
     | "recipe_kind"
-    | "resolved_config"
+    | "depends_on"
     | "price_per_million_tokens"
     | "created_at"
   >
@@ -238,10 +243,14 @@ export interface RunRepository {
     pricePerMillionTokens: number;
     totalSteps: number;
     maxAttempts: number;
+    /** Chained runs; `waiting` while the dependency has not completed yet. */
+    dependsOn?: { runId: string; waiting: boolean } | undefined;
   }): Promise<RunRecord>;
   get(workspaceId: string, id: string): Promise<RunRecord | null>;
   getById(id: string): Promise<RunRecord | null>;
   list(workspaceId: string, page: PageRequest): Promise<Page<RunRecord>>;
+  /** Queued runs waiting for `runId` to complete. */
+  listWaitingOn(runId: string): Promise<RunRecord[]>;
   update(
     id: string,
     patch: RunPatch,

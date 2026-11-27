@@ -3475,6 +3475,9 @@ pub mod models {
         pub split: Option<SplitSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub max_cost_usd: Option<f64>,
+        /// Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub depends_on: Option<String>,
     }
 
     /// Generated from the OpenAPI schema `PlanRunResponse`.
@@ -4925,6 +4928,9 @@ pub mod models {
         pub eval_report: Option<BTreeMap<String, Value>>,
         #[serde(default)]
         pub artifact_id: Option<String>,
+        /// The run this chained run starts from; it stays queued until that run completes.
+        #[serde(default)]
+        pub depends_on: Option<String>,
         #[serde(default)]
         pub error: Option<String>,
         pub created_at: String,

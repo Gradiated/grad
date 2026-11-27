@@ -24,7 +24,7 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { ApiError, conflict, forbidden, invalid, notFound } from "../errors.js";
 import { newId } from "../ids.js";
-import { isArtifactRef } from "../continued-training.js";
+import { isArtifactRef, toBaseArtifact } from "../continued-training.js";
 import { planRun } from "../planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
@@ -100,6 +100,7 @@ export const toPublicRun = (run: RunRecord): Run => ({
   latest_metric: run.latest_metric,
   eval_report: run.eval_report,
   artifact_id: run.artifact_id,
+  depends_on: run.depends_on,
   error: run.error,
   created_at: run.created_at,
   updated_at: run.updated_at,
@@ -268,17 +269,81 @@ export const createRunLifecycle = (
   const planFor = async (workspaceId: string, request: PlanRunRequest) => {
     const resolved = await datasets.resolve(workspaceId, request.dataset);
     const records = await datasets.readRecords(resolved.version);
-    const baseArtifact = isArtifactRef(request.recipe.model)
-      ? await store.artifacts.get(workspaceId, request.recipe.model)
+    const dependency = request.depends_on
+      ? await store.runs.get(workspaceId, request.depends_on)
+      : null;
+    const artifactRef = isArtifactRef(request.recipe.model)
+      ? request.recipe.model
+      : dependency?.artifact_id;
+    const baseArtifact = artifactRef
+      ? await store.artifacts.get(workspaceId, artifactRef)
       : null;
     const plan = planRun(request, records, {
       catalog,
       datasetVersion: resolved.version.version,
       allowWave2: settings.allowWave2Recipes,
       baseArtifact: baseArtifact && toPublicArtifact(baseArtifact),
+      dependency: dependency && toPublicRun(dependency),
     });
 
-    return { plan, dataset: resolved.dataset };
+    return { plan, dataset: resolved.dataset, dependency };
+  };
+
+  /**
+   * After `run` reaches a terminal status: chained runs waiting on it start
+   * from its artifact (completed) or are cancelled (failed, cancelled, or an
+   * artifact that can't be continued). `stopped_budget` keeps them waiting,
+   * since the run can be resumed.
+   */
+  const settleDependents = async (
+    tx: Repositories,
+    run: RunRecord,
+  ): Promise<void> => {
+    if (!TERMINAL.includes(run.status) || run.status === "stopped_budget") {
+      return;
+    }
+    const waiting = await tx.runs.listWaitingOn(run.id);
+    if (waiting.length === 0) return;
+
+    const artifact =
+      run.status === "completed" && run.artifact_id
+        ? await tx.artifacts.get(run.workspace_id, run.artifact_id)
+        : null;
+    const now = clock.now().toISOString();
+    for (const dependent of waiting) {
+      if (artifact?.format === "peft_lora") {
+        await tx.runs.update(
+          dependent.id,
+          {
+            waiting_on: null,
+            resolved_config: {
+              ...dependent.resolved_config,
+              base_artifact: toBaseArtifact(toPublicArtifact(artifact)),
+            },
+            updated_at: now,
+          },
+          { status: ["queued"] },
+        );
+        continue;
+      }
+
+      const why =
+        run.status === "completed"
+          ? `its artifact has format '${artifact?.format ?? "none"}', which can't be continued`
+          : `it ended ${run.status}`;
+      const cancelled = await tx.runs.update(
+        dependent.id,
+        {
+          status: "cancelled",
+          waiting_on: null,
+          finished_at: now,
+          updated_at: now,
+          error: `Cancelled because dependency run '${run.id}' did not produce a starting point: ${why}.`,
+        },
+        { status: ["queued"] },
+      );
+      if (cancelled) await settleDependents(tx, cancelled);
+    }
   };
 
   const pinCheckpoints = async (
@@ -342,8 +407,10 @@ export const createRunLifecycle = (
       tokens,
       costUsd: attemptCost,
     });
-    if (TERMINAL.includes(updated.status))
+    if (TERMINAL.includes(updated.status)) {
       await pinCheckpoints(tx, updated, now);
+      await settleDependents(tx, updated);
+    }
 
     return updated;
   };
@@ -459,7 +526,7 @@ export const createRunLifecycle = (
       (await planFor(workspaceId, request)).plan,
 
     create: async (workspaceId, request) => {
-      const { plan, dataset } = await planFor(workspaceId, request);
+      const { plan, dataset, dependency } = await planFor(workspaceId, request);
       const check = await deps.billing.checkCanStartRun(
         workspaceId,
         plan.estimated_cost_usd,
@@ -483,9 +550,20 @@ export const createRunLifecycle = (
         pricePerMillionTokens: plan.price_per_million_tokens,
         totalSteps: plan.estimated_steps,
         maxAttempts: settings.maxAttempts,
+        dependsOn: dependency
+          ? {
+              runId: dependency.id,
+              waiting: plan.resolved_config.base_artifact === null,
+            }
+          : undefined,
       });
+      if (run.waiting_on === null) return toPublicRun(run);
 
-      return toPublicRun(run);
+      // The dependency may have finished between planning and insert.
+      const latest = await store.runs.getById(run.waiting_on);
+      if (latest) await store.transaction((tx) => settleDependents(tx, latest));
+
+      return toPublicRun((await store.runs.getById(run.id)) ?? run);
     },
 
     get: async (workspaceId, id) => toPublicRun(await loadRun(workspaceId, id)),
@@ -533,13 +611,26 @@ export const createRunLifecycle = (
       }
 
       const now = clock.now().toISOString();
-      const updated = await store.runs.update(
-        id,
-        run.worker_id === null
-          ? { status: "cancelled", finished_at: now, updated_at: now }
-          : { status: "cancelled", updated_at: now },
-        { status: [run.status], workerId: run.worker_id },
-      );
+      const updated = await store.transaction(async (tx) => {
+        const cancelled = await tx.runs.update(
+          id,
+          run.worker_id === null
+            ? {
+                status: "cancelled",
+                waiting_on: null,
+                finished_at: now,
+                updated_at: now,
+              }
+            : { status: "cancelled", updated_at: now },
+          { status: [run.status], workerId: run.worker_id },
+        );
+        // Without a worker the run is final now; with one, closeAttempt settles it.
+        if (cancelled?.worker_id === null) {
+          await settleDependents(tx, cancelled);
+        }
+
+        return cancelled;
+      });
       if (!updated)
         throw conflict(
           "run_state_changed",
@@ -558,6 +649,21 @@ export const createRunLifecycle = (
         throw conflict(
           "run_not_resumable",
           `Run '${id}' is ${run.status}${run.worker_id ? " and its worker is still finalizing" : ""}; only stopped_budget, failed or cancelled runs can be resumed.`,
+        );
+      }
+
+      // A chained run cancelled with its dependency waits for it again.
+      const pendingDependency =
+        run.depends_on !== null && run.resolved_config.base_artifact === null
+          ? await store.runs.getById(run.depends_on)
+          : null;
+      if (
+        pendingDependency &&
+        ["failed", "cancelled"].includes(pendingDependency.status)
+      ) {
+        throw conflict(
+          "dependency_not_viable",
+          `Run '${id}' starts from run '${pendingDependency.id}', which is ${pendingDependency.status}; resume that run first.`,
         );
       }
 
@@ -593,6 +699,7 @@ export const createRunLifecycle = (
           error: null,
           failed_attempts: 0,
           finished_at: null,
+          waiting_on: pendingDependency?.id ?? null,
           updated_at: clock.now().toISOString(),
         },
         { status: [run.status], workerId: null },
@@ -602,8 +709,12 @@ export const createRunLifecycle = (
           "run_state_changed",
           `Run '${id}' changed concurrently; retry.`,
         );
+      if (pendingDependency?.status !== "completed")
+        return toPublicRun(updated);
 
-      return toPublicRun(updated);
+      await store.transaction((tx) => settleDependents(tx, pendingDependency));
+
+      return toPublicRun(await loadRun(workspaceId, id));
     },
 
     listCheckpoints: async (workspaceId, runId, page) => {

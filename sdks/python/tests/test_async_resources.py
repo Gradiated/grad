@@ -226,6 +226,10 @@ class AsyncRunTests(unittest.TestCase):
                 await client.deploy(done)
             with self.assertRaises(RuntimeError):
                 await grad.AsyncRun.from_api(RUN_Q, client).deploy()
+            chained = await done.then("prefs", recipe=grad.recipes.DPORecipe())
+            self.assertEqual(sender.sent[-1].json["depends_on"], RUN_C["id"])
+            self.assertEqual(sender.sent[-1].json["name"], RUN_C["name"])
+            self.assertIsInstance(chained, grad.AsyncRun)
 
         arun(main)
 

@@ -1150,6 +1150,8 @@ type PlanRunRequest struct {
 	Recipe     RecipeSpec `json:"recipe"`
 	Split      *SplitSpec `json:"split,omitempty"`
 	MaxCostUSD *float64   `json:"max_cost_usd,omitempty"`
+	// DependsOn Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model.
+	DependsOn *string `json:"depends_on,omitempty"`
 }
 
 // PlanRunResponse is generated from the OpenAPI schema.
@@ -1627,10 +1629,12 @@ type Run struct {
 	LatestMetric          *MetricPoint      `json:"latest_metric"`
 	EvalReport            map[string]any    `json:"eval_report"`
 	ArtifactID            *string           `json:"artifact_id"`
-	Error                 *string           `json:"error"`
-	CreatedAt             string            `json:"created_at"`
-	UpdatedAt             string            `json:"updated_at"`
-	FinishedAt            *string           `json:"finished_at"`
+	// DependsOn The run this chained run starts from; it stays queued until that run completes.
+	DependsOn  *string `json:"depends_on"`
+	Error      *string `json:"error"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	FinishedAt *string `json:"finished_at"`
 }
 
 // RunStatus is an enumeration of allowed values.

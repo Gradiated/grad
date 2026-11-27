@@ -648,6 +648,7 @@ class _RunData(APIObject):
     latest_metric: MetricPoint | None = None
     eval_report: AttrDict | None = None
     artifact_id: str | None = None
+    depends_on: str | None = None
     error: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -674,17 +675,20 @@ class _RunData(APIObject):
         hint = "" if self.done else " It is still running: call run.wait() first."
         return RuntimeError(f"Run {self.id} ({self.status}) has no artifact.{hint}")
 
-    def then(self, *args: Any, **kwargs: Any) -> Any:
-        """Not available in v0 (run chaining)."""
-        raise NotAvailableInV0Error(
-            "Run.then()",
-            "multi-stage run chains are deferred past v0 (and v0 servers cannot continue training from an artifact).",
-            alternative="Wait for the first run, then create the next one.",
-        )
 
 
 class Run(_RunData):
     """A training run. ``wait()``, stream ``metrics(follow=True)``, then ``deploy()`` or download."""
+
+    def then(
+        self, dataset: Any = None, *, recipe: Any, name: str | None = None, split: Any = None, max_cost_usd: float | None = None
+    ) -> Run:
+        """Queue the next stage (e.g. SFT then DPO): it starts from this run's artifact once this run
+        completes, and is cancelled if this run fails. Leave the recipe's ``model`` unset."""
+        run: Run = self._need_client().runs.create(
+            dataset, name=name or self.name, recipe=recipe, split=split, max_cost_usd=max_cost_usd, depends_on=self.id
+        )
+        return run
 
     def refresh(self) -> Run:
         """Reload from the server (in place)."""
@@ -749,6 +753,15 @@ class Run(_RunData):
 
 class AsyncRun(_RunData):
     """A training run (async methods)."""
+
+    async def then(
+        self, dataset: Any = None, *, recipe: Any, name: str | None = None, split: Any = None, max_cost_usd: float | None = None
+    ) -> AsyncRun:
+        """Queue the next stage from this run's artifact (see ``Run.then``)."""
+        run: AsyncRun = await self._need_client().runs.create(
+            dataset, name=name or self.name, recipe=recipe, split=split, max_cost_usd=max_cost_usd, depends_on=self.id
+        )
+        return run
 
     async def refresh(self) -> AsyncRun:
         """Reload from the server (in place)."""

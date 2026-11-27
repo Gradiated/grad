@@ -138,6 +138,155 @@ describe("continued training from an artifact", () => {
     });
   });
 
+  describe("chained runs (depends_on)", () => {
+    const DEFAULT_LORA = { adapter: { kind: "lora", rank: 32, alpha: 32 } };
+
+    const chain = async (
+      dependsOn: string,
+      recipe: Record<string, unknown> = { kind: "dpo" },
+      dataset = "prefs",
+    ) =>
+      t.json<Record<string, any> & { id: string }>("/v1/runs", {
+        body: { dataset, name: "chained", recipe, depends_on: dependsOn },
+      });
+
+    const getRun = async (id: string) =>
+      (await t.json<Record<string, any>>(`/v1/runs/${id}`)).body;
+
+    beforeEach(async () => {
+      await t.json("/v1/datasets/prefs/records", { body: { records: PAIRS } });
+    });
+
+    it("waits for the dependency, then starts from its artifact", async () => {
+      const sft = await createSftRun(t);
+      const dpo = await chain(sft.id);
+      expect(dpo.status).toBe(202);
+      expect(dpo.body).toMatchObject({ status: "queued", depends_on: sft.id });
+      expect(dpo.body.resolved_config).toMatchObject({
+        model: "test/tiny-qwen3",
+        adapter: { kind: "lora", rank: 32, alpha: 32 },
+        base_artifact: null,
+      });
+
+      const job = await worker.claim();
+      expect(job?.id).toBe(sft.id);
+      expect(await new FakeWorker(t, "worker-2").claim()).toBeNull();
+      const queue = await worker.call<{ queued: number }>(
+        "/v1/trainer-jobs/queue",
+        undefined,
+        "GET",
+      );
+      expect(queue.body.queued).toBe(0);
+
+      const done = await worker.complete(
+        job!,
+        { status: "completed", manifest: DEFAULT_LORA, tokens_processed: 1 },
+        "sft-bundle",
+      );
+      const artifact = done.body.artifact as { id: string };
+      expect((await getRun(dpo.body.id)).resolved_config.base_artifact).toEqual(
+        {
+          id: artifact.id,
+          recipe_kind: "sft",
+          format: "peft_lora",
+          sha256: sha256Hex("sft-bundle"),
+        },
+      );
+      const next = await worker.claim();
+      expect(next?.id).toBe(dpo.body.id);
+      expect(
+        (next as unknown as { base: { artifact_id: string } }).base.artifact_id,
+      ).toBe(artifact.id);
+      expect(next?.run?.resolved_config).toMatchObject({
+        base_artifact: { id: artifact.id },
+      });
+
+      // Chaining onto a finished run resolves its artifact right away.
+      const late = await chain(sft.id);
+      expect(late.body.resolved_config.base_artifact).toMatchObject({
+        id: artifact.id,
+      });
+    });
+
+    it("cancels the whole chain when a dependency fails, and resumes it again", async () => {
+      const sft = await createSftRun(t);
+      const dpo = await chain(sft.id);
+      const third = await chain(dpo.body.id);
+      const job = await worker.claim();
+      await worker.complete(job!, { status: "failed", error: "boom" });
+
+      for (const id of [dpo.body.id, third.body.id]) {
+        const run = await getRun(id);
+        expect(run.status).toBe("cancelled");
+        expect(run.error).toMatch(/dependency run .* ended (failed|cancelled)/);
+      }
+      expect((await chain(sft.id)).body).toMatchObject({
+        code: "dependency_failed",
+      });
+      const blocked = await t.json(`/v1/runs/${dpo.body.id}/resume`, {
+        body: {},
+      });
+      expect(blocked.body).toMatchObject({ code: "dependency_not_viable" });
+
+      expect(
+        (await t.json(`/v1/runs/${sft.id}/resume`, { body: {} })).status,
+      ).toBe(200);
+      const resumed = await t.json<Record<string, any>>(
+        `/v1/runs/${dpo.body.id}/resume`,
+        { body: {} },
+      );
+      expect(resumed.body).toMatchObject({ status: "queued" });
+      const retry = await worker.claim();
+      expect(retry?.id).toBe(sft.id);
+      await worker.complete(
+        retry!,
+        { status: "completed", manifest: DEFAULT_LORA },
+        "sft-2",
+      );
+      expect(
+        (await getRun(dpo.body.id)).resolved_config.base_artifact,
+      ).toMatchObject({ sha256: sha256Hex("sft-2") });
+    });
+
+    it("cancels dependents of a cancelled queued run and of a non-continuable artifact", async () => {
+      const sft = await createSftRun(t);
+      const dpo = await chain(sft.id);
+      expect(
+        (await t.json(`/v1/runs/${sft.id}/cancel`, { body: {} })).status,
+      ).toBe(200);
+      expect((await getRun(dpo.body.id)).status).toBe("cancelled");
+
+      const other = await createSftRun(t, { dataset: "d2", name: "other" });
+      const follower = await chain(other.id);
+      const job = await worker.claim();
+      await worker.complete(
+        job!,
+        { status: "completed", format: "reference", manifest: DEFAULT_LORA },
+        "ref-bundle",
+      );
+      const cancelled = await getRun(follower.body.id);
+      expect(cancelled.status).toBe("cancelled");
+      expect(cancelled.error).toMatch(/format 'reference'/);
+    });
+
+    it("validates the chain at plan time", async () => {
+      const sft = await createSftRun(t);
+      expect(
+        (await chain(sft.id, { kind: "dpo", model: "test/tiny-qwen3" })).body,
+      ).toMatchObject({ code: "depends_on_model_conflict" });
+      expect((await chain("run_missing")).body).toMatchObject({
+        code: "unknown_dependency",
+      });
+      expect(
+        (
+          await chain(sft.id, {
+            kind: "router",
+          })
+        ).body,
+      ).toMatchObject({ code: "continued_training_unsupported" });
+    });
+  });
+
   describe("resolveContinuation", () => {
     const catalog = createModelCatalog(TINY_MODELS_JSON);
     const artifact = (over: Partial<Artifact> = {}): Artifact => ({

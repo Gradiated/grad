@@ -26,7 +26,7 @@ import {
 import { addSecondsIso, first, listNewest, nowIso } from "./shared.js";
 
 const RUN_COLUMNS: ColumnTypes = {
-  json: new Set(["latest_metric", "eval_report"]),
+  json: new Set(["latest_metric", "eval_report", "resolved_config"]),
   timestamps: new Set(["lease_expires_at", "updated_at", "finished_at"]),
 };
 
@@ -37,9 +37,9 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
       `INSERT INTO grad_runs
          (id, workspace_id, name, dataset_id, dataset_name, dataset_version, recipe_kind, status,
           resolved_config, max_cost_usd, price_per_million_tokens, total_steps, max_attempts,
-          created_at, updated_at)
+          created_at, updated_at, depends_on, waiting_on)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8::jsonb, $9, $10, $11, $12,
-               $13::timestamptz, $13::timestamptz)
+               $13::timestamptz, $13::timestamptz, $14, $15)
        RETURNING *`,
       [
         newId("run"),
@@ -55,6 +55,8 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
         input.totalSteps,
         input.maxAttempts,
         ts,
+        input.dependsOn?.runId ?? null,
+        input.dependsOn?.waiting ? input.dependsOn.runId : null,
       ],
     );
 
@@ -88,6 +90,14 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
       map: toRun,
     });
   },
+  listWaitingOn: async (runId) =>
+    (
+      await db.query(
+        `SELECT * FROM grad_runs WHERE waiting_on = $1 AND status = 'queued'
+         ORDER BY created_at, id COLLATE "C"`,
+        [runId],
+      )
+    ).map(toRun),
   update: async (id, patch, expect) => {
     const params = new Params();
     const sets = setClause(
@@ -114,7 +124,7 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
              updated_at = $4::timestamptz
          WHERE id = (
            SELECT id FROM grad_runs
-           WHERE status = 'queued'
+           WHERE status = 'queued' AND waiting_on IS NULL
              AND ($5::text IS NULL OR workspace_id = $5)
              AND ($6::text[] IS NULL OR recipe_kind = ANY($6::text[]))
            ORDER BY created_at, id COLLATE "C"
@@ -146,7 +156,7 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => ({
   countActive: async () => {
     const row = first(
       await db.query(
-        `SELECT COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+        `SELECT COUNT(*) FILTER (WHERE status = 'queued' AND waiting_on IS NULL) AS queued,
                 COUNT(*) FILTER (WHERE worker_id IS NOT NULL) AS running
          FROM grad_runs WHERE status = 'queued' OR worker_id IS NOT NULL`,
       ),

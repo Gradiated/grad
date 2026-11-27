@@ -535,6 +535,8 @@ export interface PlanRunRequest {
   recipe: RecipeSpec;
   split?: SplitSpec | undefined;
   maxCostUsd?: number | undefined;
+  /** Chained run (run.then(...)): starts from this run's artifact once it completes and is cancelled if it fails. Omit recipe.model. */
+  dependsOn?: string | undefined;
 }
 
 export interface PlanRunResponse {
@@ -798,6 +800,8 @@ export interface Run {
   latestMetric: MetricPoint | null;
   evalReport: Record<string, unknown> | null;
   artifactId: string | null;
+  /** The run this chained run starts from; it stays queued until that run completes. */
+  dependsOn: string | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
