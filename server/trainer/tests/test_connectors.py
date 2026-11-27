@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from grad_trainer.connectors import detect_source, normalize_traces
+from grad_trainer.connectors import detect_source, normalize_traces, normalize_traces_with_stats, parse_row
 
 
 class ConnectorTests(unittest.TestCase):
@@ -108,6 +108,103 @@ class ConnectorTests(unittest.TestCase):
             self.assertGreaterEqual(len(msgs), 2, expected_source)
             self.assertEqual(msgs[0]["role"], "user")
             self.assertEqual(msgs[-1]["role"], "assistant")
+
+
+class ConnectorEdgeCaseTests(unittest.TestCase):
+    def test_openinference_and_otlp_list_attributes(self) -> None:
+        openinference = {
+            "span_id": "s",
+            "attributes": {
+                "llm.model_name": "gpt-x",
+                "llm.input_messages.0.message.role": "user",
+                "llm.input_messages.0.message.content": "hi",
+                "llm.output_messages.0.message.role": "assistant",
+                "llm.output_messages.0.message.content": "hello",
+            },
+        }
+        rec = normalize_traces([openinference])[0]
+        self.assertEqual([m["content"] for m in rec["messages"]], ["hi", "hello"])
+        self.assertEqual(rec["metadata"]["model"], "gpt-x")
+        otlp = {
+            "traceId": "t1",
+            "spanId": "s1",
+            "attributes": [
+                {"key": "gen_ai.request.model", "value": {"stringValue": "m"}},
+                {"key": "gen_ai.prompt.0.role", "value": {"stringValue": "user"}},
+                {"key": "gen_ai.prompt.0.content", "value": {"stringValue": "q"}},
+                {"key": "gen_ai.completion.0.content", "value": {"stringValue": "a"}},
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "3"}},
+                {"key": "tags", "value": {"arrayValue": {"values": [{"stringValue": "x"}]}}},
+            ],
+        }
+        self.assertEqual(detect_source(otlp), "otel")
+        rec = normalize_traces([otlp])[0]
+        self.assertEqual((rec["session_id"], rec["id"]), ("t1", "s1"))
+        self.assertEqual(rec["messages"][1], {"role": "assistant", "content": "a"})
+
+    def test_genai_semconv_json_messages(self) -> None:
+        row = {
+            "attributes": {
+                "gen_ai.input.messages": '[{"role": "user", "parts": [{"type": "text", "content": "q"}]}]',
+                "gen_ai.output.messages": [{"role": "assistant", "content": "a"}],
+                "gen_ai.conversation.id": "c1",
+            }
+        }
+        rec = normalize_traces([row])[0]
+        self.assertEqual([m["content"] for m in rec["messages"]], ["q", "a"])
+        self.assertEqual(rec["session_id"], "c1")
+        plain = {"attributes": {"gen_ai.input.messages": "just text"}}
+        self.assertEqual(normalize_traces([plain])[0]["messages"], [{"role": "user", "content": "just text"}])
+
+    def test_tool_calls_and_anthropic_blocks_are_kept(self) -> None:
+        call = [{"id": "c", "type": "function", "function": {"name": "f", "arguments": "{}"}}]
+        row = {
+            "request": {"messages": [{"role": "user", "content": "go"}], "tools": [{"type": "function"}]},
+            "response": {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": call}}]},
+        }
+        rec = normalize_traces([row])[0]
+        self.assertEqual(rec["messages"][1]["tool_calls"], call)
+        self.assertEqual(rec["tools"], [{"type": "function"}])
+        anthropic = {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "f", "input": {"a": 1}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "res"}]},
+            ]
+        }
+        msgs = normalize_traces([anthropic])[0]["messages"]
+        self.assertEqual(msgs[1]["tool_calls"][0]["function"], {"name": "f", "arguments": {"a": 1}})
+        self.assertEqual((msgs[2]["role"], msgs[2]["content"]), ("tool", "res"))
+
+    def test_native_records_pass_through(self) -> None:
+        rows = [
+            {"prompt": "p", "chosen": "c", "rejected": "r", "group_id": 7},
+            {"query": "q", "positive": "d", "negatives": ["n"]},
+            {"state": {"t": 1}, "questions": {"x": {"type": "noul"}}, "expected_output": {"x": 1}},
+            {"schema": "grad.trajectory/1", "group_id": "g", "role": "chosen", "input": {"messages": []}, "output": {"turns": []}},
+        ]
+        recs = normalize_traces(rows)
+        self.assertEqual(len(recs), 4)
+        self.assertEqual(recs[0]["group_id"], "7")
+        self.assertEqual(recs[3]["schema"], "grad.trajectory/1")
+
+    def test_detection_edge_cases_and_skip_stats(self) -> None:
+        self.assertEqual(detect_source({"root_span_id": "r", "input": "x", "output": "y"}), "braintrust")
+        self.assertEqual(detect_source({"traceId": "t", "input": "x"}), "langfuse")
+        self.assertEqual(detect_source({"$ai_input": []}), "posthog")
+        records, skipped = normalize_traces_with_stats(["text", {"messages": []}, {"inputs": {}, "outputs": {}}])
+        self.assertEqual(records, [])
+        self.assertEqual(skipped, {"not_an_object": 1, "grad_trajectories:no_messages": 1, "langsmith:no_messages": 1})
+        with self.assertRaisesRegex(ValueError, "Unknown trace connector"):
+            parse_row({}, "splunk")
+        deep: dict = {"role": "user", "content": "x"}
+        for _ in range(20):
+            deep = {"message": deep}
+        self.assertEqual(normalize_traces([{"input": deep, "output": "y"}])[0]["messages"], [{"role": "assistant", "content": "y"}])
+        flat = {"inputs": {"q": 1}, "outputs": {"generations": [{"text": "a"}]}}
+        self.assertEqual(normalize_traces([flat], source="langsmith")[0]["messages"][-1]["content"], "a")
+        scores = normalize_traces([{"messages": [{"role": "user", "content": "x"}], "scores": [{"name": "a", "value": 1}, {"name": "b", "value": True}]}])
+        self.assertEqual(scores[0]["scores"], {"a": 1.0})
 
 
 if __name__ == "__main__":
