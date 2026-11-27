@@ -18,6 +18,7 @@ import type {
   CreateApiKeyRequest,
   CreateDatasetRequest,
   CreateImportRequest,
+  CreateSourceRequest,
   CreateUploadRequest,
   CreatedApiKey,
   Dataset,
@@ -50,6 +51,10 @@ import type {
   RouteResponse,
   Run,
   ScoreDatasetRequest,
+  Secret,
+  SetSecretRequest,
+  Source,
+  SyncSourceRequest,
   TrainableModel,
   UploadTicket,
   UsageRecord,
@@ -107,6 +112,9 @@ export const CODEC: CodecTable = {
   "RouteResponse": { o: [["inferenceId", "inference_id", 0], ["artifactId", "artifact_id", 0], ["isExploration", "is_exploration", 0]] },
   "RouterParetoSummary": { o: [["targetMaxDrop", "target_max_drop", 0], ["routedQuality", "routed_quality", 0], ["qualityDrop", "quality_drop", 0], ["qualityDropCi95", "quality_drop_ci95", 0], ["offloadRate", "offload_rate", 0], ["costSavingsPct", "cost_savings_pct", 0]] },
   "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", "EvalReport"], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
+  "Secret": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "Source": { o: [["workspaceId", "workspace_id", 0], ["nextSyncAt", "next_sync_at", 0], ["lastSyncedAt", "last_synced_at", 0], ["lastSync", "last_sync", "SourceSync"], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "SourceSync": { o: [["importId", "import_id", 0], ["datasetVersion", "dataset_version", 0], ["createdAt", "created_at", 0], ["finishedAt", "finished_at", 0]] },
   "SplitSpec": { o: [["evalFraction", "eval_fraction", 0]] },
   "TrainableModel": { o: [["hfRepo", "hf_repo", 0], ["defaultFor", "default_for", 0], ["pricePerMillionTokensUsd", "price_per_million_tokens_usd", 0], ["maxContextTokens", "max_context_tokens", 0], ["templateRevision", "template_revision", 0], ["calibratedLrs", "calibrated_lrs", 0]] },
   "TrajectoryInput": { o: [["messages", "messages", { a: "ChatMessage" }]] },
@@ -272,6 +280,31 @@ export type ListRunsResponse = {
   nextCursor: string | null;
 };
 
+export interface ListSecretsParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export type ListSecretsResponse = {
+  data: Array<Secret>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
+  nextCursor: string | null;
+};
+
+export interface ListSourcesParams {
+  /** Page size (default 50). Values above 200 are clamped to 200. */
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  dataset?: string | undefined;
+}
+
+export type ListSourcesResponse = {
+  data: Array<Source>;
+  /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
+  nextCursor: string | null;
+};
+
 export interface ListUsageParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
@@ -310,6 +343,10 @@ export const LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200;
 export const LIST_RUN_METRICS_LIMIT_MAX = 5000;
 /** Largest `limit` accepted by `listRuns` (the server clamps larger values). */
 export const LIST_RUNS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listSecrets` (the server clamps larger values). */
+export const LIST_SECRETS_LIMIT_MAX = 200;
+/** Largest `limit` accepted by `listSources` (the server clamps larger values). */
+export const LIST_SOURCES_LIMIT_MAX = 200;
 /** Largest `limit` accepted by `listUsage` (the server clamps larger values). */
 export const LIST_USAGE_LIMIT_MAX = 200;
 
@@ -368,6 +405,16 @@ export class ApiClient {
   }
 
   /**
+   * Connect an observability provider to a dataset
+   *
+   * `POST /v1/datasets/{name}/sources`
+   */
+  async createDatasetSource(name: string, body: CreateSourceRequest, options?: RequestOptions): Promise<Source> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/sources`, json: body, idempotent: true }, options);
+    return convertKeys(CODEC, "Source", data, "decode") as Source;
+  }
+
+  /**
    * Generate embeddings from a deployed embedding artifact
    *
    * `POST /v1/embeddings`
@@ -405,6 +452,24 @@ export class ApiClient {
   async createUpload(body: CreateUploadRequest, options?: RequestOptions): Promise<UploadTicket> {
     const data = await this.transport.json({ method: "POST", path: `/v1/uploads`, json: convertKeys(CODEC, "CreateUploadRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "UploadTicket", data, "decode") as UploadTicket;
+  }
+
+  /**
+   * Delete a secret (409 while a source uses it)
+   *
+   * `DELETE /v1/secrets/{name}`
+   */
+  async deleteSecret(name: string, options?: RequestOptions): Promise<void> {
+    await this.transport.json({ method: "DELETE", path: `/v1/secrets/${encodePathParam(name, "name")}` }, options);
+  }
+
+  /**
+   * Remove a source (its dataset and versions stay)
+   *
+   * `DELETE /v1/sources/{id}`
+   */
+  async deleteSource(id: string, options?: RequestOptions): Promise<void> {
+    await this.transport.json({ method: "DELETE", path: `/v1/sources/${encodePathParam(id, "id")}` }, options);
   }
 
   /**
@@ -494,6 +559,26 @@ export class ApiClient {
   async getRun(id: string, options?: RequestOptions): Promise<Run> {
     const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}` }, options);
     return convertKeys(CODEC, "Run", data, "decode") as Run;
+  }
+
+  /**
+   * Get a secret's metadata (never the value)
+   *
+   * `GET /v1/secrets/{name}`
+   */
+  async getSecret(name: string, options?: RequestOptions): Promise<Secret> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/secrets/${encodePathParam(name, "name")}` }, options);
+    return convertKeys(CODEC, "Secret", data, "decode") as Secret;
+  }
+
+  /**
+   * Get a source and its latest sync
+   *
+   * `GET /v1/sources/{id}`
+   */
+  async getSource(id: string, options?: RequestOptions): Promise<Source> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/sources/${encodePathParam(id, "id")}` }, options);
+    return convertKeys(CODEC, "Source", data, "decode") as Source;
   }
 
   /**
@@ -644,6 +729,26 @@ export class ApiClient {
   }
 
   /**
+   * List workspace secrets (names and metadata only)
+   *
+   * `GET /v1/secrets`
+   */
+  async listSecrets(params?: ListSecretsParams, options?: RequestOptions): Promise<ListSecretsResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/secrets`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "Secret" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListSecretsResponse;
+  }
+
+  /**
+   * List sources (newest first), optionally for one dataset
+   *
+   * `GET /v1/sources`
+   */
+  async listSources(params?: ListSourcesParams, options?: RequestOptions): Promise<ListSourcesResponse> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/sources`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["dataset", params?.dataset]] }, options);
+    return convertKeys(CODEC, { o: [["data", "data", { a: "Source" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListSourcesResponse;
+  }
+
+  /**
    * List billed usage, newest first: one record per run or eval attempt
    *
    * `GET /v1/usage`
@@ -771,5 +876,25 @@ export class ApiClient {
   async scoreDataset(name: string, body: ScoreDatasetRequest, options?: RequestOptions): Promise<EvalRun> {
     const data = await this.transport.json({ method: "POST", path: `/v1/datasets/${encodePathParam(name, "name")}/score`, json: body, idempotent: true }, options);
     return convertKeys(CODEC, "EvalRun", data, "decode") as EvalRun;
+  }
+
+  /**
+   * Create or replace a workspace secret (the value is write-only)
+   *
+   * `POST /v1/secrets`
+   */
+  async setSecret(body: SetSecretRequest, options?: RequestOptions): Promise<Secret> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/secrets`, json: body, idempotent: true }, options);
+    return convertKeys(CODEC, "Secret", data, "decode") as Secret;
+  }
+
+  /**
+   * Sync now: queue an import of new traces and scores (returns the running one if a sync is in progress)
+   *
+   * `POST /v1/sources/{id}/sync`
+   */
+  async syncSource(id: string, body?: SyncSourceRequest, options?: RequestOptions): Promise<ImportJob> {
+    const data = await this.transport.json({ method: "POST", path: `/v1/sources/${encodePathParam(id, "id")}/sync`, json: body, idempotent: true }, options);
+    return convertKeys(CODEC, "ImportJob", data, "decode") as ImportJob;
   }
 }

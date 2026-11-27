@@ -108,6 +108,10 @@ string_enum! {
         RunsWrite => "runs:write",
         ArtifactsRead => "artifacts:read",
         ArtifactsWrite => "artifacts:write",
+        SecretsRead => "secrets:read",
+        SecretsWrite => "secrets:write",
+        SourcesRead => "sources:read",
+        SourcesWrite => "sources:write",
         DeploymentsWrite => "deployments:write",
         FeedbackWrite => "feedback:write",
         EnvServe => "env:serve",
@@ -884,6 +888,9 @@ pub struct ImportSource {
     pub columns: Option<HfColumnMapping>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<i64>,
+    /// Name of a workspace secret holding a Hugging Face token, for gated or private datasets. The worker receives the token at claim time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub benchmark: Option<ImportSourceBenchmark>,
 }
@@ -1725,5 +1732,9 @@ pub const LIST_RUN_CHECKPOINTS_LIMIT_MAX: u32 = 200;
 pub const LIST_RUN_METRICS_LIMIT_MAX: u32 = 5000;
 /// Largest `limit` accepted by `list_runs` (the server clamps larger values).
 pub const LIST_RUNS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_secrets` (the server clamps larger values).
+pub const LIST_SECRETS_LIMIT_MAX: u32 = 200;
+/// Largest `limit` accepted by `list_sources` (the server clamps larger values).
+pub const LIST_SOURCES_LIMIT_MAX: u32 = 200;
 /// Largest `limit` accepted by `list_usage` (the server clamps larger values).
 pub const LIST_USAGE_LIMIT_MAX: u32 = 200;

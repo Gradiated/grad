@@ -1,0 +1,146 @@
+import { z } from "@hono/zod-openapi";
+
+import { IsoTimestampSchema, SlugSchema } from "./common.js";
+
+// --- Secrets ------------------------------------------------------------------
+
+export const SecretNameSchema = SlugSchema.openapi({
+  description:
+    "Lowercase letters, digits, '.', '_' and '-'; unique per workspace.",
+});
+
+export const MAX_SECRET_BYTES = 16 * 1024;
+
+export const SetSecretRequestSchema = z
+  .object({
+    name: SecretNameSchema,
+    value: z
+      .string()
+      .min(1)
+      .refine((v) => Buffer.byteLength(v, "utf8") <= MAX_SECRET_BYTES, {
+        message: `Secret values are limited to ${MAX_SECRET_BYTES} bytes.`,
+      })
+      .openapi({
+        description:
+          "Write-only: stored encrypted and never returned by any endpoint.",
+      }),
+  })
+  .openapi("SetSecretRequest");
+
+export const SecretSchema = z
+  .object({
+    name: SecretNameSchema,
+    workspace_id: z.string().min(1),
+    created_at: IsoTimestampSchema,
+    updated_at: IsoTimestampSchema,
+  })
+  .openapi("Secret", {
+    description: "A workspace secret's metadata. The value is never returned.",
+  });
+
+export type Secret = z.infer<typeof SecretSchema>;
+
+export const SecretNameParamSchema = z.object({ name: SecretNameSchema });
+
+// --- Sources ------------------------------------------------------------------
+
+/** Providers with a fetcher in `grad_trainer/providers`. */
+export const SOURCE_PROVIDERS = [
+  "langfuse",
+  "langsmith",
+  "braintrust",
+  "posthog",
+  "phoenix",
+  "gradiated",
+] as const;
+
+export type SourceProviderKind = (typeof SOURCE_PROVIDERS)[number];
+
+export const SourceProviderSchema = z
+  .object({
+    kind: z
+      .string()
+      .min(1)
+      .max(40)
+      .openapi({
+        description: `One of ${SOURCE_PROVIDERS.join(", ")}; anything else is 422 source_provider_unsupported.`,
+        example: "langfuse",
+      }),
+    host: z.string().url().max(2048).nullable().optional().openapi({
+      description:
+        "The provider's API host (https). Optional for providers with one public host; not used by 'gradiated'.",
+    }),
+    secret: SecretNameSchema.nullable().optional().openapi({
+      description:
+        "Name of the workspace secret holding the provider key. Not used by 'gradiated'.",
+    }),
+    project: z.string().min(1).max(200).nullable().optional().openapi({
+      description:
+        "The provider project to read. Required for braintrust (project id or name) and posthog (numeric project id); optional elsewhere (LangSmith project, Phoenix project).",
+    }),
+    filters: z.record(z.string(), z.unknown()).optional().openapi({
+      description:
+        'Provider-specific filters passed to the fetcher, for example `{"tags": ["prod"]}` or, for \'gradiated\', `{"models": [...], "tasks": [...]}`.',
+    }),
+  })
+  .openapi("SourceProvider");
+
+export type SourceProviderInput = z.infer<typeof SourceProviderSchema>;
+
+export const CreateSourceRequestSchema = z
+  .object({
+    provider: SourceProviderSchema,
+    schedule: z.string().min(1).max(120).nullable().optional().openapi({
+      description:
+        "Five-field cron in UTC (`*/15 * * * *`). Leave it out to sync only on request.",
+    }),
+  })
+  .openapi("CreateSourceRequest");
+
+export const SourceSyncSchema = z
+  .object({
+    import_id: z.string().min(1),
+    status: z.enum(["queued", "running", "completed", "failed"]),
+    full: z.boolean(),
+    dataset_version: z.number().int().min(0).nullable(),
+    error: z.string().nullable(),
+    created_at: IsoTimestampSchema,
+    finished_at: IsoTimestampSchema.nullable(),
+  })
+  .openapi("SourceSync");
+
+export const SourceSchema = z
+  .object({
+    id: z.string().min(1),
+    workspace_id: z.string().min(1),
+    dataset: SlugSchema,
+    provider: z.object({
+      kind: z.enum(SOURCE_PROVIDERS),
+      host: z.string().nullable(),
+      secret: z.string().nullable(),
+      project: z.string().nullable(),
+      filters: z.record(z.string(), z.unknown()),
+    }),
+    schedule: z.string().nullable(),
+    next_sync_at: IsoTimestampSchema.nullable(),
+    last_synced_at: IsoTimestampSchema.nullable().openapi({
+      description: "When the last successful sync finished.",
+    }),
+    last_sync: SourceSyncSchema.nullable().openapi({
+      description: "The most recent sync, running or finished.",
+    }),
+    created_at: IsoTimestampSchema,
+    updated_at: IsoTimestampSchema,
+  })
+  .openapi("Source");
+
+export type Source = z.infer<typeof SourceSchema>;
+
+export const SyncSourceRequestSchema = z
+  .object({
+    full: z.boolean().default(false).openapi({
+      description:
+        "Rebuild the dataset from the provider as a new version (ignores the stored watermark).",
+    }),
+  })
+  .openapi("SyncSourceRequest");

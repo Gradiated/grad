@@ -16,7 +16,7 @@ import type {
   PostImportRecordsRequestSchema,
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
-import { notFound } from "../errors.js";
+import { errorMessage, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import type {
   IdempotencyInput,
@@ -35,6 +35,7 @@ import {
   type JobKindHandler,
   type JobQueue,
 } from "./jobs.js";
+import { isSyncPayload, type SourceService } from "./sources.js";
 import { jobBlobKey, stagingKey, type UploadService } from "./uploads.js";
 
 type CreateImportBody = z.infer<typeof CreateImportRequestSchema>;
@@ -98,7 +99,11 @@ const batchRecordId = (
 
 export const createImportService = (
   deps: AppDependencies,
-  collaborators: { uploads: UploadService; queue: () => JobQueue },
+  collaborators: {
+    uploads: UploadService;
+    sources: SourceService;
+    queue: () => JobQueue;
+  },
 ): ImportService => {
   const { store, storage, clock, settings } = deps;
   const { uploads } = collaborators;
@@ -133,6 +138,35 @@ export const createImportService = (
     return updated;
   };
 
+  /**
+   * The source a worker gets: uploads with a download URL; source syncs and
+   * gated HF datasets with their workspace secret (only in this response).
+   */
+  const claimSource = async (
+    job: ImportJobRecord,
+  ): Promise<Record<string, unknown>> => {
+    if (job.upload_key !== null) {
+      return {
+        ...job.source,
+        download_url: await uploads.downloadUrl(job.upload_key),
+      };
+    }
+    if (isSyncPayload(job.source))
+      return collaborators.sources.claimPayload(job);
+    const secret = job.source.kind === "hf" ? job.source.secret : undefined;
+    if (typeof secret === "string") {
+      return {
+        ...job.source,
+        token: await collaborators.sources.revealSecret(
+          job.workspace_id,
+          secret,
+        ),
+      };
+    }
+
+    return job.source;
+  };
+
   const handler: JobKindHandler = {
     onClaim: async (row, renewed) => {
       // Counters describe the current attempt; its parts are staged afresh.
@@ -149,13 +183,18 @@ export const createImportService = (
             fenceOf(row, ["running"]),
           );
       if (!job) return null;
-      const source =
-        job.upload_key !== null
-          ? {
-              ...job.source,
-              download_url: await uploads.downloadUrl(job.upload_key),
-            }
-          : job.source;
+      let source: Record<string, unknown>;
+      try {
+        source = await claimSource(job);
+      } catch (error) {
+        // Unbuildable (source removed, secret gone): fail it, claim the next.
+        await close(job, {
+          status: "failed",
+          finished_at: clock.now().toISOString(),
+          error: errorMessage(error),
+        });
+        return null;
+      }
 
       return {
         id: job.id,
@@ -218,6 +257,12 @@ export const createImportService = (
             idempotency,
           };
           if (body.source.kind === "hf" || body.source.kind === "benchmark") {
+            if (body.source.kind === "hf" && body.source.secret !== undefined) {
+              await collaborators.sources.requireSecret(
+                workspaceId,
+                body.source.secret,
+              );
+            }
             return toPublicImport(
               await store.imports.create({
                 ...common,
@@ -426,6 +471,9 @@ export const createImportService = (
           fenceOf(job, ["running"]),
         );
         if (!updated) throw leaseLost(id);
+        if (isSyncPayload(job.source)) {
+          await collaborators.sources.completeSync(tx, job, summary.watermark);
+        }
 
         return { completed: updated, orphans: orphanKeys };
       });

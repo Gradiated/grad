@@ -7,6 +7,7 @@ import {
 import {
   createCloudAuthAdapter,
   createCloudBillingAdapter,
+  createCloudTracesAdapter,
   type CloudAdapterConfig,
 } from "./adapters-cloud.js";
 import { createModelCatalog } from "./catalog.js";
@@ -20,6 +21,7 @@ import { assertMigrated } from "./migrations.js";
 import { LocalObjectStore } from "./storage/local.js";
 import { S3ObjectStore } from "./storage/s3.js";
 import { createBlobSigner } from "./storage/signer.js";
+import { createSecretsCipher } from "./secrets.js";
 import { createPostgresStore } from "./store/postgres.js";
 
 export const log = (
@@ -82,6 +84,7 @@ export const buildDependencies = async (
     internalApiBaseUrl: env.CLOUD_INTERNAL_API_URL as string,
     serviceToken: env.CLOUD_SERVICE_TOKEN as string,
     trainerKeyHash,
+    trainerKeys: env.trainerKeys,
   });
 
   const auth =
@@ -91,6 +94,7 @@ export const buildDependencies = async (
         ? createLocalApiKeyAuth({
             adminKeyHash: env.ADMIN_API_KEY_HASH,
             trainerKeyHash,
+            trainerKeys: env.trainerKeys,
             workspaceId: env.DEFAULT_WORKSPACE_ID,
             lookup: store.apiKeys,
           })
@@ -116,6 +120,13 @@ export const buildDependencies = async (
     clock,
     inference: buildInference(env),
     regex: createRegexEvaluator(),
+    secrets: createSecretsCipher({
+      key: env.GRAD_SECRETS_KEY,
+      oldKeys: env.GRAD_SECRETS_KEYS_OLD,
+    }),
+    // The `gradiated` source reads Cloud gateway traces: Cloud only.
+    traces:
+      env.AUTH_MODE === "cloud" ? createCloudTracesAdapter(cloud()) : null,
     settings: {
       maxAttempts: env.MAX_ATTEMPTS,
       evalConcurrency: env.EVAL_CONCURRENCY,

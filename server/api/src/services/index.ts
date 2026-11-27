@@ -5,6 +5,7 @@ import { createImportService, type ImportService } from "./imports.js";
 import { createJobQueue, type JobQueue } from "./jobs.js";
 import { createMaintenance, type Maintenance } from "./maintenance.js";
 import { createRunLifecycle, type RunLifecycle } from "./runs.js";
+import { createSourceService, type SourceService } from "./sources.js";
 import { createUploadService, type UploadService } from "./uploads.js";
 import { createUsageService, type UsageService } from "./usage.js";
 
@@ -16,6 +17,7 @@ export interface Services {
   usage: UsageService;
   evals: EvalService;
   queue: JobQueue;
+  sources: SourceService;
   maintenance: Maintenance;
 }
 
@@ -31,7 +33,12 @@ export const createServices = (deps: AppDependencies): Services => {
   const datasets = createDatasetService(deps);
   const uploads = createUploadService(deps);
   const usage = createUsageService(deps);
-  const imports = createImportService(deps, { uploads, queue: getQueue });
+  const sources = createSourceService(deps, { queue: getQueue });
+  const imports = createImportService(deps, {
+    uploads,
+    sources,
+    queue: getQueue,
+  });
   const evals = createEvalService(deps, { datasets, usage, queue: getQueue });
   const runs = createRunLifecycle(deps, {
     datasets,
@@ -51,6 +58,7 @@ export const createServices = (deps: AppDependencies): Services => {
     evals,
     uploads,
     usage,
+    sources,
   });
 
   return {
@@ -61,6 +69,7 @@ export const createServices = (deps: AppDependencies): Services => {
     usage,
     evals,
     queue,
+    sources,
     maintenance,
   };
 };

@@ -16,7 +16,33 @@ export interface AuthPrincipal {
    * for a platform worker that serves every workspace.
    */
   workerWorkspaceId: string | null;
+  /**
+   * Trainer workers only: the job kinds this key may claim. Import jobs carry
+   * workspace secrets, so a GPU host's key is train-only (TRAINER_KEYS_JSON).
+   */
+  workerKinds?: readonly WorkerJobKind[];
 }
+
+export const WORKER_JOB_KINDS = ["train", "import"] as const;
+export type WorkerJobKind = (typeof WORKER_JOB_KINDS)[number];
+
+/** One trainer key: `TRAINER_API_KEY(_HASH)` (every kind) or a `TRAINER_KEYS_JSON` entry. */
+export interface TrainerKey {
+  label: string;
+  sha256: string;
+  kinds: readonly WorkerJobKind[];
+}
+
+/** The configured trainer keys: the single platform key first, then the labelled ones. */
+export const trainerKeysOf = (
+  trainerKeyHash: string | undefined,
+  extra: readonly TrainerKey[] = [],
+): TrainerKey[] => [
+  ...(trainerKeyHash
+    ? [{ label: "trainer", sha256: trainerKeyHash, kinds: WORKER_JOB_KINDS }]
+    : []),
+  ...extra,
+];
 
 export interface AuthAdapter {
   /** Returns null for an invalid token; throws ApiError(503) when unavailable. */
@@ -104,44 +130,63 @@ const assertDigest = (name: string, value: string | undefined): void => {
 };
 
 /**
- * Checks a bearer token against the platform trainer key (`trainerKeyHash`);
- * shared by the local and Cloud auth adapters so worker keys never depend on
- * workspace key storage.
+ * Checks a bearer token against the trainer keys; shared by the local and
+ * Cloud auth adapters so worker keys never depend on workspace key storage.
  */
 export const matchTrainerKey = (
   token: string,
-  trainerKeyHash: string | undefined,
+  keys: readonly TrainerKey[],
 ): AuthPrincipal | null => {
-  if (!trainerKeyHash || !safeDigestEqual(hashApiKey(token), trainerKeyHash)) {
-    return null;
-  }
+  const digest = hashApiKey(token);
+  const key = keys.find((k) => safeDigestEqual(digest, k.sha256));
+  if (!key) return null;
 
   return {
     kind: "worker",
     workspaceId: "_platform",
-    actor: "trainer-worker",
+    actor:
+      key.label === "trainer"
+        ? "trainer-worker"
+        : `trainer-worker:${key.label}`,
     scopes: ["trainer:worker"],
     isPlatformAdmin: false,
     workerWorkspaceId: null,
+    workerKinds: key.kinds,
   };
 };
+
+/** The kinds `principal` may claim out of `requested` (every kind for non-key workers). */
+export const claimableKinds = <K extends string>(
+  principal: AuthPrincipal,
+  requested: readonly K[],
+): K[] =>
+  requested.filter(
+    (kind) =>
+      principal.workerKinds === undefined ||
+      (principal.workerKinds as readonly string[]).includes(kind),
+  );
 
 export const createLocalApiKeyAuth = (options: {
   adminKeyHash?: string | undefined;
   trainerKeyHash?: string | undefined;
+  trainerKeys?: readonly TrainerKey[] | undefined;
   workspaceId?: string;
   lookup: KeyLookup;
 }): AuthAdapter => {
   const defaultWorkspaceId = options.workspaceId ?? "default";
   assertDigest("adminKeyHash", options.adminKeyHash);
   assertDigest("trainerKeyHash", options.trainerKeyHash);
+  const trainerKeys = trainerKeysOf(
+    options.trainerKeyHash,
+    options.trainerKeys,
+  );
 
   return {
     authenticate: async (bearerToken) => {
       const token = bearerToken?.trim();
       if (!token) return null;
 
-      const worker = matchTrainerKey(token, options.trainerKeyHash);
+      const worker = matchTrainerKey(token, trainerKeys);
       if (worker) return worker;
 
       const digest = hashApiKey(token);
@@ -184,3 +229,20 @@ export const DEPLOY_DISABLED_DETAIL =
 
 export const INFERENCE_DISABLED_DETAIL =
   "Routing, embeddings and feedback are served by Gradiated Cloud's inference gateway, not by grad-server. Self-hosted: serve the downloaded artifact with vLLM or SGLang, and record scores in your observability tool (`grad sources` syncs them into datasets).";
+
+/** One page of Gradiated Cloud gateway traces and scores (the `gradiated` source). */
+export interface TracesPage {
+  records: Record<string, unknown>[];
+  cursor: string | null;
+  has_more: boolean;
+}
+
+/** Cloud only: reads gateway traces for a workspace; null when self-hosted. */
+export interface TracesAdapter {
+  pull(input: {
+    workspaceId: string;
+    filter: Record<string, unknown>;
+    cursor: string | null;
+    limit: number;
+  }): Promise<TracesPage>;
+}

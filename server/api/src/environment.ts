@@ -28,6 +28,9 @@ const EnvironmentSchema = z.object({
   ADMIN_API_KEY_HASH: optionalString,
   TRAINER_API_KEY_HASH: optionalString,
   TRAINER_API_KEY: optionalString,
+  TRAINER_KEYS_JSON: optionalString,
+  GRAD_SECRETS_KEY: optionalString,
+  GRAD_SECRETS_KEYS_OLD: optionalString,
   DEFAULT_WORKSPACE_ID: z.string().min(1).max(64).default("local"),
   BILLING_MODE: z.enum(["noop", "cloud"]).default("noop"),
   CLOUD_INTERNAL_API_URL: optionalString,
@@ -61,7 +64,44 @@ const EnvironmentSchema = z.object({
 
 export type RawEnvironment = z.infer<typeof EnvironmentSchema>;
 
+const TrainerKeysSchema = z.array(
+  z.strictObject({
+    label: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
+    sha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/, "a lowercase SHA-256 hex digest"),
+    kinds: z.array(z.enum(["train", "import"])).min(1),
+  }),
+);
+
+export type TrainerKeyConfig = z.infer<typeof TrainerKeysSchema>[number];
+
+const parseTrainerKeys = (raw: string | undefined): TrainerKeyConfig[] => {
+  if (!raw) return [];
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      'TRAINER_KEYS_JSON must be JSON: [{"label": "h100-01", "sha256": "<hex>", "kinds": ["train"]}].',
+    );
+  }
+  const parsed = TrainerKeysSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid TRAINER_KEYS_JSON: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+    );
+  }
+  const labels = parsed.data.map((k) => k.label);
+  const dup = labels.find((l, i) => labels.indexOf(l) !== i);
+  if (dup) throw new Error(`TRAINER_KEYS_JSON has two keys labelled '${dup}'.`);
+
+  return parsed.data;
+};
+
 export interface ServerEnvironment extends RawEnvironment {
+  /** Labelled, kind-scoped trainer keys from TRAINER_KEYS_JSON. */
+  trainerKeys: TrainerKeyConfig[];
   /** Effective judge endpoint (JUDGE_BASE_URL, GRAD_JUDGE_BASE_URL, then inference). */
   judgeBaseUrl: string | undefined;
   judgeApiKey: string | undefined;
@@ -129,6 +169,7 @@ export const parseServerEnvironment = (
 
   return {
     ...env,
+    trainerKeys: parseTrainerKeys(env.TRAINER_KEYS_JSON),
     judgeBaseUrl,
     judgeApiKey,
     warnings,

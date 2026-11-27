@@ -4,6 +4,7 @@ import { errorMessage } from "../errors.js";
 import type { EvalService } from "./evals/service.js";
 import type { JobQueue } from "./jobs.js";
 import type { RunLifecycle } from "./runs.js";
+import type { SourceService } from "./sources.js";
 import type { UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
 
@@ -16,10 +17,11 @@ export interface MaintenanceReport {
   deletedUploads: number;
   deletedEvents: number;
   exportedUsage: number;
+  syncedSources: number;
 }
 
 export interface Maintenance {
-  /** One pass: lease expiry, eval settling, retention sweeps, usage export. */
+  /** One pass: lease expiry, eval settling, retention sweeps, usage export, source schedules. */
   tick(): Promise<MaintenanceReport>;
   start(intervalMs: number): void;
   stop(): Promise<void>;
@@ -33,6 +35,7 @@ export const createMaintenance = (
     evals: EvalService;
     uploads: UploadService;
     usage: UsageService;
+    sources: SourceService;
   },
 ): Maintenance => {
   let timer: NodeJS.Timeout | null = null;
@@ -81,6 +84,9 @@ export const createMaintenance = (
       ),
       exportedUsage: await step("export_usage", () =>
         services.usage.exportPending(),
+      ),
+      syncedSources: await step("sync_sources", () =>
+        services.sources.tick(now),
       ),
     };
   };

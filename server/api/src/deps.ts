@@ -1,6 +1,7 @@
-import type { AuthAdapter, BillingAdapter } from "./adapters.js";
+import type { AuthAdapter, BillingAdapter, TracesAdapter } from "./adapters.js";
 import type { ModelCatalog } from "./catalog.js";
 import type { Clock } from "./clock.js";
+import type { SecretsCipher } from "./secrets.js";
 import type {
   InferenceClients,
   RegexEvaluator,
@@ -37,4 +38,8 @@ export interface AppDependencies {
   inference: InferenceClients | null;
   regex: RegexEvaluator;
   settings: AppSettings;
+  /** Null or absent when GRAD_SECRETS_KEY is unset (secret writes → 501). */
+  secrets?: SecretsCipher | null | undefined;
+  /** Cloud only: gateway traces for the `gradiated` source. */
+  traces?: TracesAdapter | null | undefined;
 }

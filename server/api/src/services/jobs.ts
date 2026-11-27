@@ -1,4 +1,4 @@
-import type { AuthPrincipal } from "../adapters.js";
+import { claimableKinds, type AuthPrincipal } from "../adapters.js";
 import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import type { RecipeKind, TrainerJob } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
@@ -187,6 +187,9 @@ export const createJobQueue = (
     const job = await store.jobs.getById(id);
     if (!job || job.kind === "eval") throw notFound("trainer_job", id);
     assertWorkerScope(principal, job.workspace_id, id);
+    if (claimableKinds(principal, [job.kind]).length === 0) {
+      throw notFound("trainer_job", id);
+    }
 
     return job;
   };

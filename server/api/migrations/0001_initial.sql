@@ -281,3 +281,52 @@ CREATE TABLE grad_usage (
 );
 
 CREATE INDEX grad_usage_workspace_idx ON grad_usage (workspace_id, seq DESC);
+
+-- Workspace secrets (provider keys, HF tokens). Values are AES-256-GCM sealed
+-- by the application (src/secrets.ts; AAD = workspace + name) and never
+-- returned; key_id names the GRAD_SECRETS_KEY that sealed them.
+CREATE TABLE grad_secrets (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  nonce BYTEA NOT NULL,
+  ciphertext BYTEA NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (workspace_id, name)
+);
+
+CREATE INDEX grad_secrets_workspace_idx
+  ON grad_secrets (workspace_id, created_at DESC, id COLLATE "C" DESC);
+
+-- Observability sources syncing into a dataset. A sync is an import job;
+-- sync_job_id is the latest one (at most one queued or running per source),
+-- and watermark only advances when that job completes.
+CREATE TABLE grad_sources (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  dataset_id TEXT NOT NULL REFERENCES grad_datasets (id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  host TEXT,
+  secret_name TEXT,
+  project TEXT,
+  filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+  schedule TEXT,
+  next_sync_at TIMESTAMPTZ,
+  watermark JSONB,
+  sync_job_id TEXT REFERENCES grad_jobs (id) ON DELETE SET NULL,
+  last_synced_at TIMESTAMPTZ,
+  idempotency_key TEXT,
+  request_hash TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (workspace_id, idempotency_key)
+);
+
+CREATE INDEX grad_sources_workspace_idx
+  ON grad_sources (workspace_id, created_at DESC, id COLLATE "C" DESC);
+CREATE INDEX grad_sources_due_idx
+  ON grad_sources (next_sync_at) WHERE next_sync_at IS NOT NULL;
+CREATE INDEX grad_sources_secret_idx
+  ON grad_sources (workspace_id, secret_name) WHERE secret_name IS NOT NULL;

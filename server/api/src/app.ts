@@ -16,6 +16,7 @@ import { registerEvalRoutes } from "./routes/evals.js";
 import { problemBody, requireScope, type AppEnv } from "./routes/helpers.js";
 import { registerModelsAndKeysRoutes } from "./routes/keys.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerSourceRoutes } from "./routes/sources.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
 import { createServices, type Services } from "./services/index.js";
 import { isDatabaseUnavailable } from "./store/postgres/db.js";
@@ -230,6 +231,7 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   registerArtifactRoutes(app, deps, services);
   registerDeploymentRoutes(app, deps, services);
   registerEvalRoutes(app, deps, services);
+  registerSourceRoutes(app, deps, services);
 
   app.doc31("/openapi.json", {
     openapi: "3.1.0",

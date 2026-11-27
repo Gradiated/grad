@@ -231,6 +231,14 @@ export const CompleteJobRequestSchema = z
         dropped_count: z.number().int().min(0).default(0),
         detected_scores: z.array(z.string().max(160)).max(1000).default([]),
         drop_reasons: z.array(z.string().max(1000)).max(101).default([]),
+        watermark: z
+          .record(z.string(), z.unknown())
+          .nullable()
+          .optional()
+          .openapi({
+            description:
+              "Source syncs: where the next sync starts (opaque to the server). Stored only when the import completes; null or absent keeps the previous one.",
+          }),
       })
       .optional(),
   })
@@ -250,3 +258,18 @@ export const CompleteJobResponseSchema = z
 export const RegisterCheckpointResponseSchema = CheckpointSchema;
 
 export const ImportRecordsSchema = z.array(DatasetRecordSchema);
+
+export const SourcePageRequestSchema = z
+  .object({
+    ...AttemptRefShape,
+    cursor: z.string().max(4096).nullable().default(null),
+  })
+  .openapi("SourcePageRequest");
+
+export const SourcePageResponseSchema = z
+  .object({
+    records: z.array(z.record(z.string(), z.unknown())),
+    cursor: z.string().nullable(),
+    has_more: z.boolean(),
+  })
+  .openapi("SourcePageResponse");

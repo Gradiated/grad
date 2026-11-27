@@ -173,6 +173,10 @@ components:
         - runs:write
         - artifacts:read
         - artifacts:write
+        - secrets:read
+        - secrets:write
+        - sources:read
+        - sources:write
         - deployments:write
         - feedback:write
         - env:serve
@@ -1112,6 +1116,13 @@ components:
               type: integer
               minimum: 1
               maximum: 10000000
+            secret:
+              type: string
+              minLength: 1
+              maxLength: 64
+              pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+              description: Name of a workspace secret holding a Hugging Face token, for gated or private datasets. The worker receives
+                the token at claim time.
           required:
             - kind
             - repo
@@ -3120,6 +3131,13 @@ components:
                 maxLength: 1000
               maxItems: 101
               default: []
+            watermark:
+              type:
+                - object
+                - "null"
+              additionalProperties: {}
+              description: "Source syncs: where the next sync starts (opaque to the server). Stored only when the import completes;
+                null or absent keeps the previous one."
       required:
         - worker_id
         - attempt
@@ -3741,6 +3759,269 @@ components:
         - sample_scores
         - judge_model
         - record
+    Secret:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+        workspace_id:
+          type: string
+          minLength: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - name
+        - workspace_id
+        - created_at
+        - updated_at
+      description: A workspace secret's metadata. The value is never returned.
+    SetSecretRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+        value:
+          type: string
+          minLength: 1
+          description: "Write-only: stored encrypted and never returned by any endpoint."
+      required:
+        - name
+        - value
+    Source:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+        workspace_id:
+          type: string
+          minLength: 1
+        dataset:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+        provider:
+          type: object
+          properties:
+            kind:
+              type: string
+              enum:
+                - langfuse
+                - langsmith
+                - braintrust
+                - posthog
+                - phoenix
+                - gradiated
+            host:
+              type:
+                - string
+                - "null"
+            secret:
+              type:
+                - string
+                - "null"
+            project:
+              type:
+                - string
+                - "null"
+            filters:
+              type: object
+              additionalProperties: {}
+          required:
+            - kind
+            - host
+            - secret
+            - project
+            - filters
+        schedule:
+          type:
+            - string
+            - "null"
+        next_sync_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        last_synced_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+          description: When the last successful sync finished.
+        last_sync:
+          $ref: "#/components/schemas/SourceSync"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - dataset
+        - provider
+        - schedule
+        - next_sync_at
+        - last_synced_at
+        - last_sync
+        - created_at
+        - updated_at
+    SourceSync:
+      type:
+        - object
+        - "null"
+      properties:
+        import_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - completed
+            - failed
+        full:
+          type: boolean
+        dataset_version:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        error:
+          type:
+            - string
+            - "null"
+        created_at:
+          type: string
+          format: date-time
+        finished_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - import_id
+        - status
+        - full
+        - dataset_version
+        - error
+        - created_at
+        - finished_at
+      description: The most recent sync, running or finished.
+    CreateSourceRequest:
+      type: object
+      properties:
+        provider:
+          $ref: "#/components/schemas/SourceProvider"
+        schedule:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          maxLength: 120
+          description: Five-field cron in UTC (`*/15 * * * *`). Leave it out to sync only on request.
+      required:
+        - provider
+    SourceProvider:
+      type: object
+      properties:
+        kind:
+          type: string
+          minLength: 1
+          maxLength: 40
+          description: One of langfuse, langsmith, braintrust, posthog, phoenix, gradiated; anything else is 422
+            source_provider_unsupported.
+          example: langfuse
+        host:
+          type:
+            - string
+            - "null"
+          maxLength: 2048
+          format: uri
+          description: The provider's API host (https). Optional for providers with one public host; not used by 'gradiated'.
+        secret:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Name of the workspace secret holding the provider key. Not used by 'gradiated'.
+        project:
+          type:
+            - string
+            - "null"
+          minLength: 1
+          maxLength: 200
+          description: The provider project to read. Required for braintrust (project id or name) and posthog (numeric project
+            id); optional elsewhere (LangSmith project, Phoenix project).
+        filters:
+          type: object
+          additionalProperties: {}
+          description: "Provider-specific filters passed to the fetcher, for example `{\"tags\": [\"prod\"]}` or, for 'gradiated',
+            `{\"models\": [...], \"tasks\": [...]}`."
+      required:
+        - kind
+    SyncSourceRequest:
+      type: object
+      properties:
+        full:
+          type: boolean
+          default: false
+          description: Rebuild the dataset from the provider as a new version (ignores the stored watermark).
+    SourcePageResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        cursor:
+          type:
+            - string
+            - "null"
+        has_more:
+          type: boolean
+      required:
+        - records
+        - cursor
+        - has_more
+    SourcePageRequest:
+      type: object
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: ^[A-Za-z0-9._:-]+$
+        attempt:
+          type: integer
+          minimum: 1
+        cursor:
+          type:
+            - string
+            - "null"
+          maxLength: 4096
+          default: null
+      required:
+        - worker_id
+        - attempt
   parameters:
     IdempotencyKey:
       schema:
@@ -7979,6 +8260,784 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/secrets:
+    post:
+      operationId: setSecret
+      summary: Create or replace a workspace secret (the value is write-only)
+      tags: &a6
+        - Secrets
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSecretRequest"
+      responses:
+        "200":
+          description: The secret's metadata (never the value).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      operationId: listSecrets
+      summary: List workspace secrets (names and metadata only)
+      tags: *a6
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
+          required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+      responses:
+        "200":
+          description: Secrets.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Secret"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+                required:
+                  - data
+                  - next_cursor
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/secrets/{name}:
+    get:
+      operationId: getSecret
+      summary: Get a secret's metadata (never the value)
+      tags: *a6
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+            description: Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+          required: true
+          description: Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+          name: name
+          in: path
+      responses:
+        "200":
+          description: Secret metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    delete:
+      operationId: deleteSecret
+      summary: Delete a secret (409 while a source uses it)
+      tags: *a6
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+            description: Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+          required: true
+          description: Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+          name: name
+          in: path
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/datasets/{name}/sources:
+    post:
+      operationId: createDatasetSource
+      summary: Connect an observability provider to a dataset
+      tags: &a7
+        - Sources
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: true
+          name: name
+          in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSourceRequest"
+      responses:
+        "201":
+          description: Created source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/sources:
+    get:
+      operationId: listSources
+      summary: List sources (newest first), optionally for one dataset
+      tags: *a7
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+            description: Page size (default 50). Values above 200 are clamped to 200.
+          required: false
+          description: Page size (default 50). Values above 200 are clamped to 200.
+          name: limit
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          required: false
+          name: dataset
+          in: query
+      responses:
+        "200":
+          description: Sources.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Source"
+                  next_cursor:
+                    type:
+                      - string
+                      - "null"
+                    description: Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+                required:
+                  - data
+                  - next_cursor
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/sources/{id}:
+    get:
+      operationId: getSource
+      summary: Get a source and its latest sync
+      tags: *a7
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    delete:
+      operationId: deleteSource
+      summary: Remove a source (its dataset and versions stay)
+      tags: *a7
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      responses:
+        "204":
+          description: Removed.
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/sources/{id}/sync:
+    post:
+      operationId: syncSource
+      summary: "Sync now: queue an import of new traces and scores (returns the running one if a sync is in progress)"
+      tags: *a7
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncSourceRequest"
+      responses:
+        "202":
+          description: The sync's import job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportJob"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Dependency unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/trainer-jobs/{id}/source-page:
+    post:
+      operationId: pullTrainerSourcePage
+      summary: A gradiated source sync's next page of Cloud gateway traces (for the job's workspace)
+      tags:
+        - TrainerJobs
+      x-internal: true
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SourcePageRequest"
+      responses:
+        "200":
+          description: One page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourcePageResponse"
+        "400":
+          description: Malformed request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Insufficient scope.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: Resource not found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Conflict.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Validation failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: Internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Capability not configured on this server.
           content:
             application/problem+json:
               schema:

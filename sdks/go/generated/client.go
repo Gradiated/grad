@@ -46,6 +46,12 @@ const ListRunMetricsLimitMax = 5000
 // ListRunsLimitMax is the largest limit accepted by ListRuns (the server clamps larger values).
 const ListRunsLimitMax = 200
 
+// ListSecretsLimitMax is the largest limit accepted by ListSecrets (the server clamps larger values).
+const ListSecretsLimitMax = 200
+
+// ListSourcesLimitMax is the largest limit accepted by ListSources (the server clamps larger values).
+const ListSourcesLimitMax = 200
+
 // ListUsageLimitMax is the largest limit accepted by ListUsage (the server clamps larger values).
 const ListUsageLimitMax = 200
 
@@ -138,6 +144,25 @@ func (c *Client) CreateDatasetImport(ctx context.Context, name string, body *Cre
 	return &out, nil
 }
 
+// CreateDatasetSource calls POST /v1/datasets/{name}/sources.
+//
+// Connect an observability provider to a dataset.
+func (c *Client) CreateDatasetSource(ctx context.Context, name string, body *CreateSourceRequest, opts ...RequestOption) (*Source, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "CreateDatasetSource: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/sources", Body: body, Idempotent: true}
+	var out Source
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // CreateEmbeddings calls POST /v1/embeddings.
 //
 // Generate embeddings from a deployed embedding artifact.
@@ -196,6 +221,30 @@ func (c *Client) CreateUpload(ctx context.Context, body *CreateUploadRequest, op
 		return nil, err
 	}
 	return &out, nil
+}
+
+// DeleteSecret calls DELETE /v1/secrets/{name}.
+//
+// Delete a secret (409 while a source uses it).
+func (c *Client) DeleteSecret(ctx context.Context, name string, opts ...RequestOption) error {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return err
+	}
+	spec := RequestSpec{Method: "DELETE", Path: "/v1/secrets/" + p0}
+	return c.T.DoJSON(ctx, spec, nil, opts...)
+}
+
+// DeleteSource calls DELETE /v1/sources/{id}.
+//
+// Remove a source (its dataset and versions stay).
+func (c *Client) DeleteSource(ctx context.Context, id string, opts ...RequestOption) error {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return err
+	}
+	spec := RequestSpec{Method: "DELETE", Path: "/v1/sources/" + p0}
+	return c.T.DoJSON(ctx, spec, nil, opts...)
 }
 
 // DeployArtifact calls POST /v1/deployments.
@@ -334,6 +383,38 @@ func (c *Client) GetRun(ctx context.Context, id string, opts ...RequestOption) (
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0}
 	var out Run
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetSecret calls GET /v1/secrets/{name}.
+//
+// Get a secret's metadata (never the value).
+func (c *Client) GetSecret(ctx context.Context, name string, opts ...RequestOption) (*Secret, error) {
+	p0, err := EscapePathParam("name", name)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/secrets/" + p0}
+	var out Secret
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetSource calls GET /v1/sources/{id}.
+//
+// Get a source and its latest sync.
+func (c *Client) GetSource(ctx context.Context, id string, opts ...RequestOption) (*Source, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/sources/" + p0}
+	var out Source
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -695,6 +776,51 @@ func (c *Client) ListRuns(ctx context.Context, params *ListRunsParams, opts ...R
 	return &out, nil
 }
 
+// ListSecrets calls GET /v1/secrets.
+//
+// List workspace secrets (names and metadata only).
+func (c *Client) ListSecrets(ctx context.Context, params *ListSecretsParams, opts ...RequestOption) (*ListSecretsResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/secrets", Query: q}
+	var out ListSecretsResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListSources calls GET /v1/sources.
+//
+// List sources (newest first), optionally for one dataset.
+func (c *Client) ListSources(ctx context.Context, params *ListSourcesParams, opts ...RequestOption) (*ListSourcesResponse, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Limit != nil {
+			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.Cursor != nil {
+			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Dataset != nil {
+			q.Add("dataset", FormatScalar(*params.Dataset))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/sources", Query: q}
+	var out ListSourcesResponse
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListUsage calls GET /v1/usage.
 //
 // List billed usage, newest first: one record per run or eval attempt.
@@ -910,6 +1036,37 @@ func (c *Client) ScoreDataset(ctx context.Context, name string, body *ScoreDatas
 	}
 	spec := RequestSpec{Method: "POST", Path: "/v1/datasets/" + p0 + "/score", Body: body, Idempotent: true}
 	var out EvalRun
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetSecret calls POST /v1/secrets.
+//
+// Create or replace a workspace secret (the value is write-only).
+func (c *Client) SetSecret(ctx context.Context, body *SetSecretRequest, opts ...RequestOption) (*Secret, error) {
+	if body == nil {
+		return nil, &GradError{Code: "invalid_request", Message: "SetSecret: body is required"}
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/secrets", Body: body, Idempotent: true}
+	var out Secret
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SyncSource calls POST /v1/sources/{id}/sync.
+//
+// Sync now: queue an import of new traces and scores (returns the running one if a sync is in progress).
+func (c *Client) SyncSource(ctx context.Context, id string, body *SyncSourceRequest, opts ...RequestOption) (*ImportJob, error) {
+	p0, err := EscapePathParam("id", id)
+	if err != nil {
+		return nil, err
+	}
+	spec := RequestSpec{Method: "POST", Path: "/v1/sources/" + p0 + "/sync", Body: body, Idempotent: true}
+	var out ImportJob
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}

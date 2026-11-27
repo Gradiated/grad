@@ -18,6 +18,8 @@ import type {
   RecipeKind,
   ResolvedRunConfig,
   RunStatus,
+  Secret,
+  SourceProviderKind,
   UsageRecord,
 } from "../contracts.js";
 
@@ -675,6 +677,95 @@ export interface UsageRepository {
   listByRef(refId: string): Promise<UsageRecord[]>;
 }
 
+// --- Secrets and sources --------------------------------------------------------
+
+export interface SealedSecretRow {
+  keyId: string;
+  nonce: Buffer;
+  ciphertext: Buffer;
+}
+
+export interface SecretRepository {
+  /** Creates or replaces the value of (workspace, name). */
+  put(input: {
+    workspaceId: string;
+    name: string;
+    sealed: SealedSecretRow;
+  }): Promise<Secret>;
+  get(workspaceId: string, name: string): Promise<Secret | null>;
+  getSealed(workspaceId: string, name: string): Promise<SealedSecretRow | null>;
+  list(workspaceId: string, page: PageRequest): Promise<Page<Secret>>;
+  delete(workspaceId: string, name: string): Promise<boolean>;
+}
+
+export interface SourceRecord {
+  id: string;
+  workspace_id: string;
+  dataset_id: string;
+  dataset: string;
+  provider: SourceProviderKind;
+  host: string | null;
+  secret_name: string | null;
+  project: string | null;
+  filters: Record<string, unknown>;
+  schedule: string | null;
+  next_sync_at: string | null;
+  watermark: Record<string, unknown> | null;
+  sync_job_id: string | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SourcePatch = Partial<
+  Pick<
+    SourceRecord,
+    "next_sync_at" | "watermark" | "sync_job_id" | "last_synced_at"
+  >
+>;
+
+export interface SourceRepository {
+  create(input: {
+    workspaceId: string;
+    datasetId: string;
+    provider: SourceProviderKind;
+    host: string | null;
+    secretName: string | null;
+    project: string | null;
+    filters: Record<string, unknown>;
+    schedule: string | null;
+    nextSyncAt: string | null;
+    idempotency?: IdempotencyInput | undefined;
+  }): Promise<SourceRecord>;
+  get(workspaceId: string, id: string): Promise<SourceRecord | null>;
+  getById(id: string): Promise<SourceRecord | null>;
+  /** Locks the row for the enclosing transaction (one sync enqueue at a time). */
+  lock(workspaceId: string, id: string): Promise<SourceRecord | null>;
+  list(
+    workspaceId: string,
+    filter: { datasetId?: string | undefined },
+    page: PageRequest,
+  ): Promise<Page<SourceRecord>>;
+  delete(workspaceId: string, id: string): Promise<boolean>;
+  findIdempotent(
+    workspaceId: string,
+    key: string,
+  ): Promise<IdempotentHit | null>;
+  /**
+   * Scheduled sources due at `now`, locked FOR UPDATE SKIP LOCKED so each
+   * replica's tick takes different ones (call inside a transaction).
+   */
+  lockDue(now: string, limit: number): Promise<SourceRecord[]>;
+  /** `expectJobId`: only while that job is still the source's latest sync. */
+  update(
+    id: string,
+    patch: SourcePatch,
+    expectJobId?: string | undefined,
+  ): Promise<SourceRecord | null>;
+  /** Ids of sources that read `secretName`. */
+  usingSecret(workspaceId: string, secretName: string): Promise<string[]>;
+}
+
 // --- Composition ----------------------------------------------------------------------
 
 export interface Repositories {
@@ -686,6 +777,8 @@ export interface Repositories {
   artifacts: ArtifactRepository;
   evals: EvalRepository;
   usage: UsageRepository;
+  secrets: SecretRepository;
+  sources: SourceRepository;
 }
 
 export interface Store extends Repositories {

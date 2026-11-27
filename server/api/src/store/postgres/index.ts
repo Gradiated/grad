@@ -9,6 +9,7 @@ import { createDb } from "./db.js";
 import { createEvalRepository } from "./evals.js";
 import { createJobRepository } from "./jobs.js";
 import { createImportJobRepository, createRunRepository } from "./runs.js";
+import { createSecretRepository, createSourceRepository } from "./sources.js";
 import { createUsageRepository } from "./usage.js";
 
 export interface PostgresStoreOptions {
@@ -72,6 +73,8 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
     artifacts: createArtifactRepository(db, clock),
     evals: createEvalRepository(db, clock),
     usage: createUsageRepository(db, clock),
+    secrets: createSecretRepository(db, clock),
+    sources: createSourceRepository(db, clock),
   };
 
   return {

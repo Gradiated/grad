@@ -3,9 +3,12 @@ import { z } from "zod";
 
 import {
   matchTrainerKey,
+  trainerKeysOf,
   type AuthAdapter,
   type AuthPrincipal,
   type BillingAdapter,
+  type TracesAdapter,
+  type TrainerKey,
 } from "./adapters.js";
 import { systemClock, type Clock } from "./clock.js";
 import { WORKSPACE_SCOPES, type Scope } from "./contracts.js";
@@ -19,6 +22,8 @@ export interface CloudAdapterConfig {
   fetchImpl?: typeof fetch;
   /** sha256 hex of the platform trainer key; checked before Cloud auth. */
   trainerKeyHash?: string | undefined;
+  /** Labelled, kind-scoped trainer keys (TRAINER_KEYS_JSON). */
+  trainerKeys?: readonly TrainerKey[] | undefined;
   clock?: Clock;
   authCache?: {
     positiveTtlMs?: number;
@@ -141,6 +146,7 @@ export const createCloudAuthAdapter = (
   cfg: CloudAdapterConfig,
 ): AuthAdapter => {
   const resolved = validateCloudConfig(cfg);
+  const trainerKeys = trainerKeysOf(cfg.trainerKeyHash, cfg.trainerKeys);
   const clock = cfg.clock ?? systemClock;
   const positiveTtlMs = cfg.authCache?.positiveTtlMs ?? 30_000;
   const negativeTtlMs = cfg.authCache?.negativeTtlMs ?? 5_000;
@@ -226,7 +232,7 @@ export const createCloudAuthAdapter = (
       const token = bearerToken?.trim();
       if (!token) return null;
 
-      const worker = matchTrainerKey(token, cfg.trainerKeyHash);
+      const worker = matchTrainerKey(token, trainerKeys);
       if (worker) return worker;
 
       const key = createHash("sha256").update(token).digest("hex");
@@ -342,6 +348,62 @@ export const createCloudBillingAdapter = (
           },
           row.idempotency_key,
         ),
+    },
+  };
+};
+
+const TracesPageSchema = z.object({
+  records: z.array(z.record(z.string(), z.unknown())),
+  cursor: z.string().max(4096).nullable(),
+  has_more: z.boolean(),
+});
+
+/**
+ * The `gradiated` source: gateway traces and feedback for one workspace, from
+ * the product's internal `training/traces:pull` (the token stays here; workers
+ * reach it only through their job's `/source-page`).
+ */
+export const createCloudTracesAdapter = (
+  cfg: CloudAdapterConfig,
+): TracesAdapter => {
+  const resolved = validateCloudConfig(cfg);
+
+  return {
+    pull: async ({ workspaceId, filter, cursor, limit }) => {
+      let res: InternalResponse;
+      try {
+        res = await postInternalJson(
+          resolved,
+          "/api/internal/v1/training/traces:pull",
+          { workspace_id: workspaceId, filter, cursor, limit },
+        );
+      } catch (error) {
+        throw new ApiError(
+          503,
+          "source_upstream_unavailable",
+          "Gradiated Cloud traces unavailable",
+          errorMessage(error),
+        );
+      }
+      if (!isOk(res.status)) {
+        throw new ApiError(
+          502,
+          "source_upstream_error",
+          "Gradiated Cloud traces failed",
+          `Gradiated Cloud traces:pull returned HTTP ${res.status}${detailOf(res) ? `: ${detailOf(res)}` : ""}.`,
+        );
+      }
+      const page = TracesPageSchema.safeParse(res.json);
+      if (!page.success) {
+        throw new ApiError(
+          502,
+          "source_upstream_error",
+          "Gradiated Cloud traces failed",
+          "Gradiated Cloud traces:pull returned an unexpected body.",
+        );
+      }
+
+      return page.data;
     },
   };
 };

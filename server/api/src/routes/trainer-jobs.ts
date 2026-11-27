@@ -17,8 +17,9 @@ import {
   UploadTicketSchema,
   WorkerUploadRequestSchema,
 } from "../contracts.js";
+import { claimableKinds } from "../adapters.js";
 import type { AppDependencies } from "../deps.js";
-import { conflict, notFound } from "../errors.js";
+import { conflict, forbidden, notFound } from "../errors.js";
 import type { Services } from "../services/index.js";
 import {
   defaultErrors,
@@ -61,11 +62,19 @@ export const registerTrainerJobRoutes = (
     async (c) => {
       const principal = requireScope(c, "trainer:worker");
       const input = c.req.valid("json");
+      // The key decides what it may claim: import jobs carry workspace secrets.
+      const kinds = claimableKinds(principal, input.kinds);
+      if (kinds.length === 0) {
+        throw forbidden(
+          "job_kind_forbidden",
+          `This trainer key may claim only ${(principal.workerKinds ?? []).join(", ")} jobs, not ${input.kinds.join(", ")}.`,
+        );
+      }
       // One queue, oldest first across the requested kinds.
       const job = await services.queue.claim(principal, {
         workerId: input.worker_id,
         leaseSeconds: input.lease_seconds,
-        kinds: input.kinds,
+        kinds,
         recipes: input.recipes,
       });
 

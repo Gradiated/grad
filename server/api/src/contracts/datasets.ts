@@ -235,6 +235,10 @@ export const ImportSourceSchema = z
       revision: z.string().min(1).max(128).optional(),
       columns: HfColumnMappingSchema.default({}),
       limit: z.number().int().min(1).max(10_000_000).optional(),
+      secret: SlugSchema.optional().openapi({
+        description:
+          "Name of a workspace secret holding a Hugging Face token, for gated or private datasets. The worker receives the token at claim time.",
+      }),
     }),
     z.object({
       kind: z.literal("benchmark"),

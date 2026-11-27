@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from .._transport import Transport
 
-__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_DEPLOYMENTS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_SECRETS_LIMIT_MAX", "LIST_SOURCES_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -36,7 +36,7 @@ ApiKey = TypedDict(
     },
 )
 
-ApiKeyScope: TypeAlias = "Literal['admin', 'datasets:read', 'datasets:write', 'runs:read', 'runs:write', 'artifacts:read', 'artifacts:write', 'deployments:write', 'feedback:write', 'env:serve']"
+ApiKeyScope: TypeAlias = "Literal['admin', 'datasets:read', 'datasets:write', 'runs:read', 'runs:write', 'artifacts:read', 'artifacts:write', 'secrets:read', 'secrets:write', 'sources:read', 'sources:write', 'deployments:write', 'feedback:write', 'env:serve']"
 
 Artifact = TypedDict(
     "Artifact",
@@ -169,6 +169,14 @@ CreateImportRequest = TypedDict(
     {
         "source": "ImportSource",
         "connector": "NotRequired[Literal['auto', 'grad_trajectories', 'openai_chat', 'gradiated', 'otel', 'langfuse', 'posthog', 'braintrust', 'langsmith']]",
+    },
+)
+
+CreateSourceRequest = TypedDict(
+    "CreateSourceRequest",
+    {
+        "provider": "SourceProvider",
+        "schedule": "NotRequired[str | None]",
     },
 )
 
@@ -963,12 +971,95 @@ ScoreDatasetRequest = TypedDict(
     },
 )
 
+Secret = TypedDict(
+    "Secret",
+    {
+        "name": "str",
+        "workspace_id": "str",
+        "created_at": "str",
+        "updated_at": "str",
+    },
+)
+
+SetSecretRequest = TypedDict(
+    "SetSecretRequest",
+    {
+        "name": "str",
+        "value": "str",
+    },
+)
+
+Source = TypedDict(
+    "Source",
+    {
+        "id": "str",
+        "workspace_id": "str",
+        "dataset": "str",
+        "provider": "dict[str, Any]",
+        "schedule": "str | None",
+        "next_sync_at": "str | None",
+        "last_synced_at": "str | None",
+        "last_sync": "SourceSync",
+        "created_at": "str",
+        "updated_at": "str",
+    },
+)
+
+SourcePageRequest = TypedDict(
+    "SourcePageRequest",
+    {
+        "worker_id": "str",
+        "attempt": "int",
+        "cursor": "NotRequired[str | None]",
+    },
+)
+
+SourcePageResponse = TypedDict(
+    "SourcePageResponse",
+    {
+        "records": "list[dict[str, Any]]",
+        "cursor": "str | None",
+        "has_more": "bool",
+    },
+)
+
+SourceProvider = TypedDict(
+    "SourceProvider",
+    {
+        "kind": "str",
+        "host": "NotRequired[str | None]",
+        "secret": "NotRequired[str | None]",
+        "project": "NotRequired[str | None]",
+        "filters": "NotRequired[dict[str, Any]]",
+    },
+)
+
+SourceSync = TypedDict(
+    "SourceSync",
+    {
+        "import_id": "str",
+        "status": "Literal['queued', 'running', 'completed', 'failed']",
+        "full": "bool",
+        "dataset_version": "int | None",
+        "error": "str | None",
+        "created_at": "str",
+        "finished_at": "str | None",
+    },
+)
+
 SplitSpec = TypedDict(
     "SplitSpec",
     {
         "strategy": "NotRequired[Literal['by_session', 'by_group', 'random']]",
         "eval_fraction": "NotRequired[float]",
         "seed": "NotRequired[int]",
+    },
+)
+
+SyncSourceRequest = TypedDict(
+    "SyncSourceRequest",
+    {
+        "full": "NotRequired[bool]",
     },
 )
 
@@ -1179,6 +1270,22 @@ ListRunsResponse = TypedDict(
     },
 )
 
+ListSecretsResponse = TypedDict(
+    "ListSecretsResponse",
+    {
+        "data": "list[Secret]",
+        "next_cursor": "str | None",
+    },
+)
+
+ListSourcesResponse = TypedDict(
+    "ListSourcesResponse",
+    {
+        "data": "list[Source]",
+        "next_cursor": "str | None",
+    },
+)
+
 ListUsageResponse = TypedDict(
     "ListUsageResponse",
     {
@@ -1200,6 +1307,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "CreateApiKeyRequest": frozenset({"name", "scopes"}),
     "CreateDatasetRequest": frozenset({"metadata", "name"}),
     "CreateImportRequest": frozenset({"connector", "source"}),
+    "CreateSourceRequest": frozenset({"provider", "schedule"}),
     "CreateUploadRequest": frozenset({"filename", "purpose", "sha256", "size_bytes"}),
     "CreatedApiKey": frozenset({"key", "secret"}),
     "Dataset": frozenset({"created_at", "id", "metadata", "name", "record_count", "updated_at", "version", "workspace_id"}),
@@ -1253,7 +1361,15 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
     "Run": frozenset({"artifact_id", "attempt", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
     "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),
+    "Secret": frozenset({"created_at", "name", "updated_at", "workspace_id"}),
+    "SetSecretRequest": frozenset({"name", "value"}),
+    "Source": frozenset({"created_at", "dataset", "id", "last_sync", "last_synced_at", "next_sync_at", "provider", "schedule", "updated_at", "workspace_id"}),
+    "SourcePageRequest": frozenset({"attempt", "cursor", "worker_id"}),
+    "SourcePageResponse": frozenset({"cursor", "has_more", "records"}),
+    "SourceProvider": frozenset({"filters", "host", "kind", "project", "secret"}),
+    "SourceSync": frozenset({"created_at", "dataset_version", "error", "finished_at", "full", "import_id", "status"}),
     "SplitSpec": frozenset({"eval_fraction", "seed", "strategy"}),
+    "SyncSourceRequest": frozenset({"full"}),
     "TrainableModel": frozenset({"adapters", "calibrated_lrs", "default_for", "family", "hf_repo", "id", "max_context_tokens", "price_per_million_tokens_usd", "recipes", "template_revision"}),
     "TrainerHeartbeatRequest": frozenset({"attempt", "lease_seconds", "worker_id"}),
     "TrainerHeartbeatResponse": frozenset({"lease_expires_at", "should_stop", "status", "stop_reason"}),
@@ -1267,7 +1383,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
 """Property names of every object schema (for client-side typo checks)."""
 
 SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
-    "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "deployments:write", "feedback:write", "env:serve",),
+    "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve",),
     "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference", None,),
     "EvalMode": ("eval", "score",),
     "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
@@ -1284,10 +1400,13 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "create_api_key": ("POST", "/v1/keys"),
     "create_dataset": ("POST", "/v1/datasets"),
     "create_dataset_import": ("POST", "/v1/datasets/{name}/imports"),
+    "create_dataset_source": ("POST", "/v1/datasets/{name}/sources"),
     "create_embeddings": ("POST", "/v1/embeddings"),
     "create_eval": ("POST", "/v1/evals"),
     "create_run": ("POST", "/v1/runs"),
     "create_upload": ("POST", "/v1/uploads"),
+    "delete_secret": ("DELETE", "/v1/secrets/{name}"),
+    "delete_source": ("DELETE", "/v1/sources/{id}"),
     "deploy_artifact": ("POST", "/v1/deployments"),
     "download_artifact": ("GET", "/v1/artifacts/{id}/download"),
     "filter_dataset": ("POST", "/v1/datasets/{name}/filter"),
@@ -1297,6 +1416,8 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "get_eval": ("GET", "/v1/evals/{id}"),
     "get_import": ("GET", "/v1/imports/{id}"),
     "get_run": ("GET", "/v1/runs/{id}"),
+    "get_secret": ("GET", "/v1/secrets/{name}"),
+    "get_source": ("GET", "/v1/sources/{id}"),
     "list_api_keys": ("GET", "/v1/keys"),
     "list_artifacts": ("GET", "/v1/artifacts"),
     "list_base_models": ("GET", "/v1/base-models"),
@@ -1311,6 +1432,8 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "list_run_checkpoints": ("GET", "/v1/runs/{id}/checkpoints"),
     "list_run_metrics": ("GET", "/v1/runs/{id}/metrics"),
     "list_runs": ("GET", "/v1/runs"),
+    "list_secrets": ("GET", "/v1/secrets"),
+    "list_sources": ("GET", "/v1/sources"),
     "list_usage": ("GET", "/v1/usage"),
     "plan_eval": ("POST", "/v1/evals/plan"),
     "plan_run": ("POST", "/v1/runs/plan"),
@@ -1324,6 +1447,8 @@ OPERATIONS: dict[str, tuple[str, str]] = {
     "rollback_deployment": ("POST", "/v1/deployments/{name}/rollback"),
     "route_request": ("POST", "/v1/route"),
     "score_dataset": ("POST", "/v1/datasets/{name}/score"),
+    "set_secret": ("POST", "/v1/secrets"),
+    "sync_source": ("POST", "/v1/sources/{id}/sync"),
 }
 """Public operationId (snake_case) -> (HTTP method, path template)."""
 
@@ -1341,6 +1466,8 @@ LIST_IMPORTS_LIMIT_MAX = 200
 LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200
 LIST_RUN_METRICS_LIMIT_MAX = 5000
 LIST_RUNS_LIMIT_MAX = 200
+LIST_SECRETS_LIMIT_MAX = 200
+LIST_SOURCES_LIMIT_MAX = 200
 LIST_USAGE_LIMIT_MAX = 200
 
 
@@ -1370,6 +1497,10 @@ class GeneratedApiClient:
         """Import an uploaded file or a Hugging Face dataset into a dataset (async job)."""
         return cast("ImportJob", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/imports", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
 
+    def create_dataset_source(self, name: str, body: CreateSourceRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Source:
+        """Connect an observability provider to a dataset."""
+        return cast("Source", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/sources", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
     def create_embeddings(self, body: EmbedRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EmbedResponse:
         """Generate embeddings from a deployed embedding artifact."""
         return cast("EmbedResponse", self._t.request("POST", "/v1/embeddings", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
@@ -1385,6 +1516,14 @@ class GeneratedApiClient:
     def create_upload(self, body: CreateUploadRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> UploadTicket:
         """Get an upload URL for a file to import (PUT the bytes, then create an import)."""
         return cast("UploadTicket", self._t.request("POST", "/v1/uploads", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
+    def delete_secret(self, name: str, *, timeout: float | None = None) -> Any:
+        """Delete a secret (409 while a source uses it)."""
+        return self._t.request("DELETE", f"/v1/secrets/{quote_path_param(name, 'name')}", timeout=timeout)
+
+    def delete_source(self, id: str, *, timeout: float | None = None) -> Any:
+        """Remove a source (its dataset and versions stay)."""
+        return self._t.request("DELETE", f"/v1/sources/{quote_path_param(id, 'id')}", timeout=timeout)
 
     def deploy_artifact(self, body: DeployArtifactRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Deployment:
         """Deploy or update an artifact under a stable model name."""
@@ -1421,6 +1560,14 @@ class GeneratedApiClient:
     def get_run(self, id: str, *, timeout: float | None = None) -> Run:
         """Get a training run."""
         return cast("Run", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}", timeout=timeout))
+
+    def get_secret(self, name: str, *, timeout: float | None = None) -> Secret:
+        """Get a secret's metadata (never the value)."""
+        return cast("Secret", self._t.request("GET", f"/v1/secrets/{quote_path_param(name, 'name')}", timeout=timeout))
+
+    def get_source(self, id: str, *, timeout: float | None = None) -> Source:
+        """Get a source and its latest sync."""
+        return cast("Source", self._t.request("GET", f"/v1/sources/{quote_path_param(id, 'id')}", timeout=timeout))
 
     def list_api_keys(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListApiKeysResponse:
         """List workspace API keys."""
@@ -1482,6 +1629,14 @@ class GeneratedApiClient:
         """List training runs (newest first)."""
         return cast("ListRunsResponse", self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
+    def list_secrets(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListSecretsResponse:
+        """List workspace secrets (names and metadata only)."""
+        return cast("ListSecretsResponse", self._t.request("GET", "/v1/secrets", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+
+    def list_sources(self, *, limit: int | None = None, cursor: str | None = None, dataset: str | None = None, timeout: float | None = None) -> ListSourcesResponse:
+        """List sources (newest first), optionally for one dataset."""
+        return cast("ListSourcesResponse", self._t.request("GET", "/v1/sources", query={"limit": limit, "cursor": cursor, "dataset": dataset}, timeout=timeout))
+
     def list_usage(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListUsageResponse:
         """List billed usage, newest first: one record per run or eval attempt."""
         return cast("ListUsageResponse", self._t.request("GET", "/v1/usage", query={"limit": limit, "cursor": cursor}, timeout=timeout))
@@ -1533,3 +1688,11 @@ class GeneratedApiClient:
     def score_dataset(self, name: str, body: ScoreDatasetRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> EvalRun:
         """Score a dataset's records with a rubric (async; the scores become the next version)."""
         return cast("EvalRun", self._t.request("POST", f"/v1/datasets/{quote_path_param(name, 'name')}/score", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
+    def set_secret(self, body: SetSecretRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> Secret:
+        """Create or replace a workspace secret (the value is write-only)."""
+        return cast("Secret", self._t.request("POST", "/v1/secrets", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
+    def sync_source(self, id: str, body: SyncSourceRequest | Mapping[str, Any] | None = None, *, idempotency_key: str | None = None, timeout: float | None = None) -> ImportJob:
+        """Sync now: queue an import of new traces and scores (returns the running one if a sync is in progress)."""
+        return cast("ImportJob", self._t.request("POST", f"/v1/sources/{quote_path_param(id, 'id')}/sync", json_body=body, headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))

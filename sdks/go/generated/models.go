@@ -27,6 +27,10 @@ const (
 	APIKeyScopeRunsWrite        APIKeyScope = "runs:write"
 	APIKeyScopeArtifactsRead    APIKeyScope = "artifacts:read"
 	APIKeyScopeArtifactsWrite   APIKeyScope = "artifacts:write"
+	APIKeyScopeSecretsRead      APIKeyScope = "secrets:read"
+	APIKeyScopeSecretsWrite     APIKeyScope = "secrets:write"
+	APIKeyScopeSourcesRead      APIKeyScope = "sources:read"
+	APIKeyScopeSourcesWrite     APIKeyScope = "sources:write"
 	APIKeyScopeDeploymentsWrite APIKeyScope = "deployments:write"
 	APIKeyScopeFeedbackWrite    APIKeyScope = "feedback:write"
 	APIKeyScopeEnvServe         APIKeyScope = "env:serve"
@@ -206,6 +210,13 @@ const (
 	CreateImportRequestConnectorBraintrust       CreateImportRequestConnector = "braintrust"
 	CreateImportRequestConnectorLangsmith        CreateImportRequestConnector = "langsmith"
 )
+
+// CreateSourceRequest is generated from the OpenAPI schema.
+type CreateSourceRequest struct {
+	Provider SourceProvider `json:"provider"`
+	// Schedule Five-field cron in UTC (`*/15 * * * *`). Leave it out to sync only on request.
+	Schedule *string `json:"schedule,omitempty"`
+}
 
 // CreateUploadRequest is generated from the OpenAPI schema.
 type CreateUploadRequest struct {
@@ -909,15 +920,17 @@ const (
 
 // ImportSource is a union of object shapes; set the fields of exactly one variant.
 type ImportSource struct {
-	Kind      ImportSourceKind       `json:"kind"`
-	UploadID  *string                `json:"upload_id,omitempty"`
-	Format    *ImportSourceFormat    `json:"format,omitempty"`
-	Repo      *string                `json:"repo,omitempty"`
-	Split     *string                `json:"split,omitempty"`
-	Config    *string                `json:"config,omitempty"`
-	Revision  *string                `json:"revision,omitempty"`
-	Columns   *HFColumnMapping       `json:"columns,omitempty"`
-	Limit     *int                   `json:"limit,omitempty"`
+	Kind     ImportSourceKind    `json:"kind"`
+	UploadID *string             `json:"upload_id,omitempty"`
+	Format   *ImportSourceFormat `json:"format,omitempty"`
+	Repo     *string             `json:"repo,omitempty"`
+	Split    *string             `json:"split,omitempty"`
+	Config   *string             `json:"config,omitempty"`
+	Revision *string             `json:"revision,omitempty"`
+	Columns  *HFColumnMapping    `json:"columns,omitempty"`
+	Limit    *int                `json:"limit,omitempty"`
+	// Secret Name of a workspace secret holding a Hugging Face token, for gated or private datasets. The worker receives the token at claim time.
+	Secret    *string                `json:"secret,omitempty"`
 	Benchmark *ImportSourceBenchmark `json:"benchmark,omitempty"`
 }
 
@@ -1142,6 +1155,35 @@ type ListRunsParams struct {
 // ListRunsResponse is generated from the OpenAPI schema.
 type ListRunsResponse struct {
 	Data []Run `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
+}
+
+// ListSecretsParams holds the query and header parameters of ListSecrets.
+type ListSecretsParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
+	Limit  *int
+	Cursor *string
+}
+
+// ListSecretsResponse is generated from the OpenAPI schema.
+type ListSecretsResponse struct {
+	Data []Secret `json:"data"`
+	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
+	NextCursor *string `json:"next_cursor"`
+}
+
+// ListSourcesParams holds the query and header parameters of ListSources.
+type ListSourcesParams struct {
+	// Limit Page size (default 50). Values above 200 are clamped to 200.
+	Limit   *int
+	Cursor  *string
+	Dataset *string
+}
+
+// ListSourcesResponse is generated from the OpenAPI schema.
+type ListSourcesResponse struct {
+	Data []Source `json:"data"`
 	// NextCursor Pass back as `cursor` for the next page; null on the last page (every list endpoint).
 	NextCursor *string `json:"next_cursor"`
 }
@@ -1839,6 +1881,96 @@ type ScoreDatasetRequest struct {
 	Limit *int    `json:"limit,omitempty"`
 }
 
+// Secret A workspace secret's metadata. The value is never returned.
+type Secret struct {
+	// Name Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+	Name        string `json:"name"`
+	WorkspaceID string `json:"workspace_id"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// SetSecretRequest is generated from the OpenAPI schema.
+type SetSecretRequest struct {
+	// Name Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
+	Name string `json:"name"`
+	// Value Write-only: stored encrypted and never returned by any endpoint.
+	Value string `json:"value"`
+}
+
+// Source is generated from the OpenAPI schema.
+type Source struct {
+	ID          string             `json:"id"`
+	WorkspaceID string             `json:"workspace_id"`
+	Dataset     string             `json:"dataset"`
+	Provider    SourceProviderType `json:"provider"`
+	Schedule    *string            `json:"schedule"`
+	NextSyncAt  *string            `json:"next_sync_at"`
+	// LastSyncedAt When the last successful sync finished.
+	LastSyncedAt *string     `json:"last_synced_at"`
+	LastSync     *SourceSync `json:"last_sync"`
+	CreatedAt    string      `json:"created_at"`
+	UpdatedAt    string      `json:"updated_at"`
+}
+
+// SourceProvider is generated from the OpenAPI schema.
+type SourceProvider struct {
+	// Kind One of langfuse, langsmith, braintrust, posthog, phoenix, gradiated; anything else is 422 source_provider_unsupported.
+	Kind string `json:"kind"`
+	// Host The provider's API host (https). Optional for providers with one public host; not used by 'gradiated'.
+	Host *string `json:"host,omitempty"`
+	// Secret Name of the workspace secret holding the provider key. Not used by 'gradiated'.
+	Secret *string `json:"secret,omitempty"`
+	// Project The provider project to read. Required for braintrust (project id or name) and posthog (numeric project id); optional elsewhere (LangSmith project, Phoenix project).
+	Project *string `json:"project,omitempty"`
+	// Filters Provider-specific filters passed to the fetcher, for example `{"tags": ["prod"]}` or, for 'gradiated', `{"models": [...], "tasks": [...]}`.
+	Filters map[string]any `json:"filters,omitempty"`
+}
+
+// SourceProviderType is generated from the OpenAPI schema.
+type SourceProviderType struct {
+	Kind    SourceProviderTypeKind `json:"kind"`
+	Host    *string                `json:"host"`
+	Secret  *string                `json:"secret"`
+	Project *string                `json:"project"`
+	Filters map[string]any         `json:"filters"`
+}
+
+// SourceProviderTypeKind is an enumeration of allowed values.
+type SourceProviderTypeKind string
+
+// Values of SourceProviderTypeKind.
+const (
+	SourceProviderTypeKindLangfuse   SourceProviderTypeKind = "langfuse"
+	SourceProviderTypeKindLangsmith  SourceProviderTypeKind = "langsmith"
+	SourceProviderTypeKindBraintrust SourceProviderTypeKind = "braintrust"
+	SourceProviderTypeKindPosthog    SourceProviderTypeKind = "posthog"
+	SourceProviderTypeKindPhoenix    SourceProviderTypeKind = "phoenix"
+	SourceProviderTypeKindGradiated  SourceProviderTypeKind = "gradiated"
+)
+
+// SourceSync The most recent sync, running or finished.
+type SourceSync struct {
+	ImportID       string           `json:"import_id"`
+	Status         SourceSyncStatus `json:"status"`
+	Full           bool             `json:"full"`
+	DatasetVersion *int             `json:"dataset_version"`
+	Error          *string          `json:"error"`
+	CreatedAt      string           `json:"created_at"`
+	FinishedAt     *string          `json:"finished_at"`
+}
+
+// SourceSyncStatus is an enumeration of allowed values.
+type SourceSyncStatus string
+
+// Values of SourceSyncStatus.
+const (
+	SourceSyncStatusQueued    SourceSyncStatus = "queued"
+	SourceSyncStatusRunning   SourceSyncStatus = "running"
+	SourceSyncStatusCompleted SourceSyncStatus = "completed"
+	SourceSyncStatusFailed    SourceSyncStatus = "failed"
+)
+
 // SplitSpec is generated from the OpenAPI schema.
 type SplitSpec struct {
 	Strategy     *SplitSpecStrategy `json:"strategy,omitempty"`
@@ -1855,6 +1987,12 @@ const (
 	SplitSpecStrategyByGroup   SplitSpecStrategy = "by_group"
 	SplitSpecStrategyRandom    SplitSpecStrategy = "random"
 )
+
+// SyncSourceRequest is generated from the OpenAPI schema.
+type SyncSourceRequest struct {
+	// Full Rebuild the dataset from the provider as a new version (ignores the stored watermark).
+	Full *bool `json:"full,omitempty"`
+}
 
 // TrainableModel is generated from the OpenAPI schema.
 type TrainableModel struct {

@@ -43,6 +43,12 @@ export interface FakeCloudApi {
   usage: UsageEntry[];
   /** Every request received, in order. */
   requests: LoggedRequest[];
+  /**
+   * workspace → gateway trace and score rows, in ingestion order, served by
+   * `training/traces:pull` (r7-cloud-integration.md §4.1). Tests (any language)
+   * can also append with `POST /_control/gateway-records {workspace_id, records}`.
+   */
+  gatewayRecords: Map<string, Record<string, unknown>[]>;
   /** The next `count` requests to `path` (or any path) return HTTP `status`. */
   failNext(count: number, status?: number, path?: string): void;
   /** Delay every response by `ms`. */
@@ -71,6 +77,7 @@ export const startFakeCloudApi = async (
   const balances = new Map<string, number>();
   const usage: UsageEntry[] = [];
   const requests: LoggedRequest[] = [];
+  const gatewayRecords = new Map<string, Record<string, unknown>[]>();
   const failures: Array<{ remaining: number; status: number; path?: string }> =
     [];
   const canned = new Map<string, Array<{ status: number; body: unknown }>>();
@@ -104,6 +111,35 @@ export const startFakeCloudApi = async (
       }
       case "/api/internal/v1/billing/usage/cursor":
         return [200, { seq: Math.max(0, ...usage.map((u) => u.seq)) }];
+      case "/api/internal/v1/training/traces:pull": {
+        // The cursor is opaque to grad: here, the ingestion offset already read.
+        const rows = gatewayRecords.get(ws) ?? [];
+        const filter = (body.filter ?? {}) as { models?: string[] };
+        const offset =
+          body.cursor === null || body.cursor === undefined
+            ? 0
+            : Number(body.cursor);
+        const limit = Math.max(1, Math.min(500, Number(body.limit ?? 500)));
+        const page = rows.slice(offset, offset + limit).filter((r) => {
+          const model = (r.metadata as { model?: string } | undefined)?.model;
+          return (
+            r.type !== "trace" ||
+            !filter.models ||
+            filter.models.includes(String(model))
+          );
+        });
+        const next = Math.min(rows.length, offset + limit);
+        return [
+          200,
+          { records: page, cursor: String(next), has_more: next < rows.length },
+        ];
+      }
+      case "/_control/gateway-records": {
+        const list = gatewayRecords.get(ws) ?? [];
+        list.push(...((body.records ?? []) as Record<string, unknown>[]));
+        gatewayRecords.set(ws, list);
+        return [200, { records: list.length }];
+      }
       default:
         return [404, { detail: `unknown internal route ${path}` }];
     }
@@ -129,7 +165,8 @@ export const startFakeCloudApi = async (
       };
 
       if (req.method !== "POST") return send(405, { detail: "POST only" });
-      if (req.headers.authorization !== `Bearer ${serviceToken}`) {
+      const control = path.startsWith("/_control/");
+      if (!control && req.headers.authorization !== `Bearer ${serviceToken}`) {
         return send(401, { detail: "invalid service token" });
       }
 
@@ -178,6 +215,7 @@ export const startFakeCloudApi = async (
     balances,
     usage,
     requests,
+    gatewayRecords,
     failNext: (count, status = 503, path) =>
       failures.push({ remaining: count, status, ...(path ? { path } : {}) }),
     setLatency: (ms) => {

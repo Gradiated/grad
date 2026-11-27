@@ -23,9 +23,9 @@ export interface ApiKey {
   revokedAt: string | null;
 }
 
-export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:read" | "runs:write" | "artifacts:read" | "artifacts:write" | "deployments:write" | "feedback:write" | "env:serve";
+export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:read" | "runs:write" | "artifacts:read" | "artifacts:write" | "secrets:read" | "secrets:write" | "sources:read" | "sources:write" | "deployments:write" | "feedback:write" | "env:serve";
 
-export const ApiKeyScopeValues = ["admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "deployments:write", "feedback:write", "env:serve"] as const;
+export const ApiKeyScopeValues = ["admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve"] as const;
 
 export interface Artifact {
   id: string;
@@ -97,6 +97,12 @@ export interface CreateDatasetRequest {
 export interface CreateImportRequest {
   source: ImportSource;
   connector?: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith" | undefined;
+}
+
+export interface CreateSourceRequest {
+  provider: SourceProvider;
+  /** Five-field cron in UTC (`*\/15 * * * *`). Leave it out to sync only on request. */
+  schedule?: string | null | undefined;
 }
 
 export interface CreateUploadRequest {
@@ -500,6 +506,8 @@ export type ImportSource = {
   revision?: string | undefined;
   columns?: HfColumnMapping | undefined;
   limit?: number | undefined;
+  /** Name of a workspace secret holding a Hugging Face token, for gated or private datasets. The worker receives the token at claim time. */
+  secret?: string | undefined;
 } | {
   kind: "benchmark";
   /** A built-in benchmark, imported from Hugging Face at a pinned revision with fixed prompts; evals on the dataset default to its answer check. */
@@ -871,10 +879,75 @@ export interface ScoreDatasetRequest {
   limit?: number | undefined;
 }
 
+/** A workspace secret's metadata. The value is never returned. */
+export interface Secret {
+  /** Lowercase letters, digits, '.', '_' and '-'; unique per workspace. */
+  name: string;
+  workspaceId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SetSecretRequest {
+  /** Lowercase letters, digits, '.', '_' and '-'; unique per workspace. */
+  name: string;
+  /** Write-only: stored encrypted and never returned by any endpoint. */
+  value: string;
+}
+
+export interface Source {
+  id: string;
+  workspaceId: string;
+  dataset: string;
+  provider: {
+    kind: "langfuse" | "langsmith" | "braintrust" | "posthog" | "phoenix" | "gradiated";
+    host: string | null;
+    secret: string | null;
+    project: string | null;
+    filters: Record<string, unknown>;
+  };
+  schedule: string | null;
+  nextSyncAt: string | null;
+  /** When the last successful sync finished. */
+  lastSyncedAt: string | null;
+  lastSync: SourceSync | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SourceProvider {
+  /** One of langfuse, langsmith, braintrust, posthog, phoenix, gradiated; anything else is 422 source_provider_unsupported. */
+  kind: string;
+  /** The provider's API host (https). Optional for providers with one public host; not used by 'gradiated'. */
+  host?: string | null | undefined;
+  /** Name of the workspace secret holding the provider key. Not used by 'gradiated'. */
+  secret?: string | null | undefined;
+  /** The provider project to read. Required for braintrust (project id or name) and posthog (numeric project id); optional elsewhere (LangSmith project, Phoenix project). */
+  project?: string | null | undefined;
+  /** Provider-specific filters passed to the fetcher, for example `{"tags": ["prod"]}` or, for 'gradiated', `{"models": [...], "tasks": [...]}`. */
+  filters?: Record<string, unknown> | undefined;
+}
+
+/** The most recent sync, running or finished. */
+export interface SourceSync {
+  importId: string;
+  status: "queued" | "running" | "completed" | "failed";
+  full: boolean;
+  datasetVersion: number | null;
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
 export interface SplitSpec {
   strategy?: "by_session" | "by_group" | "random" | undefined;
   evalFraction?: number | undefined;
   seed?: number | undefined;
+}
+
+export interface SyncSourceRequest {
+  /** Rebuild the dataset from the provider as a new version (ignores the stored watermark). */
+  full?: boolean | undefined;
 }
 
 export interface TrainableModel {
