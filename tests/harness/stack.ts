@@ -69,6 +69,8 @@ const trainerDir = join(repo, "server", "trainer");
 
 export const API_KEY = "grad_e2e_admin_key";
 export const TRAINER_KEY = "grad_e2e_trainer_key";
+/** Mints lease tokens on the first replica's internal port (GRAD_WORKER_AUTH=static,lease). */
+export const ORCHESTRATOR_KEY = "grad_e2e_orchestrator_key";
 export const WORKSPACE_ID = "ws_e2e";
 
 export const TINY_MODELS = [
@@ -281,6 +283,14 @@ const main = async () => {
       // The API only checks an endpoint is set; the eval worker calls it.
       GRAD_INFERENCE_BASE_URL: `${inference.baseUrl}`,
       TRAINER_API_KEY: TRAINER_KEY,
+      GRAD_WORKER_AUTH: "static,lease",
+      GRAD_ORCHESTRATOR_KEYS_JSON: JSON.stringify([
+        {
+          label: "e2e",
+          sha256: createHash("sha256").update(ORCHESTRATOR_KEY).digest("hex"),
+          kinds: ["train", "import"],
+        },
+      ]),
       MAINTENANCE_INTERVAL_MS: "500",
       GRAD_SECRETS_KEY: randomBytes(32).toString("base64"),
       // Live tests sync a source several times in a row.
@@ -304,14 +314,22 @@ const main = async () => {
 
     // `node --import tsx` keeps each replica one process (one PID to kill).
     const replicas: Array<{ url: string; pid: number }> = [];
+    let internalUrl = "";
     for (let i = 0; i < Math.max(1, Number(args.replicas)); i += 1) {
       const port = await freePort();
+      let internalPort = await freePort();
+      while (internalPort === port) internalPort = await freePort();
+      internalUrl ||= `http://127.0.0.1:${internalPort}`;
       const server = spawn(
         process.execPath,
         ["--import", "tsx", "src/main.ts"],
         {
           cwd: apiDir,
-          env: { ...env, PORT: String(port) },
+          env: {
+            ...env,
+            PORT: String(port),
+            INTERNAL_PORT: String(internalPort),
+          },
           stdio: ["ignore", 2, 2],
         },
       );
@@ -383,6 +401,8 @@ const main = async () => {
         base_url: baseUrl,
         api_key: API_KEY,
         trainer_key: TRAINER_KEY,
+        internal_url: internalUrl,
+        orchestrator_key: ORCHESTRATOR_KEY,
         inference_url: inference.baseUrl,
         cloud_url: cloud?.url ?? null,
         workspace_id: WORKSPACE_ID,
