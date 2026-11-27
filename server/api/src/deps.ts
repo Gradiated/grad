@@ -22,6 +22,8 @@ export interface AppSettings {
   evalConcurrency: number;
   /** SSE metrics stream poll interval (default 1000 ms). */
   ssePollMs?: number;
+  /** How long a duplicate keyed POST waits for the first (default 5000 ms). */
+  idempotencyWaitMs?: number;
 }
 
 export interface AppDependencies {

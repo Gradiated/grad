@@ -43,8 +43,17 @@ export interface FeedbackEvent {
 
 export interface ServingService {
   readonly mode: "disabled" | "cloud";
-  deploy(workspaceId: string, input: DeployInput): Promise<Deployment>;
-  rollback(workspaceId: string, name: string): Promise<Deployment>;
+  /** `requestKey` is the caller's Idempotency-Key, forwarded to the Cloud promote. */
+  deploy(
+    workspaceId: string,
+    input: DeployInput,
+    requestKey?: string,
+  ): Promise<Deployment>;
+  rollback(
+    workspaceId: string,
+    name: string,
+    requestKey?: string,
+  ): Promise<Deployment>;
   get(workspaceId: string, name: string): Promise<DeploymentStatus>;
   list(workspaceId: string, page: PageRequest): Promise<Page<Deployment>>;
   route(
@@ -94,6 +103,7 @@ export const createServingService = (deps: AppDependencies): ServingService => {
     artifact: ArtifactRecord,
     fallbackModel: string | null,
     exploreRate: number,
+    requestKey: string | undefined,
   ): Promise<Deployment> => {
     if (NON_DEPLOYABLE_FORMATS.includes(artifact.format)) {
       throw conflict(
@@ -108,6 +118,7 @@ export const createServingService = (deps: AppDependencies): ServingService => {
       name,
       artifact,
       fallbackModel,
+      requestKey,
     });
 
     return tx.deployments.upsert({
@@ -146,7 +157,7 @@ export const createServingService = (deps: AppDependencies): ServingService => {
   return {
     mode: deps.deploy.mode,
 
-    deploy: async (workspaceId, input) => {
+    deploy: async (workspaceId, input, requestKey) => {
       requireEnabled();
       const artifact = await store.artifacts.get(workspaceId, input.artifact);
       if (!artifact) throw notFound("artifact", input.artifact);
@@ -159,11 +170,12 @@ export const createServingService = (deps: AppDependencies): ServingService => {
           artifact,
           input.fallback ?? null,
           input.explore_rate,
+          requestKey,
         ),
       );
     },
 
-    rollback: async (workspaceId, name) => {
+    rollback: async (workspaceId, name, requestKey) => {
       requireEnabled();
       const deployment = await getDeployment(workspaceId, name);
       if (!deployment.previous_artifact_id) {
@@ -187,6 +199,7 @@ export const createServingService = (deps: AppDependencies): ServingService => {
           previous,
           deployment.fallback_model,
           deployment.explore_rate,
+          requestKey,
         ),
       );
     },

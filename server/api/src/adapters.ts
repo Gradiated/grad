@@ -46,6 +46,8 @@ export interface DeployAdapter {
     name: string;
     artifact: Artifact & { storage_key: string };
     fallbackModel: string | null;
+    /** The caller's Idempotency-Key: the promote is keyed by this intent, not by its content. */
+    requestKey?: string | undefined;
   }): Promise<{ modelId: string }>;
 }
 

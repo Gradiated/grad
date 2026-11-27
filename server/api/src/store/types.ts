@@ -691,6 +691,13 @@ export interface IdempotencyRepository {
     scope: IdempotencyScope,
     requestHash: string,
     at: { now: Date; expiredBefore: Date; abandonedBefore: Date },
+    options?: {
+      /**
+       * Inside a transaction: how long to wait for a concurrent transaction
+       * holding the same key before reporting it in progress (Postgres).
+       */
+      waitMs?: number;
+    },
   ): Promise<IdempotencyClaim>;
   /** Stores the response of the request holding `claimId`. */
   complete(
@@ -727,8 +734,9 @@ export interface Repositories {
 export interface Store extends Repositories {
   /**
    * Runs `fn` atomically. Postgres: one transaction on one connection.
-   * Memory: serialized with a snapshot restored on error. Nested calls reuse
-   * the outer transaction.
+   * Memory: serialized with a snapshot restored on error. Nested calls join
+   * the outer transaction; an error thrown inside a nested call rolls back
+   * only that call (Postgres savepoint, memory snapshot).
    */
   transaction<T>(fn: (tx: Repositories) => Promise<T>): Promise<T>;
   migrate(): Promise<void>;

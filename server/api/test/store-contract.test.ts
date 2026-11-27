@@ -1613,6 +1613,34 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(await store.billing.listByRun(committed!.id)).toHaveLength(1);
       expect(await store.ping()).toBe(true);
     });
+
+    it("transactions: a failed nested block rolls back alone; the outer one commits", async () => {
+      await store.transaction(async (tx) => {
+        await tx.datasets.create({
+          workspaceId: "ws_t",
+          name: "outer",
+          metadata: {},
+        });
+        await expect(
+          store.transaction(async (inner) => {
+            await inner.datasets.create({
+              workspaceId: "ws_t",
+              name: "inner",
+              metadata: {},
+            });
+            throw new Error("inner failed");
+          }),
+        ).rejects.toThrow("inner failed");
+        await tx.datasets.create({
+          workspaceId: "ws_t",
+          name: "after",
+          metadata: {},
+        });
+      });
+      expect(await store.datasets.get("ws_t", "outer")).not.toBeNull();
+      expect(await store.datasets.get("ws_t", "inner")).toBeNull();
+      expect(await store.datasets.get("ws_t", "after")).not.toBeNull();
+    });
   });
 
 describeStoreContract("memory", async (clock) => ({

@@ -33,20 +33,30 @@ const toClaim = (row: Row, requestHash: string): IdempotencyClaim => {
   return { outcome: "completed", response };
 };
 
+/** Postgres `lock_not_available` (lock_timeout expired). */
+const LOCK_NOT_AVAILABLE = "55P03";
+
 /** Bounded retries when a competing claim is released between our statements. */
 const CLAIM_ATTEMPTS = 3;
 
 /**
  * Postgres idempotency rows. The primary key serializes concurrent claims
- * across API replicas: the second INSERT waits for the first, then sees its
- * row and reports it.
+ * across API replicas: inside a transaction the second INSERT waits (up to
+ * `waitMs`) for the first to commit or roll back, then sees its row or takes
+ * the key.
  */
 export const createIdempotencyRepository = (db: Db): IdempotencyRepository => ({
-  claim: async (scope, requestHash, at) => {
+  claim: async (scope, requestHash, at, options = {}) => {
+    const { waitMs } = options;
     for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt += 1) {
       const claimId = randomUUID();
-      const claimed = first(
+      if (waitMs !== undefined) {
         await db.query(
+          `SET LOCAL lock_timeout = '${Math.max(1, Math.floor(waitMs))}ms'`,
+        );
+      }
+      const inserted = await db
+        .query(
           `INSERT INTO grad_idempotency_keys AS k
              (workspace_id, principal, method, path, idempotency_key, claim_id,
               request_hash, status, created_at, updated_at)
@@ -67,9 +77,17 @@ export const createIdempotencyRepository = (db: Db): IdempotencyRepository => ({
             at.expiredBefore.toISOString(),
             at.abandonedBefore.toISOString(),
           ],
-        ),
-      );
-      if (claimed) return { outcome: "claimed", claimId };
+        )
+        .catch((error: unknown) => {
+          // A concurrent transaction still holds this key past `waitMs`.
+          if ((error as { code?: string }).code === LOCK_NOT_AVAILABLE)
+            return null;
+          throw error;
+        });
+      if (inserted === null) return { outcome: "in_progress" };
+      if (waitMs !== undefined)
+        await db.query("SET LOCAL lock_timeout TO DEFAULT");
+      if (first(inserted)) return { outcome: "claimed", claimId };
 
       const existing = first(
         await db.query(

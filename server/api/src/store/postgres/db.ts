@@ -6,7 +6,8 @@ export type Row = Record<string, unknown>;
 /**
  * Query executor bound to a pool. Inside `atomic`, every query (including
  * queries issued through the top-level repositories) runs on the ambient
- * transaction's client, which gives nested-transaction reuse for free.
+ * transaction's client; a nested `atomic` joins it under a savepoint, so an
+ * inner failure rolls back only the inner block (as in the memory store).
  */
 export interface Db {
   query<R extends Row = Row>(
@@ -18,6 +19,7 @@ export interface Db {
 
 export const createDb = (pool: Pool): Db => {
   const ambient = new AsyncLocalStorage<PoolClient>();
+  let savepoints = 0;
 
   return {
     query: async <R extends Row = Row>(
@@ -30,7 +32,24 @@ export const createDb = (pool: Pool): Db => {
       return result.rows as R[];
     },
     atomic: async (fn) => {
-      if (ambient.getStore()) return fn();
+      const outer = ambient.getStore();
+      if (outer) {
+        // Nested: join the outer transaction, but roll back only this block on error.
+        savepoints += 1;
+        const name = `grad_sp_${savepoints}`;
+        await outer.query(`SAVEPOINT ${name}`);
+        try {
+          const value = await fn();
+          await outer.query(`RELEASE SAVEPOINT ${name}`);
+
+          return value;
+        } catch (error) {
+          await outer
+            .query(`ROLLBACK TO SAVEPOINT ${name}`)
+            .catch(() => undefined);
+          throw error;
+        }
+      }
 
       const client = await pool.connect();
       try {

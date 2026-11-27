@@ -201,6 +201,49 @@ describe("serving (DEPLOY_MODE=cloud) against the fake Cloud API", () => {
     expect(listed.body.next_cursor).toBeNull();
   });
 
+  it("keys the Cloud promote by the caller's Idempotency-Key and replays deploys", async () => {
+    const a = await seedArtifact(t, {
+      name: "keyed",
+      recipe: "router",
+      format: "router_bundle",
+      manifest: ROUTER_MANIFEST,
+    });
+    t.clock.advanceSeconds(1);
+    const b = await seedArtifact(t, {
+      name: "keyed",
+      recipe: "router",
+      format: "router_bundle",
+      manifest: ROUTER_MANIFEST,
+    });
+    const keyed = (path: string, key: string, body?: unknown) =>
+      t.json(path, {
+        method: "POST",
+        ...(body === undefined ? {} : { body }),
+        headers: { "Idempotency-Key": key },
+      });
+
+    expect(
+      (await keyed("/v1/deployments", "deploy-a", { artifact: a.id })).status,
+    ).toBe(200);
+    expect(
+      (await keyed("/v1/deployments", "deploy-b", { artifact: b.id })).status,
+    ).toBe(200);
+    const back = await keyed("/v1/deployments/keyed/rollback", "rollback-1");
+    expect(back.body).toMatchObject({ active_artifact_id: a.id });
+    const retried = await keyed("/v1/deployments/keyed/rollback", "rollback-1");
+    expect(retried.headers.get("Idempotent-Replayed")).toBe("true");
+    expect(retried.body).toMatchObject({ active_artifact_id: a.id });
+
+    const keys = cloud
+      .callsTo("/api/internal/v1/deployments/promote")
+      .map((c) => c.idempotency_key);
+    expect(keys).toEqual([
+      `deploy-promote:${WORKSPACE_A}:keyed:deploy-a`,
+      `deploy-promote:${WORKSPACE_A}:keyed:deploy-b`,
+      `deploy-promote:${WORKSPACE_A}:keyed:rollback-1`,
+    ]);
+  });
+
   it("rejects unknown inference ids, unknown deployments and mismatches", async () => {
     await seedArtifact(t, {
       name: "r1",

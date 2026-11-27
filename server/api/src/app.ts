@@ -207,7 +207,9 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     await next();
   });
 
-  installIdempotency(app, deps.store.idempotency, deps.clock);
+  installIdempotency(app, deps.store, deps.clock, {
+    waitMs: deps.settings.idempotencyWaitMs,
+  });
 
   registerModelsAndKeysRoutes(app, deps);
   registerDatasetRoutes(app, deps, services);

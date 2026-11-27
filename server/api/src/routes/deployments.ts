@@ -56,7 +56,11 @@ export const registerDeploymentRoutes = (
     }),
     async (c) => {
       const ws = workspaceOf(c, "deployments:write");
-      const deployment = await serving.deploy(ws, c.req.valid("json"));
+      const deployment = await serving.deploy(
+        ws,
+        c.req.valid("json"),
+        c.req.header("idempotency-key"),
+      );
 
       return c.json(deployment, 200);
     },
@@ -120,7 +124,11 @@ export const registerDeploymentRoutes = (
     }),
     async (c) => {
       const ws = workspaceOf(c, "deployments:write");
-      const deployment = await serving.rollback(ws, c.req.valid("param").name);
+      const deployment = await serving.rollback(
+        ws,
+        c.req.valid("param").name,
+        c.req.header("idempotency-key"),
+      );
 
       return c.json(deployment, 200);
     },

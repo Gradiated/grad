@@ -328,6 +328,7 @@ export const createCloudDeployAdapter = (
       name,
       artifact,
       fallbackModel,
+      requestKey,
     }) => {
       try {
         const publish = await postInternalJson(
@@ -361,7 +362,7 @@ export const createCloudDeployAdapter = (
             artifact_id: artifact.id,
             fallback_model: fallbackModel,
           },
-          `deploy-promote:${workspaceId}:${name}:${artifact.id}`,
+          `deploy-promote:${workspaceId}:${name}:${requestKey ?? artifact.id}`,
         );
         if (!isOk(promote.status)) {
           throw new Error(
