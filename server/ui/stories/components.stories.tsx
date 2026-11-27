@@ -140,9 +140,8 @@ export const Stats: Story = {
         <Stat label="Tokens" value="80.3K" hint="$1.20 / M" />
         <div className="stat">
           <div className="stat-label">Cost</div>
-          <div className="stat-value">
-            $8.80<span className="of"> of $10.00 cap</span>
-          </div>
+          <div className="stat-value">$8.80</div>
+          <div className="stat-hint">of $10.00 cap</div>
           <Meter label="Cost against the cap" value={8.8} max={10} />
         </div>
       </div>

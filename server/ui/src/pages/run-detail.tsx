@@ -264,10 +264,8 @@ const RunStats = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
       <Stat label="Tokens" value={compact(run.tokensProcessed)} hint={`${usd(run.pricePerMillionTokens)} / M`} />
       <div className="stat">
         <div className="stat-label">Cost</div>
-        <div className="stat-value">
-          {usd(run.costUsd)}
-          <span className="of"> {run.maxCostUsd !== null ? `of ${usd(run.maxCostUsd)} cap` : "no cap"}</span>
-        </div>
+        <div className="stat-value">{usd(run.costUsd)}</div>
+        <div className="stat-hint">{run.maxCostUsd !== null ? `of ${usd(run.maxCostUsd)} cap` : "no cap"}</div>
         <Meter label="Cost against the cap" value={run.costUsd} max={run.maxCostUsd} />
       </div>
     </div>

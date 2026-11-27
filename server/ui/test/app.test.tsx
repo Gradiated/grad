@@ -287,6 +287,10 @@ describe("runs", () => {
     // $0.01 of a $5 cap: the cap line would flatten the cost line, so the legend states the share instead.
     expect(charts.created.some((c) => c.series.includes("cap"))).toBe(false);
     expect(text).toContain("0% of cap");
+    // The cap sits on the cost tile's sub-line, so the value itself never truncates.
+    const cost = [...container.querySelectorAll(".stat")].find((el) => el.querySelector(".stat-label")?.textContent === "Cost");
+    expect(cost?.querySelector(".stat-value")?.textContent).toBe("$0.0114");
+    expect(cost?.querySelector(".stat-hint")?.textContent).toBe("of $5.00 cap");
     expect(container.querySelector("pre.code")?.textContent).toContain("model: test/tiny-qwen3");
     expect(container.querySelector("pre.code")?.textContent).toContain("checkpoint_every_steps: 1");
     expect(container.querySelectorAll(".table tbody tr").length).toBeGreaterThanOrEqual(3);
