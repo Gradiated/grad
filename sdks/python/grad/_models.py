@@ -354,6 +354,7 @@ class SecretRef(APIObject):
 
     name: str
     workspace_id: str | None = None
+    allowed_hosts: list[str] = field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
 

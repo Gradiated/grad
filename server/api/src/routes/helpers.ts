@@ -96,6 +96,28 @@ export const requireScope = (
   return principal;
 };
 
+/**
+ * A request that names workspace secrets (a source's key, an HF token, a run
+ * logger's key) makes the server send their plaintext somewhere, so it needs
+ * `secrets:read` (or admin) on top of the endpoint's own scope. Where the
+ * value may go is bound separately, by the secret's allowed_hosts.
+ */
+export const requireSecretUse = (
+  c: Context<AppEnv>,
+  names: ReadonlyArray<string | null | undefined>,
+): void => {
+  const named = names.filter((n): n is string => typeof n === "string");
+  if (named.length === 0 || hasScope(c.get("principal"), "secrets:read")) {
+    return;
+  }
+  throw new ApiError(
+    403,
+    "forbidden",
+    "Insufficient scope",
+    `Using workspace secret '${named[0]}' needs the 'secrets:read' scope (or admin) as well.`,
+  );
+};
+
 /** Workspace id of a workspace-scoped caller (after a scope check). */
 export const workspaceOf = (c: Context<AppEnv>, scope: Scope): string =>
   requireScope(c, scope).workspaceId;

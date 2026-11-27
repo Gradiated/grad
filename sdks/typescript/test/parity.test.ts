@@ -133,6 +133,8 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
   filter_dataset_ids: () => grad.datasets.filter("support-logs", { ids: ["rec_a", "rec_c"] }),
   deploy: () => grad.deploy(artifact, { name: "support", fallback: "test/tiny-qwen3", exploreRate: 0.1, idempotencyKey: "parity-deploy-key" }),
   set_secret: () => grad.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
+  set_secret_hosts: () =>
+    grad.secrets.set("langfuse-self", "pk-lf-1:sk-lf-2", { allowedHosts: ["langfuse.internal:3000"] }),
   add_source: () =>
     grad.sources.create("support-prod", {
       provider: sources.langfuse({ host: "https://cloud.langfuse.com", secret: new SecretRef({ name: "langfuse-prod" } as Secret) }),
@@ -202,6 +204,7 @@ describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
       "source.consecutive_failures": source.consecutiveFailures,
       "source.last_error": source.lastError,
       "secret.name": secret.name,
+      "secret.allowed_hosts[0]": secret.allowedHosts[0],
       "usage[0].kind": usage.kind,
       "usage[0].tokens_through": usage.tokensThrough,
       "usage[0].cost_usd": usage.costUsd,

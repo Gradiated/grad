@@ -13,6 +13,11 @@ import { CronError, parseCron } from "../cron.js";
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound, unavailable } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
+import {
+  assertSecretHost,
+  normaliseAllowedHosts,
+  PROVIDER_DEFAULT_HOSTS,
+} from "../secret-hosts.js";
 import { secretsUnavailable, type SecretsCipher } from "../secrets.js";
 import type {
   IdempotencyInput,
@@ -88,15 +93,41 @@ export interface SyncRequest {
   retryAfter: number | null;
 }
 
+/** Where a secret is about to be sent: checked against its allowed_hosts. */
+export interface SecretUse {
+  url: string;
+  /** For the error message: "langfuse source", "HF import", ... */
+  use: string;
+}
+
 export interface SourceService {
-  setSecret(workspaceId: string, name: string, value: string): Promise<Secret>;
+  setSecret(
+    workspaceId: string,
+    name: string,
+    value: string,
+    allowedHosts?: readonly string[] | undefined,
+  ): Promise<Secret>;
   getSecret(workspaceId: string, name: string): Promise<Secret>;
   listSecrets(workspaceId: string, page: PageRequest): Promise<Page<Secret>>;
   deleteSecret(workspaceId: string, name: string): Promise<void>;
-  /** 422 secret_not_found unless `name` exists (and secrets are configured). */
-  requireSecret(workspaceId: string, name: string): Promise<void>;
-  /** Plaintext for a worker claim (HF tokens, provider keys). Never log it. */
-  revealSecret(workspaceId: string, name: string): Promise<string>;
+  /**
+   * 422 secret_not_found unless `name` exists (and secrets are configured),
+   * 422 secret_host_not_allowed unless it may be sent to `to`.
+   */
+  requireSecret(
+    workspaceId: string,
+    name: string,
+    to: SecretUse,
+  ): Promise<void>;
+  /**
+   * Plaintext for a worker claim (HF tokens, provider keys), re-checked
+   * against allowed_hosts at claim time. Never log it.
+   */
+  revealSecret(
+    workspaceId: string,
+    name: string,
+    to: SecretUse,
+  ): Promise<string>;
 
   create(
     workspaceId: string,
@@ -162,22 +193,38 @@ export const createSourceService = (
     return deps.secrets;
   };
 
-  const revealSecret = async (workspaceId: string, name: string) => {
+  const revealSecret = async (
+    workspaceId: string,
+    name: string,
+    to: SecretUse,
+  ) => {
+    const secret = await store.secrets.get(workspaceId, name);
     const sealed = await store.secrets.getSealed(workspaceId, name);
-    if (!sealed) throw notFound("secret", name);
+    if (!secret || !sealed) throw notFound("secret", name);
+    assertSecretHost(secret, to.url, to.use);
 
     return cipher().open(workspaceId, name, sealed);
   };
 
-  const requireSecret = async (workspaceId: string, name: string) => {
+  const requireSecret = async (
+    workspaceId: string,
+    name: string,
+    to: SecretUse,
+  ) => {
     cipher();
-    if (!(await store.secrets.get(workspaceId, name))) {
+    const secret = await store.secrets.get(workspaceId, name);
+    if (!secret) {
       throw invalid(
         "secret_not_found",
         `No secret named '${name}' in this workspace. Store it first with 'grad secrets set ${name}' (the value is read from stdin).`,
       );
     }
+    assertSecretHost(secret, to.url, to.use);
   };
+
+  /** The host a source's requests go to: its own, else the provider's public one. */
+  const sourceUrl = (kind: SourceProviderKind, host: string | null) =>
+    host ?? PROVIDER_DEFAULT_HOSTS[kind] ?? "";
 
   const lastSync = async (
     repos: Repositories,
@@ -346,7 +393,12 @@ export const createSourceService = (
         `The ${kind} source needs a secret holding its API key: store it with 'grad secrets set NAME' and pass secret=NAME.`,
       );
     }
-    if (secret !== null) await requireSecret(workspaceId, secret);
+    if (secret !== null) {
+      await requireSecret(workspaceId, secret, {
+        url: sourceUrl(kind as SourceProviderKind, host),
+        use: `${kind} source`,
+      });
+    }
 
     return { kind: kind as SourceProviderKind, host, secret };
   };
@@ -372,11 +424,12 @@ export const createSourceService = (
   };
 
   return {
-    setSecret: async (workspaceId, name, value) => {
+    setSecret: async (workspaceId, name, value, allowedHosts) => {
       const secret = await store.secrets.put({
         workspaceId,
         name,
         sealed: cipher().seal(workspaceId, name, value),
+        allowedHosts: normaliseAllowedHosts(allowedHosts),
       });
       // A new key is the usual fix for a paused source: resume its users.
       for (const id of await store.sources.usingSecret(workspaceId, name)) {
@@ -515,13 +568,14 @@ export const createSourceService = (
       }
 
       const secret = source.secret_name
-        ? await revealSecret(source.workspace_id, source.secret_name).catch(
-            (error: unknown) => {
-              throw new Error(
-                `The source's secret '${source.secret_name}' can't be read: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            },
-          )
+        ? await revealSecret(source.workspace_id, source.secret_name, {
+            url: sourceUrl(source.provider, source.host),
+            use: `${source.provider} source`,
+          }).catch((error: unknown) => {
+            throw new Error(
+              `The source's secret '${source.secret_name}' can't be read: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          })
         : null;
 
       return {

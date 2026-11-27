@@ -92,9 +92,12 @@ describe("workspace secrets", () => {
       headers: { "Idempotency-Key": "k1" },
     });
     expect(replaced.status).toBe(200);
-    expect(await t.services.sources.revealSecret("ws_a", "langfuse-prod")).toBe(
-      "pk:other",
-    );
+    expect(
+      await t.services.sources.revealSecret("ws_a", "langfuse-prod", {
+        url: "https://cloud.langfuse.com",
+        use: "test",
+      }),
+    ).toBe("pk:other");
 
     const listed = await t.json<{ data: Array<Record<string, unknown>> }>(
       "/v1/secrets",
@@ -237,6 +240,96 @@ describe("sources", () => {
       project: null,
       filters: {},
     });
+  });
+
+  it("binds every secret to its allowed hosts: no exfiltration through a source, import or logger (r8 P1-2)", async () => {
+    // The admin stores an HF token for imports (default hosts).
+    const hf = await t.json<{ allowed_hosts: string[] }>("/v1/secrets", {
+      body: { name: "hf-token", value: "hf_REAL_TOKEN_VALUE" },
+    });
+    expect(hf.body.allowed_hosts).toContain("huggingface.co");
+    expect(hf.body.allowed_hosts).not.toContain("attacker.example");
+
+    // A key that may only write sources can't use secrets at all...
+    const member = await t.mintKey("ws_a", ["sources:write"]);
+    const exfil = {
+      provider: {
+        kind: "langfuse",
+        host: "https://attacker.example",
+        secret: "hf-token",
+      },
+    };
+    const denied = await t.json("/v1/datasets/exfil/sources", {
+      token: member,
+      body: exfil,
+    });
+    expect([denied.status, denied.body.code]).toEqual([403, "forbidden"]);
+    // ...and with secrets:read, the secret still only goes where it's allowed.
+    const reader = await t.mintKey("ws_a", ["sources:write", "secrets:read"]);
+    const refused = await t.json("/v1/datasets/exfil/sources", {
+      token: reader,
+      body: exfil,
+    });
+    expect([refused.status, refused.body.code]).toEqual([
+      422,
+      "secret_host_not_allowed",
+    ]);
+    const datasetWriter = await t.mintKey("ws_a", ["datasets:write"]);
+    const hfImport = await t.json("/v1/datasets/d/imports", {
+      token: datasetWriter,
+      body: { source: { kind: "hf", repo: "org/data", secret: "hf-token" } },
+    });
+    expect(hfImport.status).toBe(403);
+
+    // A self-hosted provider's secret names its host; other hosts and
+    // invalid entries are refused.
+    const bad = await t.json("/v1/secrets", {
+      body: { name: "x", value: "y", allowed_hosts: ["not a host!"] },
+    });
+    expect([bad.status, bad.body.code]).toEqual([422, "secret_host_invalid"]);
+    const own = await t.json<{ allowed_hosts: string[] }>("/v1/secrets", {
+      body: {
+        name: "lf-self",
+        value: "pk:sk",
+        allowed_hosts: [
+          "https://Langfuse.internal:3000/",
+          "langfuse.internal:3000",
+        ],
+      },
+    });
+    expect(own.body.allowed_hosts).toEqual(["langfuse.internal:3000"]);
+    const selfHosted = {
+      kind: "langfuse",
+      host: "https://langfuse.internal:3000",
+      secret: "lf-self",
+    };
+    const created = await addSource({ provider: selfHosted });
+    expect(created.status).toBe(201);
+    expect(
+      (await addSource({ provider: { ...selfHosted, host: null } })).body.code,
+    ).toBe("secret_host_not_allowed");
+    const hfWithLf = await t.json("/v1/datasets/d/imports", {
+      body: { source: { kind: "hf", repo: "org/data", secret: "lf-self" } },
+    });
+    expect(hfWithLf.body.code).toBe("secret_host_not_allowed");
+
+    // Re-setting a secret to other hosts stops a source that was allowed: the
+    // claim re-checks, fails the sync, and never hands out the value.
+    await t.json("/v1/secrets", {
+      body: {
+        name: "lf-self",
+        value: "pk:sk",
+        allowed_hosts: ["elsewhere.example"],
+      },
+    });
+    await t.json(`/v1/sources/${created.body.id}/sync`, { body: {} });
+    expect(await worker.claim({ kinds: ["import"] })).toBeNull();
+    const source = await t.json<{
+      last_sync: { status: string; error: string };
+    }>(`/v1/sources/${created.body.id}`);
+    expect(source.body.last_sync.status).toBe("failed");
+    expect(source.body.last_sync.error).toContain("may only be sent to");
+    expect(JSON.stringify(source.body)).not.toContain("pk:sk");
   });
 
   it("creates once per Idempotency-Key and lists by dataset", async () => {

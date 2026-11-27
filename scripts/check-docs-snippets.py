@@ -249,6 +249,8 @@ class Runner:
         if self.langfuse_url:
             for host in LANGFUSE_HOSTS:
                 code = code.replace(host, self.langfuse_url)
+            # Secrets go only to their allowed hosts: the fake Langfuse is one.
+            code = re.sub(r"(grad secrets set [a-z0-9._-]+)", rf"\1 --allowed-host {self.langfuse_url}", code)
         if self.source_id:
             code = SOURCE_IDS.sub(self.source_id, code)
         for name in {m[0] for m in DATED_REFS.findall(code)}:  # the k-th oldest dated ref -> the k-th oldest seed version
@@ -328,7 +330,8 @@ class Runner:
         try:
             self.client.secrets.get(name)
         except NotFoundError:
-            self.client.secrets.set(name, self.provider_key)
+            hosts = [self.langfuse_url, "huggingface.co", "api.wandb.ai"] if self.langfuse_url else None
+            self.client.secrets.set(name, self.provider_key, allowed_hosts=hosts)
 
     def run(self, block: dict, n: int) -> tuple[bool, str]:
         self.seed(block["code"])

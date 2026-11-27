@@ -34,7 +34,10 @@ var errNoSecretValue = errors.New("grad: a secret value must be a non-empty stri
 type SecretsService struct{ c *Client }
 
 // Set creates or replaces a secret. The value is encrypted at rest and never returned.
-func (s *SecretsService) Set(ctx context.Context, name, value string) (*SecretRef, error) {
+// allowedHosts are the only hosts the server sends it to (a source's host,
+// huggingface.co for HF imports, a logger's host); leave them out for the public
+// provider hosts. A secret for a self-hosted tool must name its host.
+func (s *SecretsService) Set(ctx context.Context, name, value string, allowedHosts ...string) (*SecretRef, error) {
 	if value == "" {
 		return nil, errNoSecretValue
 	}
@@ -42,7 +45,7 @@ func (s *SecretsService) Set(ctx context.Context, name, value string) (*SecretRe
 	if err != nil {
 		return nil, err
 	}
-	secret, err := api.SetSecret(ctx, &generated.SetSecretRequest{Name: name, Value: value})
+	secret, err := api.SetSecret(ctx, &generated.SetSecretRequest{Name: name, Value: value, AllowedHosts: allowedHosts})
 	if err != nil {
 		return nil, err
 	}

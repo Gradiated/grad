@@ -24,6 +24,15 @@ export const SetSecretRequestSchema = z
         description:
           "Write-only: stored encrypted and never returned by any endpoint.",
       }),
+    allowed_hosts: z
+      .array(z.string().min(1).max(260))
+      .max(32)
+      .optional()
+      .openapi({
+        description:
+          "Hosts (`host[:port]`, or URLs) this secret may be sent to: a source's host, huggingface.co for HF imports, a logger's host. Default: the public hosts of the supported providers (cloud.langfuse.com, us.cloud.langfuse.com, api.smith.langchain.com, eu.api.smith.langchain.com, api.braintrust.dev, us.posthog.com, eu.posthog.com, app.phoenix.arize.com, huggingface.co, api.wandb.ai). A secret for a self-hosted tool must name its host. Replacing a secret replaces its hosts.",
+        example: ["langfuse.internal.example.com"],
+      }),
   })
   .openapi("SetSecretRequest");
 
@@ -31,6 +40,9 @@ export const SecretSchema = z
   .object({
     name: SecretNameSchema,
     workspace_id: z.string().min(1),
+    allowed_hosts: z.array(z.string()).openapi({
+      description: "The hosts this secret may be sent to.",
+    }),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
   })

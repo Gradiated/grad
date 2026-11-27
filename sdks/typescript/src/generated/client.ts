@@ -114,7 +114,8 @@ export const CODEC: CodecTable = {
   "RouteResponse": { o: [["inferenceId", "inference_id", 0], ["artifactId", "artifact_id", 0], ["isExploration", "is_exploration", 0]] },
   "RouterParetoSummary": { o: [["targetMaxDrop", "target_max_drop", 0], ["routedQuality", "routed_quality", 0], ["qualityDrop", "quality_drop", 0], ["qualityDropCi95", "quality_drop_ci95", 0], ["offloadRate", "offload_rate", 0], ["costSavingsPct", "cost_savings_pct", 0]] },
   "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", "EvalReport"], ["checkpointEvals", "checkpoint_evals", { a: "CheckpointEvalResult" }], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
-  "Secret": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "Secret": { o: [["workspaceId", "workspace_id", 0], ["allowedHosts", "allowed_hosts", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
+  "SetSecretRequest": { o: [["allowedHosts", "allowed_hosts", 0]] },
   "Source": { o: [["workspaceId", "workspace_id", 0], ["nextSyncAt", "next_sync_at", 0], ["pausedReason", "paused_reason", 0], ["lastError", "last_error", 0], ["lastErrorAt", "last_error_at", 0], ["consecutiveFailures", "consecutive_failures", 0], ["pendingFull", "pending_full", 0], ["lastSyncedAt", "last_synced_at", 0], ["lastSync", "last_sync", "SourceSync"], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "SourceSync": { o: [["importId", "import_id", 0], ["datasetVersion", "dataset_version", 0], ["createdAt", "created_at", 0], ["finishedAt", "finished_at", 0]] },
   "SplitSpec": { o: [["evalFraction", "eval_fraction", 0]] },
@@ -886,7 +887,7 @@ export class ApiClient {
    * `POST /v1/secrets`
    */
   async setSecret(body: SetSecretRequest, options?: RequestOptions): Promise<Secret> {
-    const data = await this.transport.json({ method: "POST", path: `/v1/secrets`, json: body, idempotent: true }, options);
+    const data = await this.transport.json({ method: "POST", path: `/v1/secrets`, json: convertKeys(CODEC, "SetSecretRequest", body, "encode"), idempotent: true }, options);
     return convertKeys(CODEC, "Secret", data, "decode") as Secret;
   }
 

@@ -43,6 +43,8 @@ class SecretsTests(unittest.TestCase):
             client.secrets.set("Bad Name", "v")
         with self.assertRaises(ValueError):
             client.secrets.set("ok", "")
+        with self.assertRaises(TypeError):
+            client.secrets.set("ok", "v", allowed_hosts="langfuse.internal")  # type: ignore[arg-type]
 
     def test_typed_errors(self) -> None:
         client, _, _ = make_client(

@@ -25,6 +25,7 @@ import {
   jsonResponse,
   notImplementedError,
   requireScope,
+  requireSecretUse,
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
@@ -72,6 +73,7 @@ export const registerSourceRoutes = (
           workspaceOf(c, "secrets:write"),
           input.name,
           input.value,
+          input.allowed_hosts,
         ),
         200,
       );
@@ -165,10 +167,13 @@ export const registerSourceRoutes = (
       },
     }),
     async (c) => {
+      const workspaceId = workspaceOf(c, "sources:write");
+      const body = c.req.valid("json");
+      requireSecretUse(c, [body.provider.secret]);
       const created = await services.sources.create(
-        workspaceOf(c, "sources:write"),
+        workspaceId,
         c.req.valid("param").name,
-        c.req.valid("json"),
+        body,
         await idempotencyOf(c),
       );
 

@@ -335,6 +335,19 @@
       }
     },
     {
+      "case": "set_secret_hosts",
+      "method": "POST",
+      "path": "/v1/secrets",
+      "idempotency_key": null,
+      "body": {
+        "name": "langfuse-self",
+        "value": "pk-lf-1:sk-lf-2",
+        "allowed_hosts": [
+          "langfuse.internal:3000"
+        ]
+      }
+    },
+    {
       "case": "add_source",
       "method": "POST",
       "path": "/v1/datasets/support-prod/sources",
@@ -732,6 +745,9 @@
     "secret": {
       "name": "langfuse-prod",
       "workspace_id": "ws_e2e",
+      "allowed_hosts": [
+        "cloud.langfuse.com"
+      ],
       "created_at": "2026-11-27T11:00:00.000Z",
       "updated_at": "2026-11-27T11:00:00.000Z"
     },
@@ -780,6 +796,7 @@
     "source.consecutive_failures": 10,
     "source.last_error": "langfuse: 401 Unauthorized (auth failed for ***)",
     "secret.name": "langfuse-prod",
+    "secret.allowed_hosts[0]": "cloud.langfuse.com",
     "usage[0].kind": "run",
     "usage[0].tokens_through": 84,
     "usage[0].cost_usd": 8.4e-05

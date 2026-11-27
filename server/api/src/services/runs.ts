@@ -30,6 +30,7 @@ import { conflict, forbidden, invalid, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
+import { assertSecretHost, loggerUrl } from "../secret-hosts.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./evals/planner.js";
 import { decodeCursor, encodeCursor } from "../store/cursor.js";
 import type {
@@ -560,15 +561,26 @@ export const createRunLifecycle = (
     };
   };
 
-  /** The secret a logger names, or null when it can't be read (the plan warned). */
+  /**
+   * The secret a logger names, or null when it can't be read (the plan
+   * warned) or may no longer be sent to the logger's host (re-set since).
+   */
   const loggerSecret = async (
     workspaceId: string,
     name: string,
+    url: string,
   ): Promise<string | null> => {
     if (!deps.secrets) return null;
+    const secret = await store.secrets.get(workspaceId, name);
     const sealed = await store.secrets.getSealed(workspaceId, name);
+    if (!secret || !sealed) return null;
+    try {
+      assertSecretHost(secret, url, "logger");
+    } catch {
+      return null;
+    }
 
-    return sealed ? deps.secrets.open(workspaceId, name, sealed) : null;
+    return deps.secrets.open(workspaceId, name, sealed);
   };
 
   /** recipe.loggers with their secrets as `api_key`, for the worker only. */
@@ -576,19 +588,23 @@ export const createRunLifecycle = (
     run: RunRecord,
   ): Promise<Array<Record<string, unknown>>> => {
     const out: Array<Record<string, unknown>> = [];
-    for (const { secret, ...logger } of run.resolved_config.loggers ?? []) {
+    for (const spec of run.resolved_config.loggers ?? []) {
+      const { secret, ...logger } = spec;
       if (secret === undefined) {
         out.push(logger);
         continue;
       }
-      const key = await loggerSecret(run.workspace_id, secret);
+      const key = await loggerSecret(run.workspace_id, secret, loggerUrl(spec));
       if (key !== null) out.push({ ...logger, api_key: key });
     }
 
     return out;
   };
 
-  /** Plan warnings for loggers whose secret this server can't read. */
+  /**
+   * Plan warnings for loggers whose secret this server can't read; 422
+   * secret_host_not_allowed for a secret that may not go to the logger's host.
+   */
   const loggerWarnings = async (
     workspaceId: string,
     request: PlanRunRequest,
@@ -596,14 +612,19 @@ export const createRunLifecycle = (
     const warnings: string[] = [];
     for (const logger of request.recipe.loggers ?? []) {
       if (logger.secret === undefined) continue;
+      const secret = deps.secrets
+        ? await store.secrets.get(workspaceId, logger.secret)
+        : null;
       if (!deps.secrets) {
         warnings.push(
           `Logger '${logger.kind}' needs secret '${logger.secret}', but workspace secrets are not configured (GRAD_SECRETS_KEY); the run trains without it.`,
         );
-      } else if (!(await store.secrets.get(workspaceId, logger.secret))) {
+      } else if (!secret) {
         warnings.push(
           `Logger '${logger.kind}': no secret named '${logger.secret}' (store it with 'grad secrets set ${logger.secret}'); the run trains without it.`,
         );
+      } else {
+        assertSecretHost(secret, loggerUrl(logger), `${logger.kind} logger`);
       }
     }
 

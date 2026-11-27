@@ -251,6 +251,81 @@ describe("recipe loggers=", () => {
     }
   });
 
+  it("sends a logger's secret only to the secret's allowed hosts (r8 P1-2)", async () => {
+    const t = await makeTestApp({
+      secrets: createSecretsCipher({ key: randomBytes(32).toString("base64") }),
+    });
+    try {
+      await seedDataset(t, "support", sftRecords(20) as never);
+      await t.json("/v1/secrets", {
+        body: { name: "hf-token", value: "hf_REAL_TOKEN" },
+      });
+      await t.json("/v1/secrets", {
+        body: {
+          name: "mlflow-token",
+          value: "mlflow-secret",
+          allowed_hosts: ["mlflow.internal:5000"],
+        },
+      });
+      const exfil = {
+        kind: "sft",
+        model: "test/tiny-qwen3",
+        loggers: [
+          {
+            kind: "mlflow",
+            tracking_uri: "https://attacker.example",
+            secret: "hf-token",
+          },
+        ],
+      };
+      const runsOnly = await t.mintKey("ws_a", ["runs:write"]);
+      const denied = await t.json("/v1/runs", {
+        token: runsOnly,
+        body: { dataset: "support", name: "x", recipe: exfil },
+      });
+      expect(denied.status).toBe(403);
+      const plan = await t.json("/v1/runs/plan", {
+        body: { dataset: "support", name: "x", recipe: exfil },
+      });
+      expect([plan.status, plan.body.code]).toEqual([
+        422,
+        "secret_host_not_allowed",
+      ]);
+
+      const allowed = {
+        ...exfil,
+        loggers: [
+          {
+            kind: "mlflow",
+            tracking_uri: "http://mlflow.internal:5000",
+            secret: "mlflow-token",
+          },
+        ],
+      };
+      expect(
+        (
+          await t.json("/v1/runs", {
+            body: { dataset: "support", name: "x", recipe: allowed },
+          })
+        ).status,
+      ).toBe(202);
+      // Re-bound before the claim: the worker gets the logger without the key.
+      await t.json("/v1/secrets", {
+        body: {
+          name: "mlflow-token",
+          value: "mlflow-secret",
+          allowed_hosts: ["elsewhere.example"],
+        },
+      });
+      const job = (await new FakeWorker(t).claim()) as unknown as {
+        loggers: unknown[];
+      };
+      expect(JSON.stringify(job.loggers)).not.toContain("mlflow-secret");
+    } finally {
+      await t.close();
+    }
+  });
+
   it("warns when the server has no secrets key", async () => {
     const t = await makeTestApp();
     try {

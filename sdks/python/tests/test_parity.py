@@ -125,6 +125,9 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "filter_dataset_ids": lambda: client.datasets.filter("support-logs", ids=["rec_a", "rec_c"]),
         "deploy": lambda: client.deploy(artifact, name="support", fallback="test/tiny-qwen3", explore_rate=0.1, idempotency_key="parity-deploy-key"),
         "set_secret": lambda: client.secrets.set("langfuse-prod", "pk-lf-1:sk-lf-2"),
+        "set_secret_hosts": lambda: client.secrets.set(
+            "langfuse-self", "pk-lf-1:sk-lf-2", allowed_hosts=["langfuse.internal:3000"]
+        ),
         "add_source": lambda: client.sources.create(
             "support-prod",
             grad.sources.Langfuse(host="https://cloud.langfuse.com", secret=secret),
@@ -194,6 +197,7 @@ class ParityTests(unittest.TestCase):
             "source.consecutive_failures": source.consecutive_failures,
             "source.last_error": source.last_error,
             "secret.name": secret.name,
+            "secret.allowed_hosts[0]": secret.allowed_hosts[0],
             "usage[0].kind": usage.kind,
             "usage[0].tokens_through": usage.tokens_through,
             "usage[0].cost_usd": usage.cost_usd,

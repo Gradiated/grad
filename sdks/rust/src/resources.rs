@@ -651,18 +651,35 @@ impl UsageLedger<'_> {
 
 impl Secrets<'_> {
     /// Create or replace a secret. The value is encrypted at rest and never returned.
+    /// The server sends it only to the public provider hosts; see [`Self::set_with_hosts`].
     pub async fn set(&self, name: &str, value: &str) -> Result<SecretRef> {
+        self.put(name, value, None).await
+    }
+
+    /// [`Self::set`] for a self-hosted tool: `allowed_hosts` are the only hosts the
+    /// server sends the value to (a source's host, huggingface.co for HF imports, a
+    /// logger's host).
+    pub async fn set_with_hosts(
+        &self,
+        name: &str,
+        value: &str,
+        allowed_hosts: &[&str],
+    ) -> Result<SecretRef> {
+        self.put(name, value, Some(allowed_hosts)).await
+    }
+
+    async fn put(&self, name: &str, value: &str, hosts: Option<&[&str]>) -> Result<SecretRef> {
         check_path_param("secret name", name)?;
         if value.is_empty() {
             return Err(Error::InvalidInput(
                 "a secret value must not be empty".into(),
             ));
         }
-        get(
-            self.c,
-            Req::post("/v1/secrets").json(json!({ "name": name, "value": value })),
-        )
-        .await
+        let mut body = json!({ "name": name, "value": value });
+        if let Some(hosts) = hosts {
+            body["allowed_hosts"] = json!(hosts);
+        }
+        get(self.c, Req::post("/v1/secrets").json(body)).await
     }
 
     /// A reference to pass as a secret (checks that it exists; no value).

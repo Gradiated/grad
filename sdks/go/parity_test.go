@@ -156,6 +156,10 @@ func TestParityRequests(t *testing.T) {
 			_, err := c.Secrets.Set(ctx, "langfuse-prod", "pk-lf-1:sk-lf-2")
 			return err
 		},
+		"set_secret_hosts": func() error {
+			_, err := c.Secrets.Set(ctx, "langfuse-self", "pk-lf-1:sk-lf-2", "langfuse.internal:3000")
+			return err
+		},
 		"add_source": func() error {
 			secret := &grad.SecretRef{Secret: generated.Secret{Name: "langfuse-prod"}}
 			_, err := c.Sources.Create(ctx, grad.DatasetName("support-prod"), grad.SourceParams{
@@ -266,6 +270,7 @@ func TestParityTypedResponses(t *testing.T) {
 		"source.consecutive_failures":                      float64(source.ConsecutiveFailures),
 		"source.last_error":                                *source.LastError,
 		"secret.name":                                      secret.Name,
+		"secret.allowed_hosts[0]":                          secret.AllowedHosts[0],
 		"usage[0].kind":                                    string(usage.Kind),
 		"usage[0].tokens_through":                          float64(usage.TokensThrough),
 		"usage[0].cost_usd":                                usage.CostUSD,

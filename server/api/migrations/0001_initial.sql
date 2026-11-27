@@ -305,6 +305,8 @@ CREATE TABLE grad_secrets (
   key_id TEXT NOT NULL,
   nonce BYTEA NOT NULL,
   ciphertext BYTEA NOT NULL,
+  -- Hosts the value may be sent to (secret-hosts.ts); set with the value.
+  allowed_hosts TEXT[] NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
   UNIQUE (workspace_id, name)

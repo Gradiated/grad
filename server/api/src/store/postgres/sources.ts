@@ -21,9 +21,15 @@ const toSecret = (r: Row): Secret & { id: string } => ({
   id: String(r.id),
   name: String(r.name),
   workspace_id: String(r.workspace_id),
+  allowed_hosts: Array.isArray(r.allowed_hosts)
+    ? r.allowed_hosts.map(String)
+    : [],
   created_at: iso(r.created_at),
   updated_at: iso(r.updated_at),
 });
+
+const SECRET_COLUMNS =
+  "id, workspace_id, name, allowed_hosts, created_at, updated_at";
 
 const publicSecret = ({
   id: _id,
@@ -34,16 +40,17 @@ export const createSecretRepository = (
   db: Db,
   clock: Clock,
 ): SecretRepository => ({
-  put: async ({ workspaceId, name, sealed }) => {
+  put: async ({ workspaceId, name, sealed, allowedHosts }) => {
     const now = nowIso(clock);
     const rows = await db.query(
       `INSERT INTO grad_secrets
-         (id, workspace_id, name, key_id, nonce, ciphertext, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $7::timestamptz)
+         (id, workspace_id, name, key_id, nonce, ciphertext, allowed_hosts, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $8::text[], $7::timestamptz, $7::timestamptz)
        ON CONFLICT (workspace_id, name) DO UPDATE
          SET key_id = EXCLUDED.key_id, nonce = EXCLUDED.nonce,
-             ciphertext = EXCLUDED.ciphertext, updated_at = EXCLUDED.updated_at
-       RETURNING id, workspace_id, name, created_at, updated_at`,
+             ciphertext = EXCLUDED.ciphertext, allowed_hosts = EXCLUDED.allowed_hosts,
+             updated_at = EXCLUDED.updated_at
+       RETURNING ${SECRET_COLUMNS}`,
       [
         newId("sec"),
         workspaceId,
@@ -52,6 +59,7 @@ export const createSecretRepository = (
         sealed.nonce,
         sealed.ciphertext,
         now,
+        [...allowedHosts],
       ],
     );
 
@@ -60,7 +68,7 @@ export const createSecretRepository = (
   get: async (workspaceId, name) => {
     const row = first(
       await db.query(
-        "SELECT id, workspace_id, name, created_at, updated_at FROM grad_secrets WHERE workspace_id = $1 AND name = $2",
+        `SELECT ${SECRET_COLUMNS} FROM grad_secrets WHERE workspace_id = $1 AND name = $2`,
         [workspaceId, name],
       ),
     );
@@ -86,8 +94,7 @@ export const createSecretRepository = (
   list: async (workspaceId, page) => {
     const params = new Params();
     const result = await listNewest(db, {
-      table:
-        "(SELECT id, workspace_id, name, created_at, updated_at FROM grad_secrets) secrets",
+      table: `(SELECT ${SECRET_COLUMNS} FROM grad_secrets) secrets`,
       where: `workspace_id = ${params.add(workspaceId)}`,
       params,
       page,

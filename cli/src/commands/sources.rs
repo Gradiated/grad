@@ -58,10 +58,18 @@ fn strip_one_newline(mut s: String) -> String {
 pub async fn secrets(ctx: &Ctx, action: SecretsCmd) -> CliResult {
     let out = &ctx.out;
     match action {
-        SecretsCmd::Set { name } => {
+        SecretsCmd::Set {
+            name,
+            allowed_hosts,
+        } => {
             let value = read_secret(&name)?;
             let c = ctx.client()?;
-            let s = c.secrets().set(&name, &value).await?;
+            let s = if allowed_hosts.is_empty() {
+                c.secrets().set(&name, &value).await?
+            } else {
+                let hosts: Vec<&str> = allowed_hosts.iter().map(String::as_str).collect();
+                c.secrets().set_with_hosts(&name, &value, &hosts).await?
+            };
             out.line(format!("✓ Saved secret {}", s.name));
             out.line(format!(
                 "  Use it with: grad sources add PROVIDER --secret {} ...",
@@ -73,10 +81,17 @@ pub async fn secrets(ctx: &Ctx, action: SecretsCmd) -> CliResult {
             let c = ctx.client()?;
             let res = c.secrets().list(&page(&p)).await?;
             out.table(
-                &["name", "created", "updated"],
+                &["name", "allowed hosts", "created", "updated"],
                 res.data
                     .iter()
-                    .map(|s| vec![s.name.clone(), when(&s.created_at), when(&s.updated_at)])
+                    .map(|s| {
+                        vec![
+                            s.name.clone(),
+                            s.allowed_hosts.join(","),
+                            when(&s.created_at),
+                            when(&s.updated_at),
+                        ]
+                    })
                     .collect(),
             );
             more_hint(

@@ -201,6 +201,8 @@ impl ChatMessage {
 pub struct SecretRef {
     pub name: String,
     pub workspace_id: String,
+    /// The only hosts the server sends this secret to.
+    pub allowed_hosts: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
 }

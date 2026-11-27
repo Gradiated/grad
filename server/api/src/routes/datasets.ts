@@ -30,6 +30,7 @@ import {
   defaultErrors,
   IdParamSchema,
   jsonResponse,
+  requireSecretUse,
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
@@ -349,10 +350,15 @@ export const registerDatasetRoutes = (
       },
     }),
     async (c) => {
+      const workspaceId = workspaceOf(c, "datasets:write");
+      const body = c.req.valid("json");
+      requireSecretUse(c, [
+        body.source.kind === "hf" ? body.source.secret : undefined,
+      ]);
       const created = await services.imports.create(
-        workspaceOf(c, "datasets:write"),
+        workspaceId,
         c.req.valid("param").name,
-        c.req.valid("json"),
+        body,
         await idempotencyOf(c),
       );
 

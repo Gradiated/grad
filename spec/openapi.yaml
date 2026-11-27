@@ -3997,6 +3997,11 @@ components:
         workspace_id:
           type: string
           minLength: 1
+        allowed_hosts:
+          type: array
+          items:
+            type: string
+          description: The hosts this secret may be sent to.
         created_at:
           type: string
           format: date-time
@@ -4006,6 +4011,7 @@ components:
       required:
         - name
         - workspace_id
+        - allowed_hosts
         - created_at
         - updated_at
       description: A workspace secret's metadata. The value is never returned.
@@ -4022,6 +4028,20 @@ components:
           type: string
           minLength: 1
           description: "Write-only: stored encrypted and never returned by any endpoint."
+        allowed_hosts:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 260
+          maxItems: 32
+          description: "Hosts (`host[:port]`, or URLs) this secret may be sent to: a source's host, huggingface.co for HF imports,
+            a logger's host. Default: the public hosts of the supported providers (cloud.langfuse.com,
+            us.cloud.langfuse.com, api.smith.langchain.com, eu.api.smith.langchain.com, api.braintrust.dev,
+            us.posthog.com, eu.posthog.com, app.phoenix.arize.com, huggingface.co, api.wandb.ai). A secret for a
+            self-hosted tool must name its host. Replacing a secret replaces its hosts."
+          example:
+            - langfuse.internal.example.com
       required:
         - name
         - value

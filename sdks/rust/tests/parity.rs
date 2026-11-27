@@ -296,6 +296,15 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             .set("langfuse-prod", "pk-lf-1:sk-lf-2")
             .await
             .map(drop),
+        "set_secret_hosts" => c
+            .secrets()
+            .set_with_hosts(
+                "langfuse-self",
+                "pk-lf-1:sk-lf-2",
+                &["langfuse.internal:3000"],
+            )
+            .await
+            .map(drop),
         "add_source" => {
             let provider = SourceProvider::langfuse()
                 .host("https://cloud.langfuse.com")
@@ -421,6 +430,7 @@ fn typed_responses() {
         "source.consecutive_failures": source.consecutive_failures,
         "source.last_error": source.last_error,
         "secret.name": secret.name,
+        "secret.allowed_hosts[0]": secret.allowed_hosts[0],
         "usage[0].kind": usage.kind,
         "usage[0].tokens_through": usage.tokens_through,
         "usage[0].cost_usd": usage.cost_usd,

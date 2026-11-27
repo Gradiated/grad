@@ -1011,6 +1011,7 @@ Secret = TypedDict(
     {
         "name": "str",
         "workspace_id": "str",
+        "allowed_hosts": "list[str]",
         "created_at": "str",
         "updated_at": "str",
     },
@@ -1021,6 +1022,7 @@ SetSecretRequest = TypedDict(
     {
         "name": "str",
         "value": "str",
+        "allowed_hosts": "NotRequired[list[str]]",
     },
 )
 
@@ -1405,8 +1407,8 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
     "Run": frozenset({"artifact_id", "attempt", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "latest_metric", "max_attempts", "max_cost_usd", "name", "price_per_million_tokens", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "workspace_id"}),
     "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),
-    "Secret": frozenset({"created_at", "name", "updated_at", "workspace_id"}),
-    "SetSecretRequest": frozenset({"name", "value"}),
+    "Secret": frozenset({"allowed_hosts", "created_at", "name", "updated_at", "workspace_id"}),
+    "SetSecretRequest": frozenset({"allowed_hosts", "name", "value"}),
     "Source": frozenset({"consecutive_failures", "created_at", "dataset", "id", "last_error", "last_error_at", "last_sync", "last_synced_at", "next_sync_at", "paused_reason", "pending_full", "provider", "schedule", "status", "updated_at", "workspace_id"}),
     "SourcePageRequest": frozenset({"attempt", "cursor", "worker_id"}),
     "SourcePageResponse": frozenset({"cursor", "has_more", "records"}),

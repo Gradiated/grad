@@ -430,11 +430,21 @@ class Usage(_Resource):
 class Secrets(_Resource):
     """Workspace secrets (provider keys, HF tokens). Values are write-only."""
 
-    def set(self, name: str, value: str) -> SecretRef:
-        """Create or replace a secret. The value is encrypted at rest and never returned."""
+    def set(self, name: str, value: str, *, allowed_hosts: Sequence[str] | None = None) -> SecretRef:
+        """Create or replace a secret. The value is encrypted at rest and never returned.
+
+        ``allowed_hosts`` are the only hosts the server will send the value to (a source's
+        host, ``huggingface.co`` for HF imports, a logger's host). Leave it out for the
+        public provider hosts; a secret for a self-hosted tool must name its host.
+        """
         if not isinstance(value, str) or not value:
             raise ValueError("A secret value must be a non-empty string.")
-        return SecretRef.from_api(self._wire.set_secret({"name": h.check_slug(name, "secret name"), "value": value}), self._client)
+        body: dict[str, Any] = {"name": h.check_slug(name, "secret name"), "value": value}
+        if allowed_hosts is not None:
+            if isinstance(allowed_hosts, str):
+                raise TypeError("allowed_hosts must be a list of hosts, not a string.")
+            body["allowed_hosts"] = [str(host) for host in allowed_hosts]
+        return SecretRef.from_api(self._wire.set_secret(body), self._client)
 
     def get(self, name: str) -> SecretRef:
         """A reference to pass as ``secret=`` (checks that the secret exists; no value)."""

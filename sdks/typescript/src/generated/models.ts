@@ -949,6 +949,8 @@ export interface Secret {
   /** Lowercase letters, digits, '.', '_' and '-'; unique per workspace. */
   name: string;
   workspaceId: string;
+  /** The hosts this secret may be sent to. */
+  allowedHosts: Array<string>;
   createdAt: string;
   updatedAt: string;
 }
@@ -958,6 +960,8 @@ export interface SetSecretRequest {
   name: string;
   /** Write-only: stored encrypted and never returned by any endpoint. */
   value: string;
+  /** Hosts (`host[:port]`, or URLs) this secret may be sent to: a source's host, huggingface.co for HF imports, a logger's host. Default: the public hosts of the supported providers (cloud.langfuse.com, us.cloud.langfuse.com, api.smith.langchain.com, eu.api.smith.langchain.com, api.braintrust.dev, us.posthog.com, eu.posthog.com, app.phoenix.arize.com, huggingface.co, api.wandb.ai). A secret for a self-hosted tool must name its host. Replacing a secret replaces its hosts. */
+  allowedHosts?: Array<string> | undefined;
 }
 
 /** An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset. */

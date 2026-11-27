@@ -221,10 +221,13 @@ Examples:
 Examples:
   grad secrets set langfuse-prod            # paste the value, then Ctrl-D
   printf '%s' \"$LANGFUSE_KEYS\" | grad secrets set langfuse-prod
+  printf '%s' \"$KEYS\" | grad secrets set langfuse-self --allowed-host langfuse.internal:3000
   grad secrets list
   grad secrets delete langfuse-prod
 
-Values are read from stdin, encrypted at rest and never returned.")]
+Values are read from stdin, encrypted at rest and never returned. The server
+sends a secret only to its allowed hosts: by default the public provider hosts;
+a secret for a self-hosted tool names its host with --allowed-host.")]
     Secrets {
         #[command(subcommand)]
         action: SecretsCmd,
@@ -894,6 +897,10 @@ pub enum SecretsCmd {
     Set {
         /// Secret name (lowercase letters, digits, '.', '_', '-')
         name: String,
+        /// A host the server may send the secret to (repeatable; default: the
+        /// public provider hosts). Replacing a secret replaces its hosts.
+        #[arg(long = "allowed-host", value_name = "HOST")]
+        allowed_hosts: Vec<String>,
     },
     /// List secret names (values are never shown)
     List {

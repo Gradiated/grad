@@ -1980,8 +1980,10 @@ type Secret struct {
 	// Name Lowercase letters, digits, '.', '_' and '-'; unique per workspace.
 	Name        string `json:"name"`
 	WorkspaceID string `json:"workspace_id"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// AllowedHosts The hosts this secret may be sent to.
+	AllowedHosts []string `json:"allowed_hosts"`
+	CreatedAt    string   `json:"created_at"`
+	UpdatedAt    string   `json:"updated_at"`
 }
 
 // SetSecretRequest is generated from the OpenAPI schema.
@@ -1990,6 +1992,8 @@ type SetSecretRequest struct {
 	Name string `json:"name"`
 	// Value Write-only: stored encrypted and never returned by any endpoint.
 	Value string `json:"value"`
+	// AllowedHosts Hosts (`host[:port]`, or URLs) this secret may be sent to: a source's host, huggingface.co for HF imports, a logger's host. Default: the public hosts of the supported providers (cloud.langfuse.com, us.cloud.langfuse.com, api.smith.langchain.com, eu.api.smith.langchain.com, api.braintrust.dev, us.posthog.com, eu.posthog.com, app.phoenix.arize.com, huggingface.co, api.wandb.ai). A secret for a self-hosted tool must name its host. Replacing a secret replaces its hosts.
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
 }
 
 // Source An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset.

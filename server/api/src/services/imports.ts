@@ -18,6 +18,7 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { errorMessage, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
+import { HF_HOST } from "../secret-hosts.js";
 import type {
   IdempotencyInput,
   ImportJobPatch,
@@ -36,8 +37,15 @@ import {
   type JobKindHandler,
   type JobQueue,
 } from "./jobs.js";
-import { isSyncPayload, type SourceService } from "./sources.js";
+import {
+  isSyncPayload,
+  type SecretUse,
+  type SourceService,
+} from "./sources.js";
 import { jobBlobKey, stagingKey, type UploadService } from "./uploads.js";
+
+/** HF imports send their token to the Hugging Face Hub only. */
+const HF_USE: SecretUse = { url: `https://${HF_HOST}`, use: "HF import" };
 
 type CreateImportBody = z.infer<typeof CreateImportRequestSchema>;
 type RecordsBody = z.infer<typeof PostImportRecordsRequestSchema>;
@@ -164,6 +172,7 @@ export const createImportService = (
         token: await collaborators.sources.revealSecret(
           job.workspace_id,
           secret,
+          HF_USE,
         ),
       };
     }
@@ -265,6 +274,7 @@ export const createImportService = (
               await collaborators.sources.requireSecret(
                 workspaceId,
                 body.source.secret,
+                HF_USE,
               );
             }
             return toPublicImport(

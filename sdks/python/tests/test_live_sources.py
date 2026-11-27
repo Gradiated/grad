@@ -86,7 +86,10 @@ class LangfuseSyncLiveTests(_SourcesLive):
     def test_sync_lifecycle(self) -> None:
         client = Grad()
         key = str(self.stack.info["langfuse_secret"])
-        secret = client.secrets.set("langfuse-prod", key)
+        # A self-hosted provider's secret names the host it may be sent to.
+        secret = client.secrets.set(
+            "langfuse-prod", key, allowed_hosts=[str(self.stack.info["langfuse_url"])]
+        )
         self.assertEqual(secret.name, "langfuse-prod")
         self.assertNotIn(key, json.dumps([s.raw for s in client.secrets.list()]))
 

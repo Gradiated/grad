@@ -147,12 +147,27 @@ export const addSource = async (core: Core, dataset: DatasetRef, options: AddSou
 export class SecretsResource {
   constructor(private readonly core: Core) {}
 
-  /** Creates or replaces a secret. The value is encrypted at rest and never returned. */
-  async set(name: string, value: string, options?: RequestOptions): Promise<SecretRef> {
+  /**
+   * Creates or replaces a secret. The value is encrypted at rest and never returned.
+   * `allowedHosts` are the only hosts the server sends it to (a source's host,
+   * huggingface.co for HF imports, a logger's host); leave it out for the public
+   * provider hosts. A secret for a self-hosted tool must name its host.
+   */
+  async set(
+    name: string,
+    value: string,
+    options: { allowedHosts?: readonly string[] } & RequestOptions = {},
+  ): Promise<SecretRef> {
     if (typeof value !== "string" || value === "") {
       throw new GradUsageError("A secret value must be a non-empty string.", "invalid_secret");
     }
-    return new SecretRef(await this.core.api.setSecret({ name, value }, options));
+    const { allowedHosts, ...request } = options;
+    return new SecretRef(
+      await this.core.api.setSecret(
+        { name, value, ...(allowedHosts !== undefined ? { allowedHosts: [...allowedHosts] } : {}) },
+        request,
+      ),
+    );
   }
 
   /** A reference to pass as `secret` (checks that it exists; never the value). */

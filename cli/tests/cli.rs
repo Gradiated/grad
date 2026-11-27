@@ -1351,6 +1351,7 @@ fn sources_api() -> MockServer {
     let polls = Arc::new(AtomicUsize::new(0));
     MockServer::start(move |r| {
         let secret = json!({"name": "langfuse-prod", "workspace_id": "ws",
+                            "allowed_hosts": ["cloud.langfuse.com"],
                             "created_at": "2026-11-27T11:00:00.000Z", "updated_at": "2026-11-27T11:00:00.000Z"});
         let job = |status: &str| {
             json!({"id": "imp_7c1d", "dataset": "support-prod", "status": status,
@@ -1446,6 +1447,26 @@ fn secrets_set_reads_stdin_and_never_prints_the_value() {
         }
     }
 
+    // A self-hosted tool's secret names the hosts it may be sent to.
+    let r = run_stdin(
+        sb.grad(u),
+        &[
+            "secrets",
+            "set",
+            "langfuse-prod",
+            "--allowed-host",
+            "langfuse.internal:3000",
+            "--allowed-host",
+            "lf2.internal",
+        ],
+        value,
+    );
+    expect(&r, 0);
+    assert_eq!(
+        srv.last("POST", "/v1/secrets").unwrap().json()["allowed_hosts"],
+        json!(["langfuse.internal:3000", "lf2.internal"])
+    );
+
     let before = srv.count("POST", "/v1/secrets");
     let r = run_stdin(sb.grad(u), &["secrets", "set", "empty"], "\n");
     expect(&r, 2);
@@ -1465,6 +1486,7 @@ fn secrets_set_reads_stdin_and_never_prints_the_value() {
     let r = run(sb.grad(u), &["secrets", "list"]);
     expect(&r, 0);
     assert!(r.stdout.contains("langfuse-prod"));
+    assert!(r.stdout.contains("cloud.langfuse.com"), "{}", r.stdout);
     let r = run(sb.grad(u), &["secrets", "delete", "langfuse-prod"]);
     expect(&r, 0);
     assert_eq!(srv.count("DELETE", "/v1/secrets/langfuse-prod"), 1);
@@ -2510,7 +2532,14 @@ fn parity_requests_match_the_shared_fixture() {
                 }
                 a
             }
-            "/v1/secrets" => vec!["secrets".into(), "set".into(), s("name")],
+            "/v1/secrets" => {
+                let mut a = vec!["secrets".into(), "set".into(), s("name")];
+                for host in body["allowed_hosts"].as_array().into_iter().flatten() {
+                    a.push("--allowed-host".into());
+                    a.push(host.as_str().unwrap().into());
+                }
+                a
+            }
             "/v1/usage" => vec![
                 "usage".into(),
                 "--limit".into(),

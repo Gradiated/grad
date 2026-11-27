@@ -716,6 +716,8 @@ export interface SecretRepository {
     workspaceId: string;
     name: string;
     sealed: SealedSecretRow;
+    /** Normalised hosts the value may be sent to (secret-hosts.ts). */
+    allowedHosts: readonly string[];
   }): Promise<Secret>;
   get(workspaceId: string, name: string): Promise<Secret | null>;
   getSealed(workspaceId: string, name: string): Promise<SealedSecretRow | null>;

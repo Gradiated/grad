@@ -20,6 +20,7 @@ import {
   defaultErrors,
   IdParamSchema,
   jsonResponse,
+  requireSecretUse,
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
@@ -84,9 +85,15 @@ export const registerRunRoutes = (
       },
     }),
     async (c) => {
+      const workspaceId = workspaceOf(c, "runs:write");
+      const body = c.req.valid("json");
+      requireSecretUse(
+        c,
+        (body.recipe.loggers ?? []).map((logger) => logger.secret),
+      );
       const created = await services.runs.create(
-        workspaceOf(c, "runs:write"),
-        c.req.valid("json"),
+        workspaceId,
+        body,
         await idempotencyOf(c),
       );
 
