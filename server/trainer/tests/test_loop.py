@@ -137,6 +137,18 @@ class LoopTests(TempDirCase):
         self.assertEqual((result.status, result.step), ("cancelled", 3))
         self.assertEqual([c[0] for c in rec.checkpoints], [3])
 
+    def test_emergency_stop_checkpoints_the_current_step_without_an_eval(self) -> None:
+        task = FakeTask(scores=[1.0] * 20)
+        rec = Recorder(self.tmpdir(), stop_after=3, stop_with="checkpoint")
+        result = loop(task, self.tmpdir(), recorder=rec, eval_every_steps=2, checkpoint_every_steps=2).run()
+        self.assertEqual((result.status, result.step), ("cancelled", 3))
+        self.assertEqual([c[0] for c in rec.checkpoints], [2, 3])
+        self.assertEqual(rec.checkpoints[-1][1], None)  # no eval at the emergency step
+        self.assertEqual(
+            rec.phases,
+            [("training", 0), ("evaluating", 2), ("training", 2), ("checkpointing", 2), ("training", 2), ("checkpointing", 3)],
+        )
+
     def test_no_eval_data_reports_null_and_selects_last(self) -> None:
         result = loop(FakeTask(eval_data=False), self.tmpdir()).run()
         self.assertEqual((result.select, result.selected_step, result.last_eval), ("last", 8, None))

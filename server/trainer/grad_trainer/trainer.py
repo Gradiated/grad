@@ -207,7 +207,12 @@ class TrainingLoop:
             shutil.rmtree(self.best_dir, ignore_errors=True)
             shutil.copytree(state_dir / "best", self.best_dir)
 
+    def _phase(self, phase: str) -> None:
+        if self.callbacks.on_phase:
+            self.callbacks.on_phase(phase, self.step)
+
     def _write_checkpoint(self) -> None:
+        self._phase("checkpointing")
         directory = self.workdir / "checkpoints" / f"step-{self.step:06d}"
         shutil.rmtree(directory, ignore_errors=True)
         directory.mkdir(parents=True)
@@ -248,6 +253,7 @@ class TrainingLoop:
         return None if self.last_eval is None else self.last_eval.get(self.task.metric_name)
 
     def _evaluate(self) -> dict[str, Any] | None:
+        self._phase("evaluating")
         result = self.task.evaluate()
         self.last_eval_step = self.step
         if result is None:
@@ -283,6 +289,8 @@ class TrainingLoop:
             else:
                 self.tokens_total += int(prepare())
 
+        emergency = False
+        self._phase("training")
         while status == "completed" and self.step < self.total_steps:
             indices = self.batch_indices(self.step)
             step_tokens = sum(self.task.item_tokens(i) for i in indices)
@@ -311,6 +319,7 @@ class TrainingLoop:
             eval_metrics = None
             if self.step % self.eval_every == 0 or self.step == self.total_steps:
                 eval_metrics = self._evaluate()
+                self._phase("training")
 
             metric: dict[str, Any] = {
                 "step": self.step,
@@ -324,17 +333,25 @@ class TrainingLoop:
             }
             if eval_metrics is not None:
                 metric["eval_metrics"] = eval_metrics
-            stop_requested = bool(self.callbacks.on_step and self.callbacks.on_step(metric))
+            stop = self.callbacks.on_step(metric) if self.callbacks.on_step else False
 
-            if stop_requested:
+            if stop == "checkpoint":
+                # Emergency stop: save this step now; no eval, nothing after it.
+                status, emergency = "cancelled", True
+                if self.last_checkpoint_step != self.step:
+                    self._write_checkpoint()
+                break
+            if stop:
                 status = "cancelled"
                 break
             if self.step % self.checkpoint_every == 0 or self.step == self.total_steps:
                 self._write_checkpoint()
+                if self.step < self.total_steps:
+                    self._phase("training")
 
-        if self.last_eval_step != self.step:
+        if not emergency and self.last_eval_step != self.step:
             self._evaluate()
-        if self.step > 0 and self.last_checkpoint_step != self.step:
+        if not emergency and self.step > 0 and self.last_checkpoint_step != self.step:
             self._write_checkpoint()
 
         select = self.spec.select

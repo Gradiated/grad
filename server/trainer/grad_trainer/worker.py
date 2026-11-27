@@ -22,6 +22,7 @@ import secrets
 import shutil
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -242,6 +243,10 @@ class LeaseLost(Exception):
     """Another claim owns the job now; this attempt must not complete."""
 
 
+class _HandBack(Exception):
+    """The worker's compute is going away: hand the attempt back now."""
+
+
 class _StopImport(Exception):
     pass
 
@@ -257,6 +262,18 @@ class _JobState:
     max_tokens: int = 0
     batches: int = 0
     final_status: str = "failed"
+    # Lifecycle: the phase last reported, log line numbering, step/checkpoint timing.
+    phase: str | None = None
+    step: int = 0
+    notes: int = 0
+    last_step_at: float | None = None
+    step_seconds: float | None = None
+    checkpoint_started: float | None = None
+    checkpoint_seconds: float | None = None
+    # Compute reclaimed: save by this monotonic deadline, then hand the job back.
+    reclaim_deadline: float | None = None
+    emergency: bool = False
+    handed_back: bool = False
 
     def request_stop(self, reason: str) -> None:
         if self.stop_reason is None:
@@ -344,6 +361,9 @@ class TrainerWorker:
         complete_attempts: int = 8,
         kinds: Sequence[str] = JOB_KINDS,
         telemetry: WorkerTelemetry | None = None,
+        reclaim_grace_s: float = 25.0,
+        termination_notice: str | None = None,
+        gpu: dict[str, Any] | None | bool = True,
     ) -> None:
         unknown = sorted(set(kinds) - set(JOB_KINDS))
         if not kinds or unknown:
@@ -366,16 +386,140 @@ class TrainerWorker:
         self.heartbeat_interval_s = heartbeat_interval_s or max(1.0, lease_seconds / 3)
         self.complete_attempts = complete_attempts
         self.telemetry = telemetry or WorkerTelemetry()
+        self.reclaim_grace_s = reclaim_grace_s
+        if termination_notice not in (None, "aws"):
+            raise ValueError(
+                f"Unknown termination notice source {termination_notice!r}; supported: aws."
+            )
+        self.termination_notice = termination_notice
+        # True: detect with nvidia-smi on first claim; a dict or None: use as given.
+        self._gpu: dict[str, Any] | None | bool = gpu
         self._shutdown = threading.Event()
         self._current: _JobState | None = None
+        self._lock = threading.Lock()
 
     # -- public API ---------------------------------------------------------
 
-    def request_shutdown(self) -> None:
-        """Stop claiming and ask the running job to stop at its next step."""
+    def request_shutdown(self, grace_s: float | None = None) -> None:
+        """The worker's compute is going away (SIGTERM, a termination notice): stop
+        claiming and save the running job if a checkpoint fits ``grace_s`` (default
+        GRAD_RECLAIM_GRACE_SECONDS); otherwise hand it back at once. Either way the
+        job is reported ``abandoned`` (``compute_reclaimed``) and requeues immediately."""
         self._shutdown.set()
-        if self._current is not None:
-            self._current.request_stop("shutdown")
+        state = self._current
+        if state is None:
+            return
+        with self._lock:
+            if state.reclaim_deadline is not None or state.handed_back:
+                return
+            grace = self.reclaim_grace_s if grace_s is None else grace_s
+            now = time.monotonic()
+            if state.phase in ("uploading", "completing"):
+                # The result is nearly in: let it finish.
+                state.reclaim_deadline = now + grace
+                return
+            fits = state.phase in ("training", "evaluating", "checkpointing") and (
+                self._remaining_step(state, now) + (state.checkpoint_seconds or 0.0)
+                <= grace
+            )
+            if fits:
+                _log(f"job {state.job_id}: checkpointing after the current step (grace {grace:.0f}s)")
+                state.reclaim_deadline = now + grace
+                state.request_stop("reclaimed")
+                return
+            _log(f"job {state.job_id}: no time to checkpoint in phase {state.phase}; handing it back now")
+            state.handed_back = True
+            state.request_stop("reclaimed")
+        # Too little time to save: hand the attempt back now (off the signal handler).
+        threading.Thread(target=self._hand_back, args=(state,), daemon=True).start()
+
+    @staticmethod
+    def _remaining_step(state: _JobState, now: float) -> float:
+        if state.step_seconds is None or state.last_step_at is None:
+            return 0.0
+        return max(0.0, state.step_seconds - (now - state.last_step_at))
+
+    def _hand_back(self, state: _JobState) -> None:
+        state.handed_back = True
+        try:
+            self._complete(
+                state,
+                {
+                    "status": "abandoned",
+                    "reason": "compute_reclaimed",
+                    "tokens_processed": state.max_tokens,
+                },
+                force=True,
+            )
+        except Exception as exc:  # the lease expiry requeues it anyway
+            _log(f"hand-back of job {state.job_id} failed: {exc}")
+
+    def _report(self, state: _JobState, payload: dict[str, Any]) -> None:
+        """Best effort: a lifecycle event never fails the job."""
+        try:
+            self._post(state, "events", payload, attempts=2)
+        except (LeaseLost, WorkerAuthError):
+            raise
+        except (ServerError, ServerUnreachable) as exc:
+            _log(f"event not reported: {exc}")
+
+    def _phase(self, state: _JobState, phase: str, step: int | None = None) -> None:
+        if state.phase == phase:
+            return
+        state.phase = phase
+        self.telemetry.set_phase(phase)
+        if phase == "checkpointing":
+            state.checkpoint_started = time.monotonic()
+        self._report(state, {"type": "phase", "phase": phase, "step": state.step if step is None else step})
+
+    def _note(self, state: _JobState, kind: str, message: str) -> None:
+        seq, state.notes = state.notes, state.notes + 1
+        try:
+            self._report(state, {"type": kind, "seq": seq, "message": message[:2000], "step": state.step})
+        except LeaseLost:
+            pass
+
+    def _report_step(self, state: _JobState, trackers: Loggers, metric: dict[str, Any]) -> bool:
+        point = {**metric}
+        point.setdefault("timestamp", _now_iso())
+        trackers.log(point)
+        tokens = point.get("tokens")
+        if isinstance(tokens, (int, float)):
+            state.max_tokens = max(state.max_tokens, int(tokens))
+        self.telemetry.observe_step(tokens if isinstance(tokens, (int, float)) else None)
+        try:
+            resp = self._post(state, "progress", {"metric": point}, attempts=2)
+        except WorkerAuthError:
+            raise
+        except (ServerError, ServerUnreachable) as exc:
+            _log(f"progress report skipped: {exc}")
+            return state.stop.is_set()
+        if resp.get("should_stop"):
+            state.request_stop(str(resp.get("stop_reason") or "cancelled"))
+        return state.stop.is_set()
+
+    def _tracker_warning(self, state: _JobState, run: dict[str, Any], message: str) -> None:
+        _log(f"run {run.get('id')}: {message}")
+        if state.notes < 50:  # a flapping tracker must not flood the run's events
+            self._note(state, "warning", message)
+
+    def _watch_aws_notice(
+        self, poll_s: float = 5.0, notice: Callable[[], float | None] | None = None
+    ) -> None:
+        """GRAD_TERMINATION_NOTICE=aws: poll EC2 metadata for a termination notice
+        (about two minutes ahead) and treat it like SIGTERM with that much grace."""
+        check = notice or aws_termination_notice
+        while not self._shutdown.wait(poll_s):
+            seconds = check()
+            if seconds is not None:
+                _log(f"termination notice: the instance goes away in {seconds:.0f}s")
+                self.request_shutdown(grace_s=max(self.reclaim_grace_s, seconds - 5.0))
+                return
+
+    def _gpu_info(self) -> dict[str, Any] | None:
+        if self._gpu is True:
+            self._gpu = detect_gpu()
+        return self._gpu if isinstance(self._gpu, dict) else None
 
     def claim(self) -> dict[str, Any] | None:
         payload: dict[str, Any] = {
@@ -385,6 +529,9 @@ class TrainerWorker:
         }
         if self.recipes:
             payload["recipes"] = self.recipes
+        gpu = self._gpu_info() if "train" in self.kinds else None
+        if gpu:
+            payload["gpu"] = gpu
         resp = self.client.post_json("/v1/trainer-jobs/claim", payload, attempts=5)
         protocol = resp.get("protocol")
         if protocol not in (None, PROTOCOL_VERSION):
@@ -419,7 +566,7 @@ class TrainerWorker:
                 return self._run_import(job, state, job_dir)
             return self._run_train(job, state, job_dir)
         except LeaseLost:
-            return {"job_id": state.job_id, "status": "lease_lost"}
+            return {"job_id": state.job_id, "status": "handed_back" if state.handed_back else "lease_lost"}
         except (WorkerAuthError, SystemExit, KeyboardInterrupt):
             raise
         except Exception as exc:
@@ -428,7 +575,12 @@ class TrainerWorker:
             _log(f"job {state.job_id} attempt {state.attempt} crashed ({exc}); abandoning it")
             try:
                 return self._complete(
-                    state, {"status": "abandoned", "tokens_processed": state.max_tokens}
+                    state,
+                    {
+                        "status": "abandoned",
+                        "reason": _interruption(exc),
+                        "tokens_processed": state.max_tokens,
+                    },
                 )
             except LeaseLost:
                 return {"job_id": state.job_id, "status": "lease_lost"}
@@ -450,11 +602,13 @@ class TrainerWorker:
             if self._shutdown.is_set():
                 _log("second signal received; exiting immediately")
                 raise SystemExit(128 + signum)
-            _log("shutdown requested; finishing the current step")
+            _log("shutdown requested; checkpointing the current job if there is time")
             self.request_shutdown()
 
         signal.signal(signal.SIGTERM, _handle)
         signal.signal(signal.SIGINT, _handle)
+        if self.termination_notice == "aws":
+            threading.Thread(target=self._watch_aws_notice, name="termination-notice", daemon=True).start()
         delays = backoff_delays(max(self.poll_interval_s, 0.5), 30.0)
         while not self._shutdown.is_set():
             try:
@@ -495,8 +649,10 @@ class TrainerWorker:
         payload: dict[str, Any],
         *,
         attempts: int = 3,
+        force: bool = False,
     ) -> dict[str, Any]:
-        if state.lease_lost:
+        # Once a reclaimed attempt was handed back, only that hand-back may still post.
+        if state.lease_lost or (state.handed_back and not force):
             raise LeaseLost()
         try:
             return self.client.post_json(
@@ -533,7 +689,9 @@ class TrainerWorker:
         self.telemetry.observe_upload(kind, size, time.monotonic() - started)
         return str(ticket["upload_id"])
 
-    def _complete(self, state: _JobState, payload: dict[str, Any]) -> dict[str, Any]:
+    def _complete(
+        self, state: _JobState, payload: dict[str, Any], *, force: bool = False
+    ) -> dict[str, Any]:
         """Retries until the server answers: completion is idempotent per attempt,
         and the bundle stays on disk meanwhile. Gives up only when the lease is
         lost (409/404) or the worker is shutting down."""
@@ -542,7 +700,7 @@ class TrainerWorker:
         while True:
             try:
                 return self._post(
-                    state, "complete", payload, attempts=self.complete_attempts
+                    state, "complete", payload, attempts=self.complete_attempts, force=force
                 )
             except ServerUnreachable as exc:
                 error: Exception = exc
@@ -560,6 +718,8 @@ class TrainerWorker:
         self, job: dict[str, Any], state: _JobState, job_dir: Path
     ) -> dict[str, Any]:
         run = job.get("run") or {}
+        state.step = int((job.get("resume") or {}).get("step") or 0)
+        self._phase(state, "loading_model")
         try:
             records = self._load_dataset(job, job_dir)
             resume = self._load_resume(job, job_dir)
@@ -575,7 +735,7 @@ class TrainerWorker:
         trackers = Loggers(
             list(job.get("loggers") or []),
             {"id": run.get("id"), "name": run.get("name"), "config": run.get("resolved_config") or {}},
-            lambda message: _log(f"run {run.get('id')}: {message}"),
+            lambda message: self._tracker_warning(state, run, message),
         )
         try:
             return self._train(job, run, state, job_dir, records, resume, base, runner, trackers)
@@ -594,26 +754,36 @@ class TrainerWorker:
         runner: RecipeRunner,
         trackers: Loggers,
     ) -> dict[str, Any]:
-        def on_step(metric: dict[str, Any]) -> bool:
-            if state.stop.is_set():
-                return True
-            point = {**metric}
-            point.setdefault("timestamp", _now_iso())
-            trackers.log(point)
-            tokens = point.get("tokens")
-            if isinstance(tokens, (int, float)):
-                state.max_tokens = max(state.max_tokens, int(tokens))
-            self.telemetry.observe_step(tokens if isinstance(tokens, (int, float)) else None)
-            try:
-                resp = self._post(state, "progress", {"metric": point}, attempts=2)
-            except WorkerAuthError:
-                raise
-            except (ServerError, ServerUnreachable) as exc:
-                _log(f"progress report skipped: {exc}")
-                return state.stop.is_set()
-            if resp.get("should_stop"):
-                state.request_stop(str(resp.get("stop_reason") or "cancelled"))
-            return state.stop.is_set()
+        def on_step(metric: dict[str, Any]) -> bool | str:
+            now = time.monotonic()
+            if state.last_step_at is not None:
+                took = now - state.last_step_at
+                state.step_seconds = took if state.step_seconds is None else 0.7 * state.step_seconds + 0.3 * took
+            state.last_step_at = now
+            state.step = int(metric.get("step") or state.step)
+            if state.handed_back:
+                raise LeaseLost()
+            reported = False
+            if state.reclaim_deadline is None:
+                if state.stop.is_set():
+                    return True
+                stop = self._report_step(state, trackers, metric)
+                if state.reclaim_deadline is None:  # (a notice may land during the report)
+                    return stop
+                reported = True
+            # Compute is being reclaimed: keep this step (billed), then save it if there's time.
+            if not reported:
+                self._report_step(state, trackers, metric)
+            if time.monotonic() + (state.checkpoint_seconds or 0.0) <= state.reclaim_deadline:
+                state.emergency = True
+                self._note(
+                    state,
+                    "log",
+                    f"The worker is shutting down: saving a checkpoint at step {state.step} "
+                    "before handing the run back",
+                )
+                return "checkpoint"
+            raise _HandBack()
 
         def on_checkpoint(
             step: int,
@@ -621,7 +791,7 @@ class TrainerWorker:
             checkpoint_dir: Path,
             metadata: dict[str, Any],
         ) -> None:
-            if state.stop_reason == "lease_lost":
+            if state.stop_reason == "lease_lost" or state.handed_back:
                 return
             bundle = job_dir / f"checkpoint-{step}.grad.tar.gz"
             started = time.monotonic()
@@ -662,6 +832,14 @@ class TrainerWorker:
             finally:
                 bundle.unlink(missing_ok=True)
                 self.telemetry.set_phase("training")
+                if state.checkpoint_started is not None:
+                    state.checkpoint_seconds = time.monotonic() - state.checkpoint_started
+            if state.emergency:
+                raise _HandBack()
+
+        def on_phase(phase: str, step: int) -> None:
+            state.step = step
+            self._phase(state, phase, step)
 
         work = job_dir / "work"
         work.mkdir()
@@ -674,16 +852,29 @@ class TrainerWorker:
                     job.get("max_cost_usd"),
                     float(job.get("price_per_million_tokens") or 0.0),
                 ),
-                callbacks=RunCallbacks(on_step=on_step, on_checkpoint=on_checkpoint),
+                callbacks=RunCallbacks(
+                    on_step=on_step, on_checkpoint=on_checkpoint, on_phase=on_phase
+                ),
                 resume=resume,
                 workdir=work,
                 base=base,
             )
         except (LeaseLost, WorkerAuthError):
             raise
+        except _HandBack:
+            return self._complete(
+                state,
+                {"status": "abandoned", "reason": "compute_reclaimed", "tokens_processed": state.max_tokens},
+            )
         except Exception as exc:
-            if state.lease_lost:
+            if state.lease_lost or state.handed_back:
                 raise LeaseLost() from exc
+            if _interruption(exc) == "oom":
+                # Another worker (maybe with more memory) retries it; counts toward max_attempts.
+                self._note(state, "warning", f"The GPU ran out of memory at step {state.step}; retrying the run")
+                return self._complete(
+                    state, {"status": "abandoned", "reason": "oom", "tokens_processed": state.max_tokens}
+                )
             return self._complete(
                 state,
                 {
@@ -697,7 +888,7 @@ class TrainerWorker:
             raise LeaseLost()
         tokens = max(int(output.tokens_processed or 0), state.max_tokens)
         status = str(output.status)
-        if status == "cancelled" and state.stop_reason == "shutdown":
+        if status == "cancelled" and state.stop_reason == "reclaimed":
             status = "abandoned"
         elif status == "cancelled" and state.stop_reason in ("budget", "insufficient_balance"):
             # Out of workspace balance completes like the run's own cap: resumable.
@@ -705,6 +896,8 @@ class TrainerWorker:
 
         if status in ("cancelled", "abandoned", "failed"):
             payload: dict[str, Any] = {"status": status, "tokens_processed": tokens}
+            if status == "abandoned":
+                payload["reason"] = "compute_reclaimed"
             if status == "failed":
                 payload["error"] = str(
                     (output.eval_report or {}).get("error") or "recipe reported failure"
@@ -726,6 +919,7 @@ class TrainerWorker:
             )
         artifact_dir = Path(output.artifact_dir)
         if artifact_dir.is_dir() and any(artifact_dir.iterdir()):
+            self._phase(state, "uploading")
             bundle = job_dir / "artifact.grad.tar.gz"
             try:
                 info = bundle_directory(
@@ -746,6 +940,7 @@ class TrainerWorker:
             )
             # The server stores the bundle's own manifest: files, format_version, created_by.
             payload["manifest"] = info.manifest
+        self._phase(state, "completing")
         return self._complete(state, payload)
 
     def _load_dataset(self, job: dict[str, Any], job_dir: Path) -> list[dict[str, Any]]:
@@ -866,6 +1061,59 @@ class TrainerWorker:
         )
 
 
+def _interruption(exc: BaseException) -> str:
+    """The interruption reason a crash reports: ``oom`` for CUDA out of memory."""
+    name = type(exc).__name__
+    if name == "OutOfMemoryError" or "CUDA out of memory" in str(exc):
+        return "oom"
+    return "worker_error"
+
+
+def detect_gpu(run: Callable[..., Any] = subprocess.run) -> dict[str, Any] | None:
+    """The first GPU's name and memory (``nvidia-smi``), or None without one."""
+    try:
+        out = run(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout
+        name, mib = [part.strip() for part in out.splitlines()[0].split(",")[:2]]
+        return {"name": name[:200], "memory_gb": round(float(mib) / 1024, 1)}
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
+IMDS = "http://169.254.169.254"
+
+
+def aws_termination_notice(timeout_s: float = 2.0) -> float | None:
+    """Seconds until AWS reclaims this instance (IMDSv2 ``spot/instance-action``), or None."""
+    opener = urllib.request.build_opener(_RefuseRedirects)
+    try:
+        token_req = urllib.request.Request(
+            f"{IMDS}/latest/api/token",
+            method="PUT",
+            headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"},
+        )
+        with opener.open(token_req, timeout=timeout_s) as resp:
+            token = resp.read().decode()
+        req = urllib.request.Request(
+            f"{IMDS}/latest/meta-data/spot/instance-action",
+            headers={"X-aws-ec2-metadata-token": token},
+        )
+        with opener.open(req, timeout=timeout_s) as resp:
+            notice = json.loads(resp.read())
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+        return None  # 404: no notice (or not on EC2)
+    try:
+        at = datetime.fromisoformat(str(notice["time"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    return max(0.0, (at - datetime.now(timezone.utc)).total_seconds())
+
+
 def worker_from_env(env: Mapping[str, str]) -> TrainerWorker:
     """The worker `grad-trainer` runs, configured from the environment.
 
@@ -898,7 +1146,22 @@ def worker_from_env(env: Mapping[str, str]) -> TrainerWorker:
         workdir=env.get("GRAD_WORKDIR") or None,
         kinds=kinds or JOB_KINDS,
         telemetry=telemetry,
+        reclaim_grace_s=float(env.get("GRAD_RECLAIM_GRACE_SECONDS", "25")),
+        termination_notice=env.get("GRAD_TERMINATION_NOTICE") or None,
+        gpu=_gpu_from_env(env.get("GRAD_WORKER_GPU")),
     )
+
+
+def _gpu_from_env(raw: str | None) -> dict[str, Any] | None | bool:
+    """GRAD_WORKER_GPU: unset = detect, "none" = no GPU, else JSON {name, memory_gb}."""
+    if not raw:
+        return True
+    if raw.strip().lower() == "none":
+        return None
+    value = json.loads(raw)
+    if not isinstance(value, dict) or not {"name", "memory_gb"} <= value.keys():
+        raise ValueError('GRAD_WORKER_GPU must be "none" or JSON {"name": ..., "memory_gb": ...}.')
+    return {"name": str(value["name"]), "memory_gb": float(value["memory_gb"])}
 
 
 def main() -> None:

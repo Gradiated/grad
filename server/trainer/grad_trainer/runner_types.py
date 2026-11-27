@@ -30,15 +30,21 @@ class Budget:
 class RunCallbacks:
     """Hooks the recipe calls while it trains.
 
-    ``on_step(metric) -> bool``: called after every optimizer step; return True to stop.
+    ``on_step(metric) -> bool | "checkpoint"``: called after every optimizer step; return
+    True to stop (the loop evaluates and checkpoints the current step first), or
+    ``"checkpoint"`` to stop at once with a checkpoint of the current step and no eval
+    (an emergency checkpoint before the worker's compute goes away).
     ``on_checkpoint(step, eval_score, checkpoint_dir, metadata)``: called after a
     checkpoint directory is complete. The directory is only valid during the call.
+    ``on_phase(phase, step)``: the loop entered ``training``, ``evaluating`` or
+    ``checkpointing`` at ``step``.
     """
 
-    on_step: Callable[[dict[str, Any]], bool] | None = None
+    on_step: Callable[[dict[str, Any]], bool | str] | None = None
     on_checkpoint: Callable[[int, float | None, Path, dict[str, Any]], None] | None = (
         None
     )
+    on_phase: Callable[[str, int], None] | None = None
 
 
 @dataclass(frozen=True)

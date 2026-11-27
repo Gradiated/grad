@@ -249,6 +249,8 @@ class FakeProtocolServer:
                 None,
                 None,
             )
+        if action == "events":
+            return 204, None, None, None
         if action == "source-page":
             return 200, self.source_pages.pop(0), None, None
         if action == "complete":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import timedelta
 import gzip
 import io
 import json
@@ -18,6 +19,7 @@ from typing import Any
 from fixtures.fake_protocol_server import FakeProtocolServer
 from fixtures.stub_runners import StubImporter, StubRunner
 
+from grad_trainer import worker as worker_module
 from grad_trainer.bundles import bundle_directory, extract_bundle
 from grad_trainer.worker import (
     ProtocolClient,
@@ -294,13 +296,143 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(result, {"job_id": "run_1", "status": "lease_lost"})
         self.assertEqual(srv.bodies("complete"), [])
 
-    def test_runner_exception_completes_failed_with_tokens(self) -> None:
+    def _run_until_progress(self, worker: TrainerWorker, srv: FakeProtocolServer, n: int) -> tuple[threading.Thread, dict]:
+        out: dict = {}
+        thread = threading.Thread(target=lambda: out.setdefault("result", worker.run_once()))
+        thread.start()
+        for _ in range(500):
+            if len(srv.bodies("progress")) >= n:
+                break
+            threading.Event().wait(0.01)
+        return thread, out
+
+    def test_reclaimed_compute_saves_the_current_step_and_hands_the_run_back(self) -> None:
+        srv = self.server(jobs=[train_job()])
+        worker = self.worker(srv, StubRunner(steps=200, checkpoint_at=None, step_sleep=0.03))
+        with contextlib.redirect_stderr(io.StringIO()):
+            thread, out = self._run_until_progress(worker, srv, 3)
+            worker.request_shutdown()
+            worker.request_shutdown()  # a second notice changes nothing
+            thread.join(10)
+        progress = [b["metric"]["step"] for b in srv.bodies("progress")]
+        checkpoint = srv.bodies("checkpoints")
+        self.assertEqual([c["step"] for c in checkpoint], [progress[-1]])
+        self.assertEqual(progress[-1], progress[0] + len(progress) - 1)
+        complete = srv.bodies("complete")[0]
+        self.assertEqual((complete["status"], complete["reason"]), ("abandoned", "compute_reclaimed"))
+        self.assertEqual(complete["tokens_processed"], 100 * len(progress))
+        self.assertEqual(out["result"]["status"], "abandoned")
+        events = srv.bodies("events")
+        phases = [e["phase"] for e in events if e["type"] == "phase"]
+        self.assertEqual(phases, ["loading_model", "training", "checkpointing"])
+        log = [e for e in events if e["type"] == "log"][0]
+        self.assertIn(f"saving a checkpoint at step {progress[-1]}", log["message"])
+        self.assertNotIn("spot", json.dumps(events).lower())
+        self.assertNotIn("preempt", json.dumps(events).lower())
+
+    def test_reclaimed_compute_without_time_to_save_hands_back_at_once(self) -> None:
+        srv = self.server(jobs=[train_job()])
+        worker = self.worker(
+            srv, StubRunner(steps=50, checkpoint_at=None, step_sleep=0.4), reclaim_grace_s=0.1
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            thread, out = self._run_until_progress(worker, srv, 2)
+            worker.request_shutdown()
+            for _ in range(100):  # handed back before the running step ends
+                if srv.bodies("complete"):
+                    break
+                threading.Event().wait(0.01)
+            self.assertEqual(len(srv.bodies("progress")), 2)
+            thread.join(10)
+        self.assertEqual(srv.bodies("checkpoints"), [])
+        complete = srv.bodies("complete")
+        self.assertEqual(len(complete), 1)
+        self.assertEqual((complete[0]["status"], complete[0]["reason"]), ("abandoned", "compute_reclaimed"))
+        self.assertEqual(complete[0]["tokens_processed"], 200)
+        self.assertEqual(out["result"]["status"], "handed_back")
+
+    def test_reclaim_before_training_hands_back_and_crash_reports_worker_error(self) -> None:
+        srv = self.server(jobs=[train_job()])
+        worker = self.worker(srv)
+        worker._current = state = worker_module._JobState(job_id="run_1", attempt=1)
+        state.phase = "loading_model"
+        worker.request_shutdown()
+        for _ in range(200):
+            if srv.bodies("complete"):
+                break
+            threading.Event().wait(0.01)
+        self.assertEqual(srv.bodies("complete")[0]["reason"], "compute_reclaimed")
+        self.assertEqual(worker_module._interruption(ValueError("x")), "worker_error")
+        uploading = worker_module._JobState(job_id="run_2", attempt=1)
+        uploading.phase = "uploading"
+        worker._current = uploading
+        worker.request_shutdown()
+        self.assertFalse(uploading.handed_back)
+        self.assertIsNotNone(uploading.reclaim_deadline)
+
+    def test_aws_termination_notice_is_treated_like_sigterm_with_its_grace(self) -> None:
+        srv = self.server(jobs=[])
+        worker = self.worker(srv, termination_notice="aws")
+        with mock.patch.object(worker, "request_shutdown") as shutdown:
+            notices = iter([None, 90.0])
+            worker._watch_aws_notice(poll_s=0.001, notice=lambda: next(notices))
+        shutdown.assert_called_once_with(grace_s=85.0)
+        with self.assertRaises(ValueError):
+            self.worker(srv, termination_notice="gcp")
+
+        class Resp(io.BytesIO):
+            def __enter__(self):  # type: ignore[no-untyped-def]
+                return self
+
+            def __exit__(self, *_a):  # type: ignore[no-untyped-def]
+                return None
+
+        class Opener:
+            def __init__(self, bodies: list[Any]) -> None:
+                self.bodies = bodies
+
+            def open(self, req, timeout):  # type: ignore[no-untyped-def]
+                body = self.bodies.pop(0)
+                if isinstance(body, Exception):
+                    raise body
+                return Resp(body)
+
+        soon = (worker_module.datetime.now(worker_module.timezone.utc) + timedelta(seconds=120)).isoformat()
+        cases = [
+            ([b"tok", json.dumps({"action": "terminate", "time": soon}).encode()], 115.0),
+            ([b"tok", OSError("404")], None),
+            ([b"tok", b'{"action": "stop"}'], 0.0),
+        ]
+        for bodies, expected in cases:
+            with mock.patch.object(worker_module.urllib.request, "build_opener", return_value=Opener(bodies)):
+                got = worker_module.aws_termination_notice()
+            if expected is None:
+                self.assertIsNone(got)
+            else:
+                self.assertGreaterEqual(got, expected)
+
+    def test_gpu_detection_and_env(self) -> None:
+        ok = mock.Mock(return_value=mock.Mock(stdout="NVIDIA H100 80GB HBM3, 81559\n"))
+        self.assertEqual(worker_module.detect_gpu(ok), {"name": "NVIDIA H100 80GB HBM3", "memory_gb": 79.6})
+        self.assertIsNone(worker_module.detect_gpu(mock.Mock(side_effect=OSError("no nvidia-smi"))))
+        self.assertIsNone(worker_module._gpu_from_env("none"))
+        self.assertTrue(worker_module._gpu_from_env(None))
+        self.assertEqual(worker_module._gpu_from_env('{"name": "L4", "memory_gb": 22.5}'), {"name": "L4", "memory_gb": 22.5})
+        with self.assertRaises(ValueError):
+            worker_module._gpu_from_env('{"name": "L4"}')
+        srv = self.server(jobs=[train_job()])
+        self.worker(srv, gpu={"name": "L4", "memory_gb": 22.5}).run_once()
+        self.assertEqual(srv.bodies("claim")[0]["gpu"], {"name": "L4", "memory_gb": 22.5})
+
+    def test_cuda_oom_hands_the_attempt_back_for_a_retry(self) -> None:
         srv = self.server(jobs=[train_job()])
         self.worker(srv, StubRunner(raise_at=3, checkpoint_at=None)).run_once()
         complete = srv.bodies("complete")[0]
-        self.assertEqual(complete["status"], "failed")
-        self.assertIn("CUDA out of memory", complete["error"])
+        self.assertEqual(complete["status"], "abandoned")
+        self.assertEqual(complete["reason"], "oom")
         self.assertEqual(complete["tokens_processed"], 200)
+        warning = [e for e in srv.bodies("events") if e["type"] == "warning"]
+        self.assertIn("ran out of memory", warning[0]["message"])
 
     def test_unknown_recipe_completes_failed(self) -> None:
         srv = self.server(jobs=[train_job()])

@@ -45,7 +45,7 @@ class StubRunner:
         self,
         *,
         steps: int = 3,
-        checkpoint_at: int | None = 2,
+        checkpoint_at: int | str | None = 2,
         raise_at: int | None = None,
         step_sleep: float = 0.0,
         status: str = "completed",
@@ -77,13 +77,25 @@ class StubRunner:
         start = resume.step + 1 if resume else 1
         tokens = 0
         status = self.status
+        if callbacks.on_phase:
+            callbacks.on_phase("training", start - 1)
         for step in range(start, start + self.steps):
             if self.raise_at == step:
                 raise RuntimeError("CUDA out of memory")
+            time.sleep(self.step_sleep)
             tokens += 100
-            if callbacks.on_step(
+            stop = callbacks.on_step(
                 {"step": step, "loss": 1.0 / step, "tokens": tokens, "cost_usd": 0.0}
-            ):
+            )
+            if stop == "checkpoint" or (stop and self.checkpoint_at == "on_stop"):
+                if callbacks.on_phase:
+                    callbacks.on_phase("checkpointing", step)
+                ckpt = Path(workdir) / f"ckpt-{step}"
+                write_lora(ckpt)
+                callbacks.on_checkpoint(
+                    step, None, ckpt, {"artifact_format": "peft_lora", "manifest": STUB_MANIFEST}
+                )
+            if stop:
                 status = "cancelled"
                 break
             if self.checkpoint_at == step:
@@ -92,7 +104,6 @@ class StubRunner:
                 callbacks.on_checkpoint(
                     step, 0.5, ckpt, {"artifact_format": "peft_lora", "manifest": STUB_MANIFEST}
                 )
-            time.sleep(self.step_sleep)
         out = Path(workdir) / "artifact"
         write_lora(out)
         return RunOutput(

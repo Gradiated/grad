@@ -43,15 +43,21 @@ class TorchCase(TempDirCase):
 class Recorder:
     """Collects callback calls; copies checkpoint directories while they are valid."""
 
-    def __init__(self, root: Path, stop_after: int | None = None) -> None:
+    def __init__(self, root: Path, stop_after: int | None = None, stop_with: bool | str = True) -> None:
         self.root = root
         self.stop_after = stop_after
+        self.stop_with = stop_with
+        self.phases: list[tuple[str, int]] = []
         self.metrics: list[dict[str, Any]] = []
         self.checkpoints: list[tuple[int, float | None, Path, dict[str, Any]]] = []
 
-    def on_step(self, metric: dict[str, Any]) -> bool:
+    def on_step(self, metric: dict[str, Any]) -> bool | str:
         self.metrics.append(metric)
-        return self.stop_after is not None and metric["step"] >= self.stop_after
+        stop = self.stop_after is not None and metric["step"] >= self.stop_after
+        return self.stop_with if stop else False
+
+    def on_phase(self, phase: str, step: int) -> None:
+        self.phases.append((phase, step))
 
     def on_checkpoint(self, step: int, score: float | None, directory: Path, metadata: dict[str, Any]) -> None:
         copy = self.root / f"ckpt-{step}-{len(self.checkpoints)}"
@@ -59,7 +65,7 @@ class Recorder:
         self.checkpoints.append((step, score, copy, metadata))
 
     def callbacks(self) -> RunCallbacks:
-        return RunCallbacks(on_step=self.on_step, on_checkpoint=self.on_checkpoint)
+        return RunCallbacks(on_step=self.on_step, on_checkpoint=self.on_checkpoint, on_phase=self.on_phase)
 
 
 def run_recipe(
