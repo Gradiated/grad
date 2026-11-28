@@ -2475,15 +2475,20 @@ type SetSecretRequest struct {
 
 // Source An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset.
 type Source struct {
-	ID          string             `json:"id"`
-	WorkspaceID string             `json:"workspace_id"`
-	Dataset     string             `json:"dataset"`
-	Provider    SourceProviderType `json:"provider"`
-	Schedule    *string            `json:"schedule"`
+	// ID Source id (`src_` and 24 hex characters).
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	// Dataset The dataset the source syncs into (one per source).
+	Dataset  string             `json:"dataset"`
+	Provider SourceProviderType `json:"provider"`
+	// Schedule Five-field UTC cron; null when the source syncs only on request.
+	Schedule *string `json:"schedule"`
 	// SampleRate The share of traces synced (1: all).
-	SampleRate        float64 `json:"sample_rate"`
-	MaxRecordsPerSync *int    `json:"max_records_per_sync"`
-	MaxRecordsPerDay  *int    `json:"max_records_per_day"`
+	SampleRate float64 `json:"sample_rate"`
+	// MaxRecordsPerSync At most this many new traces per sync; null for no cap.
+	MaxRecordsPerSync *int `json:"max_records_per_sync"`
+	// MaxRecordsPerDay At most this many new traces per UTC day; null for no cap.
+	MaxRecordsPerDay *int `json:"max_records_per_day"`
 	// RecordsToday New traces synced so far this UTC day (what max_records_per_day counts).
 	RecordsToday int `json:"records_today"`
 	// VersionInterval Seconds between the dataset versions scheduled syncs commit (0: every sync).
@@ -2497,7 +2502,8 @@ type Source struct {
 	// PausedReason Why the source is paused (null while active).
 	PausedReason *string `json:"paused_reason"`
 	// LastError The error of the last failed sync (provider keys redacted); cleared by a successful sync.
-	LastError   *string `json:"last_error"`
+	LastError *string `json:"last_error"`
+	// LastErrorAt When the last sync failed; null if none has.
 	LastErrorAt *string `json:"last_error_at"`
 	// ConsecutiveFailures Failed syncs since the last successful one.
 	ConsecutiveFailures int `json:"consecutive_failures"`
@@ -2792,24 +2798,33 @@ type UsageKindTotal struct {
 
 // UsageRecord is generated from the OpenAPI schema.
 type UsageRecord struct {
+	// ID Usage row id.
 	ID   string    `json:"id"`
 	Kind UsageKind `json:"kind"`
 	// RefID The run (kind `training`) or eval this usage belongs to.
-	RefID   string  `json:"ref_id"`
+	RefID string `json:"ref_id"`
+	// RefName The run's or eval's name.
 	RefName *string `json:"ref_name"`
 	// RunID The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it is.
-	RunID   *string `json:"run_id"`
-	Attempt int     `json:"attempt"`
+	RunID *string `json:"run_id"`
+	// Attempt The attempt the tokens belong to.
+	Attempt int `json:"attempt"`
 	// TokensFrom The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).
-	TokensFrom    int     `json:"tokens_from"`
-	TokensThrough int     `json:"tokens_through"`
-	Tokens        int     `json:"tokens"`
-	CostUSD       float64 `json:"cost_usd"`
-	PriceVersion  string  `json:"price_version"`
+	TokensFrom int `json:"tokens_from"`
+	// TokensThrough The attempt's tokens this row ends at; `tokens` is the difference from `tokens_from`.
+	TokensThrough int `json:"tokens_through"`
+	// Tokens Tokens billed in this row.
+	Tokens int `json:"tokens"`
+	// CostUSD The charge, in USD.
+	CostUSD float64 `json:"cost_usd"`
+	// PriceVersion The version of the catalog price the charge was computed with.
+	PriceVersion string `json:"price_version"`
 	// BilledBy Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).
-	BilledBy       UsageRecordBilledBy `json:"billed_by"`
-	IdempotencyKey string              `json:"idempotency_key"`
-	CreatedAt      string              `json:"created_at"`
+	BilledBy UsageRecordBilledBy `json:"billed_by"`
+	// IdempotencyKey `run-usage:{id}:{attempt}:{tokens_through}` (`eval-usage:` for evals); unique, so an increment is never billed twice.
+	IdempotencyKey string `json:"idempotency_key"`
+	// CreatedAt When the increment was billed.
+	CreatedAt string `json:"created_at"`
 }
 
 // UsageRecordBilledBy Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).

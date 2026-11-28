@@ -109,31 +109,53 @@ export type UsageSummaryQuery = z.infer<typeof UsageSummaryQuerySchema>;
 
 export const UsageRecordSchema = z
   .object({
-    id: z.string().min(1),
+    id: z.string().min(1).openapi({ description: "Usage row id." }),
     kind: UsageKindSchema,
     ref_id: z.string().min(1).openapi({
       description: "The run (kind `training`) or eval this usage belongs to.",
     }),
-    ref_name: z.string().nullable(),
+    ref_name: z
+      .string()
+      .nullable()
+      .openapi({ description: "The run's or eval's name." }),
     run_id: z.string().nullable().openapi({
       description:
         "The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it is.",
     }),
-    attempt: z.number().int().min(1),
+    attempt: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "The attempt the tokens belong to." }),
     tokens_from: z.number().int().min(0).openapi({
       description:
         "The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).",
     }),
-    tokens_through: z.number().int().min(0),
-    tokens: z.number().int().min(0),
-    cost_usd: z.number().min(0),
-    price_version: z.string().min(1),
+    tokens_through: z.number().int().min(0).openapi({
+      description:
+        "The attempt's tokens this row ends at; `tokens` is the difference from `tokens_from`.",
+    }),
+    tokens: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Tokens billed in this row." }),
+    cost_usd: z.number().min(0).openapi({ description: "The charge, in USD." }),
+    price_version: z.string().min(1).openapi({
+      description:
+        "The version of the catalog price the charge was computed with.",
+    }),
     billed_by: z.enum(["grad", "gateway"]).openapi({
       description:
         "Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).",
     }),
-    idempotency_key: z.string().min(1),
-    created_at: IsoTimestampSchema,
+    idempotency_key: z.string().min(1).openapi({
+      description:
+        "`run-usage:{id}:{attempt}:{tokens_through}` (`eval-usage:` for evals); unique, so an increment is never billed twice.",
+    }),
+    created_at: IsoTimestampSchema.openapi({
+      description: "When the increment was billed.",
+    }),
   })
   .openapi("UsageRecord");
 

@@ -215,9 +215,14 @@ export const SourceSyncSchema = z
 
 export const SourceSchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .openapi({ description: "Source id (`src_` and 24 hex characters)." }),
     workspace_id: z.string().min(1),
-    dataset: SlugSchema,
+    dataset: SlugSchema.openapi({
+      description: "The dataset the source syncs into (one per source).",
+    }),
     provider: z.object({
       kind: z.enum(SOURCE_PROVIDERS),
       host: z.string().nullable(),
@@ -228,12 +233,19 @@ export const SourceSchema = z
           "The effective filters: validated, with single values as lists.",
       }),
     }),
-    schedule: z.string().nullable(),
+    schedule: z.string().nullable().openapi({
+      description:
+        "Five-field UTC cron; null when the source syncs only on request.",
+    }),
     sample_rate: z.number().openapi({
       description: "The share of traces synced (1: all).",
     }),
-    max_records_per_sync: z.number().int().nullable(),
-    max_records_per_day: z.number().int().nullable(),
+    max_records_per_sync: z.number().int().nullable().openapi({
+      description: "At most this many new traces per sync; null for no cap.",
+    }),
+    max_records_per_day: z.number().int().nullable().openapi({
+      description: "At most this many new traces per UTC day; null for no cap.",
+    }),
     records_today: z.number().int().min(0).openapi({
       description:
         "New traces synced so far this UTC day (what max_records_per_day counts).",
@@ -261,7 +273,9 @@ export const SourceSchema = z
       description:
         "The error of the last failed sync (provider keys redacted); cleared by a successful sync.",
     }),
-    last_error_at: IsoTimestampSchema.nullable(),
+    last_error_at: IsoTimestampSchema.nullable().openapi({
+      description: "When the last sync failed; null if none has.",
+    }),
     consecutive_failures: z.number().int().min(0).openapi({
       description: "Failed syncs since the last successful one.",
     }),

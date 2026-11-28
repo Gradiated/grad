@@ -2140,23 +2140,32 @@ pub struct UsageKindTotal {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UsageRecord {
+    /// Usage row id.
     pub id: String,
     pub kind: UsageKind,
     /// The run (kind `training`) or eval this usage belongs to.
     pub ref_id: String,
+    /// The run's or eval's name.
     pub ref_name: Option<String>,
     /// The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it is.
     pub run_id: Option<String>,
+    /// The attempt the tokens belong to.
     pub attempt: i64,
     /// The attempt's tokens this row starts after (usage is billed in increments while an attempt runs).
     pub tokens_from: i64,
+    /// The attempt's tokens this row ends at; `tokens` is the difference from `tokens_from`.
     pub tokens_through: i64,
+    /// Tokens billed in this row.
     pub tokens: i64,
+    /// The charge, in USD.
     pub cost_usd: f64,
+    /// The version of the catalog price the charge was computed with.
     pub price_version: String,
     /// Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice).
     pub billed_by: UsageRecordBilledBy,
+    /// `run-usage:{id}:{attempt}:{tokens_through}` (`eval-usage:` for evals); unique, so an increment is never billed twice.
     pub idempotency_key: String,
+    /// When the increment was billed.
     pub created_at: String,
 }
 

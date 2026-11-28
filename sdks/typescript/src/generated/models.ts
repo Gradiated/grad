@@ -1204,8 +1204,10 @@ export interface SetSecretRequest {
 
 /** An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset. */
 export interface Source {
+  /** Source id (`src_` and 24 hex characters). */
   id: string;
   workspaceId: string;
+  /** The dataset the source syncs into (one per source). */
   dataset: string;
   provider: {
     kind: "langfuse" | "langsmith" | "braintrust" | "posthog" | "phoenix" | "gradiated";
@@ -1215,10 +1217,13 @@ export interface Source {
     /** The effective filters: validated, with single values as lists. */
     filters: Record<string, unknown>;
   };
+  /** Five-field UTC cron; null when the source syncs only on request. */
   schedule: string | null;
   /** The share of traces synced (1: all). */
   sampleRate: number;
+  /** At most this many new traces per sync; null for no cap. */
   maxRecordsPerSync: number | null;
+  /** At most this many new traces per UTC day; null for no cap. */
   maxRecordsPerDay: number | null;
   /** New traces synced so far this UTC day (what max_records_per_day counts). */
   recordsToday: number;
@@ -1234,6 +1239,7 @@ export interface Source {
   pausedReason: string | null;
   /** The error of the last failed sync (provider keys redacted); cleared by a successful sync. */
   lastError: string | null;
+  /** When the last sync failed; null if none has. */
   lastErrorAt: string | null;
   /** Failed syncs since the last successful one. */
   consecutiveFailures: number;
@@ -1362,23 +1368,32 @@ export interface UsageKindTotal {
 }
 
 export interface UsageRecord {
+  /** Usage row id. */
   id: string;
   kind: UsageKind;
   /** The run (kind `training`) or eval this usage belongs to. */
   refId: string;
+  /** The run's or eval's name. */
   refName: string | null;
   /** The run the usage was billed for: the run itself, or the run whose labeling, teacher or checkpoint eval it is. */
   runId: string | null;
+  /** The attempt the tokens belong to. */
   attempt: number;
   /** The attempt's tokens this row starts after (usage is billed in increments while an attempt runs). */
   tokensFrom: number;
+  /** The attempt's tokens this row ends at; `tokens` is the difference from `tokens_from`. */
   tokensThrough: number;
+  /** Tokens billed in this row. */
   tokens: number;
+  /** The charge, in USD. */
   costUsd: number;
+  /** The version of the catalog price the charge was computed with. */
   priceVersion: string;
   /** Who bills this usage: `grad` (training, and evals on a self-hosted server) or `gateway` (on Gradiated Cloud, eval model and judge tokens are billed once by the inference gateway; shown here, not charged twice). */
   billedBy: "grad" | "gateway";
+  /** `run-usage:{id}:{attempt}:{tokens_through}` (`eval-usage:` for evals); unique, so an increment is never billed twice. */
   idempotencyKey: string;
+  /** When the increment was billed. */
   createdAt: string;
 }
 

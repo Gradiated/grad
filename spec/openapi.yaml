@@ -4753,6 +4753,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: Usage row id.
         kind:
           $ref: "#/components/schemas/UsageKind"
         ref_id:
@@ -4763,6 +4764,7 @@ components:
           type:
             - string
             - "null"
+          description: The run's or eval's name.
         run_id:
           type:
             - string
@@ -4772,6 +4774,7 @@ components:
         attempt:
           type: integer
           minimum: 1
+          description: The attempt the tokens belong to.
         tokens_from:
           type: integer
           minimum: 0
@@ -4779,15 +4782,19 @@ components:
         tokens_through:
           type: integer
           minimum: 0
+          description: The attempt's tokens this row ends at; `tokens` is the difference from `tokens_from`.
         tokens:
           type: integer
           minimum: 0
+          description: Tokens billed in this row.
         cost_usd:
           type: number
           minimum: 0
+          description: The charge, in USD.
         price_version:
           type: string
           minLength: 1
+          description: The version of the catalog price the charge was computed with.
         billed_by:
           type: string
           enum:
@@ -4799,9 +4806,12 @@ components:
         idempotency_key:
           type: string
           minLength: 1
+          description: "`run-usage:{id}:{attempt}:{tokens_through}` (`eval-usage:` for evals); unique, so an increment is never
+            billed twice."
         created_at:
           type: string
           format: date-time
+          description: When the increment was billed.
       required:
         - id
         - kind
@@ -5280,6 +5290,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: Source id (`src_` and 24 hex characters).
         workspace_id:
           type: string
           minLength: 1
@@ -5288,6 +5299,7 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: The dataset the source syncs into (one per source).
         provider:
           type: object
           properties:
@@ -5326,6 +5338,7 @@ components:
           type:
             - string
             - "null"
+          description: Five-field UTC cron; null when the source syncs only on request.
         sample_rate:
           type: number
           description: "The share of traces synced (1: all)."
@@ -5333,10 +5346,12 @@ components:
           type:
             - integer
             - "null"
+          description: At most this many new traces per sync; null for no cap.
         max_records_per_day:
           type:
             - integer
             - "null"
+          description: At most this many new traces per UTC day; null for no cap.
         records_today:
           type: integer
           minimum: 0
@@ -5378,6 +5393,7 @@ components:
             - string
             - "null"
           format: date-time
+          description: When the last sync failed; null if none has.
         consecutive_failures:
           type: integer
           minimum: 0
