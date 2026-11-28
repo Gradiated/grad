@@ -513,7 +513,13 @@ describe("run lifecycle and worker protocol", () => {
 
     expect(await worker.claim()).toBeNull();
     const after = await t.json(`/v1/runs/${run.id}`);
-    expect(after.body).toMatchObject({ status: "stopped_budget" });
+    // The same words as a budget stop the worker reports.
+    expect(after.body).toMatchObject({
+      status: "stopped_budget",
+      error: expect.stringMatching(
+        /^Stopped at the run's cost cap \(\$[\d.]+ of \$2\.0000\); resume with a higher max_cost_usd\.$/,
+      ),
+    });
   });
 
   it("resumes from the latest checkpoint and keeps every artifact immutable", async () => {

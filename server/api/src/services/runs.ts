@@ -678,7 +678,7 @@ export const createRunLifecycle = (
           closeAttempt(run, 0, {
             status: "stopped_budget",
             finished_at: now,
-            error: null,
+            error: budgetStopped(billedCost(run), run.max_cost_usd),
           }),
         );
         return null;
