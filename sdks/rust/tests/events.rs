@@ -161,6 +161,36 @@ async fn gives_up_after_its_reconnect_budget_in_a_row() {
 }
 
 #[tokio::test]
+async fn pages_past_a_page_of_only_future_event_types() {
+    let p = page();
+    let id = p["run_id"].as_str().unwrap().to_string();
+    let data = p["data"].as_array().unwrap().clone();
+    let (d2, id2) = (data.clone(), id.clone());
+    let srv = MockServer::start(move |r| {
+        let future = json!({"type": "future", "run_id": id2, "seq": 1, "attempt": 1, "timestamp": "2026-11-27T13:00:00Z"});
+        if r.query().contains("cursor=c2") {
+            Reply::json(
+                200,
+                json!({"run_id": id2, "status": "completed", "data": d2, "next_cursor": null, "tail_cursor": "c3"}),
+            )
+        } else {
+            Reply::json(
+                200,
+                json!({"run_id": id2, "status": "completed", "data": [future], "next_cursor": "c2", "tail_cursor": "c2"}),
+            )
+        }
+    });
+    let c = client(&srv.url);
+    let mut paged = c.runs().events(&id, false);
+    let mut n = 0;
+    while let Some(ev) = paged.next().await {
+        ev.unwrap();
+        n += 1;
+    }
+    assert_eq!(n, data.len());
+}
+
+#[tokio::test]
 async fn pages_events_without_follow_and_waits_with_events() {
     let p = page();
     let id = p["run_id"].as_str().unwrap().to_string();

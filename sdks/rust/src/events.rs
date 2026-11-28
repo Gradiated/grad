@@ -339,13 +339,15 @@ impl RunEventStream {
             .opt_param("cursor", self.cursor.clone())
             .opt_param("limit", self.limit);
         let page: RunEventsPage = self.transport.json(req).await?;
+        // A page of only future event types is filtered out, not the end.
+        let served = page.data.len();
         self.pending.extend(
             page.data
                 .into_iter()
                 .filter(|e| !matches!(e, RunEvent::Unknown)),
         );
         match page.next_cursor.filter(|c| !c.is_empty()) {
-            Some(next) if !self.pending.is_empty() => {
+            Some(next) if served > 0 => {
                 if !self.seen_cursors.insert(next.clone()) {
                     return Err(Error::PaginationLoop {
                         path: self.path(),
