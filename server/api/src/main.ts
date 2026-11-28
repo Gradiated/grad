@@ -3,8 +3,8 @@ import type { Server } from "node:http";
 import { serve } from "@hono/node-server";
 
 import { API_VERSION, createGradApp, createMetricsApp } from "./app.js";
-import { buildDependencies, log } from "./bootstrap.js";
-import { setLogComponent } from "./telemetry/log.js";
+import { buildDependencies } from "./bootstrap.js";
+import { log, setLogComponent } from "./telemetry/log.js";
 import { parseServerEnvironment } from "./environment.js";
 import { createInternalApp } from "./routes/internal.js";
 import { runMigrations } from "./migrations.js";

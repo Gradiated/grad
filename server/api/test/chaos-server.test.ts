@@ -14,7 +14,7 @@ import {
 } from "../src/store/migrate.js";
 import { isDatabaseUnavailable } from "../src/store/postgres/db.js";
 import { S3ObjectStore } from "../src/storage/s3.js";
-import { createPostgresStore } from "../src/store/postgres.js";
+import { createPostgresStore } from "../src/store/postgres/index.js";
 import type { Store } from "../src/store/types.js";
 import { makeTestApp, type TestApp } from "./fixtures/app.js";
 import { createSftRun, FakeWorker, sftRecords } from "./fixtures/worker.js";

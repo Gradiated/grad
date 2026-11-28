@@ -17,8 +17,7 @@ import type { CompletedEvent } from "../contracts.js";
 import type { JobEvent } from "../store/types.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
-import { toRunEvent } from "../services/run-events.js";
-import { toMetricPoint } from "../services/runs.js";
+import { toMetricPoint, toRunEvent } from "../services/run-events.js";
 import { createSseLimits } from "./sse-limits.js";
 import {
   defaultErrors,

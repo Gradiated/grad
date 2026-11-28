@@ -1560,7 +1560,9 @@ describe("postgres migrations", () => {
 
 describe("postgres store lifecycle", () => {
   it("rejects bad schema names; ping fails after close", async () => {
-    const { createPostgresStore } = await import("../src/store/postgres.js");
+    const { createPostgresStore } = await import(
+      "../src/store/postgres/index.js"
+    );
     const clock = new ManualClock();
     expect(() =>
       createPostgresStore({

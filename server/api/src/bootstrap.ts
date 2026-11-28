@@ -21,12 +21,10 @@ import { assertMigrated } from "./migrations.js";
 import { resolveUiBundle, type UiBundle } from "./ui.js";
 import { S3ObjectStore } from "./storage/s3.js";
 import { createSecretsCipher } from "./secrets.js";
-import { createPostgresStore } from "./store/postgres.js";
+import { createPostgresStore } from "./store/postgres/index.js";
 import { log } from "./telemetry/log.js";
 import { instrumentObjectStore } from "./telemetry/storage.js";
 import { buildWorkerAuthenticator } from "./worker-auth/index.js";
-
-export { log } from "./telemetry/log.js";
 
 export const buildDependencies = async (
   env: ServerEnvironment,

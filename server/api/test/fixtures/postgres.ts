@@ -4,7 +4,7 @@ import { inject } from "vitest";
 
 import type { Clock } from "../../src/clock.js";
 import { migrate } from "../../src/store/migrate.js";
-import { createPostgresStore } from "../../src/store/postgres.js";
+import { createPostgresStore } from "../../src/store/postgres/index.js";
 import type { Store } from "../../src/store/types.js";
 
 /** Connection URL from the global setup. */

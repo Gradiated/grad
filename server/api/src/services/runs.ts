@@ -105,7 +105,6 @@ import {
   type UploadService,
 } from "./uploads.js";
 
-export { toPublicArtifact };
 import type { AttemptUsage, UsageService } from "./usage.js";
 import {
   metrics,
@@ -408,8 +407,6 @@ export interface RunLifecycle {
   /** Marks queued runs nobody claimed in time waiting_for_compute. */
   markWaitingForCompute(now: Date): Promise<number>;
 }
-
-export { toMetricPoint };
 
 export const createRunLifecycle = (
   deps: AppDependencies,

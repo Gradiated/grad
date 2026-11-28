@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { systemClock } from "../src/clock.js";
 import { createAuthView } from "../src/cloud/auth-view.js";
 import { runMigrations } from "../src/migrations.js";
-import { createPostgresStore } from "../src/store/postgres.js";
+import { createPostgresStore } from "../src/store/postgres/index.js";
 import { postgresConnection } from "../src/store/postgres/tls.js";
 import {
   CONTAINER_PREFIX,
