@@ -275,8 +275,6 @@ export const ImportSourceSchema = z
   ])
   .openapi("ImportSource");
 
-export type ImportSource = z.infer<typeof ImportSourceSchema>;
-
 export const CreateImportRequestSchema = z
   .object({
     source: ImportSourceSchema,

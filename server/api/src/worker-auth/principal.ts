@@ -4,7 +4,8 @@
  * (static keys, Kubernetes service-account tokens, lease tokens) are chained
  * in the configured order (GRAD_WORKER_AUTH); the first match wins.
  */
-import type { AuthPrincipal, WorkerJobKind } from "../adapters.js";
+import type { AuthPrincipal } from "../adapters.js";
+import type { JobKind } from "../contracts.js";
 import { forbidden } from "../errors.js";
 
 export const WORKER_AUTH_MODES = ["static", "kubernetes", "lease"] as const;
@@ -13,7 +14,7 @@ export type WorkerAuthMode = (typeof WORKER_AUTH_MODES)[number];
 /** What a worker token proves about its bearer. */
 export interface WorkerPrincipal {
   /** The job kinds it may claim. */
-  kinds: readonly WorkerJobKind[];
+  kinds: readonly JobKind[];
   /** Stable name of the credential (`trainer-worker:<label>`, `k8s:<ns>/<sa>/<pod>`, `lease:<orchestrator>/<host>/<lease>`); fences leases. */
   identity: string;
   /** Lease tokens: the host the token is bound to; the claim's worker_id must match it. */

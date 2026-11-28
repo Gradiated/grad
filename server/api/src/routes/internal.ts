@@ -16,12 +16,8 @@ import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 
-import {
-  WORKER_JOB_KINDS,
-  findKeyByToken,
-  hashApiKey,
-  type TrainerKey,
-} from "../adapters.js";
+import { JOB_KINDS } from "../contracts.js";
+import { findKeyByToken, hashApiKey, type TrainerKey } from "../adapters.js";
 import type { Clock } from "../clock.js";
 import {
   ApiError,
@@ -50,7 +46,7 @@ export const MintWorkerTokenSchema = z.strictObject({
   host_id: z.string().regex(HOST_ID_RE, "1-128 of A-Z a-z 0-9 . _ - (no ':')"),
   lease_id: z.string().regex(LEASE_ID_RE, "1-128 of A-Z a-z 0-9 . _ : -"),
   kinds: z
-    .array(z.enum(WORKER_JOB_KINDS))
+    .array(z.enum(JOB_KINDS))
     .min(1)
     .refine((k) => new Set(k).size === k.length, "kinds repeat"),
   gpu_memory_gb: z.number().positive().max(100_000).optional(),

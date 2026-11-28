@@ -7,11 +7,8 @@
  */
 import { randomBytes } from "node:crypto";
 
-import {
-  hashApiKey,
-  WORKER_JOB_KINDS,
-  type WorkerJobKind,
-} from "../adapters.js";
+import { hashApiKey } from "../adapters.js";
+import { JOB_KINDS, type JobKind } from "../contracts.js";
 import type { Clock } from "../clock.js";
 import type { WorkerTokenRepository } from "../store/types.js";
 import type { WorkerAuthenticator } from "./principal.js";
@@ -22,8 +19,8 @@ export const LEASE_TOKEN_PREFIX = "gradwt_";
 /** Longest a minted token may live; a longer lease rotates its token. */
 export const MAX_LEASE_TOKEN_SECONDS = 7 * 86_400;
 
-const isKind = (kind: string): kind is WorkerJobKind =>
-  (WORKER_JOB_KINDS as readonly string[]).includes(kind);
+const isKind = (kind: string): kind is JobKind =>
+  (JOB_KINDS as readonly string[]).includes(kind);
 
 export const createLeaseWorkerAuth = (options: {
   tokens: WorkerTokenRepository;

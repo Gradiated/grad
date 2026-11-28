@@ -29,8 +29,6 @@ export const ProblemSchema = z
   })
   .openapi("Problem");
 
-export type Problem = z.infer<typeof ProblemSchema>;
-
 export const MAX_PAGE_LIMIT = 200;
 
 /**
@@ -68,11 +66,6 @@ export const pageOf = <T extends z.ZodType>(item: T) =>
     data: z.array(item),
     next_cursor: NextCursorSchema,
   });
-
-export interface Page<T> {
-  data: T[];
-  next_cursor: string | null;
-}
 
 export const ChatMessageSchema = z
   .looseObject({

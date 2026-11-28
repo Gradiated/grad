@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import type { ApiKeyScope, Scope } from "./contracts.js";
-import { PLATFORM_SCOPES } from "./contracts.js";
+import type { ApiKeyScope, JobKind, Scope } from "./contracts.js";
+import { JOB_KINDS, PLATFORM_SCOPES } from "./contracts.js";
 import type { KeyLookupResult } from "./store/types.js";
 import {
   authenticateWorkerFirst,
@@ -26,19 +26,16 @@ export interface AuthPrincipal {
    * Trainer workers only: the job kinds this key may claim. Import jobs carry
    * workspace secrets, so a GPU host's key is train-only (TRAINER_KEYS_JSON).
    */
-  workerKinds?: readonly WorkerJobKind[];
+  workerKinds?: readonly JobKind[];
   /** Trainer workers only: what the worker token proved (host binding, GPU bound, expiry). */
   worker?: WorkerPrincipal | undefined;
 }
-
-export const WORKER_JOB_KINDS = ["train", "import", "eval"] as const;
-export type WorkerJobKind = (typeof WORKER_JOB_KINDS)[number];
 
 /** One trainer key: `TRAINER_API_KEY(_HASH)` (every kind) or a `TRAINER_KEYS_JSON` entry. */
 export interface TrainerKey {
   label: string;
   sha256: string;
-  kinds: readonly WorkerJobKind[];
+  kinds: readonly JobKind[];
 }
 
 /** The configured trainer keys: the single platform key first, then the labelled ones. */
@@ -47,7 +44,7 @@ export const trainerKeysOf = (
   extra: readonly TrainerKey[] = [],
 ): TrainerKey[] => [
   ...(trainerKeyHash
-    ? [{ label: "trainer", sha256: trainerKeyHash, kinds: WORKER_JOB_KINDS }]
+    ? [{ label: "trainer", sha256: trainerKeyHash, kinds: JOB_KINDS }]
     : []),
   ...extra,
 ];

@@ -201,4 +201,3 @@ export const UsageSummarySchema = z
   .openapi("UsageSummary");
 
 export type UsageSummary = z.infer<typeof UsageSummarySchema>;
-export type UsageGroup = z.infer<typeof UsageGroupSchema>;

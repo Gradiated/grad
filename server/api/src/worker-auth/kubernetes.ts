@@ -11,7 +11,7 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
 
-import type { WorkerJobKind } from "../adapters.js";
+import type { JobKind } from "../contracts.js";
 import type { Clock } from "../clock.js";
 import { b64json } from "../cloud/jwt.js";
 import { ApiError } from "../errors.js";
@@ -163,7 +163,7 @@ const worthReviewing = (
 
 export const createKubernetesWorkerAuth = (options: {
   /** `<namespace>/<name>` -> kinds (GRAD_WORKER_K8S_SERVICE_ACCOUNTS). */
-  serviceAccounts: Readonly<Record<string, readonly WorkerJobKind[]>>;
+  serviceAccounts: Readonly<Record<string, readonly JobKind[]>>;
   review: TokenReviewer;
   clock: Clock;
   /** Longest a positive review is reused (default 60 s; never past the token's exp). */

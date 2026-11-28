@@ -40,8 +40,6 @@ export const SplitSpecSchema = z
   })
   .openapi("SplitSpec");
 
-export type SplitSpec = z.infer<typeof SplitSpecSchema>;
-
 export const V0_RECIPE_KINDS = [
   "sft",
   "dpo",
@@ -161,8 +159,6 @@ export const RecipeEvalSchema = z
   })
   .strict()
   .openapi("RecipeEval");
-
-export type RecipeEval = z.infer<typeof RecipeEvalSchema>;
 
 const LoggerCommon = {
   run_name: z.string().min(1).max(128).optional().openapi({
@@ -497,8 +493,6 @@ export const MetricPointInputSchema = z
     timestamp: IsoTimestampSchema,
   })
   .openapi("MetricPointInput");
-
-export type MetricPointInput = z.infer<typeof MetricPointInputSchema>;
 
 /** Stored metric point. `seq` is the per-server monotonic cursor (SSE event id). */
 export const MetricPointSchema = z

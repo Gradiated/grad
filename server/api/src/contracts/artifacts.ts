@@ -150,5 +150,3 @@ export const ArtifactDownloadUrlSchema = z
     filename: z.string().min(1),
   })
   .openapi("ArtifactDownloadUrl");
-
-export type ArtifactDownloadUrl = z.infer<typeof ArtifactDownloadUrlSchema>;

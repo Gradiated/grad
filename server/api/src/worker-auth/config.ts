@@ -1,10 +1,7 @@
 import { z } from "zod";
 
-import {
-  WORKER_JOB_KINDS,
-  type TrainerKey,
-  type WorkerJobKind,
-} from "../adapters.js";
+import type { TrainerKey } from "../adapters.js";
+import { JOB_KINDS, type JobKind } from "../contracts.js";
 import { issuesOf } from "../errors.js";
 import { WORKER_AUTH_MODES, type WorkerAuthMode } from "./principal.js";
 
@@ -12,7 +9,7 @@ export interface WorkerAuthConfig {
   /** GRAD_WORKER_AUTH, in order (default: static). */
   modes: WorkerAuthMode[];
   /** GRAD_WORKER_K8S_SERVICE_ACCOUNTS: `<namespace>/<name>` -> kinds. */
-  serviceAccounts: Record<string, WorkerJobKind[]>;
+  serviceAccounts: Record<string, JobKind[]>;
   /**
    * GRAD_ORCHESTRATOR_KEYS_JSON: who may mint lease tokens, for which kinds.
    * Empty unless `lease` is enabled; the lease-token routes exist only then.
@@ -25,7 +22,7 @@ export interface WorkerAuthConfig {
   internalPort: number | undefined;
 }
 
-const KindsSchema = z.array(z.enum(WORKER_JOB_KINDS)).min(1);
+const KindsSchema = z.array(z.enum(JOB_KINDS)).min(1);
 const SA_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?\/[a-z0-9]([-.a-z0-9]*[a-z0-9])?$/;
 
 const parseJson = <T>(

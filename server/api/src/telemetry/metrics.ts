@@ -534,23 +534,6 @@ export const modelFamily = (model: string): string =>
 export const secondsSince = (start: number): number =>
   (performance.now() - start) / 1000;
 
-/** Runs `fn`, observing its duration (and failure) on the given metrics. */
-export const timed = async <T>(
-  observe: (seconds: number, failed: boolean) => void,
-  fn: () => Promise<T>,
-): Promise<T> => {
-  const start = performance.now();
-  try {
-    const value = await fn();
-    observe(secondsSince(start), false);
-
-    return value;
-  } catch (error) {
-    observe(secondsSince(start), true);
-    throw error;
-  }
-};
-
 export interface MetricDescription {
   name: string;
   type: string;

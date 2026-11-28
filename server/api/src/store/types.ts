@@ -27,6 +27,7 @@ import type {
   UsageKind,
   UsageRecord,
   UsageSummary,
+  JobKind,
 } from "../contracts.js";
 
 export interface PageRequest {
@@ -218,7 +219,7 @@ export interface DatasetRepository {
 
 // --- Jobs (the one queue) -----------------------------------------------------
 
-export type JobKind = "train" | "import" | "eval";
+export type { JobKind };
 export type JobStatus = RunStatus | EvalStatus | ImportStatus;
 
 /** The queue columns every job has. */

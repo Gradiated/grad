@@ -29,12 +29,12 @@ import {
 
 export const TRAINER_PROTOCOL_VERSION = "grad.trainer-protocol/1";
 
-export const JobKindSchema = z
-  .enum(["train", "import", "eval"])
-  .openapi("JobKind", {
-    description:
-      "train (GPU trainer workers), import (imports and source syncs, on CPU trainer workers), eval (evals and dataset.score(), on `grad-server worker --kinds eval`).",
-  });
+export const JOB_KINDS = ["train", "import", "eval"] as const;
+
+export const JobKindSchema = z.enum(JOB_KINDS).openapi("JobKind", {
+  description:
+    "train (GPU trainer workers), import (imports and source syncs, on CPU trainer workers), eval (evals and dataset.score(), on `grad-server worker --kinds eval`).",
+});
 export type JobKind = z.infer<typeof JobKindSchema>;
 
 const WorkerIdSchema = z
