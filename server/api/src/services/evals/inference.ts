@@ -200,6 +200,7 @@ export const createOpenAICompatibleClient = (
     if (options.apiKey) headers.Authorization = `Bearer ${options.apiKey}`;
 
     let response: Response;
+    let text: string;
     try {
       response = await fetchImpl(`${baseUrl}/chat/completions`, {
         method: "POST",
@@ -216,6 +217,9 @@ export const createOpenAICompatibleClient = (
           ...(request.tools ? { tools: request.tools } : {}),
         }),
       });
+      // Inside the try: a timeout or reset while the body streams is the
+      // same outage as one before the headers.
+      text = await response.text();
     } catch (error) {
       const timedOut =
         error instanceof Error &&
@@ -227,7 +231,6 @@ export const createOpenAICompatibleClient = (
       );
     }
 
-    const text = await response.text();
     if (!response.ok) {
       const detail = `HTTP ${response.status}: ${text.slice(0, 300)}`;
       if (response.status === 503 && text.includes("capacity_unavailable")) {

@@ -356,6 +356,36 @@ describe("OpenAI-compatible client", () => {
     expect(result.text).toBe("answer: x");
   });
 
+  it("retries a response whose body breaks off mid-stream", async () => {
+    let calls = 0;
+    const broken = () =>
+      new Response(
+        new ReadableStream({
+          start: (controller) => {
+            controller.enqueue(new TextEncoder().encode('{"choices":'));
+            controller.error(new Error("socket hang up"));
+          },
+        }),
+        { status: 200 },
+      );
+    const client = createOpenAICompatibleClient({
+      baseUrl: fake.baseUrl,
+      retryDelayMs: 1,
+      fetchImpl: async (url, init) => {
+        calls += 1;
+        return calls === 1 ? broken() : fetch(url, init);
+      },
+    });
+    const result = await client.complete({
+      model: "m1",
+      workspace: "ws_a",
+      messages: [{ role: "user", content: "x" }],
+      temperature: 0,
+      max_tokens: 4,
+    });
+    expect([calls, result.text]).toEqual([2, "answer: x"]);
+  });
+
   it("does not retry 4xx and surfaces inference_error", async () => {
     const client = createOpenAICompatibleClient({
       baseUrl: fake.baseUrl,
