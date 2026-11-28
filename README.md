@@ -180,12 +180,14 @@ Eight recipes. Each one has calibrated defaults (learning rate, batch size, sche
 | [`DistillRecipe`](https://gradiated.com/docs/training/recipes/distillation/) | A small LoRA student that copies a larger teacher on your prompts | Prompts only, plus a `teacher` | `qwen/qwen3-4b` |
 | [`RewardModelRecipe`](https://gradiated.com/docs/training/recipes/reward-models/) | A model that scores answers in `[0, 1]`, for gating and best-of-N | `prompt` + `chosen` + `rejected` (and/or scored answers) | `qwen/qwen3-8b` |
 
+The `gradiated/linden-1` weights are not public. Self-hosted, train a decision model on `qwen/qwen3-0.6b` or `qwen/qwen3-1.7b` (`DecisionModelRecipe(model="qwen/qwen3-1.7b")`) or supply the weights through `GRAD_MODEL_PATHS` ([trainer README](server/trainer/README.md)).
+
 What every run gives you:
 
 - **Datasets from anywhere.** Push records or a `.jsonl`/`.json`/`.parquet` file (trace exports from OpenAI, OTel, Langfuse, PostHog, Braintrust and LangSmith are detected automatically), or pull a Hugging Face dataset server-side with `client.datasets.from_hf(...)`. Datasets are versioned, and every run pins the version it trained on.
 - **Cost before compute.** `runs.plan(...)` (`grad train --dry-run`) returns the resolved recipe, data warnings, token count and price. `max_cost_usd` is a hard cap: the run stops and keeps its checkpoint.
 - **Real weights.** LLM runs train LoRA adapters (or PrefixKV cartridges). Downloads are SHA-256-verified PEFT directories (`adapter_config.json`, `adapter_model.safetensors`) that load straight into vLLM or SGLang. `SFTRecipe(merge_on_export=True)` exports merged safetensors instead.
-- **Checkpoints and resume.** Checkpoints are kept for 30 days (best and final forever); `runs.resume(...)` continues a stopped run, and any checkpoint can be promoted to an artifact.
+- **Checkpoints and resume.** A run keeps its last three checkpoints and its best for 30 days (its best and final forever); `runs.resume(...)` continues a stopped run, and any checkpoint can be promoted to an artifact.
 
 ## Evaluate before you ship
 
@@ -339,7 +341,7 @@ python3 scripts/check-docs-snippets.py --docs README.md --compile
 
 It prints PASS, FAIL or SKIP (with the reason) for every block. Blocks that need a GPU, Hugging Face, the inference gateway or a cluster are skipped; the skip list and fixtures are at the top of the script.
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs all of this, plus the server on real Postgres and S3, every recipe on tiny models on CPU, the codegen drift check, and every SDK and the CLI against a live stack. Pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), and please keep the self-hosted path free of Cloud-only dependencies.
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the Development checks above (the docs-snippet checks are run by hand), plus the server on real Postgres and S3, every recipe on tiny models on CPU, the codegen drift check, and every SDK and the CLI against a live stack. Pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md), and please keep the self-hosted path free of Cloud-only dependencies.
 
 ## Roadmap
 
