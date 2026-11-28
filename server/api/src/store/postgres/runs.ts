@@ -60,9 +60,13 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
       ),
     update: repo.update,
     appendCheckpointEval: async (id, result) => {
+      // The job row's lock first, like every run write (grad_jobs, then
+      // grad_runs): an eval's finalize records this and a job event in one
+      // transaction, and the opposite order deadlocks the run's progress.
       await db.query(
-        `UPDATE grad_runs SET checkpoint_evals = checkpoint_evals || $2::jsonb
-         WHERE id = $1 AND NOT checkpoint_evals @> $3::jsonb`,
+        `UPDATE grad_runs r SET checkpoint_evals = r.checkpoint_evals || $2::jsonb
+         FROM (SELECT id FROM grad_jobs WHERE id = $1 FOR NO KEY UPDATE) j
+         WHERE r.id = j.id AND NOT r.checkpoint_evals @> $3::jsonb`,
         [
           id,
           JSON.stringify([result]),

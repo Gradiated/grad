@@ -653,6 +653,67 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       ).toEqual(["metric", "checkpoint"]);
     });
 
+    it("runs: a checkpoint eval recorded in a transaction never deadlocks a concurrent run update", async () => {
+      // An eval's finalize records its checkpoint result on the run
+      // (grad_runs) and as a job event (which locks the grad_jobs row) in one
+      // transaction, while the trainer's progress updates grad_jobs, then
+      // grad_runs. Taking the two rows in opposite orders deadlocks (40P01).
+      const run = await makeRun();
+      const result = {
+        name: "holdout",
+        step: 5,
+        checkpoint_id: "ckpt_1",
+        eval_id: "ev_1",
+        dataset: "ds",
+        dataset_version: 1,
+        status: "completed" as const,
+        score: 0.5,
+        cost_usd: 0,
+        error: null,
+      };
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let recorded = () => {};
+      const resultRecorded = new Promise<void>((r) => (recorded = r));
+      const finalize = store.transaction(async (tx) => {
+        await tx.runs.appendCheckpointEval(run.id, result);
+        recorded();
+        await gate;
+        await tx.jobs.appendEvent({
+          jobId: run.id,
+          attempt: 0,
+          type: "checkpoint_eval:holdout",
+          step: 5,
+          payload: result,
+        });
+      });
+      await resultRecorded;
+      const progress = store.runs.update(run.id, { attempt_tokens: 10 });
+      const probe = new pg.Client({ connectionString: postgresUrl() });
+      await probe.connect();
+      try {
+        // Until the update waits on a row lock that the finalize holds.
+        for (let i = 0; i < 100; i += 1) {
+          const { rows } = await probe.query(
+            `SELECT 1 FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock' AND query LIKE 'UPDATE grad_%'`,
+          );
+          if (rows.length > 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      } finally {
+        await probe.end();
+        release();
+      }
+      const settled = await Promise.allSettled([finalize, progress]);
+      expect(
+        settled.map((s) => (s.status === "rejected" ? String(s.reason) : "ok")),
+      ).toEqual(["ok", "ok"]);
+      const after = (await store.runs.getById(run.id)) as RunRecord;
+      expect(after.attempt_tokens).toBe(10);
+      expect(after.checkpoint_evals).toHaveLength(1);
+    });
+
     // --- Imports and staged parts -----------------------------------------
 
     it("imports: payload fields update with the job, staged parts commit as one version", async () => {

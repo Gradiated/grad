@@ -7,6 +7,11 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- A checkpoint eval that finishes while its run is still training no longer deadlocks the run's
+  progress writes (alpha.5's event-ordering lock took the run's rows in the opposite order from
+  every other run write; Postgres aborted one side with `deadlock detected`, a 500 the worker
+  retried).
+
 ## [0.2.0-alpha.6] - 2026-11-28
 
 No migrations. Fixes from the production end-to-end test of alpha.5, Postgres certificate
