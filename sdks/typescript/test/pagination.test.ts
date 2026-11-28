@@ -122,8 +122,8 @@ describe("low-level ApiClient", () => {
         if (value && typeof (value as { cancel?: unknown }).cancel === "function") await (value as { cancel: () => Promise<void> }).cancel();
       }
     }
-    // One request per method (the JSON and SSE variants of the metrics and events endpoints share a route).
+    // One request per method (the JSON and SSE variants of the events endpoint share a route).
     expect(calls).toHaveLength(names.length);
-    expect(new Set(calls.map((c) => `${c.method} ${c.path}`)).size).toBe(names.length - 2);
+    expect(new Set(calls.map((c) => `${c.method} ${c.path}`)).size).toBe(names.length - 1);
   });
 });
