@@ -275,7 +275,7 @@ export interface CreateSourceRequest {
   maxRecordsPerSync?: number | null | undefined;
   /** At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
   maxRecordsPerDay?: number | null | undefined;
-  /** Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit. */
+  /** Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit, and so does removing the schedule or the source, or the source pausing. */
   versionInterval?: number | undefined;
 }
 
@@ -1388,7 +1388,7 @@ export interface UpdateSourceRequest {
   maxRecordsPerSync?: number | null | undefined;
   /** At most this many new traces per UTC day; the rest are not synced (the sync's drop reasons count them). Feedback on traces already synced always lands. Null: no cap. */
   maxRecordsPerDay?: number | null | undefined;
-  /** Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit. */
+  /** Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit, and so does removing the schedule or the source, or the source pausing. */
   versionInterval?: number | undefined;
 }
 

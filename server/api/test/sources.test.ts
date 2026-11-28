@@ -1200,6 +1200,52 @@ describe("sources", () => {
     expect(patched.body.version_interval).toBe(3600);
   });
 
+  it("commits what scheduled syncs fetched when the source loses its schedule or pauses", async () => {
+    const source = (
+      await addSource({
+        provider: LANGFUSE,
+        schedule: "* * * * *",
+        version_interval: 600,
+      })
+    ).body;
+    const scheduledSync = async (ids: string[]) => {
+      t.clock.advanceSeconds(61);
+      expect(await t.services.sources.tick(t.clock.now())).toBe(1);
+      await finish(await claimImport(), ids, null);
+    };
+    const ids = async () =>
+      (
+        await t.json<{ data: Array<{ id: string }> }>(
+          "/v1/datasets/support-prod/records?limit=100",
+        )
+      ).body.data.map((r) => r.id);
+    const schedule = (value: string | null) =>
+      t.json(`/v1/sources/${source.id}`, {
+        method: "PATCH",
+        body: { schedule: value },
+      });
+
+    await scheduledSync(["t1"]);
+    await scheduledSync(["t2"]);
+    expect(await ids()).toEqual(["t1"]);
+    expect((await schedule(null)).status).toBe(200);
+    expect(await ids()).toEqual(["t1", "t2"]);
+    expect(await getSource(source.id)).toMatchObject({ pending_records: 0 });
+
+    await schedule("* * * * *");
+    await scheduledSync(["t3"]);
+    expect(await ids()).toEqual(["t1", "t2"]);
+    for (let i = 0; i < PAUSE_AFTER_FAILURES; i += 1) {
+      await syncNow(source.id);
+      await failNext();
+    }
+    expect(await getSource(source.id)).toMatchObject({
+      status: "paused",
+      pending_records: 0,
+    });
+    expect(await ids()).toEqual(["t1", "t2", "t3"]);
+  });
+
   it("counts a source's waiting records once when it's removed while a manual sync commits them", async () => {
     const source = (
       await addSource({

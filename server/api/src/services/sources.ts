@@ -391,6 +391,25 @@ export const createSourceService = (
       });
   };
 
+  /**
+   * Commits what scheduled syncs fetched into a version now (holding the
+   * source's row lock): when no scheduled sync will (a removed schedule, a
+   * paused or removed source), the records must not wait forever.
+   */
+  const commitWaiting = async (source: SourceRecord): Promise<void> => {
+    if (source.pending_records === 0 && source.last_version_at === null) return;
+    const dataset = await store.datasets.commitSettled({
+      datasetId: source.dataset_id,
+      sourceId: source.id,
+    });
+    if (dataset) {
+      await store.sources.update(source.id, {
+        pending_records: 0,
+        last_version_at: clock.now().toISOString(),
+      });
+    }
+  };
+
   const resume = (source: SourceRecord) =>
     resumeSource(store, clock.now(), source);
 
@@ -561,6 +580,7 @@ export const createSourceService = (
         if (body.version_interval !== undefined) {
           patch.version_interval = body.version_interval;
         }
+        if (schedule && schedule.schedule === null) await commitWaiting(source);
 
         return store.sources.update(source.id, {
           ...patch,
@@ -584,12 +604,7 @@ export const createSourceService = (
         const source = await store.sources.lock(workspaceId, id);
         if (!source) return false;
         // What scheduled syncs fetched stays: it becomes a last version.
-        if (source.pending_records > 0 || source.last_version_at !== null) {
-          await store.datasets.commitSettled({
-            datasetId: source.dataset_id,
-            sourceId: source.id,
-          });
-        }
+        await commitWaiting(source);
 
         return store.sources.delete(workspaceId, id);
       });
@@ -721,6 +736,7 @@ export const createSourceService = (
         const now = clock.now();
         const failures = source.consecutive_failures + 1;
         const paused = failures >= PAUSE_AFTER_FAILURES;
+        if (paused) await commitWaiting(source);
         const updated = await store.sources.update(source.id, {
           consecutive_failures: failures,
           // Worker errors are redacted (provider keys never reach them).

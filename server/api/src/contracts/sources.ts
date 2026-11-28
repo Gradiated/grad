@@ -167,7 +167,7 @@ const VersionIntervalSchema = z
   .max(7 * 86_400)
   .openapi({
     description:
-      "Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit.",
+      "Seconds between the dataset versions scheduled syncs commit (default 900). A scheduled sync may fetch every minute; its parts wait, staged, until the interval has passed or enough records are waiting, so a busy source doesn't add a version a minute. 0: every sync commits. Manual and full syncs always commit, and so does removing the schedule or the source, or the source pausing.",
     example: 900,
   });
 
