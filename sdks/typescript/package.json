@@ -1,6 +1,6 @@
 {
   "name": "@gradiated/grad",
-  "version": "0.2.0-alpha.6",
+  "version": "0.2.0-alpha.7",
   "description": "TypeScript SDK for the Gradiated training and serving platform",
   "license": "MIT",
   "homepage": "https://gradiated.com/docs/training",

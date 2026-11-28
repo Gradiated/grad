@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "grad-cli"
-version = "0.2.0-alpha.6"
+version = "0.2.0-alpha.7"
 dependencies = [
  "assert_cmd",
  "base64 0.22.1",
@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "grad-sdk"
-version = "0.2.0-alpha.6"
+version = "0.2.0-alpha.7"
 dependencies = [
  "flate2",
  "futures-core",

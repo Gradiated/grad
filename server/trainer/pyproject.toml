@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grad-trainer"
-version = "0.2.0-alpha.6"
+version = "0.2.0-alpha.7"
 description = "Gradiated training runtime: torch/transformers/peft recipes, artifact bundles and trace connectors"
 readme = "README.md"
 license = { text = "MIT" }

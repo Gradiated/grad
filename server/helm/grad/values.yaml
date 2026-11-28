@@ -70,7 +70,7 @@ api:
   replicaCount: 2
   image:
     repository: docker.io/gradiated/grad-server
-    tag: "0.2.0-alpha.6"
+    tag: "0.2.0-alpha.7"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -225,7 +225,7 @@ workers:
     lowPriority: true
     replicaCount: 1
     image:
-      tag: "0.2.0-alpha.6-gpu"
+      tag: "0.2.0-alpha.7-gpu"
     gpuCount: 1
     # On SIGTERM a worker releases its attempt, which is billed, requeued and
     # resumed from the latest checkpoint.
@@ -246,7 +246,7 @@ workers:
     kinds: [import, eval]
     replicaCount: 1
     image:
-      tag: "0.2.0-alpha.6"
+      tag: "0.2.0-alpha.7"
     gpuCount: 0
     terminationGracePeriodSeconds: 60
     env: {}

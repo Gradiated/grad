@@ -7,6 +7,27 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+## [0.2.0-alpha.7] - 2026-11-28
+
+No migrations. The last fixes from the launch review:
+
+- **Gradiated Cloud training isn't live yet.** `api.gradiated.com` doesn't serve grad's `/v1` API
+  until its routing lands, and its bare 404 read like a missing resource. All four SDKs and the
+  CLI now turn a 404 without a problem `code` from `api.gradiated.com` into a feature-unavailable
+  error (`cloud_training_unavailable`, CLI exit 6): "Gradiated Cloud training isn't available
+  yet; run `grad local up` or point at your server with --base-url or GRADIATED_BASE_URL." The
+  default base URL is unchanged. The README quickstart and `grad --help` start a server of your
+  own (`grad local up`, the Docker Hub images, Helm) and say Cloud is coming soon.
+- **A run is never billed past its `max_cost_usd`.** The step that carries a run past its cap was
+  billed in full; it is now billed only up to the cap. The stop, the resume check and the run's
+  `tokens_processed` and `cost_usd` are unchanged.
+- **A transient error while a claimed run or import is built** (storage, KMS, a database
+  timeout) requeues the job, spending the attempt, and answers the claim with a 5xx so the
+  worker backs off; it used to fail the job for good. An error about the job itself (its dataset
+  version, labeling eval, starting artifact, source or secret gone) still fails it at once.
+- docs/CLOUD_MODE.md uses placeholder hosts (`https://cloud.example.internal`) instead of
+  Gradiated's in-cluster Services and routes; the settings and paths grad calls are unchanged.
+- Cloud: a cached API key stops working at its own `expires_at`, not up to 5 s later.
 - **Gradiated Cloud usage export:** when billing refuses more than 20 single rows in a tick without
   naming an `event_id` (an envelope or contract break, not bad rows), the export stops narrowing,
   parks nothing, logs an error and backs off like an ingest outage
