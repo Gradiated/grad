@@ -133,7 +133,7 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _parse_problem(status: int, body: bytes, url: str) -> ServerError:
+def _parse_problem(status: int, body: bytes, url: str, *, from_server: bool = True) -> ServerError:
     code, detail = f"http_{status}", body.decode("utf-8", errors="replace")[:1000]
     try:
         parsed = json.loads(body)
@@ -144,7 +144,9 @@ def _parse_problem(status: int, body: bytes, url: str) -> ServerError:
         pass
     if 300 <= status < 400:
         code, detail = "redirect", "redirects are refused by the trainer worker"
-    cls = WorkerAuthError if status in (401, 403) else ServerError
+    # Only grad-server's 401/403 is about the worker token; storage's (an expired or refused
+    # presigned URL) fails the request like any other error.
+    cls = WorkerAuthError if from_server and status in (401, 403) else ServerError
     return cls(status, code, detail or f"HTTP {status}", url)
 
 
@@ -273,7 +275,7 @@ class ProtocolClient:
                     if fresh and fresh != token:
                         token = fresh
                         continue
-                raise _parse_problem(exc.code, body, shown) from None
+                raise _parse_problem(exc.code, body, shown, from_server=same_origin) from None
             except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
                 raise ServerUnreachable(f"{shown}: {getattr(exc, 'reason', exc)}") from exc
         raise AssertionError("unreachable")  # pragma: no cover

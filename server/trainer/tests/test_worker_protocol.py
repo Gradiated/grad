@@ -687,6 +687,34 @@ class WorkerProtocolTests(unittest.TestCase):
             client.download("http://127.0.0.1:9/x?X-Amz-Signature=SIG2", Path(tmp) / "x", attempts=1)
         self.assertNotIn("SIG2", str(ctx.exception))
 
+    def test_a_storage_403_fails_the_job_not_the_worker_token(self) -> None:
+        # An expired or refused presigned URL is storage's answer, not grad-server rejecting
+        # the worker key: it used to raise WorkerAuthError and exit the worker (code 2).
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Storage(BaseHTTPRequestHandler):
+            def log_message(self, *_args: Any) -> None:
+                return
+
+            def do_GET(self) -> None:
+                body = b"<Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>"
+                self.send_response(403)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Storage)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/bucket/ckpt?X-Amz-Signature=SIG"
+        srv = self.server(jobs=[train_job(attempt=2, resume={"checkpoint_id": "c", "step": 2, "download_url": url})])
+        result = self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
+        self.assertEqual(result["status"], "failed")
+        complete = srv.bodies("complete")[0]
+        self.assertIn("HTTP 403", complete["error"])
+        self.assertNotIn("SIG", complete["error"])
+
     def test_import_upload_job_posts_batches_and_summary(self) -> None:
         srv = self.server(
             jobs=[
