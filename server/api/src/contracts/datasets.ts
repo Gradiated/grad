@@ -304,25 +304,48 @@ export type ImportStatus = z.infer<typeof ImportStatusSchema>;
 
 export const ImportJobSchema = z
   .object({
-    id: z.string().min(1),
+    id: z.string().min(1).openapi({
+      description: "Import job id (`imp_` and 24 hex characters).",
+    }),
     workspace_id: z.string().min(1),
-    dataset: SlugSchema,
+    dataset: SlugSchema.openapi({
+      description: "The dataset the records go into.",
+    }),
     status: ImportStatusSchema,
-    source: z.record(z.string(), z.unknown()),
-    connector: z.enum(CONNECTOR_NAMES),
-    attempt: z.number().int().min(0),
+    source: z.record(z.string(), z.unknown()).openapi({
+      description:
+        "Where the records come from: an upload, a Hugging Face dataset, a benchmark, or a source sync.",
+    }),
+    connector: z.enum(CONNECTOR_NAMES).openapi({
+      description:
+        "The parser requested for the records (`auto` detects it from the file).",
+    }),
+    attempt: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Attempts started so far." }),
     imported_count: z.number().int().min(0).openapi({
       description:
         "Records this import added to the dataset (score updates for existing records add none).",
     }),
-    dropped_count: z.number().int().min(0),
-    detected_scores: z.array(z.string()),
+    dropped_count: z.number().int().min(0).openapi({
+      description: "Rows that couldn't be imported; `drop_reasons` says why.",
+    }),
+    detected_scores: z
+      .array(z.string())
+      .openapi({ description: "Score names found on the imported records." }),
     drop_reasons: z.array(z.string()).openapi({
       description:
         "Why rows were dropped, one line per row (`line 12: invalid JSON`), capped at 100 entries.",
     }),
-    dataset_version: z.number().int().min(0).nullable(),
-    error: z.string().nullable(),
+    dataset_version: z.number().int().min(0).nullable().openapi({
+      description: "The dataset version this import produced; null until then.",
+    }),
+    error: z
+      .string()
+      .nullable()
+      .openapi({ description: "Why the import failed; null otherwise." }),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
   })

@@ -6,13 +6,18 @@ import "encoding/json"
 
 // APIKey is generated from the OpenAPI schema.
 type APIKey struct {
-	ID          string        `json:"id"`
-	WorkspaceID string        `json:"workspace_id"`
-	Name        string        `json:"name"`
-	Prefix      string        `json:"prefix"`
-	Scopes      []APIKeyScope `json:"scopes"`
-	CreatedAt   string        `json:"created_at"`
-	RevokedAt   *string       `json:"revoked_at"`
+	// ID Key id (`key_` and 24 hex characters).
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	// Name Key name.
+	Name string `json:"name"`
+	// Prefix The first 12 characters of the secret, to tell keys apart.
+	Prefix string `json:"prefix"`
+	// Scopes What the key may do; a `:write` scope includes its `:read`, and `admin` includes every workspace scope.
+	Scopes    []APIKeyScope `json:"scopes"`
+	CreatedAt string        `json:"created_at"`
+	// RevokedAt When the key was revoked; null while it works.
+	RevokedAt *string `json:"revoked_at"`
 }
 
 // APIKeyScope `x:write` implies `x:read`; `admin` implies every workspace scope. `artifacts:pin` (pin and unpin artifacts; Gradiated Cloud's publishing calls it) is implied by `admin` only. `deployments:write`, `feedback:write` and `env:serve` are Gradiated Cloud scopes: grad-server accepts them on a key but none of its endpoints checks them.
@@ -493,7 +498,8 @@ const (
 
 // CreatedAPIKey is generated from the OpenAPI schema.
 type CreatedAPIKey struct {
-	Key    APIKey `json:"key"`
+	Key APIKey `json:"key"`
+	// Secret The full key (`grad_` and 48 hex characters). Shown only in this response.
 	Secret string `json:"secret"`
 }
 
@@ -1120,26 +1126,35 @@ type HFColumnMapping struct {
 
 // ImportJob is generated from the OpenAPI schema.
 type ImportJob struct {
-	ID          string             `json:"id"`
-	WorkspaceID string             `json:"workspace_id"`
-	Dataset     string             `json:"dataset"`
-	Status      ImportStatus       `json:"status"`
-	Source      map[string]any     `json:"source"`
-	Connector   ImportJobConnector `json:"connector"`
-	Attempt     int                `json:"attempt"`
+	// ID Import job id (`imp_` and 24 hex characters).
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	// Dataset The dataset the records go into.
+	Dataset string       `json:"dataset"`
+	Status  ImportStatus `json:"status"`
+	// Source Where the records come from: an upload, a Hugging Face dataset, a benchmark, or a source sync.
+	Source map[string]any `json:"source"`
+	// Connector The parser requested for the records (`auto` detects it from the file).
+	Connector ImportJobConnector `json:"connector"`
+	// Attempt Attempts started so far.
+	Attempt int `json:"attempt"`
 	// ImportedCount Records this import added to the dataset (score updates for existing records add none).
-	ImportedCount  int      `json:"imported_count"`
-	DroppedCount   int      `json:"dropped_count"`
+	ImportedCount int `json:"imported_count"`
+	// DroppedCount Rows that couldn't be imported; `drop_reasons` says why.
+	DroppedCount int `json:"dropped_count"`
+	// DetectedScores Score names found on the imported records.
 	DetectedScores []string `json:"detected_scores"`
 	// DropReasons Why rows were dropped, one line per row (`line 12: invalid JSON`), capped at 100 entries.
-	DropReasons    []string `json:"drop_reasons"`
-	DatasetVersion *int     `json:"dataset_version"`
-	Error          *string  `json:"error"`
-	CreatedAt      string   `json:"created_at"`
-	UpdatedAt      string   `json:"updated_at"`
+	DropReasons []string `json:"drop_reasons"`
+	// DatasetVersion The dataset version this import produced; null until then.
+	DatasetVersion *int `json:"dataset_version"`
+	// Error Why the import failed; null otherwise.
+	Error     *string `json:"error"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
-// ImportJobConnector is an enumeration of allowed values.
+// ImportJobConnector The parser requested for the records (`auto` detects it from the file).
 type ImportJobConnector string
 
 // Values of ImportJobConnector.

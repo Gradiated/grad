@@ -132,6 +132,7 @@ components:
           $ref: "#/components/schemas/ApiKey"
         secret:
           type: string
+          description: The full key (`grad_` and 48 hex characters). Shown only in this response.
       required:
         - key
         - secret
@@ -141,6 +142,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: Key id (`key_` and 24 hex characters).
         workspace_id:
           type: string
           minLength: 1
@@ -149,13 +151,16 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Key name.
         prefix:
           type: string
           minLength: 1
+          description: The first 12 characters of the secret, to tell keys apart.
         scopes:
           type: array
           items:
             $ref: "#/components/schemas/ApiKeyScope"
+          description: What the key may do; a `:write` scope includes its `:read`, and `admin` includes every workspace scope.
         created_at:
           type: string
           format: date-time
@@ -164,6 +169,7 @@ components:
             - string
             - "null"
           format: date-time
+          description: When the key was revoked; null while it works.
       required:
         - id
         - workspace_id
@@ -1010,6 +1016,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: Import job id (`imp_` and 24 hex characters).
         workspace_id:
           type: string
           minLength: 1
@@ -1018,11 +1025,13 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: The dataset the records go into.
         status:
           $ref: "#/components/schemas/ImportStatus"
         source:
           type: object
           additionalProperties: {}
+          description: "Where the records come from: an upload, a Hugging Face dataset, a benchmark, or a source sync."
         connector:
           type: string
           enum:
@@ -1035,9 +1044,11 @@ components:
             - posthog
             - braintrust
             - langsmith
+          description: The parser requested for the records (`auto` detects it from the file).
         attempt:
           type: integer
           minimum: 0
+          description: Attempts started so far.
         imported_count:
           type: integer
           minimum: 0
@@ -1045,10 +1056,12 @@ components:
         dropped_count:
           type: integer
           minimum: 0
+          description: Rows that couldn't be imported; `drop_reasons` says why.
         detected_scores:
           type: array
           items:
             type: string
+          description: Score names found on the imported records.
         drop_reasons:
           type: array
           items:
@@ -1059,10 +1072,12 @@ components:
             - integer
             - "null"
           minimum: 0
+          description: The dataset version this import produced; null until then.
         error:
           type:
             - string
             - "null"
+          description: Why the import failed; null otherwise.
         created_at:
           type: string
           format: date-time

@@ -46,20 +46,36 @@ export const CreateApiKeyRequestSchema = z
 
 export const ApiKeySchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .openapi({ description: "Key id (`key_` and 24 hex characters)." }),
     workspace_id: z.string().min(1),
-    name: SlugSchema,
-    prefix: z.string().min(1),
-    scopes: z.array(ApiKeyScopeSchema),
+    name: SlugSchema.openapi({ description: "Key name." }),
+    prefix: z.string().min(1).openapi({
+      description: "The first 12 characters of the secret, to tell keys apart.",
+    }),
+    scopes: z.array(ApiKeyScopeSchema).openapi({
+      description:
+        "What the key may do; a `:write` scope includes its `:read`, and `admin` includes every workspace scope.",
+    }),
     created_at: IsoTimestampSchema,
-    revoked_at: IsoTimestampSchema.nullable(),
+    revoked_at: IsoTimestampSchema.nullable().openapi({
+      description: "When the key was revoked; null while it works.",
+    }),
   })
   .openapi("ApiKey");
 
 export type ApiKey = z.infer<typeof ApiKeySchema>;
 
 export const CreatedApiKeySchema = z
-  .object({ key: ApiKeySchema, secret: z.string() })
+  .object({
+    key: ApiKeySchema,
+    secret: z.string().openapi({
+      description:
+        "The full key (`grad_` and 48 hex characters). Shown only in this response.",
+    }),
+  })
   .openapi("CreatedApiKey");
 
 export const TrainableModelSchema = z

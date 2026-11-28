@@ -14,12 +14,17 @@ export type AdapterSpec = {
 };
 
 export interface ApiKey {
+  /** Key id (`key_` and 24 hex characters). */
   id: string;
   workspaceId: string;
+  /** Key name. */
   name: string;
+  /** The first 12 characters of the secret, to tell keys apart. */
   prefix: string;
+  /** What the key may do; a `:write` scope includes its `:read`, and `admin` includes every workspace scope. */
   scopes: Array<ApiKeyScope>;
   createdAt: string;
+  /** When the key was revoked; null while it works. */
   revokedAt: string | null;
 }
 
@@ -280,6 +285,7 @@ export interface CreateUploadRequest {
 
 export interface CreatedApiKey {
   key: ApiKey;
+  /** The full key (`grad_` and 48 hex characters). Shown only in this response. */
   secret: string;
 }
 
@@ -601,20 +607,29 @@ export interface HfColumnMapping {
 }
 
 export interface ImportJob {
+  /** Import job id (`imp_` and 24 hex characters). */
   id: string;
   workspaceId: string;
+  /** The dataset the records go into. */
   dataset: string;
   status: ImportStatus;
+  /** Where the records come from: an upload, a Hugging Face dataset, a benchmark, or a source sync. */
   source: Record<string, unknown>;
+  /** The parser requested for the records (`auto` detects it from the file). */
   connector: "auto" | "grad_trajectories" | "openai_chat" | "gradiated" | "otel" | "langfuse" | "posthog" | "braintrust" | "langsmith";
+  /** Attempts started so far. */
   attempt: number;
   /** Records this import added to the dataset (score updates for existing records add none). */
   importedCount: number;
+  /** Rows that couldn't be imported; `drop_reasons` says why. */
   droppedCount: number;
+  /** Score names found on the imported records. */
   detectedScores: Array<string>;
   /** Why rows were dropped, one line per row (`line 12: invalid JSON`), capped at 100 entries. */
   dropReasons: Array<string>;
+  /** The dataset version this import produced; null until then. */
   datasetVersion: number | null;
+  /** Why the import failed; null otherwise. */
   error: string | null;
   createdAt: string;
   updatedAt: string;

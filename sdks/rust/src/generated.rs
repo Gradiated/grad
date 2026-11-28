@@ -89,12 +89,17 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ApiKey {
+    /// Key id (`key_` and 24 hex characters).
     pub id: String,
     pub workspace_id: String,
+    /// Key name.
     pub name: String,
+    /// The first 12 characters of the secret, to tell keys apart.
     pub prefix: String,
+    /// What the key may do; a `:write` scope includes its `:read`, and `admin` includes every workspace scope.
     pub scopes: Vec<ApiKeyScope>,
     pub created_at: String,
+    /// When the key was revoked; null while it works.
     pub revoked_at: Option<String>,
 }
 
@@ -1012,27 +1017,36 @@ pub struct HfColumnMapping {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImportJob {
+    /// Import job id (`imp_` and 24 hex characters).
     pub id: String,
     pub workspace_id: String,
+    /// The dataset the records go into.
     pub dataset: String,
     pub status: ImportStatus,
+    /// Where the records come from: an upload, a Hugging Face dataset, a benchmark, or a source sync.
     pub source: BTreeMap<String, Value>,
+    /// The parser requested for the records (`auto` detects it from the file).
     pub connector: ImportJobConnector,
+    /// Attempts started so far.
     pub attempt: i64,
     /// Records this import added to the dataset (score updates for existing records add none).
     pub imported_count: i64,
+    /// Rows that couldn't be imported; `drop_reasons` says why.
     pub dropped_count: i64,
+    /// Score names found on the imported records.
     pub detected_scores: Vec<String>,
     /// Why rows were dropped, one line per row (`line 12: invalid JSON`), capped at 100 entries.
     pub drop_reasons: Vec<String>,
+    /// The dataset version this import produced; null until then.
     pub dataset_version: Option<i64>,
+    /// Why the import failed; null otherwise.
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
 string_enum! {
-    /// Allowed values of `ImportJobConnector`.
+    /// The parser requested for the records (`auto` detects it from the file).
     ImportJobConnector {
         Auto => "auto",
         GradTrajectories => "grad_trajectories",
