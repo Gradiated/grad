@@ -61,12 +61,41 @@ export const unauthorized = (detail: string): ApiError =>
 export const validationFailed = (detail: string): ApiError =>
   new ApiError(422, "validation_error", "Validation failed", detail);
 
+interface Issue {
+  path: PropertyKey[];
+  message: string;
+  code?: string;
+  expected?: unknown;
+  /** invalid_union: each option's issues, relative to the union. */
+  errors?: ReadonlyArray<ReadonlyArray<Issue>>;
+}
+
+/**
+ * A nullable field (`z.union([schema, z.null()])`) that fails reports the
+ * schema's own issues under the field's path, not the union's bare
+ * "Invalid input".
+ */
+const unwrapNullable = (issue: Issue): Issue[] => {
+  const options = issue.code === "invalid_union" ? issue.errors : undefined;
+  const real = options?.filter(
+    (o) => !(o.length === 1 && o[0]?.expected === "null"),
+  );
+  if (!options || real?.length !== 1 || real.length === options.length) {
+    return [issue];
+  }
+
+  return (real[0] ?? []).flatMap((inner) =>
+    unwrapNullable({ ...inner, path: [...issue.path, ...inner.path] }),
+  );
+};
+
 /** A zod error's issues as `path: message; ...` (`root` names an empty path). */
 export const issuesOf = (
-  error: { issues: ReadonlyArray<{ path: PropertyKey[]; message: string }> },
+  error: { issues: ReadonlyArray<Issue> },
   root = "",
 ): string =>
   error.issues
+    .flatMap(unwrapNullable)
     .slice(0, 20)
     .map((i) => `${i.path.map(String).join(".") || root}: ${i.message}`)
     .join("; ");
