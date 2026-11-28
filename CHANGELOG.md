@@ -7,6 +7,11 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **Run comparison reads.** `GET /v1/runs/{id}/metrics?max_points=N` returns a run's whole curve in one page, thinned
+  to at most N points spaced evenly back from the newest (eval points thinned separately, so a sparse eval curve
+  survives) and without the steps a resumed attempt replayed. A 100,000-point run answers in about 300 ms.
+  `GET /v1/runs/counts` (`countRuns` / `count_runs` / `CountRuns`) counts the workspace's runs per status, narrowed by
+  `q` like the list; migration `0012` adds the index it reads (100,000 runs: 14 ms).
 - **Breaking: `GET /v1/runs/{id}/metrics` is JSON pages only.** Its Server-Sent Events mode is gone (every SDK and
   the CLI already follow metric points on `GET /v1/runs/{id}/events`); the generated
   `listRunMetricsStream` / `ListRunMetricsStream` / `list_run_metrics_stream` are removed.

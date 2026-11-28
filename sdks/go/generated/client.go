@@ -43,6 +43,9 @@ const ListRunEventsLimitMax = 5000
 // ListRunMetricsLimitMax is the largest limit accepted by ListRunMetrics (the server clamps larger values).
 const ListRunMetricsLimitMax = 5000
 
+// ListRunMetricsMaxPointsMax is the largest max_points accepted by ListRunMetrics (the server clamps larger values).
+const ListRunMetricsMaxPointsMax = 5000
+
 // ListRunsLimitMax is the largest limit accepted by ListRuns (the server clamps larger values).
 const ListRunsLimitMax = 200
 
@@ -89,6 +92,24 @@ func (c *Client) CancelRun(ctx context.Context, id string, opts ...RequestOption
 	}
 	spec := RequestSpec{Method: "POST", Path: "/v1/runs/" + p0 + "/cancel", Idempotent: true}
 	var out Run
+	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CountRuns calls GET /v1/runs/counts.
+//
+// Count the workspace's runs per status.
+func (c *Client) CountRuns(ctx context.Context, params *CountRunsParams, opts ...RequestOption) (*RunCounts, error) {
+	q := url.Values{}
+	if params != nil {
+		if params.Q != nil {
+			q.Add("q", FormatScalar(*params.Q))
+		}
+	}
+	spec := RequestSpec{Method: "GET", Path: "/v1/runs/counts", Query: q}
+	var out RunCounts
 	if err := c.T.DoJSON(ctx, spec, &out, opts...); err != nil {
 		return nil, err
 	}
@@ -798,6 +819,9 @@ func (c *Client) ListRunMetrics(ctx context.Context, id string, params *ListRunM
 		}
 		if params.Limit != nil {
 			q.Add("limit", FormatScalar(*params.Limit))
+		}
+		if params.MaxPoints != nil {
+			q.Add("max_points", FormatScalar(*params.MaxPoints))
 		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0 + "/metrics", Query: q}

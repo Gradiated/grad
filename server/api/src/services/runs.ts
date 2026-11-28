@@ -4,6 +4,7 @@ import { addDays, addSeconds } from "../clock.js";
 import {
   ArtifactFormatSchema,
   RUN_EVENT_TYPES,
+  RUN_STATUSES,
   type Artifact,
   type CompletedEvent,
   type ArtifactFormat,
@@ -15,8 +16,10 @@ import {
   type PlanRunResponse,
   type RecipeKind,
   type Run,
+  type RunCounts,
   type RunEvent,
   type RunEventsPage,
+  type RunStatus,
   type TrainerJob,
   type UploadTicket,
 } from "../contracts.js";
@@ -234,6 +237,7 @@ interface MetricsQuery {
   cursor?: string | undefined;
   after_step?: number | undefined;
   limit: number;
+  max_points?: number | undefined;
 }
 
 export interface RunLifecycle {
@@ -248,6 +252,7 @@ export interface RunLifecycle {
     workspaceId: string,
     query: PageRequest & ListFilter,
   ): Promise<Page<Run>>;
+  counts(workspaceId: string, q?: string): Promise<RunCounts>;
   metrics(
     workspaceId: string,
     id: string,
@@ -869,6 +874,22 @@ export const createRunLifecycle = (
       };
     },
 
+    counts: async (workspaceId, q) => {
+      const by_status = Object.fromEntries(
+        RUN_STATUSES.map((status) => [status, 0]),
+      ) as RunCounts["by_status"];
+      let total = 0;
+      for (const { status, n } of await store.runs.countByStatus(
+        workspaceId,
+        q,
+      )) {
+        if (status in by_status) by_status[status as RunStatus] = n;
+        total += n;
+      }
+
+      return { total, by_status };
+    },
+
     events: async (workspaceId, id, query) => {
       const run = await loadRun(workspaceId, id);
       const afterSeq = decodeIntCursor(query.cursor);
@@ -908,6 +929,25 @@ export const createRunLifecycle = (
     metrics: async (workspaceId, id, query) => {
       const run = await loadRun(workspaceId, id);
       const afterSeq = decodeIntCursor(query.cursor);
+
+      if (query.max_points !== undefined) {
+        const curve = (
+          await store.jobs.listMetricCurve(run.id, afterSeq, query.max_points)
+        ).map(toMetricPoint);
+        const newest = curve[curve.length - 1];
+        const afterStep = query.after_step;
+
+        return {
+          run_id: run.id,
+          status: run.status,
+          data:
+            afterStep === undefined
+              ? curve
+              : curve.filter((m) => m.step > afterStep),
+          next_cursor: null,
+          tail_cursor: encodeCursor([newest?.seq ?? afterSeq]),
+        };
+      }
 
       const rows = (
         await store.jobs.listEvents(run.id, "metric", afterSeq, query.limit + 1)

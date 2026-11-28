@@ -44,6 +44,7 @@ import type {
   RenderDatasetResponse,
   ResumeRunRequest,
   Run,
+  RunCounts,
   RunEventsPage,
   ScoreDatasetRequest,
   Secret,
@@ -117,6 +118,7 @@ export const CODEC: CodecTable = {
   "RolloutSpec": { u: { o: { o: [["maxNewTokens", "max_new_tokens", 0]] } } },
   "RouterParetoSummary": { o: [["targetMaxDrop", "target_max_drop", 0], ["routedQuality", "routed_quality", 0], ["qualityDrop", "quality_drop", 0], ["qualityDropCi95", "quality_drop_ci95", 0], ["offloadRate", "offload_rate", 0], ["costSavingsPct", "cost_savings_pct", 0]] },
   "Run": { o: [["workspaceId", "workspace_id", 0], ["datasetId", "dataset_id", 0], ["datasetName", "dataset_name", 0], ["datasetVersion", "dataset_version", 0], ["recipeKind", "recipe_kind", 0], ["resolvedConfig", "resolved_config", "ResolvedRunConfig"], ["maxCostUsd", "max_cost_usd", 0], ["pricePerMillionTokens", "price_per_million_tokens", 0], ["tokensProcessed", "tokens_processed", 0], ["costUsd", "cost_usd", 0], ["currentStep", "current_step", 0], ["totalSteps", "total_steps", 0], ["maxAttempts", "max_attempts", 0], ["phaseSince", "phase_since", 0], ["lastInterruption", "last_interruption", "RunInterruption"], ["workersOnline", "workers_online", 0], ["queuePosition", "queue_position", 0], ["queueMessage", "queue_message", 0], ["minGpuMemoryGb", "min_gpu_memory_gb", 0], ["latestMetric", "latest_metric", "MetricPoint"], ["evalReport", "eval_report", "EvalReport"], ["checkpointEvals", "checkpoint_evals", { a: "CheckpointEvalResult" }], ["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0], ["finishedAt", "finished_at", 0]] },
+  "RunCounts": { o: [["byStatus", "by_status", { o: [["stoppedBudget", "stopped_budget", 0], ["stoppedBalance", "stopped_balance", 0]] }]] },
   "RunEvent": { d: ["type", { "phase": "PhaseEvent", "metric": "MetricEvent", "checkpoint": "CheckpointEvent", "attempt": "AttemptEvent", "warning": "WarningEvent", "log": "LogEvent", "completed": "CompletedEvent" }] },
   "RunEventsPage": { o: [["runId", "run_id", 0], ["data", "data", { a: "RunEvent" }], ["nextCursor", "next_cursor", 0], ["tailCursor", "tail_cursor", 0]] },
   "RunInterruption": { o: [["resumeStep", "resume_step", 0]] },
@@ -137,6 +139,11 @@ export const CODEC: CodecTable = {
   "UsageSummary": { o: [["costUsd", "cost_usd", 0], ["byKind", "by_kind", { a: "UsageKindTotal" }], ["topRuns", "top_runs", { a: "UsageRefTotal" }], ["topEvals", "top_evals", { a: "UsageRefTotal" }], ["groupBy", "group_by", 0], ["groups", "groups", { a: "UsageGroup" }]] },
   "WarningEvent": { o: [["runId", "run_id", 0]] },
 };
+
+export interface CountRunsParams {
+  /** Only items whose name contains this text (any case), or whose id is exactly this. */
+  q?: string | undefined;
+}
 
 export interface GetUsageSummaryParams {
   /** Start of the period (inclusive): YYYY-MM-DD (UTC) or an ISO 8601 timestamp. */
@@ -293,6 +300,8 @@ export interface ListRunMetricsParams {
   afterStep?: number | undefined;
   /** Page size (default 1000). Values above 5000 are clamped to 5000. */
   limit?: number | undefined;
+  /** Return the whole curve after `cursor` as one page, thinned to at most this many points spaced evenly from the newest (plus as many eval points, thinned the same way). Points a resumed attempt replayed are left out, so steps only increase. `limit` is ignored and `next_cursor` is null. Compare runs or draw a long run without paging every point. */
+  maxPoints?: number | undefined;
 }
 
 export interface ListRunsParams {
@@ -380,6 +389,8 @@ export const LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200;
 export const LIST_RUN_EVENTS_LIMIT_MAX = 5000;
 /** Largest `limit` accepted by `listRunMetrics` (the server clamps larger values). */
 export const LIST_RUN_METRICS_LIMIT_MAX = 5000;
+/** Largest `max_points` accepted by `listRunMetrics` (the server clamps larger values). */
+export const LIST_RUN_METRICS_MAX_POINTS_MAX = 5000;
 /** Largest `limit` accepted by `listRuns` (the server clamps larger values). */
 export const LIST_RUNS_LIMIT_MAX = 200;
 /** Largest `limit` accepted by `listSecrets` (the server clamps larger values). */
@@ -411,6 +422,16 @@ export class ApiClient {
   async cancelRun(id: string, options?: RequestOptions): Promise<Run> {
     const data = await this.transport.json({ method: "POST", path: `/v1/runs/${encodePathParam(id, "id")}/cancel`, idempotent: true }, options);
     return convertKeys(CODEC, "Run", data, "decode") as Run;
+  }
+
+  /**
+   * Count the workspace's runs per status
+   *
+   * `GET /v1/runs/counts`
+   */
+  async countRuns(params?: CountRunsParams, options?: RequestOptions): Promise<RunCounts> {
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs/counts`, query: [["q", params?.q]] }, options);
+    return convertKeys(CODEC, "RunCounts", data, "decode") as RunCounts;
   }
 
   /**
@@ -772,7 +793,7 @@ export class ApiClient {
    * `GET /v1/runs/{id}/metrics`
    */
   async listRunMetrics(id: string, params?: ListRunMetricsParams, options?: RequestOptions): Promise<MetricsPage> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/metrics`, query: [["cursor", params?.cursor], ["after_step", params?.afterStep], ["limit", params?.limit]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/metrics`, query: [["cursor", params?.cursor], ["after_step", params?.afterStep], ["limit", params?.limit], ["max_points", params?.maxPoints]] }, options);
     return convertKeys(CODEC, "MetricsPage", data, "decode") as MetricsPage;
   }
 

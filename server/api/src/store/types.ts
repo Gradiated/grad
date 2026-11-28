@@ -429,6 +429,18 @@ export interface JobRepository {
     limit: number,
   ): Promise<JobEvent[]>;
   /**
+   * A job's metric curve after `afterSeq`, thinned to about `maxPoints`: the
+   * points a later attempt replaced (step <= a later point's step) are left
+   * out, then every k-th point is kept, counting back from the newest, with
+   * points that carry eval metrics thinned separately so a sparse eval curve
+   * survives. Ascending by seq.
+   */
+  listMetricCurve(
+    jobId: string,
+    afterSeq: number,
+    maxPoints: number,
+  ): Promise<JobEvent[]>;
+  /**
    * Events of every type after each job's cursor, ascending by seq, at most
    * `limitPerJob` per job (the SSE hub's one query for all its streams).
    */
@@ -634,6 +646,11 @@ export interface RunRepository {
     page: PageRequest,
     filter?: ListFilter,
   ): Promise<Page<RunRecord>>;
+  /** The workspace's runs per status (statuses without runs are left out), narrowed by `q` like `list`. */
+  countByStatus(
+    workspaceId: string,
+    q?: string,
+  ): Promise<Array<{ status: string; n: number }>>;
   /** Queued and running runs with this name, newest first (at most `limit`). */
   listActiveByName(
     workspaceId: string,

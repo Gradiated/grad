@@ -5,7 +5,7 @@ import type {
   RunRecord,
   RunRepository,
 } from "../types.js";
-import type { Db } from "./db.js";
+import { Params, type Db } from "./db.js";
 import { createJobBackedRepository } from "./jobs.js";
 import {
   toImportPayload,
@@ -13,6 +13,7 @@ import {
   toRunDomain,
   toRunEventsView,
 } from "./mappers.js";
+import { filterSql } from "./shared.js";
 
 /** The latest event of a type (and key) as `<prefix>_*` columns. */
 const latestEvent = (prefix: string, where: string) =>
@@ -52,6 +53,18 @@ export const createRunRepository = (db: Db, clock: Clock): RunRepository => {
     get: repo.get,
     getById: repo.getById,
     list: repo.list,
+    countByStatus: async (workspaceId, q) => {
+      // grad_jobs alone (index-only on grad_jobs_status_count_idx) unless a name filter needs grad_runs.
+      const params = new Params();
+      const rows = await db.query(
+        `SELECT status, count(*)::int AS n FROM grad_jobs${q ? " JOIN grad_runs USING (id)" : ""}
+         WHERE kind = 'train' AND workspace_id = ${params.add(workspaceId)}${filterSql(params, { q })}
+         GROUP BY status`,
+        params.values,
+      );
+
+      return rows.map((r) => ({ status: String(r.status), n: Number(r.n) }));
+    },
     listActiveByName: (workspaceId, name, limit) =>
       repo.findAll(
         "workspace_id = $1 AND name = $2 AND status IN ('queued', 'running')",

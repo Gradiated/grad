@@ -1186,6 +1186,20 @@ export interface Run {
   warnings?: Array<string> | undefined;
 }
 
+export interface RunCounts {
+  total: number;
+  /** Runs per status (0 when none). */
+  byStatus: {
+    queued: number;
+    running: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    stoppedBudget: number;
+    stoppedBalance: number;
+  };
+}
+
 /** One event of a run's lifecycle, discriminated by `type`. `completed` is always last. */
 export type RunEvent = PhaseEvent | MetricEvent | CheckpointEvent | AttemptEvent | WarningEvent | LogEvent | CompletedEvent;
 

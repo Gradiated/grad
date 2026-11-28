@@ -567,6 +567,33 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
         ],
       )
     ).map(toEvent),
+  listMetricCurve: async (jobId, afterSeq, maxPoints) =>
+    // Windows over narrow rows (seq, step, has_eval); payloads are read only
+    // for the kept points. later_step: the lowest step written after a point
+    // (a frame from UNBOUNDED PRECEDING is incremental; one ending at
+    // UNBOUNDED FOLLOWING is quadratic). 100k points: ~300 ms.
+    (
+      await db.query(
+        `WITH points AS MATERIALIZED (
+           SELECT seq, step,
+                  jsonb_typeof(payload->'eval_loss') = 'number'
+                    OR (jsonb_typeof(payload->'eval_metrics') = 'object' AND payload->'eval_metrics' <> '{}'::jsonb) AS has_eval
+           FROM grad_job_events WHERE job_id = $1 AND type = 'metric' AND seq > $2
+         ), curve AS (
+           SELECT seq, step, has_eval,
+                  min(step) OVER (ORDER BY seq DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS later_step
+           FROM points
+         ), kept AS (
+           SELECT seq, row_number() OVER (PARTITION BY has_eval ORDER BY seq) AS rn,
+                  count(*) OVER (PARTITION BY has_eval) AS n
+           FROM curve WHERE later_step IS NULL OR step < later_step
+         )
+         SELECT e.* FROM kept JOIN grad_job_events e ON e.seq = kept.seq
+         WHERE (kept.n - kept.rn) % ceil(kept.n::numeric / $3)::bigint = 0
+         ORDER BY e.seq`,
+        [jobId, afterSeq, maxPoints],
+      )
+    ).map(toEvent),
   listEventsSince: async (cursors, limitPerJob) =>
     cursors.length === 0
       ? []

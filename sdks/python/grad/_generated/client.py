@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from .._transport import Transport
 
-__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_EVENTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_SECRETS_LIMIT_MAX", "LIST_SOURCES_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
+__all__ = ["GeneratedApiClient", "GradApiError", "LIST_API_KEYS_LIMIT_MAX", "LIST_ARTIFACTS_LIMIT_MAX", "LIST_DATASETS_LIMIT_MAX", "LIST_DATASET_RECORDS_LIMIT_MAX", "LIST_EVALS_LIMIT_MAX", "LIST_EVAL_FAILURES_LIMIT_MAX", "LIST_EVAL_OUTPUTS_LIMIT_MAX", "LIST_EVAL_RESULTS_LIMIT_MAX", "LIST_IMPORTS_LIMIT_MAX", "LIST_RUNS_LIMIT_MAX", "LIST_RUN_CHECKPOINTS_LIMIT_MAX", "LIST_RUN_EVENTS_LIMIT_MAX", "LIST_RUN_METRICS_LIMIT_MAX", "LIST_RUN_METRICS_MAX_POINTS_MAX", "LIST_SECRETS_LIMIT_MAX", "LIST_SOURCES_LIMIT_MAX", "LIST_USAGE_LIMIT_MAX", "OPERATIONS", "SCHEMA_ENUMS", "SCHEMA_FIELDS"]
 
 AdapterSpec: TypeAlias = "dict[str, Any]"
 
@@ -1116,6 +1116,14 @@ Run = TypedDict(
     },
 )
 
+RunCounts = TypedDict(
+    "RunCounts",
+    {
+        "total": "int",
+        "by_status": "dict[str, Any]",
+    },
+)
+
 RunEvent: TypeAlias = "PhaseEvent | MetricEvent | CheckpointEvent | AttemptEvent | WarningEvent | LogEvent | CompletedEvent"
 
 RunEventsPage = TypedDict(
@@ -1697,6 +1705,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "RetrievalMetrics": frozenset({"mrr", "recall_at_1", "recall_at_10", "recall_at_5"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
     "Run": frozenset({"artifact_id", "attempt", "autoscaling", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "last_interruption", "latest_metric", "max_attempts", "max_cost_usd", "min_gpu_memory_gb", "name", "phase", "phase_since", "price_per_million_tokens", "queue_message", "queue_position", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "warnings", "workers_online", "workspace_id"}),
+    "RunCounts": frozenset({"by_status", "total"}),
     "RunEventsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
     "RunInterruption": frozenset({"at", "attempt", "message", "reason", "resume_step", "step"}),
     "ScoreDatasetRequest": frozenset({"limit", "name", "rubric", "version"}),
@@ -1752,6 +1761,7 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
 OPERATIONS: dict[str, tuple[str, str]] = {
     "cancel_eval": ("POST", "/v1/evals/{id}/cancel"),
     "cancel_run": ("POST", "/v1/runs/{id}/cancel"),
+    "count_runs": ("GET", "/v1/runs/counts"),
     "create_api_key": ("POST", "/v1/keys"),
     "create_artifact_import": ("POST", "/v1/artifact-imports"),
     "create_dataset": ("POST", "/v1/datasets"),
@@ -1820,6 +1830,7 @@ LIST_IMPORTS_LIMIT_MAX = 200
 LIST_RUN_CHECKPOINTS_LIMIT_MAX = 200
 LIST_RUN_EVENTS_LIMIT_MAX = 5000
 LIST_RUN_METRICS_LIMIT_MAX = 5000
+LIST_RUN_METRICS_MAX_POINTS_MAX = 5000
 LIST_RUNS_LIMIT_MAX = 200
 LIST_SECRETS_LIMIT_MAX = 200
 LIST_SOURCES_LIMIT_MAX = 200
@@ -1839,6 +1850,10 @@ class GeneratedApiClient:
     def cancel_run(self, id: str, *, idempotency_key: str | None = None, timeout: float | None = None) -> Run:
         """Cancel a training run (a running attempt is stopped and billed)."""
         return cast("Run", self._t.request("POST", f"/v1/runs/{quote_path_param(id, 'id')}/cancel", headers={"Idempotency-Key": idempotency_key or new_idempotency_key()}, timeout=timeout))
+
+    def count_runs(self, *, q: str | None = None, timeout: float | None = None) -> RunCounts:
+        """Count the workspace's runs per status."""
+        return cast("RunCounts", self._t.request("GET", "/v1/runs/counts", query={"q": q}, timeout=timeout))
 
     def create_api_key(self, body: CreateApiKeyRequest | Mapping[str, Any], *, idempotency_key: str | None = None, timeout: float | None = None) -> CreatedApiKey:
         """Create a scoped workspace API key (trainer worker keys are platform config, not keys)."""
@@ -1985,9 +2000,9 @@ class GeneratedApiClient:
         headers = {"Last-Event-ID": last_event_id} if last_event_id is not None else None
         return self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/events", query={"cursor": cursor, "limit": limit}, accept="text/event-stream", headers=headers, timeout=timeout)
 
-    def list_run_metrics(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> MetricsPage:
+    def list_run_metrics(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, max_points: int | None = None, timeout: float | None = None) -> MetricsPage:
         """Training step metrics as JSON pages."""
-        return cast("MetricsPage", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, timeout=timeout))
+        return cast("MetricsPage", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit, "max_points": max_points}, timeout=timeout))
 
     def list_runs(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, q: str | None = None, timeout: float | None = None) -> ListRunsResponse:
         """List training runs (newest first)."""

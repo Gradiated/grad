@@ -2272,6 +2272,8 @@ pub const LIST_RUN_CHECKPOINTS_LIMIT_MAX: u32 = 200;
 pub const LIST_RUN_EVENTS_LIMIT_MAX: u32 = 5000;
 /// Largest `limit` accepted by `list_run_metrics` (the server clamps larger values).
 pub const LIST_RUN_METRICS_LIMIT_MAX: u32 = 5000;
+/// Largest `max_points` accepted by `list_run_metrics` (the server clamps larger values).
+pub const LIST_RUN_METRICS_MAX_POINTS_MAX: u32 = 5000;
 /// Largest `limit` accepted by `list_runs` (the server clamps larger values).
 pub const LIST_RUNS_LIMIT_MAX: u32 = 200;
 /// Largest `limit` accepted by `list_secrets` (the server clamps larger values).

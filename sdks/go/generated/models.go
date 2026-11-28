@@ -421,6 +421,12 @@ const (
 	CompletedEventTypeCompleted CompletedEventType = "completed"
 )
 
+// CountRunsParams holds the query and header parameters of CountRuns.
+type CountRunsParams struct {
+	// Q Only items whose name contains this text (any case), or whose id is exactly this.
+	Q *string
+}
+
 // CreateAPIKeyRequest is generated from the OpenAPI schema.
 type CreateAPIKeyRequest struct {
 	// Name Key name.
@@ -1400,6 +1406,8 @@ type ListRunMetricsParams struct {
 	AfterStep *int
 	// Limit Page size (default 1000). Values above 5000 are clamped to 5000.
 	Limit *int
+	// MaxPoints Return the whole curve after `cursor` as one page, thinned to at most this many points spaced evenly from the newest (plus as many eval points, thinned the same way). Points a resumed attempt replayed are left out, so steps only increase. `limit` is ignored and `next_cursor` is null. Compare runs or draw a long run without paging every point.
+	MaxPoints *int
 }
 
 // ListRunsParams holds the query and header parameters of ListRuns.
@@ -2362,6 +2370,24 @@ type Run struct {
 	FinishedAt *string `json:"finished_at"`
 	// Warnings Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events.
 	Warnings []string `json:"warnings,omitempty"`
+}
+
+// RunCounts is generated from the OpenAPI schema.
+type RunCounts struct {
+	Total int `json:"total"`
+	// ByStatus Runs per status (0 when none).
+	ByStatus RunCountsByStatus `json:"by_status"`
+}
+
+// RunCountsByStatus Runs per status (0 when none).
+type RunCountsByStatus struct {
+	Queued         int `json:"queued"`
+	Running        int `json:"running"`
+	Completed      int `json:"completed"`
+	Failed         int `json:"failed"`
+	Cancelled      int `json:"cancelled"`
+	StoppedBudget  int `json:"stopped_budget"`
+	StoppedBalance int `json:"stopped_balance"`
 }
 
 // RunEvent is a union of object shapes; set the fields of exactly one variant.

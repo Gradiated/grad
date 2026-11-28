@@ -13,6 +13,7 @@ import {
   ResumeRunRequestSchema,
   RunEventsPageSchema,
   RUN_STATUSES,
+  RunCountsSchema,
   RunSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
@@ -186,6 +187,32 @@ export const registerRunRoutes = (
       ),
   );
 
+  // Before /v1/runs/{id}, so "counts" is never read as a run id.
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/runs/counts",
+      operationId: "countRuns",
+      summary: "Count the workspace's runs per status",
+      description:
+        "One count per status (the web console's status tabs), narrowed by `q` like `GET /v1/runs`.",
+      tags,
+      request: { query: z.object({ q: SearchQuerySchema }) },
+      responses: {
+        200: jsonResponse(RunCountsSchema, "Runs per status."),
+        ...defaultErrors,
+      },
+    }),
+    async (c) =>
+      c.json(
+        await services.runs.counts(
+          workspaceOf(c, "runs:read"),
+          c.req.valid("query").q,
+        ),
+        200,
+      ),
+  );
+
   app.openapi(
     createRoute({
       method: "get",
@@ -224,6 +251,16 @@ export const registerRunRoutes = (
           cursor: z.string().min(1).max(512).optional(),
           after_step: z.coerce.number().int().min(-1).optional(),
           limit: pageLimitSchema(5000, 1000),
+          max_points: z.coerce
+            .number()
+            .int()
+            .min(2)
+            .max(5000)
+            .optional()
+            .openapi({
+              description:
+                "Return the whole curve after `cursor` as one page, thinned to at most this many points spaced evenly from the newest (plus as many eval points, thinned the same way). Points a resumed attempt replayed are left out, so steps only increase. `limit` is ignored and `next_cursor` is null. Compare runs or draw a long run without paging every point.",
+            }),
         }),
       },
       responses: {

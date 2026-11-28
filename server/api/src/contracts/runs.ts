@@ -813,6 +813,21 @@ export const MetricsPageSchema = z
 
 export type MetricsPage = z.infer<typeof MetricsPageSchema>;
 
+export const RunCountsSchema = z
+  .object({
+    total: z.number().int().min(0),
+    by_status: z
+      .object(
+        Object.fromEntries(
+          RUN_STATUSES.map((status) => [status, z.number().int().min(0)]),
+        ) as Record<RunStatus, z.ZodNumber>,
+      )
+      .openapi({ description: "Runs per status (0 when none)." }),
+  })
+  .openapi("RunCounts");
+
+export type RunCounts = z.infer<typeof RunCountsSchema>;
+
 export const ArtifactFormatSchema = z
   .enum([
     "peft_lora",
