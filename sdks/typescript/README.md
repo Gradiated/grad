@@ -73,7 +73,8 @@ that repeats a cursor stops the listing with `PaginationLoopError`.
 Every error extends `GradError` (`status`, `code`, `requestId`). HTTP errors
 map to `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`,
 `NotFoundError`, `ConflictError`, `ValidationError` (`fieldErrors`),
-`RateLimitError`, `ServerError`, `InferenceUnavailableError`; waits throw
+`RateLimitError`, `ServerError`, `FeatureUnavailableError` (501, never retried) and its
+`InferenceUnavailableError`; waits throw
 `RunFailedError`, `EvalFailedError`, `ImportFailedError`, `ArtifactImportFailedError` or
 `WaitTimeoutError`. Requests retry twice on 408/429/5xx with jittered
 backoff that honours `Retry-After`, except a 429 `queue_limit` (the workspace's
