@@ -33,6 +33,7 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -121,7 +122,9 @@ class WorkerAuthError(ServerError):
 
 
 class ServerUnreachable(Exception):
-    """Connection-level failure (refused, DNS, timeout)."""
+    """Connection-level failure (refused, DNS, timeout, a body cut short)."""
+
+    transient = True
 
 
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
@@ -232,6 +235,11 @@ class ProtocolClient:
         parsed = urllib.parse.urlparse(url)
         return (parsed.scheme, parsed.netloc.lower()) == self._origin
 
+    def shown(self, url: str) -> str:
+        """``url`` as errors may quote it: errors reach the tenant (run and import errors), so
+        never a query string (presigned credentials and signatures)."""
+        return urllib.parse.urlparse(self.resolve(url))._replace(query="", fragment="").geturl()
+
     def _open(
         self,
         method: str,
@@ -242,9 +250,8 @@ class ProtocolClient:
     ) -> Any:
         full = self.resolve(url)
         same_origin = self._same_origin(full)
-        # Errors reach the tenant (run and import errors): never quote a query string
-        # (presigned credentials and signatures) or a storage response body.
-        shown = urllib.parse.urlparse(full)._replace(query="", fragment="").geturl()
+        # Never quote a storage response body either.
+        shown = self.shown(full)
         token = self._token() if same_origin else None
         for retry_401 in (True, False):
             hdrs = dict(headers or {})
@@ -301,12 +308,29 @@ class ProtocolClient:
         with self._open("GET", path, headers={"Accept": "application/json"}) as resp:
             return json.loads(resp.read())
 
-    def download(self, url: str, dest: Path, *, attempts: int = 3) -> None:
+    def download(self, url: str, dest: Path, *, attempts: int = 5) -> None:
+        """GET ``url`` into ``dest``. A connection that drops mid-body, or a body shorter than
+        its Content-Length (which ``http.client`` reads as a clean end), is retried from the
+        start like a refused connection."""
         delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
         for attempt in range(1, attempts + 1):
             try:
                 with self._open("GET", url) as resp, dest.open("wb") as out:
-                    shutil.copyfileobj(resp, out, _CHUNK)
+                    expected = resp.headers.get("Content-Length")
+                    received = 0
+                    while True:
+                        try:
+                            chunk = resp.read(_CHUNK)
+                        except (http.client.HTTPException, OSError) as exc:
+                            raise ServerUnreachable(f"{self.shown(url)}: download interrupted ({exc!r})") from exc
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        received += len(chunk)
+                    if expected is not None and expected.isdigit() and received != int(expected):
+                        raise ServerUnreachable(
+                            f"{self.shown(url)}: download ended after {received} of {expected} bytes"
+                        )
                 return
             except (ServerError, ServerUnreachable) as exc:
                 retryable = isinstance(exc, ServerUnreachable) or exc.transient
@@ -864,6 +888,17 @@ class TrainerWorker:
         self.telemetry.observe_upload(kind, size, time.monotonic() - started)
         return str(ticket["upload_id"])
 
+    def _retry_later(self, state: _JobState, why: str) -> dict[str, Any]:
+        """Hand back an attempt that failed for a reason another attempt may not hit (grad-server
+        or storage unreachable, a download cut short, the Hub down). It counts toward
+        max_attempts, so an outage that outlasts them still fails the job."""
+        _log(f"job {state.job_id}: {why}; handing it back for another attempt", "warn")
+        self._note(state, "warning", f"Attempt {state.attempt} hit a transient error and will be retried: {why}")
+        return self._complete(
+            state,
+            {"status": "abandoned", "reason": "worker_error", "error": why[:4000], "tokens_processed": state.max_tokens},
+        )
+
     def _complete(
         self, state: _JobState, payload: dict[str, Any], *, force: bool = False
     ) -> dict[str, Any]:
@@ -905,6 +940,8 @@ class TrainerWorker:
         except (LeaseLost, WorkerAuthError):
             raise
         except Exception as exc:
+            if _transient(exc):
+                return self._retry_later(state, f"setup failed: {exc}")
             return self._complete(
                 state, {"status": "failed", "error": f"setup failed: {exc}"[:4000]}
             )
@@ -1079,6 +1116,8 @@ class TrainerWorker:
                     return self._complete(
                         state, {"status": "abandoned", "reason": "oom", "tokens_processed": state.max_tokens}
                     )
+                if _transient(exc):
+                    return self._retry_later(state, str(exc))
                 failure = str(exc) or type(exc).__name__
             if retry_tokens is None:
                 break
@@ -1167,7 +1206,12 @@ class TrainerWorker:
             return []
         path = job_dir / "dataset.jsonl.gz"
         self.client.download(str(dataset["download_url"]), path)
-        return merge_records(_parse_jsonl_gz(path))
+        try:
+            return merge_records(_parse_jsonl_gz(path))
+        except (EOFError, zlib.error) as exc:  # a stream cut short that still looked complete
+            raise ServerUnreachable(f"the dataset download is truncated or corrupt ({exc})") from exc
+        finally:
+            path.unlink(missing_ok=True)
 
     def _load_resume(self, job: dict[str, Any], job_dir: Path) -> ResumeState | None:
         resume = job.get("resume")
@@ -1247,6 +1291,8 @@ class TrainerWorker:
         except (LeaseLost, WorkerAuthError):
             raise
         except Exception as exc:
+            if _transient(exc):
+                return self._retry_later(state, f"download failed: {exc}")
             return self._complete(
                 state, {"status": "failed", "error": redact(f"download failed: {exc}", *secrets)[:4000]}
             )
@@ -1314,6 +1360,12 @@ class TrainerWorker:
                 },
             },
         )
+
+
+def _transient(exc: BaseException) -> bool:
+    """A failure another attempt may not hit: grad-server or storage unreachable or answering
+    429/5xx, a download cut short, a model download that failed on the network."""
+    return bool(getattr(exc, "transient", False))
 
 
 def _interruption(exc: BaseException) -> str:

@@ -49,6 +49,9 @@ class FakeProtocolServer:
     put_delay_s: float = 0.0
     upload_origin: str | None = None
     redirect_claim_to: str | None = None
+    # Blob GETs cut short: {path: n} sends the full Content-Length but only half the body,
+    # then closes the connection, for the next n downloads of that path.
+    truncate: dict[str, int] = field(default_factory=dict)
     requests: list[Recorded] = field(default_factory=list)
     uploads: dict[str, bytes] = field(default_factory=dict)
 
@@ -103,6 +106,15 @@ class FakeProtocolServer:
                     server.requests.append(rec)
                 status, payload, raw, headers = server.dispatch(rec)
                 if status == 0:
+                    self.close_connection = True
+                    return
+                path = rec.path.split("?")[0]
+                if raw is not None and server.truncate.get(path):
+                    server.truncate[path] -= 1
+                    self.send_response(status)
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw[: len(raw) // 2])
                     self.close_connection = True
                     return
                 self._send(status, payload, raw, headers)

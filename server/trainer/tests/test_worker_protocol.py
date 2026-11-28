@@ -764,6 +764,53 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertIn("setup failed", srv.bodies("complete")[0]["error"])
         self.assertEqual(runner.calls, [])
 
+    def test_a_download_cut_short_is_retried(self) -> None:
+        # http.client reads a body shorter than its Content-Length as a clean end of stream.
+        srv = self.server(jobs=[train_job()])
+        srv.truncate["/v1/trainer-jobs/run_1/dataset"] = 2
+        runner = StubRunner(checkpoint_at=None)
+        result = self.worker(srv, runner).run_once()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(runner.calls[0]["records"]), 2)
+        self.assertEqual(len(srv.calls("dataset")), 3)
+
+    def test_a_download_that_keeps_failing_hands_the_attempt_back(self) -> None:
+        # A storage outage during setup is not the run's fault: requeue, don't fail.
+        srv = self.server(jobs=[train_job()])
+        srv.truncate["/v1/trainer-jobs/run_1/dataset"] = 99
+        runner = StubRunner(checkpoint_at=None)
+        result = self.worker(srv, runner).run_once()
+        self.assertEqual(result["status"], "abandoned")
+        complete = srv.bodies("complete")[0]
+        self.assertEqual((complete["status"], complete["reason"]), ("abandoned", "worker_error"))
+        self.assertIn("download ended after", complete["error"])
+        warning = [e for e in srv.bodies("events") if e.get("type") == "warning"]
+        self.assertIn("will be retried", warning[0]["message"])
+        self.assertEqual(runner.calls, [])
+
+    def test_a_truncated_gzip_dataset_hands_the_attempt_back(self) -> None:
+        srv = self.server(jobs=[train_job(dataset_url="/blobs/data")])
+        srv.blobs["/blobs/data"] = DATASET[:-12]  # no gzip trailer: the stream ended early
+        result = self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
+        self.assertEqual(result["status"], "abandoned")
+        self.assertIn("truncated or corrupt", srv.bodies("complete")[0]["error"])
+
+    def test_a_transient_model_download_failure_hands_the_attempt_back(self) -> None:
+        from grad_trainer.errors import ModelUnavailableError
+
+        class HubDown(StubRunner):
+            def run(self, *args: Any, **kwargs: Any) -> Any:
+                raise ModelUnavailableError("Hub timed out", transient=True)
+
+        srv = self.server(jobs=[train_job(), train_job()])
+        self.assertEqual(self.worker(srv, HubDown()).run_once()["status"], "abandoned")
+
+        class Gone(StubRunner):
+            def run(self, *args: Any, **kwargs: Any) -> Any:
+                raise ModelUnavailableError("no such repo")
+
+        self.assertEqual(self.worker(srv, Gone()).run_once()["status"], "failed")
+
     def test_kinds_from_the_environment(self) -> None:
         srv = self.server()
         worker = worker_from_env(

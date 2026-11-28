@@ -20,9 +20,17 @@ class RecipeDataError(TrainerError, ValueError):
 
 
 class ModelUnavailableError(TrainerError, RuntimeError):
-    """Model weights could not be located (offline, unknown id, missing mirror)."""
+    """Model weights could not be located (offline, unknown id, missing mirror).
+
+    ``transient``: the download failed on the network or a Hub 5xx/429, so another
+    attempt may succeed (the worker hands the attempt back instead of failing the run).
+    """
 
     code = "model_unavailable"
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 class SourceUnavailableError(TrainerError, RuntimeError):

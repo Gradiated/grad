@@ -284,13 +284,23 @@ class ModelResolutionTests(TempDirCase):
         self.assertEqual((resolved.repo, resolved.revision, resolved.source), ("Qwen/Qwen3-8B", "abc123", "hub"))
         self.assertFalse(dl.call_args.kwargs["local_files_only"])
         with mock.patch.object(huggingface_hub, "snapshot_download", side_effect=OSError("boom")):
-            with self.assertRaisesRegex(ModelUnavailableError, "download from the Hugging Face Hub failed"):
+            with self.assertRaisesRegex(ModelUnavailableError, "download from the Hugging Face Hub failed") as ctx:
                 resolve_model("qwen/qwen3-8b")
+        # A network failure may pass: the worker hands the attempt back instead of failing the run.
+        self.assertTrue(ctx.exception.transient)
+        from huggingface_hub.errors import GatedRepoError
+
+        gated = GatedRepoError("gated", response=mock.Mock(status_code=403))
+        with mock.patch.object(huggingface_hub, "snapshot_download", side_effect=gated):
+            with self.assertRaises(ModelUnavailableError) as ctx:
+                resolve_model("qwen/qwen3-8b")
+        self.assertFalse(ctx.exception.transient)
         os.environ["HF_HUB_OFFLINE"] = "1"
         self.assertTrue(is_offline())
         with mock.patch.object(huggingface_hub, "snapshot_download", side_effect=OSError("missing")):
-            with self.assertRaisesRegex(ModelUnavailableError, "offline mode"):
+            with self.assertRaisesRegex(ModelUnavailableError, "offline mode") as ctx:
                 resolve_model("qwen/qwen3-8b")
+        self.assertFalse(ctx.exception.transient)
 
     def test_s3_mirror(self) -> None:
         objects = {"models/qwen/qwen3-4b/config.json": b"{}", "models/qwen/qwen3-4b/model.safetensors": b"w"}

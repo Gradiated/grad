@@ -155,12 +155,29 @@ def _from_mirror(model_id: str, repo: str | None, mirror: str) -> ResolvedModel 
     return None
 
 
-def _unavailable(model_id: str, repo: str, how: str) -> ModelUnavailableError:
+def _unavailable(model_id: str, repo: str, how: str, *, transient: bool = False) -> ModelUnavailableError:
     return ModelUnavailableError(
         f"Model '{model_id}' ({repo}) is unavailable: {how}. Set GRAD_MODEL_PATHS="
         f'\'{{"{model_id}": "/path/to/weights"}}\' or GRAD_MODELS_MIRROR to a directory '
-        f"containing '{model_id}/' or '{repo}/'."
+        f"containing '{model_id}/' or '{repo}/'.",
+        transient=transient,
     )
+
+
+def _hub_transient(exc: BaseException) -> bool:
+    """A Hub failure another attempt may not hit: the network, a timeout, a 5xx or 429. A
+    missing or gated repo, revision or file is permanent."""
+    from huggingface_hub import errors
+
+    if isinstance(
+        exc,
+        (errors.RepositoryNotFoundError, errors.GatedRepoError, errors.RevisionNotFoundError, errors.RemoteEntryNotFoundError),
+    ):
+        return False
+    if isinstance(exc, errors.HfHubHTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return status is None or status == 429 or status >= 500
+    return True
 
 
 def _from_hub(model_id: str, repo: str) -> ResolvedModel:
@@ -182,7 +199,7 @@ def _from_hub(model_id: str, repo: str) -> ResolvedModel:
             if offline
             else f"download from the Hugging Face Hub failed ({type(exc).__name__}: {exc})"
         )
-        raise _unavailable(model_id, repo, how) from exc
+        raise _unavailable(model_id, repo, how, transient=not offline and _hub_transient(exc)) from exc
     return _resolved(model_id, Path(path), repo, "hub")
 
 
