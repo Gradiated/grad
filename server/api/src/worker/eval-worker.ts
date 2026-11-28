@@ -91,6 +91,8 @@ export interface EvalWorker {
 const TASK_PAGE = 200;
 const DEFAULT_LEASE_SECONDS = 180;
 const OUTAGE_RETRY_MAX_MS = 30_000;
+/** The longest wait between two failed rounds of the worker loop. */
+const FAILURE_BACKOFF_MAX_MS = 60_000;
 const CAPACITY_RETRY_MAX_MS = 300_000;
 /** How soon a halt (stop, cancel, lost lease, outage) aborts a call in flight or a wait. */
 const HALT_POLL_MS = 500;
@@ -693,15 +695,22 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     drain,
 
     run: async (pollMs) => {
+      // Consecutive failed drains (a refused token, the API down) back off
+      // up to a minute instead of retrying every poll.
+      let failures = 0;
       while (!stopping) {
         try {
           await drain();
+          failures = 0;
         } catch (error) {
-          log("warn", "eval worker claim failed", {
-            error,
-          });
+          failures += 1;
+          log("warn", "eval worker loop failed", { error, failures });
         }
-        if (!stopping) await new Promise((r) => setTimeout(r, pollMs));
+        const wait =
+          failures === 0
+            ? pollMs
+            : Math.min(FAILURE_BACKOFF_MAX_MS, pollMs * 2 ** failures);
+        if (!stopping) await sleep(wait);
       }
     },
 

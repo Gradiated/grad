@@ -552,3 +552,38 @@ const trainOnlyKey = (t: TestApp): string => {
 
   return secret;
 };
+
+describe("the eval worker loop", () => {
+  it("backs off on consecutive failed rounds (a refused token) instead of retrying every poll", async () => {
+    vi.useFakeTimers();
+    const { createEvalWorker, unconfiguredInference } = await import(
+      "../src/worker/eval-worker.js"
+    );
+    const claims: number[] = [];
+    const worker = createEvalWorker({
+      client: {
+        claim: async () => {
+          claims.push(Date.now());
+          throw new Error("401 unauthorized");
+        },
+      } as unknown as Parameters<typeof createEvalWorker>[0]["client"],
+      inference: unconfiguredInference(),
+      regex: {} as Parameters<typeof createEvalWorker>[0]["regex"],
+      concurrency: 1,
+    });
+    try {
+      const loop = worker.run(1_000);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await worker.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await loop;
+    } finally {
+      vi.useRealTimers();
+    }
+    const gaps = claims.slice(1).map((at, i) => at - (claims[i] as number));
+    // 2 s, 4 s, ... doubling, then at most a minute apart.
+    expect(gaps.slice(0, 5)).toEqual([2_000, 4_000, 8_000, 16_000, 32_000]);
+    expect(Math.max(...gaps)).toBe(60_000);
+    expect(claims.length).toBeLessThan(20);
+  });
+});
