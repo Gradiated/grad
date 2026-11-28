@@ -310,6 +310,10 @@
         "concurrency": {
           "type": "integer"
         },
+        "tmpSizeGb": {
+          "type": "integer",
+          "minimum": 1
+        },
         "workerResources": {
           "type": "object"
         }

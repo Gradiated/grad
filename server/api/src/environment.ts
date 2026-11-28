@@ -415,6 +415,8 @@ export const WorkerEnvironmentSchema = z.object({
     .min(0)
     .max(86_400)
     .default(720),
+  /** Temporary disk a dataset version may take on the eval worker (GB); none: no limit. */
+  GRAD_EVAL_TMP_MAX_GB: z.coerce.number().positive().optional(),
   ...EndpointShape,
 });
 

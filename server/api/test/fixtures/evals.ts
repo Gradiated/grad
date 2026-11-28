@@ -50,6 +50,7 @@ export const startEvalWorker = (
     outageRetryMs?: number;
     outageMaxMs?: number;
     capacityMaxMs?: number;
+    tmpMaxBytes?: number;
   } = {},
 ): TestEvalWorker => {
   const regex = createRegexEvaluator();
@@ -73,6 +74,7 @@ export const startEvalWorker = (
     ...(options.capacityMaxMs !== undefined
       ? { capacityMaxMs: options.capacityMaxMs }
       : {}),
+    tmpMaxBytes: options.tmpMaxBytes,
   });
 
   return {

@@ -142,7 +142,7 @@ describe("eval worker dataset download", () => {
         (async function* () {
           yield* lines;
         })(),
-        7,
+        { chunkLines: 7 },
       );
       const records: DatasetRecord[] = [];
       for await (const record of version.records()) records.push(record);

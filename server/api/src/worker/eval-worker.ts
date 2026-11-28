@@ -77,6 +77,12 @@ interface EvalWorkerOptions {
    * fails with it as its error. Never counted as an attempt.
    */
   capacityMaxMs?: number;
+  /**
+   * The most temporary disk a dataset version may take (its uncompressed
+   * JSONL; GRAD_EVAL_TMP_MAX_GB): a larger one fails the eval instead of
+   * filling the disk. No limit by default.
+   */
+  tmpMaxBytes?: number | undefined;
 }
 
 export interface EvalWorker {
@@ -571,6 +577,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       // made as they come: memory is bounded by the page, not the dataset.
       version = await openDownloadedVersion(
         client.datasetLines(job.dataset.download_url),
+        { maxBytes: options.tmpMaxBytes },
       );
       const tasks = evalTasks(
         version.records(),

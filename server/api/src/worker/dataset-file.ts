@@ -25,6 +25,14 @@ const CHUNK_BYTES = 16 * 1024 * 1024;
 /** Merged records read at a time. */
 const PAGE = 2_000;
 
+const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
+
+/**
+ * The version doesn't fit on the worker's disk: past `maxBytes`, or the disk
+ * filled first (ENOSPC). The attempt fails with this message.
+ */
+export class DatasetTooLarge extends Error {}
+
 /**
  * A downloaded dataset version on local disk, read the way grad-server reads
  * a stored version (dataset-pages.ts): the JSONL goes to a temporary file in
@@ -35,7 +43,7 @@ const PAGE = 2_000;
  */
 export const openDownloadedVersion = async (
   lines: AsyncIterable<string>,
-  chunkLines = CHUNK_LINES,
+  options: { chunkLines?: number; maxBytes?: number | undefined } = {},
 ): Promise<{
   records: () => AsyncGenerator<DatasetRecord>;
   close: () => Promise<void>;
@@ -44,9 +52,20 @@ export const openDownloadedVersion = async (
   const path = join(dir, "version.jsonl");
   const close = () => rm(dir, { recursive: true, force: true });
 
+  const chunkLines = options.chunkLines ?? CHUNK_LINES;
+  const maxBytes = options.maxBytes ?? Infinity;
   try {
     const chunks: Chunk[] = [];
     const out = createWriteStream(path);
+    // A write error (ENOSPC) surfaces here, never as an unhandled 'error' event.
+    let failed: NodeJS.ErrnoException | null = null;
+    out.on("error", (error) => (failed ??= error));
+    const tooLarge = (written: number) =>
+      new DatasetTooLarge(
+        failed?.code === "ENOSPC"
+          ? `The eval worker's disk filled up after ${gb(written)} of the dataset version (uncompressed JSONL in ${tmpdir()}). Give the eval worker more temporary disk (evals.tmpSizeGb in the Helm chart), or eval a smaller version or a \`limit\`.`
+          : `The dataset version is over the eval worker's ${gb(maxBytes)} of temporary disk (uncompressed JSONL; GRAD_EVAL_TMP_MAX_GB, evals.tmpSizeGb in the Helm chart). Raise it, or eval a smaller version or a \`limit\`.`,
+      );
     let offset = 0;
     let start = 0;
     let count = 0;
@@ -59,15 +78,22 @@ export const openDownloadedVersion = async (
     try {
       for await (const line of lines) {
         const text = `${line}\n`;
-        if (!out.write(text)) await once(out, "drain");
         offset += Buffer.byteLength(text);
+        if (offset > maxBytes) throw tooLarge(offset);
+        if (!out.write(text)) await once(out, "drain").catch(() => undefined);
+        if (failed) break;
         count += 1;
         if (count >= chunkLines || offset - start >= CHUNK_BYTES) cut();
       }
       cut();
     } finally {
       out.end();
-      await once(out, "close");
+      if (!out.closed) await once(out, "close").catch(() => undefined);
+    }
+    if (failed !== null) {
+      throw (failed as NodeJS.ErrnoException).code === "ENOSPC"
+        ? tooLarge(offset)
+        : failed;
     }
 
     const file = await open(path);

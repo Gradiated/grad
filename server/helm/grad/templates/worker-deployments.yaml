@@ -142,6 +142,7 @@ spec:
             - {name: GRAD_POLL_INTERVAL_S, value: {{ $d.pollIntervalSeconds | quote }}}
             - {name: GRAD_LEASE_SECONDS, value: {{ $d.leaseSeconds | quote }}}
             - {name: EVAL_CONCURRENCY, value: {{ $.Values.evals.concurrency | quote }}}
+            - {name: GRAD_EVAL_TMP_MAX_GB, value: {{ $.Values.evals.tmpSizeGb | quote }}}
             - name: GRAD_WORKER_ID
               valueFrom:
                 fieldRef:
@@ -175,7 +176,7 @@ spec:
           resources:
             {{- toYaml $.Values.evals.workerResources | nindent 12 }}
           volumeMounts:
-            - name: tmp
+            - name: eval-tmp
               mountPath: /tmp
             {{- if $k8s }}
             - name: worker-token
@@ -186,6 +187,12 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if has "eval" $w.kinds }}
+        # The eval's dataset version; the worker stops at tmpSizeGb, under the limit.
+        - name: eval-tmp
+          emptyDir:
+            sizeLimit: {{ add (int $.Values.evals.tmpSizeGb) 1 }}Gi
+        {{- end }}
         - name: hf-cache
           {{- if $.Values.models.cache }}
           {{- toYaml $.Values.models.cache | nindent 10 }}

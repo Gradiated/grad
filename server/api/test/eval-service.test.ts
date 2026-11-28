@@ -622,6 +622,22 @@ describe("eval service", () => {
     });
   });
 
+  it("fails an eval whose dataset version is over the worker's temporary disk, once", async () => {
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(20));
+    const created = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      request({ models: ["qwen/qwen3-8b"], dataset: "qa" }),
+    );
+    const small = startEvalWorker(t, fakeInference(fake), { tmpMaxBytes: 100 });
+    expect(await small.drain()).toBe(1);
+    const failed = await t.services.evals.get(WORKSPACE_A, created.id);
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toMatch(/over the eval worker's .* of temporary disk/);
+  });
+
   it("cancels active evals once and never runs them", async () => {
     h = await makeEvalHarness();
     const { t } = h;

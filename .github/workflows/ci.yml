@@ -428,6 +428,7 @@ jobs:
           refuses "both database.caBundle sources" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set database.caBundle.configMap.name=rds-ca --set database.caBundle.pem=x
           refuses "a PDB minAvailable that is neither a count nor a percentage" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set-string api.podDisruptionBudget.minAvailable=half
           helm template grad "$chart" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set api.replicaCount=3 --set-string api.podDisruptionBudget.minAvailable=50% | grep -qxF '  minAvailable: 50%' || { echo "the API PDB must take a percentage"; exit 1; }
+          helm template grad "$chart" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set evals.tmpSizeGb=50 | grep -qxF '            sizeLimit: 51Gi' || { echo "the eval worker's /tmp must be size-limited (evals.tmpSizeGb)"; exit 1; }
           # As a dependency of an umbrella chart, which always passes `global`.
           umbrella="$RUNNER_TEMP/umbrella" && mkdir -p "$umbrella/charts" && cp -rL "$chart" "$umbrella/charts/grad"
           printf 'apiVersion: v2\nname: umbrella\nversion: 0.1.0\ndependencies: [{name: grad, version: "%s"}]\n' "$(sed -n 's/^version: //p' "$chart/Chart.yaml")" > "$umbrella/Chart.yaml"

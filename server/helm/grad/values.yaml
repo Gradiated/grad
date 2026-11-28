@@ -183,6 +183,11 @@ evals:
   judgeBaseUrl: ""
   # Concurrent model calls per eval worker (EVAL_CONCURRENCY).
   concurrency: 8
+  # Temporary disk for the eval's dataset version (its uncompressed JSONL), in
+  # GB: the eval worker's own /tmp emptyDir, sized this + 1 Gi. A larger version
+  # fails the eval with a clear error (GRAD_EVAL_TMP_MAX_GB) instead of filling
+  # the node's disk.
+  tmpSizeGb: 20
   # The eval worker container's resources.
   workerResources:
     requests:
