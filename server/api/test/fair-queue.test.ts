@@ -278,6 +278,26 @@ describe("fair claims (store)", () => {
     expect((await claim("w80", { gpuMemoryGb: 80 }))?.id).toBe(big.id);
   });
 
+  it("a big GPU takes a workspace's run only it fits before the workspace's older small run", async () => {
+    // A quick test run, then a run that needs the 80 GB GPU; a 24 GB GPU is online.
+    const small = await queueRun("ws_a", { minGpuMemoryGb: 12 });
+    const big = await queueRun("ws_a", { minGpuMemoryGb: 46 });
+    for (const [id, gb] of [
+      ["l4", 24],
+      ["h100", 80],
+    ] as const) {
+      await store.jobs.seeWorker({
+        id,
+        kinds: ["train"],
+        device: "gpu",
+        gpuMemoryGb: gb,
+        now: clock.now(),
+      });
+    }
+    expect((await claim("h100", { gpuMemoryGb: 80 }))?.id).toBe(big.id);
+    expect((await claim("l4", { gpuMemoryGb: 24 }))?.id).toBe(small.id);
+  });
+
   it("refuses a create past the queued cap with 429 queue_limit, under concurrency too", async () => {
     await queueRun("ws_a", { maxQueued: 3 });
     const results = await Promise.allSettled(
@@ -393,6 +413,47 @@ describe("fair claims (store)", () => {
     );
     // Generous bound for a shared CI host; the measured numbers are logged.
     expect([...sequential].sort((a, b) => a - b)[20]).toBeLessThan(250);
+  });
+
+  it("a big GPU's claim stays fast when none of 5,000 queued runs needs it", async () => {
+    // Worst case for the big-run probe: one workspace, every run fits a 24 GB GPU.
+    await sql(`
+      INSERT INTO grad_jobs (id, workspace_id, kind, status, max_attempts, payload, created_at, updated_at, min_gpu_memory_gb)
+      SELECT 'run_small_' || g, 'ws_one', 'train', 'queued', 3, '{}'::jsonb,
+             now() - make_interval(secs => 20000 - g), now(), 12
+      FROM generate_series(0, 4999) g`);
+    await sql("ANALYZE grad_jobs");
+    for (const [id, gb] of [
+      ["l4", 24],
+      ["h100", 80],
+    ] as const) {
+      await store.jobs.seeWorker({
+        id,
+        kinds: ["train"],
+        device: "gpu",
+        gpuMemoryGb: gb,
+        now: clock.now(),
+      });
+    }
+    const timed = async (gb: number, i: number) => {
+      const start = performance.now();
+      expect(
+        await claim(`w${gb}-${i}`, { gpuMemoryGb: gb, maxRunning: caps(1e6) }),
+      ).not.toBeNull();
+      return performance.now() - start;
+    };
+    const median = (ms: number[]) =>
+      [...ms].sort((a, b) => a - b)[Math.floor(ms.length / 2)] ?? 0;
+    const small: number[] = [];
+    const big: number[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      small.push(await timed(24, i));
+      big.push(await timed(80, i));
+    }
+    console.log(
+      `claim p50, 5,000 small runs queued in one workspace: 24 GB GPU ${median(small).toFixed(1)} ms, 80 GB GPU ${median(big).toFixed(1)} ms`,
+    );
+    expect(median(big)).toBeLessThan(250);
   });
 });
 

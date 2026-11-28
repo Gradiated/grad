@@ -301,10 +301,10 @@ export const onlineWorkers = (kind: string, now: string): string =>
  * The job a claim takes (CTE chain ending in `pick`; $1 kinds, $2 recipes,
  * $3 the worker's GPU memory, $4 running caps per kind, $5 now). Fair share:
  * among workspaces below their running cap for the kind, the one with the
- * fewest running jobs (ties: its oldest job this
- * worker can run), then that job. A GPU worker first takes runs no smaller
- * online GPU fits (fair share among those), so a big run is never starved by
- * small runs that any worker could take.
+ * fewest running jobs (ties: its oldest job this worker can run), then that
+ * job. A GPU worker first takes runs no smaller online GPU fits (fair share
+ * among those, and before its own workspace's older small runs), so a big
+ * run is never starved by small runs that any worker could take.
  */
 const pickJob = `WITH RECURSIVE running AS (
     SELECT workspace_id, kind, count(*)::int AS n FROM grad_jobs
@@ -326,13 +326,25 @@ const pickJob = `WITH RECURSIVE running AS (
     SELECT min(w.gpu_memory_gb) AS gb FROM ${onlineWorkers("'train'", "$5")}
       AND w.gpu_memory_gb IS NOT NULL
   ), heads AS (
-    -- Each workspace's oldest job this worker can run.
+    -- Each workspace's oldest job this worker can run; on a GPU bigger than
+    -- the smallest online, its oldest job no smaller GPU fits comes first
+    -- (an older small run is left to a small GPU). Each probe walks the
+    -- queue index in order; the first is skipped on other workers.
     SELECT h.* FROM spaces s CROSS JOIN LATERAL (
-      SELECT j.id, j.kind, j.workspace_id, j.created_at, j.min_gpu_memory_gb FROM grad_jobs j
-      WHERE j.kind = s.kind AND j.workspace_id = s.workspace_id
-        AND j.status = 'queued' AND j.waiting_on IS NULL
-        AND ${fitsWorker("j", "$2", "$3")}
-      ORDER BY j.created_at, j.id COLLATE "C" LIMIT 1
+      (SELECT j.id, j.kind, j.workspace_id, j.created_at, j.min_gpu_memory_gb FROM grad_jobs j
+       WHERE j.kind = s.kind AND j.workspace_id = s.workspace_id
+         AND j.status = 'queued' AND j.waiting_on IS NULL
+         AND ${fitsWorker("j", "$2", "$3")}
+         AND $3::float8 > (SELECT gb FROM smallest)
+         AND j.min_gpu_memory_gb > (SELECT gb FROM smallest)
+       ORDER BY j.created_at, j.id COLLATE "C" LIMIT 1)
+      UNION ALL
+      (SELECT j.id, j.kind, j.workspace_id, j.created_at, j.min_gpu_memory_gb FROM grad_jobs j
+       WHERE j.kind = s.kind AND j.workspace_id = s.workspace_id
+         AND j.status = 'queued' AND j.waiting_on IS NULL
+         AND ${fitsWorker("j", "$2", "$3")}
+       ORDER BY j.created_at, j.id COLLATE "C" LIMIT 1)
+      LIMIT 1
     ) h
     WHERE s.workspace_id IS NOT NULL AND s.workspace_id <> ''
   ), pick AS (
