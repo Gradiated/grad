@@ -4,7 +4,7 @@
 //! `$XDG_DATA_HOME/gradiated/local/docker-compose.yml` and uses published
 //! images, so it works from any directory. `--build` (or `--file`) uses a
 //! source checkout's `server/docker-compose.yml` instead. The published images
-//! are public on Docker Hub (`docker.io/gradiated/*`, mirrored on GHCR) and
+//! are public on Docker Hub (`docker.io/gradiated/*`) and
 //! pulled without a login; their tag defaults to
 //! [`DEFAULT_IMAGE_TAG`] (`--image-tag` overrides it). The first `up`
 //! generates an admin key, a trainer key, the workspace-secrets key and the
@@ -581,9 +581,8 @@ async fn pull_images(
         )
         .hint(
             "The images are public on Docker Hub, so this is usually a stale or wrong login: run \
-             `docker logout` (or `docker login`) and retry, point GRAD_SERVER_IMAGE / \
-             GRAD_TRAINER_IMAGE at the ghcr.io/gradiated mirror, or build them from a grad \
-             checkout with `grad local up --build`.",
+             `docker logout` (or `docker login`) and retry, or build them from a grad checkout \
+             with `grad local up --build`.",
         )),
         PullFailure::NotFound => Err(CliError::general(
             "image_not_found",

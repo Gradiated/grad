@@ -5,7 +5,6 @@ The [grad](https://github.com/Gradiated/grad) API server and web UI. grad turns 
 - Source: https://github.com/Gradiated/grad (`server/api`, `server/ui`)
 - Docs: https://gradiated.com/docs/training/ and the [self-hosting guide](https://github.com/Gradiated/grad/blob/main/docs/SELF_HOSTING.md)
 - License: MIT
-- Mirror: `ghcr.io/gradiated/grad-server` (same images and tags)
 
 ## Usage
 

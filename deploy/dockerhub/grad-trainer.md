@@ -5,7 +5,6 @@ The [grad](https://github.com/Gradiated/grad) training worker. It pulls jobs fro
 - Source: https://github.com/Gradiated/grad (`server/trainer`)
 - Docs: https://gradiated.com/docs/training/ and the [self-hosting guide](https://github.com/Gradiated/grad/blob/main/docs/SELF_HOSTING.md)
 - License: MIT
-- Mirror: `ghcr.io/gradiated/grad-trainer` (same images and tags)
 
 ## Usage
 

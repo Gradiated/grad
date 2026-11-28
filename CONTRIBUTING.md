@@ -126,7 +126,7 @@ version. To release `0.3.0`:
    - the Go module, by pushing the tag `sdks/go/v0.3.0` (Go modules in a subdirectory are
      versioned by tags with that prefix, so users run `go get github.com/Gradiated/grad/sdks/go@v0.3.0`),
    - `docker.io/gradiated/grad-server` and `docker.io/gradiated/grad-trainer` (`0.3.0` for CPU,
-     `0.3.0-gpu` for CUDA), mirrored to `ghcr.io/gradiated/`, with SBOM and provenance
+     `0.3.0-gpu` for CUDA), also pushed to `ghcr.io/gradiated/`, with SBOM and provenance
      attestations, through
      [`images.yml`](.github/workflows/images.yml), the workflow that also publishes `main` and
      `sha-<7>` on every push to `main`,
@@ -175,4 +175,5 @@ These are configured on GitHub, not in this repository:
   from [`deploy/dockerhub/`](deploy/dockerhub); that step only warns if the token can't edit
   repositories.
 - GHCR: after the first push, make `grad-server`, `grad-trainer` and `charts/grad` public and
-  connect them to this repository.
+  connect them to this repository. They are private for now (the organization doesn't allow
+  public packages yet), so the docs name only Docker Hub; don't advertise GHCR until they are.
