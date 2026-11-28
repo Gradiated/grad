@@ -93,6 +93,15 @@ describe("Cloud price list", () => {
     expect(await priceAge()).toBe(301 + 24 * 3600);
   });
 
+  it("shares one fetch among concurrent refreshes", async () => {
+    const p = prices();
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => p.refresh(true)),
+    );
+    expect(results.every(Boolean)).toBe(true);
+    expect(cloud.callsTo("/api/internal/v1/billing/prices")).toHaveLength(1);
+  });
+
   it("rejects a malformed list and keeps the previous one", async () => {
     const p = prices();
     await p.refresh(true);

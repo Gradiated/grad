@@ -80,6 +80,8 @@ export const createCloudPrices = (options: CloudPricesOptions): CloudPrices => {
   let confirmedAt = -Infinity;
   let nextPollAt = -Infinity;
   let failures = 0;
+  // One fetch at a time: concurrent refreshes share it.
+  let inFlight: Promise<boolean> | null = null;
 
   const now = () => options.clock.now().getTime();
 
@@ -106,6 +108,33 @@ export const createCloudPrices = (options: CloudPricesOptions): CloudPrices => {
     etag = res.headers.get("etag");
   };
 
+  const poll = async (): Promise<boolean> => {
+    try {
+      await fetchList();
+      confirmedAt = now();
+      failures = 0;
+      nextPollAt = now() + pollMs;
+
+      return true;
+    } catch (error) {
+      failures += 1;
+      // Back off 30 s, 60 s, ... up to the poll interval (never past
+      // 30 s while there is no list at all: nothing can be priced).
+      nextPollAt =
+        now() +
+        Math.min(
+          list ? pollMs : UNPRICED_RETRY_MS,
+          30_000 * 2 ** (failures - 1),
+        );
+      log("warn", "Gradiated Cloud price list unavailable", {
+        error,
+        keeping: list?.version ?? null,
+      });
+
+      return false;
+    }
+  };
+
   watchPriceList(() =>
     Number.isFinite(confirmedAt) ? (now() - confirmedAt) / 1000 : null,
   );
@@ -113,32 +142,13 @@ export const createCloudPrices = (options: CloudPricesOptions): CloudPrices => {
   return {
     current: () => list,
     fresh: () => list !== null && now() - confirmedAt <= maxStaleMs,
-    refresh: async (force = false) => {
-      if (!force && now() < nextPollAt) return true;
-      try {
-        await fetchList();
-        confirmedAt = now();
-        failures = 0;
-        nextPollAt = now() + pollMs;
+    refresh: (force = false) => {
+      if (!force && now() < nextPollAt) return Promise.resolve(true);
+      inFlight ??= poll().finally(() => {
+        inFlight = null;
+      });
 
-        return true;
-      } catch (error) {
-        failures += 1;
-        // Back off 30 s, 60 s, ... up to the poll interval (never past
-        // 30 s while there is no list at all: nothing can be priced).
-        nextPollAt =
-          now() +
-          Math.min(
-            list ? pollMs : UNPRICED_RETRY_MS,
-            30_000 * 2 ** (failures - 1),
-          );
-        log("warn", "Gradiated Cloud price list unavailable", {
-          error,
-          keeping: list?.version ?? null,
-        });
-
-        return false;
-      }
+      return inFlight;
     },
   };
 };

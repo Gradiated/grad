@@ -73,7 +73,9 @@ export const createCloudBilling = (
 
     checkCanStartRun: async (workspaceId, estimatedCostUsd) => {
       if (!options.prices.fresh()) {
-        await options.prices.refresh(true);
+        // A due poll now (shared with any other in flight); within the
+        // backoff after a failure, answer 503 without asking again.
+        await options.prices.refresh();
         if (!options.prices.fresh()) throw pricesUnavailable();
       }
       let res: CloudResponse;
