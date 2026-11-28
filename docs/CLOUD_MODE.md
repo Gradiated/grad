@@ -97,7 +97,7 @@ Auth's jwt() plugin), sent as `Authorization: Bearer` (never cookies).
 | `admin` | `admin` (every workspace scope) |
 | `member` | `datasets:read/write`, `runs:read/write` (evals included), `artifacts:read/write`, `sources:read` |
 
-Secrets, source writes and deploy are admin-only. A key's or token's non-empty
+Secrets and source writes are admin-only. A key's or token's non-empty
 `scopes` are intersected with its role's.
 
 ## Billing

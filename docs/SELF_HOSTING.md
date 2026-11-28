@@ -1,6 +1,6 @@
 # Self-Hosting Guide
 
-Self-hosted `grad` needs only **PostgreSQL 17** and **S3-compatible object storage**: AWS S3, SeaweedFS, MinIO, Cloudflare R2 or another store with the S3 API. There is no local-disk mode; `grad local up` runs SeaweedFS, so a laptop stack stores data the same way production does. Hosted serving (`deploy`, `/v1/route`, `/v1/embeddings`) is a Gradiated Cloud feature: on a self-hosted server those endpoints return `501 deploy_unavailable`; download artifacts and serve them on vLLM or SGLang instead.
+Self-hosted `grad` needs only **PostgreSQL 17** and **S3-compatible object storage**: AWS S3, SeaweedFS, MinIO, Cloudflare R2 or another store with the S3 API. There is no local-disk mode; `grad local up` runs SeaweedFS, so a laptop stack stores data the same way production does. Hosted serving (publishing an artifact as a model version, routing, embeddings) is a Gradiated Cloud feature with its own API; grad-server has no serving endpoints. Self-hosted, download artifacts and serve them on vLLM or SGLang.
 
 ## Local development (`grad local up`)
 
@@ -395,4 +395,4 @@ Every component logs one JSON object per line to stdout: `time`, `level` (`info`
 
 ## Retention
 
-Checkpoints expire after the recipe's `checkpoint_ttl_days` (30 by default); the best and final checkpoints of every finished run never expire. Expired checkpoints and unused uploads are deleted by the server's maintenance loop. Promoting a checkpoint copies it into a new immutable artifact under `artifacts/`. Released artifacts never expire; `grad artifacts delete NAME@VERSION` deletes one and its bundle, unless it is [pinned](#artifact-pins).
+While a run trains it keeps its last three checkpoints and its best by eval score; older ones expire as soon as a newer one registers. The kept ones expire after the recipe's `checkpoint_ttl_days` (30 by default), except that the best and final checkpoints of every finished run never expire. Expired checkpoints and unused uploads are deleted by the server's maintenance loop. Promoting a checkpoint copies it into a new immutable artifact under `artifacts/`. Released artifacts never expire; `grad artifacts delete NAME@VERSION` deletes one and its bundle, unless it is [pinned](#artifact-pins).

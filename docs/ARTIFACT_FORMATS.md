@@ -5,16 +5,18 @@ Every grad training run produces one artifact bundle: a `.grad.tar.gz` file hold
 - JSON Schemas: [`spec/artifacts/`](../spec/artifacts/). [`manifest.schema.json`](../spec/artifacts/manifest.schema.json) covers `manifest.json`, and `<format>.schema.json` covers each format's config file. The trainer checks every bundle it writes against them (`grad_trainer/artifact_formats.py`) and refuses to upload one that fails.
 - Reference loaders: the Python blocks marked `# loader: <name>` below are the reference loaders. `server/trainer/tests/test_artifact_formats.py` runs them exactly as written. They use only the files this document lists, plus `torch`, `transformers`, `peft` and `safetensors`. They never import the trainer. The tests compare their outputs with the trainer's own inference code for every recipe.
 
-| `format` | Recipe (`recipe_kind`) | Config file | Needs the base model | Gradiated Cloud v0 |
+| `format` | Recipe (`recipe_kind`) | Config file | Needs the base model | Gradiated Cloud serving |
 | --- | --- | --- | --- | --- |
-| [`peft_lora`](#peft_lora) | `sft`, `dpo`, `distill` | `adapter_config.json` | yes | deploy |
+| [`peft_lora`](#peft_lora) | `sft`, `dpo`, `distill` | `adapter_config.json` | yes | first |
 | [`merged_safetensors`](#merged_safetensors) | `sft` or `distill` with `merge_on_export` | `config.json` | no | download only |
-| [`cartridge`](#cartridge) | `cartridge` | `cartridge.safetensors` header | yes | deploy |
-| [`encoder_safetensors`](#encoder_safetensors) | `embedding` | `grad_embedding.json` | no | deploy |
-| [`router_bundle`](#router_bundle) | `router` | `router_config.json` | yes | deploy |
-| [`decision_bundle`](#decision_bundle) | `decision` | `decision_config.json` | yes | deploy |
-| [`reward_bundle`](#reward_bundle) | `reward` | `reward_config.json` | yes | download only (serving planned) |
+| [`cartridge`](#cartridge) | `cartridge` | `cartridge.safetensors` header | yes | first |
+| [`encoder_safetensors`](#encoder_safetensors) | `embedding` | `grad_embedding.json` | no | planned |
+| [`router_bundle`](#router_bundle) | `router` | `router_config.json` | yes | planned |
+| [`decision_bundle`](#decision_bundle) | `decision` | `decision_config.json` | yes | planned |
+| [`reward_bundle`](#reward_bundle) | `reward` | `reward_config.json` | yes | planned |
 | [`reference`](#reference-test-only) | any | none | no | never (test double) |
+
+Gradiated Cloud serving of published artifacts starts with `peft_lora` adapters and cartridges ("first"); the other bundle formats follow ("planned"). Every format downloads and serves on your own stack with the reference loaders below.
 
 ## Versioning
 
