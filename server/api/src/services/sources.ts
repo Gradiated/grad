@@ -31,7 +31,12 @@ import type {
   Store,
 } from "../store/types.js";
 import { log } from "../telemetry/log.js";
-import { isSyncPayload, toPublicImport, type SyncPayload } from "./imports.js";
+import {
+  isSyncPayload,
+  syncPayloadOf,
+  toPublicImport,
+  type SyncPayload,
+} from "./imports.js";
 import type { SecretService } from "./secrets.js";
 import { cloudFilters, effectiveFilters } from "./source-filters.js";
 import { loadLeased } from "./jobs.js";
@@ -602,7 +607,7 @@ export const createSourceService = (
     },
 
     claimPayload: async (job) => {
-      const payload = job.source as unknown as SyncPayload;
+      const payload = syncPayloadOf(job);
       const source = await store.sources.getById(payload.source_id);
       if (!source || source.workspace_id !== job.workspace_id) {
         throw conflict(
@@ -642,7 +647,7 @@ export const createSourceService = (
     },
 
     defersVersion: async (job, records) => {
-      const payload = job.source as unknown as SyncPayload;
+      const payload = syncPayloadOf(job);
       if (payload.scheduled !== true || payload.full) return false;
       const source = await store.sources.lock(
         job.workspace_id,
@@ -661,7 +666,7 @@ export const createSourceService = (
     },
 
     completeSync: async (job, { watermark, traces }, outcome) => {
-      const payload = job.source as unknown as SyncPayload;
+      const payload = syncPayloadOf(job);
       const source = await store.sources.lock(
         job.workspace_id,
         payload.source_id,
@@ -690,7 +695,7 @@ export const createSourceService = (
     },
 
     failSync: async (job) => {
-      const payload = job.source as unknown as SyncPayload;
+      const payload = syncPayloadOf(job);
       await store.transaction(async () => {
         const source = await store.sources.lock(
           job.workspace_id,
@@ -728,8 +733,8 @@ export const createSourceService = (
       await loadLeased(store, principal, jobId, worker_id, attempt);
       const job = await store.imports.getById(jobId);
       if (!job) throw notFound("trainer_job", jobId);
-      const payload = job.source as unknown as SyncPayload;
-      if (!isSyncPayload(job.source) || payload.provider !== "gradiated") {
+      const payload = isSyncPayload(job.source) ? job.source : null;
+      if (payload?.provider !== "gradiated") {
         throw invalid(
           "source_page_unavailable",
           `Job '${job.id}' is not a gradiated source sync.`,

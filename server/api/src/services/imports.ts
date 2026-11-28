@@ -89,8 +89,21 @@ export interface SyncPayload {
   scheduled?: boolean;
 }
 
-export const isSyncPayload = (source: Record<string, unknown>): boolean =>
+export const isSyncPayload = (
+  source: Record<string, unknown>,
+): source is Record<string, unknown> & SyncPayload =>
   source.kind === "provider" && typeof source.source_id === "string";
+
+/** A source sync's payload; throws for any other import job. */
+export const syncPayloadOf = (
+  job: Pick<ImportJobRecord, "id" | "source">,
+): SyncPayload => {
+  if (!isSyncPayload(job.source)) {
+    throw new Error(`Import job '${job.id}' is not a source sync.`);
+  }
+
+  return job.source;
+};
 
 export const toPublicImport = (job: ImportJobRecord): ImportJob => ({
   id: job.id,
@@ -578,8 +591,9 @@ export const createImportService = (
         drop_reasons: [],
       };
       const staged = await store.datasets.listStaged(job.id, job.attempt);
-      const sync = isSyncPayload(job.source);
-      const sourceId = sync ? String(job.source.source_id) : undefined;
+      const sourceId = isSyncPayload(job.source)
+        ? job.source.source_id
+        : undefined;
       const { completed, orphans, dataset } = await store.transaction(
         async () => {
           const benchmark = benchmarkMetadata(job.source);
@@ -603,7 +617,7 @@ export const createImportService = (
                 attempt: job.attempt,
                 ...(benchmark ? { metadata: benchmark } : {}),
                 // A sync that found nothing new adds no empty version.
-                keepVersionIfEmpty: sync,
+                keepVersionIfEmpty: sourceId !== undefined,
                 ...(sourceId !== undefined ? { sourceId } : {}),
               });
           const updated = await store.imports.update(
@@ -631,7 +645,7 @@ export const createImportService = (
             fenceOf(job, ["running"]),
           );
           if (!updated) throw leaseLost(id);
-          if (sync) {
+          if (sourceId !== undefined) {
             await collaborators.sources.completeSync(job, summary, {
               records: staged.count,
               deferred,
