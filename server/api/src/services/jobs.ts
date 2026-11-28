@@ -318,16 +318,26 @@ export const loadForWorker = async (
   return job;
 };
 
-/** The job behind a worker write, if this worker holds `attempt`'s lease. */
-export const loadLeased = async (
-  store: Pick<Store, "jobs">,
+/**
+ * `job` (read once by the caller) if this worker holds `attempt`'s lease on
+ * it. The caller writes from this same read, fenced on it: checking one read
+ * and writing from another would let a lease taken over in between pass the
+ * new holder's fence.
+ */
+export const leased = <
+  T extends Pick<JobRow, "kind" | "worker_id" | "worker_key" | "attempt">,
+>(
   principal: AuthPrincipal,
   id: string,
-  workerId: string,
-  attempt: number,
-): Promise<JobRow> => {
-  const job = await loadForWorker(store, principal, id);
-  if (!holdsLease(principal, job, workerId, attempt)) throw leaseLost(id);
+  job: T | null,
+  holder: { worker_id: string; attempt: number },
+): T => {
+  if (!job || claimableKinds(principal, [job.kind]).length === 0) {
+    throw notFound("trainer_job", id);
+  }
+  if (!holdsLease(principal, job, holder.worker_id, holder.attempt)) {
+    throw leaseLost(id);
+  }
 
   return job;
 };

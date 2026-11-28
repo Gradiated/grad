@@ -48,7 +48,7 @@ import {
   requeuePatch,
   type JobKindHandler,
   loadForWorker,
-  loadLeased,
+  leased,
 } from "./jobs.js";
 import type { SecretService, SecretUse } from "./secrets.js";
 import type { SourceService } from "./sources.js";
@@ -429,8 +429,7 @@ export const createImportService = (
     },
 
     createUpload: async (principal, id, body) => {
-      await loadLeased(store, principal, id, body.worker_id, body.attempt);
-      const job = await load(id);
+      const job = leased(principal, id, await store.imports.getById(id), body);
       // An artifact import uploads its bundle to the released-artifacts
       // prefix; a dataset import uploads gzip JSONL parts.
       const wants = job.artifact ? "artifact" : "records";
@@ -452,8 +451,7 @@ export const createImportService = (
     },
 
     registerPart: async (principal, id, body) => {
-      await loadLeased(store, principal, id, body.worker_id, body.attempt);
-      const job = await load(id);
+      const job = leased(principal, id, await store.imports.getById(id), body);
       if (job.artifact) {
         throw conflict("wrong_job_kind", "Artifact imports stage no parts.");
       }

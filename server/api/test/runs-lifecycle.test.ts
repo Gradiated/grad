@@ -815,6 +815,49 @@ describe("run lifecycle and worker protocol", () => {
     expect(await t.services.queue.expireLeases(t.clock.now())).toBe(0);
   });
 
+  it("fences a worker write on the row its lease check read, not a later read", async () => {
+    const run = await createSftRun(t);
+    const job = (await worker.claim())!;
+    const other = new FakeWorker(t, "worker-2");
+
+    // Right after the stale worker's request first reads the run, its lease
+    // expires and another worker claims attempt 2.
+    const { jobs, runs } = t.deps.store;
+    const [jobRead, runRead] = [jobs.getById, runs.getById];
+    let armed = true;
+    const steal = async () => {
+      armed = false;
+      t.clock.advanceSeconds(120);
+      expect((await other.claim())?.attempt).toBe(2);
+    };
+    jobs.getById = async (id) => {
+      const row = await jobRead(id);
+      if (armed && id === run.id) await steal();
+      return row;
+    };
+    runs.getById = async (id) => {
+      const row = await runRead(id);
+      if (armed && id === run.id) await steal();
+      return row;
+    };
+
+    const late = await worker.progress(job, 5, 5_000);
+    jobs.getById = jobRead;
+    runs.getById = runRead;
+    expect([late.status, late.body]).toMatchObject([
+      409,
+      { code: "lease_lost" },
+    ]);
+    const after = (await runRead(run.id))!;
+    expect([after.attempt, after.attempt_tokens, after.current_step]).toEqual([
+      2, 0, 0,
+    ]);
+    const metrics = await t.json<{ data: unknown[] }>(
+      `/v1/runs/${run.id}/metrics`,
+    );
+    expect(metrics.body.data).toEqual([]);
+  });
+
   it("keeps a lease alive through heartbeats during long exports", async () => {
     await createSftRun(t);
     const job = await worker.claim();

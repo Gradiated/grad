@@ -63,6 +63,7 @@ import {
   observeInterruption,
   RELEASE,
   requeuePatch,
+  leased,
   loadForReader,
   type JobKindHandler,
   loadForWorker,
@@ -578,21 +579,6 @@ export const createEvalService = (
     },
   };
 
-  /** The eval behind a worker write, if this worker holds `attempt`'s lease. */
-  const loadLeased = async (
-    principal: AuthPrincipal,
-    id: string,
-    workerId: string,
-    attempt: number,
-  ): Promise<EvalRecord> => {
-    const row = await loadForWorker(store, principal, id);
-    const record = row.kind === "eval" && (await store.evals.getById(id));
-    if (!record) throw notFound("trainer_job", id);
-    if (!holdsLease(principal, record, workerId, attempt)) throw leaseLost(id);
-
-    return record;
-  };
-
   /** A completed attempt: aggregate, wait for local scores, or fail. */
   const completeGenerated = async (
     job: EvalRecord,
@@ -662,7 +648,7 @@ export const createEvalService = (
     id,
     body,
   ) => {
-    const job = await loadLeased(principal, id, body.worker_id, body.attempt);
+    const job = leased(principal, id, await store.evals.getById(id), body);
     const judges = new Set(Object.keys(job.judge_targets));
     for (const o of body.outputs) {
       const known =

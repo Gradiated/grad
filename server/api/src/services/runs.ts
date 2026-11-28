@@ -76,7 +76,7 @@ import {
   observeInterruption,
   queueView,
   loadForWorker,
-  loadLeased,
+  leased,
   type StopReason,
   loadForReader,
 } from "./jobs.js";
@@ -362,11 +362,8 @@ export const createRunLifecycle = (
     principal: AuthPrincipal,
     id: string,
     holder: { worker_id: string; attempt: number },
-  ): Promise<RunRecord> => {
-    await loadLeased(store, principal, id, holder.worker_id, holder.attempt);
-
-    return loadById(id);
-  };
+  ): Promise<RunRecord> =>
+    leased(principal, id, await store.runs.getById(id), holder);
 
   /** The run's training records: its pinned dataset version, or its labeling eval's answers. */
   const trainingRecords = async (

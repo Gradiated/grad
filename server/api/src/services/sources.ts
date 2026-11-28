@@ -39,7 +39,7 @@ import {
 } from "./imports.js";
 import type { SecretService } from "./secrets.js";
 import { cloudFilters, effectiveFilters } from "./source-filters.js";
-import { loadLeased } from "./jobs.js";
+import { leased } from "./jobs.js";
 
 type CreateSourceBody = z.infer<typeof CreateSourceRequestSchema>;
 type UpdateSourceBody = z.infer<typeof UpdateSourceRequestSchema>;
@@ -730,9 +730,10 @@ export const createSourceService = (
 
     pullTracesFor: async (principal, jobId, { worker_id, attempt, cursor }) => {
       if (!deps.traces) throw sourceUnavailable();
-      await loadLeased(store, principal, jobId, worker_id, attempt);
-      const job = await store.imports.getById(jobId);
-      if (!job) throw notFound("trainer_job", jobId);
+      const job = leased(principal, jobId, await store.imports.getById(jobId), {
+        worker_id,
+        attempt,
+      });
       const payload = isSyncPayload(job.source) ? job.source : null;
       if (payload?.provider !== "gradiated") {
         throw invalid(
