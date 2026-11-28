@@ -2,8 +2,12 @@ import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 import type { DatasetRecord } from "../contracts.js";
-import { conflict } from "../errors.js";
-import { ObjectExistsError, type ObjectStore } from "../storage/types.js";
+import { ApiError, conflict } from "../errors.js";
+import {
+  ObjectExistsError,
+  ObjectNotFoundError,
+  type ObjectStore,
+} from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
 import { isReset, isScoreUpdate } from "./record-merge.js";
 import { metrics } from "../telemetry/metrics.js";
@@ -78,6 +82,28 @@ export const writeRecordsPart = async (
   };
 };
 
+/**
+ * A stored part's bytes. A part whose object is gone (a bucket lost or
+ * restored without the database) answers 410 dataset_part_missing: the
+ * version's records can't be read again, so a retry would not help.
+ */
+export const readPart = async (
+  storage: ObjectStore,
+  part: DatasetPart,
+): Promise<Uint8Array> => {
+  try {
+    return await storage.get(part.key);
+  } catch (error) {
+    if (!(error instanceof ObjectNotFoundError)) throw error;
+    throw new ApiError(
+      410,
+      "dataset_part_missing",
+      "Dataset records missing",
+      `A part of this dataset version is missing from object storage (${part.key}), so its records can't be read. Push or import them again as a new version.`,
+    );
+  }
+};
+
 export const parsePart = (
   stored: Uint8Array,
   part: DatasetPart,
@@ -108,7 +134,7 @@ async function* iterateVersionRecords(
   version: Pick<DatasetVersion, "parts">,
 ): AsyncGenerator<DatasetRecord> {
   for (const part of version.parts) {
-    const records = parsePart(await storage.get(part.key), part);
+    const records = parsePart(await readPart(storage, part), part);
     yield* records;
   }
 }

@@ -1,7 +1,7 @@
 import type { DatasetRecord } from "../contracts.js";
 import type { ObjectStore } from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
-import { parsePart, partLines } from "./dataset-records.js";
+import { parsePart, partLines, readPart } from "./dataset-records.js";
 import {
   applyFacts,
   isReset,
@@ -86,7 +86,7 @@ export const buildVersionIndex = async (
 
   for (const [p, part] of parts.entries()) {
     partStarts[p] = line;
-    for (const record of parsePart(await storage.get(part.key), part)) {
+    for (const record of parsePart(await readPart(storage, part), part)) {
       const at = line;
       line += 1;
       lineSlots.push(-1);
@@ -176,7 +176,7 @@ export const createPartLinesCache = (
       cached.set(part.key, hit);
       return hit.lines;
     }
-    const lines = partLines(await storage.get(part.key), part);
+    const lines = partLines(await readPart(storage, part), part);
     const size = lines.reduce((sum, line) => sum + line.length, 0);
     if (size <= maxBytes) {
       cached.set(part.key, { lines, bytes: size });
@@ -200,7 +200,7 @@ export const readVersionPage = async (
   from: number,
   limit: number,
   lines: PartLines = async (part) =>
-    partLines(await storage.get(part.key), part),
+    partLines(await readPart(storage, part), part),
 ): Promise<DatasetRecord[]> => {
   const to = Math.min(index.total, from + limit);
   if (from >= to) return [];

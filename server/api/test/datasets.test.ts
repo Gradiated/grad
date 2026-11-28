@@ -174,6 +174,11 @@ describe("datasets, uploads and imports", () => {
     await swap(gzipSync(Buffer.from('{"id":"other"}\n')));
     res = await t.json("/v1/datasets/broken/records");
     expect(res.status).toBe(500);
+
+    // A part gone from the bucket (restored without it) is a 410, not a bug.
+    await t.deps.storage.delete(key);
+    res = await t.json("/v1/datasets/broken/records");
+    expect([res.status, res.body.code]).toEqual([410, "dataset_part_missing"]);
   });
 
   it("gives records without ids batch-derived ids, so a re-push changes nothing", async () => {
