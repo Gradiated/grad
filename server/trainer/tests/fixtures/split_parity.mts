@@ -1,5 +1,5 @@
 // Prints planner.ts splitRecords() results (splitForRecipe() for cases with a recipe kind) for
-// split_parity_records.json (used by test_core.py).
+// split_parity_records.json (used by test_core.py; server/api/test/trainer-parity.test.ts replays the golden).
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

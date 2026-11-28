@@ -80,7 +80,11 @@ export const splitRecords = (
   const inEval = fractions.map((f) => f < options.eval_fraction);
 
   if (inEval.length > 0 && inEval.every(Boolean)) {
-    inEval[0] = false;
+    // Everything hashed into eval: the first record's whole group trains, so
+    // no session or group straddles the two sides.
+    keys.forEach((key, i) => {
+      if (key === keys[0]) inEval[i] = false;
+    });
   } else if (options.eval_fraction > 0 && !inEval.some(Boolean)) {
     // With two or more groups the eval side is never empty: the group that
     // hashes lowest is held out (tiny datasets otherwise trained unevaluated).

@@ -22259,5 +22259,59 @@
       "eval_fraction": 0.25,
       "seed": 7
     }
+  },
+  {
+    "options": {
+      "strategy": "by_session",
+      "eval_fraction": 0.5,
+      "seed": 11
+    },
+    "records": [
+      {
+        "id": "a",
+        "session_id": "s1"
+      },
+      {
+        "id": "b",
+        "session_id": "s1"
+      },
+      {
+        "id": "c",
+        "session_id": "s2"
+      },
+      {
+        "id": "d",
+        "session_id": "s2"
+      }
+    ]
+  },
+  {
+    "options": {
+      "strategy": "by_group",
+      "eval_fraction": 0.5,
+      "seed": 23
+    },
+    "records": [
+      {
+        "id": "a",
+        "group_id": "g1"
+      },
+      {
+        "id": "b",
+        "session_id": "s2"
+      },
+      {
+        "id": "c",
+        "group_id": "g1"
+      },
+      {
+        "id": "d",
+        "session_id": "s2"
+      },
+      {
+        "id": "e",
+        "group_id": "g1"
+      }
+    ]
   }
 ]

@@ -53,7 +53,9 @@ def split_indices(
     fractions = [hash_fraction(key, seed) for key in keys]
     in_eval = [f < eval_fraction for f in fractions]
     if in_eval and all(in_eval):
-        in_eval[0] = False
+        # Everything hashed into eval: the first record's whole group trains, so no
+        # session or group straddles the two sides.
+        in_eval = [key != keys[0] for key in keys]
     elif eval_fraction > 0 and not any(in_eval):
         # With two or more groups the eval side is never empty: the group that hashes
         # lowest is held out (tiny datasets otherwise trained unevaluated).
