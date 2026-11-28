@@ -18,6 +18,8 @@ export interface Call {
   headers: Headers;
   body: string | undefined;
   rawBody: unknown;
+  /** The bytes of a streamed (upload) body, read as a server would. */
+  bytes: Buffer | undefined;
 }
 
 export type Reply = Response | ((call: Call) => Response | Promise<Response>);
@@ -56,7 +58,8 @@ export class FakeServer {
     const headers = new Headers(init.headers);
     const rawBody = init.body;
     const body = typeof rawBody === "string" ? rawBody : undefined;
-    const call: Call = { method, url, headers, body, rawBody };
+    const bytes = rawBody instanceof ReadableStream ? Buffer.from(await new Response(rawBody).arrayBuffer()) : undefined;
+    const call: Call = { method, url, headers, body, rawBody, bytes };
     if (this.calls.length >= this.maxCalls) throw new Error(`FakeServer: more than ${this.maxCalls} requests; the client is looping.`);
     this.calls.push(call);
     if (init.signal?.aborted) throw init.signal.reason;

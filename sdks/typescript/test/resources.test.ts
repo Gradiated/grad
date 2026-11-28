@@ -23,7 +23,6 @@ import {
   ValidationError,
 } from "../src/index.js";
 import { BASE, FakeServer, json, makeGrad, problemFixture, wire } from "./helpers.js";
-import { FileBody } from "../src/transport.js";
 
 const scratch = () => mkdtempSync(path.join(process.env.TMPDIR ?? tmpdir(), "grad-ts-"));
 
@@ -286,8 +285,9 @@ describe("datasets and imports", () => {
     expect(put.headers.has("authorization")).toBe(false);
     expect(put.headers.get("content-type")).toBe("application/octet-stream");
     expect(put.url.search).toContain("sig=");
-    expect(put.rawBody).toBeInstanceOf(FileBody);
-    expect((put.rawBody as FileBody).size).toBe(16);
+    // A caller's own fetch gets the file's bytes as a stream with its Content-Length, not a FileBody it can't send.
+    expect(put.headers.get("content-length")).toBe("16");
+    expect(put.bytes?.toString()).toBe('{"messages":[]}\n');
     expect(server.lastBody("POST", "/v1/datasets/support-prod/imports")).toEqual({
       source: { kind: "upload", upload_id: ticket["upload_id" as keyof typeof ticket], format: "jsonl" },
       connector: "openai_chat",
@@ -432,7 +432,7 @@ describe("artifacts", () => {
     const server = new FakeServer()
       .on("POST", "/v1/uploads", json(ticket, 201))
       .on("PUT", ticketPath, async (call) => {
-        sent = readFileSync((call.rawBody as FileBody).path);
+        sent = call.bytes;
         return new Response(null, { status: 200 });
       })
       .on("POST", "/v1/artifact-imports", json(IMPORT, 202))

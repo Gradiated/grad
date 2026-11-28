@@ -162,13 +162,13 @@ class LazyTransport implements TransportLike {
   async upload(url: string, headers: Record<string, string>, file: { path: string; sizeBytes: number }, options?: RequestOptions): Promise<RawResponse> {
     const { config } = await this.resolve();
     const target = new URL(url, `${config.baseURL.replace(/\/+$/, "")}/`);
-    const { nodeFetch } = await import("./node/files.js");
+    const { uploadFetch } = await import("./node/files.js");
     const uploader = new Transport({
       baseURL: target.origin,
       apiKey: undefined,
       timeoutMs: this.options.timeoutMs,
       maxRetries: this.options.maxRetries,
-      fetch: this.options.fetch ?? nodeFetch,
+      fetch: uploadFetch(this.options.fetch),
       userAgent: this.options.userAgent,
       sleep: this.options.sleep,
       random: this.options.random,

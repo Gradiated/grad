@@ -78,7 +78,9 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   per-attempt timeout, so an upload slower than that (a few GB of weights) failed; uploads now have
   no per-attempt deadline (an `AbortSignal` still cancels them). It also read the whole file into
   memory first (Node's fetch buffers a Blob body, even from `openAsBlob`): a 2 GiB upload peaked at
-  2.1 GiB RSS, now 99 MiB, streamed from disk through `node:http(s)` with its Content-Length. The Go SDK now retries an upload
+  2.1 GiB RSS, now 99 MiB, streamed from disk through `node:http(s)` with its Content-Length. With a `fetch` option
+  (a proxy wrapper), the upload goes through that fetch as a stream of the file; before, it sent the text
+  `[object Object]`. The Go SDK now retries an upload
   (dropped connection, 5xx), rewinding the file each time.
 - **SDKs: one retry rule everywhere**, pinned by `tests/fixtures/wire/retries.json`, which every
   SDK replays: a `Retry-After` above 60 s raises the typed error at once in every SDK (Python and

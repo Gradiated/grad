@@ -388,7 +388,7 @@ export interface RequestSpec {
 /**
  * A file on disk as a request body. fetch reads a Blob body into memory whole (Node's undici
  * does, even for `openAsBlob`), so uploads pass this to a fetch that streams it from disk
- * with its exact Content-Length (`nodeFetch` in node/files.ts).
+ * with its exact Content-Length (`uploadFetch` in node/files.ts).
  */
 export class FileBody {
   constructor(

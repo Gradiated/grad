@@ -50,6 +50,15 @@ describe("streamed uploads (nodeFetch)", () => {
     expect((await nodeFetch(`${base}/plain`, { method: "PUT", body: "x" })).status).toBe(200);
   });
 
+  it("sends the file's bytes through a caller's own fetch (a proxy wrapper), not '[object Object]'", async () => {
+    const grad = new Grad({ baseURL: base, apiKey: "k", fetch: (input, init) => fetch(input, init) });
+    const core = (grad as unknown as { datasets: { core: { upload: (u: string, h: Record<string, string>, f: { path: string; sizeBytes: number }) => Promise<{ status: number; cancel: () => Promise<void> }> } } }).datasets.core;
+    const put = await core.upload(`${base}/put`, {}, { path: file, sizeBytes: data.length });
+    await put.cancel();
+    const sha = createHash("sha256").update(data).digest("hex");
+    expect(seen.at(-1)).toEqual({ length: String(data.length), chunked: false, sha, bytes: data.length });
+  });
+
   it("replays the whole file on a retry through the client's upload path", async () => {
     fail = 1;
     const grad = new Grad({ baseURL: base, apiKey: "k", sleep: async () => undefined });
