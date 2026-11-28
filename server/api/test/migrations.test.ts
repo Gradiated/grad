@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { connect, createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pg from "pg";
@@ -106,6 +107,47 @@ describe("migrate command and MIGRATE_ON_BOOT=false", () => {
       expect(await runMigrations(url, { schema })).toEqual([]);
     } finally {
       await dropSchema(url, schema);
+    }
+  });
+
+  it("waits out a database that is not reachable yet, then gives up", async () => {
+    const real = new URL(postgresUrl());
+    const free = createServer();
+    await new Promise<void>((resolve) => free.listen(0, "127.0.0.1", resolve));
+    const { port } = free.address() as AddressInfo;
+    await new Promise((resolve) => free.close(resolve));
+    const late = new URL(real);
+    late.hostname = "127.0.0.1";
+    late.port = String(port);
+
+    // Nothing listens: refused until the deadline, then the error surfaces.
+    const started = Date.now();
+    await expect(
+      runMigrations(late.toString(), {
+        schema: freshSchemaName(),
+        waitMs: 800,
+      }),
+    ).rejects.toThrow(/ECONNREFUSED/);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(800);
+
+    // The database comes up 1 s into the wait (a forwarder to the real one).
+    const schema = freshSchemaName();
+    const forwarder = createServer((client) => {
+      const upstream = connect(Number(real.port), real.hostname);
+      client.pipe(upstream).pipe(client);
+      client.on("error", () => upstream.destroy());
+      upstream.on("error", () => client.destroy());
+    });
+    const opened = setTimeout(() => forwarder.listen(port, "127.0.0.1"), 1_000);
+    try {
+      const versions = (await loadMigrations()).map((m) => m.version);
+      expect(
+        await runMigrations(late.toString(), { schema, waitMs: 20_000 }),
+      ).toEqual(versions);
+    } finally {
+      clearTimeout(opened);
+      await new Promise((resolve) => forwarder.close(resolve));
+      await dropSchema(postgresUrl(), schema);
     }
   });
 

@@ -98,6 +98,8 @@ const UNAVAILABLE_ERRNO = new Set([
   "ECONNRESET",
   "ETIMEDOUT",
   "ENOTFOUND",
+  // DNS answered "try again" (a CoreDNS restart, a resolver blip).
+  "EAI_AGAIN",
   "EPIPE",
   "EHOSTUNREACH",
 ]);

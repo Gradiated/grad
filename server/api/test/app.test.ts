@@ -137,6 +137,7 @@ describe("grad-server HTTP API", () => {
       Object.assign(new Error(message), code ? { code } : {});
     for (const e of [
       err("x", "ECONNRESET"),
+      err("getaddrinfo EAI_AGAIN postgres", "EAI_AGAIN"),
       err("x", "08006"),
       err("x", "57P01"),
       err("x", "53300"),
