@@ -26,8 +26,8 @@ Configuration (highest precedence first):
 Pass --json to any command for one machine-readable envelope on stdout
 ({\"ok\": true, \"data\": ...}); errors are {\"ok\": false, \"error\": {...}} on stderr.
 
-Quickstart:
-  grad login
+Quickstart (Gradiated Cloud is coming soon; run your own server for now):
+  grad local up && export GRADIATED_PROFILE=local
   grad import ./support_traces.jsonl --dataset support-prod
   grad train --dataset support-prod --name support-router --recipe router --dry-run
   grad train --dataset support-prod --name support-router --recipe router --wait

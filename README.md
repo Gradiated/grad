@@ -31,7 +31,7 @@
 
 `grad` trains, evaluates and serves small task-specific models: a router that sends easy requests to a cheap model, an 8B fine-tune that replaces a frontier call, an embedding model tuned to your docs. You bring the traces you already log. `grad` tells you what a run will cost before it starts, scores the result against a baseline with confidence intervals, and ships it with one command.
 
-It is one open-source codebase. The same server runs on your laptop (`grad local up`), in your Kubernetes cluster (Helm), and as [Gradiated Cloud](https://gradiated.com/docs/training/).
+It is one open-source codebase. The same server runs on your laptop (`grad local up`), in your Kubernetes cluster (Helm), and soon as [Gradiated Cloud](https://gradiated.com/docs/training/).
 
 ## Quickstart
 
@@ -45,13 +45,22 @@ npm install @gradiated/grad
 
 Without Homebrew, take a binary from the [GitHub Releases](https://github.com/Gradiated/grad/releases) or build one with `cargo install --locked grad-cli@0.2.0-alpha.6` (cargo needs the version while every release is a pre-release).
 
+Start a server. `grad local up` runs grad-server, Postgres, S3 storage and a trainer in Docker from the public [Docker Hub images](#self-hosting); on Kubernetes, install the [Helm chart](#self-hosting) instead.
+
+```bash
+grad local up                    # add --gpu for the CUDA trainer
+export GRADIATED_PROFILE=local   # the CLI and every SDK now use the local stack
+```
+
+> **Gradiated Cloud is coming soon.** It runs this same server with billing and hosted serving on top. Until it opens, run your own server as above.
+
 Train a router on support traces that already carry a `resolved` score. [`examples/support_traces.jsonl`](examples/support_traces.jsonl) is a synthetic sample (two models answering 48 made-up tickets) you can use to try it:
 
 ```python
 from grad import Grad
 from grad.recipes import RouterRecipe
 
-client = Grad()  # reads GRADIATED_API_KEY, or GRADIATED_PROFILE=local for `grad local up`
+client = Grad()  # GRADIATED_PROFILE=local, or GRADIATED_BASE_URL and GRADIATED_API_KEY for your server
 
 # 1. Push traces: OpenAI chat JSONL, OTel, Langfuse, PostHog, Braintrust or LangSmith exports
 dataset = client.datasets.push("support-prod", "./examples/support_traces.jsonl")
@@ -67,7 +76,7 @@ run = client.runs.create(
 print(run.eval_report)
 ```
 
-No scores in your traces yet? Pass `models=[...]` and a `Judge` instead, and Gradiated replays the prompts against each candidate and grades the answers in a labeling eval first. That eval needs a model endpoint, which Gradiated Cloud provides (self-hosted, set `GRAD_INFERENCE_BASE_URL`):
+No scores in your traces yet? Pass `models=[...]` and a `Judge` instead, and Gradiated replays the prompts against each candidate and grades the answers in a labeling eval first. That eval needs an OpenAI-compatible model endpoint: set `GRAD_INFERENCE_BASE_URL` on the server.
 
 ```python
 from grad import Judge
@@ -84,10 +93,9 @@ Download the artifact, a router bundle here, and load it on your own stack with 
 run.download("./support-router", format="files")
 ```
 
-The same loop from the CLI:
+The same loop from the CLI (for a server of your own, `grad login --base-url https://grad.example.com` saves its key):
 
 ```bash
-grad login
 grad import ./examples/support_traces.jsonl --dataset support-prod
 grad train --dataset support-prod --name support-router --recipe router --set rubric=resolved --dry-run
 grad train --dataset support-prod --name support-router --recipe router --set rubric=resolved --max-cost-usd 20 --wait

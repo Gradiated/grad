@@ -5,7 +5,7 @@ fine-tuning runs, evaluate models, download PEFT adapters, and upload or import 
 
 - Python 3.11+, one dependency (`httpx`); a blocking `Grad` client (from asyncio, call it via `asyncio.to_thread`).
 - Typed objects with a `.raw` escape hatch, `py.typed`, typed errors, retries with backoff.
-- Works against Gradiated Cloud or a self-hosted `grad-server`.
+- Works against a self-hosted `grad-server`, and Gradiated Cloud once it opens.
 
 ```bash
 pip install grad-sdk
