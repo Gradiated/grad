@@ -9,7 +9,7 @@
 //!   429 and on connection failures where the request never left the client.
 //!   A 429 `queue_limit` (the workspace's queued-jobs cap) is never retried:
 //!   it returns `Error::QueueLimit` at once.
-//! - `Retry-After` (seconds) is honoured; one above 60 s returns the error at once.
+//! - `Retry-After` (seconds or an HTTP date) and `Retry-After-Ms` are honoured; one above 60 s returns the error at once.
 //! - Redirects are followed by hand: only same-origin GET/HEAD redirects are
 //!   followed, so a bearer token never reaches another origin and a POST is
 //!   never silently turned into a GET.
@@ -21,7 +21,7 @@ use reqwest::{Method, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::error::{ApiErrorBody, Error, Result};
 use crate::util;
@@ -543,11 +543,23 @@ impl Transport {
 }
 
 fn parse_retry_after(h: &HeaderMap) -> Option<Duration> {
-    let v = h.get("retry-after")?.to_str().ok()?.trim().to_string();
-    v.parse::<f64>()
-        .ok()
-        .filter(|s| s.is_finite() && *s >= 0.0)
-        .map(Duration::from_secs_f64)
+    retry_after_at(h, SystemTime::now())
+}
+
+/// `Retry-After-Ms`, else `Retry-After` in seconds or as an HTTP date (a
+/// proxy's), as the other SDKs read them.
+fn retry_after_at(h: &HeaderMap, now: SystemTime) -> Option<Duration> {
+    let header = |name: &str| Some(h.get(name)?.to_str().ok()?.trim().to_string());
+    let seconds = |v: &str| v.parse::<f64>().ok().filter(|s| s.is_finite() && *s >= 0.0);
+    if let Some(ms) = header("retry-after-ms").as_deref().and_then(seconds) {
+        return Some(Duration::from_secs_f64(ms / 1000.0));
+    }
+    let v = header("retry-after")?;
+    if let Some(s) = seconds(&v) {
+        return Some(Duration::from_secs_f64(s));
+    }
+    let at = util::parse_http_date(&v)?;
+    Some(at.duration_since(now).unwrap_or(Duration::ZERO))
 }
 
 /// Gradiated Cloud doesn't route grad's `/v1` API yet: its bare 404 (no problem `code`) means
@@ -660,10 +672,21 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("retry-after", HeaderValue::from_static("2"));
         assert_eq!(parse_retry_after(&h), Some(Duration::from_secs(2)));
+        h.insert("retry-after", HeaderValue::from_static("soon"));
+        assert_eq!(parse_retry_after(&h), None);
+
+        // An HTTP date (a proxy's), relative to now; a past one is no wait.
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_445_412_470);
         h.insert(
             "retry-after",
             HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT"),
         );
-        assert_eq!(parse_retry_after(&h), None);
+        assert_eq!(retry_after_at(&h, now), Some(Duration::from_secs(10)));
+        let later = now + Duration::from_secs(60);
+        assert_eq!(retry_after_at(&h, later), Some(Duration::ZERO));
+
+        // Retry-After-Ms wins.
+        h.insert("retry-after-ms", HeaderValue::from_static("250"));
+        assert_eq!(retry_after_at(&h, now), Some(Duration::from_millis(250)));
     }
 }

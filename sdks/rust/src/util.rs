@@ -1,6 +1,6 @@
 //! Small internal helpers.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// `n` random bytes as lowercase hex, from the OS CSPRNG.
 pub fn random_hex(n: usize) -> String {
@@ -78,6 +78,40 @@ pub fn encode_segment(input: &str) -> String {
         }
     }
     out
+}
+
+/// An IMF-fixdate (`Wed, 21 Oct 2015 07:28:00 GMT`, RFC 9110), the form
+/// `Retry-After` dates take.
+pub fn parse_http_date(v: &str) -> Option<SystemTime> {
+    let (_, rest) = v.split_once(", ")?;
+    let parts: Vec<&str> = rest.split(' ').collect();
+    let [day, month, year, time, "GMT"] = parts.as_slice() else {
+        return None;
+    };
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let m = MONTHS.iter().position(|x| x == month)? as i64 + 1;
+    let (d, y): (i64, i64) = (day.parse().ok()?, year.parse().ok()?);
+    let hms: Vec<i64> = time
+        .split(':')
+        .map(|x| x.parse().ok())
+        .collect::<Option<_>>()?;
+    let [hh, mm, ss] = hms.as_slice() else {
+        return None;
+    };
+    if !(1..=31).contains(&d) || *hh > 23 || *mm > 59 || *ss > 60 {
+        return None;
+    }
+    // Days since 1970-01-01 from the civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + hh * 3600 + mm * 60 + ss;
+    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(u64::try_from(secs).ok()?))
 }
 
 #[cfg(test)]
