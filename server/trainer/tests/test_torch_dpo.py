@@ -119,6 +119,29 @@ class DPOTrainingTests(TorchCase):
             after = PeftModel.from_pretrained(base, str(out.artifact_dir)).eval()(input_ids=ids).logits
         self.assertGreater(float((after - before).abs().max()), 1e-4)
 
+    def test_varlen_packed_micro_batches_train_like_padded_ones(self) -> None:
+        from unittest import mock
+
+        from grad_trainer.backends import torch_common as tc
+
+        config = {**CONFIG, "epochs": 2, "micro_batch_tokens": 64}  # several micro-batches per step
+        records = PAIRS + TRAJECTORIES + IMPLICIT
+        padded = Recorder(self.tmpdir())
+        run_recipe("dpo", config, records, self.tmpdir(), recorder=padded)
+        # CPU runs the varlen attention one example at a time: the same math as CUDA's kernel.
+        packed = Recorder(self.tmpdir())
+        with (
+            mock.patch.object(tc, "use_varlen", return_value=True),
+            mock.patch.object(tc, "collate_packed", wraps=tc.collate_packed) as collate,
+        ):
+            out = run_recipe("dpo", config, records, self.tmpdir(), recorder=packed)
+        self.assertEqual(out.status, "completed")
+        self.assertTrue(collate.called and all(c.kwargs["varlen"] for c in collate.call_args_list))
+        self.assertEqual(len(packed.metrics), len(padded.metrics))
+        for a, b in zip(padded.metrics, packed.metrics):
+            for key in ("loss", "reward_margin", "tokens"):
+                self.assertAlmostEqual(a[key], b[key], places=4, msg=key)
+
     def test_pairs_stay_together_in_the_split(self) -> None:
         out = run_recipe("dpo", {**CONFIG, "epochs": 1, "split": {"eval_fraction": 0.5, "seed": 9}}, TRAJECTORIES, self.tmpdir())
         self.assertEqual(out.eval_report["dropped_records"], 0)

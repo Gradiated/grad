@@ -32,6 +32,7 @@ import torch.nn.functional as F
 
 from ..backends import torch_common as tc
 from ..backends.torch_task import TorchTask
+from ..telemetry import setup_step
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
 from ..runner_types import BaseArtifact
@@ -88,14 +89,17 @@ class DPOTask(TorchTask):
         self.resolved = self.resolve(spec.model, "causal_lm")
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
-        base_lm = self.load_lm(self.resolved)
+        base_lm = self.load_lm(self.resolved, packed=True)
         self.max_len = tc.model_max_len(base_lm, spec)
+        # CUDA: a micro-batch's sequences run as one unpadded varlen row (no padding, no mask).
+        self.varlen = base_lm.config._attn_implementation == tc.VARLEN_ATTENTION
         self.truncated = 0
         # Pairs are encoded as they are read: only their tokens are kept.
         self.dropped = 0  # _encode adds pairs with nothing left to train
         dropped = [0]
-        self.train_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(train, dropped)) if p]
-        self.eval_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(held_out, dropped)) if p]
+        with setup_step("tokenize"):
+            self.train_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(train, dropped)) if p]
+            self.eval_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(held_out, dropped)) if p]
         self.dropped += dropped[0]
         if not self.train_pairs:
             raise RecipeDataError(
@@ -114,8 +118,9 @@ class DPOTask(TorchTask):
         self.reference_model = "base model (adapter disabled)"
         if base is not None:
             self.reference_model = f"starting artifact {base.artifact_id}"
-            self._score_reference("train", self.train_pairs)
-            self._score_reference("eval", self.eval_pairs)
+            with setup_step("reference"):
+                self._score_reference("train", self.train_pairs)
+                self._score_reference("eval", self.eval_pairs)
 
     def _encode_side(self, prompt: list[dict[str, Any]], completion: list[dict[str, Any]], rid: str) -> tuple[np.ndarray, np.ndarray] | None:
         messages = [{**m, "train": False} if m.get("role") == "assistant" else dict(m) for m in prompt]
@@ -143,6 +148,10 @@ class DPOTask(TorchTask):
         return len(c[0]) + len(r[0])
 
     def _sequence_logps(self, sequences: list[tuple[np.ndarray, np.ndarray]]) -> torch.Tensor:
+        if self.varlen:
+            batch = tc.collate_packed([list(range(len(sequences)))], sequences, self.pad_id, self.device, varlen=True)
+            losses, seg, _ = tc.packed_token_losses(self.lm, batch)
+            return torch.zeros(len(sequences), device=self.device).index_add(0, seg, -losses)
         ids, mask = tc.padded_batch([s[0] for s in sequences], self.pad_id, self.device)
         trained = torch.zeros_like(ids, dtype=torch.bool)
         for i, (_, t) in enumerate(sequences):
@@ -154,9 +163,17 @@ class DPOTask(TorchTask):
         rows = torch.arange(ids.shape[0], device=self.device)[:, None].expand_as(target)[target]
         return torch.zeros(ids.shape[0], device=self.device).index_add(0, rows, token_logp)
 
-    def _score_reference(self, split: str, pairs: list[Any]) -> None:
+    def _chunks(self, indices: Any, pairs: list[Any]) -> list[list[int]]:
+        """Micro-batches of pairs within ``micro_batch_tokens``: their tokens (varlen), else
+        their padded size (two sequences per pair, padded to the longest)."""
+        if self.varlen:
+            lengths = [len(c[0]) + len(r[0]) for c, r in pairs]
+            return tc.chunk_by_tokens(indices, lengths, self.micro_batch_tokens, padded=False)
         lengths = [max(len(c[0]), len(r[0])) for c, r in pairs]
-        for chunk in tc.chunk_by_tokens(range(len(pairs)), lengths, max(1, self.micro_batch_tokens // 2)):
+        return tc.chunk_by_tokens(indices, lengths, max(1, self.micro_batch_tokens // 2))
+
+    def _score_reference(self, split: str, pairs: list[Any]) -> None:
+        for chunk in self._chunks(range(len(pairs)), pairs):
             self._reference(split, chunk, pairs, adapter=True)
 
     def _reference(
@@ -177,10 +194,9 @@ class DPOTask(TorchTask):
 
     def _run(self, split: str, indices: list[int], *, grad: bool) -> dict[str, float]:
         pairs = self.train_pairs if split == "train" else self.eval_pairs
-        lengths = [max(len(pairs[i][0][0]), len(pairs[i][1][0])) for i in range(len(pairs))]
         n = len(indices)
         totals = {"loss": 0.0, "margin": 0.0, "accuracy": 0.0, "chosen_reward": 0.0, "rejected_reward": 0.0}
-        for chunk in tc.chunk_by_tokens(indices, lengths, max(1, self.micro_batch_tokens // 2)):
+        for chunk in self._chunks(indices, pairs):
             ref_c, ref_r = self._reference(split, chunk, pairs)
             with torch.set_grad_enabled(grad):
                 logps = self._sequence_logps([s for i in chunk for s in pairs[i]])

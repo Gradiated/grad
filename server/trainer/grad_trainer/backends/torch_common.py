@@ -585,18 +585,24 @@ def padded_batch(
     return ids.to(device), mask.to(device)
 
 
-def chunk_by_tokens(indices: Sequence[int], lengths: Sequence[int], max_tokens: int) -> list[list[int]]:
-    """Consecutive micro-batches whose padded size (count * longest) stays within budget."""
+def chunk_by_tokens(
+    indices: Iterable[int], lengths: Sequence[int], max_tokens: int, *, padded: bool = True
+) -> list[list[int]]:
+    """Consecutive micro-batches whose size stays within budget: padded (count * longest),
+    or the sum of their lengths (``padded=False``, unpadded varlen rows)."""
     chunks: list[list[int]] = []
     current: list[int] = []
     longest = 0
+    total = 0
     for i in indices:
         new_longest = max(longest, lengths[i])
-        if current and new_longest * (len(current) + 1) > max_tokens:
+        size = new_longest * (len(current) + 1) if padded else total + lengths[i]
+        if current and size > max_tokens:
             chunks.append(current)
-            current, new_longest = [], lengths[i]
+            current, new_longest, total = [], lengths[i], 0
         current.append(i)
         longest = new_longest
+        total += lengths[i]
     if current:
         chunks.append(current)
     return chunks
