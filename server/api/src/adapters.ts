@@ -5,7 +5,6 @@ import { JOB_KINDS, PLATFORM_SCOPES } from "./contracts.js";
 import type { KeyLookupResult } from "./store/types.js";
 import {
   authenticateWorkerFirst,
-  toAuthPrincipal,
   type WorkerAuthenticator,
   type WorkerPrincipal,
 } from "./worker-auth/principal.js";
@@ -205,16 +204,6 @@ export const createStaticWorkerAuth = (
   mode: "static",
   authenticate: async (token) => matchStaticWorkerKey(token, keys),
 });
-
-/** A static trainer key's principal, or null. */
-export const matchTrainerKey = (
-  token: string,
-  keys: readonly TrainerKey[],
-): AuthPrincipal | null => {
-  const worker = matchStaticWorkerKey(token, keys);
-
-  return worker ? toAuthPrincipal(worker) : null;
-};
 
 /** The kinds `principal` may claim out of `requested` (every kind for non-key workers). */
 export const claimableKinds = <K extends string>(

@@ -4,7 +4,6 @@ import {
   claimableKinds,
   createLocalApiKeyAuth,
   hashApiKey,
-  matchTrainerKey,
   trainerKeysOf,
 } from "../src/adapters.js";
 import { parseServerEnvironment } from "../src/environment.js";
@@ -59,19 +58,21 @@ describe("kind-scoped trainer keys (TRAINER_KEYS_JSON)", () => {
   });
 
   it("scopes each worker principal to its key's kinds", async () => {
-    const all = trainerKeysOf(hashApiKey("grad_platform"), keys);
-    expect(matchTrainerKey("grad_platform", all)?.workerKinds).toEqual([
-      "train",
-      "import",
-      "eval",
-    ]);
-    const gpu = matchTrainerKey(GPU, all);
+    const platform = createLocalApiKeyAuth({
+      trainerKeyHash: hashApiKey("grad_platform"),
+      trainerKeys: keys,
+      lookup: { findActiveByHash: async () => null },
+    });
+    expect((await platform.authenticate("grad_platform"))?.workerKinds).toEqual(
+      ["train", "import", "eval"],
+    );
+    const gpu = await platform.authenticate(GPU);
     expect(gpu).toMatchObject({
       actor: "trainer-worker:h100-01",
       scopes: ["trainer:worker"],
       workerKinds: ["train"],
     });
-    expect(matchTrainerKey("nope", all)).toBeNull();
+    expect(await platform.authenticate("nope")).toBeNull();
     expect(trainerKeysOf(undefined)).toEqual([]);
 
     if (!gpu) throw new Error("expected a principal");
