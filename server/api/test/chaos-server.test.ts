@@ -576,41 +576,20 @@ describe("S3 down", () => {
 });
 
 describe("S3 lost an object a row names", () => {
-  // A lost dataset part has its own answer (410 dataset_part_missing); any
-  // other missing object falls back to 500 storage_object_missing (app.ts).
-  it("a lost dataset part answers 410 dataset_part_missing, not a bare internal_error", async () => {
+  it("answers 500 storage_object_missing, not a bare internal_error", async () => {
+    // Dataset parts have their own 410 dataset_part_missing; any other object
+    // (a checkpoint, a bundle) the bucket lost lands in the generic handler.
     const { ObjectNotFoundError } = await import("../src/storage/types.js");
     const t = await makeTestApp();
     try {
-      await t.request("/v1/datasets/lost/records", {
-        body: { records: sftRecords(4) },
+      t.app.get("/v1/test-lost-object", () => {
+        throw new ObjectNotFoundError("artifacts/ws/bundle.grad.tar.gz");
       });
-      // The bucket was emptied (or restored from an older copy) since.
-      const storage = new Proxy(t.deps.storage, {
-        get: (target, prop, receiver) =>
-          prop === "get"
-            ? async (key: string) => {
-                throw new ObjectNotFoundError(key);
-              }
-            : Reflect.get(target, prop, receiver),
-      });
-      const lost = await makeTestApp({
-        store: t.deps.store,
-        clock: t.clock,
-        storage,
-      });
-      const res = await lost.json<{ code: string }>("/v1/runs", {
-        body: {
-          dataset: "lost",
-          name: "lost",
-          recipe: { kind: "sft", model: "qwen/qwen3-0.6b" },
-        },
-      });
+      const res = await t.json<{ code: string }>("/v1/test-lost-object");
       expect([res.status, res.body.code]).toEqual([
-        410,
-        "dataset_part_missing",
+        500,
+        "storage_object_missing",
       ]);
-      await lost.close();
     } finally {
       await t.close();
     }
