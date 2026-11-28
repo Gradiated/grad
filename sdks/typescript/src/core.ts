@@ -7,8 +7,8 @@ export interface Core {
   api: ApiClient;
   transport: TransportLike;
   poll: PollContext;
-  /** PUTs a replayable body to an upload ticket URL (relative URLs resolve against the API). Never sends the API key. */
-  upload: (url: string, headers: Record<string, string>, body: Blob | Uint8Array | string, options?: RequestOptions) => Promise<RawResponse>;
+  /** PUTs a file to an upload ticket URL (relative URLs resolve against the API), streamed from disk. Never sends the API key. */
+  upload: (url: string, headers: Record<string, string>, file: { path: string; sizeBytes: number }, options?: RequestOptions) => Promise<RawResponse>;
   baseURL: () => Promise<string>;
 }
 

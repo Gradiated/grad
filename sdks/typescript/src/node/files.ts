@@ -1,6 +1,6 @@
 /* Node-only file helpers. Loaded with dynamic import so the browser build never touches node:fs. */
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, createWriteStream, openAsBlob } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,15 +10,45 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 
 import { ChecksumMismatchError, GradUsageError } from "../errors.js";
-import { GradError, type RawResponse } from "../transport.js";
+import { FileBody, GradError, type RawResponse } from "../transport.js";
 
 export interface LocalFile {
   path: string;
   filename: string;
   sizeBytes: number;
   sha256: string;
-  blob: Blob;
 }
+
+/**
+ * fetch for uploads: a {@link FileBody} streams from disk through node:http(s) with its exact
+ * Content-Length (bounded memory however large the file; fetch would buffer it whole). Anything
+ * else goes to the global fetch. A fresh read stream per call, so retries replay the file.
+ */
+export const nodeFetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
+  const body = init.body as unknown;
+  if (!(body instanceof FileBody)) return fetch(input, init);
+  const url = new URL(String(input));
+  const { request } = url.protocol === "https:" ? await import("node:https") : await import("node:http");
+  const headers: Record<string, string> = Object.fromEntries(new Headers(init.headers));
+  headers["content-length"] = String(body.size);
+  return new Promise<Response>((resolve, reject) => {
+    const req = request(url, { method: init.method ?? "PUT", headers, ...(init.signal ? { signal: init.signal } : {}) }, (res) => {
+      const out = new Headers();
+      for (const [name, value] of Object.entries(res.headers)) {
+        if (value !== undefined) out.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const status = res.statusCode ?? 502;
+      if (status === 204 || status === 304) {
+        res.resume();
+        resolve(new Response(null, { status, headers: out }));
+      } else {
+        resolve(new Response(Readable.toWeb(res) as ReadableStream<Uint8Array>, { status, headers: out }));
+      }
+    });
+    req.on("error", reject);
+    pipeline(createReadStream(body.path), req).catch(reject);
+  });
+};
 
 export const sha256File = async (file: string): Promise<string> => {
   const hash = createHash("sha256");
@@ -36,7 +66,6 @@ export const describeFile = async (file: string): Promise<LocalFile> => {
     filename: path.basename(file),
     sizeBytes: info.size,
     sha256: await sha256File(file),
-    blob: await openAsBlob(file),
   };
 };
 

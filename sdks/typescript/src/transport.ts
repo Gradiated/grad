@@ -379,10 +379,22 @@ export interface RequestSpec {
   /** JSON-serializable body (already in wire casing). */
   json?: unknown;
   /** Raw, replayable body (for uploads); ignored when `json` is set. */
-  body?: Blob | Uint8Array | string | undefined;
+  body?: Blob | Uint8Array | string | FileBody | undefined;
   accept?: string | undefined;
   /** The operation accepts an Idempotency-Key, so it is sent with one and retried like a GET. */
   idempotent?: boolean | undefined;
+}
+
+/**
+ * A file on disk as a request body. fetch reads a Blob body into memory whole (Node's undici
+ * does, even for `openAsBlob`), so uploads pass this to a fetch that streams it from disk
+ * with its exact Content-Length (`nodeFetch` in node/files.ts).
+ */
+export class FileBody {
+  constructor(
+    readonly path: string,
+    readonly size: number,
+  ) {}
 }
 
 export interface RawResponse extends ResponseInfo {

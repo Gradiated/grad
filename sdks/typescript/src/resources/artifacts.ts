@@ -133,7 +133,7 @@ const uploadArtifact = async (core: Core, path: string, options: ArtifactUploadO
       { purpose: "artifact_import", filename: file.filename, sizeBytes: file.sizeBytes, sha256: file.sha256 },
       request,
     );
-    const put = await core.upload(ticket.url, ticket.headers, file.blob, request);
+    const put = await core.upload(ticket.url, ticket.headers, { path: file.path, sizeBytes: file.sizeBytes }, request);
     await put.cancel();
     return await createImport(
       core,

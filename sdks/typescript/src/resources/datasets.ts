@@ -313,7 +313,7 @@ const importFile = async (core: Core, name: string, path: string, options: Impor
     { purpose: "dataset_import", filename: file.filename, sizeBytes: file.sizeBytes, sha256: file.sha256 },
     request,
   );
-  const put = await core.upload(ticket.url, ticket.headers, file.blob, request);
+  const put = await core.upload(ticket.url, ticket.headers, { path: file.path, sizeBytes: file.sizeBytes }, request);
   await put.cancel();
   const job = await core.api.createDatasetImport(
     name,

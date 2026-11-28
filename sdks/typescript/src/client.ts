@@ -1,5 +1,6 @@
 import { ApiClient } from "./generated/client.js";
 import {
+  FileBody,
   readEnv,
   Transport,
   type RawResponse,
@@ -158,22 +159,23 @@ class LazyTransport implements TransportLike {
   }
 
   /** PUTs to an upload URL without the API key (presigned S3 or the server's signed blob route). */
-  async upload(url: string, headers: Record<string, string>, body: Blob | Uint8Array | string, options?: RequestOptions): Promise<RawResponse> {
+  async upload(url: string, headers: Record<string, string>, file: { path: string; sizeBytes: number }, options?: RequestOptions): Promise<RawResponse> {
     const { config } = await this.resolve();
     const target = new URL(url, `${config.baseURL.replace(/\/+$/, "")}/`);
+    const { nodeFetch } = await import("./node/files.js");
     const uploader = new Transport({
       baseURL: target.origin,
       apiKey: undefined,
       timeoutMs: this.options.timeoutMs,
       maxRetries: this.options.maxRetries,
-      fetch: this.options.fetch,
+      fetch: this.options.fetch ?? nodeFetch,
       userAgent: this.options.userAgent,
       sleep: this.options.sleep,
       random: this.options.random,
     });
     // No per-attempt deadline: a multi-GB upload outlasts any request timeout. `signal` still cancels it.
     return uploader.raw(
-      { method: "PUT", path: `${target.pathname}${target.search}`, body, headers: Object.entries(headers), accept: "*/*" },
+      { method: "PUT", path: `${target.pathname}${target.search}`, body: new FileBody(file.path, file.sizeBytes), headers: Object.entries(headers), accept: "*/*" },
       { ...options, timeoutMs: Number.POSITIVE_INFINITY },
     );
   }
@@ -217,7 +219,7 @@ export class Grad {
       api: this.api,
       transport: this.#transport,
       poll,
-      upload: (url, headers, body, request) => this.#transport.upload(url, headers, body, request),
+      upload: (url, headers, file, request) => this.#transport.upload(url, headers, file, request),
       baseURL: async () => (await this.#transport.resolve()).config.baseURL,
     };
     this.models = new ModelsResource(this.#core);
