@@ -47,7 +47,6 @@ class StubRunner:
         *,
         steps: int = 3,
         checkpoint_at: int | tuple[int, ...] | str | None = 2,
-        raise_at: int | None = None,
         oom_runs: int = 0,
         step_sleep: float = 0.0,
         status: str = "completed",
@@ -59,7 +58,6 @@ class StubRunner:
             self.checkpoint_steps: tuple[int, ...] = (checkpoint_at,)
         else:
             self.checkpoint_steps = () if checkpoint_at is None or isinstance(checkpoint_at, str) else tuple(checkpoint_at)
-        self.raise_at = raise_at
         self.oom_runs = oom_runs  # the first N calls run out of GPU memory at step 1
         self.step_sleep = step_sleep
         self.status = status
@@ -89,8 +87,6 @@ class StubRunner:
         if callbacks.on_phase:
             callbacks.on_phase("training", start - 1)
         for step in range(start, start + self.steps):
-            if self.raise_at == step:
-                raise RuntimeError("CUDA out of memory")
             time.sleep(self.step_sleep)
             tokens += 100
             stop = callbacks.on_step(

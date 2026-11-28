@@ -392,7 +392,6 @@ class WorkerProtocolTests(unittest.TestCase):
                 break
             threading.Event().wait(0.01)
         self.assertEqual(srv.bodies("complete")[0]["reason"], "compute_reclaimed")
-        self.assertEqual(worker_module._interruption(ValueError("x")), "worker_error")
         uploading = worker_module._JobState(job_id="run_2", attempt=1)
         uploading.phase = "uploading"
         worker._current = uploading
@@ -458,16 +457,6 @@ class WorkerProtocolTests(unittest.TestCase):
         self.worker(cpu, gpu=None).run_once()
         self.assertEqual(cpu.bodies("claim")[0]["device"], "cpu")
         self.assertNotIn("gpu", cpu.bodies("claim")[0])
-
-    def test_cuda_oom_hands_the_attempt_back_for_a_retry(self) -> None:
-        srv = self.server(jobs=[train_job()])
-        self.worker(srv, StubRunner(raise_at=3, checkpoint_at=None)).run_once()
-        complete = srv.bodies("complete")[0]
-        self.assertEqual(complete["status"], "abandoned")
-        self.assertEqual(complete["reason"], "oom")
-        self.assertEqual(complete["tokens_processed"], 200)
-        warning = [e for e in srv.bodies("events") if e["type"] == "warning"]
-        self.assertIn("ran out of memory", warning[0]["message"])
 
     def test_out_of_memory_retries_once_with_half_the_micro_batch(self) -> None:
         srv = self.server(jobs=[train_job()])

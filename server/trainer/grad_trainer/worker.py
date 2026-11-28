@@ -802,7 +802,7 @@ class TrainerWorker:
                     state,
                     {
                         "status": "abandoned",
-                        "reason": _interruption(exc),
+                        "reason": "worker_error",
                         "tokens_processed": state.max_tokens,
                     },
                 )
@@ -1163,13 +1163,6 @@ class TrainerWorker:
                 _log_traceback(f"job {state.job_id} failed")
                 if state.lease_lost or state.handed_back:
                     raise LeaseLost() from exc
-                if _interruption(exc) == "oom":
-                    # Out of memory outside a recipe's step (no micro-batch to halve): another
-                    # attempt retries it; counts toward max_attempts.
-                    self._note(state, "warning", f"The GPU ran out of memory at step {state.step}; retrying the run")
-                    return self._complete(
-                        state, {"status": "abandoned", "reason": "oom", "tokens_processed": state.max_tokens}
-                    )
                 if _transient(exc):
                     return self._retry_later(state, str(exc))
                 failure = str(exc) or type(exc).__name__
@@ -1430,14 +1423,6 @@ def _transient(exc: BaseException) -> bool:
     if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
         return True
     return bool(getattr(exc, "transient", False))
-
-
-def _interruption(exc: BaseException) -> str:
-    """The interruption reason a crash reports: ``oom`` for CUDA out of memory."""
-    name = type(exc).__name__
-    if name == "OutOfMemoryError" or "CUDA out of memory" in str(exc):
-        return "oom"
-    return "worker_error"
 
 
 def detect_gpu(run: Callable[..., Any] = subprocess.run) -> dict[str, Any] | None:
