@@ -1,4 +1,7 @@
-import { gunzipSync } from "node:zlib";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import { createGunzip } from "node:zlib";
 
 import type { z } from "@hono/zod-openapi";
 
@@ -89,7 +92,7 @@ export const createWorkerClient = (
 
   const send = async (
     path: string,
-    init: { method?: string; body?: unknown } = {},
+    init: { method?: string; body?: unknown; signal?: AbortSignal } = {},
     retry = true,
   ): Promise<Response> => {
     const headers: Record<string, string> = {};
@@ -110,7 +113,7 @@ export const createWorkerClient = (
           method: init.method ?? (init.body === undefined ? "GET" : "POST"),
           headers,
           redirect: "error",
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: init.signal ?? AbortSignal.timeout(timeoutMs),
           ...(init.body !== undefined
             ? { body: JSON.stringify(init.body) }
             : {}),
@@ -178,21 +181,59 @@ export const createWorkerClient = (
       ),
 
     datasetRecords: async (downloadUrl) => {
-      const url = /^https?:\/\//.test(downloadUrl)
-        ? downloadUrl
-        : downloadUrl.replace(/^\/?/, "/");
-      const res = /^https?:\/\//.test(url)
-        ? await fetchImpl(url)
-        : await send(url);
-      if (!res.ok) throw new Error(`dataset download: HTTP ${res.status}`);
-      const text = gunzipSync(Buffer.from(await res.arrayBuffer())).toString(
-        "utf8",
-      );
+      // Streamed and gunzipped line by line: a dataset is any number of GB,
+      // and a buffered body or one string of it (V8's ~512 MB string limit)
+      // would not fit. The download is aborted only when it stalls.
+      const stalled = new AbortController();
+      let timer = setTimeout(() => stalled.abort(), timeoutMs);
+      const alive = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => stalled.abort(), timeoutMs);
+      };
+      // A connection that drops (or stalls) mid-body, or a gzip stream cut
+      // short, is grad-server or storage being unavailable: the attempt is
+      // handed back, not failed.
+      const unavailable = (error: unknown) =>
+        new ServerUnavailable(`dataset download: ${errorMessage(error)}`);
+      try {
+        const res = /^https?:\/\//.test(downloadUrl)
+          ? await fetchImpl(downloadUrl, {
+              redirect: "error",
+              signal: stalled.signal,
+            }).catch((error: unknown) => {
+              throw unavailable(error);
+            })
+          : await send(downloadUrl.replace(/^\/?/, "/"), {
+              signal: stalled.signal,
+            });
+        if (!res.ok || !res.body) {
+          const message = `dataset download: HTTP ${res.status}`;
+          throw RETRYABLE.has(res.status)
+            ? new ServerUnavailable(message)
+            : new Error(message);
+        }
+        const body = Readable.fromWeb(res.body as WebReadableStream);
+        body.on("data", alive);
+        const gunzip = body.pipe(createGunzip());
+        body.on("error", (error) => gunzip.destroy(error));
+        const records: DatasetRecord[] = [];
+        try {
+          for await (const line of createInterface({
+            input: gunzip,
+            crlfDelay: Infinity,
+          })) {
+            if (line.length > 0) {
+              records.push(JSON.parse(line) as DatasetRecord);
+            }
+          }
+        } catch (error) {
+          throw error instanceof SyntaxError ? error : unavailable(error);
+        }
 
-      return text
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line) as DatasetRecord);
+        return records;
+      } finally {
+        clearTimeout(timer);
+      }
     },
 
     postOutputs: (job, body) =>
