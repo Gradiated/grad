@@ -118,11 +118,13 @@ export const createCloudAuth = (options: CloudAuthOptions): AuthAdapter => {
     keyExpiresAt: Date | null = null,
   ): void => {
     const now = clock.now().getTime();
+    const ttl = principal ? positiveTtlMs : negativeTtlMs;
     cache.delete(key);
     cache.set(key, {
       principal,
       refused,
-      expiresAt: now + (principal ? positiveTtlMs : negativeTtlMs),
+      // A key expiring sooner is looked up again then (and found expired).
+      expiresAt: Math.min(now + ttl, keyExpiresAt?.getTime() ?? Infinity),
       staleUntil: now + staleTtlMs,
       keyExpiresAt: keyExpiresAt?.getTime() ?? null,
     });

@@ -146,6 +146,17 @@ describe("Cloud auth: the auth_principals_v1 view, console JWTs, worker keys", (
     expect(await auth().authenticate("grad_expired")).toBeNull();
   });
 
+  it("never serves a cached key past its own expiry", async () => {
+    await cloud.addKey("grad_expiring", {
+      workspace_id: WS,
+      expires_at: new Date(clock.now().getTime() + 2000),
+    });
+    const a = auth();
+    expect(await a.authenticate("grad_expiring")).not.toBeNull();
+    clock.advanceSeconds(3);
+    expect(await a.authenticate("grad_expiring")).toBeNull();
+  });
+
   it("caches answers for 5 s either way; concurrent requests share one lookup", async () => {
     await cloud.addKey("grad_cached", { workspace_id: WS });
     const a = auth();
