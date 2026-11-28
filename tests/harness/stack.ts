@@ -31,7 +31,7 @@
  * service JWTs, add keys and set balances; `internal_url` takes the service
  * JWTs (workspace state, artifact pins).
  * `ui_url` is the web UI (null in --cloud mode or until `pnpm -C server/ui
- * build` has run); open `<ui_url>#key=<api_key>` to sign in.
+ * build` has run); open `<ui_url>#key=<api_key>` to get the sign-in form filled in.
  * `langfuse_url` is tests/fixtures/fake-langfuse.ts (drive it via its
  * /_control/ routes); store `langfuse_secret` as a grad secret to sync it.
  * Workers reach it through GRAD_SOURCES_EGRESS_ALLOW=127.0.0.1/32 with the
