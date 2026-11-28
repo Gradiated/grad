@@ -323,3 +323,40 @@ func TestPaginationHonoursCancelledContext(t *testing.T) {
 		t.Fatalf("fetched %d pages after cancel", n)
 	}
 }
+
+func TestUploadRetriesAndRewindsTheFile(t *testing.T) {
+	ctx := context.Background()
+	content := []byte(strings.Repeat("{\"messages\":[]}\n", 4096))
+	var bodies [][]byte
+	f := newFake(t, map[string]route{
+		"GET /v1/datasets/support-prod": jsonBody(200, wire(t, "dataset.json")),
+		"POST /v1/uploads":              jsonValue(201, wireMap(t, "upload-ticket.json")),
+		"PUT /blobs/uploads/*": func(w http.ResponseWriter, r *http.Request, body []byte) {
+			bodies = append(bodies, body)
+			if len(bodies) == 1 {
+				problem(503, "unavailable")(w, r, nil)
+				return
+			}
+			w.WriteHeader(200)
+		},
+		"POST /v1/datasets/support-prod/imports": jsonBody(202, wire(t, "import-job-queued.json")),
+	})
+	c, clk := f.client()
+	path := filepath.Join(t.TempDir(), "big.jsonl")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dataset, err := c.Datasets.Get(ctx, "support-prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataset.ImportFile(ctx, path).Result(); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || string(bodies[1]) != string(content) {
+		t.Fatalf("upload attempts %d, last body %d bytes (want %d)", len(bodies), len(bodies[len(bodies)-1]), len(content))
+	}
+	if len(clk.Sleeps()) != 1 {
+		t.Fatalf("retry sleeps %v", clk.Sleeps())
+	}
+}

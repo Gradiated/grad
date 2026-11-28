@@ -171,9 +171,10 @@ class LazyTransport implements TransportLike {
       sleep: this.options.sleep,
       random: this.options.random,
     });
+    // No per-attempt deadline: a multi-GB upload outlasts any request timeout. `signal` still cancels it.
     return uploader.raw(
       { method: "PUT", path: `${target.pathname}${target.search}`, body, headers: Object.entries(headers), accept: "*/*" },
-      options,
+      { ...options, timeoutMs: Number.POSITIVE_INFINITY },
     );
   }
 }

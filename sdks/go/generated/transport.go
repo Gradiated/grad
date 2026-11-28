@@ -500,8 +500,12 @@ type RequestSpec struct {
 	Query  url.Values
 	Header http.Header
 	// Body is JSON-encoded when non-nil.
-	Body   any
-	Accept string
+	Body any
+	// Upload streams this body instead (rewound before every attempt) to the absolute URL in
+	// Path, a presigned upload URL: no API key is sent and only ctx bounds the attempt.
+	Upload     io.ReadSeeker
+	UploadSize int64
+	Accept     string
 	// Idempotent marks an operation that accepts an Idempotency-Key: it is sent
 	// with one and retried like a GET.
 	Idempotent bool
@@ -584,6 +588,10 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 		payload = raw
 	}
 	target := t.buildURL(spec)
+	if spec.Upload != nil {
+		target = spec.Path
+	}
+	shown := redactURL(target)
 	redirects := 0
 	idemKey := o.idempotencyKey
 	if idemKey == "" && spec.Idempotent && o.header.Get("Idempotency-Key") == "" {
@@ -594,7 +602,7 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 
 	for try := 0; ; try++ {
 		if err := ctx.Err(); err != nil {
-			return nil, &GradError{Code: "aborted", Message: fmt.Sprintf("%s %s was cancelled: %v", method, target, err), Cause: err}
+			return nil, &GradError{Code: "aborted", Message: fmt.Sprintf("%s %s was cancelled: %v", method, shown, err), Cause: err}
 		}
 		attemptCtx, cancel := context.WithCancelCause(ctx)
 		timer := time.AfterFunc(timeout, func() { cancel(errTimeout) })
@@ -603,11 +611,23 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 		if payload != nil {
 			body = bytes.NewReader(payload)
 		}
+		if spec.Upload != nil {
+			// An upload takes as long as its bytes take: no per-attempt deadline.
+			timer.Stop()
+			if _, err := spec.Upload.Seek(0, io.SeekStart); err != nil {
+				cancel(nil)
+				return nil, &GradError{Code: "invalid_request", Message: fmt.Sprintf("%s %s: rewinding the upload: %v", method, shown, err), Cause: err}
+			}
+			body = io.NopCloser(spec.Upload)
+		}
 		req, err := http.NewRequestWithContext(attemptCtx, method, target, body)
 		if err != nil {
 			timer.Stop()
 			cancel(nil)
-			return nil, &GradError{Code: "invalid_request", Message: fmt.Sprintf("%s %s: %v", method, target, err), Cause: err}
+			return nil, &GradError{Code: "invalid_request", Message: fmt.Sprintf("%s %s: %v", method, shown, err), Cause: err}
+		}
+		if spec.Upload != nil {
+			req.ContentLength = spec.UploadSize
 		}
 		for k, vs := range t.header {
 			for _, v := range vs {
@@ -620,7 +640,7 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 			accept = "application/json"
 		}
 		req.Header.Set("Accept", accept)
-		if t.apiKey != "" {
+		if t.apiKey != "" && spec.Upload == nil {
 			req.Header.Set("Authorization", "Bearer "+t.apiKey)
 		}
 		if payload != nil {
@@ -642,16 +662,16 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 			timedOut := errors.Is(context.Cause(attemptCtx), errTimeout)
 			cancel(nil)
 			if ctx.Err() != nil {
-				return nil, &GradError{Code: "aborted", Message: fmt.Sprintf("%s %s was cancelled: %v", method, target, ctx.Err()), Cause: ctx.Err()}
+				return nil, &GradError{Code: "aborted", Message: fmt.Sprintf("%s %s was cancelled: %v", method, shown, ctx.Err()), Cause: ctx.Err()}
 			}
 			var wrapped error
 			if timedOut {
-				wrapped = &TimeoutError{&ConnectionError{&GradError{Code: "timeout", Message: fmt.Sprintf("%s %s timed out after %s", method, target, timeout), Cause: err}}}
+				wrapped = &TimeoutError{&ConnectionError{&GradError{Code: "timeout", Message: fmt.Sprintf("%s %s timed out after %s", method, shown, timeout), Cause: err}}}
 			} else {
-				wrapped = &ConnectionError{&GradError{Code: "connection_error", Message: fmt.Sprintf("%s %s failed: could not reach %s (%v). Is the server running? Check GRADIATED_BASE_URL or grad.WithBaseURL.", method, target, t.origin, err), Cause: err}}
+				wrapped = &ConnectionError{&GradError{Code: "connection_error", Message: fmt.Sprintf("%s %s failed: could not reach %s (%v). Is the server running? Check GRADIATED_BASE_URL or grad.WithBaseURL.", method, shown, originOf(target), err), Cause: err}}
 			}
 			if try < maxRetries && (retrySafe || (!timedOut && neverSent(err))) {
-				if werr := t.wait(ctx, t.Backoff(try), method, target); werr != nil {
+				if werr := t.wait(ctx, t.Backoff(try), method, shown); werr != nil {
 					return nil, werr
 				}
 				continue
@@ -668,6 +688,7 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 			if locErr == nil && loc.Scheme+"://"+loc.Host == t.origin && (method == "GET" || method == "HEAD") && redirects < maxRedirects {
 				redirects++
 				target = loc.String()
+				shown = redactURL(target)
 				try--
 				continue
 			}
@@ -676,7 +697,7 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 				where = loc.String()
 			}
 			return nil, &RedirectError{&GradError{Status: resp.StatusCode, Code: "redirect_refused", RequestID: resp.Header.Get("X-Request-Id"),
-				Message: fmt.Sprintf("%s %s was redirected (%d) to %s; refusing to follow a redirect that leaves %s or changes a %s request, so credentials are never sent elsewhere. Point GRADIATED_BASE_URL at the final URL.", method, target, resp.StatusCode, where, t.origin, method)}}
+				Message: fmt.Sprintf("%s %s was redirected (%d) to %s; refusing to follow a redirect that leaves %s or changes a %s request, so credentials are never sent elsewhere. Point GRADIATED_BASE_URL at the final URL.", method, shown, resp.StatusCode, where, t.origin, method)}}
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -684,7 +705,7 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 			resp.Body.Close()
 			timer.Stop()
 			cancel(nil)
-			apiErr := NewAPIError(resp.StatusCode, resp.Header, raw, method, target, t.apiKey != "")
+			apiErr := NewAPIError(resp.StatusCode, resp.Header, raw, method, shown, t.apiKey != "")
 			delay, hinted := ParseRetryAfter(resp.Header, time.Now())
 			// 409 + Retry-After on a keyed request: the first attempt is still running server-side.
 			inProgress := resp.StatusCode == http.StatusConflict && keyed && hinted
@@ -695,7 +716,7 @@ func (t *Transport) send(ctx context.Context, spec RequestSpec, o *requestOption
 					delay = t.Backoff(try)
 				}
 				if delay <= MaxRetryAfter {
-					if werr := t.wait(ctx, delay, method, target); werr != nil {
+					if werr := t.wait(ctx, delay, method, shown); werr != nil {
 						return nil, werr
 					}
 					continue
@@ -760,6 +781,28 @@ func (t *Transport) DoJSON(ctx context.Context, spec RequestSpec, out any, opts 
 			Message: fmt.Sprintf("%s %s returned %d with a body that does not decode: %v: %s", method, a.url, a.resp.StatusCode, err, snippet), Cause: err}}
 	}
 	return nil
+}
+
+// Upload sends body to a presigned upload URL (relative URLs resolve against the API) with the
+// client's retry policy: the body is rewound before every attempt, no API key is sent and
+// only ctx bounds the transfer, however large the file.
+func (t *Transport) Upload(ctx context.Context, method, rawURL string, header http.Header, body io.ReadSeeker, size int64) error {
+	base, err := url.Parse(t.baseURL + "/")
+	if err != nil {
+		return err
+	}
+	ref, err := url.Parse(rawURL)
+	if err != nil {
+		return &GradError{Code: "invalid_upload_url", Message: fmt.Sprintf("upload URL %q is invalid: %v", redactURL(rawURL), err), Cause: err}
+	}
+	spec := RequestSpec{Method: method, Path: base.ResolveReference(ref).String(), Header: header, Upload: body, UploadSize: size, Accept: "*/*"}
+	a, err := t.send(ctx, spec, &requestOptions{}, true)
+	if err != nil {
+		return err
+	}
+	defer a.cancel(nil)
+	_, _ = io.Copy(io.Discard, io.LimitReader(a.resp.Body, 1<<20))
+	return a.resp.Body.Close()
 }
 
 // StreamResponse is a successful streaming response. Close it when done.
@@ -998,6 +1041,26 @@ func AdditionalFields(data []byte, known map[string]bool) (map[string]any, error
 		}
 	}
 	return extra, nil
+}
+
+// redactURL drops a presigned URL's query (its signature and credentials) from messages.
+func redactURL(raw string) string {
+	q := strings.IndexByte(raw, '?')
+	if q < 0 {
+		return raw
+	}
+	query := strings.ToLower(raw[q+1:])
+	if strings.Contains(query, "signature") || strings.Contains(query, "x-amz-") || strings.Contains(query, "sig=") {
+		return raw[:q] + "?<redacted>"
+	}
+	return raw
+}
+
+func originOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Scheme + "://" + u.Host
+	}
+	return raw
 }
 
 // Ptr returns a pointer to v (handy for optional fields).

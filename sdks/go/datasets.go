@@ -11,7 +11,6 @@ import (
 	"io"
 	"iter"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -540,46 +539,22 @@ func (c *Client) importFile(ctx context.Context, dataset, path string, opts []Im
 	return api.CreateDatasetImport(ctx, dataset, req)
 }
 
-// upload PUTs a file to an upload ticket URL. Only the ticket's headers are sent:
-// the URL is presigned (or signed by the server), so the API key never leaves the API.
-func (c *Client) upload(ctx context.Context, ticket *generated.UploadTicket, body io.Reader, size int64) error {
-	base, err := url.Parse(c.baseURL + "/")
+// upload PUTs a file to an upload ticket URL with the client's retry policy. Only the
+// ticket's headers are sent: the URL is presigned, so the API key never leaves the API.
+func (c *Client) upload(ctx context.Context, ticket *generated.UploadTicket, body io.ReadSeeker, size int64) error {
+	api, err := c.api()
 	if err != nil {
 		return err
 	}
-	ref, err := url.Parse(ticket.URL)
-	if err != nil {
-		return newError("invalid_upload_url", "upload ticket URL %q is invalid: %v", ticket.URL, err)
-	}
-	target := base.ResolveReference(ref)
 	method := string(ticket.Method)
 	if method == "" {
 		method = http.MethodPut
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target.String(), body)
-	if err != nil {
-		return err
-	}
-	req.ContentLength = size
+	header := http.Header{}
 	for k, v := range ticket.Headers {
-		req.Header.Set(k, v)
+		header.Set(k, v)
 	}
-	hc := *c.httpClient
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := hc.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return &GradError{Code: "aborted", Message: "grad: upload cancelled: " + ctx.Err().Error(), Cause: ctx.Err()}
-		}
-		return &ConnectionError{GradError: &GradError{Code: "connection_error", Message: fmt.Sprintf("grad: uploading to %s://%s failed: %v", target.Scheme, target.Host, err), Cause: err}}
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode >= 300 {
-		redacted := target.Scheme + "://" + target.Host + target.Path
-		return generated.NewAPIError(resp.StatusCode, resp.Header, raw, method, redacted, true)
-	}
-	return nil
+	return api.T.Upload(ctx, method, ticket.URL, header, body, size)
 }
 
 // ImportsService reads import jobs.

@@ -611,10 +611,10 @@ export class Transport implements TransportLike {
       const controller = new AbortController();
       const onUserAbort = () => controller.abort(userSignal?.reason);
       userSignal?.addEventListener("abort", onUserAbort, { once: true });
-      let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
-        () => controller.abort(TIMEOUT),
-        timeoutMs,
-      );
+      // An infinite timeout (uploads: they take as long as their bytes take) arms no timer.
+      let timer: ReturnType<typeof setTimeout> | undefined = Number.isFinite(timeoutMs)
+        ? setTimeout(() => controller.abort(TIMEOUT), timeoutMs)
+        : undefined;
       const done = () => {
         if (timer !== undefined) clearTimeout(timer);
         timer = undefined;

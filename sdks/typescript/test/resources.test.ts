@@ -311,6 +311,18 @@ describe("datasets and imports", () => {
     expect(put.headers.get("x-amz-checksum-sha256")).toBe("z");
   });
 
+  it("gives an upload as long as its bytes take, not the request timeout", async () => {
+    const server = new FakeServer()
+      .on("POST", "/v1/uploads", json({ upload_id: "upl_1", method: "PUT", url: "/blobs/uploads/upl_1?sig=x", headers: {}, expires_at: "t" }, 201))
+      .on("PUT", "/blobs/uploads/upl_1", () => new Promise<Response>((resolve) => setTimeout(() => resolve(new Response(null, { status: 200 })), 60)))
+      .on("POST", "/v1/datasets/d/imports", json(wire("import-job-queued.json"), 202));
+    const { grad } = makeGrad(server, { timeoutMs: 20 });
+    const file = path.join(scratch(), "slow.jsonl");
+    writeFileSync(file, "{}\n");
+    await expect(grad.datasets.importFile("d", file)).resolves.toBeDefined();
+    expect(server.callsTo("PUT", "/blobs/uploads/upl_1")).toHaveLength(1);
+  });
+
   it("raises ImportFailedError with the server's error", async () => {
     const failed = { ...wire<Record<string, unknown>>("import-job-completed.json"), id: "imp_1", status: "failed", error: "line 3: not JSON" };
     const server = new FakeServer().on("GET", "/v1/imports/imp_1", json(failed));
