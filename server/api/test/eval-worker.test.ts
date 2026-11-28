@@ -19,6 +19,7 @@ import {
   type EvalHarness,
 } from "./fixtures/evals.js";
 import { judgeResponder } from "./fixtures/fake-openai.js";
+import { ledgerOf } from "./fixtures/postgres.js";
 
 const request = (raw: Record<string, unknown>) =>
   PlanEvalRequestSchema.parse({
@@ -44,7 +45,7 @@ const until = async (what: () => Promise<boolean>, ms = 5000) => {
 
 /** What the ledger billed and what the stored outputs cost, per attempt and in total. */
 const billing = async (t: TestApp, id: string) => {
-  const ledger = await t.deps.store.usage.listByRef(id);
+  const ledger = await ledgerOf(id);
   const outputs = await t.deps.store.evals.listOutputs(id, {}, { limit: 1000 });
   const sum = (xs: number[]) =>
     Number(xs.reduce((a, b) => a + b, 0).toFixed(8));

@@ -9,15 +9,12 @@ import {
   usageCommitted,
 } from "./fixtures/cloud.js";
 import type { FakeCloudApi } from "./fixtures/fake-cloud-api.js";
+import { ledgerOf } from "./fixtures/postgres.js";
 import { createSftRun, FakeWorker } from "./fixtures/worker.js";
-
-/** Usage rows of one run, oldest first. */
-const ledger = async (t: TestApp, runId: string) =>
-  t.deps.store.usage.listByRef(runId);
 
 /** The rows tile the run's tokens per attempt and sum to what it used. */
 const expectTiled = (
-  rows: Awaited<ReturnType<typeof ledger>>,
+  rows: Awaited<ReturnType<typeof ledgerOf>>,
   perAttempt: Record<number, number>,
 ) => {
   const ends = new Map<number, number>();
@@ -60,10 +57,10 @@ describe("usage ledger: incremental billing while a run trains", () => {
     const job = (await worker.claim())!;
 
     await worker.progress(job, 1, 400); // under both thresholds
-    expect(await ledger(t, run.id)).toEqual([]);
+    expect(await ledgerOf(run.id)).toEqual([]);
     await worker.progress(job, 2, 1200); // past 1000 tokens
     await worker.progress(job, 2, 1200); // the same report, replayed
-    expect((await ledger(t, run.id)).map((r) => r.tokens)).toEqual([1200]);
+    expect((await ledgerOf(run.id)).map((r) => r.tokens)).toEqual([1200]);
 
     t.clock.advanceSeconds(301);
     await worker.progress(job, 3, 1500); // past 5 minutes
@@ -76,7 +73,7 @@ describe("usage ledger: incremental billing while a run trains", () => {
       "artifact",
     );
 
-    const rows = await ledger(t, run.id);
+    const rows = await ledgerOf(run.id);
     expect(rows.map((r) => r.tokens_through)).toEqual([1200, 1500, 1800, 2100]);
     expectTiled(rows, { 1: 2100 });
     const final = await t.json<{ tokens_processed: number; cost_usd: number }>(
@@ -118,7 +115,7 @@ describe("usage ledger: incremental billing while a run trains", () => {
       status: "stopped_budget",
       tokens_processed: 2600,
     });
-    const rows = await ledger(t, run.id);
+    const rows = await ledgerOf(run.id);
     expectTiled(rows, { 1: 2000 });
     expect(rows.reduce((total, r) => total + r.cost_usd, 0)).toBeCloseTo(
       0.002,
@@ -135,7 +132,7 @@ describe("usage ledger: incremental billing while a run trains", () => {
       { status: "stopped_budget", tokens_processed: 1000 },
       "partial-2",
     );
-    expectTiled(await ledger(t, run.id), { 1: 2000, 2: 400 });
+    expectTiled(await ledgerOf(run.id), { 1: 2000, 2: 400 });
   });
 
   it("a cancel bills exactly what ran, with no rows after it", async () => {
@@ -152,12 +149,12 @@ describe("usage ledger: incremental billing while a run trains", () => {
       stop_reason: "cancelled",
     });
     await worker.complete(job, { status: "cancelled", tokens_processed: 1750 });
-    const afterCancel = await ledger(t, run.id);
+    const afterCancel = await ledgerOf(run.id);
     expectTiled(afterCancel, { 1: 1750 });
 
     // A late report of the closed attempt is fenced off and bills nothing.
     expect((await worker.progress(job, 3, 5000)).status).toBe(409);
-    expect(await ledger(t, run.id)).toEqual(afterCancel);
+    expect(await ledgerOf(run.id)).toEqual(afterCancel);
     expect(
       (await t.json<{ tokens_processed: number }>(`/v1/runs/${run.id}`)).body
         .tokens_processed,
@@ -179,7 +176,7 @@ describe("usage ledger: incremental billing while a run trains", () => {
       { status: "completed", tokens_processed: 1100 },
       "a",
     );
-    expectTiled(await ledger(t, run.id), { 1: 600, 2: 1100 });
+    expectTiled(await ledgerOf(run.id), { 1: 600, 2: 1100 });
   });
 
   it("pushes the ledger to Cloud billing as usage events, once per row", async () => {
@@ -269,7 +266,7 @@ describe("usage ledger: incremental billing while a run trains", () => {
       error: BALANCE_STOPPED,
       tokens_processed: 1200,
     });
-    expectTiled(await ledger(t, run.id), { 1: 1200 });
+    expectTiled(await ledgerOf(run.id), { 1: 1200 });
 
     // A billing outage never stops a run; a top-up lets it resume as is.
     cloud.balances.set(WORKSPACE_A, 100_000_000_000);

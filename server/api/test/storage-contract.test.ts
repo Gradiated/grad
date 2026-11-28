@@ -5,7 +5,6 @@ import { S3ObjectStore } from "../src/storage/s3.js";
 import {
   attachmentDisposition,
   ObjectExistsError,
-  ObjectIntegrityError,
   ObjectNotFoundError,
   validateObjectKey,
 } from "../src/storage/types.js";
@@ -13,15 +12,6 @@ import { s3Store, s3Target } from "./fixtures/s3.js";
 
 const sha = (data: Uint8Array): string =>
   createHash("sha256").update(data).digest("hex");
-
-const chunksOf = async function* (
-  data: Uint8Array,
-  size = 7,
-): AsyncGenerator<Uint8Array> {
-  for (let i = 0; i < data.byteLength; i += size) {
-    yield data.subarray(i, i + size);
-  }
-};
 
 const readAll = async (stream: ReadableStream<Uint8Array>): Promise<Buffer> => {
   const chunks: Uint8Array[] = [];
@@ -69,13 +59,6 @@ describe("ObjectStore contract: S3 (SeaweedFS)", () => {
     await expect(store.put(key, Buffer.from("BBBB"))).rejects.toBeInstanceOf(
       ObjectExistsError,
     );
-    await expect(
-      store.putStream(key, chunksOf(Buffer.from("CCCC")), {
-        maxBytes: 100,
-        expectedSha256: sha(Buffer.from("CCCC")),
-        expectedSizeBytes: 4,
-      }),
-    ).rejects.toBeInstanceOf(ObjectExistsError);
     expect(Buffer.from(await store.get(key)).toString()).toBe("AAAA");
   });
 
@@ -99,61 +82,6 @@ describe("ObjectStore contract: S3 (SeaweedFS)", () => {
     const winner = (wins[0] as PromiseFulfilledResult<{ sha256: string }>)
       .value;
     expect(sha(await store.get(key))).toBe(winner.sha256);
-  });
-
-  it("streams uploads with declared size and sha256", async () => {
-    const key = uniqueKey("stream.bin");
-    const data = randomBytes(64 * 1024 + 3);
-    const stored = await store.putStream(key, chunksOf(data, 4096), {
-      maxBytes: 1024 * 1024,
-      expectedSha256: sha(data),
-      expectedSizeBytes: data.byteLength,
-    });
-
-    expect(stored.sha256).toBe(sha(data));
-    expect(stored.sizeBytes).toBe(data.byteLength);
-    expect(Buffer.compare(Buffer.from(await store.get(key)), data)).toBe(0);
-  });
-
-  it("streams uploads without declared digests", async () => {
-    const key = uniqueKey("undeclared.bin");
-    const data = Buffer.from("no declared digest");
-    const stored = await store.putStream(key, chunksOf(data), {
-      maxBytes: 1000,
-    });
-
-    expect(stored.sha256).toBe(sha(data));
-    expect(stored.sizeBytes).toBe(data.byteLength);
-  });
-
-  it.each([
-    [
-      "sha256 mismatch",
-      { expectedSha256: "0".repeat(64), expectedSizeBytes: 11 },
-    ],
-    ["size too small", { expectedSha256: undefined, expectedSizeBytes: 5 }],
-    ["size too large", { expectedSha256: undefined, expectedSizeBytes: 50 }],
-    ["declared size mismatch with sha", { sizeDelta: 1 }],
-    ["maxBytes exceeded", { maxBytes: 4 }],
-  ] as const)("rejects %s and leaves no object", async (_label, opts) => {
-    const key = uniqueKey("bad.bin");
-    const data = Buffer.from("hello world");
-    const options =
-      "sizeDelta" in opts
-        ? {
-            maxBytes: 1000,
-            expectedSha256: sha(data),
-            expectedSizeBytes: data.byteLength + opts.sizeDelta,
-          }
-        : "maxBytes" in opts
-          ? { maxBytes: opts.maxBytes }
-          : { maxBytes: 1000, ...opts };
-
-    await expect(
-      store.putStream(key, chunksOf(data), options),
-    ).rejects.toBeInstanceOf(ObjectIntegrityError);
-    expect(await store.head(key)).toBeNull();
-    await expect(store.get(key)).rejects.toBeInstanceOf(ObjectNotFoundError);
   });
 
   it("reports head size and sha256", async () => {

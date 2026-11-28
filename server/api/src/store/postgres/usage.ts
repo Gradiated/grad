@@ -294,11 +294,4 @@ export const createUsageRepository = (
       parked: Number(row?.parked ?? 0),
     };
   },
-  listByRef: async (refId) =>
-    (
-      await db.query(
-        "SELECT * FROM grad_usage WHERE ref_id = $1 ORDER BY seq",
-        [refId],
-      )
-    ).map(toLedgerRow),
 });

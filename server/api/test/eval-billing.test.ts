@@ -9,6 +9,7 @@ import {
   type EvalHarness,
   createEval,
 } from "./fixtures/evals.js";
+import { ledgerOf } from "./fixtures/postgres.js";
 
 /** Every call reports 100k prompt tokens: $0.04 on qwen/qwen3-8b ($0.40/M). */
 const EXPENSIVE = () => ({
@@ -83,7 +84,7 @@ describe("eval billing", () => {
     expect(done.total_cost_usd).toBeCloseTo(0.12, 6);
 
     // The attempt closed under the flush threshold: one ledger row.
-    expect(await t.deps.store.usage.listByRef(created.id)).toEqual([
+    expect(await ledgerOf(created.id)).toEqual([
       expect.objectContaining({
         kind: "eval",
         ref_id: created.id,
@@ -116,7 +117,7 @@ describe("eval billing", () => {
     }
     await evals.cancel(WORKSPACE_A, created.id);
     await running;
-    const billed = (await t.deps.store.usage.listByRef(created.id)).reduce(
+    const billed = (await ledgerOf(created.id)).reduce(
       (sum, u) => sum + u.tokens,
       0,
     );
@@ -163,11 +164,8 @@ describe("eval billing", () => {
     expect((await evals.get(WORKSPACE_A, failed.id)).status).toBe("failed");
 
     // Nothing ran for the cancelled and failed evals, so only the scored one bills.
-    const store = t.deps.store;
-    expect(
-      (await store.usage.listByRef(local.id)).map((u) => u.attempt),
-    ).toEqual([1]);
-    expect(await store.usage.listByRef(cancelled.id)).toEqual([]);
-    expect(await store.usage.listByRef(failed.id)).toEqual([]);
+    expect((await ledgerOf(local.id)).map((u) => u.attempt)).toEqual([1]);
+    expect(await ledgerOf(cancelled.id)).toEqual([]);
+    expect(await ledgerOf(failed.id)).toEqual([]);
   });
 });

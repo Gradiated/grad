@@ -17,6 +17,7 @@ import { S3ObjectStore } from "../src/storage/s3.js";
 import { createPostgresStore } from "../src/store/postgres/index.js";
 import type { Store } from "../src/store/types.js";
 import { makeTestApp, type TestApp } from "./fixtures/app.js";
+import { seedArtifact } from "./fixtures/evals.js";
 import { createSftRun, FakeWorker, sftRecords } from "./fixtures/worker.js";
 import {
   dropSchema,
@@ -579,17 +580,18 @@ describe("S3 lost an object a row names", () => {
   it("answers 500 storage_object_missing, not a bare internal_error", async () => {
     // Dataset parts have their own 410 dataset_part_missing; any other object
     // (a checkpoint, a bundle) the bucket lost lands in the generic handler.
-    const { ObjectNotFoundError } = await import("../src/storage/types.js");
+    // An artifact row whose bundle was never stored is a lost bundle.
     const t = await makeTestApp();
     try {
-      t.app.get("/v1/test-lost-object", () => {
-        throw new ObjectNotFoundError("artifacts/ws/bundle.grad.tar.gz");
-      });
-      const res = await t.json<{ code: string }>("/v1/test-lost-object");
+      const artifact = await seedArtifact(t, "lost-bundle");
+      const res = await t.json<{ code: string; detail: string }>(
+        `/v1/artifacts/${artifact.id}/download`,
+      );
       expect([res.status, res.body.code]).toEqual([
         500,
         "storage_object_missing",
       ]);
+      expect(res.body.detail).toMatch(/missing from object storage/);
     } finally {
       await t.close();
     }

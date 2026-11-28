@@ -8,7 +8,6 @@ import { SpanKind, withSpan } from "./tracing.js";
 
 const OPS = [
   "put",
-  "putStream",
   "get",
   "getStream",
   "head",

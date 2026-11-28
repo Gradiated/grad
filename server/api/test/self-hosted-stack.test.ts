@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stagingKey } from "../src/services/uploads.js";
 import { makeTestApp, WORKSPACE_A, type TestApp } from "./fixtures/app.js";
 import { ManualClock } from "./fixtures/clock.js";
+import { ledgerOf } from "./fixtures/postgres.js";
 import {
   createSftRun,
   FakeWorker,
@@ -93,7 +94,7 @@ describe("self-hosted stack (Postgres + S3)", () => {
       ).text(),
     ).toBe("ckpt-state");
 
-    const usage = await t.deps.store.usage.listByRef(run.id);
+    const usage = await ledgerOf(run.id);
     expect([...new Set(usage.map((u) => u.attempt))]).toEqual([1, 2]);
   });
 

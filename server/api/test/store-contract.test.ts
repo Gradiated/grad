@@ -17,6 +17,7 @@ import {
   createTestStore,
   dropSchema,
   freshSchemaName,
+  ledgerOf,
   postgresUrl,
 } from "./fixtures/postgres.js";
 
@@ -1297,9 +1298,9 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       );
       expect(pages).toBe(2);
       expect(rows.map((u) => u.idempotency_key)).toEqual(["k2", "k1"]);
-      expect(
-        (await store.usage.listByRef("run_1")).map((u) => u.tokens),
-      ).toEqual([10, 20, 5]);
+      expect((await ledgerOf("run_1")).map((u) => u.tokens)).toEqual([
+        10, 20, 5,
+      ]);
 
       // The exporter: batches in commit order from the shared cursor.
       await usageCommitted();
@@ -1372,7 +1373,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(rolledBack).toBeDefined();
       expect(await store.datasets.get("ws_t", "tx")).toBeNull();
       expect((await store.runs.getById(committed!.id))?.current_step).toBe(9);
-      expect(await store.usage.listByRef(committed!.id)).toEqual([]);
+      expect(await ledgerOf(committed!.id)).toEqual([]);
 
       const nested = await store.transaction(async () =>
         store.transaction(async () => {
@@ -1391,7 +1392,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
         }),
       );
       expect(nested).toBe("ok");
-      const [entry] = await store.usage.listByRef(committed!.id);
+      const [entry] = await ledgerOf(committed!.id);
       expect(entry?.kind).toBe("eval");
       expect(await store.ping()).toBe(true);
     });

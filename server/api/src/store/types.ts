@@ -1085,7 +1085,6 @@ export interface UsageRepository {
     oldest: Date | null;
     parked: number;
   }>;
-  listByRef(refId: string): Promise<LedgerRow[]>;
 }
 
 // --- Secrets and sources --------------------------------------------------------

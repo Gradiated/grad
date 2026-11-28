@@ -5,7 +5,8 @@ import { inject } from "vitest";
 import type { Clock } from "../../src/clock.js";
 import { migrate } from "../../src/store/migrate.js";
 import { createPostgresStore } from "../../src/store/postgres/index.js";
-import type { Store } from "../../src/store/types.js";
+import { toLedgerRow } from "../../src/store/postgres/mappers.js";
+import type { LedgerRow, Store } from "../../src/store/types.js";
 
 /** Connection URL from the global setup. */
 export const postgresUrl = (): string => inject("postgresUrl");
@@ -95,3 +96,11 @@ export const sql = async (
     await client.end();
   }
 };
+
+/** A run's or eval's usage ledger rows, oldest first. */
+export const ledgerOf = async (refId: string): Promise<LedgerRow[]> =>
+  (
+    await sql("SELECT * FROM grad_usage WHERE ref_id = $1 ORDER BY seq", [
+      refId,
+    ])
+  ).map(toLedgerRow);

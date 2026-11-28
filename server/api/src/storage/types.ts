@@ -42,13 +42,6 @@ export class ObjectIntegrityError extends Error {
   }
 }
 
-export interface PutStreamOptions {
-  /** Hard cap; exceeding it aborts the write with ObjectIntegrityError. */
-  maxBytes: number;
-  expectedSha256?: string | undefined;
-  expectedSizeBytes?: number | undefined;
-}
-
 export interface PresignedUpload {
   url: string;
   headers: Record<string, string>;
@@ -68,11 +61,6 @@ export interface PresignUploadInput {
  */
 export interface ObjectStore {
   put(key: string, data: Uint8Array): Promise<StoredObject>;
-  putStream(
-    key: string,
-    body: AsyncIterable<Uint8Array>,
-    options: PutStreamOptions,
-  ): Promise<StoredObject>;
   /** Throws ObjectNotFoundError. */
   get(key: string): Promise<Uint8Array>;
   /** Throws ObjectNotFoundError. */

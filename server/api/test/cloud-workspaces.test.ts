@@ -15,6 +15,7 @@ import {
 import { createSftRun, FakeWorker } from "./fixtures/worker.js";
 import { createEval, qaRecords, seedDataset } from "./fixtures/evals.js";
 import { PlanEvalRequestSchema } from "../src/contracts.js";
+import { ledgerOf } from "./fixtures/postgres.js";
 
 const LANGFUSE = {
   kind: "langfuse",
@@ -222,7 +223,7 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
         keys.filter((k) => k.startsWith(`${prefix}/${WORKSPACE_A}/`)),
       ).toEqual([]);
     }
-    expect((await t.deps.store.usage.listByRef(run.id)).length).toBe(1);
+    expect((await ledgerOf(run.id)).length).toBe(1);
   });
 
   it("resolves and pins artifacts for serving; a delete keeps pinned bundles until they are unpinned", async () => {

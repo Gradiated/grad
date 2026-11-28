@@ -26,10 +26,6 @@ const storeWith = (
     } as unknown as S3Client,
   });
 
-const body = async function* () {
-  yield Buffer.from("abc");
-};
-
 describe("S3ObjectStore error mapping", () => {
   it("maps conditional-write conflicts to ObjectExistsError", async () => {
     for (const error of [
@@ -82,20 +78,6 @@ describe("S3ObjectStore error mapping", () => {
     const store = storeWith(() => ({ ContentLength: 3 }));
 
     expect(await store.head("k")).toEqual({ sizeBytes: 3, sha256: null });
-  });
-
-  it("rejects a declared size above maxBytes before sending anything", async () => {
-    const store = storeWith(() => {
-      throw new Error("must not be called");
-    });
-
-    await expect(
-      store.putStream("k", body(), {
-        maxBytes: 2,
-        expectedSizeBytes: 3,
-        expectedSha256: "0".repeat(64),
-      }),
-    ).rejects.toBeInstanceOf(ObjectIntegrityError);
   });
 
   it("sends deletes for valid keys", async () => {

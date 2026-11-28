@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
@@ -23,7 +22,6 @@ import {
   type ObjectStore,
   type PresignUploadInput,
   type PresignedUpload,
-  type PutStreamOptions,
   type StoredObject,
 } from "./types.js";
 
@@ -114,13 +112,8 @@ const uploadHeaders = (
 /**
  * S3 (or S3-compatible) object store. Writes use `If-None-Match: *` so an
  * existing key is never replaced, and carry `x-amz-checksum-sha256` so the
- * service rejects corrupted bodies.
- *
- * `putStream` streams the body straight through when the caller declares both
- * size and sha256 (the trainer upload path: S3 verifies the digest
- * server-side). Without both, the body is buffered in memory up to
- * `maxBytes`, because a single PutObject needs the length and checksum up
- * front and multipart upload (`@aws-sdk/lib-storage`) is not a dependency.
+ * service rejects corrupted bodies. Clients and workers upload large bodies
+ * straight to storage through presigned PUTs.
  */
 export class S3ObjectStore implements ObjectStore {
   private readonly client: S3Client;
@@ -163,14 +156,10 @@ export class S3ObjectStore implements ObjectStore {
 
   private sendPut = async (
     key: string,
-    body: Uint8Array | Readable,
+    body: Uint8Array,
     sha256: string,
     sizeBytes: number,
-    abort?: AbortSignal,
   ): Promise<void> => {
-    const signal = abort
-      ? AbortSignal.any([this.signal(), abort])
-      : this.signal();
     try {
       await this.send(
         new PutObjectCommand({
@@ -181,10 +170,9 @@ export class S3ObjectStore implements ObjectStore {
           ChecksumSHA256: hexToBase64(sha256),
           IfNoneMatch: "*",
         }),
-        { abortSignal: signal },
+        { abortSignal: this.signal() },
       );
     } catch (error) {
-      if (error instanceof ObjectIntegrityError) throw error;
       if (isPreconditionFailed(error)) throw new ObjectExistsError(key);
       if (isBadDigest(error)) {
         throw new ObjectIntegrityError(
@@ -201,96 +189,6 @@ export class S3ObjectStore implements ObjectStore {
     await this.sendPut(clean, data, sha256, data.byteLength);
 
     return { key: clean, sha256, sizeBytes: data.byteLength };
-  };
-
-  putStream = async (
-    key: string,
-    body: AsyncIterable<Uint8Array>,
-    options: PutStreamOptions,
-  ): Promise<StoredObject> => {
-    const clean = validateObjectKey(key);
-    const { expectedSha256, expectedSizeBytes, maxBytes } = options;
-    if (expectedSizeBytes !== undefined && expectedSizeBytes > maxBytes) {
-      throw new ObjectIntegrityError(
-        `Upload exceeds the ${maxBytes}-byte limit.`,
-      );
-    }
-
-    if (expectedSha256 !== undefined && expectedSizeBytes !== undefined) {
-      const hash = createHash("sha256");
-      let size = 0;
-      const counted = async function* () {
-        for await (const chunk of body) {
-          size += chunk.byteLength;
-          if (size > expectedSizeBytes) {
-            throw new ObjectIntegrityError(
-              `Upload exceeds the declared ${expectedSizeBytes} bytes.`,
-            );
-          }
-          hash.update(chunk);
-          yield chunk;
-        }
-        if (size !== expectedSizeBytes) {
-          throw new ObjectIntegrityError(
-            `Upload size ${size} does not match the declared ${expectedSizeBytes} bytes.`,
-          );
-        }
-        if (hash.digest("hex") !== expectedSha256) {
-          throw new ObjectIntegrityError(
-            `Upload sha256 does not match the declared ${expectedSha256}.`,
-          );
-        }
-      };
-
-      // A body that ends short of ContentLength would leave the request (and
-      // the backend's per-key lock) hanging, so a source error aborts it.
-      const controller = new AbortController();
-      const stream = Readable.from(counted());
-      const failure = new Promise<never>((_, reject) =>
-        stream.once("error", (error) => {
-          controller.abort(error);
-          reject(error);
-        }),
-      );
-      const upload = this.sendPut(
-        clean,
-        stream,
-        expectedSha256,
-        expectedSizeBytes,
-        controller.signal,
-      );
-      upload.catch(() => undefined);
-      await Promise.race([upload, failure]).finally(() => stream.destroy());
-
-      return { key: clean, sha256: expectedSha256, sizeBytes: size };
-    }
-
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    for await (const chunk of body) {
-      size += chunk.byteLength;
-      if (size > maxBytes) {
-        throw new ObjectIntegrityError(
-          `Upload exceeds the ${maxBytes}-byte limit.`,
-        );
-      }
-      chunks.push(chunk);
-    }
-    const data = Buffer.concat(chunks);
-    const sha256 = createHash("sha256").update(data).digest("hex");
-    if (expectedSizeBytes !== undefined && size !== expectedSizeBytes) {
-      throw new ObjectIntegrityError(
-        `Upload size ${size} does not match the declared ${expectedSizeBytes} bytes.`,
-      );
-    }
-    if (expectedSha256 !== undefined && sha256 !== expectedSha256) {
-      throw new ObjectIntegrityError(
-        `Upload sha256 ${sha256} does not match the declared ${expectedSha256}.`,
-      );
-    }
-    await this.sendPut(clean, data, sha256, size);
-
-    return { key: clean, sha256, sizeBytes: size };
   };
 
   private getObject = async (key: string, abortSignal: AbortSignal) => {

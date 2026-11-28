@@ -34,6 +34,7 @@ import {
   startFakeOpenAI,
   type FakeOpenAI,
 } from "./fixtures/fake-openai.js";
+import { ledgerOf } from "./fixtures/postgres.js";
 
 describe("evals on Gradiated Cloud: the gateway's eval lane", () => {
   let upstream: FakeOpenAI;
@@ -143,7 +144,7 @@ describe("evals on Gradiated Cloud: the gateway's eval lane", () => {
       ),
     ).toBe(true);
 
-    const usage = await t.deps.store.usage.listByRef(created.id);
+    const usage = await ledgerOf(created.id);
     expect(usage.length).toBeGreaterThan(0);
     expect(usage.every((u) => u.billed_by === "gateway")).toBe(true);
     expect(await t.services.usage.exportPending()).toBe(0);

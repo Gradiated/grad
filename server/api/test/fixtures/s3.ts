@@ -33,10 +33,6 @@ export const prefixedStore = (
 
   return {
     put: async (key, data) => ({ ...(await store.put(k(key), data)), key }),
-    putStream: async (key, body, options) => ({
-      ...(await store.putStream(k(key), body, options)),
-      key,
-    }),
     get: (key) => store.get(k(key)),
     getStream: (key) => store.getStream(k(key)),
     head: (key) => store.head(k(key)),
