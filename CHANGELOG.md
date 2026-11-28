@@ -13,12 +13,14 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - **Evals:** a transient failure (storage, the database) while handing a claimed eval to its worker requeues the eval at
   once, spending the attempt, as runs and imports already did; before, the eval stayed leased until its lease expired.
 
-- Docs: `spec/openapi.yaml` describes the fields of `Run`, `PlanRunRequest`, `Checkpoint`, `Artifact` and `Dataset`
-  (descriptions only, no wire change), so the generated
-  [API reference](https://gradiated.com/docs/reference/training-api/) and the SDKs' doc comments explain them. A
-  problem's `type` URL (`https://gradiated.com/problems/<code>`) now opens that code's entry in
-  [Errors](https://gradiated.com/docs/training/errors/). `scripts/check-docs-snippets.py --api-examples` sends every
-  request body the API reference shows to a live stack.
+- Docs: `spec/openapi.yaml` describes the fields of `Run`, `PlanRunRequest`, `Checkpoint`, `Artifact`, `Dataset`,
+  `EvalRun`, `PlanEvalRequest`, `ImportJob`, `ApiKey`, `Source` and `UsageRecord` (descriptions only, no wire
+  change), so the generated [API reference](https://gradiated.com/docs/reference/training-api/) and the SDKs' doc
+  comments explain them. A problem's `type` URL (`https://gradiated.com/problems/<code>`) now opens that code's entry
+  in [Errors](https://gradiated.com/docs/training/errors/). `scripts/check-docs-snippets.py --api-examples` sends
+  every request body the API reference shows to a live stack (`--capture` records each endpoint's response for it),
+  and fenced blocks with a title are checked too. `grad --help` has examples for `runs events`, `runs resume`,
+  `runs promote`, `eval failures`, `secrets set`, `sources add` and `sources update`.
 
 - **List filters.** `GET /v1/runs` takes `status` (comma-separated, e.g. `queued,running`) and `q`
   (a case-insensitive name substring, or an exact id); `GET /v1/evals` takes `status`;
