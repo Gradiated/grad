@@ -106,3 +106,11 @@ export const type = async (el: Element | null | undefined, value: string): Promi
 
 export const byText = (root: ParentNode, selector: string, text: string | RegExp): HTMLElement | undefined =>
   [...root.querySelectorAll<HTMLElement>(selector)].find((e) => (typeof text === "string" ? e.textContent?.includes(text) : text.test(e.textContent ?? "")));
+
+/** A `#key=` handoff shows the sign-in form filled in: confirm it, as the user would. */
+export const confirmHandoff = async (container: HTMLElement): Promise<void> => {
+  await waitFor(() => {
+    if (!container.textContent?.includes("This link signs you in")) throw new Error("no #key= handoff form yet");
+  }, 20_000);
+  await click(container.querySelector("button[type=submit]"));
+};

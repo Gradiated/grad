@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app.js";
 import { navigate } from "../../src/lib/router.js";
-import { byText, click, mount, waitFor, type Mounted } from "../helpers.js";
+import { byText, click, confirmHandoff, mount, waitFor, type Mounted } from "../helpers.js";
 
 vi.mock("uplot", () => ({ default: class { setData() {} setSize() {} destroy() {} } }));
 
@@ -24,6 +24,7 @@ describe("web UI against a live grad-server", () => {
     const runs = (await (await fetch(`${base}/v1/runs?limit=5`, { headers: key ? { authorization: `Bearer ${key}` } : {} })).json()) as { data: { id: string; name: string }[] };
     history.replaceState(null, "", key ? `/runs#key=${encodeURIComponent(key)}` : "/runs");
     app = await mount(<App baseURL={base} />);
+    if (key) await confirmHandoff(app.container);
     await waitFor(() => expect(app?.container.querySelector("h1")?.textContent).toBe("Runs"), 20_000);
     expect(location.hash).toBe("");
     const first = runs.data[0];

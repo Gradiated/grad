@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app.js";
-import { mount, waitFor, type Mounted } from "../helpers.js";
+import { confirmHandoff, mount, waitFor, type Mounted } from "../helpers.js";
 
 vi.mock("uplot", () => ({ default: class { setData() {} setSize() {} destroy() {} } }));
 
@@ -32,6 +32,7 @@ describe("eval report against a live grad-server", () => {
 
     history.replaceState(null, "", key ? `/evals/${ev.id}#key=${encodeURIComponent(key)}` : `/evals/${ev.id}`);
     app = await mount(<App baseURL={base} />);
+    if (key) await confirmHandoff(app.container);
     await waitFor(() => expect(app?.container.querySelector("h1")?.textContent).toContain(ev.name), 20_000);
     const text = () => app?.container.textContent ?? "";
     await waitFor(() => expect(text()).toContain("Summary"), 20_000);
