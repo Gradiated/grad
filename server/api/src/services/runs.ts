@@ -812,12 +812,17 @@ export const createRunLifecycle = (
                 "Insufficient balance to start this training run.",
             );
           }
+          // Planned before the transaction: it reads the dataset and may ask
+          // Cloud billing and the product, which no open transaction waits on.
+          const labelPlan = labelRequest
+            ? await evals.planRecord(workspaceId, labelRequest)
+            : null;
 
           // Router rubric items: the labeling eval runs first, the run waits
           // on it. Both commit together (or neither, on a key race).
           const { run, labels } = await store.transaction(async () => {
-            const labels = labelRequest
-              ? await evals.createRecord(workspaceId, labelRequest)
+            const labels = labelPlan
+              ? await store.evals.create(labelPlan)
               : null;
             const run = await store.runs.create({
               workspaceId,

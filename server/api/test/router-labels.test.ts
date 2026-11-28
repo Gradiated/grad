@@ -143,6 +143,34 @@ describe("router rubric: a labeling eval replays prompts and judges them", () =>
     expect(strong.scores).toEqual({ rubric: 0.9 });
   });
 
+  it("plans and balance-checks the labeling eval before the run's transaction opens", async () => {
+    const { t } = await harness();
+    const { store, billing } = t.deps;
+    let open = 0;
+    const transaction = store.transaction;
+    store.transaction = async (fn) => {
+      open += 1;
+      try {
+        return await transaction(fn);
+      } finally {
+        open -= 1;
+      }
+    };
+    const check = billing.checkCanStartRun;
+    const checkedInTx: boolean[] = [];
+    billing.checkCanStartRun = (...args) => {
+      checkedInTx.push(open > 0);
+      return check(...args);
+    };
+
+    const created = await t.json("/v1/runs", { body: routerRequest() });
+    store.transaction = transaction;
+    billing.checkCanStartRun = check;
+    expect(created.status).toBe(202);
+    // The run's check, then the labeling eval's: neither holds a transaction.
+    expect(checkedInTx).toEqual([false, false]);
+  });
+
   it("cancels the run when labeling fails or is cancelled", async () => {
     const { t, fake } = await harness();
     const getRun = async (id: string) =>

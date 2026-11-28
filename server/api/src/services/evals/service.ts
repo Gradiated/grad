@@ -44,6 +44,7 @@ import type {
   EvalOutputRow,
   EvalScoreRow,
   EvalRecord,
+  EvalRepository,
   IdempotencyInput,
   JobExpectation,
   Page,
@@ -81,6 +82,9 @@ const SCORE_ROWS_PAGE = 5_000;
 /** Score updates per dataset part a scoring job writes. */
 const SCORE_PART_RECORDS = 50_000;
 
+/** An eval row ready to insert: planned, balance-checked and resolved. */
+export type NewEval = Parameters<EvalRepository["create"]>[0];
+
 export interface EvalService {
   plan(
     workspaceId: string,
@@ -101,11 +105,12 @@ export interface EvalService {
     request: ScoreDatasetRequest,
     idempotency?: IdempotencyInput,
   ): Promise<Created<EvalRun>>;
-  /** Plans and inserts an eval (joins the caller's transaction). */
-  createRecord(
-    workspaceId: string,
-    request: PlanEvalRequest,
-  ): Promise<EvalRecord>;
+  /**
+   * Plans an eval (dataset reads, the balance check, Cloud model resolution)
+   * into the row `store.evals.create` inserts, so a caller can insert it in
+   * its own short transaction.
+   */
+  planRecord(workspaceId: string, request: PlanEvalRequest): Promise<NewEval>;
   /** recipe.evals: queues the run's checkpoint evals on a new checkpoint. */
   evaluateCheckpoint(
     run: Pick<RunRecord, "id" | "workspace_id" | "name" | "resolved_config">,
@@ -845,7 +850,7 @@ export const createEvalService = (
     return served;
   };
 
-  const createRecord = async (
+  const planRecord = async (
     workspaceId: string,
     request: PlanEvalRequest,
     idempotency?: IdempotencyInput,
@@ -855,7 +860,7 @@ export const createEvalService = (
       step: number;
       targets: EvalRecord["model_targets"];
     },
-  ): Promise<EvalRecord> => {
+  ): Promise<NewEval> => {
     if (checkpoint && evalsOnCloud(deps)) throw checkpointEvalsUnsupported();
     const plan = await planEvalRequest(
       deps,
@@ -882,7 +887,7 @@ export const createEvalService = (
     const modelTargets = await servedTargets(workspaceId, plan.targets);
     const judgeTargets = await servedTargets(workspaceId, plan.judgeTargets);
 
-    return store.evals.create({
+    return {
       workspaceId,
       maxAttempts: deps.settings.maxAttempts,
       maxQueued: deps.settings.queue.maxQueued,
@@ -907,8 +912,12 @@ export const createEvalService = (
       run_id: checkpoint?.runId ?? null,
       run_step: checkpoint?.step ?? null,
       totalOutputs: plan.taskCount * request.models.length * request.samples,
-    });
+    };
   };
+
+  const createRecord = async (
+    ...args: Parameters<typeof planRecord>
+  ): Promise<EvalRecord> => store.evals.create(await planRecord(...args));
 
   /** Records a recipe.evals result on its run: in run.checkpoint_evals and a job event. */
   const recordCheckpointEval = async (
@@ -1029,7 +1038,7 @@ export const createEvalService = (
           toPublic(await createRecord(workspaceId, request, idempotency)),
       ),
 
-    createRecord,
+    planRecord: (workspaceId, request) => planRecord(workspaceId, request),
 
     evaluateCheckpoint,
 
