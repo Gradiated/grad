@@ -84,7 +84,7 @@ export GRAD_SECRETS_KEY=$(openssl rand -base64 32)    # encrypts workspace secre
 
 ## Web UI
 
-`grad-server` serves a web UI at `/` for watching training, much like the Temporal UI for workflows: `http://127.0.0.1:18787/` after `grad local up` (which prints the URL; `grad local status` shows it later), `<base_url>/` from the harness (`ui_url`), and the API Service or ingress in Kubernetes. Run `grad ui` to open it signed in with your CLI profile (`grad ui RUN_ID` opens one run).
+`grad-server` serves a web UI at `/` for watching training, much like the Temporal UI for workflows: `http://127.0.0.1:18787/` after `grad local up` (which prints the URL; `grad local status` shows it later), `<base_url>/` from the harness (`ui_url`), and the API Service or ingress in Kubernetes. Run `grad ui` to open it with your CLI profile's key filled in, one click from signed in (`grad ui RUN_ID` opens one run).
 
 What it shows (read-mostly):
 
@@ -104,7 +104,7 @@ How it works and what it can reach:
 
 - It is a static build (`server/ui`, Vite + React + uPlot, about 130 KB gzipped, plus 120 KB of self-hosted OFL fonts: Inter, Instrument Sans and JetBrains Mono) baked into the image and served from memory: hashed `/assets/*` files are cached forever, `index.html` is revalidated, and any other browser navigation outside `/v1`, `/health/*` and `/metrics` returns `index.html`. Unknown `/v1` paths still answer with problem+json 404s.
 - It calls only the public `/v1` API, with the viewer's API key, so a key sees exactly what it could see through the SDKs. It adds no endpoints.
-- With `AUTH_MODE=none` there is no login. With `api_key`, paste a key on the login page; it is kept in that tab's `sessionStorage` only (never `localStorage` or cookies, so there is no CSRF surface) and is forgotten when the tab closes. `grad ui` hands the profile's key over once in a `#key=` URL fragment, which browsers never send to the server; the page moves it into `sessionStorage` and removes it from the address bar. A tab that is already signed in keeps its key and ignores a `#key=` link, so a link can't silently switch you into someone else's workspace.
+- With `AUTH_MODE=none` there is no login. With `api_key`, paste a key on the login page; it is kept in that tab's `sessionStorage` only (never `localStorage` or cookies, so there is no CSRF surface) and is forgotten when the tab closes. `grad ui` hands the profile's key over once in a `#key=` URL fragment, which browsers never send to the server; the page removes it from the address bar and shows the sign-in form filled in with it (masked, `grad_abcd…wxyz`), so one click signs you in. A link can carry anyone's key, so it never signs a tab in on its own, and a tab that is already signed in keeps its key and ignores a `#key=` link: a link can't silently switch you into someone else's workspace.
 - Every UI response carries a strict Content-Security-Policy (`default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`, nothing inline), `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`.
 - `UI_ENABLED=false` turns it off (it is off by default with `AUTH_MODE=cloud`); Helm sets it from `ui.enabled` (default `true`). The UI needs no extra exposure: keep the server on loopback or behind your ingress as before.
 

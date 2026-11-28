@@ -174,12 +174,27 @@ describe("auth", () => {
     expect(sessionStorage.getItem("grad.api_key")).toBeNull();
   });
 
-  it("signs in from a `grad ui` #key= handoff and clears the fragment", async () => {
+  it("asks before a `grad ui` #key= handoff signs a signed-out tab in, and clears the fragment", async () => {
     const server = fakeServer(routes(), { key: "grad_handoff_key_9999" });
     const { container } = await boot(server, "/runs#key=grad_handoff_key_9999");
+    await waitFor(() => expect(container.textContent).toContain("This link signs you in with the API key grad_hand…9999"));
+    expect(location.hash).toBe("");
+    expect(sessionStorage.getItem("grad.api_key")).toBeNull();
+    expect(server.calls).toHaveLength(0);
+    expect(container.querySelector<HTMLInputElement>("#api-key")?.value).toBe("grad_handoff_key_9999");
+    await click(container.querySelector("button[type=submit]"));
+    await waitFor(() => expect(container.querySelector("h1")?.textContent).toBe("Runs"));
+    expect(container.textContent).toContain("grad_hand…9999");
+  });
+
+  it("keeps a signed-in tab's key when a link carries another", async () => {
+    const server = fakeServer(routes(), { key: "grad_mine_key_000001" });
+    sessionStorage.setItem("grad.api_key", "grad_mine_key_000001");
+    const { container } = await boot(server, "/runs#key=grad_attacker_key_99");
     await waitFor(() => expect(container.querySelector("h1")?.textContent).toBe("Runs"));
     expect(location.hash).toBe("");
-    expect(container.textContent).toContain("grad_hand…9999");
+    expect(sessionStorage.getItem("grad.api_key")).toBe("grad_mine_key_000001");
+    expect(server.calls.at(-1)?.auth).toBe("Bearer grad_mine_key_000001");
   });
 
   it("returns to the login page when a later request is rejected", async () => {

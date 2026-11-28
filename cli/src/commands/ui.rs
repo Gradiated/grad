@@ -1,4 +1,4 @@
-//! `grad ui`: open grad-server's web UI in a browser, signed in.
+//! `grad ui`: open grad-server's web UI in a browser with the profile's key filled in.
 //!
 //! The profile's API key rides in a one-time `#key=` URL fragment: browsers
 //! never send fragments to the server, and the page moves the key into
@@ -90,7 +90,7 @@ pub fn ui(ctx: &Ctx, args: UiArgs) -> CliResult {
     if args.no_open {
         out.line(&page);
         if key.is_some() {
-            out.note("Sign in with your API key, or run `grad ui` without --no-open to open it signed in.");
+            out.note("Sign in with your API key, or run `grad ui` without --no-open to open it with your key filled in.");
         }
         return out.done(&json!({ "url": page, "opened": false }));
     }

@@ -16,7 +16,7 @@ import { RunDetailPage } from "./pages/run-detail.js";
 import { RunsPage } from "./pages/runs.js";
 import { UsagePage } from "./pages/usage.js";
 
-type Session = { state: "checking" } | { state: "login"; reason?: string } | { state: "ready"; api: Api; key: string | undefined };
+type Session = { state: "checking" } | { state: "login"; reason?: string; offered?: string } | { state: "ready"; api: Api; key: string | undefined };
 
 export interface AppProps {
   baseURL?: string;
@@ -58,8 +58,13 @@ export const App = ({ baseURL = location.origin, store: given, fetch: fetchImpl 
   );
 
   useEffect(() => {
-    takeFragmentKey(store);
+    const offered = takeFragmentKey();
     const key = store.get();
+    // A `grad ui` handoff signs a signed-out tab in only once the user confirms.
+    if (offered !== undefined && key === undefined) {
+      setSession({ state: "login", reason: `This link signs you in with the API key ${maskKey(offered)}. Sign in only if you opened it yourself (grad ui does).`, offered });
+      return;
+    }
     void connect(key).then((problem) => {
       if (problem === null) return;
       if (key) store.clear();
@@ -73,7 +78,7 @@ export const App = ({ baseURL = location.origin, store: given, fetch: fetchImpl 
   }, [store]);
 
   if (session.state === "checking") return <div className="login" aria-busy="true" />;
-  if (session.state === "login") return <LoginPage reason={session.reason} onSubmit={connect} />;
+  if (session.state === "login") return <LoginPage reason={session.reason} initialKey={session.offered} onSubmit={connect} />;
   return (
     <ApiContext.Provider value={session.api}>
       <ToastProvider>

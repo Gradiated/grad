@@ -21,24 +21,26 @@ import { fixture, fixtureText } from "./helpers.js";
 const run = (over: Record<string, unknown> = {}): Run => convertKeys(CODEC, "Run", { ...fixture<Record<string, unknown>>("run.json"), ...over }, "decode") as Run;
 
 describe("auth", () => {
-  it("takes a one-time #key= fragment into sessionStorage and strips it from the URL", () => {
+  it("offers a one-time #key= fragment without storing it, and strips it from the URL", () => {
     sessionStorage.clear();
     history.replaceState(null, "", "/runs/run_1?x=1#key=grad_secret_abc&tab=events");
-    const store = sessionKeyStore();
-    expect(takeFragmentKey(store)).toBe(true);
-    expect(store.get()).toBe("grad_secret_abc");
-    expect(sessionStorage.getItem("grad.api_key")).toBe("grad_secret_abc");
+    expect(takeFragmentKey()).toBe("grad_secret_abc");
+    expect(sessionStorage.length).toBe(0);
     expect(localStorage.length).toBe(0);
     expect(location.href).not.toContain("grad_secret_abc");
     expect(location.pathname + location.search + location.hash).toBe("/runs/run_1?x=1#tab=events");
-    expect(takeFragmentKey(store)).toBe(false);
+    expect(takeFragmentKey()).toBeUndefined();
     history.replaceState(null, "", "/#key=");
-    expect(takeFragmentKey(store)).toBe(false);
-    // A link carrying another key never replaces the signed-in one (it is still stripped).
-    history.replaceState(null, "", "/runs#key=grad_attacker_key");
-    expect(takeFragmentKey(store)).toBe(false);
-    expect(store.get()).toBe("grad_secret_abc");
-    expect(location.href).not.toContain("grad_attacker_key");
+    expect(takeFragmentKey()).toBeUndefined();
+    expect(location.hash).toBe("");
+  });
+
+  it("stores keys in sessionStorage only", () => {
+    sessionStorage.clear();
+    const store = sessionKeyStore();
+    store.set("grad_secret_abc");
+    expect(sessionStorage.getItem("grad.api_key")).toBe("grad_secret_abc");
+    expect(localStorage.length).toBe(0);
     store.clear();
     expect(store.get()).toBeUndefined();
   });

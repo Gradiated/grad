@@ -261,7 +261,7 @@ key) resumes it.")]
         action: SourcesCmd,
     },
 
-    /// Open the web UI in a browser, signed in with this profile's key
+    /// Open the web UI in a browser with this profile's key filled in (one click signs in)
     #[command(after_help = "\
 Examples:
   grad ui                         # runs list on the configured server

@@ -3,8 +3,8 @@ import { useState, type FormEvent } from "react";
 import { Wordmark } from "../components/icons.js";
 import { Banner } from "../components/ui.js";
 
-export const LoginPage = ({ reason, onSubmit }: { reason?: string | undefined; onSubmit: (key: string) => Promise<string | null> }) => {
-  const [key, setKey] = useState("");
+export const LoginPage = ({ reason, initialKey, onSubmit }: { reason?: string | undefined; initialKey?: string | undefined; onSubmit: (key: string) => Promise<string | null> }) => {
+  const [key, setKey] = useState(initialKey ?? "");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | undefined>(reason);
 
@@ -28,7 +28,7 @@ export const LoginPage = ({ reason, onSubmit }: { reason?: string | undefined; o
           <h1>Sign in to grad</h1>
           <p>Paste an API key for {location.host}. It stays in this tab only and is cleared when you close it.</p>
         </div>
-        {problem && <Banner>{problem}</Banner>}
+        {problem && <Banner tone={initialKey && problem === reason ? "info" : "error"}>{problem}</Banner>}
         <form onSubmit={(e) => void submit(e)}>
           <label className="field">
             API key

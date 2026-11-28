@@ -49,22 +49,19 @@ export const sessionKeyStore = (storage: Storage | undefined = safeSession()): K
 };
 
 /**
- * Reads a one-time `#key=` fragment, stores the key and removes it from the URL.
- * A tab that is already signed in keeps its key: a link with someone else's
- * `#key=` must not silently switch the user into another workspace.
+ * Reads a one-time `#key=` fragment and removes it from the URL. It only
+ * offers the key: a link can carry anyone's key, so the caller asks before
+ * signing a signed-out tab in with it, and a signed-in tab keeps its own.
  */
-export const takeFragmentKey = (store: KeyStore, loc: Location = location, hist: History = history): boolean => {
-  if (!loc.hash.startsWith("#")) return false;
+export const takeFragmentKey = (loc: Location = location, hist: History = history): string | undefined => {
+  if (!loc.hash.startsWith("#")) return undefined;
   const params = new URLSearchParams(loc.hash.slice(1));
+  if (!params.has("key")) return undefined;
   const key = params.get("key")?.trim();
-  if (!key) return false;
-  const current = store.get();
-  const taken = current === undefined || current === key;
-  if (taken) store.set(key);
   params.delete("key");
   const rest = params.toString();
   hist.replaceState(hist.state, "", `${loc.pathname}${loc.search}${rest ? `#${rest}` : ""}`);
-  return taken;
+  return key || undefined;
 };
 
 /** Masks a key for display: `grad_abcd…wxyz`. */

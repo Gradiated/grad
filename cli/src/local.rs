@@ -870,7 +870,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 );
             }
             out.line(format!(
-                "  Web UI: {}/  (grad --profile {} ui opens it signed in)",
+                "  Web UI: {}/  (grad --profile {} ui opens it with the key filled in)",
                 base_url, profile
             ));
             let grafana_url = observability.then(|| format!("{}/", url(ports.grafana)));
