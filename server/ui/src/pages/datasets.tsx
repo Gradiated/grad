@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { DatasetRecord, ImportJob, Source } from "@sdk/generated/models.js";
 
@@ -128,7 +128,7 @@ export const DatasetDetailPage = ({ name }: { name: string }) => {
               </select>
             ) : (
               // An hourly source sync makes thousands of versions: a number field, not thousands of options.
-              <input id="version" className="input version-input" type="number" min={1} max={d.version} value={version} onChange={(e) => pick(e.target.value)} />
+              <VersionInput version={version} latest={d.version} onPick={pick} />
             )}
           </div>
         )}
@@ -158,6 +158,27 @@ export const DatasetDetailPage = ({ name }: { name: string }) => {
 // ------------------------------------------------------------ records
 
 const PREVIEW = 25;
+
+/** A number field that may be cleared or half-typed: it picks a version once the text is one, and shows the picked one again on blur. */
+const VersionInput = ({ version, latest, onPick }: { version: number; latest: number; onPick: (v: string) => void }) => {
+  const [draft, setDraft] = useState(String(version));
+  useEffect(() => setDraft(String(version)), [version]);
+  return (
+    <input
+      id="version"
+      className="input version-input"
+      type="number"
+      min={1}
+      max={latest}
+      value={draft}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        onPick(e.target.value);
+      }}
+      onBlur={() => setDraft(String(version))}
+    />
+  );
+};
 
 const Records = ({ name, version }: { name: string; version: number }) => {
   const { client } = useApi();

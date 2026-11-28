@@ -684,6 +684,14 @@ describe("datasets, evals, usage, health", () => {
     await waitFor(() => expect(location.search).toBe("?version=12"));
     await type(container.querySelector("input#version"), "99999");
     expect(location.search).toBe("?version=12");
+    // Cleared to type another: the field stays empty instead of snapping back.
+    const input = container.querySelector<HTMLInputElement>("input#version");
+    await type(input, "");
+    expect(input?.value).toBe("");
+    await type(input, "1");
+    await type(input, "13");
+    await waitFor(() => expect(location.search).toBe("?version=13"));
+    expect(input?.value).toBe("13");
   });
 
   it("clamps a long record message and expands it in place", async () => {
