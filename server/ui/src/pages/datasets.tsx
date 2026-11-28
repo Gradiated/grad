@@ -6,7 +6,7 @@ import { IconChevron, IconDatasets, IconImport, IconRefresh, IconSearch } from "
 import { Banner, Card, Confirm, Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SearchBox, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { errorMessage, useApi } from "../lib/api.js";
 import { ago, dateTime, int, num } from "../lib/format.js";
-import { Message, recordTurns } from "../components/record.js";
+import { Turns } from "../components/record.js";
 import { useDebounced, useNow, usePagedList, useResource } from "../lib/hooks.js";
 import { Link, setQuery, useLocation } from "../lib/router.js";
 
@@ -203,7 +203,6 @@ const Records = ({ name, version }: { name: string; version: number }) => {
 };
 
 const RecordView = ({ record }: { record: DatasetRecord }) => {
-  const turns = recordTurns(record).slice(0, 6);
   const scores = Object.entries(record.scores ?? {});
   return (
     <div className="record">
@@ -218,9 +217,7 @@ const RecordView = ({ record }: { record: DatasetRecord }) => {
           ))}
         </div>
       </div>
-      {turns.map((t, i) => (
-        <Message key={i} role={t.role} text={t.text} />
-      ))}
+      <Turns record={record} count={6} />
     </div>
   );
 };

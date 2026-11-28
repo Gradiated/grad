@@ -6,7 +6,7 @@ import { useApi } from "../lib/api.js";
 import { ago, compact, dateTime, int, num, usd } from "../lib/format.js";
 import { useDebounced, useNow, usePagedList, useResource, useTitle } from "../lib/hooks.js";
 import { Link, setQuery, useLocation } from "../lib/router.js";
-import { Message, recordTurns } from "../components/record.js";
+import { Turns } from "../components/record.js";
 
 const TERMINAL_EVAL = new Set(["completed", "failed", "cancelled"]);
 
@@ -280,11 +280,7 @@ const Failures = ({ run }: { run: EvalRun }) => {
               {f.judgeModel && <span className="chip">{f.judgeModel}</span>}
             </div>
           </div>
-          {recordTurns(f.record)
-            .slice(-3)
-            .map((t, i) => (
-              <Message key={i} role={t.role} text={t.text} />
-            ))}
+          <Turns record={f.record} count={-3} />
         </div>
       ))}
     </Card>

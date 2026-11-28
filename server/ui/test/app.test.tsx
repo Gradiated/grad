@@ -6,7 +6,9 @@ import { createApi } from "../src/lib/api.js";
 import { navigate } from "../src/lib/router.js";
 import { followRun } from "../src/lib/stream.js";
 import { presets } from "../src/pages/usage.js";
+import { Turns } from "../src/components/record.js";
 import type { RunEvent } from "../src/lib/events.js";
+import type { DatasetRecord } from "@sdk/generated/models.js";
 // happy-dom has no canvas: stand in for uPlot and record what the charts draw.
 type ChartOpts = { series: { label?: string }[]; hooks: { setCursor: ((u: unknown) => void)[] }; axes: { values: (u: unknown, ticks: number[]) => string[] }[] };
 const charts = vi.hoisted(() => ({ created: [] as { series: string[]; data: unknown[]; opts: ChartOpts }[] }));
@@ -692,6 +694,17 @@ describe("datasets, evals, usage, health", () => {
     await type(input, "13");
     await waitFor(() => expect(location.search).toBe("?version=13"));
     expect(input?.value).toBe("13");
+  });
+
+  it("stringifies a record without chat turns once, not on every render", async () => {
+    const record = { id: "rec_raw", payload: "x".repeat(2_000_000) } as DatasetRecord;
+    const stringify = vi.spyOn(JSON, "stringify");
+    const mounted = await mount(<Turns record={record} count={6} />);
+    for (let i = 0; i < 3; i += 1) await act(async () => mounted.root.render(<Turns record={record} count={6} />));
+    expect(stringify.mock.calls.filter(([v]) => v === record)).toHaveLength(1);
+    expect(mounted.container.textContent).toContain("Show all 2M characters");
+    stringify.mockRestore();
+    mounted.unmount();
   });
 
   it("clamps a long record message and expands it in place", async () => {

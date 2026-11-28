@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { ChatMessage, DatasetRecord } from "@sdk/generated/models.js";
 
@@ -46,5 +46,20 @@ export const Message = ({ role, text }: { role: string; text: string }) => {
         )}
       </div>
     </div>
+  );
+};
+
+/** A record's first `count` turns (its last ones when negative), worked out once per record, not on every render. */
+export const Turns = ({ record, count }: { record: DatasetRecord; count: number }) => {
+  const turns = useMemo(() => {
+    const all = recordTurns(record);
+    return count < 0 ? all.slice(count) : all.slice(0, count);
+  }, [record, count]);
+  return (
+    <>
+      {turns.map((t, i) => (
+        <Message key={i} role={t.role} text={t.text} />
+      ))}
+    </>
   );
 };
