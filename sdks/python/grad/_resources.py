@@ -751,9 +751,8 @@ class Runs(_Resource):
         retry_ms = 1000
         path = f"/v1/runs/{quote_path_param(run_id, 'id')}/events"
         while True:
-            headers = {"Last-Event-ID": str(last_seq)} if last_seq is not None else None
             try:
-                resp = self._client._transport.stream("GET", path, accept="text/event-stream", headers=headers, timeout=SSE_READ_TIMEOUT)
+                resp = self._wire.list_run_events_stream(run_id, last_event_id=None if last_seq is None else str(last_seq), timeout=SSE_READ_TIMEOUT)
             except TRANSIENT as exc:
                 failures += 1
                 if failures > MAX_SSE_RECONNECTS:

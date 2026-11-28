@@ -198,9 +198,10 @@ const pyMethod = (spec, op, inlineTypes) => {
   if (success.sse) {
     methods.push(
       [
-        `    def ${name}_stream(${sig.join(", ")}) -> Response:`,
-        `        """${doc} (Server-Sent Events stream; read or close the response)."""`,
-        `        return self._t.stream(${pyString(op.method)}, ${pathExpr}, ${queryArg}accept="text/event-stream", timeout=timeout)`,
+        `    def ${name}_stream(${[...sig, "last_event_id: str | None = None"].join(", ")}) -> Response:`,
+        `        """${doc} (Server-Sent Events stream, resumed after \`last_event_id\`; read or close the response)."""`,
+        `        headers = {"Last-Event-ID": last_event_id} if last_event_id is not None else None`,
+        `        return self._t.stream(${pyString(op.method)}, ${pathExpr}, ${queryArg}accept="text/event-stream", headers=headers, timeout=timeout)`,
       ].join("\n"),
     );
   }
