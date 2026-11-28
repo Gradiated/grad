@@ -88,6 +88,7 @@ SKIP = [
     ("", "vllm serve", "needs a GPU and vLLM"),
     ("", "sglang.launch_server", "needs a GPU and SGLang"),
     ("", "grad local up", "starts Docker Compose (the harness is already a local stack)"),
+    ("self-hosting.mdx", "pg_dump", "backs up a real database and bucket"),
     ("", "helm upgrade", "needs a Kubernetes cluster"),
     ("", "kubectl ", "needs a Kubernetes cluster"),
     ("", "langfuse.create_score", "Langfuse SDK and account"),
