@@ -206,7 +206,7 @@ export const rowLink = (href: string) => {
 };
 
 export const RowTitle = ({ href, mono, children }: { href: string; mono?: boolean; children: ReactNode }) => (
-  <Link href={href} className={`title row-title${mono ? " mono" : ""}`}>
+  <Link href={href} className={`title row-title${mono ? " mono" : ""}`} title={typeof children === "string" ? children : undefined}>
     {children}
   </Link>
 );

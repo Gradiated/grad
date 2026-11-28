@@ -82,15 +82,17 @@ export GRAD_SECRETS_KEY=$(openssl rand -base64 32)    # encrypts workspace secre
 
 What it shows (read-mostly):
 
-- **Runs**: every run with its status, phase, recipe, model, dataset version, cost against its cap and age, filterable by status and name.
+- **Runs**: every run with its status, phase, recipe, model, dataset version, cost against its cap and age, filterable by status and by name or id.
 - **Run detail**: a header with status, phase and attempt N/M; a lifecycle strip (queued, starting, training, uploading, done) with interruption and "waiting for a worker" notices; live loss and eval-loss, learning-rate, throughput and cost-versus-cap charts; checkpoints with a **Promote** button; the event timeline (phases, attempts, interruptions, resumes, warnings, checkpoints); the eval report for the run's recipe; the artifact with a download button and the `grad artifacts download` command; the resolved config as YAML; **Cancel** and **Resume** (optionally with a new cost cap).
-- **Artifacts**: every artifact as `name@version` with its format, base model, provenance (the run that trained it, the uploader, or the Hub revision it was imported from), size, age and whether a holder pins it, filterable by name, model or format. An artifact's page shows its details, provenance, pins (holder and reason) and manifest, a **Download** button (a short-lived presigned URL from `GET /v1/artifacts/{id}/download-url`, straight from storage) and **Delete**, which a pinned artifact refuses with the server's `409 artifact_pinned` naming its holders.
-- **Datasets**: versions, a record preview with merged scores, sources with their schedule, last sync status and last error plus a **Sync** button, and recent imports.
+- **Artifacts**: every artifact as `name@version` with its format, base model, provenance (the run that trained it, the uploader, or the Hub revision it was imported from), size, age and whether a holder pins it, filterable by name. An artifact's page shows its details, provenance, pins (holder and reason) and manifest, a **Download** button (a short-lived presigned URL from `GET /v1/artifacts/{id}/download-url`, straight from storage) and **Delete**, which a pinned artifact refuses with the server's `409 artifact_pinned` naming its holders.
+- **Datasets**: every dataset, filterable by name; per dataset its versions, a record preview with merged scores (a long message expands in place), sources with their schedule, last sync status and last error plus a **Sync** button, and recent imports.
 - **Evals**: summary tables with scores, 95% CIs, pass@k, the delta against the baseline, and failures.
 - **Usage**: a date range (presets or from/to, UTC) with the total cost and tokens, a breakdown by kind (training, evals, dataset scoring, labeling, teacher answers), groups by day, week, month, model, recipe or kind, the top runs and evals, and the period's newest billed rows.
-- **Health**: server readiness, the training and import worker pools (busy workers, `workers_online` while a run waits, autoscaling from zero) and the queue.
+- **Health**: server readiness, the training and import worker pools (busy workers, `workers_online` while a run waits, autoscaling from zero) and the queue. It reads only queued and running jobs (up to 100 of each, shown as "100+" beyond), however many have finished.
 
-It is dark by default, in the Gradiated palette; the sun/moon button in the sidebar switches to the light theme (remembered per browser). It updates live from the run events stream.
+It is dark by default, in the Gradiated palette; the sun/moon button in the sidebar switches to the light theme (remembered per browser). It updates live from the run events stream; the header says "connecting" while the stream reconnects.
+
+Every list pages through the server 50 rows at a time (**Load more**), and its status tab and filter box are API filters (`status`, `q`, `dataset`) kept in the URL, so a link or a reload shows the same view and a filter covers every row, not just the loaded ones. `/` focuses the filter and Escape clears it. A row opens with a click, or in a new tab with Cmd/Ctrl- or middle-click. A run's event timeline shows the newest 100 events and pages older ones in. When a refresh fails the page keeps what it loaded and says so, and an offline browser gets a banner.
 
 How it works and what it can reach:
 

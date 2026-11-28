@@ -4,7 +4,7 @@ import type { ImportJob, Run } from "@sdk/generated/models.js";
 
 import { IconCpu, IconEvals, IconImport, IconRuns } from "../components/icons.js";
 import { Badge, Banner, Card, Empty, ErrorBanner, Stat, StatusBadge, type Tone } from "../components/ui.js";
-import { lifecycleOf, useApi } from "../lib/api.js";
+import { useApi } from "../lib/api.js";
 import { PHASE_LABEL } from "../lib/events.js";
 import { duration, int } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
@@ -22,15 +22,14 @@ export interface PoolView {
 
 export const trainPool = (runs: Run[], now: number): PoolView => {
   const queued = runs.filter((r) => r.status === "queued");
-  const lives = queued.map(lifecycleOf);
-  const online = lives.map((l) => l.workersOnline).filter((n): n is number => n !== null);
+  const online = queued.map((r) => r.workersOnline).filter((n): n is number => n !== null);
   const oldest = queued.reduce<number | null>((m, r) => Math.max(m ?? 0, now - Date.parse(r.createdAt)), null);
   return {
     kind: "train",
     running: runs.filter((r) => r.status === "running").length,
     queued: queued.length,
     online: online.length ? Math.max(...online) : null,
-    autoscaling: lives.some((l) => l.autoscaling === true),
+    autoscaling: queued.some((r) => r.autoscaling === true),
     oldestQueuedMs: oldest,
   };
 };
@@ -146,7 +145,6 @@ export const HealthPage = () => {
             </Empty>
           )}
           {queuedRuns.slice(0, 12).map((r) => {
-            const life = lifecycleOf(r);
             return (
               <div key={r.id} className="item">
                 <StatusBadge status={r.status} />
@@ -155,7 +153,7 @@ export const HealthPage = () => {
                     {r.name}
                   </Link>
                   <div className="item-sub truncate">
-                    {life.queueMessage ?? (life.phase ? PHASE_LABEL[life.phase] : "Queued")} · {r.recipeKind} · <span className="mono">{r.resolvedConfig.model}</span>
+                    {r.queueMessage ?? (r.phase ? PHASE_LABEL[r.phase] : "Queued")} · {r.recipeKind} · <span className="mono">{r.resolvedConfig.model}</span>
                   </div>
                 </div>
                 <div className="item-side muted">{duration(now - Date.parse(r.createdAt))}</div>

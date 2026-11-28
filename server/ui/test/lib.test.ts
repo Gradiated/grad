@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { EvalReport, Run } from "@sdk/generated/models.js";
 
-import { CODEC, convertKeys, isTerminalRun, lifecycleOf } from "../src/lib/api.js";
+import { CODEC, convertKeys, isTerminalRun } from "../src/lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey } from "../src/lib/auth.js";
 import { smooth } from "../src/components/chart.js";
 import { applyEvents, decodeEvent, emptyStream, foldCheckpoints, type RunEvent, type TimelineItem } from "../src/lib/events.js";
-import { ago, bytes, compact, duration, int, num, pct, plural, toYaml, usd } from "../src/lib/format.js";
+import { ago, bytes, compact, dateTime, duration, int, num, pct, plural, toYaml, usd } from "../src/lib/format.js";
 import { guardLocale } from "../src/lib/locale.js";
 import { renderReport } from "../src/lib/report.js";
 import { match } from "../src/lib/router.js";
@@ -56,6 +56,7 @@ describe("auth", () => {
 describe("format", () => {
   it("formats money, numbers, sizes and durations", () => {
     expect(plural(1, "step")).toBe("1 step");
+    expect(dateTime("2026-11-28T23:30:05Z", { utc: true })).toBe("Nov 28, 23:30:05 UTC");
     expect(plural(1000, "step")).toBe("1,000 steps");
     expect(usd(0)).toBe("$0.00");
     expect(usd(0.0034)).toBe("$0.0034");
@@ -131,21 +132,7 @@ describe("router", () => {
   });
 });
 
-describe("run lifecycle fields", () => {
-  it("reads phase fields in either casing and defaults them to null", () => {
-    expect(lifecycleOf(run())).toEqual({ phase: null, phaseSince: null, lastInterruption: null, workersOnline: null, autoscaling: null, queuePosition: null, queueMessage: null });
-    const wire = run({ phase: "training", phase_since: "2026-11-27T12:00:00Z", workers_online: 2, autoscaling: true, queue_position: 3, queue_message: "Queued behind 3 runs", last_interruption: { attempt: 1, reason: "preempted", step: 120, resume_step: 100, at: "t", message: "m" } });
-    expect(lifecycleOf(wire)).toEqual({
-      phase: "training",
-      phaseSince: "2026-11-27T12:00:00Z",
-      workersOnline: 2,
-      autoscaling: true,
-      queuePosition: 3,
-      queueMessage: "Queued behind 3 runs",
-      lastInterruption: { attempt: 1, reason: "preempted", step: 120, resumeStep: 100, at: "t", message: "m" },
-    });
-  });
-
+describe("run status", () => {
   it("treats every stopped status as terminal", () => {
     for (const status of ["completed", "failed", "cancelled", "stopped_budget", "stopped_balance"]) expect(isTerminalRun({ status } as Run)).toBe(true);
     for (const status of ["queued", "running"]) expect(isTerminalRun({ status } as Run)).toBe(false);

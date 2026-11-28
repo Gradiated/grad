@@ -2,7 +2,7 @@ import type { Run } from "@sdk/generated/models.js";
 
 import { IconRuns, IconSearch } from "../components/icons.js";
 import { Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SearchBox, Segmented, SkeletonRows, StatusBadge } from "../components/ui.js";
-import { isTerminalRun, lifecycleOf, useApi } from "../lib/api.js";
+import { isTerminalRun, useApi } from "../lib/api.js";
 import { PHASE_LABEL } from "../lib/events.js";
 import { ago, duration, usd } from "../lib/format.js";
 import { useDebounced, useNow, usePagedList } from "../lib/hooks.js";
@@ -103,10 +103,9 @@ export const RunsPage = () => {
 };
 
 const RunRow = ({ run, now }: { run: Run; now: number }) => {
-  const life = lifecycleOf(run);
   const active = !isTerminalRun(run);
   const progress = run.totalSteps > 0 ? run.currentStep / run.totalSteps : 0;
-  const phase = life.phase ? (PHASE_LABEL[life.phase] ?? life.phase) : run.status === "queued" ? "Queued" : run.currentStep > 0 ? "Training" : "Starting";
+  const phase = run.phase ? PHASE_LABEL[run.phase] : run.status === "queued" ? "Queued" : run.currentStep > 0 ? "Training" : "Starting";
   const href = `/runs/${encodeURIComponent(run.id)}`;
   return (
     <tr {...rowLink(href)}>

@@ -5,7 +5,7 @@ import type { Artifact, Checkpoint, Run } from "@sdk/generated/models.js";
 import { LineChart, smooth, type ChartColor } from "../components/chart.js";
 import { IconChevron, IconDownload, IconPlay, IconRuns as IconChart, IconStop } from "../components/icons.js";
 import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Kv, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
-import { CODEC, convertKeys, errorMessage, isTerminalRun, lifecycleOf, useApi, type RunLifecycle, type RunPhase } from "../lib/api.js";
+import { CODEC, convertKeys, errorMessage, isTerminalRun, useApi, type RunPhase } from "../lib/api.js";
 import { evalLossOf, foldCheckpoints, PHASE_LABEL, REASON_LABEL, type RunStreamState, type TimelineItem } from "../lib/events.js";
 import { ago, bytes, compact, dateTime, duration, int, num, plural, time, toYaml, usd } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
@@ -35,7 +35,6 @@ export const RunDetailPage = ({ id }: { id: string }) => {
     );
   }
 
-  const life = lifecycleOf(run);
   const active = !isTerminalRun(run);
   const started = Date.parse(run.createdAt);
   const ended = run.finishedAt ? Date.parse(run.finishedAt) : now;
@@ -98,7 +97,7 @@ export const RunDetailPage = ({ id }: { id: string }) => {
       )}
       {streamError ? <Banner tone="warn">Live updates stopped: {errorMessage(streamError)}</Banner> : null}
 
-      <Lifecycle run={run} life={life} stream={stream} now={now} />
+      <Lifecycle run={run} stream={stream} now={now} />
       <RunStats run={run} stream={stream} />
       {stream.series.step.length > 0 ? (
         <Charts run={run} stream={stream} />
@@ -172,8 +171,8 @@ const GROUPS: { label: string; phases: RunPhase[] }[] = [
   { label: "Done", phases: [] },
 ];
 
-export const derivePhase = (run: Run, life: RunLifecycle, streamPhase: RunPhase | undefined): RunPhase | null => {
-  const phase = streamPhase ?? life.phase;
+export const derivePhase = (run: Run, streamPhase: RunPhase | undefined): RunPhase | null => {
+  const phase = streamPhase ?? run.phase;
   if (phase) return phase;
   if (run.status === "queued") return "queued";
   if (run.status === "running") return run.currentStep > 0 ? "training" : "starting";
@@ -182,14 +181,14 @@ export const derivePhase = (run: Run, life: RunLifecycle, streamPhase: RunPhase 
 
 const ENDED: Record<string, string> = { failed: "with an error", cancelled: "by cancellation", stopped_budget: "at the cost cap", stopped_balance: "out of balance" };
 
-const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; stream: RunStreamState; now: number }) => {
+const Lifecycle = ({ run, stream, now }: { run: Run; stream: RunStreamState; now: number }) => {
   const active = !isTerminalRun(run);
-  const phase = active ? derivePhase(run, life, stream.phase?.phase) : null;
-  const groupIdx = run.status === "completed" ? GROUPS.length - 1 : phase ? GROUPS.findIndex((g) => g.phases.includes(phase)) : GROUPS.findIndex((g) => g.phases.includes(life.phase ?? "training"));
-  const since = stream.phase?.since ?? life.phaseSince;
+  const phase = active ? derivePhase(run, stream.phase?.phase) : null;
+  const groupIdx = run.status === "completed" ? GROUPS.length - 1 : phase ? GROUPS.findIndex((g) => g.phases.includes(phase)) : GROUPS.findIndex((g) => g.phases.includes(run.phase ?? "training"));
+  const since = stream.phase?.since ?? run.phaseSince;
   const progress = run.totalSteps > 0 ? run.currentStep / run.totalSteps : 0;
-  const workersOnline = stream.phase?.workersOnline ?? life.workersOnline;
-  const autoscaling = stream.phase?.autoscaling ?? life.autoscaling;
+  const workersOnline = stream.phase?.workersOnline ?? run.workersOnline;
+  const autoscaling = stream.phase?.autoscaling ?? run.autoscaling;
   const failed = !active && run.status !== "completed";
 
   const headline = phase ? PHASE_LABEL[phase] : run.status === "completed" ? "Completed" : failed ? `Ended ${ENDED[run.status] ?? run.status}` : "—";
@@ -233,7 +232,7 @@ const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; s
             <span style={{ width: `${(progress * 100).toFixed(1)}%` }} />
           </div>
         )}
-        {active && (phase === "queued" || phase === "waiting_for_compute") && life.queueMessage && <Banner tone="info">{life.queueMessage}</Banner>}
+        {active && (phase === "queued" || phase === "waiting_for_compute") && run.queueMessage && <Banner tone="info">{run.queueMessage}</Banner>}
         {active && (phase === "queued" || phase === "waiting_for_compute") && (autoscaling || workersOnline !== null) && (
           <Banner tone="info">
             {autoscaling
@@ -243,11 +242,11 @@ const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; s
                 : `${workersOnline} worker${workersOnline === 1 ? "" : "s"} of this kind online, all busy. The run starts when one frees up.`}
           </Banner>
         )}
-        {life.lastInterruption && (
+        {run.lastInterruption && (
           <Banner tone="warn">
-            <b>Attempt {life.lastInterruption.attempt} interrupted</b> ({REASON_LABEL[life.lastInterruption.reason] ?? life.lastInterruption.reason}) at step {int(life.lastInterruption.step)}
-            {life.lastInterruption.resumeStep !== null ? `; resumed from step ${int(life.lastInterruption.resumeStep)}` : "; restarted from scratch"}
-            <span className="muted"> · {ago(life.lastInterruption.at, now)}</span>
+            <b>Attempt {run.lastInterruption.attempt} interrupted</b> ({REASON_LABEL[run.lastInterruption.reason] ?? run.lastInterruption.reason}) at step {int(run.lastInterruption.step)}
+            {run.lastInterruption.resumeStep !== null ? `; resumed from step ${int(run.lastInterruption.resumeStep)}` : "; restarted from scratch"}
+            <span className="muted"> · {ago(run.lastInterruption.at, now)}</span>
           </Banner>
         )}
       </div>

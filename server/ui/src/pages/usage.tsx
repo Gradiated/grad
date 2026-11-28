@@ -215,7 +215,7 @@ export const UsagePage = () => {
               {rows.loading && <SkeletonRows cols={6} />}
               {rows.items.map((r) => (
                 <tr key={r.id}>
-                  <td className="muted">{dateTime(r.createdAt)}</td>
+                  <td className="muted">{dateTime(r.createdAt, { utc: true })}</td>
                   <td>
                     <span className="chip">{r.kind}</span>
                   </td>
