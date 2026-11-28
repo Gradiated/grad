@@ -48,7 +48,6 @@ import type {
   RunRecord,
 } from "../../store/types.js";
 
-const EVAL_DONE: readonly EvalStatus[] = ["completed", "failed", "cancelled"];
 import { streamVersionGzip, writeRecordsPart } from "../dataset-records.js";
 import { datasetPartKey, type DatasetService } from "../datasets.js";
 import {
@@ -64,6 +63,7 @@ import {
   workerKeyOf,
   type JobKindHandler,
   type JobQueue,
+  isTerminal,
 } from "../jobs.js";
 import { metrics } from "../../telemetry/metrics.js";
 import { scoreUpdate } from "../record-merge.js";
@@ -932,7 +932,7 @@ export const createEvalService = (
     record: EvalRecord,
   ): CheckpointEvalResult | null => {
     if (record.run_id === null || record.run_step === null) return null;
-    if (!EVAL_DONE.includes(record.status)) return null;
+    if (!isTerminal(record.status)) return null;
 
     return {
       name: record.name,

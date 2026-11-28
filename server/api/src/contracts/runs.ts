@@ -914,8 +914,7 @@ export const RunEventSchema = z
   });
 
 export type RunEvent = z.infer<typeof RunEventSchema>;
-export type PhaseEvent = z.infer<typeof PhaseEventSchema>;
-export type AttemptEvent = z.infer<typeof AttemptEventSchema>;
+export type CompletedEvent = z.infer<typeof CompletedEventSchema>;
 
 export const RUN_EVENT_TYPES = [
   "phase",

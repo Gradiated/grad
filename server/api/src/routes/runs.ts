@@ -13,12 +13,12 @@ import {
   RunSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
-import { notFound } from "../errors.js";
+import type { CompletedEvent } from "../contracts.js";
 import type { JobEvent } from "../store/types.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
 import { toRunEvent } from "../services/run-events.js";
-import { toMetricPoint, toPublicRun } from "../services/runs.js";
+import { toMetricPoint } from "../services/runs.js";
 import { createSseLimits } from "./sse-limits.js";
 import {
   defaultErrors,
@@ -29,13 +29,6 @@ import {
   type AppEnv,
 } from "./helpers.js";
 
-const TERMINAL = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-  "stopped_budget",
-  "stopped_balance",
-]);
 const SSE_PING_MS = 15_000;
 
 /** Where a reconnecting client resumes (its Last-Event-ID; 0: from the start). */
@@ -60,23 +53,24 @@ export const registerRunRoutes = (
   const reserveStream = createSseLimits(deps.settings.sseStreamsPerKey ?? 20);
 
   /**
-   * Streams a job's events from the replica's event hub: its history after
-   * `afterSeq` first, then live events. When the hub reports the job settled,
-   * `finish` reads the final state, writes the closing event and returns true
-   * (false: it was resumed meanwhile, keep following). An idle stream gets a
-   * comment ping every SSE_PING_MS; the hub closing (SIGTERM) ends it, and the
-   * client resumes on another replica with Last-Event-ID.
+   * Streams a run's events from the replica's event hub: its history after
+   * `afterSeq` first, then live events. Once the hub reports the run settled,
+   * `close` writes the closing event and the stream ends (it keeps following
+   * a run resumed meanwhile). An idle stream gets a comment ping every
+   * SSE_PING_MS; the hub closing (SIGTERM) ends it, and the client resumes on
+   * another replica with Last-Event-ID.
    */
   const follow = async (
     stream: SSEStreamingApi,
-    jobId: string,
+    workspaceId: string,
+    runId: string,
     afterSeq: number,
     on: {
       write: (row: JobEvent) => Promise<void>;
-      finish: (lastSeq: number) => Promise<boolean>;
+      close: (event: CompletedEvent) => Promise<void>;
     },
   ): Promise<void> => {
-    const sub = services.events.subscribe(jobId, afterSeq);
+    const sub = services.events.subscribe(runId, afterSeq);
     stream.onAbort(() => sub.close());
     let lastSeq = afterSeq;
     try {
@@ -87,8 +81,15 @@ export const registerRunRoutes = (
           lastSeq = row.seq;
           await on.write(row);
         }
-        if (batch.settled && (await on.finish(lastSeq))) break;
-        if (batch.events.length === 0 && !batch.settled) {
+        if (batch.settled) {
+          const end = await services.runs.streamEnd(
+            workspaceId,
+            runId,
+            lastSeq,
+          );
+          if (end.event) await on.close(end.event);
+          if (end.done) break;
+        } else if (batch.events.length === 0) {
           await stream.write(": ping\n\n");
         }
       }
@@ -251,13 +252,12 @@ export const registerRunRoutes = (
         );
       }
 
-      const run = await deps.store.runs.get(workspaceId, id);
-      if (!run) throw notFound("run", id);
+      await services.runs.get(workspaceId, id);
 
       return streamSSE(
         c,
         reserveStream(c, (stream) =>
-          follow(stream, id, lastEventIdOf(c), {
+          follow(stream, workspaceId, id, lastEventIdOf(c), {
             write: async (row) => {
               if (row.type !== "metric") return;
               const point = toMetricPoint(row);
@@ -267,18 +267,11 @@ export const registerRunRoutes = (
                 data: JSON.stringify(point),
               });
             },
-            finish: async () => {
-              const current = await deps.store.runs.get(workspaceId, id);
-              if (!current) return true;
-              if (!TERMINAL.has(current.status) || current.worker_id !== null)
-                return false;
-              await stream.writeSSE({
+            close: (done) =>
+              stream.writeSSE({
                 event: "status",
-                data: JSON.stringify(toPublicRun(current)),
-              });
-
-              return true;
-            },
+                data: JSON.stringify(done.run),
+              }),
           }),
         ),
       ) as never;
@@ -333,13 +326,12 @@ export const registerRunRoutes = (
         );
       }
 
-      const run = await deps.store.runs.get(workspaceId, id);
-      if (!run) throw notFound("run", id);
+      await services.runs.get(workspaceId, id);
 
       return streamSSE(
         c,
         reserveStream(c, (stream) =>
-          follow(stream, id, lastEventIdOf(c), {
+          follow(stream, workspaceId, id, lastEventIdOf(c), {
             write: async (row) => {
               const event = toRunEvent(id, row);
               if (!event) return;
@@ -349,21 +341,8 @@ export const registerRunRoutes = (
                 data: JSON.stringify(event),
               });
             },
-            finish: async (lastSeq) => {
-              const current = await deps.store.runs.get(workspaceId, id);
-              const done = current
-                ? await services.runs.completedEvent(current, lastSeq)
-                : null;
-              if (current && !done) return false;
-              if (done) {
-                await stream.writeSSE({
-                  event: done.type,
-                  data: JSON.stringify(done),
-                });
-              }
-
-              return true;
-            },
+            close: (done) =>
+              stream.writeSSE({ event: done.type, data: JSON.stringify(done) }),
           }),
         ),
       ) as never;

@@ -1,9 +1,10 @@
 import { AsyncResource } from "node:async_hooks";
 
 import type { Clock } from "../clock.js";
-import type { JobEvent, JobStatus, Store } from "../store/types.js";
+import type { JobEvent, Store } from "../store/types.js";
 import { log } from "../telemetry/log.js";
 import { metrics } from "../telemetry/metrics.js";
+import { isSettled } from "./jobs.js";
 
 /**
  * One reader of grad_job_events per API replica, fanned out to every SSE
@@ -19,14 +20,6 @@ import { metrics } from "../telemetry/metrics.js";
  * events written through any replica reach streams on every replica.
  */
 
-/** Statuses after which a released job writes no more events. */
-const TERMINAL: ReadonlySet<JobStatus> = new Set<JobStatus>([
-  "completed",
-  "failed",
-  "cancelled",
-  "stopped_budget",
-  "stopped_balance",
-]);
 /** Rows per job per fetch; a subscription with this many queued is skipped until it drains. */
 export const HUB_BATCH = 500;
 /** Jobs per fetch query (bounds one fetch to JOBS_PER_QUERY * HUB_BATCH rows). */
@@ -198,9 +191,7 @@ export const createEventHub = (
       const events = byJob.get(jobId) ?? [];
       const full = events.length >= HUB_BATCH;
       const state = states.get(jobId);
-      const settled =
-        !full &&
-        (!state || (TERMINAL.has(state.status) && state.worker_id === null));
+      const settled = !full && (!state || isSettled(state));
       if (full) dirty.add(jobId);
       for (const sub of subs) {
         // A subscription that arrived (or filled up) during the fetch, behind

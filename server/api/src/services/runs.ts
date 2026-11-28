@@ -8,10 +8,10 @@ import {
   type CheckpointEvalSpec,
   RUN_EVENT_TYPES,
   type Artifact,
+  type CompletedEvent,
   type ArtifactFormat,
   type Checkpoint,
   type DatasetRecord,
-  type EvalStatus,
   type MetricPoint,
   type PlanRunRequest,
   type InterruptionReason,
@@ -72,6 +72,8 @@ import {
   DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
   closedBy,
+  isSettled,
+  isTerminal,
   holdsLease,
   leaseLost,
   RELEASE,
@@ -129,20 +131,6 @@ const NO_COMPUTE: RunCompute = {
   queue_position: null,
   queue_message: null,
 };
-
-const EVAL_TERMINAL: readonly EvalStatus[] = [
-  "completed",
-  "failed",
-  "cancelled",
-];
-
-const TERMINAL: readonly Run["status"][] = [
-  "completed",
-  "failed",
-  "cancelled",
-  "stopped_budget",
-  "stopped_balance",
-];
 
 export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
   switch (kind) {
@@ -349,8 +337,16 @@ export interface RunLifecycle {
     next_cursor: string | null;
     tail_cursor: string;
   }>;
-  /** The terminal event once the run is final and released, else null. */
-  completedEvent(run: RunRecord, lastSeq: number): Promise<RunEvent | null>;
+  /**
+   * How a run's event stream ends once the event hub reports it settled:
+   * `done` is false when it was resumed meanwhile (keep following); `event`
+   * is the closing event (null when the run is gone).
+   */
+  streamEnd(
+    workspaceId: string,
+    id: string,
+    lastSeq: number,
+  ): Promise<{ done: boolean; event: CompletedEvent | null }>;
   cancel(workspaceId: string, id: string): Promise<Run>;
   /** A queued run of a suspended workspace: stopped_balance (resumable), no attempt spent. */
   stopForSuspension(id: string): Promise<void>;
@@ -755,7 +751,7 @@ export const createRunLifecycle = (
       billed_tokens: closed.billed_tokens + used,
       attempt_tokens: 0,
     })) as RunRecord;
-    if (TERMINAL.includes(updated.status)) {
+    if (isTerminal(updated.status)) {
       await pinCheckpoints(updated, now);
     }
 
@@ -955,11 +951,12 @@ export const createRunLifecycle = (
 
     return warnings;
   };
-  const completedEvent = async (
+  /** The closing event of a settled run's stream, else null. */
+  const completedEvent = (
     run: RunRecord,
     lastSeq: number,
-  ): Promise<RunEvent | null> =>
-    TERMINAL.includes(run.status) && run.worker_id === null
+  ): CompletedEvent | null =>
+    isSettled(run)
       ? {
           type: "completed",
           run_id: run.id,
@@ -1148,7 +1145,7 @@ export const createRunLifecycle = (
 
           // The labeling eval may have finished before the run was inserted.
           const labelEval = await store.evals.getById(labels.id);
-          if (labelEval && EVAL_TERMINAL.includes(labelEval.status)) {
+          if (labelEval && isTerminal(labelEval.status)) {
             await settleLabelledRuns(
               store,
               labelEval,
@@ -1196,7 +1193,7 @@ export const createRunLifecycle = (
         .map((e) => toRunEvent(run.id, e))
         .filter((e) => e !== null);
       const more = rows.length > query.limit;
-      const done = more ? null : await completedEvent(run, lastSeq);
+      const done = more ? null : completedEvent(run, lastSeq);
       if (done) data.push(done);
 
       return {
@@ -1207,7 +1204,13 @@ export const createRunLifecycle = (
       };
     },
 
-    completedEvent: (run, lastSeq) => completedEvent(run, lastSeq),
+    streamEnd: async (workspaceId, id, lastSeq) => {
+      const run = await store.runs.get(workspaceId, id);
+      if (!run) return { done: true, event: null };
+      const event = completedEvent(run, lastSeq);
+
+      return { done: event !== null, event };
+    },
 
     metrics: async (workspaceId, id, query) => {
       const run = await loadRun(workspaceId, id);
@@ -1588,10 +1591,7 @@ export const createRunLifecycle = (
       if (!holdsLease(principal, run, body.worker_id, body.attempt)) {
         // Idempotent retry of a completion that already committed: this
         // attempt was closed with a result (not requeued by the reaper).
-        if (
-          closedBy(principal, run, body.attempt) &&
-          TERMINAL.includes(run.status)
-        ) {
+        if (closedBy(principal, run, body.attempt) && isTerminal(run.status)) {
           const artifact = run.artifact_id
             ? await store.artifacts.get(run.workspace_id, run.artifact_id)
             : null;

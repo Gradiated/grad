@@ -35,6 +35,21 @@ import type {
 
 export type StopReason = "cancelled" | "budget" | "insufficient_balance" | null;
 
+/** Statuses no worker acts on (only a resume re-queues a stopped or failed run). */
+const TERMINAL: ReadonlySet<JobStatus> = new Set<JobStatus>([
+  "completed",
+  "failed",
+  "cancelled",
+  "stopped_budget",
+  "stopped_balance",
+]);
+
+export const isTerminal = (status: JobStatus): boolean => TERMINAL.has(status);
+
+/** Terminal and released: the job writes no more events, so its stream can end. */
+export const isSettled = (job: Pick<JobRow, "status" | "worker_id">): boolean =>
+  isTerminal(job.status) && job.worker_id === null;
+
 /** What a claiming worker says about itself (shown on the run, never its id). */
 export interface ClaimWorker {
   gpu: { name: string; memory_gb: number } | null;
