@@ -8,7 +8,9 @@ const { createModelCatalog } = await import(`${root}/server/api/src/catalog.ts`)
 const { PlanRunRequestSchema } = await import(`${root}/server/api/src/contracts/runs.ts`);
 
 const compose = readFileSync(`${root}/cli/assets/dev-models.yml`, "utf8");
-const extras = compose.slice(compose.indexOf("[{"), compose.lastIndexOf("}]") + 2).replace(/\n\s*/g, "");
+// GRAD_EXTRA_MODELS_JSON: the first JSON array in the file (GRAD_JUDGE_MODELS_JSON follows it).
+const start = compose.indexOf("[{");
+const extras = compose.slice(start, compose.indexOf("}]", start) + 2).replace(/\n\s*/g, "");
 const catalog = createModelCatalog(extras);
 const { cases } = JSON.parse(readFileSync(0, "utf8"));
 
