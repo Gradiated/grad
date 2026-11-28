@@ -19,6 +19,7 @@ import {
   recordPromptAndReference,
   recordPromptAndResponse,
 } from "../../records.js";
+import { estimateTextTokens } from "../../render.js";
 import type { EvalRecord, EvalTask } from "../../store/types.js";
 import type { DatasetService, ResolvedDatasetVersion } from "../datasets.js";
 
@@ -38,9 +39,6 @@ interface ResolvedEvalPlan {
   localScorers: string[];
   passThreshold: number;
 }
-
-const estimateTokens = (text: string): number =>
-  text.trim() ? Math.max(1, Math.ceil(text.length / 4)) : 0;
 
 export const resolvePassThreshold = (
   rubric: readonly EvalRubricItem[],
@@ -192,8 +190,8 @@ const addTask = (
     if (typeof task === "string") return null;
 
     built.count += 1;
-    built.promptTokens += estimateTokens(task.prompt);
-    built.referenceTokens += estimateTokens(task.reference);
+    built.promptTokens += estimateTextTokens(task.prompt);
+    built.referenceTokens += estimateTextTokens(task.reference);
     return { task_index: index, task_id: record.id as string, record };
   }
 
@@ -204,9 +202,11 @@ const addTask = (
   }
 
   built.count += 1;
-  built.promptTokens += estimateTokens(pr.prompt.map(messageText).join("\n"));
+  built.promptTokens += estimateTextTokens(
+    pr.prompt.map(messageText).join("\n"),
+  );
   built.referenceTokens +=
-    pr.reference === null ? 256 : estimateTokens(pr.reference);
+    pr.reference === null ? 256 : estimateTextTokens(pr.reference);
   return {
     task_index: index,
     task_id: record.id ?? `task_${index + 1}`,
