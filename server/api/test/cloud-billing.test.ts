@@ -5,7 +5,7 @@ import { createCloudBilling } from "../src/cloud/billing.js";
 import { createCloudPrices, pricedCatalog } from "../src/cloud/prices.js";
 import { createModelCatalog } from "../src/catalog.js";
 import { ApiError } from "../src/errors.js";
-import { amountNanoUsd } from "../src/services/usage.js";
+import { amountNanoUsd, MAX_UNNAMED_REFUSALS } from "../src/services/usage.js";
 import { metrics } from "../src/telemetry/metrics.js";
 import {
   makeTestApp,
@@ -400,6 +400,56 @@ describe("Cloud billing: balance check, stop on balance, usage push", () => {
       "training:run-usage:run_y:1:0",
     ]);
     expect((await t.deps.store.usage.exportBacklog()).parked).toBe(1);
+  });
+
+  it("unnamed one-row refusals past the cap are a contract break: it backs off and parks nothing", async () => {
+    const clock = new ManualClock();
+    t = await makeTestApp({
+      clock,
+      ...(await cloudBillingDeps(cloud, clock)),
+    });
+    const rows = MAX_UNNAMED_REFUSALS + 5;
+    for (let i = 0; i < rows; i += 1) {
+      await t.deps.store.usage.record({
+        idempotencyKey: `run-usage:run_w:1:${i}`,
+        workspaceId: WORKSPACE_A,
+        kind: "run",
+        refId: "run_w",
+        attempt: 1,
+        tokensFrom: 0,
+        tokensThrough: 10,
+        costUsd: 0.00001,
+        amountNanoUsd: amountNanoUsd(10, 1e9),
+        priceVersion: "pv_1",
+        sku: "train:test/tiny-qwen3",
+      });
+    }
+    await usageCommitted();
+    const failures = async () =>
+      (await metrics.usageExportFailures.get()).values[0]?.value ?? 0;
+    const before = await failures();
+    const path = "/api/internal/v1/billing/usage-events";
+    const calls = cloud.callsTo(path).length;
+    // Ingest refuses every request without naming a row (an envelope change).
+    cloud.failNext(1000, 422, path);
+    expect(await t.services.usage.exportPending()).toBe(0);
+    // The batch, then MAX_UNNAMED_REFUSALS + 1 single rows; then it stops.
+    expect(cloud.callsTo(path).length - calls).toBe(MAX_UNNAMED_REFUSALS + 2);
+    expect(await t.deps.store.usage.exportBacklog()).toMatchObject({
+      rows,
+      parked: 0,
+    });
+    expect(await failures()).toBe(before + 1);
+
+    // Backed off like any failed push; once ingest takes them, all go out.
+    cloud.clearFaults();
+    expect(await t.services.usage.exportPending()).toBe(0);
+    clock.advanceSeconds(16);
+    expect(await t.services.usage.exportPending()).toBe(rows);
+    expect(await t.deps.store.usage.exportBacklog()).toMatchObject({
+      rows: 0,
+      parked: 0,
+    });
   });
 
   it("a transient failure while parking keeps the cursor: nothing is skipped", async () => {

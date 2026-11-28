@@ -173,7 +173,11 @@ by `event_id`, so a replay is free.
   `unknown_workspace`; 409 `event_conflict`): the exporter parks the row the
   refusal names (`event_id`; a refusal that names none is narrowed down by
   pushing the batch one row at a time) and pushes the rest at once, with no
-  backoff. A parked row keeps its place in `grad_usage` with `parked_code`
+  backoff. More than 20 single-row refusals naming no `event_id` in one tick
+  mean billing is refusing the envelope, not rows: the export stops
+  narrowing, parks nothing from that batch, logs an error, counts a failure
+  on `grad_usage_export_failures_total` and backs off like an ingest outage
+  (`GradUsagePushLagging` fires if it lasts). A parked row keeps its place in `grad_usage` with `parked_code`
   (the refusal code) and `parked_at`, is never deleted and never pushed again
   by itself. `grad_usage_parked_rows` counts them, and the `GradUsageRowsParked`
   alert (`warning`) fires while any exist.

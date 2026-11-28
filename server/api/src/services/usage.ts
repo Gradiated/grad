@@ -38,6 +38,15 @@ const EXPORT_BATCHES_PER_TICK = 20;
 /** After a failed push: retry in 15 s, doubling up to 5 min. */
 const EXPORT_BACKOFF_MS = 15_000;
 const EXPORT_BACKOFF_MAX_MS = 300_000;
+/**
+ * One-row refusals naming no event_id a tick narrows before it gives up:
+ * past that, billing is refusing the envelope (a contract break), not rows,
+ * so the push backs off and retries instead of parking every row.
+ */
+export const MAX_UNNAMED_REFUSALS = 20;
+
+/** Billing refused more than MAX_UNNAMED_REFUSALS single rows without naming one. */
+class UnnamedRefusalsError extends Error {}
 
 /** nano-USD for `tokens` at `nanoPerMtok`, rounded half up (billing recomputes it the same way). */
 export const amountNanoUsd = (tokens: number, nanoPerMtok: number): number =>
@@ -164,6 +173,7 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
   const pushOrPark = async (
     send: (events: UsageEvent[]) => Promise<void>,
     rows: readonly ExportableUsage[],
+    tick: { unnamed: number },
   ): Promise<ParkedUsage[]> => {
     if (rows.length === 0) return [];
     try {
@@ -171,13 +181,23 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
       return [];
     } catch (error) {
       if (!(error instanceof UsageRefusedError)) throw error;
+      if (rows.length === 1 && error.eventId === undefined) {
+        tick.unnamed += 1;
+        if (tick.unnamed > MAX_UNNAMED_REFUSALS) {
+          throw new UnnamedRefusalsError(
+            `billing refused ${tick.unnamed} single usage rows without naming an event_id (last: ${error.code}: ${error.message}); treating it as an ingest contract break, not bad rows`,
+          );
+        }
+      }
       const refused =
         rows.length === 1
           ? rows[0]
           : rows.find((r) => usageEventOf(r).event_id === error.eventId);
       if (!refused) {
         const parked: ParkedUsage[] = [];
-        for (const row of rows) parked.push(...(await pushOrPark(send, [row])));
+        for (const row of rows) {
+          parked.push(...(await pushOrPark(send, [row], tick)));
+        }
         return parked;
       }
       log(
@@ -195,6 +215,7 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
         ...(await pushOrPark(
           send,
           rows.filter((r) => r !== refused),
+          tick,
         )),
       ];
     }
@@ -277,13 +298,14 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
         return 0;
       }
       let sent = 0;
+      const tick = { unnamed: 0 };
       try {
         for (let i = 0; i < EXPORT_BATCHES_PER_TICK; i += 1) {
           let parked = 0;
           const n = await store.usage.exportBatch(
             EXPORT_BATCH,
             async (rows) => {
-              const refused = await pushOrPark(push, rows);
+              const refused = await pushOrPark(push, rows, tick);
               parked = refused.length;
               return refused;
             },
@@ -304,7 +326,8 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
           );
         metrics.usageExportFailures.inc();
         log(
-          "warn",
+          // Every row refused unnamed: an envelope or contract break.
+          error instanceof UnnamedRefusalsError ? "error" : "warn",
           "usage export to Gradiated Cloud failed; rows stay in the ledger",
           {
             error,

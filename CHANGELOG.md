@@ -7,6 +7,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **Gradiated Cloud usage export:** when billing refuses more than 20 single rows in a tick without
+  naming an `event_id` (an envelope or contract break, not bad rows), the export stops narrowing,
+  parks nothing, logs an error and backs off like an ingest outage
+  (`grad_usage_export_failures_total`), instead of parking every row.
 - **Gradiated Cloud:** the public `DELETE /v1/artifacts/{id}/pins/{holder}` answers 403
   `pin_managed_by_cloud` for `inference:` holders (a published model version's pin), so a
   workspace admin can no longer unpin a live version's artifact and delete it. Only Cloud's
