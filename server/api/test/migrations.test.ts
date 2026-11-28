@@ -41,6 +41,9 @@ const RELEASED: Record<string, string> = {
     "23f717da8100e130a973ce07da0a7b44d825c2ea8c94ea454804dc4a305e7a36",
   "0009_usage_report_indexes.sql":
     "621b49ed31a976991848a9ecd3c26579a3869bb8d7ece0cf03fcf42b737699a5",
+  // v0.2.0-alpha.5.
+  "0010_usage_parked.sql":
+    "46632b8b53b1b84cb8a5fca48085b1b22c45faaafa531a1996cd1f4d8b1277d7",
 };
 
 const sha256 = (text: string) =>
@@ -131,7 +134,7 @@ describe("migration files", () => {
     }
   });
 
-  it("upgrade an alpha.3 (0001) or 0001-0005 database to the schema a fresh one gets", async () => {
+  it("upgrade an alpha.3 (0001), 0001-0005 or alpha.4 (0001-0009) database to the schema a fresh one gets", async () => {
     const url = postgresUrl();
     const all = (await loadMigrations()).map((m) => m.name);
     const fresh = freshSchemaName();
@@ -143,7 +146,7 @@ describe("migration files", () => {
       const want = await describeSchema(client, fresh);
       expect(want.length).toBeGreaterThan(200);
 
-      for (const upTo of ["0001", "0005"]) {
+      for (const upTo of ["0001", "0005", "0009"]) {
         const schema = freshSchemaName();
         cleanup.push(schema);
         const dir = await subsetDir(all.filter((n) => n.slice(0, 4) <= upTo));
@@ -166,10 +169,15 @@ describe("migration files", () => {
              VALUES ('ds_1', 1, 2, 'abc', now()), ('ds_1', 2, 2, 'abc', now())`,
           );
         }
+        // alpha.4 (0008 on) writes nano-USD itself.
         await client.query(
-          `INSERT INTO grad_usage (idempotency_key, workspace_id, kind, ref_id, attempt,
-             tokens_from, tokens_through, tokens, cost_usd, price_version, created_at)
-           VALUES ('run-usage:run_1:1:10', 'ws', 'run', 'run_1', 1, 0, 10, 10, 0.25, 'v1', now())`,
+          upTo < "0008"
+            ? `INSERT INTO grad_usage (idempotency_key, workspace_id, kind, ref_id, attempt,
+                 tokens_from, tokens_through, tokens, cost_usd, price_version, created_at)
+               VALUES ('run-usage:run_1:1:10', 'ws', 'run', 'run_1', 1, 0, 10, 10, 0.25, 'v1', now())`
+            : `INSERT INTO grad_usage (idempotency_key, workspace_id, kind, ref_id, attempt,
+                 tokens_from, tokens_through, tokens, cost_usd, amount_nano_usd, price_version, created_at)
+               VALUES ('run-usage:run_1:1:10', 'ws', 'run', 'run_1', 1, 0, 10, 10, 0.25, 250000000, 'v1', now())`,
         );
         await client.query("RESET search_path");
 
@@ -181,9 +189,17 @@ describe("migration files", () => {
 
         await client.query(`SET search_path TO "${schema}"`);
         const usage = await client.query(
-          "SELECT amount_nano_usd::text AS nano, billed_by FROM grad_usage",
+          "SELECT amount_nano_usd::text AS nano, billed_by, parked_code, parked_at FROM grad_usage",
         );
-        expect(usage.rows).toEqual([{ nano: "250000000", billed_by: "grad" }]);
+        // 0010: existing rows are not parked.
+        expect(usage.rows).toEqual([
+          {
+            nano: "250000000",
+            billed_by: "grad",
+            parked_code: null,
+            parked_at: null,
+          },
+        ]);
         if (upTo === "0001") {
           const parts = await client.query(
             "SELECT version, push_sha256 FROM grad_dataset_parts ORDER BY id",
