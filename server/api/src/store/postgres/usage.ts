@@ -31,7 +31,7 @@ const usageRows = (where: string) => `
   LEFT JOIN LATERAL (
     SELECT x.id, x.recipe_kind FROM grad_runs x
     WHERE u.kind = 'eval' AND x.resolved_config->>'label_eval_id' = u.ref_id
-    ORDER BY x.id LIMIT 1
+    LIMIT 1
   ) lr ON true
   LEFT JOIN LATERAL (
     SELECT string_agg(m, ', ' ORDER BY m) AS models
@@ -134,7 +134,15 @@ export const createUsageRepository = (
       );
     if (filter.evalId)
       inner.push(`u.kind = 'eval' AND u.ref_id = ${params.add(filter.evalId)}`);
-    if (filter.runId) outer.push(`run_id = ${params.add(filter.runId)}`);
+    if (filter.runId) {
+      // The run's own rows and its evals' (checkpoint evals, its labeling or
+      // teacher eval), found by ref before the joins.
+      const run = params.add(filter.runId);
+      inner.push(`u.ref_id IN (SELECT ${run}::text
+        UNION ALL SELECT id FROM grad_evals WHERE run_id = ${run}
+        UNION ALL SELECT resolved_config->>'label_eval_id' FROM grad_runs WHERE id = ${run})`);
+      outer.push(`run_id = ${run}`);
+    }
     if (filter.kind) outer.push(`usage_kind = ${params.add(filter.kind)}`);
     const after = decodeCursor(page.cursor, 1);
     if (after) inner.push(`u.seq < ${params.add(Number(after[0]))}::bigint`);

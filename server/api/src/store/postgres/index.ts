@@ -38,6 +38,9 @@ const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,62}$/;
  * and TCP keepalive probes an idle peer after 10 s. A peer that vanished
  * without a RST can't enforce statement_timeout, so the client gives up on a
  * query after QUERY_TIMEOUT_MS and the pool drops that connection.
+ * JIT is off: these are short OLTP queries, and on a report the planner
+ * overestimates (the usage summary of a 10k-row ledger) compiling took 1.3 s
+ * of 1.7 s (p1-scale).
  */
 const POOL_TIMEOUTS = {
   connectionTimeoutMillis: 5_000,
@@ -71,6 +74,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
     options: [
       `-c statement_timeout=${STATEMENT_TIMEOUT_MS}`,
       `-c idle_in_transaction_session_timeout=${IDLE_IN_TRANSACTION_TIMEOUT_MS}`,
+      "-c jit=off",
       ...(options.schema ? [`-c search_path=${options.schema}`] : []),
     ].join(" "),
   });
