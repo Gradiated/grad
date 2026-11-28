@@ -24,7 +24,7 @@ from __future__ import annotations
 import contextlib
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator
 
 import numpy as np
 import torch
@@ -39,6 +39,21 @@ from ..runner_types import BaseArtifact
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .data import Pair, iter_pairs
+
+# Pairs per tokenizer call (two chats each).
+ENCODE_BATCH = 128
+
+
+def _batched(items: Iterable[Any], size: int) -> Iterator[list[Any]]:
+    chunk: list[Any] = []
+    for item in items:
+        chunk.append(item)
+        if len(chunk) == size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
 
 def dpo_loss(
     policy_chosen: torch.Tensor,
@@ -95,11 +110,11 @@ class DPOTask(TorchTask):
         self.varlen = base_lm.config._attn_implementation == tc.VARLEN_ATTENTION
         self.truncated = 0
         # Pairs are encoded as they are read: only their tokens are kept.
-        self.dropped = 0  # _encode adds pairs with nothing left to train
+        self.dropped = 0  # _encode_all adds pairs with nothing left to train
         dropped = [0]
         with setup_step("tokenize"):
-            self.train_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(train, dropped)) if p]
-            self.eval_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(held_out, dropped)) if p]
+            self.train_pairs = self._encode_all(iter_pairs(train, dropped))
+            self.eval_pairs = self._encode_all(iter_pairs(held_out, dropped))
         self.dropped += dropped[0]
         if not self.train_pairs:
             raise RecipeDataError(
@@ -122,23 +137,25 @@ class DPOTask(TorchTask):
                 self._score_reference("train", self.train_pairs)
                 self._score_reference("eval", self.eval_pairs)
 
-    def _encode_side(self, prompt: list[dict[str, Any]], completion: list[dict[str, Any]], rid: str) -> tuple[np.ndarray, np.ndarray] | None:
+    def _render_side(self, prompt: list[dict[str, Any]], completion: list[dict[str, Any]], rid: str) -> Any:
         messages = [{**m, "train": False} if m.get("role") == "assistant" else dict(m) for m in prompt]
         messages += [{**m, "train": True} for m in completion]
-        tok = self.tokenize(self.render(messages, rid), self.max_len)
-        self.truncated += int(tok.truncated)
-        if not tok.trained[1:].any():
-            return None
-        return tok.input_ids, tok.trained
+        return self.render(messages, rid)
 
-    def _encode(self, pair: Pair) -> tuple[Any, Any] | None:
-        prompt, chosen, rejected, rid = pair
-        c = self._encode_side(prompt, chosen, rid)
-        r = self._encode_side(prompt, rejected, rid)
-        if c is None or r is None:
-            self.dropped += 1
-            return None
-        return c, r
+    def _encode_all(self, pairs: Iterable[Pair]) -> list[tuple[Any, Any]]:
+        """Each pair's (chosen, rejected) tokens, ENCODE_BATCH pairs per tokenizer call; a pair
+        with nothing left to train on either side is dropped."""
+        out: list[tuple[Any, Any]] = []
+        for chunk in _batched(pairs, ENCODE_BATCH):
+            rendered = [self._render_side(prompt, side, rid) for prompt, chosen, rejected, rid in chunk for side in (chosen, rejected)]
+            toks = self.tokenize_batch(rendered, self.max_len)
+            for c, r in zip(toks[0::2], toks[1::2]):
+                self.truncated += int(c.truncated) + int(r.truncated)
+                if not (c.trained[1:].any() and r.trained[1:].any()):
+                    self.dropped += 1
+                    continue
+                out.append(((c.input_ids, c.trained), (r.input_ids, r.trained)))
+        return out
 
     def num_train_items(self) -> int:
         return len(self.train_pairs)
