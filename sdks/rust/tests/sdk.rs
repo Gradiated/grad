@@ -600,6 +600,25 @@ async fn download_streams_verifies_and_extracts_a_peft_directory() {
         .await
         .unwrap();
 
+    // ...but never onto the working directory or a parent of it (that deleted the caller's tree).
+    // Refused before any request; the client points at a closed port, so a regression fails to
+    // connect instead of deleting this crate.
+    let dead = client("http://127.0.0.1:9");
+    for held in [".", ".."] {
+        let mut opts = DownloadOptions::extract(held);
+        opts.overwrite = true;
+        let e = dead
+            .artifacts()
+            .download("support-sft@latest", &opts)
+            .await
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("holds the current directory"),
+            "{}",
+            e
+        );
+    }
+
     // Archive mode keeps the verified tarball.
     let archive = dir.join("bundle.grad.tar.gz");
     let res = c

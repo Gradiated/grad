@@ -1586,6 +1586,9 @@ impl Artifacts<'_> {
             ));
         }
         if let Some(dir) = &opts.extract_to {
+            if let Ok(cwd) = std::env::current_dir() {
+                download::refuse_holding_cwd(dir, &cwd)?;
+            }
             if dir.exists() && !opts.overwrite {
                 let non_empty = !dir.is_dir()
                     || std::fs::read_dir(dir)

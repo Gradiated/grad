@@ -82,6 +82,36 @@ class DownloadTests(unittest.TestCase):
         out = client.artifacts.download(self.ref, self.dir / "x", format="files")
         self.assertTrue((out / "reference_model.json").exists())
 
+    def test_default_destination_is_a_new_directory_named_after_the_artifact(self) -> None:
+        bundle = bundle_bytes(PEFT_FILES)
+        client, _, _ = make_client(routes(bundle))
+        here = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, here)
+        (self.dir / "notes.txt").write_text("keep")
+        out = client.artifacts.download(self.ref)
+        self.assertEqual(out, self.dir / f"{ART['name']}-{ART['version']}")
+        self.assertTrue((out / "adapter_config.json").is_file())
+        bundled = client.artifacts.download(self.ref, format="bundle")
+        self.assertEqual(bundled, self.dir / f"{ART['name']}-{ART['version']}.grad.tar.gz")
+
+    def test_overwrite_never_replaces_the_current_directory_or_its_parents(self) -> None:
+        # p3: download(ref, ".", overwrite=True) rmtree'd the working directory, then failed.
+        bundle = bundle_bytes(PEFT_FILES)
+        client, _, _ = make_client(routes(bundle))
+        work = self.dir / "project" / "src"
+        work.mkdir(parents=True)
+        (work / "main.py").write_text("code")
+        here = os.getcwd()
+        os.chdir(work)
+        self.addCleanup(os.chdir, here)
+        for dest in (".", "..", str(self.dir)):
+            with self.assertRaises(FileExistsError) as ctx:
+                client.artifacts.download(self.ref, dest, overwrite=True)
+            self.assertIn("current directory", str(ctx.exception))
+        self.assertEqual((work / "main.py").read_text(), "code")
+        self.assertEqual(sorted(p.name for p in self.dir.rglob("*")), ["main.py", "project", "src"])
+
     def test_bundle_download_to_directory_or_file(self) -> None:
         bundle = bundle_bytes(PEFT_FILES)
         client, _, _ = make_client(routes(bundle))

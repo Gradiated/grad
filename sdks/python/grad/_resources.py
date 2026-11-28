@@ -1121,7 +1121,7 @@ class Artifacts(_Resource):
     def download(
         self,
         ref: Any,
-        path: str | os.PathLike[str] = ".",
+        path: str | os.PathLike[str] | None = None,
         *,
         format: str = "peft",
         overwrite: bool = False,
@@ -1134,6 +1134,9 @@ class Artifacts(_Resource):
           ``vllm serve <base> --enable-lora --lora-modules name=<path>`` (or is merged weights).
         * ``format="files"``: extract any artifact (routers, embeddings, cartridges).
         * ``format="bundle"``: keep the ``.grad.tar.gz`` (``path`` may be a file or a directory).
+
+        Without ``path`` it goes to ``./<name>-<version>`` (``.grad.tar.gz`` for a bundle).
+        ``overwrite=True`` replaces an existing directory, never the current one or its parents.
 
         A checksum mismatch or an unsafe archive entry deletes the partial download and raises.
         """

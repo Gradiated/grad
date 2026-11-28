@@ -406,6 +406,21 @@ pub fn verify_manifest(
     Ok(manifest)
 }
 
+/// Refuses an extraction directory that holds `cwd` (`.`, `..`, `~` from inside it):
+/// replacing it, even with `overwrite`, would delete the caller's working tree.
+pub(crate) fn refuse_holding_cwd(dest: &Path, cwd: &Path) -> Result<()> {
+    let (Ok(dest_real), Ok(cwd_real)) = (fs::canonicalize(dest), fs::canonicalize(cwd)) else {
+        return Ok(()); // a directory that doesn't exist holds nothing
+    };
+    if cwd_real.starts_with(&dest_real) {
+        return Err(Error::InvalidInput(format!(
+            "refusing to extract into {}: it holds the current directory; choose a new --output directory",
+            dest.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Move a verified extraction directory into place.
 pub(crate) fn install_dir(tmp: &Path, dest: &Path, overwrite: bool) -> Result<()> {
     refuse_symlink(dest)?;
@@ -461,5 +476,26 @@ impl Drop for TempDir {
         if !self.keep {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_extraction_never_replaces_the_working_directory_or_its_parents() {
+        let root = std::env::temp_dir().join(format!("grad-cwd-{}", util::random_hex(6)));
+        let work = root.join("project").join("src");
+        fs::create_dir_all(&work).unwrap();
+        for dest in [work.clone(), work.join(".."), root.clone(), work.join(".")] {
+            let e = refuse_holding_cwd(&dest, &work).unwrap_err();
+            assert!(e.to_string().contains("holds the current directory"), "{e}");
+        }
+        refuse_holding_cwd(&work.join("adapter"), &work).unwrap();
+        refuse_holding_cwd(&root.join("other"), &work).unwrap();
+        fs::create_dir_all(root.join("other")).unwrap();
+        refuse_holding_cwd(&root.join("other"), &work).unwrap();
+        let _ = fs::remove_dir_all(&root);
     }
 }

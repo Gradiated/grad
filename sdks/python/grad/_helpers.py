@@ -412,17 +412,26 @@ class DownloadPlan:
     temp_dir: Path
 
 
-def plan_download(path: str | os.PathLike[str], *, fmt: str, filename: str, overwrite: bool) -> DownloadPlan:
-    """Resolve the destination for ``artifacts.download`` and check it is safe to write."""
+def plan_download(path: str | os.PathLike[str] | None, *, fmt: str, filename: str, overwrite: bool) -> DownloadPlan:
+    """Resolve the destination for ``artifacts.download`` and check it is safe to write.
+
+    Without ``path`` a bundle lands in the current directory as ``filename`` and an extraction
+    in a new directory named like it (without ``.grad.tar.gz``). An extraction never replaces
+    the current directory or one of its parents, even with ``overwrite``.
+    """
     if fmt not in ("peft", "files", "bundle"):
         raise ValueError(f"format must be 'peft', 'files' or 'bundle', got {fmt!r}.")
-    target = Path(path).expanduser()
+    if path is None:
+        path = filename if fmt == "bundle" else filename.removesuffix(".grad.tar.gz")
+    target = Path(os.path.abspath(Path(path).expanduser()))
     if fmt == "bundle":
         if target.is_dir() or str(path).endswith(("/", os.sep)):
             target = target / filename
         if target.exists() and not overwrite:
             raise FileExistsError(f"{target} exists; pass overwrite=True to replace it.")
     else:
+        if Path.cwd().resolve().is_relative_to(target.resolve()):
+            raise FileExistsError(f"Refusing to extract into {target}: it holds the current directory. Pass a new directory.")
         if target.exists():
             if not target.is_dir():
                 raise FileExistsError(f"{target} exists and is not a directory.")
