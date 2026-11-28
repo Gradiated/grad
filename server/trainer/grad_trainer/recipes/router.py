@@ -346,6 +346,12 @@ class RouterTask(PooledLMTask):
             fallback_quality = result.pop("fallback_quality")
             summary.update(result)
             summary["quality_drop_ci95"] = list(ci) if ci else None
+            if summary["quality_drop"] > self.max_quality_drop + 1e-9:
+                warnings.append(
+                    f"On the {len(report_rows)} held-out report prompts the router loses {summary['quality_drop']:.3g} quality, "
+                    f"more than max_quality_drop={self.max_quality_drop:g}: the threshold was chosen on {len(select_rows)} other "
+                    "prompts and doesn't hold yet. Train on more scored prompts before relying on it."
+                )
         else:
             warnings.append("The report fold has no prompts scored for every candidate: pareto_summary is null.")
         observed = [(p[m], s[m]) for p, s in report_rows_all for m in self.candidates if m in s]

@@ -93,6 +93,9 @@ class RouterTrainingTests(TorchCase):
         self.assertGreaterEqual(hi, summary["quality_drop"])
         self.assertTrue(0.0 <= summary["ece"] <= 1.0)
         self.assertAlmostEqual(report["fallback_quality"], 1.0)
+        # A report fold that misses the target says so.
+        missed = summary["quality_drop"] > CONFIG["recipe_params"]["max_quality_drop"]
+        self.assertEqual(missed, any("more than max_quality_drop" in w for w in report["warnings"]), report["warnings"])
 
         files = {p.name for p in out.artifact_dir.iterdir()}
         self.assertEqual(files, {"adapter_config.json", "adapter_model.safetensors", "router_config.json", "router_head.safetensors"})
