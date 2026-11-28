@@ -236,7 +236,7 @@ describe("eval worker (grad-server worker --kinds eval)", () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
     await seedDataset(t, "qa", qaRecords(2));
-    fake.setModel("qwen/qwen3-8b", () => ({ status: 429 }));
+    fake.setModel("qwen/qwen3-8b", () => ({ content: "ok" }));
     const rateLimited = async () =>
       (await metrics.evalInferenceErrors.get()).values.find(
         (v) =>
@@ -245,7 +245,16 @@ describe("eval worker (grad-server worker --kinds eval)", () => {
       )?.value ?? 0;
     const before = await rateLimited();
     await createEval(t.services.evals, WORKSPACE_A, request({}));
-    await h.worker.drain();
+    // Rate limited past the client's own retries (2 here), twice: the calls
+    // wait and succeed, and both refusals are counted although they stored
+    // no output.
+    fake.failNext(4, 429);
+    const worker = startEvalWorker(t, fakeInference(fake), {
+      concurrency: 1,
+      outageMaxMs: 60_000,
+    });
+    await worker.drain();
+    await worker.close();
     expect((await rateLimited()) - before).toBe(2);
   });
 

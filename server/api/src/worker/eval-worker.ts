@@ -293,8 +293,10 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
       (w) => onWait(w),
     );
   const inference: InferenceClients = {
-    models: counted(wait(options.inference.models), () => counts, "model"),
-    judge: counted(wait(options.inference.judge), () => counts, "judge"),
+    // Counted inside the wait: every refused call shows up by reason, the
+    // ones an outage or a cold pool retries included.
+    models: wait(counted(options.inference.models, () => counts, "model")),
+    judge: wait(counted(options.inference.judge, () => counts, "judge")),
   };
   let running: Promise<unknown> | null = null;
 
@@ -487,9 +489,12 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
         const outputs = buffer;
         buffer = [];
         lastSent = Date.now();
+        // The server counts calls only with stored outputs (so a replayed
+        // batch counts once): calls that stored nothing, such as an
+        // outage's, ride on the next batch.
+        if (halt === "lost" || outputs.length === 0) return;
         const calls = counts;
         counts = emptyCounts();
-        if (halt === "lost" || outputs.length === 0) return;
         try {
           const res = await client.postOutputs(ref, { outputs, calls });
           if (res.should_stop) halt ??= "cancelled";
