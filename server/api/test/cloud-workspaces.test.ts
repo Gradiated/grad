@@ -91,17 +91,15 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
       state: "active",
     });
     expect((await setState("archived")).status).toBe(422);
-    // Orchestrator routes still need an orchestrator key.
-    expect(
-      (
-        await internal.request("/internal/v1/worker-tokens", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${cloud.serviceJwt(WORKSPACE_A, ["workspaces:admin"])}`,
-          },
-        })
-      ).status,
-    ).toBe(401);
+    // No lease auth configured: the lease-token routes are not mounted.
+    const mint = await internal.request("/internal/v1/worker-tokens", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cloud.serviceJwt(WORKSPACE_A, ["workspaces:admin"])}`,
+      },
+    });
+    expect(mint.status).toBe(404);
+    expect(await mint.json()).toMatchObject({ code: "route_not_found" });
   });
 
   it("suspend stops runs resumable and refuses new jobs; reinstating resumes sources", async () => {

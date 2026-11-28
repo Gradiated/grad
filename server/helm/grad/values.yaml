@@ -57,6 +57,13 @@ api:
     port: 8787
   authMode: api_key
   billingMode: noop
+  # The internal listener (INTERNAL_PORT; 0: off): Gradiated Cloud's product
+  # API routes (authMode cloud: workspace state, artifact resolve and pins,
+  # with service JWTs) and lease-token minting (lease worker auth with
+  # GRAD_ORCHESTRATOR_KEYS_JSON in api.env). It is served only by the
+  # ClusterIP Service <fullname>-internal, never by the API Service or the
+  # Ingress. Gradiated Cloud uses 8788.
+  internalPort: 0
   defaultWorkspaceId: default
   # Per-workspace queue caps. Claims are fair across workspaces (the one with
   # the fewest running jobs of the kind goes next); past maxRunning a
@@ -337,6 +344,9 @@ networkPolicy:
   # namespaces). Workers of this release are always allowed.
   apiIngressFrom: []
   #  - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+  # Peers allowed to reach the internal listener (api.internalPort), e.g. the
+  # product API's namespace. Empty: nobody, not even this release's workers.
+  internalIngressFrom: []
   # Egress allowlist for worker pods besides DNS and the API: by default HTTPS to
   # public addresses only (S3, the Hugging Face Hub, observability providers),
   # never private ranges, CGNAT or link-local (cloud metadata).

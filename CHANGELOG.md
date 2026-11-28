@@ -46,6 +46,16 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Fixed
 
+- The internal listener (`INTERNAL_PORT`) starts when either of its route groups is configured:
+  Gradiated Cloud's routes (`AUTH_MODE=cloud`) no longer need lease worker auth and an
+  orchestrator key. Each group is mounted only when configured (otherwise 404), and startup fails
+  only when neither is. Helm: `api.internalPort` serves it on the ClusterIP Service
+  `<fullname>-internal` (never the Ingress), with `networkPolicy.internalIngressFrom`.
+- Cloud usage export: a row billing ingest refuses for good (422/409) is parked
+  (`grad_usage.parked_code`, `parked_at`) instead of holding back every later row; the rest export
+  at once. `grad_usage_parked_rows` and the `GradUsageRowsParked` warning alert flag parked rows,
+  which are never deleted and are retried by hand (docs/CLOUD_MODE.md). Transient failures still
+  retry forever.
 - Gradiated Cloud evals: `recipe.evals` (checkpoint evals during training) is refused with
   `422 checkpoint_evals_unsupported_on_cloud` at plan and create, since Cloud serves only
   published artifacts. A 404 from the product's eval-versions call is `422

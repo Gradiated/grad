@@ -1,0 +1,20 @@
+{{- if gt (int .Values.api.internalPort) 0 }}
+# The internal listener (api.internalPort): ClusterIP only, never behind the
+# Ingress; networkPolicy.internalIngressFrom names who may reach it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "grad.fullname" . }}-internal
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+    - name: internal
+      port: {{ .Values.api.internalPort }}
+      targetPort: internal
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+{{- end }}

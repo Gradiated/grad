@@ -1,10 +1,11 @@
 /**
  * The internal listener (INTERNAL_PORT, default off): routes an orchestrator
- * calls, never served on the public API port. Today: lease-scoped worker
- * tokens (callers authenticate with an orchestrator key,
- * GRAD_ORCHESTRATOR_KEYS_JSON) and, on Cloud, the product API's routes in
- * routes/internal-cloud.ts (service JWTs). Workspace and worker keys are
- * never accepted.
+ * or the Cloud product API calls, never served on the public API port. Two
+ * groups, each mounted only when configured (otherwise 404): lease-scoped
+ * worker tokens (lease in GRAD_WORKER_AUTH; callers authenticate with an
+ * orchestrator key, GRAD_ORCHESTRATOR_KEYS_JSON) and, on Cloud, the product
+ * API's routes in routes/internal-cloud.ts (AUTH_MODE=cloud; service JWTs).
+ * Workspace and worker keys are never accepted.
  *
  *   POST   /internal/v1/worker-tokens {host_id, lease_id, kinds, gpu_memory_gb?, expires_at}
  *          -> 201 {token, host_id, lease_id, kinds, gpu_memory_gb, expires_at}
@@ -79,6 +80,7 @@ const invalid = (detail: string) =>
 export const createInternalApp = (deps: {
   tokens: WorkerTokenRepository;
   clock: Clock;
+  /** Empty: no lease-token routes. */
   orchestratorKeys: readonly TrainerKey[];
   /** Cloud: the product API's routes (workspace state, artifact pins). */
   cloud?: CloudInternalDeps | undefined;
@@ -145,11 +147,12 @@ export const createInternalApp = (deps: {
     c.set("orchestrator", key);
     await next();
   };
-  app.use("/internal/v1/worker-tokens", orchestratorOnly);
-  app.use("/internal/v1/worker-tokens/*", orchestratorOnly);
   // Gradiated Cloud's routes authenticate with service JWTs instead.
   if (deps.cloud) app.route("/", createCloudInternalRoutes(deps.cloud));
+  if (deps.orchestratorKeys.length === 0) return app;
 
+  app.use("/internal/v1/worker-tokens", orchestratorOnly);
+  app.use("/internal/v1/worker-tokens/*", orchestratorOnly);
   app.post("/internal/v1/worker-tokens", async (c) => {
     const orchestrator = c.get("orchestrator");
     let json: unknown;

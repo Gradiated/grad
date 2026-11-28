@@ -12,9 +12,15 @@ export interface WorkerAuthConfig {
   modes: WorkerAuthMode[];
   /** GRAD_WORKER_K8S_SERVICE_ACCOUNTS: `<namespace>/<name>` -> kinds. */
   serviceAccounts: Record<string, WorkerJobKind[]>;
-  /** GRAD_ORCHESTRATOR_KEYS_JSON: who may mint lease tokens, for which kinds. */
+  /**
+   * GRAD_ORCHESTRATOR_KEYS_JSON: who may mint lease tokens, for which kinds.
+   * Empty unless `lease` is enabled; the lease-token routes exist only then.
+   */
   orchestratorKeys: TrainerKey[];
-  /** INTERNAL_PORT: the internal listener (worker-token routes); unset: off. */
+  /**
+   * INTERNAL_PORT: the internal listener (lease-token routes and the Cloud
+   * routes, each mounted when configured); unset: off.
+   */
   internalPort: number | undefined;
 }
 
@@ -66,6 +72,8 @@ export const parseWorkerAuthConfig = (
     PORT: number;
     METRICS_PORT?: number | undefined;
     hasStaticKeys: boolean;
+    /** AUTH_MODE=cloud: the Cloud internal routes verify service JWTs. */
+    cloudRoutes: boolean;
   },
   warnings: string[],
 ): WorkerAuthConfig => {
@@ -135,22 +143,28 @@ export const parseWorkerAuthConfig = (
   }
 
   const internalPort = env.INTERNAL_PORT;
+  const leaseRoutes = enabled("lease") && orchestratorKeys.length > 0;
+  if (orchestratorKeys.length > 0 && !enabled("lease")) {
+    warnings.push(
+      "GRAD_ORCHESTRATOR_KEYS_JSON is ignored: GRAD_WORKER_AUTH does not include lease.",
+    );
+  }
   if (internalPort !== undefined) {
     if (internalPort === env.PORT || internalPort === env.METRICS_PORT) {
       throw new Error("INTERNAL_PORT must differ from PORT and METRICS_PORT.");
     }
-    if (!enabled("lease")) {
+    if (!leaseRoutes && !env.cloudRoutes) {
       throw new Error(
-        "INTERNAL_PORT serves the lease-token routes: add lease to GRAD_WORKER_AUTH, or unset INTERNAL_PORT.",
+        "INTERNAL_PORT would serve nothing: it needs the lease-token routes (lease in GRAD_WORKER_AUTH plus GRAD_ORCHESTRATOR_KEYS_JSON) or the Cloud routes (AUTH_MODE=cloud); configure one, or unset INTERNAL_PORT.",
       );
     }
-    if (orchestratorKeys.length === 0) {
-      throw new Error(
-        "INTERNAL_PORT needs GRAD_ORCHESTRATOR_KEYS_JSON: without an orchestrator key nobody could call it.",
+    if (enabled("lease") && !leaseRoutes) {
+      warnings.push(
+        "GRAD_WORKER_AUTH includes lease but GRAD_ORCHESTRATOR_KEYS_JSON is empty: the internal listener serves no lease-token routes.",
       );
     }
   } else {
-    if (orchestratorKeys.length > 0) {
+    if (leaseRoutes) {
       warnings.push(
         "GRAD_ORCHESTRATOR_KEYS_JSON is ignored on this replica: INTERNAL_PORT is not set.",
       );
@@ -165,7 +179,7 @@ export const parseWorkerAuthConfig = (
   return {
     modes: modes as WorkerAuthMode[],
     serviceAccounts,
-    orchestratorKeys,
+    orchestratorKeys: leaseRoutes ? orchestratorKeys : [],
     internalPort,
   };
 };

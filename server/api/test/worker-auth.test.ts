@@ -743,10 +743,14 @@ describe("worker-auth configuration", () => {
         },
         /Invalid GRAD_WORKER_K8S_SERVICE_ACCOUNTS/,
       ],
-      [{ INTERNAL_PORT: "8790" }, /add lease to GRAD_WORKER_AUTH/],
+      [{ INTERNAL_PORT: "8790" }, /INTERNAL_PORT would serve nothing/],
       [
         { GRAD_WORKER_AUTH: "lease", INTERNAL_PORT: "8790" },
-        /needs GRAD_ORCHESTRATOR_KEYS_JSON/,
+        /INTERNAL_PORT would serve nothing/,
+      ],
+      [
+        { GRAD_ORCHESTRATOR_KEYS_JSON: orch, INTERNAL_PORT: "8790" },
+        /INTERNAL_PORT would serve nothing/,
       ],
       [
         {
@@ -772,6 +776,41 @@ describe("worker-auth configuration", () => {
     }
   });
 
+  it("INTERNAL_PORT starts with either route group: Cloud routes alone need no lease auth", () => {
+    const cloud = parseServerEnvironment({
+      ...base,
+      AUTH_MODE: "cloud",
+      GRAD_CLOUD_AUTH_DATABASE_URL: "postgres://view",
+      GRAD_CLOUD_JWKS_URL: "https://api.gradiated.com/api/auth/jwks",
+      GRAD_CLOUD_JWT_ISSUER: "https://api.gradiated.com",
+      GRAD_WORKER_AUTH: "kubernetes",
+      GRAD_WORKER_K8S_SERVICE_ACCOUNTS: sa,
+      INTERNAL_PORT: "8788",
+    });
+    expect(cloud.workerAuth).toMatchObject({
+      internalPort: 8788,
+      orchestratorKeys: [],
+    });
+    const lease = parseServerEnvironment({
+      ...base,
+      GRAD_WORKER_AUTH: "lease",
+      INTERNAL_PORT: "8788",
+      GRAD_ORCHESTRATOR_KEYS_JSON: orch,
+    });
+    expect(lease.workerAuth.orchestratorKeys).toHaveLength(1);
+    // Lease enabled without a key on a Cloud listener: up, minting off.
+    const noKeys = parseServerEnvironment({
+      ...base,
+      AUTH_MODE: "cloud",
+      GRAD_CLOUD_AUTH_DATABASE_URL: "postgres://view",
+      GRAD_CLOUD_JWKS_URL: "https://api.gradiated.com/api/auth/jwks",
+      GRAD_CLOUD_JWT_ISSUER: "https://api.gradiated.com",
+      GRAD_WORKER_AUTH: "static,lease",
+      INTERNAL_PORT: "8788",
+    });
+    expect(noKeys.warnings.join("\n")).toMatch(/serves no lease-token routes/);
+  });
+
   it("warns about settings a mode does not use", () => {
     const env = parseServerEnvironment({
       ...base,
@@ -783,6 +822,12 @@ describe("worker-auth configuration", () => {
     expect(warnings).toMatch(/K8S_SERVICE_ACCOUNTS is ignored/);
     expect(warnings).toMatch(/ORCHESTRATOR_KEYS_JSON is ignored/);
     expect(warnings).toMatch(/cannot mint them/);
+    expect(
+      parseServerEnvironment({ ...base, GRAD_ORCHESTRATOR_KEYS_JSON: orch })
+        .warnings,
+    ).toContain(
+      "GRAD_ORCHESTRATOR_KEYS_JSON is ignored: GRAD_WORKER_AUTH does not include lease.",
+    );
   });
 });
 

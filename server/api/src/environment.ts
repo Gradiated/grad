@@ -424,6 +424,7 @@ export const parseServerEnvironment = (
         trainerKeys.length > 0 ||
         env.TRAINER_API_KEY !== undefined ||
         env.TRAINER_API_KEY_HASH !== undefined,
+      cloudRoutes: env.AUTH_MODE === "cloud",
     },
     warnings,
   );

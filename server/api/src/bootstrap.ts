@@ -61,14 +61,15 @@ export const buildDependencies = async (
     tokens: store.workerTokens,
     clock,
   });
-  const jwt = env.GRAD_CLOUD_JWKS_URL
-    ? createJwtVerifier({
-        jwksUrl: env.GRAD_CLOUD_JWKS_URL,
-        issuer: env.GRAD_CLOUD_JWT_ISSUER as string,
-        audience: env.GRAD_CLOUD_JWT_AUDIENCE,
-        clock,
-      })
-    : null;
+  const jwt =
+    env.AUTH_MODE === "cloud" && env.GRAD_CLOUD_JWKS_URL
+      ? createJwtVerifier({
+          jwksUrl: env.GRAD_CLOUD_JWKS_URL,
+          issuer: env.GRAD_CLOUD_JWT_ISSUER as string,
+          audience: env.GRAD_CLOUD_JWT_AUDIENCE,
+          clock,
+        })
+      : null;
   const auth =
     env.AUTH_MODE === "cloud"
       ? createCloudAuth({

@@ -32,6 +32,14 @@ spec:
         - protocol: TCP
           port: {{ .Values.metrics.port }}
     {{- end }}
+    {{- if and (gt (int .Values.api.internalPort) 0) .Values.networkPolicy.internalIngressFrom }}
+    # The internal listener: only the configured peers (the product API).
+    - from:
+        {{- toYaml .Values.networkPolicy.internalIngressFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.internalPort }}
+    {{- end }}
 ---
 # Workers reach DNS, the API and the egress allowlist, nothing else; only the
 # metrics port accepts traffic.

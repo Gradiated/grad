@@ -27,7 +27,7 @@ all of it, used by the server tests and by `tests/harness/stack.ts --cloud`.
 | `GRAD_CLOUD_TRACES_ENABLED` | the `gradiated` source | Default `false`: the product's `training/traces:pull` isn't shipped yet, so the `gradiated` source answers `501 source_unavailable` ("coming soon on Gradiated Cloud") at create and sync instead of failing at sync time. Set `true` once the product serves it. |
 | `GRAD_CLOUD_GATEWAY_URL` | evals | The inference gateway's OpenAI-compatible base URL. On the API: evals are allowed (no `GRAD_INFERENCE_BASE_URL`; with `BILLING_MODE=cloud` that one is refused). On eval workers: where they call. |
 | `GRAD_CLOUD_GATEWAY_TOKEN` | eval workers | The gateway service credential. Only eval workers hold it. |
-| `INTERNAL_PORT` | workspace hooks, pins | The internal listener (ClusterIP only), also used by worker lease tokens. |
+| `INTERNAL_PORT` | workspace hooks, pins | The internal listener (ClusterIP only). With `AUTH_MODE=cloud` it serves the product's routes below; lease-token minting is mounted too only with `lease` worker auth and `GRAD_ORCHESTRATOR_KEYS_JSON`. Helm: `api.internalPort` (Gradiated Cloud: 8788, Service `<fullname>-internal`). |
 | `GRAD_WORKSPACE_PURGE_DELAY_SECONDS` | | Delay between a workspace delete and its purge (default 7 days). |
 | `GRAD_CORS_ORIGINS` | the console | Comma-separated browser origins allowed on `/v1` (exact `https://host[:port]`; `http` only for localhost). Default: CORS off. |
 | `GRAD_SECRETS_KMS_KEY_ID` | secrets | An AWS KMS key id, ARN or alias: workspace secrets use envelope encryption. Credentials and region come from the AWS chain (Pod Identity); `AWS_ENDPOINT_URL_KMS` overrides the endpoint. |
@@ -257,7 +257,14 @@ X-Gradiated-Eval-Id: ev_…
 
 ## The internal listener
 
-The product calls grad on `INTERNAL_PORT` (never on the public port) with
+The product calls grad on `INTERNAL_PORT` (never on the public port; Helm:
+`api.internalPort`, served by the ClusterIP Service `<fullname>-internal`
+and kept out of the Ingress; `networkPolicy.internalIngressFrom` names who
+may reach it). The listener mounts each route group only when it is
+configured: these Cloud routes with `AUTH_MODE=cloud`, the lease-token
+routes with `lease` worker auth plus an orchestrator key; anything else is
+404. grad refuses to start with `INTERNAL_PORT` set and neither group
+configured. The Cloud routes need no lease worker auth. Callers send
 **service JWTs** from the same key set as console tokens: `sub =
 service:<name>`, `aud = training`, `ws` = the workspace in the path, and the
 route's scope in `scopes`.

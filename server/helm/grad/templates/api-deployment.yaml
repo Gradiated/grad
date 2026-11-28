@@ -50,9 +50,16 @@ spec:
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
             {{- end }}
+            {{- if gt (int .Values.api.internalPort) 0 }}
+            - name: internal
+              containerPort: {{ .Values.api.internalPort }}
+            {{- end }}
           env:
             - {name: HOST, value: "0.0.0.0"}
             - {name: PORT, value: {{ .Values.api.service.port | quote }}}
+            {{- if gt (int .Values.api.internalPort) 0 }}
+            - {name: INTERNAL_PORT, value: {{ .Values.api.internalPort | quote }}}
+            {{- end }}
             - {name: AUTH_MODE, value: {{ .Values.api.authMode | quote }}}
             - {name: BILLING_MODE, value: {{ .Values.api.billingMode | quote }}}
             - {name: DEFAULT_WORKSPACE_ID, value: {{ .Values.api.defaultWorkspaceId | quote }}}

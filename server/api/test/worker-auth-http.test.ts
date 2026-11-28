@@ -275,6 +275,14 @@ describe("lease tokens over HTTP: mint, claim, revoke", () => {
     expect(retry.body).toMatchObject({ kind: "train", status: "failed" });
   });
 
+  it("a lease-only listener has no Cloud routes", async () => {
+    const res = await internal.request(
+      `/internal/v1/workspaces/${WORKSPACE_A}/state`,
+      { headers: { Authorization: `Bearer ${FLEET_KEY}` } },
+    );
+    expect(res.status).toBe(404);
+  });
+
   it("only orchestrator keys reach the internal routes, within their kinds", async () => {
     expect((await mint({}, "")).status).toBe(401);
     for (const token of [ADMIN_KEY, TRAINER_KEY, "grad_wrong"]) {
