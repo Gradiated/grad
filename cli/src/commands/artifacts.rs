@@ -9,7 +9,7 @@ use grad_sdk::{
 
 use super::{page, Ctx};
 use crate::cli::{ArtifactsCmd, ImportWaitArgs};
-use crate::output::{bytes, opt, thousands, when, CliError, CliResult, Out};
+use crate::output::{bytes, thousands, when, CliError, CliResult, Out};
 
 /// `run run_…`, `upload by key_…` or `import hf://owner/name@<commit>`.
 fn provenance(a: &Artifact) -> String {
@@ -31,7 +31,7 @@ fn print_artifact(out: &Out, a: &Artifact) {
         rows.push(("id", a.id.clone()));
     }
     rows.extend([
-        ("format", opt(&a.format)),
+        ("format", a.format.to_string()),
         ("base model", a.base_model.clone()),
         ("recipe", a.recipe_kind.to_string()),
         ("source", provenance(a)),
@@ -69,7 +69,7 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
                     .map(|a| {
                         vec![
                             a.reference(),
-                            opt(&a.format),
+                            a.format.to_string(),
                             a.base_model.clone(),
                             bytes(a.size_bytes),
                             when(&a.created_at),

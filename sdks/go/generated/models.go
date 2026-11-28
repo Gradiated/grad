@@ -75,9 +75,9 @@ type Artifact struct {
 	// CheckpointID The checkpoint it was promoted from; null when it is a run's final artifact or was uploaded or imported.
 	CheckpointID *string `json:"checkpoint_id"`
 	// BaseModel The base model the weights apply to.
-	BaseModel  string          `json:"base_model"`
-	RecipeKind RecipeKind      `json:"recipe_kind"`
-	Format     *ArtifactFormat `json:"format"`
+	BaseModel  string         `json:"base_model"`
+	RecipeKind RecipeKind     `json:"recipe_kind"`
+	Format     ArtifactFormat `json:"format"`
 	// SHA256 SHA-256 of the bundle; downloads verify it.
 	SHA256 string `json:"sha256"`
 	// SizeBytes Bundle size in bytes.
@@ -102,7 +102,7 @@ type ArtifactDownloadURL struct {
 	Filename  string `json:"filename"`
 }
 
-// ArtifactFormat Artifact format when this checkpoint is exportable (promotable); null for training state only.
+// ArtifactFormat is an enumeration of allowed values.
 type ArtifactFormat string
 
 // Values of ArtifactFormat.
@@ -125,7 +125,7 @@ type ArtifactImport struct {
 	Status      ArtifactImportStatus     `json:"status"`
 	Name        string                   `json:"name"`
 	BaseModel   string                   `json:"base_model"`
-	Format      *ArtifactFormat          `json:"format"`
+	Format      ArtifactFormat           `json:"format"`
 	Source      ArtifactImportSourceType `json:"source"`
 	// ArtifactID The artifact (name@version) once the import completed.
 	ArtifactID *string `json:"artifact_id"`
@@ -254,7 +254,7 @@ const (
 	AttemptEventTypeAttempt AttemptEventType = "attempt"
 )
 
-// BaseArtifact Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
+// BaseArtifact is generated from the OpenAPI schema.
 type BaseArtifact struct {
 	ID         string             `json:"id"`
 	RecipeKind RecipeKind         `json:"recipe_kind"`
@@ -336,8 +336,9 @@ type Checkpoint struct {
 	// Step Optimizer step it was saved at.
 	Step int `json:"step"`
 	// EvalScore Held-out score at this step; null when it wasn't evaluated.
-	EvalScore *float64        `json:"eval_score"`
-	Format    *ArtifactFormat `json:"format"`
+	EvalScore *float64 `json:"eval_score"`
+	// Format Artifact format when this checkpoint is exportable (promotable); null for training state only.
+	Format *ArtifactFormat `json:"format"`
 	// SHA256 SHA-256 of the checkpoint bundle.
 	SHA256 string `json:"sha256"`
 	// SizeBytes Bundle size in bytes.
@@ -382,13 +383,14 @@ type CheckpointEvent struct {
 	Type  CheckpointEventType `json:"type"`
 	RunID string              `json:"run_id"`
 	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
-	Seq          int             `json:"seq"`
-	Attempt      int             `json:"attempt"`
-	Timestamp    string          `json:"timestamp"`
-	Step         int             `json:"step"`
-	CheckpointID string          `json:"checkpoint_id"`
-	EvalScore    *float64        `json:"eval_score"`
-	Format       *ArtifactFormat `json:"format"`
+	Seq          int      `json:"seq"`
+	Attempt      int      `json:"attempt"`
+	Timestamp    string   `json:"timestamp"`
+	Step         int      `json:"step"`
+	CheckpointID string   `json:"checkpoint_id"`
+	EvalScore    *float64 `json:"eval_score"`
+	// Format Artifact format when this checkpoint is exportable (promotable); null for training state only.
+	Format *ArtifactFormat `json:"format"`
 }
 
 // CheckpointEventType is an enumeration of allowed values.
@@ -794,7 +796,7 @@ type EvalReport struct {
 	// Ece Written by: decision.
 	Ece *float64 `json:"ece,omitempty"`
 	// Heads Written by: decision (one entry per question).
-	Heads map[string]DecisionHeadReport `json:"heads,omitempty"`
+	Heads map[string]*DecisionHeadReport `json:"heads,omitempty"`
 	// RecallAt1 Written by: embedding.
 	RecallAt1 *float64 `json:"recall_at_1,omitempty"`
 	// RecallAt5 Written by: embedding.
@@ -806,7 +808,7 @@ type EvalReport struct {
 	// CorpusSize Written by: embedding.
 	CorpusSize *int `json:"corpus_size,omitempty"`
 	// Baseline Retrieval metrics of the untrained base encoder. Written by: embedding.
-	Baseline *EvalReportBaseline `json:"baseline,omitempty"`
+	Baseline *RetrievalMetrics `json:"baseline,omitempty"`
 	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
 	AdditionalProperties map[string]any `json:"-"`
 }
@@ -876,45 +878,6 @@ func (m *EvalReport) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*m = EvalReport(p)
-	m.AdditionalProperties = extra
-	return nil
-}
-
-// EvalReportBaseline Retrieval metrics of the untrained base encoder. Written by: embedding.
-type EvalReportBaseline struct {
-	RecallAt1  *float64 `json:"recall_at_1"`
-	RecallAt5  *float64 `json:"recall_at_5"`
-	RecallAt10 *float64 `json:"recall_at_10"`
-	Mrr        *float64 `json:"mrr"`
-	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
-	AdditionalProperties map[string]any `json:"-"`
-}
-
-var knownEvalReportBaselineFields = map[string]bool{
-	"recall_at_1":  true,
-	"recall_at_5":  true,
-	"recall_at_10": true,
-	"mrr":          true,
-}
-
-// MarshalJSON encodes declared fields plus AdditionalProperties.
-func (m EvalReportBaseline) MarshalJSON() ([]byte, error) {
-	type plain EvalReportBaseline
-	return MarshalWithAdditional(plain(m), m.AdditionalProperties)
-}
-
-// UnmarshalJSON decodes declared fields and keeps the rest in AdditionalProperties.
-func (m *EvalReportBaseline) UnmarshalJSON(data []byte) error {
-	type plain EvalReportBaseline
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	extra, err := AdditionalFields(data, knownEvalReportBaselineFields)
-	if err != nil {
-		return err
-	}
-	*m = EvalReportBaseline(p)
 	m.AdditionalProperties = extra
 	return nil
 }
@@ -1098,7 +1061,7 @@ type FilterDatasetRequest struct {
 	Name *string `json:"name,omitempty"`
 }
 
-// GPUInfo starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.
+// GPUInfo is generated from the OpenAPI schema.
 type GPUInfo struct {
 	Name     string  `json:"name"`
 	MemoryGb float64 `json:"memory_gb"`
@@ -1598,11 +1561,11 @@ type MetricEvent struct {
 	Type  MetricEventType `json:"type"`
 	RunID string          `json:"run_id"`
 	// Seq Position in the run's event sequence (the SSE event id; pass it as Last-Event-ID or `cursor` to resume). `completed` repeats the last stored seq.
-	Seq       int          `json:"seq"`
-	Attempt   int          `json:"attempt"`
-	Timestamp string       `json:"timestamp"`
-	Step      int          `json:"step"`
-	Metric    *MetricPoint `json:"metric"`
+	Seq       int         `json:"seq"`
+	Attempt   int         `json:"attempt"`
+	Timestamp string      `json:"timestamp"`
+	Step      int         `json:"step"`
+	Metric    MetricPoint `json:"metric"`
 }
 
 // MetricEventType is an enumeration of allowed values.
@@ -1715,8 +1678,9 @@ type PhaseEvent struct {
 	// QueuePosition queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value.
 	QueuePosition *int `json:"queue_position"`
 	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.
-	Message *string  `json:"message"`
-	GPU     *GPUInfo `json:"gpu"`
+	Message *string `json:"message"`
+	// GPU starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.
+	GPU *GPUInfo `json:"gpu"`
 }
 
 // PhaseEventType is an enumeration of allowed values.
@@ -2120,7 +2084,8 @@ type ResolvedRunConfig struct {
 	CheckpointTTLDays int                    `json:"checkpoint_ttl_days"`
 	Split             ResolvedRunConfigSplit `json:"split"`
 	// LabelEvalID The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).
-	LabelEvalID  *string       `json:"label_eval_id"`
+	LabelEvalID *string `json:"label_eval_id"`
+	// BaseArtifact Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
 	BaseArtifact *BaseArtifact `json:"base_artifact"`
 	// RecipeParams The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...).
 	RecipeParams map[string]any `json:"recipe_params"`
@@ -2227,6 +2192,45 @@ const (
 // ResumeRunRequest is generated from the OpenAPI schema.
 type ResumeRunRequest struct {
 	MaxCostUSD *float64 `json:"max_cost_usd,omitempty"`
+}
+
+// RetrievalMetrics is generated from the OpenAPI schema.
+type RetrievalMetrics struct {
+	RecallAt1  *float64 `json:"recall_at_1"`
+	RecallAt5  *float64 `json:"recall_at_5"`
+	RecallAt10 *float64 `json:"recall_at_10"`
+	Mrr        *float64 `json:"mrr"`
+	// AdditionalProperties holds members not declared in the schema (round-tripped verbatim).
+	AdditionalProperties map[string]any `json:"-"`
+}
+
+var knownRetrievalMetricsFields = map[string]bool{
+	"recall_at_1":  true,
+	"recall_at_5":  true,
+	"recall_at_10": true,
+	"mrr":          true,
+}
+
+// MarshalJSON encodes declared fields plus AdditionalProperties.
+func (m RetrievalMetrics) MarshalJSON() ([]byte, error) {
+	type plain RetrievalMetrics
+	return MarshalWithAdditional(plain(m), m.AdditionalProperties)
+}
+
+// UnmarshalJSON decodes declared fields and keeps the rest in AdditionalProperties.
+func (m *RetrievalMetrics) UnmarshalJSON(data []byte) error {
+	type plain RetrievalMetrics
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	extra, err := AdditionalFields(data, knownRetrievalMetricsFields)
+	if err != nil {
+		return err
+	}
+	*m = RetrievalMetrics(p)
+	m.AdditionalProperties = extra
+	return nil
 }
 
 // RolloutSpec is a union of object shapes; set the fields of exactly one variant.
@@ -2378,14 +2382,16 @@ type RunEvent struct {
 	// QueuePosition queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value.
 	QueuePosition *int `json:"queue_position,omitempty"`
 	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.
-	Message      *string             `json:"message,omitempty"`
-	GPU          *GPUInfo            `json:"gpu,omitempty"`
-	Metric       *MetricPoint        `json:"metric,omitempty"`
-	CheckpointID *string             `json:"checkpoint_id,omitempty"`
-	EvalScore    *float64            `json:"eval_score,omitempty"`
-	Format       *ArtifactFormat     `json:"format,omitempty"`
-	Event        *RunEventEvent      `json:"event,omitempty"`
-	Reason       *InterruptionReason `json:"reason,omitempty"`
+	Message *string `json:"message,omitempty"`
+	// GPU starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.
+	GPU          *GPUInfo     `json:"gpu,omitempty"`
+	Metric       *MetricPoint `json:"metric,omitempty"`
+	CheckpointID *string      `json:"checkpoint_id,omitempty"`
+	EvalScore    *float64     `json:"eval_score,omitempty"`
+	// Format Artifact format when this checkpoint is exportable (promotable); null for training state only.
+	Format *ArtifactFormat     `json:"format,omitempty"`
+	Event  *RunEventEvent      `json:"event,omitempty"`
+	Reason *InterruptionReason `json:"reason,omitempty"`
 	// ResumeStep Checkpoint step to resume from; null starts from scratch.
 	ResumeStep  *int       `json:"resume_step,omitempty"`
 	MaxAttempts *int       `json:"max_attempts,omitempty"`
@@ -2552,10 +2558,11 @@ type Source struct {
 	// PendingFull A full sync was requested while another sync ran; it is queued as soon as that one ends.
 	PendingFull bool `json:"pending_full"`
 	// LastSyncedAt When the last successful sync finished.
-	LastSyncedAt *string     `json:"last_synced_at"`
-	LastSync     *SourceSync `json:"last_sync"`
-	CreatedAt    string      `json:"created_at"`
-	UpdatedAt    string      `json:"updated_at"`
+	LastSyncedAt *string `json:"last_synced_at"`
+	// LastSync The most recent sync, running or finished.
+	LastSync  *SourceSync `json:"last_sync"`
+	CreatedAt string      `json:"created_at"`
+	UpdatedAt string      `json:"updated_at"`
 }
 
 // SourceProvider is generated from the OpenAPI schema.
@@ -2604,7 +2611,7 @@ const (
 	SourceStatusPaused SourceStatus = "paused"
 )
 
-// SourceSync The most recent sync, running or finished.
+// SourceSync is generated from the OpenAPI schema.
 type SourceSync struct {
 	ImportID       string           `json:"import_id"`
 	Status         SourceSyncStatus `json:"status"`

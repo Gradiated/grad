@@ -1,4 +1,5 @@
 import { z } from "@hono/zod-openapi";
+import { nullable } from "./common.js";
 
 const score = z.number().nullable();
 const count = z.number().int().min(0);
@@ -137,7 +138,7 @@ export const EvalReportSchema = z
 
     ece: score.optional().openapi(recipes("decision")),
     heads: z
-      .record(z.string(), DecisionHeadReportSchema.nullable())
+      .record(z.string(), nullable(DecisionHeadReportSchema))
       .optional()
       .openapi(recipes("decision (one entry per question)")),
 
@@ -146,7 +147,7 @@ export const EvalReportSchema = z
     recall_at_10: score.optional().openapi(recipes("embedding")),
     mrr: score.optional().openapi(recipes("embedding")),
     corpus_size: count.optional().openapi(recipes("embedding")),
-    baseline: RetrievalMetricsSchema.nullable().optional().openapi({
+    baseline: nullable(RetrievalMetricsSchema).optional().openapi({
       description:
         "Retrieval metrics of the untrained base encoder. Written by: embedding.",
     }),

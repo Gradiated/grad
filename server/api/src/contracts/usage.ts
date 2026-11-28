@@ -1,6 +1,6 @@
 import { z } from "@hono/zod-openapi";
 
-import { IsoTimestampSchema, PageQuerySchema } from "./common.js";
+import { IsoTimestampSchema, nullable, PageQuerySchema } from "./common.js";
 
 export const USAGE_KINDS = [
   "training",
@@ -214,7 +214,7 @@ export const UsageSummarySchema = z
       description:
         "The costliest evals, scoring, labeling and teacher jobs in the period (up to 5).",
     }),
-    group_by: UsageGroupBySchema.nullable(),
+    group_by: nullable(UsageGroupBySchema),
     groups: z.array(UsageGroupSchema).openapi({
       description:
         "With group_by: one entry per group with usage, oldest first for time groups and costliest first otherwise.",

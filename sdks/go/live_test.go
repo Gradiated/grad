@@ -425,13 +425,13 @@ func TestLiveCloudDistillAndRewardWithTorch(t *testing.T) {
 		t.Fatalf("plan teacher %+v", plan.Teacher)
 	}
 	distilled := must(client.Runs.Create(ctx, grad.RunParams{Dataset: promptsDS, Name: "support-distilled", Recipe: distill}).Wait(ctx))(t)
-	if distilled.Artifact == nil || *distilled.Artifact.Format != "peft_lora" || distilled.EvalReport.MetricName != "eval_kl" {
+	if distilled.Artifact == nil || distilled.Artifact.Format != "peft_lora" || distilled.EvalReport.MetricName != "eval_kl" {
 		t.Fatalf("distill run %+v", distilled.Run)
 	}
 	pairsDS := must(client.Datasets.Push(ctx, "sql-preferences", pairs))(t)
 	verifier := must(client.Runs.Create(ctx, grad.RunParams{Dataset: pairsDS, Name: "sql-verifier",
 		Recipe: grad.RewardModelRecipe{Common: grad.Common{Model: "test/tiny-qwen3", BatchSize: 4}}}).Wait(ctx))(t)
-	if verifier.Artifact == nil || *verifier.Artifact.Format != "reward_bundle" || verifier.EvalReport.MetricName != "preference_accuracy" {
+	if verifier.Artifact == nil || verifier.Artifact.Format != "reward_bundle" || verifier.EvalReport.MetricName != "preference_accuracy" {
 		t.Fatalf("reward run %+v artifact %+v report %+v", verifier.Run, verifier.Artifact, verifier.EvalReport)
 	}
 

@@ -4,6 +4,7 @@ import {
   IsoTimestampSchema,
   ModelIdSchema,
   NextCursorSchema,
+  nullable,
   Sha256HexSchema,
   SlugSchema,
 } from "./common.js";
@@ -410,7 +411,7 @@ export const ResolvedRunConfigSchema = z
       description:
         "The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).",
     }),
-    base_artifact: BaseArtifactSchema.nullable().openapi({
+    base_artifact: nullable(BaseArtifactSchema).openapi({
       description:
         "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).",
     }),
@@ -738,7 +739,7 @@ export const RunSchema = z
     phase_since: IsoTimestampSchema.nullable().openapi({
       description: "When the run entered its phase.",
     }),
-    last_interruption: RunInterruptionSchema.nullable(),
+    last_interruption: nullable(RunInterruptionSchema),
     workers_online: z.number().int().min(0).nullable().openapi({
       description:
         "While queued: workers of this kind holding a lease (all busy). Null otherwise.",
@@ -759,8 +760,8 @@ export const RunSchema = z
       description:
         "GPU memory (GB) the run needs (its plan's min_gpu_memory_gb): only workers with at least this much claim it. Null when unknown.",
     }),
-    latest_metric: MetricPointSchema.nullable(),
-    eval_report: EvalReportSchema.nullable(),
+    latest_metric: nullable(MetricPointSchema),
+    eval_report: nullable(EvalReportSchema),
     checkpoint_evals: z.array(CheckpointEvalResultSchema).openapi({
       description:
         "recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.",
@@ -854,7 +855,7 @@ export const CheckpointSchema = z
       description:
         "Held-out score at this step; null when it wasn't evaluated.",
     }),
-    format: ArtifactFormatSchema.nullable().openapi({
+    format: nullable(ArtifactFormatSchema).openapi({
       description:
         "Artifact format when this checkpoint is exportable (promotable); null for training state only.",
     }),
@@ -962,7 +963,7 @@ export const ArtifactSchema = z
         "The bundle's manifest.json: format, base model, adapter and training settings.",
     }),
     provenance: ArtifactProvenanceSchema,
-    eval_report: EvalReportSchema.nullable(),
+    eval_report: nullable(EvalReportSchema),
     pins: z.array(ArtifactPinSchema).openapi({
       description:
         "Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.",
@@ -1010,7 +1011,7 @@ export const PhaseEventSchema = z
       description:
         'queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.',
     }),
-    gpu: GpuInfoSchema.nullable().openapi({
+    gpu: nullable(GpuInfoSchema).openapi({
       description:
         "starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.",
     }),
@@ -1045,7 +1046,7 @@ export const AttemptEventSchema = z
       description:
         "started: a worker claimed attempt N (resume_step: the checkpoint it resumes from). interrupted: attempt N ended without a result at `step` (resume_step: where the next attempt resumes). gave_up: no attempts left; the run failed.",
     }),
-    reason: InterruptionReasonSchema.nullable(),
+    reason: nullable(InterruptionReasonSchema),
     step: z.number().int().min(0).nullable(),
     resume_step: z.number().int().min(0).nullable().openapi({
       description: "Checkpoint step to resume from; null starts from scratch.",

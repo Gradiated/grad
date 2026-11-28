@@ -142,7 +142,7 @@ pub struct Artifact {
     /// The base model the weights apply to.
     pub base_model: String,
     pub recipe_kind: RecipeKind,
-    pub format: Option<ArtifactFormat>,
+    pub format: ArtifactFormat,
     /// SHA-256 of the bundle; downloads verify it.
     pub sha256: String,
     /// Bundle size in bytes.
@@ -170,7 +170,7 @@ pub struct ArtifactDownloadUrl {
 }
 
 string_enum! {
-    /// Artifact format when this checkpoint is exportable (promotable); null for training state only.
+    /// Allowed values of `ArtifactFormat`.
     ArtifactFormat {
         PeftLora => "peft_lora",
         MergedSafetensors => "merged_safetensors",
@@ -193,7 +193,7 @@ pub struct ArtifactImport {
     pub status: ArtifactImportStatus,
     pub name: String,
     pub base_model: String,
-    pub format: Option<ArtifactFormat>,
+    pub format: ArtifactFormat,
     pub source: ArtifactImportSourceType,
     /// The artifact (name@version) once the import completed.
     pub artifact_id: Option<String>,
@@ -294,7 +294,7 @@ string_enum! {
     }
 }
 
-/// Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
+/// Generated from the OpenAPI schema `BaseArtifact`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BaseArtifact {
@@ -356,6 +356,7 @@ pub struct Checkpoint {
     pub step: i64,
     /// Held-out score at this step; null when it wasn't evaluated.
     pub eval_score: Option<f64>,
+    /// Artifact format when this checkpoint is exportable (promotable); null for training state only.
     pub format: Option<ArtifactFormat>,
     /// SHA-256 of the checkpoint bundle.
     pub sha256: String,
@@ -767,7 +768,7 @@ pub struct EvalReport {
     pub ece: Option<f64>,
     /// Written by: decision (one entry per question).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub heads: Option<BTreeMap<String, DecisionHeadReport>>,
+    pub heads: Option<BTreeMap<String, Option<DecisionHeadReport>>>,
     /// Written by: embedding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recall_at_1: Option<f64>,
@@ -785,20 +786,7 @@ pub struct EvalReport {
     pub corpus_size: Option<i64>,
     /// Retrieval metrics of the untrained base encoder. Written by: embedding.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub baseline: Option<EvalReportBaseline>,
-    /// Members not declared in the schema (round-tripped verbatim).
-    #[serde(flatten)]
-    pub additional_properties: BTreeMap<String, Value>,
-}
-
-/// Retrieval metrics of the untrained base encoder. Written by: embedding.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct EvalReportBaseline {
-    pub recall_at_1: Option<f64>,
-    pub recall_at_5: Option<f64>,
-    pub recall_at_10: Option<f64>,
-    pub mrr: Option<f64>,
+    pub baseline: Option<RetrievalMetrics>,
     /// Members not declared in the schema (round-tripped verbatim).
     #[serde(flatten)]
     pub additional_properties: BTreeMap<String, Value>,
@@ -1751,6 +1739,7 @@ pub struct ResolvedRunConfig {
     pub split: ResolvedRunConfigSplit,
     /// The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).
     pub label_eval_id: Option<String>,
+    /// Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).
     pub base_artifact: Option<BaseArtifact>,
     /// The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...).
     pub recipe_params: BTreeMap<String, Value>,
@@ -1857,6 +1846,19 @@ string_enum! {
         Last => "last",
         AllAssistant => "all_assistant",
     }
+}
+
+/// Generated from the OpenAPI schema `RetrievalMetrics`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RetrievalMetrics {
+    pub recall_at_1: Option<f64>,
+    pub recall_at_5: Option<f64>,
+    pub recall_at_10: Option<f64>,
+    pub mrr: Option<f64>,
+    /// Members not declared in the schema (round-tripped verbatim).
+    #[serde(flatten)]
+    pub additional_properties: BTreeMap<String, Value>,
 }
 
 /// A union of object shapes: set the fields of exactly one variant.

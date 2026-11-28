@@ -216,7 +216,7 @@ export class Run {
     }
     // The events stream carries every metric (and ends after `completed`, which refreshes this run).
     for await (const event of this.events({ ...request, follow: true })) {
-      if (event.type === "metric" && event.metric !== null && (afterStep === undefined || event.metric.step > afterStep)) yield event.metric;
+      if (event.type === "metric" && (afterStep === undefined || event.metric.step > afterStep)) yield event.metric;
     }
   }
 

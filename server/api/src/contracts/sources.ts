@@ -1,6 +1,6 @@
 import { z } from "@hono/zod-openapi";
 
-import { IsoTimestampSchema, SlugSchema } from "./common.js";
+import { IsoTimestampSchema, nullable, SlugSchema } from "./common.js";
 
 // --- Secrets ------------------------------------------------------------------
 
@@ -286,7 +286,7 @@ export const SourceSchema = z
     last_synced_at: IsoTimestampSchema.nullable().openapi({
       description: "When the last successful sync finished.",
     }),
-    last_sync: SourceSyncSchema.nullable().openapi({
+    last_sync: nullable(SourceSyncSchema).openapi({
       description: "The most recent sync, running or finished.",
     }),
     created_at: IsoTimestampSchema,

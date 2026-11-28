@@ -56,6 +56,15 @@ export const PageQuerySchema = z.object({
   cursor: z.string().min(1).max(512).optional(),
 });
 
+/**
+ * `schema` or null. A registered (named) schema's own `.nullable()` makes the
+ * generator mark the whole component nullable (or emit an `allOf` with null that
+ * no value matches), so every use of it in the SDKs reads `T | null`. A union
+ * keeps the null at this use: `anyOf: [{$ref}, {type: "null"}]`.
+ */
+export const nullable = <T extends z.ZodType>(schema: T) =>
+  z.union([schema, z.null()]);
+
 /** `?status=queued,running`: a comma-separated subset of `values`. */
 export const statusFilterSchema = <
   const T extends readonly [string, ...string[]],

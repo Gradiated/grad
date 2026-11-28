@@ -1,7 +1,7 @@
 import { z } from "@hono/zod-openapi";
 
 import { ArtifactImportSchema } from "./artifacts.js";
-import { IsoTimestampSchema, Sha256HexSchema } from "./common.js";
+import { IsoTimestampSchema, nullable, Sha256HexSchema } from "./common.js";
 import { EvalReportSchema } from "./eval-report.js";
 import {
   EvalModeSchema,
@@ -59,7 +59,7 @@ export const ClaimJobRequestSchema = z
       description:
         "Recipe kinds this worker can run; train jobs for other recipes are left queued.",
     }),
-    gpu: GpuInfoSchema.nullable().optional().openapi({
+    gpu: nullable(GpuInfoSchema).optional().openapi({
       description:
         "The worker's GPU, shown on the run's `starting` phase (never the worker id or host). Its memory_gb also filters train jobs: the worker gets only runs whose min_gpu_memory_gb fits.",
     }),
@@ -191,7 +191,7 @@ export type TrainerJob = z.infer<typeof TrainerJobSchema>;
 export const ClaimJobResponseSchema = z
   .object({
     protocol: z.literal(TRAINER_PROTOCOL_VERSION),
-    job: TrainerJobSchema.nullable(),
+    job: nullable(TrainerJobSchema),
   })
   .openapi("ClaimJobResponse");
 
@@ -313,7 +313,7 @@ export const RegisterCheckpointRequestSchema = z
     step: z.number().int().min(0),
     eval_score: z.number().nullable().optional(),
     upload_id: z.string().min(1).max(160),
-    format: ArtifactFormatSchema.nullable().optional(),
+    format: nullable(ArtifactFormatSchema).optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
   })
   .openapi("RegisterTrainerCheckpointRequest");
@@ -477,7 +477,7 @@ export const CompleteJobRequestSchema = z
     upload_id: z.string().min(1).max(160).optional(),
     format: ArtifactFormatSchema.optional(),
     manifest: z.record(z.string(), z.unknown()).default({}),
-    eval_report: EvalReportSchema.nullable().optional(),
+    eval_report: nullable(EvalReportSchema).optional(),
     tokens_processed: z.number().int().min(0).default(0),
     error: z.string().max(4000).optional(),
     error_code: z
@@ -518,11 +518,11 @@ export const CompleteJobResponseSchema = z
     job_id: z.string(),
     kind: JobKindSchema,
     status: z.string(),
-    run: RunSchema.nullable(),
-    artifact: ArtifactSchema.nullable(),
-    import: ImportJobSchema.nullable(),
-    eval: EvalRunSchema.nullable().optional(),
-    artifact_import: ArtifactImportSchema.nullable().optional(),
+    run: nullable(RunSchema),
+    artifact: nullable(ArtifactSchema),
+    import: nullable(ImportJobSchema),
+    eval: nullable(EvalRunSchema).optional(),
+    artifact_import: nullable(ArtifactImportSchema).optional(),
   })
   .openapi("CompleteTrainerJobResponse");
 

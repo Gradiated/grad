@@ -81,7 +81,14 @@
           "$ref": "#/$defs/TrajectoryInput"
         },
         "output": {
-          "$ref": "#/$defs/TrajectoryOutput"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrajectoryOutput"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "prompt": {
           "anyOf": [
@@ -255,10 +262,7 @@
       "additionalProperties": {}
     },
     "TrajectoryOutput": {
-      "type": [
-        "object",
-        "null"
-      ],
+      "type": "object",
       "properties": {
         "turns": {
           "type": "array",

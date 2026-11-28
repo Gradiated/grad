@@ -354,7 +354,9 @@ components:
         input:
           $ref: "#/components/schemas/TrajectoryInput"
         output:
-          $ref: "#/components/schemas/TrajectoryOutput"
+          anyOf:
+            - $ref: "#/components/schemas/TrajectoryOutput"
+            - type: "null"
         prompt:
           anyOf:
             - type: string
@@ -459,9 +461,7 @@ components:
         payload: {}
       additionalProperties: {}
     TrajectoryOutput:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         turns:
           type: array
@@ -1565,7 +1565,11 @@ components:
           description: "The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and
             off-policy distill runs (the teacher's answers)."
         base_artifact:
-          $ref: "#/components/schemas/BaseArtifact"
+          anyOf:
+            - $ref: "#/components/schemas/BaseArtifact"
+            - type: "null"
+          description: "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact
+            reference)."
         recipe_params:
           type: object
           additionalProperties: {}
@@ -1669,9 +1673,7 @@ components:
           description: Max global gradient norm; 0 disables clipping.
       additionalProperties: false
     BaseArtifact:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         id:
           type: string
@@ -1690,7 +1692,6 @@ components:
         - recipe_kind
         - format
         - sha256
-      description: "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference)."
     LoggerSpec:
       oneOf:
         - type: object
@@ -2278,7 +2279,9 @@ components:
           format: date-time
           description: When the run entered its phase.
         last_interruption:
-          $ref: "#/components/schemas/RunInterruption"
+          anyOf:
+            - $ref: "#/components/schemas/RunInterruption"
+            - type: "null"
         workers_online:
           type:
             - integer
@@ -2313,9 +2316,13 @@ components:
           description: "GPU memory (GB) the run needs (its plan's min_gpu_memory_gb): only workers with at least this much claim
             it. Null when unknown."
         latest_metric:
-          $ref: "#/components/schemas/MetricPoint"
+          anyOf:
+            - $ref: "#/components/schemas/MetricPoint"
+            - type: "null"
         eval_report:
-          $ref: "#/components/schemas/EvalReport"
+          anyOf:
+            - $ref: "#/components/schemas/EvalReport"
+            - type: "null"
         checkpoint_evals:
           type: array
           items:
@@ -2398,9 +2405,7 @@ components:
       description: "stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the
         workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints."
     RunInterruption:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         attempt:
           type: integer
@@ -2439,9 +2444,7 @@ components:
         had time and handed the run back), worker_error (the worker hit an unexpected error and handed the run back),
         oom (CUDA out of memory)."
     MetricPoint:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         seq:
           type: integer
@@ -2499,9 +2502,7 @@ components:
         - timestamp
       additionalProperties: {}
     EvalReport:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         metric_name:
           type: string
@@ -2661,7 +2662,9 @@ components:
         heads:
           type: object
           additionalProperties:
-            $ref: "#/components/schemas/DecisionHeadReport"
+            anyOf:
+              - $ref: "#/components/schemas/DecisionHeadReport"
+              - type: "null"
           description: "Written by: decision (one entry per question)."
         recall_at_1:
           type:
@@ -2688,32 +2691,9 @@ components:
           minimum: 0
           description: "Written by: embedding."
         baseline:
-          type:
-            - object
-            - "null"
-          properties:
-            recall_at_1:
-              type:
-                - number
-                - "null"
-            recall_at_5:
-              type:
-                - number
-                - "null"
-            recall_at_10:
-              type:
-                - number
-                - "null"
-            mrr:
-              type:
-                - number
-                - "null"
-          required:
-            - recall_at_1
-            - recall_at_5
-            - recall_at_10
-            - mrr
-          additionalProperties: {}
+          anyOf:
+            - $ref: "#/components/schemas/RetrievalMetrics"
+            - type: "null"
           description: "Retrieval metrics of the untrained base encoder. Written by: embedding."
       required:
         - metric_name
@@ -2776,9 +2756,7 @@ components:
       description: Router quality vs. cost on the held-out report fold, against the fallback model. Values are null when no
         report prompt was scored for every candidate.
     DecisionHeadReport:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         type:
           type: string
@@ -2857,6 +2835,31 @@ components:
         - accuracy
         - ece
         - temperature
+      additionalProperties: {}
+    RetrievalMetrics:
+      type: object
+      properties:
+        recall_at_1:
+          type:
+            - number
+            - "null"
+        recall_at_5:
+          type:
+            - number
+            - "null"
+        recall_at_10:
+          type:
+            - number
+            - "null"
+        mrr:
+          type:
+            - number
+            - "null"
+      required:
+        - recall_at_1
+        - recall_at_5
+        - recall_at_10
+        - mrr
       additionalProperties: {}
     CheckpointEvalResult:
       type: object
@@ -3035,7 +3038,11 @@ components:
             workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null
             when it is next in line.'
         gpu:
-          $ref: "#/components/schemas/GpuInfo"
+          anyOf:
+            - $ref: "#/components/schemas/GpuInfo"
+            - type: "null"
+          description: "starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or
+            host."
       required:
         - type
         - run_id
@@ -3066,9 +3073,7 @@ components:
         server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the
         worker reports the rest. training, evaluating and checkpointing repeat."
     GpuInfo:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         name:
           type: string
@@ -3081,8 +3086,6 @@ components:
       required:
         - name
         - memory_gb
-      description: "starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or
-        host."
     MetricEvent:
       type: object
       properties:
@@ -3149,7 +3152,10 @@ components:
             - number
             - "null"
         format:
-          $ref: "#/components/schemas/ArtifactFormat"
+          anyOf:
+            - $ref: "#/components/schemas/ArtifactFormat"
+            - type: "null"
+          description: Artifact format when this checkpoint is exportable (promotable); null for training state only.
       required:
         - type
         - run_id
@@ -3161,9 +3167,7 @@ components:
         - eval_score
         - format
     ArtifactFormat:
-      type:
-        - string
-        - "null"
+      type: string
       enum:
         - peft_lora
         - merged_safetensors
@@ -3174,8 +3178,6 @@ components:
         - decision_bundle
         - reward_bundle
         - reference
-        - null
-      description: Artifact format when this checkpoint is exportable (promotable); null for training state only.
     AttemptEvent:
       type: object
       properties:
@@ -3207,11 +3209,9 @@ components:
             ended without a result at `step` (resume_step: where the next attempt resumes). gave_up: no attempts left;
             the run failed."
         reason:
-          allOf:
+          anyOf:
             - $ref: "#/components/schemas/InterruptionReason"
-            - type:
-                - string
-                - "null"
+            - type: "null"
         step:
           type:
             - integer
@@ -3379,7 +3379,10 @@ components:
             - "null"
           description: Held-out score at this step; null when it wasn't evaluated.
         format:
-          $ref: "#/components/schemas/ArtifactFormat"
+          anyOf:
+            - $ref: "#/components/schemas/ArtifactFormat"
+            - type: "null"
+          description: Artifact format when this checkpoint is exportable (promotable); null for training state only.
         sha256:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -3475,7 +3478,9 @@ components:
         provenance:
           $ref: "#/components/schemas/ArtifactProvenance"
         eval_report:
-          $ref: "#/components/schemas/EvalReport"
+          anyOf:
+            - $ref: "#/components/schemas/EvalReport"
+            - type: "null"
         pins:
           type: array
           items:
@@ -3568,14 +3573,14 @@ components:
           enum:
             - grad.trainer-protocol/1
         job:
-          $ref: "#/components/schemas/TrainerJob"
+          anyOf:
+            - $ref: "#/components/schemas/TrainerJob"
+            - type: "null"
       required:
         - protocol
         - job
     TrainerJob:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         id:
           type: string
@@ -3903,21 +3908,9 @@ components:
           minItems: 1
           description: Recipe kinds this worker can run; train jobs for other recipes are left queued.
         gpu:
-          type:
-            - object
-            - "null"
-          properties:
-            name:
-              type: string
-              minLength: 1
-              maxLength: 200
-            memory_gb:
-              type: number
-              minimum: 0
-              maximum: 100000
-          required:
-            - name
-            - memory_gb
+          anyOf:
+            - $ref: "#/components/schemas/GpuInfo"
+            - type: "null"
           description: "The worker's GPU, shown on the run's `starting` phase (never the worker id or host). Its memory_gb also
             filters train jobs: the worker gets only runs whose min_gpu_memory_gb fits."
         device:
@@ -4213,7 +4206,9 @@ components:
           minLength: 1
           maxLength: 160
         format:
-          $ref: "#/components/schemas/ArtifactFormat"
+          anyOf:
+            - $ref: "#/components/schemas/ArtifactFormat"
+            - type: "null"
         metadata:
           type: object
           additionalProperties: {}
@@ -4453,31 +4448,25 @@ components:
         status:
           type: string
         run:
-          allOf:
+          anyOf:
             - $ref: "#/components/schemas/Run"
-            - type:
-                - object
-                - "null"
+            - type: "null"
         artifact:
-          allOf:
+          anyOf:
             - $ref: "#/components/schemas/Artifact"
-            - type:
-                - object
-                - "null"
+            - type: "null"
         import:
-          allOf:
+          anyOf:
             - $ref: "#/components/schemas/ImportJob"
-            - type:
-                - object
-                - "null"
+            - type: "null"
         eval:
-          allOf:
+          anyOf:
             - $ref: "#/components/schemas/EvalRun"
-            - type:
-                - object
-                - "null"
+            - type: "null"
         artifact_import:
-          $ref: "#/components/schemas/ArtifactImport"
+          anyOf:
+            - $ref: "#/components/schemas/ArtifactImport"
+            - type: "null"
       required:
         - job_id
         - kind
@@ -4486,9 +4475,7 @@ components:
         - artifact
         - import
     ArtifactImport:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         id:
           type: string
@@ -4619,7 +4606,9 @@ components:
           additionalProperties: {}
           default: {}
         eval_report:
-          $ref: "#/components/schemas/EvalReport"
+          anyOf:
+            - $ref: "#/components/schemas/EvalReport"
+            - type: "null"
         tokens_processed:
           type: integer
           minimum: 0
@@ -4919,7 +4908,9 @@ components:
             $ref: "#/components/schemas/UsageRefTotal"
           description: The costliest evals, scoring, labeling and teacher jobs in the period (up to 5).
         group_by:
-          $ref: "#/components/schemas/UsageGroupBy"
+          anyOf:
+            - $ref: "#/components/schemas/UsageGroupBy"
+            - type: "null"
         groups:
           type: array
           items:
@@ -4979,9 +4970,7 @@ components:
         - cost_usd
         - tokens
     UsageGroupBy:
-      type:
-        - string
-        - "null"
+      type: string
       enum:
         - day
         - week
@@ -4989,7 +4978,6 @@ components:
         - model
         - recipe
         - kind
-        - null
     UsageGroup:
       type: object
       properties:
@@ -5453,7 +5441,10 @@ components:
           format: date-time
           description: When the last successful sync finished.
         last_sync:
-          $ref: "#/components/schemas/SourceSync"
+          anyOf:
+            - $ref: "#/components/schemas/SourceSync"
+            - type: "null"
+          description: The most recent sync, running or finished.
         created_at:
           type: string
           format: date-time
@@ -5486,9 +5477,7 @@ components:
       description: An observability provider synced into one dataset. A source feeds exactly one dataset; a dataset can have
         several sources. Deleting the dataset deletes its sources; removing a source keeps the dataset.
     SourceSync:
-      type:
-        - object
-        - "null"
+      type: object
       properties:
         import_id:
           type: string
@@ -5527,7 +5516,6 @@ components:
         - error
         - created_at
         - finished_at
-      description: The most recent sync, running or finished.
     CreateSourceRequest:
       type: object
       properties:

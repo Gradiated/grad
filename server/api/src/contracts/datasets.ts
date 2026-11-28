@@ -6,6 +6,7 @@ import {
   IsoTimestampSchema,
   ModelIdSchema,
   NextCursorSchema,
+  nullable,
   Sha256HexSchema,
   SlugSchema,
 } from "./common.js";
@@ -60,7 +61,7 @@ export const DatasetRecordSchema = z
     messages: z.array(ChatMessageSchema).optional(),
     tools: z.array(z.record(z.string(), z.unknown())).optional(),
     input: TrajectoryInputSchema.optional(),
-    output: TrajectoryOutputSchema.nullable().optional(),
+    output: nullable(TrajectoryOutputSchema).optional(),
     prompt: TextOrMessagesSchema.optional(),
     completion: TextOrMessagesSchema.optional(),
     chosen: TextOrMessagesSchema.optional(),

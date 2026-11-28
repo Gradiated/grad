@@ -10,6 +10,13 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - **Breaking: `GET /v1/runs/{id}/metrics` is JSON pages only.** Its Server-Sent Events mode is gone (every SDK and
   the CLI already follow metric points on `GET /v1/runs/{id}/events`); the generated
   `listRunMetricsStream` / `ListRunMetricsStream` / `list_run_metrics_stream` are removed.
+- **Spec: no whole-component nulls.** A nullable use of a named schema (`latest_metric`, `last_sync`, a
+  checkpoint's `format`, ...) marked the component itself nullable, so the typed SDKs read
+  `MetricPoint | null` inside metrics pages and events and an optional `format` on every artifact; the
+  trainer-callback responses had an `allOf` with null that no null value matched. The null now sits at
+  each nullable field (`anyOf: [$ref, null]`). `MetricsPage.data`, `MetricEvent.metric`,
+  `Artifact.format` and `ArtifactImport.format` are non-null in all four SDKs (Go drops the pointers,
+  Rust the `Option`).
 - **Evals:** a transient failure (storage, the database) while handing a claimed eval to its worker requeues the eval at
   once, spending the attempt, as runs and imports already did; before, the eval stayed leased until its lease expired.
 

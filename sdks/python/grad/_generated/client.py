@@ -54,7 +54,7 @@ Artifact = TypedDict(
         "size_bytes": "int",
         "manifest": "dict[str, Any]",
         "provenance": "ArtifactProvenance",
-        "eval_report": "EvalReport",
+        "eval_report": "EvalReport | None",
         "pins": "list[ArtifactPin]",
         "created_at": "str",
     },
@@ -71,7 +71,7 @@ ArtifactDownloadUrl = TypedDict(
     },
 )
 
-ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reward_bundle', 'reference'] | None"
+ArtifactFormat: TypeAlias = "Literal['peft_lora', 'merged_safetensors', 'prefix_kv', 'cartridge', 'encoder_safetensors', 'router_bundle', 'decision_bundle', 'reward_bundle', 'reference']"
 
 ArtifactImport = TypedDict(
     "ArtifactImport",
@@ -125,7 +125,7 @@ AttemptEvent = TypedDict(
         "attempt": "int",
         "timestamp": "str",
         "event": "Literal['started', 'interrupted', 'gave_up']",
-        "reason": "InterruptionReason",
+        "reason": "InterruptionReason | None",
         "step": "int | None",
         "resume_step": "int | None",
         "max_attempts": "int",
@@ -164,7 +164,7 @@ Checkpoint = TypedDict(
         "attempt": "int",
         "step": "int",
         "eval_score": "float | None",
-        "format": "ArtifactFormat",
+        "format": "ArtifactFormat | None",
         "sha256": "str",
         "size_bytes": "int",
         "metadata": "dict[str, Any]",
@@ -202,7 +202,7 @@ CheckpointEvent = TypedDict(
         "step": "int",
         "checkpoint_id": "str",
         "eval_score": "float | None",
-        "format": "ArtifactFormat",
+        "format": "ArtifactFormat | None",
     },
 )
 
@@ -213,7 +213,7 @@ ClaimJobRequest = TypedDict(
         "lease_seconds": "NotRequired[int]",
         "kinds": "NotRequired[list[JobKind]]",
         "recipes": "NotRequired[list[RecipeKind]]",
-        "gpu": "NotRequired[dict[str, Any] | None]",
+        "gpu": "NotRequired[GpuInfo | None]",
         "device": "NotRequired[Literal['cpu', 'gpu']]",
     },
 )
@@ -222,7 +222,7 @@ ClaimJobResponse = TypedDict(
     "ClaimJobResponse",
     {
         "protocol": "Literal['grad.trainer-protocol/1']",
-        "job": "TrainerJob",
+        "job": "TrainerJob | None",
     },
 )
 
@@ -236,7 +236,7 @@ CompleteTrainerJobRequest = TypedDict(
         "upload_id": "NotRequired[str]",
         "format": "NotRequired[ArtifactFormat]",
         "manifest": "NotRequired[dict[str, Any]]",
-        "eval_report": "NotRequired[EvalReport]",
+        "eval_report": "NotRequired[EvalReport | None]",
         "tokens_processed": "NotRequired[int]",
         "error": "NotRequired[str]",
         "error_code": "NotRequired[Literal['invalid_artifact', 'source_unavailable']]",
@@ -251,11 +251,11 @@ CompleteTrainerJobResponse = TypedDict(
         "job_id": "str",
         "kind": "JobKind",
         "status": "str",
-        "run": "Run",
-        "artifact": "Artifact",
-        "import": "ImportJob",
-        "eval": "NotRequired[EvalRun]",
-        "artifact_import": "NotRequired[ArtifactImport]",
+        "run": "Run | None",
+        "artifact": "Artifact | None",
+        "import": "ImportJob | None",
+        "eval": "NotRequired[EvalRun | None]",
+        "artifact_import": "NotRequired[ArtifactImport | None]",
     },
 )
 
@@ -374,7 +374,7 @@ DatasetRecord = TypedDict(
         "messages": "NotRequired[list[ChatMessage]]",
         "tools": "NotRequired[list[dict[str, Any]]]",
         "input": "NotRequired[TrajectoryInput]",
-        "output": "NotRequired[TrajectoryOutput]",
+        "output": "NotRequired[TrajectoryOutput | None]",
         "prompt": "NotRequired[str | list[ChatMessage]]",
         "completion": "NotRequired[str | list[ChatMessage]]",
         "chosen": "NotRequired[str | list[ChatMessage]]",
@@ -494,13 +494,13 @@ EvalReport = TypedDict(
         "routes_any_traffic": "NotRequired[bool]",
         "pareto_summary": "NotRequired[RouterParetoSummary]",
         "ece": "NotRequired[float | None]",
-        "heads": "NotRequired[dict[str, DecisionHeadReport]]",
+        "heads": "NotRequired[dict[str, DecisionHeadReport | None]]",
         "recall_at_1": "NotRequired[float | None]",
         "recall_at_5": "NotRequired[float | None]",
         "recall_at_10": "NotRequired[float | None]",
         "mrr": "NotRequired[float | None]",
         "corpus_size": "NotRequired[int]",
-        "baseline": "NotRequired[dict[str, Any] | None]",
+        "baseline": "NotRequired[RetrievalMetrics | None]",
     },
 )
 
@@ -720,7 +720,7 @@ PhaseEvent = TypedDict(
         "autoscaling": "bool | None",
         "queue_position": "int | None",
         "message": "str | None",
-        "gpu": "GpuInfo",
+        "gpu": "GpuInfo | None",
     },
 )
 
@@ -959,7 +959,7 @@ RegisterTrainerCheckpointRequest = TypedDict(
         "step": "int",
         "eval_score": "NotRequired[float | None]",
         "upload_id": "str",
-        "format": "NotRequired[ArtifactFormat]",
+        "format": "NotRequired[ArtifactFormat | None]",
         "metadata": "NotRequired[dict[str, Any]]",
     },
 )
@@ -1035,7 +1035,7 @@ ResolvedRunConfig = TypedDict(
         "checkpoint_ttl_days": "int",
         "split": "dict[str, Any]",
         "label_eval_id": "str | None",
-        "base_artifact": "BaseArtifact",
+        "base_artifact": "BaseArtifact | None",
         "recipe_params": "dict[str, Any]",
         "checkpoint_evals": "NotRequired[list[dict[str, Any]]]",
         "loggers": "NotRequired[list[LoggerSpec]]",
@@ -1046,6 +1046,16 @@ ResumeRunRequest = TypedDict(
     "ResumeRunRequest",
     {
         "max_cost_usd": "NotRequired[float]",
+    },
+)
+
+RetrievalMetrics = TypedDict(
+    "RetrievalMetrics",
+    {
+        "recall_at_1": "float | None",
+        "recall_at_5": "float | None",
+        "recall_at_10": "float | None",
+        "mrr": "float | None",
     },
 )
 
@@ -1088,14 +1098,14 @@ Run = TypedDict(
         "max_attempts": "int",
         "phase": "Literal['queued', 'waiting_for_compute', 'starting', 'loading_model', 'training', 'evaluating', 'checkpointing', 'uploading', 'completing'] | None",
         "phase_since": "str | None",
-        "last_interruption": "RunInterruption",
+        "last_interruption": "RunInterruption | None",
         "workers_online": "int | None",
         "autoscaling": "bool | None",
         "queue_position": "int | None",
         "queue_message": "str | None",
         "min_gpu_memory_gb": "float | None",
-        "latest_metric": "MetricPoint",
-        "eval_report": "EvalReport",
+        "latest_metric": "MetricPoint | None",
+        "eval_report": "EvalReport | None",
         "checkpoint_evals": "list[CheckpointEvalResult]",
         "artifact_id": "str | None",
         "error": "str | None",
@@ -1187,7 +1197,7 @@ Source = TypedDict(
         "consecutive_failures": "int",
         "pending_full": "bool",
         "last_synced_at": "str | None",
-        "last_sync": "SourceSync",
+        "last_sync": "SourceSync | None",
         "created_at": "str",
         "updated_at": "str",
     },
@@ -1427,7 +1437,7 @@ UsageGroup = TypedDict(
     },
 )
 
-UsageGroupBy: TypeAlias = "Literal['day', 'week', 'month', 'model', 'recipe', 'kind'] | None"
+UsageGroupBy: TypeAlias = "Literal['day', 'week', 'month', 'model', 'recipe', 'kind']"
 
 UsageKind: TypeAlias = "Literal['training', 'eval', 'scoring', 'labeling', 'teacher']"
 
@@ -1483,7 +1493,7 @@ UsageSummary = TypedDict(
         "by_kind": "list[UsageKindTotal]",
         "top_runs": "list[UsageRefTotal]",
         "top_evals": "list[UsageRefTotal]",
-        "group_by": "UsageGroupBy",
+        "group_by": "UsageGroupBy | None",
         "groups": "list[UsageGroup]",
     },
 )
@@ -1684,6 +1694,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ReportTrainerProgressResponse": frozenset({"cost_usd", "should_stop", "status", "stop_reason"}),
     "ResolvedRunConfig": frozenset({"adapter", "base_artifact", "batch_size", "checkpoint_evals", "checkpoint_every_steps", "checkpoint_ttl_days", "dataset", "dataset_version", "epochs", "eval_every_steps", "label_eval_id", "loggers", "lr", "lr_source", "model", "name", "optimizer", "preserve_thinking", "recipe_kind", "recipe_params", "reduction", "rule_version", "schedule", "select", "split", "template_revision", "thinking", "train_on", "warmup"}),
     "ResumeRunRequest": frozenset({"max_cost_usd"}),
+    "RetrievalMetrics": frozenset({"mrr", "recall_at_1", "recall_at_10", "recall_at_5"}),
     "RouterParetoSummary": frozenset({"cost_savings_pct", "ece", "offload_rate", "quality_drop", "quality_drop_ci95", "routed_quality", "target_max_drop", "temperature", "threshold"}),
     "Run": frozenset({"artifact_id", "attempt", "autoscaling", "checkpoint_evals", "cost_usd", "created_at", "current_step", "dataset_id", "dataset_name", "dataset_version", "error", "eval_report", "finished_at", "id", "last_interruption", "latest_metric", "max_attempts", "max_cost_usd", "min_gpu_memory_gb", "name", "phase", "phase_since", "price_per_million_tokens", "queue_message", "queue_position", "recipe_kind", "resolved_config", "status", "tokens_processed", "total_steps", "updated_at", "warnings", "workers_online", "workspace_id"}),
     "RunEventsPage": frozenset({"data", "next_cursor", "run_id", "status", "tail_cursor"}),
@@ -1722,7 +1733,7 @@ SCHEMA_FIELDS: dict[str, frozenset[str]] = {
 
 SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "ApiKeyScope": ("admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "artifacts:pin", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve",),
-    "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference", None,),
+    "ArtifactFormat": ("peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference",),
     "ArtifactImportStatus": ("queued", "running", "completed", "failed",),
     "EvalMode": ("eval", "score",),
     "EvalStatus": ("queued", "running", "awaiting_scores", "completed", "failed", "cancelled",),
@@ -1733,7 +1744,7 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
     "RunPhase": ("queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing",),
     "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance",),
-    "UsageGroupBy": ("day", "week", "month", "model", "recipe", "kind", None,),
+    "UsageGroupBy": ("day", "week", "month", "model", "recipe", "kind",),
     "UsageKind": ("training", "eval", "scoring", "labeling", "teacher",),
 }
 """Allowed values of every enum schema."""

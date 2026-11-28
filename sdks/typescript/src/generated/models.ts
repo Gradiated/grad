@@ -48,7 +48,7 @@ export interface Artifact {
   /** The base model the weights apply to. */
   baseModel: string;
   recipeKind: RecipeKind;
-  format: ArtifactFormat | null;
+  format: ArtifactFormat;
   /** SHA-256 of the bundle; downloads verify it. */
   sha256: string;
   /** Bundle size in bytes. */
@@ -72,7 +72,6 @@ export interface ArtifactDownloadUrl {
   filename: string;
 }
 
-/** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
 export type ArtifactFormat = "peft_lora" | "merged_safetensors" | "prefix_kv" | "cartridge" | "encoder_safetensors" | "router_bundle" | "decision_bundle" | "reward_bundle" | "reference";
 
 export const ArtifactFormatValues = ["peft_lora", "merged_safetensors", "prefix_kv", "cartridge", "encoder_safetensors", "router_bundle", "decision_bundle", "reward_bundle", "reference"] as const;
@@ -83,7 +82,7 @@ export interface ArtifactImport {
   status: ArtifactImportStatus;
   name: string;
   baseModel: string;
-  format: ArtifactFormat | null;
+  format: ArtifactFormat;
   source: {
     kind: "upload" | "hf";
     uploadId: string | null;
@@ -154,7 +153,6 @@ export interface AttemptEvent {
   message: string;
 }
 
-/** Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference). */
 export interface BaseArtifact {
   id: string;
   recipeKind: RecipeKind;
@@ -184,6 +182,7 @@ export interface Checkpoint {
   step: number;
   /** Held-out score at this step; null when it wasn't evaluated. */
   evalScore: number | null;
+  /** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
   format: ArtifactFormat | null;
   /** SHA-256 of the checkpoint bundle. */
   sha256: string;
@@ -223,6 +222,7 @@ export interface CheckpointEvent {
   step: number;
   checkpointId: string;
   evalScore: number | null;
+  /** Artifact format when this checkpoint is exportable (promotable); null for training state only. */
   format: ArtifactFormat | null;
 }
 
@@ -500,13 +500,7 @@ export interface EvalReport {
   /** Written by: embedding. */
   corpusSize?: number | undefined;
   /** Retrieval metrics of the untrained base encoder. Written by: embedding. */
-  baseline?: {
-    recallAt1: number | null;
-    recallAt5: number | null;
-    recallAt10: number | null;
-    mrr: number | null;
-    [key: string]: unknown;
-  } | null | undefined;
+  baseline?: RetrievalMetrics | null | undefined;
   [key: string]: unknown;
 }
 
@@ -603,7 +597,6 @@ export interface FilterDatasetRequest {
   name?: string | undefined;
 }
 
-/** starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host. */
 export interface GpuInfo {
   name: string;
   memoryGb: number;
@@ -737,7 +730,7 @@ export interface MetricEvent {
   attempt: number;
   timestamp: string;
   step: number;
-  metric: MetricPoint | null;
+  metric: MetricPoint;
 }
 
 export interface MetricPoint {
@@ -760,7 +753,7 @@ export interface MetricPoint {
 export interface MetricsPage {
   runId: string;
   status: RunStatus;
-  data: Array<MetricPoint | null>;
+  data: Array<MetricPoint>;
   /** Pass back as `cursor` for the next page; null on the last page (every list endpoint). */
   nextCursor: string | null;
   /** Cursor after the newest point returned so far; pass it back as `cursor` to poll for points written later (tailing a running run). */
@@ -793,6 +786,7 @@ export interface PhaseEvent {
   queuePosition: number | null;
   /** queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line. */
   message: string | null;
+  /** starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host. */
   gpu: GpuInfo | null;
 }
 
@@ -1076,6 +1070,7 @@ export interface ResolvedRunConfig {
   };
   /** The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers). */
   labelEvalId: string | null;
+  /** Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference). */
   baseArtifact: BaseArtifact | null;
   /** The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...). */
   recipeParams: Record<string, unknown>;
@@ -1092,6 +1087,14 @@ export interface ResolvedRunConfig {
 
 export interface ResumeRunRequest {
   maxCostUsd?: number | undefined;
+}
+
+export interface RetrievalMetrics {
+  recallAt1: number | null;
+  recallAt5: number | null;
+  recallAt10: number | null;
+  mrr: number | null;
+  [key: string]: unknown;
 }
 
 /** DistillRecipe: on_policy (default) samples answers from the student and the trainer scores them with the teacher's top-k logits; off_policy has the teacher answer each prompt once through the inference endpoint and trains the student on those answers. */
@@ -1289,6 +1292,7 @@ export interface Source {
   pendingFull: boolean;
   /** When the last successful sync finished. */
   lastSyncedAt: string | null;
+  /** The most recent sync, running or finished. */
   lastSync: SourceSync | null;
   createdAt: string;
   updatedAt: string;
@@ -1307,7 +1311,6 @@ export interface SourceProvider {
   filters?: Record<string, unknown> | undefined;
 }
 
-/** The most recent sync, running or finished. */
 export interface SourceSync {
   importId: string;
   status: "queued" | "running" | "completed" | "failed";

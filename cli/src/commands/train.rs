@@ -1,8 +1,9 @@
 //! `grad train` and `grad runs`.
 
 use grad_sdk::{
-    Artifact, AttemptKind, Client, Error as SdkError, EvalReport, MetricPoint, MetricsQuery,
-    PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunFilter, RunPhase, RunStatus,
+    Artifact, ArtifactFormat, AttemptKind, Client, Error as SdkError, EvalReport, MetricPoint,
+    MetricsQuery, PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunFilter, RunPhase,
+    RunStatus,
 };
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -669,7 +670,7 @@ async fn report_finished(ctx: &Ctx, c: &Client, run: &Run) -> Option<Artifact> {
     match &artifact {
         Some(a) => {
             out.line(format!("✓ Exported artifact {}", a.reference()));
-            if a.format.as_ref().map(|f| f.as_str()) == Some("reference") {
+            if a.format == ArtifactFormat::Reference {
                 out.line("  This is a reference-backend test artifact; it cannot be deployed.");
             } else {
                 out.line(format!(
