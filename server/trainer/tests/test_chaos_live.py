@@ -183,6 +183,7 @@ class ChaosLiveTest(unittest.TestCase):
         http(f"{self.api}/v1/datasets/chaos/records", "POST", {"records": records(60)})
         worker = self.start_worker("a", worker_id="chaos-fixed")
         control = self.wait_run(self.new_run("control"))
+        self.assertEqual((control["status"], control["attempt"]), ("completed", 1), self.why(control["id"]))
         run_id = self.new_run("restart")
         deadline = time.time() + 60
         while len(self.get(f"/v1/runs/{run_id}/checkpoints")["data"]) < 2 and time.time() < deadline:
@@ -196,7 +197,7 @@ class ChaosLiveTest(unittest.TestCase):
 
         self.start_worker("b", worker_id="chaos-fixed")
         final = self.wait_run(run_id)
-        self.assertEqual((final["status"], final["attempt"]), ("completed", 2), final)
+        self.assertEqual((final["status"], final["attempt"]), ("completed", 2), f"{final.get('last_interruption')}\n{self.why(run_id)}")
         self.assertEqual(final["tokens_processed"], at_kill["tokens_processed"] + control["tokens_processed"] - tokens_at_resume)
 
 
