@@ -1066,26 +1066,10 @@ export const createRunLifecycle = (
       const cost = runCost(run, attemptTokens);
       // One step's point is stored once per attempt (a retry returns it), and
       // only while this worker still holds the lease.
+      // One transaction, one run write: the event insert takes the job row's
+      // lock, and the fenced update fails the whole write if the lease moved
+      // (p1-scale: two run updates made ~16 round trips per point).
       const updated = await store.transaction(async () => {
-        const fenced = await store.runs.update(
-          id,
-          {
-            attempt_tokens: attemptTokens,
-            lease_expires_at: addSeconds(
-              clock.now(),
-              run.lease_seconds,
-            ).toISOString(),
-          },
-          fenceOf(run),
-        );
-        if (!fenced) throw leaseLost(id);
-        metrics.trainingTokens.inc(
-          {
-            recipe_kind: run.recipe_kind,
-            model_family: modelFamily(run.resolved_config.model),
-          },
-          attemptTokens - run.attempt_tokens,
-        );
         const point = toMetricPoint(
           await store.jobs.appendEvent({
             jobId: run.id,
@@ -1099,19 +1083,35 @@ export const createRunLifecycle = (
             },
           }),
         );
-
-        // Bill the attempt in increments (every N tokens or minutes).
-        await usage.flush(fenced, attemptUsage(fenced, attemptTokens), false);
-
-        return (
-          (await store.runs.update(id, {
+        const fenced = await store.runs.update(
+          id,
+          {
+            attempt_tokens: attemptTokens,
+            lease_expires_at: addSeconds(
+              clock.now(),
+              run.lease_seconds,
+            ).toISOString(),
             current_step: Math.max(run.current_step, point.step),
             latest_metric:
               point.step >= (run.latest_metric?.step ?? -1)
                 ? point
                 : run.latest_metric,
-          })) ?? fenced
+          },
+          fenceOf(run),
         );
+        if (!fenced) throw leaseLost(id);
+        metrics.trainingTokens.inc(
+          {
+            recipe_kind: run.recipe_kind,
+            model_family: modelFamily(run.resolved_config.model),
+          },
+          attemptTokens - run.attempt_tokens,
+        );
+
+        // Bill the attempt in increments (every N tokens or minutes).
+        await usage.flush(fenced, attemptUsage(fenced, attemptTokens), false);
+
+        return fenced;
       });
 
       const reason = stopReason(updated);
