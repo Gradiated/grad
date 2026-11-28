@@ -795,6 +795,17 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(result["status"], "abandoned")
         self.assertIn("truncated or corrupt", srv.bodies("complete")[0]["error"])
 
+    def test_a_full_disk_hands_the_attempt_back(self) -> None:
+        # The worker's disk, not the run: another worker may have room.
+        import errno
+
+        srv = self.server(jobs=[train_job()])
+        full = OSError(errno.ENOSPC, "No space left on device")
+        with mock.patch.object(worker_module.MergedDataset, "from_parts", side_effect=full):
+            result = self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
+        self.assertEqual(result["status"], "abandoned")
+        self.assertIn("No space left", srv.bodies("complete")[0]["error"])
+
     def test_a_transient_model_download_failure_hands_the_attempt_back(self) -> None:
         from grad_trainer.errors import ModelUnavailableError
 

@@ -13,6 +13,7 @@ timeout, 5xx): the replay is stored once.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import http.client
@@ -1387,7 +1388,10 @@ class TrainerWorker:
 
 def _transient(exc: BaseException) -> bool:
     """A failure another attempt may not hit: grad-server or storage unreachable or answering
-    429/5xx, a download cut short, a model download that failed on the network."""
+    429/5xx, a download cut short, a model download that failed on the network, this
+    worker's disk full."""
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return True
     return bool(getattr(exc, "transient", False))
 
 
