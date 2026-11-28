@@ -245,12 +245,38 @@ export const Confirm = ({ title, body, confirm, danger, onConfirm, onClose }: { 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  // Mount only: callers pass a new onClose every render, and re-running this would
+  // pull focus back to the button on each keystroke in the dialog's fields.
   useEffect(() => {
-    ref.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const opener = document.activeElement as HTMLElement | null;
+    // A field first; otherwise Cancel for a destructive action (Enter mustn't delete), else the action.
+    (dialog.current?.querySelector<HTMLElement>("input, select, textarea") ?? (danger ? cancel.current : ref.current))?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close.current();
+      if (e.key !== "Tab" || !dialog.current) return;
+      // Keep Tab inside the dialog (aria-modal): wrap from the last control to the first.
+      const all = [...dialog.current.querySelectorAll<HTMLElement>("button:not(:disabled), input, select, textarea, a[href]")];
+      const first = all[0];
+      const last = all[all.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    };
     addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const go = async () => {
     setBusy(true);
     setError(null);
@@ -264,12 +290,12 @@ export const Confirm = ({ title, body, confirm, danger, onConfirm, onClose }: { 
   };
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div ref={dialog} className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <h2 id="dialog-title">{title}</h2>
         <div>{body}</div>
         <ErrorBanner error={error} />
         <div className="actions">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+          <button ref={cancel} type="button" className="btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>
           <button ref={ref} type="button" className={`btn ${danger ? "danger solid" : "primary"}`} onClick={() => void go()} disabled={busy}>

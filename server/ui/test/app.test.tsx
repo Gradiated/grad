@@ -211,6 +211,9 @@ describe("runs", () => {
     await type(container.querySelector("input[type=search]"), "router");
     await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(1));
     expect(location.search).toBe("?q=router");
+    // A tab change is a history entry (Back undoes it); typing in the filter is not.
+    history.back();
+    await waitFor(() => expect(location.search).toBe("?status=stopped"));
     expect(server.calls.some((c) => c.path === "/v1/runs?limit=50&q=router")).toBe(true);
     await type(container.querySelector("input[type=search]"), "zzz");
     await waitFor(() => expect(container.textContent).toContain("No runs match"));
@@ -421,11 +424,40 @@ describe("runs", () => {
     );
     const { container } = await boot(server, `/runs/${RUN_ID}`);
     await waitFor(() => expect(byText(container, "button", "Promote")).toBeTruthy());
-    await click(byText(container, "button", "Promote"));
-    await type(container.querySelector("#promote-name"), "my-model");
+    const opener = byText(container, "button", "Promote") as HTMLButtonElement;
+    opener.focus();
+    await click(opener);
+    // The field has focus and keeps it while typing: each keystroke re-renders the page.
+    const field = container.querySelector<HTMLInputElement>("#promote-name");
+    expect(document.activeElement).toBe(field);
+    for (const value of ["m", "my", "my-"]) {
+      await type(field, value);
+      expect(document.activeElement).toBe(field);
+    }
+    await type(field, "my-model");
     await click(byText(container, ".dialog button", "Promote"));
     await waitFor(() => expect(container.textContent).toContain("Promoted to my-model@2026-11-27-2"));
     expect(promoted[0]).toMatch(/^\/v1\/checkpoints\/ckpt_\w+\/promote \{"name":"my-model"\}$/);
+  });
+
+  it("traps Tab in a destructive dialog, focuses Cancel first, and returns focus to its opener", async () => {
+    const { container } = await boot(fakeServer(routes({ "GET /v1/runs/run_q1/events": () => sse("") })), "/runs/run_q1");
+    await waitFor(() => expect(byText(container, ".page-header button", "Cancel")).toBeTruthy());
+    const opener = byText(container, ".page-header button", "Cancel") as HTMLButtonElement;
+    opener.focus();
+    await click(opener);
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>(".dialog button")];
+    expect(document.activeElement?.textContent).toBe("Cancel");
+    buttons.at(-1)?.focus();
+    await act(async () => {
+      dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    });
+    expect(document.activeElement).toBe(buttons[0]);
+    await act(async () => {
+      dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(container.querySelector(".dialog")).toBeNull();
+    expect(document.activeElement).toBe(opener);
   });
 
   it("cancels an active run and resumes a failed one with a new cap", async () => {

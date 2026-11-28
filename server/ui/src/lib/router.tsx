@@ -20,9 +20,13 @@ export const navigate = (to: string, opts: { replace?: boolean } = {}): void => 
 export const RouterProvider = ({ children }: { children: ReactNode }) => {
   const [loc, setLoc] = useState(current);
   useEffect(() => {
+    let path = current().path;
     const on = () => {
-      setLoc(current());
-      window.scrollTo?.(0, 0);
+      const next = current();
+      // A new page starts at the top; a query change (a tab, a search) keeps the scroll.
+      if (next.path !== path) window.scrollTo?.(0, 0);
+      path = next.path;
+      setLoc(next);
     };
     addEventListener("popstate", on);
     return () => removeEventListener("popstate", on);
@@ -52,15 +56,19 @@ export const match = (pattern: string, path: string): Record<string, string> | n
   return params;
 };
 
-/** Replaces query parameters in the current URL without adding history entries. */
-export const setQuery = (updates: Record<string, string | undefined>): void => {
+/**
+ * Sets query parameters in the current URL as a new history entry, so Back
+ * undoes a tab or select change; `replace` (a search box, per keystroke) doesn't add one.
+ */
+export const setQuery = (updates: Record<string, string | undefined>, opts: { replace?: boolean } = {}): void => {
   const q = new URLSearchParams(location.search);
   for (const [k, v] of Object.entries(updates)) {
     if (v === undefined || v === "") q.delete(k);
     else q.set(k, v);
   }
   const s = q.toString();
-  navigate(`${location.pathname}${s ? `?${s}` : ""}`, { replace: true });
+  const to = `${location.pathname}${s ? `?${s}` : ""}`;
+  if (to !== `${location.pathname}${location.search}`) navigate(to, opts);
 };
 
 export const Link = ({ href, children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => {

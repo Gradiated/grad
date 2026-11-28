@@ -60,7 +60,7 @@ export const RunsPage = () => {
           ]}
         />
         <div className="grow" />
-        <SearchBox value={q} onChange={(v) => setQuery({ q: v })} placeholder="Filter by name or id" label="Filter runs" />
+        <SearchBox value={q} onChange={(v) => setQuery({ q: v }, { replace: true })} placeholder="Filter by name or id" label="Filter runs" />
       </div>
 
       <ErrorBanner error={list.error} onRetry={list.reload} stale={list.items.length > 0} />
