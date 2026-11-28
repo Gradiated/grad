@@ -42,5 +42,14 @@ whose typed fields each client reads back; every column below replays it.
 | `wait()` raises for every unsuccessful terminal status (`failed`, `cancelled`, `stopped_budget`; code `run_<status>`) | `test_resources.RunTests.test_wait_timeout_and_failure` | `runs.test.ts` | `runs_test.go` | `Error::RunFailed` | exit 7 (`cli.rs::unsuccessful_runs_exit_7_with_a_next_step`) |
 | Usage reporting: `GET /v1/usage/summary` (totals, by kind, top runs and evals, `group_by` day/week/month/model/recipe/kind; default period the current UTC month) and `GET /v1/usage` filters (`from`/`to`, `run_id`, `eval_id`, `kind`); bounds are dates or timestamps, strings or native types | `client.usage.summary(from_=, to=, group_by=)` (`print()` it), `client.usage.list(from_=, to=, run_id=, eval_id=, kind=)`, `date`/`datetime` bounds; cases `list_usage_filtered`, `usage_summary`; `test_sources.UsageTests` | `grad.usage.summary({ from, to, groupBy })`, `grad.usage.list({ from, to, runId, evalId, kind })`, `Date` bounds; same cases; `sources.test.ts` "usage" | `c.Usage.Summary(ctx, grad.WithUsageFrom(...), grad.WithUsageGroupBy(grad.UsageByModel))`, `c.Usage.List(ctx, grad.WithUsageRun(id), grad.WithUsageKind(grad.UsageLabeling))`, `string` or `time.Time` bounds; same cases; `TestUsageSummary`, `TestUsageFiltersAndTimeBounds` | `c.usage().summary(&UsageSummaryQuery::new().group_by(UsageGroupBy::Model))`, `c.usage().list(&UsageQuery::new().run(id).kind(UsageKind::Labeling))`, `&str` or `SystemTime` bounds (`UsageBound::parse` checks one); same cases; `sources.rs::usage_list_all_keeps_filters_on_every_page_and_summary_decodes` | `grad usage [--from --to --by]`, `grad usage list [--run --eval --kind --from --to]`; `cli.rs::usage_summary_breaks_down_the_period`, `usage_list_filters_and_resolves_names` |
 
+Two more shared fixtures pin the HTTP behaviour every SDK must agree on:
+`tests/fixtures/wire/errors.json` (problem+json to typed error) and
+`tests/fixtures/wire/retries.json` (which statuses each method retries, `Retry-After`,
+`queue_limit`, one `Idempotency-Key` across a POST's retries), replayed by
+`test_retries.py`, `retries.test.ts`, `retries_test.go` and `tests/retries.rs`. The shared
+defaults: a 60 s per-attempt timeout until the response headers (none for uploads, which
+only the caller cancels), 2 retries with exponential backoff (0.5 s doubling to 8 s, 50-100%
+jitter), and a `Retry-After` above 60 s raises at once instead of blocking.
+
 Each SDK also runs its own live suite against `tests/harness/stack.ts`
 (`tests/test_live.py`, `test/live/`, `live_test.go`, `cli/tests/live.rs`).

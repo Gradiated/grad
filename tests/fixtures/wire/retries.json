@@ -1,0 +1,403 @@
+{
+  "description": "Retry policy every SDK replays through its public API with max_retries=2 (the default). GET is datasets.list (first page), POST is datasets.create('d') (it carries an Idempotency-Key), DELETE is secrets.delete('s'). `responses` are served in order; a 2xx gets the operation's success body. `expect.attempts` is the number of HTTP requests, `expect.error` the typed error class (null: the call succeeds), `expect.sleeps_ms` the waits between attempts when they are fixed by Retry-After (omitted: jittered backoff). Every attempt of the POST must carry the same non-empty Idempotency-Key.",
+  "cases": [
+    {
+      "name": "GET retries a 503 and succeeds",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 503,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "unavailable",
+            "status": 503,
+            "detail": "unavailable detail",
+            "code": "unavailable"
+          }
+        },
+        {
+          "status": 200
+        }
+      ],
+      "expect": {
+        "attempts": 2,
+        "error": null
+      }
+    },
+    {
+      "name": "GET gives up after max_retries (2) and raises ServerError",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 503,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "unavailable",
+            "status": 503,
+            "detail": "unavailable detail",
+            "code": "unavailable"
+          }
+        },
+        {
+          "status": 503,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "unavailable",
+            "status": 503,
+            "detail": "unavailable detail",
+            "code": "unavailable"
+          }
+        },
+        {
+          "status": 503,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "unavailable",
+            "status": 503,
+            "detail": "unavailable detail",
+            "code": "unavailable"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 3,
+        "error": "ServerError"
+      }
+    },
+    {
+      "name": "GET retries a 500 then a 504",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 500,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "internal",
+            "status": 500,
+            "detail": "internal detail",
+            "code": "internal"
+          }
+        },
+        {
+          "status": 504,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "gateway_timeout",
+            "status": 504,
+            "detail": "gateway_timeout detail",
+            "code": "gateway_timeout"
+          }
+        },
+        {
+          "status": 200
+        }
+      ],
+      "expect": {
+        "attempts": 3,
+        "error": null
+      }
+    },
+    {
+      "name": "GET retries a 408",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 408,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "request_timeout",
+            "status": 408,
+            "detail": "request_timeout detail",
+            "code": "request_timeout"
+          }
+        },
+        {
+          "status": 200
+        }
+      ],
+      "expect": {
+        "attempts": 2,
+        "error": null
+      }
+    },
+    {
+      "name": "GET honours Retry-After on a 429",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 429,
+          "headers": {
+            "content-type": "application/problem+json",
+            "retry-after": "2"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "rate_limited",
+            "status": 429,
+            "detail": "rate_limited detail",
+            "code": "rate_limited"
+          }
+        },
+        {
+          "status": 200
+        }
+      ],
+      "expect": {
+        "attempts": 2,
+        "error": null,
+        "sleeps_ms": [
+          2000
+        ]
+      }
+    },
+    {
+      "name": "GET raises at once when Retry-After exceeds 60 s",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 429,
+          "headers": {
+            "content-type": "application/problem+json",
+            "retry-after": "120"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "rate_limited",
+            "status": 429,
+            "detail": "rate_limited detail",
+            "code": "rate_limited"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "error": "RateLimitError",
+        "sleeps_ms": []
+      }
+    },
+    {
+      "name": "429 queue_limit is never retried",
+      "method": "POST",
+      "responses": [
+        {
+          "status": 429,
+          "headers": {
+            "content-type": "application/problem+json",
+            "retry-after": "1"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "queue_limit",
+            "status": 429,
+            "detail": "queue_limit detail",
+            "code": "queue_limit"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "error": "QueueLimitError",
+        "sleeps_ms": []
+      }
+    },
+    {
+      "name": "GET never retries a 404",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 404,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "not_found",
+            "status": 404,
+            "detail": "not_found detail",
+            "code": "not_found"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "error": "NotFoundError",
+        "sleeps_ms": []
+      }
+    },
+    {
+      "name": "GET never retries a 422",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 422,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "validation_error",
+            "status": 422,
+            "detail": "validation_error detail",
+            "code": "validation_error"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "error": "ValidationError",
+        "sleeps_ms": []
+      }
+    },
+    {
+      "name": "GET never retries a 501",
+      "method": "GET",
+      "responses": [
+        {
+          "status": 501,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "inference_unavailable",
+            "status": 501,
+            "detail": "inference_unavailable detail",
+            "code": "inference_unavailable"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "error": "InferenceUnavailableError",
+        "sleeps_ms": []
+      }
+    },
+    {
+      "name": "a keyed POST retries a 503 with the same Idempotency-Key",
+      "method": "POST",
+      "responses": [
+        {
+          "status": 503,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "unavailable",
+            "status": 503,
+            "detail": "unavailable detail",
+            "code": "unavailable"
+          }
+        },
+        {
+          "status": 200
+        }
+      ],
+      "expect": {
+        "attempts": 2,
+        "error": null
+      }
+    },
+    {
+      "name": "a keyed POST retries a 409 with Retry-After (first attempt still running)",
+      "method": "POST",
+      "responses": [
+        {
+          "status": 409,
+          "headers": {
+            "content-type": "application/problem+json",
+            "retry-after": "1"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "idempotency_in_progress",
+            "status": 409,
+            "detail": "idempotency_in_progress detail",
+            "code": "idempotency_in_progress"
+          }
+        },
+        {
+          "status": 200
+        }
+      ],
+      "expect": {
+        "attempts": 2,
+        "error": null,
+        "sleeps_ms": [
+          1000
+        ]
+      }
+    },
+    {
+      "name": "a 409 without Retry-After is a conflict, not retried",
+      "method": "POST",
+      "responses": [
+        {
+          "status": 409,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "conflict",
+            "status": 409,
+            "detail": "conflict detail",
+            "code": "conflict"
+          }
+        }
+      ],
+      "expect": {
+        "attempts": 1,
+        "error": "ConflictError",
+        "sleeps_ms": []
+      }
+    },
+    {
+      "name": "DELETE retries a 502",
+      "method": "DELETE",
+      "responses": [
+        {
+          "status": 502,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "body": {
+            "type": "about:blank",
+            "title": "bad_gateway",
+            "status": 502,
+            "detail": "bad_gateway detail",
+            "code": "bad_gateway"
+          }
+        },
+        {
+          "status": 204
+        }
+      ],
+      "expect": {
+        "attempts": 2,
+        "error": null
+      }
+    }
+  ]
+}

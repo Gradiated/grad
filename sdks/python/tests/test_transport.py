@@ -189,9 +189,10 @@ class RetryTests(unittest.TestCase):
         client, _, clock = make_client({"GET /v1/base-models": [problem(429, "slow", **{"retry-after": "4"}), json_reply({"data": []})]})
         client.models.list()
         self.assertEqual(clock.sleeps, [4.0])
-        client, _, clock = make_client({"GET /v1/base-models": [problem(503, "slow", **{"retry-after": "9999"}), json_reply({"data": []})]})
-        client.models.list()
-        self.assertEqual(clock.sleeps, [60.0])
+        client, sender, clock = make_client({"GET /v1/base-models": [problem(503, "slow", **{"retry-after": "9999"}), json_reply({"data": []})]})
+        with self.assertRaises(grad.ServerError) as ctx:
+            client.models.list()
+        self.assertEqual((clock.sleeps, len(sender.sent), ctx.exception.retry_after), ([], 1, 9999.0), "a wait over 60 s raises at once")
 
     def test_client_errors_are_not_retried(self) -> None:
         for status in (400, 401, 403, 404, 409, 422):

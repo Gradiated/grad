@@ -9,7 +9,7 @@
 //!   429 and on connection failures where the request never left the client.
 //!   A 429 `queue_limit` (the workspace's queued-jobs cap) is never retried:
 //!   it returns `Error::QueueLimit` at once.
-//! - `Retry-After` (seconds) is honoured, capped at 60 s.
+//! - `Retry-After` (seconds) is honoured; one above 60 s returns the error at once.
 //! - Redirects are followed by hand: only same-origin GET/HEAD redirects are
 //!   followed, so a bearer token never reaches another origin and a POST is
 //!   never silently turned into a GET.
@@ -452,8 +452,14 @@ impl Transport {
                     let ra = err.api().and_then(|b| b.retry_after);
                     // 429 queue_limit is the workspace's queued-jobs cap, not rate limiting.
                     let capped = matches!(err, Error::QueueLimit(_));
-                    if !capped && attempt < self.max_retries && retryable_status(req, status, ra) {
-                        Some(ra.map(|d| d.min(MAX_RETRY_AFTER)))
+                    // A Retry-After longer than a call should block returns the error at once.
+                    let too_long = ra.is_some_and(|d| d > MAX_RETRY_AFTER);
+                    if !capped
+                        && !too_long
+                        && attempt < self.max_retries
+                        && retryable_status(req, status, ra)
+                    {
+                        Some(ra)
                     } else {
                         return Err(err);
                     }

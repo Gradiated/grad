@@ -3,7 +3,7 @@
 HTTP itself is ``httpx`` (pooling, proxies, streaming). This module adds the policy:
 
 * Retries (``max_retries``, default 2) use exponential backoff with jitter and honour
-  ``Retry-After``. GET/HEAD/PUT/DELETE, and every request that carries an
+  ``Retry-After`` (a ``Retry-After`` above 60 s raises at once instead). GET/HEAD/PUT/DELETE, and every request that carries an
   ``Idempotency-Key``, are retried on 408/429/500/502/503/504 and on connection
   failures. The generated client sends a fresh UUIDv4 key with every POST the server
   accepts one for (or the caller's ``idempotency_key=``) and reuses it across retries,
@@ -177,6 +177,9 @@ class Transport:
     def _retry_status(self, method: str, status: int, attempt: int, *, keyed: bool, retry_after: float | None) -> bool:
         if attempt >= self.retry.max_retries:
             return False
+        if retry_after is not None and retry_after > self.retry.max_retry_after:
+            # The server asks for a longer wait than a call should block: raise (with retry_after).
+            return False
         if status == 409:
             # The first attempt with this Idempotency-Key is still running server-side.
             return keyed and retry_after is not None
@@ -191,7 +194,7 @@ class Transport:
 
     def _backoff(self, attempt: int, retry_after: float | None) -> float:
         if retry_after is not None:
-            return min(retry_after, self.retry.max_retry_after)
+            return retry_after
         base: float = min(self.retry.max_backoff, self.retry.initial_backoff * (2.0**attempt))
         return base * (0.5 + self.clock.random() / 2)
 
