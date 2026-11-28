@@ -131,9 +131,6 @@ export interface DatasetService {
  * Parts are gzip-compressed and content-addressed by their uncompressed
  * JSONL: `ws/<ws>/datasets/<dataset>/<sha256>.jsonl.gz`.
  */
-/** Records read per page while rendering a preview. */
-const RENDER_PAGE = 100;
-
 export const datasetPartKey = (
   workspaceId: string,
   datasetId: string,
@@ -302,31 +299,24 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
       );
     }
 
-    // Page through the merged records only until `limit` conversations.
+    // Reads the merged records a page at a time, only until `limit` conversations.
+    const { version } = await resolve(workspaceId, name);
     const examples: RenderDatasetResponse["examples"] = [];
     let position = 0;
-    let cursor: string | undefined;
-    do {
-      const page = await listRecords(workspaceId, name, {
-        limit: RENDER_PAGE,
-        cursor,
-      });
-      for (const record of page.data) {
-        position += 1;
-        const messages = recordConversation(record);
-        if (messages.length === 0) continue;
-        examples.push(
-          renderMessages(record.id ?? `rec_${position}`, messages, {
-            templateRevision: model.template_revision,
-            train_on: input.train_on,
-            thinking: input.thinking,
-            preserve_thinking: input.preserve_thinking,
-          }),
-        );
-        if (examples.length === input.limit) break;
-      }
-      cursor = page.next_cursor ?? undefined;
-    } while (cursor !== undefined && examples.length < input.limit);
+    for await (const record of records(version)) {
+      position += 1;
+      const messages = recordConversation(record);
+      if (messages.length === 0) continue;
+      examples.push(
+        renderMessages(record.id ?? `rec_${position}`, messages, {
+          templateRevision: model.template_revision,
+          train_on: input.train_on,
+          thinking: input.thinking,
+          preserve_thinking: input.preserve_thinking,
+        }),
+      );
+      if (examples.length === input.limit) break;
+    }
 
     return {
       dataset: name,
