@@ -7,6 +7,15 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **Server at scale** (measured with 1k workspaces, 100k runs, 10M job events, a 1M-record dataset, 200
+  workers and 5,000 event streams): every open run event stream leaked memory until the API ran out (upstream
+  `@hono/node-server` bug, now 2.1.11); run plans, eval plans and dataset filters no longer load a whole dataset
+  version (a plan on more than 100k records is estimated from a spread sample and says so); a push, import or
+  source sync indexes only the new parts instead of the whole dataset, and parts are (de)compressed off the event
+  loop; idle workers polling a queue they can't take from no longer contend on the claim lock or the database
+  pool; the waiting-for-compute and job-event retention sweeps keep up with 100k queued runs and thousands of
+  events a second; each run event is serialized once for all its streams; migration 0011 adds the indexes that
+  workspace purges and `GET /v1/usage?run_id=` were missing, and the usage reports skip Postgres JIT.
 - **SDKs: one name per verb.** `sources.delete` (Python, TS), `Sources.Delete` (Go) and `sources().delete` (Rust)
   replace `remove`, which stays as a deprecated alias (it shipped in 0.2.0-alpha.7); `grad sources delete` is the
   CLI verb and `remove` its alias. **Breaking (Go):** `Runs.Resume(ctx, id, grad.ResumeOptions{MaxCostUSD: 10})`
