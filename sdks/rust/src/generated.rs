@@ -1379,10 +1379,15 @@ pub struct PlanRunRequest {
 #[serde(default)]
 pub struct PlanRunResponse {
     pub resolved_config: ResolvedRunConfig,
+    /// The dataset version the run would pin.
     pub dataset_version: i64,
+    /// Records the recipe can train on (the rest are skipped; a warning says why).
     pub usable_records: i64,
+    /// Records in the dataset version.
     pub total_records: i64,
+    /// Optimizer steps the run would take.
     pub estimated_steps: i64,
+    /// Tokens the run would process (billed tokens).
     pub estimated_tokens: i64,
     /// Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling, recipe.evals). See cost_breakdown.
     pub estimated_cost_usd: f64,
@@ -1390,7 +1395,9 @@ pub struct PlanRunResponse {
     pub estimated_duration_s: i64,
     /// GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown.
     pub min_gpu_memory_gb: Option<f64>,
+    /// The base model's price, USD per million tokens.
     pub price_per_million_tokens: f64,
+    /// The share of tokens that are trained on (the loss mask), the rest being prompt context.
     pub trained_token_fraction: f64,
     /// The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
     pub labeling: Option<PlanRunResponseLabeling>,

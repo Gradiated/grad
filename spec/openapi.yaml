@@ -1276,18 +1276,23 @@ components:
         dataset_version:
           type: integer
           minimum: 0
+          description: The dataset version the run would pin.
         usable_records:
           type: integer
           minimum: 0
+          description: Records the recipe can train on (the rest are skipped; a warning says why).
         total_records:
           type: integer
           minimum: 0
+          description: Records in the dataset version.
         estimated_steps:
           type: integer
           minimum: 0
+          description: Optimizer steps the run would take.
         estimated_tokens:
           type: integer
           minimum: 0
+          description: Tokens the run would process (billed tokens).
         estimated_cost_usd:
           type: number
           minimum: 0
@@ -1308,10 +1313,12 @@ components:
         price_per_million_tokens:
           type: number
           exclusiveMinimum: 0
+          description: The base model's price, USD per million tokens.
         trained_token_fraction:
           type: number
           minimum: 0
           maximum: 1
+          description: The share of tokens that are trained on (the loss mask), the rest being prompt context.
         labeling:
           type:
             - object

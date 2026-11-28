@@ -856,10 +856,15 @@ export interface PlanRunRequest {
 
 export interface PlanRunResponse {
   resolvedConfig: ResolvedRunConfig;
+  /** The dataset version the run would pin. */
   datasetVersion: number;
+  /** Records the recipe can train on (the rest are skipped; a warning says why). */
   usableRecords: number;
+  /** Records in the dataset version. */
   totalRecords: number;
+  /** Optimizer steps the run would take. */
   estimatedSteps: number;
+  /** Tokens the run would process (billed tokens). */
   estimatedTokens: number;
   /** Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling, recipe.evals). See cost_breakdown. */
   estimatedCostUsd: number;
@@ -867,7 +872,9 @@ export interface PlanRunResponse {
   estimatedDurationS: number;
   /** GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown. */
   minGpuMemoryGb: number | null;
+  /** The base model's price, USD per million tokens. */
   pricePerMillionTokens: number;
+  /** The share of tokens that are trained on (the loss mask), the rest being prompt context. */
   trainedTokenFraction: number;
   /** The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt. */
   labeling: {

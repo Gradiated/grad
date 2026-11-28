@@ -390,11 +390,28 @@ export type ResolvedRunConfig = z.infer<typeof ResolvedRunConfigSchema>;
 export const PlanRunResponseSchema = z
   .object({
     resolved_config: ResolvedRunConfigSchema,
-    dataset_version: z.number().int().min(0),
-    usable_records: z.number().int().min(0),
-    total_records: z.number().int().min(0),
-    estimated_steps: z.number().int().min(0),
-    estimated_tokens: z.number().int().min(0),
+    dataset_version: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "The dataset version the run would pin." }),
+    usable_records: z.number().int().min(0).openapi({
+      description:
+        "Records the recipe can train on (the rest are skipped; a warning says why).",
+    }),
+    total_records: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Records in the dataset version." }),
+    estimated_steps: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Optimizer steps the run would take." }),
+    estimated_tokens: z.number().int().min(0).openapi({
+      description: "Tokens the run would process (billed tokens).",
+    }),
     estimated_cost_usd: z.number().min(0).openapi({
       description:
         "Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling, recipe.evals). See cost_breakdown.",
@@ -407,8 +424,13 @@ export const PlanRunResponseSchema = z
       description:
         "GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown.",
     }),
-    price_per_million_tokens: z.number().positive(),
-    trained_token_fraction: z.number().min(0).max(1),
+    price_per_million_tokens: z.number().positive().openapi({
+      description: "The base model's price, USD per million tokens.",
+    }),
+    trained_token_fraction: z.number().min(0).max(1).openapi({
+      description:
+        "The share of tokens that are trained on (the loss mask), the rest being prompt context.",
+    }),
     labeling: z
       .object({
         estimated_model_calls: z.number().int().min(0),

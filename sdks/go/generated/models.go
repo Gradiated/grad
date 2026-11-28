@@ -1798,20 +1798,27 @@ type PlanRunRequest struct {
 
 // PlanRunResponse is generated from the OpenAPI schema.
 type PlanRunResponse struct {
-	ResolvedConfig  ResolvedRunConfig `json:"resolved_config"`
-	DatasetVersion  int               `json:"dataset_version"`
-	UsableRecords   int               `json:"usable_records"`
-	TotalRecords    int               `json:"total_records"`
-	EstimatedSteps  int               `json:"estimated_steps"`
-	EstimatedTokens int               `json:"estimated_tokens"`
+	ResolvedConfig ResolvedRunConfig `json:"resolved_config"`
+	// DatasetVersion The dataset version the run would pin.
+	DatasetVersion int `json:"dataset_version"`
+	// UsableRecords Records the recipe can train on (the rest are skipped; a warning says why).
+	UsableRecords int `json:"usable_records"`
+	// TotalRecords Records in the dataset version.
+	TotalRecords int `json:"total_records"`
+	// EstimatedSteps Optimizer steps the run would take.
+	EstimatedSteps int `json:"estimated_steps"`
+	// EstimatedTokens Tokens the run would process (billed tokens).
+	EstimatedTokens int `json:"estimated_tokens"`
 	// EstimatedCostUSD Everything the run is expected to bill: training (and teacher) tokens, plus the evals it starts (labeling, recipe.evals). See cost_breakdown.
 	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
 	// EstimatedDurationS Wall-clock estimate in seconds on one H100 80 GB: model load and export, training at the measured tokens/s for this base and recipe, evaluations and checkpoints. Excludes queueing and any labeling eval.
 	EstimatedDurationS int `json:"estimated_duration_s"`
 	// MinGPUMemoryGb GPU memory (GB) this run needs: the base's min_gpu_memory_gb plus a teacher loaded beside it. Null when the base's requirement is unknown.
-	MinGPUMemoryGb        *float64 `json:"min_gpu_memory_gb"`
-	PricePerMillionTokens float64  `json:"price_per_million_tokens"`
-	TrainedTokenFraction  float64  `json:"trained_token_fraction"`
+	MinGPUMemoryGb *float64 `json:"min_gpu_memory_gb"`
+	// PricePerMillionTokens The base model's price, USD per million tokens.
+	PricePerMillionTokens float64 `json:"price_per_million_tokens"`
+	// TrainedTokenFraction The share of tokens that are trained on (the loss mask), the rest being prompt context.
+	TrainedTokenFraction float64 `json:"trained_token_fraction"`
 	// Labeling The labeling eval that runs before training (billed as an eval, included in estimated_cost_usd): router runs with a Judge/validator rubric replay prompts against the candidates; off-policy distill runs have the teacher answer each prompt.
 	Labeling *PlanRunResponseLabeling `json:"labeling"`
 	// Teacher On-policy distill runs: the teacher's scoring tokens at the teacher's price (included in estimated_tokens as student-price tokens, and in estimated_cost_usd).
