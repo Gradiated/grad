@@ -241,6 +241,9 @@ describe("Cloud auth: the auth_principals_v1 view, console JWTs, worker keys", (
       cloud.signJwt({ ...claims, org: undefined }),
       // A service token is for the internal listener, not the public API.
       cloud.signJwt({ ...claims, sub: "service:inference" }),
+      // Console tokens live 10 minutes: a year-long one is mis-issued or forged.
+      cloud.signJwt({ ...claims, exp: now + 365 * 86_400 }),
+      cloud.signJwt({ ...claims, exp: now + 3600 + 61 }),
     ];
     for (const token of bad) expect(await a.authenticate(token)).toBeNull();
     // Within the 60 s skew.

@@ -76,7 +76,8 @@ Auth's jwt() plugin), sent as `Authorization: Bearer` (never cookies).
 - Claims: `iss` = `GRAD_CLOUD_JWT_ISSUER`, `aud` contains `training`, `exp`
   and `nbf` with 60 s of skew, `sub` = `user:<id>`, `ws` (the workspace),
   `org`, `role` (`admin` | `member`), optional `scopes` (narrowing). The
-  product issues them for 10 minutes.
+  product issues them for 10 minutes; an `exp` more than an hour ahead is
+  refused (console and service tokens alike).
 - The JWKS is fetched once, cached, re-fetched every 10 minutes and on an
   unknown `kid` (at most once per 30 s). If it can't be fetched and none is
   cached: 503 `auth_unavailable`.

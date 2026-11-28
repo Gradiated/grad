@@ -41,6 +41,11 @@ export interface JwtVerifierOptions {
   fetchImpl?: typeof fetch;
   /** Tolerated clock skew on exp/nbf (default 60 s). */
   skewSeconds?: number;
+  /**
+   * The furthest `exp` may lie ahead (default 1 h; console tokens live 10 min,
+   * service tokens 5): a mis-issued or stolen long-lived token is refused.
+   */
+  maxLifetimeSeconds?: number;
   refreshMs?: number;
   minRefetchMs?: number;
   timeoutMs?: number;
@@ -152,6 +157,7 @@ const authUnavailable = (detail: string) =>
 export const createJwtVerifier = (options: JwtVerifierOptions): JwtVerifier => {
   const fetchFn = options.fetchImpl ?? globalThis.fetch;
   const skew = options.skewSeconds ?? 60;
+  const maxLifetime = options.maxLifetimeSeconds ?? 3600;
   const refreshMs = options.refreshMs ?? 600_000;
   const minRefetchMs = options.minRefetchMs ?? 30_000;
   let keys: Map<string, VerifyKey> | null = null;
@@ -247,6 +253,7 @@ export const createJwtVerifier = (options: JwtVerifierOptions): JwtVerifier => {
         typeof claims.sub !== "string" ||
         typeof claims.exp !== "number" ||
         claims.exp + skew <= now ||
+        claims.exp - now > maxLifetime + skew ||
         (claims.nbf !== undefined &&
           (typeof claims.nbf !== "number" || claims.nbf - skew > now))
       ) {
