@@ -110,7 +110,7 @@ describe("workspace secrets", () => {
     });
     expect(replaced.status).toBe(200);
     expect(
-      await t.services.sources.revealSecret("ws_a", "langfuse-prod", {
+      await t.services.secrets.reveal("ws_a", "langfuse-prod", {
         url: "https://cloud.langfuse.com",
         use: "test",
       }),

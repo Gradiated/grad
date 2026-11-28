@@ -7,6 +7,7 @@ import type { EvalService } from "./evals/service.js";
 import type { JobQueue } from "./jobs.js";
 import type { CheckpointService } from "./checkpoints.js";
 import type { RunLifecycle } from "./runs.js";
+import type { SecretService } from "./secrets.js";
 import type { SourceService } from "./sources.js";
 import { deleteUnreferencedBlob } from "./artifacts.js";
 import { ARTIFACTS_PREFIX, type UploadService } from "./uploads.js";
@@ -60,6 +61,7 @@ export const createMaintenance = (
     uploads: UploadService;
     usage: UsageService;
     sources: SourceService;
+    secrets: SecretService;
     workspaces?: WorkspaceLifecycle | undefined;
     telemetry?: TelemetrySampler;
   },
@@ -181,7 +183,7 @@ export const createMaintenance = (
         services.sources.tick(now),
       ),
       resealedSecrets: await step("reseal_secrets", () =>
-        services.sources.resealSecrets(),
+        services.secrets.reseal(),
       ),
       purgedWorkspaces: await step(
         "purge_workspaces",

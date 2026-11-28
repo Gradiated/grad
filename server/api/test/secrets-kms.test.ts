@@ -80,7 +80,7 @@ describe("secrets on AWS KMS (envelope encryption)", () => {
         })
       ).status,
     ).toBe(200);
-    expect(await local.services.sources.resealSecrets()).toBe(0);
+    expect(await local.services.secrets.reseal()).toBe(0);
 
     const cloud = await makeTestApp({
       store: local.deps.store,
@@ -89,7 +89,7 @@ describe("secrets on AWS KMS (envelope encryption)", () => {
     try {
       // Still readable before the move (the local key is an old key now).
       expect(
-        await cloud.services.sources.revealSecret("ws_a", "hf-token", {
+        await cloud.services.secrets.reveal("ws_a", "hf-token", {
           url: "https://huggingface.co",
           use: "HF import",
         }),
@@ -98,9 +98,9 @@ describe("secrets on AWS KMS (envelope encryption)", () => {
       expect(
         (await cloud.deps.store.secrets.getSealed("ws_a", "hf-token"))?.keyId,
       ).toBe("kms:alias/grad-secrets");
-      expect(await cloud.services.sources.resealSecrets()).toBe(0);
+      expect(await cloud.services.secrets.reseal()).toBe(0);
       expect(
-        await cloud.services.sources.revealSecret("ws_a", "hf-token", {
+        await cloud.services.secrets.reveal("ws_a", "hf-token", {
           url: "https://huggingface.co",
           use: "HF import",
         }),

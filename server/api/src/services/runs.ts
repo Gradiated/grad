@@ -40,7 +40,7 @@ import {
   workspaceInactive,
 } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
-import { assertSecretHost, loggerUrl } from "../secret-hosts.js";
+import { loggerUrl } from "../secret-hosts.js";
 import { log } from "../telemetry/log.js";
 import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
 import type {
@@ -87,6 +87,7 @@ import {
 import { holdBlob, toPublicArtifact } from "./artifacts.js";
 import { toPublicCheckpoint, type CheckpointService } from "./checkpoints.js";
 import { createRunPlanner } from "./run-plan.js";
+import type { SecretService } from "./secrets.js";
 import {
   artifactKey,
   jobBlobKey,
@@ -322,10 +323,12 @@ export const createRunLifecycle = (
     usage: UsageService;
     evals: EvalService;
     checkpoints: CheckpointService;
+    secrets: SecretService;
   },
 ): RunLifecycle => {
   const { store, storage, clock, settings } = deps;
-  const { datasets, uploads, usage, evals, checkpoints } = collaborators;
+  const { datasets, uploads, usage, evals, checkpoints, secrets } =
+    collaborators;
   const planFor = createRunPlanner(deps, { datasets, evals });
 
   const loadRun = async (
@@ -615,24 +618,17 @@ export const createRunLifecycle = (
   /**
    * The secret a logger names, or null when it can't be read (the plan
    * warned) or may no longer be sent to the logger's host (re-set since).
+   * A failure to open it (KMS, the database) fails the claim instead.
    */
-  const loggerSecret = async (
+  const loggerSecret = (
     workspaceId: string,
     name: string,
     url: string,
-  ): Promise<string | null> => {
-    if (!deps.secrets) return null;
-    const secret = await store.secrets.get(workspaceId, name);
-    const sealed = await store.secrets.getSealed(workspaceId, name);
-    if (!secret || !sealed) return null;
-    try {
-      assertSecretHost(secret, url, "logger");
-    } catch {
+  ): Promise<string | null> =>
+    secrets.reveal(workspaceId, name, { url, use: "logger" }).catch((error) => {
+      if (isTransient(error)) throw error;
       return null;
-    }
-
-    return deps.secrets.open(workspaceId, name, sealed);
-  };
+    });
 
   /** recipe.loggers with their secrets as `api_key`, for the worker only. */
   const resolveLoggers = async (

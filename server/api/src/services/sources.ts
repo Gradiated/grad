@@ -6,7 +6,6 @@ import {
   type CreateSourceRequestSchema,
   type UpdateSourceRequestSchema,
   type ImportJob,
-  type Secret,
   type Source,
   type SourceProviderKind,
 } from "../contracts.js";
@@ -21,12 +20,7 @@ import {
   unavailable,
 } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
-import {
-  assertSecretHost,
-  normaliseAllowedHosts,
-  PROVIDER_DEFAULT_HOSTS,
-} from "../secret-hosts.js";
-import { secretsUnavailable, type SecretsCipher } from "../secrets.js";
+import { PROVIDER_DEFAULT_HOSTS } from "../secret-hosts.js";
 import type {
   IdempotencyInput,
   ImportJobRecord,
@@ -34,9 +28,11 @@ import type {
   PageRequest,
   SourcePatch,
   SourceRecord,
+  Store,
 } from "../store/types.js";
 import { log } from "../telemetry/log.js";
 import { toPublicImport } from "./imports.js";
+import type { SecretService } from "./secrets.js";
 import { cloudFilters, effectiveFilters } from "./source-filters.js";
 import { loadLeased } from "./jobs.js";
 
@@ -152,48 +148,24 @@ export interface SyncRequest {
   retryAfter: number | null;
 }
 
-/** Where a secret is about to be sent: checked against its allowed_hosts. */
-export interface SecretUse {
-  url: string;
-  /** For the error message: "langfuse source", "HF import", ... */
-  use: string;
-}
+/** A paused source active again, with a fresh failure count and schedule (call holding its row lock). */
+export const resumeSource = async (
+  store: Pick<Store, "sources">,
+  now: Date,
+  source: SourceRecord,
+): Promise<SourceRecord> => {
+  if (source.status !== "paused") return source;
+  const resumed = await store.sources.update(source.id, {
+    status: "active",
+    paused_reason: null,
+    consecutive_failures: 0,
+    next_sync_at: nextScheduledSync(source.schedule, now, 0),
+  });
+
+  return resumed ?? source;
+};
 
 export interface SourceService {
-  setSecret(
-    workspaceId: string,
-    name: string,
-    value: string,
-    allowedHosts?: readonly string[] | undefined,
-  ): Promise<Secret>;
-  getSecret(workspaceId: string, name: string): Promise<Secret>;
-  listSecrets(workspaceId: string, page: PageRequest): Promise<Page<Secret>>;
-  deleteSecret(workspaceId: string, name: string): Promise<void>;
-  /**
-   * KMS mode: re-seals up to `limit` values sealed under another key (a KMS
-   * key rotated out, or a local GRAD_SECRETS_KEY being migrated onto KMS);
-   * returns how many. A value that fails is logged and retried next pass.
-   */
-  resealSecrets(limit?: number): Promise<number>;
-  /**
-   * 422 secret_not_found unless `name` exists (and secrets are configured),
-   * 422 secret_host_not_allowed unless it may be sent to `to`.
-   */
-  requireSecret(
-    workspaceId: string,
-    name: string,
-    to: SecretUse,
-  ): Promise<void>;
-  /**
-   * Plaintext for a worker claim (HF tokens, provider keys), re-checked
-   * against allowed_hosts at claim time. Never log it.
-   */
-  revealSecret(
-    workspaceId: string,
-    name: string,
-    to: SecretUse,
-  ): Promise<string>;
-
   create(
     workspaceId: string,
     datasetName: string,
@@ -258,46 +230,12 @@ const sourceUnavailable = () =>
     "The 'gradiated' source isn't available on this server: it reads traces recorded by the Gradiated Cloud gateway, and is coming soon on Gradiated Cloud. Meanwhile, connect your observability tool instead (langfuse, langsmith, braintrust, posthog or phoenix).",
   );
 
-export const createSourceService = (deps: AppDependencies): SourceService => {
+export const createSourceService = (
+  deps: AppDependencies,
+  collaborators: { secrets: SecretService },
+): SourceService => {
   const { store, clock, settings } = deps;
-
-  // The re-seal pass's position (by secret id); "" starts a new pass.
-  let resealCursor = "";
-
-  const cipher = (): SecretsCipher => {
-    if (!deps.secrets) throw secretsUnavailable();
-
-    return deps.secrets;
-  };
-
-  const revealSecret = async (
-    workspaceId: string,
-    name: string,
-    to: SecretUse,
-  ) => {
-    const secret = await store.secrets.get(workspaceId, name);
-    const sealed = await store.secrets.getSealed(workspaceId, name);
-    if (!secret || !sealed) throw notFound("secret", name);
-    assertSecretHost(secret, to.url, to.use);
-
-    return await cipher().open(workspaceId, name, sealed);
-  };
-
-  const requireSecret = async (
-    workspaceId: string,
-    name: string,
-    to: SecretUse,
-  ) => {
-    cipher();
-    const secret = await store.secrets.get(workspaceId, name);
-    if (!secret) {
-      throw invalid(
-        "secret_not_found",
-        `No secret named '${name}' in this workspace. Store it first with 'grad secrets set ${name}' (the value is read from stdin).`,
-      );
-    }
-    assertSecretHost(secret, to.url, to.use);
-  };
+  const { secrets } = collaborators;
 
   /** The host a source's requests go to: its own, else the provider's public one. */
   const sourceUrl = (kind: SourceProviderKind, host: string | null) =>
@@ -445,18 +383,8 @@ export const createSourceService = (deps: AppDependencies): SourceService => {
     return { job, retryAfter: null };
   };
 
-  /** Active again, with a fresh failure count and schedule. */
-  const resume = async (source: SourceRecord) => {
-    if (source.status !== "paused") return source;
-    const resumed = await store.sources.update(source.id, {
-      status: "active",
-      paused_reason: null,
-      consecutive_failures: 0,
-      next_sync_at: nextScheduledSync(source.schedule, clock.now(), 0),
-    });
-
-    return resumed ?? source;
-  };
+  const resume = (source: SourceRecord) =>
+    resumeSource(store, clock.now(), source);
 
   const validateProvider = async (
     workspaceId: string,
@@ -516,7 +444,7 @@ export const createSourceService = (deps: AppDependencies): SourceService => {
       );
     }
     if (secret !== null) {
-      await requireSecret(workspaceId, secret, {
+      await secrets.require(workspaceId, secret, {
         url: sourceUrl(kind as SourceProviderKind, host),
         use: `${kind} source`,
       });
@@ -546,85 +474,6 @@ export const createSourceService = (deps: AppDependencies): SourceService => {
   };
 
   return {
-    setSecret: async (workspaceId, name, value, allowedHosts) => {
-      const secret = await store.secrets.put({
-        workspaceId,
-        name,
-        sealed: await cipher().seal(workspaceId, name, value),
-        allowedHosts: normaliseAllowedHosts(allowedHosts),
-      });
-      // A new key is the usual fix for a paused source: resume its users.
-      for (const id of await store.sources.usingSecret(workspaceId, name)) {
-        await store.transaction(async () => {
-          const locked = await store.sources.lock(workspaceId, id);
-          if (locked) await resume(locked);
-        });
-      }
-
-      return secret;
-    },
-
-    getSecret: async (workspaceId, name) => {
-      const secret = await store.secrets.get(workspaceId, name);
-      if (!secret) throw notFound("secret", name);
-
-      return secret;
-    },
-
-    listSecrets: (workspaceId, page) => store.secrets.list(workspaceId, page),
-
-    deleteSecret: async (workspaceId, name) => {
-      const users = await store.sources.usingSecret(workspaceId, name);
-      if (users.length > 0) {
-        throw conflict(
-          "secret_in_use",
-          `Secret '${name}' is used by ${users.length === 1 ? "source" : "sources"} ${users.join(", ")}; remove ${users.length === 1 ? "it" : "them"} first.`,
-        );
-      }
-      if (!(await store.secrets.delete(workspaceId, name))) {
-        throw notFound("secret", name);
-      }
-    },
-
-    resealSecrets: async (limit = 100) => {
-      const secrets = deps.secrets;
-      if (!secrets?.reseals) return 0;
-      const batch = await store.secrets.listSealedNotUnder(
-        secrets.keyId,
-        resealCursor,
-        limit,
-      );
-      resealCursor = batch.length < limit ? "" : (batch.at(-1)?.id ?? "");
-      let done = 0;
-      for (const { workspaceId, name, sealed } of batch) {
-        try {
-          const next = await secrets.reseal(workspaceId, name, sealed);
-          if (
-            await store.secrets.replaceSealed(
-              workspaceId,
-              name,
-              sealed.keyId,
-              next,
-            )
-          ) {
-            done += 1;
-          }
-        } catch (error) {
-          log("error", "could not re-seal a workspace secret", {
-            workspace_id: workspaceId,
-            secret: name,
-            key_id: sealed.keyId,
-            error,
-          });
-        }
-      }
-
-      return done;
-    },
-
-    requireSecret,
-    revealSecret,
-
     create: async (workspaceId, datasetName, body, idempotency) => {
       const created = await createOnce(
         idempotency,
@@ -776,16 +625,18 @@ export const createSourceService = (deps: AppDependencies): SourceService => {
       }
 
       const secret = source.secret_name
-        ? await revealSecret(source.workspace_id, source.secret_name, {
-            url: sourceUrl(source.provider, source.host),
-            use: `${source.provider} source`,
-          }).catch((error: unknown) => {
-            if (isTransient(error)) throw error;
-            throw conflict(
-              "secret_unreadable",
-              `The source's secret '${source.secret_name}' can't be read: ${errorMessage(error)}`,
-            );
-          })
+        ? await secrets
+            .reveal(source.workspace_id, source.secret_name, {
+              url: sourceUrl(source.provider, source.host),
+              use: `${source.provider} source`,
+            })
+            .catch((error: unknown) => {
+              if (isTransient(error)) throw error;
+              throw conflict(
+                "secret_unreadable",
+                `The source's secret '${source.secret_name}' can't be read: ${errorMessage(error)}`,
+              );
+            })
         : null;
 
       return {

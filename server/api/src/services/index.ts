@@ -19,6 +19,7 @@ import { createImportService, type ImportService } from "./imports.js";
 import { createJobQueue, type JobQueue } from "./jobs.js";
 import { createMaintenance, type Maintenance } from "./maintenance.js";
 import { createRunLifecycle, type RunLifecycle } from "./runs.js";
+import { createSecretService, type SecretService } from "./secrets.js";
 import { createSourceService, type SourceService } from "./sources.js";
 import { createUploadService, type UploadService } from "./uploads.js";
 import { createUsageService, type UsageService } from "./usage.js";
@@ -39,6 +40,7 @@ export interface Services {
   evals: EvalService;
   queue: JobQueue;
   sources: SourceService;
+  secrets: SecretService;
   telemetry: TelemetrySampler;
   maintenance: Maintenance;
   /** The replica's SSE fan-out (one LISTEN + safety poll for every stream). */
@@ -51,16 +53,18 @@ export const createServices = (deps: AppDependencies): Services => {
   const datasets = createDatasetService(deps);
   const uploads = createUploadService(deps);
   const usage = createUsageService(deps);
-  const sources = createSourceService(deps);
+  const secrets = createSecretService(deps);
+  const sources = createSourceService(deps, { secrets });
   const artifacts = createArtifactService(deps);
   const checkpoints = createCheckpointService(deps);
   const artifactImports = createArtifactImportService(deps, {
     uploads,
-    sources,
+    secrets,
   });
   const imports = createImportService(deps, {
     uploads,
     sources,
+    secrets,
     datasets,
     artifactImports,
   });
@@ -71,6 +75,7 @@ export const createServices = (deps: AppDependencies): Services => {
     usage,
     evals,
     checkpoints,
+    secrets,
   });
   const queue = createJobQueue(deps, {
     train: runs.handler,
@@ -92,6 +97,7 @@ export const createServices = (deps: AppDependencies): Services => {
     uploads,
     usage,
     sources,
+    secrets,
   });
 
   return {
@@ -106,6 +112,7 @@ export const createServices = (deps: AppDependencies): Services => {
     evals,
     queue,
     sources,
+    secrets,
     telemetry,
     maintenance,
     workspaces,

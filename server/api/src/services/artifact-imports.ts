@@ -20,7 +20,7 @@ import type {
 } from "../store/types.js";
 import { leaseLost, RELEASE, fenceOf } from "./jobs.js";
 import { holdBlob, toPublicArtifact } from "./artifacts.js";
-import type { SecretUse, SourceService } from "./sources.js";
+import type { SecretService, SecretUse } from "./secrets.js";
 import {
   artifactKey,
   stagingKey,
@@ -103,11 +103,11 @@ export const createArtifactImportService = (
   deps: AppDependencies,
   collaborators: {
     uploads: UploadService;
-    sources: Pick<SourceService, "requireSecret" | "revealSecret">;
+    secrets: SecretService;
   },
 ): ArtifactImportService => {
   const { store, catalog, clock, settings } = deps;
-  const { uploads, sources } = collaborators;
+  const { uploads, secrets } = collaborators;
 
   const load = async (workspaceId: string, id: string) => {
     const job = await store.imports.get(workspaceId, id);
@@ -154,11 +154,7 @@ export const createArtifactImportService = (
           };
           if (body.source.kind === "hf") {
             if (body.source.secret !== undefined) {
-              await sources.requireSecret(
-                workspaceId,
-                body.source.secret,
-                HF_USE,
-              );
+              await secrets.require(workspaceId, body.source.secret, HF_USE);
             }
             const created = await store.imports.createArtifactImport({
               ...common,
@@ -247,7 +243,7 @@ export const createArtifactImportService = (
               revision: source.revision,
               ...(source.secret !== null
                 ? {
-                    token: await sources.revealSecret(
+                    token: await secrets.reveal(
                       job.workspace_id,
                       source.secret,
                       HF_USE,

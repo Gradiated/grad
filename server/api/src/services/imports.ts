@@ -48,11 +48,8 @@ import {
   loadForWorker,
   loadLeased,
 } from "./jobs.js";
-import {
-  isSyncPayload,
-  type SecretUse,
-  type SourceService,
-} from "./sources.js";
+import type { SecretService, SecretUse } from "./secrets.js";
+import { isSyncPayload, type SourceService } from "./sources.js";
 import {
   artifactKey,
   jobBlobKey,
@@ -148,6 +145,7 @@ export const createImportService = (
   collaborators: {
     uploads: UploadService;
     sources: SourceService;
+    secrets: SecretService;
     datasets: Pick<DatasetService, "settleCount">;
     artifactImports: ArtifactImportService;
   },
@@ -217,7 +215,7 @@ export const createImportService = (
     if (typeof secret === "string") {
       return {
         ...job.source,
-        token: await collaborators.sources.revealSecret(
+        token: await collaborators.secrets.reveal(
           job.workspace_id,
           secret,
           HF_USE,
@@ -333,7 +331,7 @@ export const createImportService = (
           };
           if (body.source.kind === "hf" || body.source.kind === "benchmark") {
             if (body.source.kind === "hf" && body.source.secret !== undefined) {
-              await collaborators.sources.requireSecret(
+              await collaborators.secrets.require(
                 workspaceId,
                 body.source.secret,
                 HF_USE,

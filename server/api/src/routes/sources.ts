@@ -63,7 +63,7 @@ export const registerSourceRoutes = (
       await idempotencyOf(c);
 
       return c.json(
-        await services.sources.setSecret(
+        await services.secrets.set(
           workspaceOf(c, "secrets:write"),
           input.name,
           input.value,
@@ -89,7 +89,7 @@ export const registerSourceRoutes = (
     }),
     async (c) =>
       c.json(
-        await services.sources.listSecrets(
+        await services.secrets.list(
           workspaceOf(c, "secrets:read"),
           c.req.valid("query"),
         ),
@@ -112,7 +112,7 @@ export const registerSourceRoutes = (
     }),
     async (c) =>
       c.json(
-        await services.sources.getSecret(
+        await services.secrets.get(
           workspaceOf(c, "secrets:read"),
           c.req.valid("param").name,
         ),
@@ -134,7 +134,7 @@ export const registerSourceRoutes = (
       },
     }),
     async (c) => {
-      await services.sources.deleteSecret(
+      await services.secrets.delete(
         workspaceOf(c, "secrets:write"),
         c.req.valid("param").name,
       );
