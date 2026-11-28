@@ -1381,50 +1381,59 @@ export const createRunLifecycle = (
       };
 
       const result = await store.transaction(async () => {
-        if (blob && !(await holdBlob(deps, blob.key))) {
+        // The row as it is now, locked by a fenced write: a cancel that
+        // landed since the read above wins (its answer said the run stops).
+        const current = await store.runs.update(
+          id,
+          { updated_at: now },
+          fenceOf(run),
+        );
+        if (!current) throw leaseLost(id);
+        const cancelled = current.status === "cancelled";
+        if (blob && !cancelled && !(await holdBlob(deps, blob.key))) {
           throw uploadIncomplete(blob.sha256);
         }
-        const artifact = blob
-          ? await store.artifacts.createRelease({
-              workspaceId: run.workspace_id,
-              name: run.name,
-              runId: run.id,
-              sourceId: null,
-              baseModel: run.resolved_config.model,
-              recipeKind: run.recipe_kind,
-              format,
-              storageKey: blob.key,
-              sha256: blob.sha256,
-              sizeBytes: blob.sizeBytes,
-              manifest: {
-                ...body.manifest,
-                schema: "grad.artifact/1",
+        const artifact =
+          blob && !cancelled
+            ? await store.artifacts.createRelease({
+                workspaceId: run.workspace_id,
+                name: run.name,
+                runId: run.id,
+                sourceId: null,
+                baseModel: run.resolved_config.model,
+                recipeKind: run.recipe_kind,
                 format,
-                run_id: run.id,
-                provenance: { source: "run", run_id: run.id },
-                attempt: run.attempt,
-                dataset: run.dataset_name,
-                dataset_version: run.dataset_version,
-                resolved_config: run.resolved_config,
-              },
-              evalReport: body.eval_report ?? null,
-            })
-          : null;
+                storageKey: blob.key,
+                sha256: blob.sha256,
+                sizeBytes: blob.sizeBytes,
+                manifest: {
+                  ...body.manifest,
+                  schema: "grad.artifact/1",
+                  format,
+                  run_id: run.id,
+                  provenance: { source: "run", run_id: run.id },
+                  attempt: run.attempt,
+                  dataset: run.dataset_name,
+                  dataset_version: run.dataset_version,
+                  resolved_config: run.resolved_config,
+                },
+                evalReport: body.eval_report ?? null,
+              })
+            : null;
 
-        const patch: RunPatch =
-          run.status === "cancelled"
-            ? { status: "cancelled", finished_at: now }
-            : {
-                status: balanceStop ? "stopped_balance" : status,
-                finished_at: now,
-                error: closingError(),
-                ...(artifact ? { artifact_id: artifact.id } : {}),
-                ...(body.eval_report !== undefined
-                  ? { eval_report: body.eval_report }
-                  : {}),
-              };
+        const patch: RunPatch = cancelled
+          ? { status: "cancelled", finished_at: now }
+          : {
+              status: balanceStop ? "stopped_balance" : status,
+              finished_at: now,
+              error: closingError(),
+              ...(artifact ? { artifact_id: artifact.id } : {}),
+              ...(body.eval_report !== undefined
+                ? { eval_report: body.eval_report }
+                : {}),
+            };
 
-        const updated = await closeAttempt(run, tokens, patch);
+        const updated = await closeAttempt(current, tokens, patch);
         const warnings = body.eval_report?.warnings ?? [];
         for (const [i, message] of warnings.entries()) {
           await appendNote(store.jobs, {

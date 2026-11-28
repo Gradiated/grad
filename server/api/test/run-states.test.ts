@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { RUN_STATUSES, type RunStatus } from "../src/contracts.js";
+import { createNoopBillingAdapter } from "../src/adapters.js";
 import { makeTestApp, type TestApp } from "./fixtures/app.js";
 import { createSftRun, FakeWorker } from "./fixtures/worker.js";
 
@@ -142,6 +143,43 @@ describe("run state transitions", () => {
     expect([refused.status, refused.body.code]).toEqual([429, "queue_limit"]);
     expect((await t.json(`/v1/runs/${stopped}`)).body).toMatchObject({
       status: "failed",
+    });
+  });
+
+  it("a cancel that lands while the worker's /complete is in flight wins", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let paused = () => {};
+    const reached = new Promise<void>((resolve) => (paused = resolve));
+    await t.close();
+    t = await makeTestApp({
+      settings: { maxAttempts: 3 },
+      // An older worker's budget stop asks billing whether it was the balance.
+      billing: {
+        ...createNoopBillingAdapter(),
+        canContinue: async () => {
+          paused();
+          await gate;
+          return true;
+        },
+      },
+    });
+    const run = await createSftRun(t, { maxCostUsd: 5 });
+    const worker = new FakeWorker(t);
+    const job = (await worker.claim())!;
+
+    const completing = worker.complete(job, { status: "stopped_budget" });
+    await reached;
+    const cancelled = await post(run.id, "cancel");
+    expect([cancelled.status, cancelled.body.status]).toEqual([
+      200,
+      "cancelled",
+    ]);
+    release();
+    expect((await completing).status).toBe(200);
+    expect((await t.json(`/v1/runs/${run.id}`)).body).toMatchObject({
+      status: "cancelled",
+      error: null,
     });
   });
 });
