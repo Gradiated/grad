@@ -751,6 +751,17 @@ describe("run lifecycle and worker protocol", () => {
     expect((await billed()).map((c) => c.attempt)).toEqual([1, 2, 3]);
     expect(await worker.claim()).toBeNull();
 
+    // The worker of the reaped last attempt reports late: its result is not
+    // taken, and it is told so (not answered as if it had completed).
+    const late = await worker.call(`/v1/trainer-jobs/${run.id}/complete`, {
+      worker_id: worker.workerId,
+      attempt: 3,
+      status: "failed",
+      error: "late",
+      tokens_processed: 100_000,
+    });
+    expect([late.status, late.body.code]).toEqual([409, "lease_lost"]);
+
     // A resumed run gets a fresh attempt budget.
     await t.json(`/v1/runs/${run.id}/resume`, { method: "POST", body: {} });
     expect((await worker.claim())?.attempt).toBe(4);

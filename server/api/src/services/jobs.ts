@@ -379,6 +379,14 @@ export const createJobQueue = (
           },
           now,
         );
+        // Closed without its worker: a late /complete from that worker is
+        // lease_lost, never answered as the result it already reported
+        // (closedBy matches the key that closed the attempt).
+        await store.jobs.update(
+          job.id,
+          { worker_key: null },
+          { attempt: job.attempt, workerId: null },
+        );
         observeInterruption(job, "lease_lost");
         closed += 1;
       } catch (error) {
