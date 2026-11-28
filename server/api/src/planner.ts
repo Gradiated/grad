@@ -19,6 +19,7 @@ import {
 import { invalid } from "./errors.js";
 import {
   assertFitsOneGpu,
+  assertMergedExportFits,
   estimateDurationS,
   requiredGpuMemoryGb,
 } from "./gpu-profile.js";
@@ -588,6 +589,7 @@ export const planRun = (
   }
 
   const { model, adapter, base } = resolveStart(request, context);
+  assertMergedExportFits(recipe.kind, model, adapter);
   if (
     recipe.kind === "cartridge" &&
     recipe.teacher !== undefined &&

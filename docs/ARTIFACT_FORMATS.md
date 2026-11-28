@@ -203,7 +203,7 @@ A distillation run (`recipe_kind: "distill"`) exports the same adapter for the s
 
 The LoRA merged into the base weights: a standalone Hugging Face causal LM for download. Cloud does not serve it. Use `peft_lora` for that.
 
-A bundle is at most 5 GiB, so only bases up to about 2B parameters (in the catalog, `qwen/qwen3-0.6b` and `qwen/qwen3-1.7b`) can export merged. For a larger base, a run with `merge_on_export=true` fails before its first step: train the adapter and merge it locally with `PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()`.
+A bundle is at most 5 GiB, so only bases up to about 2B parameters (in the catalog, `qwen/qwen3-0.6b` and `qwen/qwen3-1.7b`) can export merged. For a larger catalog base, `runs.plan` and `runs.create` refuse `merge_on_export=true` (422 `merged_export_too_large`; a base outside the catalog's measured profiles fails before its first step instead): train the adapter and merge it locally with `PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()`.
 
 | File | Contents |
 | --- | --- |

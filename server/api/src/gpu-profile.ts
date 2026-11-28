@@ -1,4 +1,9 @@
-import type { RecipeKind, TrainableModel } from "./contracts.js";
+import type {
+  RecipeKind,
+  ResolvedRunConfig,
+  TrainableModel,
+} from "./contracts.js";
+import { MAX_UPLOAD_BYTES } from "./contracts/datasets.js";
 import { invalid } from "./errors.js";
 
 /**
@@ -120,6 +125,28 @@ export const assertFitsOneGpu = (
         ? "Pick a smaller teacher, or pass rollout=OffPolicy() so the inference endpoint answers for it."
         : "Pick a smaller base model (GET /v1/models lists min_gpu_memory_gb)."
     }`,
+  );
+};
+
+/**
+ * 422 when merge_on_export (SFT and distill export merged) would export more
+ * than one upload holds: the merged model is the whole base in bf16.
+ * Unprofiled bases are left to the trainer, which checks the loaded weights
+ * before the first step.
+ */
+export const assertMergedExportFits = (
+  kind: RecipeKind,
+  model: TrainableModel,
+  adapter: ResolvedRunConfig["adapter"],
+): void => {
+  if (kind !== "sft" && kind !== "distill") return;
+  if (adapter.kind !== "lora" || !adapter.merge_on_export) return;
+  const weightsGb = PROFILES[model.id]?.weights_gb;
+  if (weightsGb === undefined || weightsGb * 1e9 <= MAX_UPLOAD_BYTES) return;
+
+  throw invalid(
+    "merged_export_too_large",
+    `merge_on_export=true would export '${model.id}' as a ${weightsGb} GB merged model, and an artifact is at most ${MAX_UPLOAD_BYTES / 1024 ** 3} GiB. Train with merge_on_export=false and merge the downloaded adapter locally (peft: PeftModel.from_pretrained(base, dir).merge_and_unload()).`,
   );
 };
 

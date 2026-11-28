@@ -175,6 +175,28 @@ describe("renderMessages", () => {
 describe("planRun", () => {
   const records = Array.from({ length: 40 }, (_, i) => chat(i));
 
+  it("refuses a merged export bigger than one upload at plan time", () => {
+    const merged = (model: string) => ({
+      kind: "sft",
+      model,
+      adapter: { kind: "lora", merge_on_export: true },
+    });
+
+    expectCode(
+      () => plan(merged("qwen/qwen3-4b"), records),
+      "merged_export_too_large",
+      /8\.8 GB merged model.*at most 5 GiB.*merge_on_export=false.*merge_and_unload/,
+    );
+    expect(
+      plan(merged("qwen/qwen3-1.7b"), records).resolved_config.adapter,
+    ).toMatchObject({ merge_on_export: true });
+    // Unprofiled bases are the trainer's to check once the weights load.
+    expect(() => plan(merged("test/tiny-qwen3"), records)).not.toThrow();
+    expect(() =>
+      plan({ kind: "sft", model: "qwen/qwen3-14b" }, records),
+    ).not.toThrow();
+  });
+
   it("resolves defaults for every v0 recipe with the catalog's defaults", () => {
     const sft = plan({ kind: "sft" }, records);
     expect(sft.resolved_config).toMatchObject({
