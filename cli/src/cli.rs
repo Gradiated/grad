@@ -1191,7 +1191,7 @@ Examples:
   grad local up --gpu
   grad local up --observability  # plus Prometheus and Grafana dashboards
   grad local up --build          # build images from a source checkout
-  grad local up --dev-models     # tiny test models: train end to end on a laptop in seconds
+  grad local up --dev-models     # tiny test models: train and eval end to end on a laptop in seconds
 
 First run generates an admin key, a trainer key and the workspace-secrets
 key and saves them in the 'local' profile, so the local server runs with
@@ -1215,8 +1215,10 @@ profile follows it. `grad local status` prints the real URLs.")]
         #[arg(long)]
         build: bool,
         /// Also register tiny, randomly initialised test models (test/tiny-qwen3,
-        /// test/tiny-qwen3-teacher, test/tiny-bert) that train in seconds on a CPU.
-        /// For trying the workflow only: their artifacts are marked test_only
+        /// test/tiny-qwen3-teacher, test/tiny-bert) that train in seconds on a CPU,
+        /// and grad-dev-inference, a CPU endpoint that serves them, artifacts trained
+        /// on them and the test/tiny-judge judge to evals. For trying the workflow
+        /// only: their artifacts are marked test_only
         #[arg(long)]
         dev_models: bool,
         /// Tag of the published images to pull (default: this binary's version for a

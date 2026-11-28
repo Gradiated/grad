@@ -2852,7 +2852,7 @@ fn docker_shim(sb: &Sandbox, exit: i32) -> PathBuf {
     std::fs::write(
         &shim,
         format!(
-            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY SECRETS=$GRAD_SECRETS_KEY PORT=$GRAD_PORT GRAFANA=$GRAD_GRAFANA_PORT PROMETHEUS=$GRAD_PROMETHEUS_PORT S3=$GRAD_S3_PORT S3KEYS=$GRAD_S3_ACCESS_KEY:$GRAD_S3_SECRET_KEY AUTH=$GRAD_AUTH_MODE\" >> \"{log}\"\nif [ \"$1\" = ps ]; then cat \"{ps}\" 2>/dev/null; fi\nexit {exit}\n",
+            "#!/bin/sh\necho \"$@\" >> \"{log}\"\necho \"HASH=$GRAD_ADMIN_API_KEY_HASH TRAINER=$GRAD_TRAINER_API_KEY SECRETS=$GRAD_SECRETS_KEY PORT=$GRAD_PORT GRAFANA=$GRAD_GRAFANA_PORT PROMETHEUS=$GRAD_PROMETHEUS_PORT S3=$GRAD_S3_PORT S3KEYS=$GRAD_S3_ACCESS_KEY:$GRAD_S3_SECRET_KEY AUTH=$GRAD_AUTH_MODE DEVKEY=$GRAD_DEV_INFERENCE_API_KEY\" >> \"{log}\"\nif [ \"$1\" = ps ]; then cat \"{ps}\" 2>/dev/null; fi\nexit {exit}\n",
             log = sb.path("docker.log").display(),
             ps = sb.path("docker-ps.txt").display(),
             exit = exit
@@ -3411,13 +3411,19 @@ fn local_up_uses_the_embedded_compose_from_any_directory_and_saves_keys() {
     let log = std::fs::read_to_string(sb.path("docker.log")).unwrap();
     assert!(
         log.contains(&format!(
-            "-f {} -f {} up -d",
+            "-f {} -f {} --profile dev-models up -d",
             compose.display(),
             dev.display()
         )),
         "{}",
         log
     );
+    // grad-dev-inference reads artifacts with the local profile's admin key; plain `up` passes none.
+    let cfg: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.config_path()).unwrap()).unwrap();
+    let admin_key = cfg["profiles"]["local"]["api_key"].as_str().unwrap();
+    assert!(log.contains(&format!("DEVKEY={}\n", admin_key)), "{}", log);
+    assert!(log.contains("DEVKEY=\n"), "{}", log);
 
     // --image-tag picks the tag; tags are validated; --build builds instead.
     let shim = docker_shim(&sb, 0);

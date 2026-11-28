@@ -393,12 +393,23 @@ fn docker_bin() -> String {
 }
 
 /// Compose profiles an `up` (and its pull) enables.
-fn profiles(cmd: &mut tokio::process::Command, gpu: bool, observability: bool) {
-    if gpu {
-        cmd.arg("--profile").arg("gpu");
-    }
-    if observability {
-        cmd.arg("--profile").arg("observability");
+#[derive(Debug, Clone, Copy)]
+struct Profiles {
+    gpu: bool,
+    observability: bool,
+    /// grad-dev-inference, the CPU inference endpoint `--dev-models` evals call.
+    dev_models: bool,
+}
+
+fn profiles(cmd: &mut tokio::process::Command, p: Profiles) {
+    for (on, name) in [
+        (p.gpu, "gpu"),
+        (p.observability, "observability"),
+        (p.dev_models, "dev-models"),
+    ] {
+        if on {
+            cmd.arg("--profile").arg(name);
+        }
     }
 }
 
@@ -513,12 +524,12 @@ async fn pull_images(
     ctx: &Ctx,
     args: &ComposeArgs,
     files: &[PathBuf],
-    (gpu, observability): (bool, bool),
+    enabled: Profiles,
     tag: &str,
 ) -> CliResult {
     use tokio::io::{AsyncBufReadExt, BufReader};
     let mut cmd = compose(args, files);
-    profiles(&mut cmd, gpu, observability);
+    profiles(&mut cmd, enabled);
     // --quiet: compose's per-layer lines (dozens, since stderr isn't its TTY) bury the
     // summary; errors still come through on stderr.
     cmd.arg("pull")
@@ -740,6 +751,11 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             timeout,
         } => {
             let tag = image_tag.as_deref().unwrap_or(DEFAULT_IMAGE_TAG);
+            let enabled = Profiles {
+                gpu,
+                observability,
+                dev_models,
+            };
             let overrides = if dev_models {
                 vec![write_dev_models_override()?]
             } else {
@@ -766,7 +782,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             ));
             on_interrupt("stopped waiting; the containers keep starting (`grad local status`)");
             if pulls_published_images(&args, build) {
-                if let Err(e) = pull_images(ctx, &args, &files, (gpu, observability), tag).await {
+                if let Err(e) = pull_images(ctx, &args, &files, enabled, tag).await {
                     let cwd = std::env::current_dir()?;
                     let fallback = image_tag
                         .is_none()
@@ -785,7 +801,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 }
             }
             let mut cmd = compose(&args, &files);
-            profiles(&mut cmd, gpu, observability);
+            profiles(&mut cmd, enabled);
             cmd.arg("up").arg("-d");
             if build {
                 cmd.arg("--build");
@@ -799,6 +815,10 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 .env("GRAD_SECRETS_KEY", &keys.secrets)
                 .env("GRAD_S3_ACCESS_KEY", &keys.s3_access)
                 .env("GRAD_S3_SECRET_KEY", &keys.s3_secret);
+            if dev_models {
+                // grad-dev-inference reads the artifacts it serves with the profile's key.
+                cmd.env("GRAD_DEV_INFERENCE_API_KEY", &keys.admin);
+            }
             port_env(&mut cmd, ports);
             ctx.out.note("Starting the containers");
             run_with(ctx, cmd, "up", !build).await.map_err(|e| {
@@ -844,6 +864,10 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 out.line(
                     "  Dev models: test/tiny-qwen3, test/tiny-qwen3-teacher, test/tiny-bert (random tiny weights; \
                      artifacts are test-only), e.g. grad train --model test/tiny-qwen3 ...",
+                );
+                out.line(
+                    "  Evals: a CPU endpoint serves the dev models, artifacts trained on them and the \
+                     test/tiny-judge judge, e.g. grad eval --models NAME@latest,test/tiny-qwen3 ...",
                 );
             }
             out.line(format!(
@@ -1182,7 +1206,7 @@ mod tests {
             .nth(1)
             .unwrap()
             .lines()
-            .take_while(|l| !l.trim_start().starts_with("grad-trainer:"))
+            .take_while(|l| !l.trim_start().starts_with("GRAD_"))
             .map(str::trim)
             .collect::<Vec<_>>()
             .join(" ");
@@ -1197,5 +1221,16 @@ mod tests {
             ]
         );
         assert!(DEV_MODELS_COMPOSE.contains("GRAD_DEV_MODELS: \"1\""));
+        // Evals call grad-dev-inference unless the shell names an endpoint, and it judges with test/tiny-judge.
+        let url = "\"${GRAD_INFERENCE_BASE_URL:-http://grad-dev-inference:8000/v1}\"";
+        assert_eq!(DEV_MODELS_COMPOSE.matches(url).count(), 2);
+        assert!(DEV_MODELS_COMPOSE
+            .contains(r#"{"id":"test/tiny-judge","price_per_million_tokens_usd":1}"#));
+        let service = EMBEDDED_COMPOSE
+            .split("  grad-dev-inference:\n")
+            .nth(1)
+            .unwrap();
+        assert!(service.starts_with("    profiles: [\"dev-models\"]\n"));
+        assert!(service.contains("GRADIATED_API_KEY: \"${GRAD_DEV_INFERENCE_API_KEY:-}\""));
     }
 }

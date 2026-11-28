@@ -166,6 +166,33 @@ services:
       - grad-hf-cache:/home/grad/.cache/huggingface
     restart: unless-stopped
 
+  # `grad local up --dev-models`: a CPU OpenAI-compatible endpoint for evals (the
+  # trainer image): the dev models, artifacts trained on them and the test/tiny-judge
+  # judge. Not published: only the eval worker calls it, over the compose network.
+  grad-dev-inference:
+    profiles: ["dev-models"]
+    image: ${GRAD_TRAINER_IMAGE:-docker.io/gradiated/grad-trainer:__GRAD_VERSION__}
+    command: ["grad-dev-inference"]
+    environment:
+      GRAD_SERVER_URL: "http://grad-server:8787"
+      # Reads the artifacts it serves (`grad local up` passes the local profile's key).
+      GRADIATED_API_KEY: "${GRAD_DEV_INFERENCE_API_KEY:-}"
+      GRAD_DEV_MODELS: "1"
+      GRAD_DEV_INFERENCE_HOST: "0.0.0.0"
+      GRAD_TORCH_THREADS: "2"
+      HF_HUB_OFFLINE: "1"
+    mem_limit: ${GRAD_DEV_INFERENCE_MEMORY:-1g}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    # The dev models' weights, shared with the CPU trainer.
+    volumes:
+      - grad-hf-cache:/home/grad/.cache/huggingface
+    stop_grace_period: 5s
+    restart: unless-stopped
+
   grad-trainer-gpu:
     profiles: ["gpu"]
     image: ${GRAD_TRAINER_GPU_IMAGE:-docker.io/gradiated/grad-trainer:__GRAD_VERSION__-gpu}

@@ -2,6 +2,9 @@
 # registers tiny, randomly initialised test models so a run finishes in seconds
 # on a CPU. They learn nothing useful; their artifacts are marked test_only.
 # The trainer builds the weights on first use (grad_trainer/dev_models).
+# Evals call grad-dev-inference (the dev-models profile): the dev models, artifacts
+# trained on them and the test/tiny-judge judge. An endpoint exported in your shell
+# (GRAD_INFERENCE_BASE_URL, GRAD_JUDGE_BASE_URL) still wins.
 services:
   grad-server:
     environment:
@@ -9,6 +12,20 @@ services:
         [{"id":"test/tiny-qwen3","hf_repo":null,"family":"llm","adapters":["lora","prefix_kv"],"default_for":[],"price_per_million_tokens_usd":1,"max_context_tokens":2048,"chars_per_token":1.5,"template_revision":"qwen3@3","calibrated_lrs":{"sft":0.001,"dpo":0.0001,"router":0.001,"cartridge":0.01,"distill":0.001,"reward":0.001}},
         {"id":"test/tiny-qwen3-teacher","hf_repo":null,"family":"llm","adapters":["lora","prefix_kv"],"default_for":[],"price_per_million_tokens_usd":2,"max_context_tokens":2048,"chars_per_token":1.5,"template_revision":"qwen3@3","calibrated_lrs":{"sft":0.001}},
         {"id":"test/tiny-bert","hf_repo":null,"family":"encoder","adapters":["encoder_full"],"default_for":[],"price_per_million_tokens_usd":0.5,"max_context_tokens":512,"template_revision":"bge@1","calibrated_lrs":{"embedding":0.0001}}]
+      GRAD_INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-http://grad-dev-inference:8000/v1}"
+      GRAD_JUDGE_BASE_URL: "${GRAD_JUDGE_BASE_URL:-${GRAD_INFERENCE_BASE_URL:-http://grad-dev-inference:8000/v1}}"
+      GRAD_JUDGE_MODELS_JSON: >-
+        ${GRAD_JUDGE_MODELS_JSON:-[{"id":"test/tiny-judge","price_per_million_tokens_usd":1}]}
+  grad-eval-worker:
+    depends_on:
+      grad-dev-inference:
+        condition: service_healthy
+        required: false
+    environment:
+      GRAD_INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-http://grad-dev-inference:8000/v1}"
+      GRAD_JUDGE_BASE_URL: "${GRAD_JUDGE_BASE_URL:-${GRAD_INFERENCE_BASE_URL:-http://grad-dev-inference:8000/v1}}"
+      # grad-dev-inference generates one completion at a time.
+      EVAL_CONCURRENCY: "${GRAD_EVAL_CONCURRENCY:-2}"
   grad-trainer:
     environment:
       GRAD_DEV_MODELS: "1"
