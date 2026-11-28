@@ -168,8 +168,20 @@ export const parseRetryAfterMs = (
   return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 };
 
+export const CLOUD_TRAINING_UNAVAILABLE =
+  "Gradiated Cloud training isn't available yet; run `grad local up` or point at your server with --base-url or GRADIATED_BASE_URL.";
+
+const hostOf = (url: string): string | undefined => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+};
+
 const errorClassFor = (status: number, code: string): typeof APIError => {
   if (code === "inference_unavailable") return InferenceUnavailableError;
+  if (code === "cloud_training_unavailable") return FeatureUnavailableError;
   if (status === 429 && code === "queue_limit") return QueueLimitError;
   if (status === 400) return BadRequestError;
   if (status === 401) return AuthenticationError;
@@ -203,12 +215,15 @@ export const makeAPIError = (
     // Non-JSON body (proxy HTML, plain text): keep the raw text.
   }
   const problem = isObject(body) ? body : {};
-  const code = str(problem.code) ?? `http_${status}`;
+  // Gradiated Cloud doesn't route grad's /v1 API yet: its bare 404 isn't a missing resource.
+  const cloudUnavailable = status === 404 && problem.code === undefined && hostOf(ctx.url) === "api.gradiated.com";
+  const code = cloudUnavailable ? "cloud_training_unavailable" : (str(problem.code) ?? `http_${status}`);
   const title = str(problem.title) ?? `HTTP ${status}`;
-  const detail =
-    str(problem.detail) ??
-    str(problem.message) ??
-    (typeof body === "string" ? body.slice(0, 500).trim() : "");
+  const detail = cloudUnavailable
+    ? CLOUD_TRAINING_UNAVAILABLE
+    : (str(problem.detail) ??
+      str(problem.message) ??
+      (typeof body === "string" ? body.slice(0, 500).trim() : ""));
   const requestId = headers.get("x-request-id") ?? str(problem.request_id);
   let hint = "";
   if (status === 401 && !ctx.apiKeyConfigured) {

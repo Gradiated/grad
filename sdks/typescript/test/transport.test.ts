@@ -99,6 +99,17 @@ describe("error mapping (tests/fixtures/wire/errors.json)", () => {
     expect(makeAPIError(401, new Headers(), "", { method: "GET", url: "u", apiKeyConfigured: true }).message).not.toContain("grad login");
   });
 
+  it("says Cloud training isn't available yet on Cloud's bare 404", () => {
+    const cloud = { method: "GET", url: "https://api.gradiated.com/v1/datasets", apiKeyConfigured: true };
+    const e = makeAPIError(404, new Headers(), "", cloud);
+    expect(e).toBeInstanceOf(errors.FeatureUnavailableError);
+    expect([e.status, e.code]).toEqual([404, "cloud_training_unavailable"]);
+    expect(e.message).toContain("grad local up");
+    expect(makeAPIError(404, new Headers(), '{"code":"dataset_not_found"}', cloud)).toBeInstanceOf(errors.NotFoundError);
+    const other = { ...cloud, url: "https://grad.example.com/v1/datasets" };
+    expect(makeAPIError(404, new Headers(), "", other)).toBeInstanceOf(errors.NotFoundError);
+  });
+
   it("parses field errors and Retry-After variants", () => {
     expect(parseFieldErrors({ errors: [{ path: ["a", 0], detail: "bad" }, "junk", { pointer: "/x" }] }, "")).toEqual([
       { field: "a.0", message: "bad" },

@@ -15,6 +15,10 @@ use std::time::Duration;
 use crate::models::RunStatus;
 use crate::models::{ArtifactImport, EvalRun, ImportJob, Run};
 
+/// The detail of Gradiated Cloud's bare 404 (code `cloud_training_unavailable`) while Cloud
+/// doesn't route grad's `/v1` API yet.
+pub const CLOUD_TRAINING_UNAVAILABLE: &str = "Gradiated Cloud training isn't available yet; run `grad local up` or point at your server with --base-url or GRADIATED_BASE_URL.";
+
 /// Details of an HTTP error response from grad-server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiErrorBody {
@@ -105,7 +109,8 @@ pub enum Error {
     InferenceUnavailable(Box<ApiErrorBody>),
     /// Any other 501: a capability this server has not configured
     /// (`secrets_unavailable`: no `GRAD_SECRETS_KEY`; `source_unavailable`: the
-    /// `gradiated` source on a self-hosted server).
+    /// `gradiated` source on a self-hosted server). Also Gradiated Cloud's bare
+    /// 404 (`cloud_training_unavailable`) while Cloud doesn't serve training yet.
     FeatureUnavailable(Box<ApiErrorBody>),
     /// 5xx (already retried for idempotent requests).
     Server(Box<ApiErrorBody>),
@@ -266,6 +271,7 @@ impl Error {
         match (body.status, body.code.as_str()) {
             (_, "inference_unavailable") => Error::InferenceUnavailable(body),
             (429, "queue_limit") => Error::QueueLimit(body),
+            (_, "cloud_training_unavailable") => Error::FeatureUnavailable(body),
             (401, _) => Error::Authentication(body),
             (403, _) => Error::PermissionDenied(body),
             (404, _) => Error::NotFound(body),
@@ -476,6 +482,10 @@ mod tests {
         assert!(matches!(
             Error::from_status(body(429, "queue_limit")),
             Error::QueueLimit(_)
+        ));
+        assert!(matches!(
+            Error::from_status(body(404, "cloud_training_unavailable")),
+            Error::FeatureUnavailable(_)
         ));
         assert!(!Error::from_status(body(429, "queue_limit")).is_transient());
         assert!(Error::from_status(body(429, "rate_limited")).is_transient());

@@ -167,6 +167,22 @@ func TestCapturedProblemFixturesMapToTypedErrors(t *testing.T) {
 	}
 }
 
+func TestCloudBare404SaysCloudTrainingIsNotAvailable(t *testing.T) {
+	cloud := "https://api.gradiated.com/v1/datasets"
+	err := generated.NewAPIError(404, http.Header{}, nil, "GET", cloud, true)
+	var fu *grad.FeatureUnavailableError
+	if !errors.As(err, &fu) || fu.Status != 404 || fu.Code != "cloud_training_unavailable" || !strings.Contains(err.Error(), "grad local up") {
+		t.Fatalf("got %T %v", err, err)
+	}
+	var nf *grad.NotFoundError
+	if err := generated.NewAPIError(404, http.Header{}, []byte(`{"code":"dataset_not_found"}`), "GET", cloud, true); !errors.As(err, &nf) {
+		t.Fatalf("a problem body: got %T %v", err, err)
+	}
+	if err := generated.NewAPIError(404, http.Header{}, nil, "GET", "https://grad.example.com/v1/datasets", true); !errors.As(err, &nf) {
+		t.Fatalf("another server: got %T %v", err, err)
+	}
+}
+
 func TestRetriesHonourRetryAfterAndMethodRules(t *testing.T) {
 	ctx := context.Background()
 	t.Run("429 Retry-After then success", func(t *testing.T) {

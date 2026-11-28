@@ -386,9 +386,14 @@ impl Transport {
                 detail.push_str(&format!(" Note: {}.", h));
             }
         }
+        let mut code = field("code").unwrap_or_else(|| format!("http_{}", status));
+        if is_cloud_bare_404(status, obj, url) {
+            code = "cloud_training_unavailable".into();
+            detail = crate::error::CLOUD_TRAINING_UNAVAILABLE.into();
+        }
         let body = ApiErrorBody {
             status,
-            code: field("code").unwrap_or_else(|| format!("http_{}", status)),
+            code,
             title: field("title").unwrap_or_else(|| reason.to_string()),
             detail,
             request_id: field("request_id").or(header_rid),
@@ -537,9 +542,32 @@ fn parse_retry_after(h: &HeaderMap) -> Option<Duration> {
         .map(Duration::from_secs_f64)
 }
 
+/// Gradiated Cloud doesn't route grad's `/v1` API yet: its bare 404 (no problem `code`) means
+/// Cloud training isn't available, not that a resource is missing.
+fn is_cloud_bare_404(
+    status: u16,
+    problem: Option<&serde_json::Map<String, Value>>,
+    url: &Url,
+) -> bool {
+    status == 404
+        && !problem.is_some_and(|o| o.contains_key("code"))
+        && url.host_str() == Some("api.gradiated.com")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_404_from_cloud_means_cloud_training_is_unavailable() {
+        let cloud = Url::parse("https://api.gradiated.com/v1/datasets").unwrap();
+        let other = Url::parse("https://grad.example.com/v1/datasets").unwrap();
+        let problem = serde_json::json!({"code": "dataset_not_found"});
+        assert!(is_cloud_bare_404(404, None, &cloud));
+        assert!(!is_cloud_bare_404(404, problem.as_object(), &cloud));
+        assert!(!is_cloud_bare_404(404, None, &other));
+        assert!(!is_cloud_bare_404(502, None, &cloud));
+    }
 
     #[test]
     fn retry_rules_follow_the_contract() {

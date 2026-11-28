@@ -98,6 +98,18 @@ class ErrorMappingTests(unittest.TestCase):
         err = error_from_response(status=501, headers={}, body=b'{"code":"inference_unavailable","detail":"no INFERENCE_BASE_URL"}', method="POST", url="u")
         self.assertIsInstance(err, grad.InferenceUnavailableError)
 
+    def test_cloud_bare_404_says_cloud_training_is_not_available(self) -> None:
+        cloud = "https://api.gradiated.com/v1/datasets"
+        err = error_from_response(status=404, headers={}, body=b"", method="GET", url=cloud)
+        self.assertIsInstance(err, grad.FeatureUnavailableError)
+        self.assertEqual((err.status, err.code), (404, "cloud_training_unavailable"))
+        self.assertIn("grad local up", str(err))
+        # A real problem body, or any other server, stays a plain NotFoundError.
+        err = error_from_response(status=404, headers={}, body=b'{"code":"dataset_not_found"}', method="GET", url=cloud)
+        self.assertIsInstance(err, grad.NotFoundError)
+        err = error_from_response(status=404, headers={}, body=b"", method="GET", url="https://grad.example.com/v1/datasets")
+        self.assertIsInstance(err, grad.NotFoundError)
+
     def test_validation_field_errors_from_fixture(self) -> None:
         client, _, _ = make_client({"POST /v1/runs/plan": fixture_reply("python-problem-422.json")})
         with self.assertRaises(grad.ValidationError) as ctx:

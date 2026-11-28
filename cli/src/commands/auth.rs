@@ -92,6 +92,9 @@ pub async fn login(ctx: &Ctx, args: LoginArgs) -> CliResult {
                 }
                 return Err(err.hint("Check the key, or create a new one; nothing was saved."));
             }
+            Err(e) if e.code() == "cloud_training_unavailable" => {
+                return Err(CliError::from(e).hint("Nothing was saved."));
+            }
             Err(e) => {
                 return Err(CliError::from(e).hint(
                     "Nothing was saved. Pass --no-verify to save the key without checking it.",

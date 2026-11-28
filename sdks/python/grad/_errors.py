@@ -16,6 +16,7 @@ import email.utils
 import json
 import re
 import time
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -55,6 +56,11 @@ __all__ = [
 ]
 
 _LOGIN_HINT = "Set GRADIATED_API_KEY, pass Grad(api_key=...), or run `grad login`."
+
+CLOUD_TRAINING_UNAVAILABLE = (
+    "Gradiated Cloud training isn't available yet; run `grad local up` "
+    "or point at your server with --base-url or GRADIATED_BASE_URL."
+)
 
 
 class GradError(Exception):
@@ -376,6 +382,7 @@ _STATUS_CLASSES: dict[int, type[GradAPIError]] = {
 _CODE_CLASSES: dict[str, type[GradAPIError]] = {
     "inference_unavailable": InferenceUnavailableError,
     "queue_limit": QueueLimitError,
+    "cloud_training_unavailable": FeatureUnavailableError,
 }
 
 _FIELD_RE = re.compile(r"^([A-Za-z0-9_.\[\]-]+): (.+)$")
@@ -451,6 +458,9 @@ def error_from_response(
         detail = snippet if snippet and not problem else title
     request_id = headers.get("x-request-id") or problem.get("request_id")
     request_id = str(request_id) if request_id else None
+    if status == 404 and "code" not in problem and urllib.parse.urlsplit(url).hostname == "api.gradiated.com":
+        # Gradiated Cloud doesn't route grad's /v1 API yet: its bare 404 isn't a missing resource.
+        code, title, detail = "cloud_training_unavailable", "Cloud training unavailable", CLOUD_TRAINING_UNAVAILABLE
 
     cls = _CODE_CLASSES.get(code) or _STATUS_CLASSES.get(status)
     if cls is None:

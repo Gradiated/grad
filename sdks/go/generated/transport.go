@@ -215,6 +215,10 @@ func ParseRetryAfter(h http.Header, now time.Time) (time.Duration, bool) {
 	return 0, false
 }
 
+// CloudTrainingUnavailable is the detail of Gradiated Cloud's bare 404 while Cloud doesn't route
+// grad's /v1 API yet.
+const CloudTrainingUnavailable = "Gradiated Cloud training isn't available yet; run `grad local up` or point at your server with --base-url or GRADIATED_BASE_URL."
+
 // NewAPIError builds the typed error for a non-2xx response; tolerant of any body shape.
 func NewAPIError(status int, header http.Header, body []byte, method, rawURL string, apiKeyConfigured bool) error {
 	problem := map[string]any{}
@@ -241,6 +245,11 @@ func NewAPIError(status int, header http.Header, body []byte, method, rawURL str
 			text = text[:500]
 		}
 		detail = text
+	}
+	if _, hasCode := problem["code"]; status == http.StatusNotFound && !hasCode {
+		if u, err := url.Parse(rawURL); err == nil && u.Hostname() == "api.gradiated.com" {
+			code, detail = "cloud_training_unavailable", CloudTrainingUnavailable
+		}
 	}
 	requestID := header.Get("X-Request-Id")
 	if requestID == "" {
@@ -280,6 +289,8 @@ func NewAPIError(status int, header http.Header, body []byte, method, rawURL str
 	switch {
 	case code == "inference_unavailable":
 		return &InferenceUnavailableError{&FeatureUnavailableError{base}}
+	case code == "cloud_training_unavailable":
+		return &FeatureUnavailableError{base}
 	case status == http.StatusTooManyRequests && code == "queue_limit":
 		return &QueueLimitError{&RateLimitError{base}}
 	case status == http.StatusBadRequest:
