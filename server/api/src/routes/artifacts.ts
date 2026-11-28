@@ -65,11 +65,11 @@ export const registerArtifactRoutes = (
     }),
     async (c) => {
       const workspaceId = workspaceOf(c, "artifacts:read");
-      const { name, ...page } = c.req.valid("query");
+      const { name, q, limit, cursor } = c.req.valid("query");
       const result = await deps.store.artifacts.list(
         workspaceId,
-        { name },
-        page,
+        { name, q },
+        { limit, cursor },
       );
 
       return c.json(

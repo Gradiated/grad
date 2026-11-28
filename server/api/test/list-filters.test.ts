@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makeTestApp, type TestApp } from "./fixtures/app.js";
+import {
+  makeEvalHarness,
+  qaRecords,
+  seedArtifact,
+  seedDataset,
+} from "./fixtures/evals.js";
 import { createSftRun } from "./fixtures/worker.js";
 
 type Named = { data: { id: string; name?: string; dataset?: string }[] };
@@ -83,5 +89,39 @@ describe("list filters: status, q and an import's dataset", () => {
       "billing",
     ]);
     expect(await names("/v1/imports?status=completed")).toEqual([]);
+  });
+});
+
+describe("list filters: an eval's status and an artifact's name", () => {
+  it("narrows evals by status and artifacts by a name substring", async () => {
+    const h = await makeEvalHarness();
+    try {
+      await seedDataset(h.t, "qa", qaRecords(2));
+      const created = await h.t.json<{ id: string }>("/v1/evals", {
+        body: { models: ["qwen/qwen3-8b"], dataset: "qa", name: "nightly" },
+      });
+      expect(created.status).toBe(202);
+      const ids = async (path: string) =>
+        (await h.t.json<{ data: { id: string }[] }>(path)).body.data.map(
+          (r) => r.id,
+        );
+      expect(await ids("/v1/evals?status=queued")).toEqual([created.body.id]);
+      expect(await ids("/v1/evals?status=completed,failed")).toEqual([]);
+
+      await seedArtifact(h.t, "support-sft");
+      h.t.clock.advance(1000);
+      await seedArtifact(h.t, "billing-router");
+      const names = async (path: string) =>
+        (await h.t.json<{ data: { name: string }[] }>(path)).body.data.map(
+          (r) => r.name,
+        );
+      expect(await names("/v1/artifacts?q=ROUTER")).toEqual(["billing-router"]);
+      expect(await names("/v1/artifacts?q=sft&name=support-sft")).toEqual([
+        "support-sft",
+      ]);
+      expect(await names("/v1/artifacts?q=nothing")).toEqual([]);
+    } finally {
+      await h.close();
+    }
   });
 });

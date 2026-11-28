@@ -102,10 +102,8 @@ export const registerEvalRoutes = (
       },
     }),
     async (c) => {
-      const { limit, cursor } = c.req.valid("query");
-
       return c.json(
-        await evals.list(workspaceOf(c, "runs:read"), { limit, cursor }),
+        await evals.list(workspaceOf(c, "runs:read"), c.req.valid("query")),
         200,
       );
     },
