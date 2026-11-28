@@ -16,7 +16,6 @@ import type {
   LedgerRow,
   Page,
   ParkedUsage,
-  Repositories,
 } from "../store/types.js";
 
 /** A usage row's key: the attempt and the token count it bills through. */
@@ -124,7 +123,6 @@ export interface UsageService {
    * an attempt's rows always sum to its last reported usage.
    */
   flush(
-    tx: Pick<Repositories, "jobs" | "usage">,
     job: Pick<JobRow, "id" | "kind" | "workspace_id" | "attempt">,
     total: AttemptUsage,
     final: boolean,
@@ -241,8 +239,8 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
         query.group_by,
       ),
 
-    flush: async (tx, job, total, final) => {
-      const state = await tx.jobs.getById(job.id);
+    flush: async (job, total, final) => {
+      const state = await store.jobs.getById(job.id);
       if (!state || state.attempt !== job.attempt || job.attempt < 1) return;
       const tokens = total.tokens - state.billed_through;
       if (tokens <= 0) return;
@@ -253,7 +251,7 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
         now.getTime() - Date.parse(state.billed_at ?? state.updated_at) >=
           (deps.settings.usageFlushSeconds ?? DEFAULT_FLUSH_SECONDS) * 1000;
       if (!due) return;
-      const advanced = await tx.jobs.advanceBilling({
+      const advanced = await store.jobs.advanceBilling({
         id: job.id,
         attempt: job.attempt,
         from: state.billed_through,
@@ -266,7 +264,7 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
       const costUsd = Number(
         Math.max(0, total.costUsd - state.billed_cost).toFixed(8),
       );
-      await tx.usage.record({
+      await store.usage.record({
         idempotencyKey: usageKey(kind, job.id, job.attempt, total.tokens),
         workspaceId: job.workspace_id,
         kind,

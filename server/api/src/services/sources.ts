@@ -32,7 +32,6 @@ import type {
   ImportJobRecord,
   Page,
   PageRequest,
-  Repositories,
   SourcePatch,
   SourceRecord,
 } from "../store/types.js";
@@ -232,7 +231,6 @@ export interface SourceService {
    * failure state, queue a pending full sync.
    */
   completeSync(
-    tx: Repositories,
     job: ImportJobRecord,
     summary: SyncSummary,
     outcome: SyncOutcome,
@@ -242,11 +240,7 @@ export interface SourceService {
    * version. Only scheduled incremental syncs wait, until version_interval
    * has passed since the last version or enough records are waiting.
    */
-  defersVersion(
-    tx: Repositories,
-    job: ImportJobRecord,
-    records: number,
-  ): Promise<boolean>;
+  defersVersion(job: ImportJobRecord, records: number): Promise<boolean>;
   /**
    * A sync ended failed: record the error, back the schedule off, pause the
    * source after PAUSE_AFTER_FAILURES in a row, else queue a pending full sync.
@@ -315,15 +309,14 @@ export const createSourceService = (
     host ?? PROVIDER_DEFAULT_HOSTS[kind] ?? "";
 
   const lastSync = async (
-    repos: Repositories,
     source: SourceRecord,
   ): Promise<ImportJobRecord | null> =>
     source.sync_job_id
-      ? repos.imports.get(source.workspace_id, source.sync_job_id)
+      ? store.imports.get(source.workspace_id, source.sync_job_id)
       : null;
 
   const toPublic = async (source: SourceRecord): Promise<Source> => {
-    const job = await lastSync(store, source);
+    const job = await lastSync(source);
 
     return {
       id: source.id,
@@ -374,23 +367,17 @@ export const createSourceService = (
     return source;
   };
 
-  /**
-   * Inside a transaction holding the source's row lock. At most one sync is
-   * queued or running: asking for a full one meanwhile marks it pending. A new
-   * one starts at most a minute after the last one did, unless `force` (a
-   * pending full sync, queued when the one before it ends).
-   */
   /** One transaction's worth of due sources: each enqueued (or skipped) and rescheduled. */
   const tickBatch = (now: Date): Promise<number> =>
-    store.transaction(async (tx) => {
-      const due = await tx.sources.lockDue(now.toISOString(), TICK_BATCH);
+    store.transaction(async () => {
+      const due = await store.sources.lockDue(now.toISOString(), TICK_BATCH);
       for (const source of due) {
         // One source that can't enqueue (its workspace suspended under it,
         // say) rolls back only its own savepoint, never the whole batch.
         await store
-          .transaction(async (one) => {
+          .transaction(async () => {
             // Queued, running or started under a minute ago: this firing is skipped.
-            await enqueue(one, source, false, false, true);
+            await enqueue(source, false, false, true);
           })
           .catch((error: unknown) => {
             log("warn", "scheduled source sync not started", {
@@ -399,7 +386,7 @@ export const createSourceService = (
               error,
             });
           });
-        await tx.sources.update(source.id, {
+        await store.sources.update(source.id, {
           next_sync_at: nextScheduledSync(
             source.schedule,
             now,
@@ -411,17 +398,22 @@ export const createSourceService = (
       return due.length;
     });
 
+  /**
+   * Inside a transaction holding the source's row lock. At most one sync is
+   * queued or running: asking for a full one meanwhile marks it pending. A new
+   * one starts at most a minute after the last one did, unless `force` (a
+   * pending full sync, queued when the one before it ends).
+   */
   const enqueue = async (
-    repos: Repositories,
     source: SourceRecord,
     full: boolean,
     force = false,
     scheduled = false,
   ): Promise<{ job: ImportJobRecord; retryAfter: number | null }> => {
-    const current = await lastSync(repos, source);
+    const current = await lastSync(source);
     if (current && ACTIVE.has(current.status)) {
       if (full && current.source.full !== true && !source.pending_full) {
-        await repos.sources.update(source.id, { pending_full: true });
+        await store.sources.update(source.id, { pending_full: true });
       }
       return { job: current, retryAfter: null };
     }
@@ -442,7 +434,7 @@ export const createSourceService = (
       full: full || source.pending_full,
       ...(scheduled ? { scheduled: true } : {}),
     };
-    const job = await repos.imports.create({
+    const job = await store.imports.create({
       workspaceId: source.workspace_id,
       maxAttempts: settings.maxAttempts,
       datasetId: source.dataset_id,
@@ -451,7 +443,7 @@ export const createSourceService = (
       connector: "auto",
       uploadKey: null,
     });
-    await repos.sources.update(source.id, {
+    await store.sources.update(source.id, {
       sync_job_id: job.id,
       pending_full: false,
     });
@@ -460,9 +452,9 @@ export const createSourceService = (
   };
 
   /** Active again, with a fresh failure count and schedule. */
-  const resume = async (repos: Repositories, source: SourceRecord) => {
+  const resume = async (source: SourceRecord) => {
     if (source.status !== "paused") return source;
-    const resumed = await repos.sources.update(source.id, {
+    const resumed = await store.sources.update(source.id, {
       status: "active",
       paused_reason: null,
       consecutive_failures: 0,
@@ -569,9 +561,9 @@ export const createSourceService = (
       });
       // A new key is the usual fix for a paused source: resume its users.
       for (const id of await store.sources.usingSecret(workspaceId, name)) {
-        await store.transaction(async (tx) => {
-          const locked = await tx.sources.lock(workspaceId, id);
-          if (locked) await resume(tx, locked);
+        await store.transaction(async () => {
+          const locked = await store.sources.lock(workspaceId, id);
+          if (locked) await resume(locked);
         });
       }
 
@@ -699,8 +691,8 @@ export const createSourceService = (
     },
 
     update: async (workspaceId, id, body) => {
-      const updated = await store.transaction(async (tx) => {
-        const source = await tx.sources.lock(workspaceId, id);
+      const updated = await store.transaction(async () => {
+        const source = await store.sources.lock(workspaceId, id);
         if (!source) throw notFound("source", id);
         const schedule =
           body.schedule === undefined ? undefined : firstRun(body.schedule);
@@ -721,7 +713,7 @@ export const createSourceService = (
           patch.version_interval = body.version_interval;
         }
 
-        return tx.sources.update(source.id, {
+        return store.sources.update(source.id, {
           ...patch,
           ...(schedule
             ? {
@@ -739,18 +731,18 @@ export const createSourceService = (
     },
 
     remove: async (workspaceId, id) => {
-      const removed = await store.transaction(async (tx) => {
-        const source = await tx.sources.lock(workspaceId, id);
+      const removed = await store.transaction(async () => {
+        const source = await store.sources.lock(workspaceId, id);
         if (!source) return false;
         // What scheduled syncs fetched stays: it becomes a last version.
         if (source.pending_records > 0 || source.last_version_at !== null) {
-          await tx.datasets.commitSettled({
+          await store.datasets.commitSettled({
             datasetId: source.dataset_id,
             sourceId: source.id,
           });
         }
 
-        return tx.sources.delete(workspaceId, id);
+        return store.sources.delete(workspaceId, id);
       });
       if (!removed) throw notFound("source", id);
     },
@@ -760,11 +752,11 @@ export const createSourceService = (
       if (source.provider === "gradiated" && !deps.traces)
         throw sourceUnavailable();
 
-      const { job, retryAfter } = await store.transaction(async (tx) => {
-        const locked = await tx.sources.lock(workspaceId, id);
+      const { job, retryAfter } = await store.transaction(async () => {
+        const locked = await store.sources.lock(workspaceId, id);
         if (!locked) throw notFound("source", id);
 
-        return enqueue(tx, await resume(tx, locked), full);
+        return enqueue(await resume(locked), full);
       });
 
       return { job: toPublicImport(job), retryAfter };
@@ -819,10 +811,13 @@ export const createSourceService = (
       };
     },
 
-    defersVersion: async (tx, job, records) => {
+    defersVersion: async (job, records) => {
       const payload = job.source as unknown as SyncPayload;
       if (payload.scheduled !== true || payload.full) return false;
-      const source = await tx.sources.lock(job.workspace_id, payload.source_id);
+      const source = await store.sources.lock(
+        job.workspace_id,
+        payload.source_id,
+      );
       if (!source || source.version_interval <= 0) return false;
       // The first version, and enough waiting records, commit at once.
       if (source.last_version_at === null) return false;
@@ -836,12 +831,15 @@ export const createSourceService = (
       );
     },
 
-    completeSync: async (tx, job, { watermark, traces }, outcome) => {
+    completeSync: async (job, { watermark, traces }, outcome) => {
       const payload = job.source as unknown as SyncPayload;
-      const source = await tx.sources.lock(job.workspace_id, payload.source_id);
+      const source = await store.sources.lock(
+        job.workspace_id,
+        payload.source_id,
+      );
       if (!source || source.sync_job_id !== job.id) return;
       const now = clock.now();
-      const updated = await tx.sources.update(source.id, {
+      const updated = await store.sources.update(source.id, {
         last_synced_at: now.toISOString(),
         ...(watermark !== undefined && watermark !== null ? { watermark } : {}),
         records_today: recordsToday(source, now) + (traces ?? 0),
@@ -859,13 +857,13 @@ export const createSourceService = (
           ? { next_sync_at: nextScheduledSync(source.schedule, now, 0) }
           : {}),
       });
-      if (updated?.pending_full) await enqueue(tx, updated, true, true);
+      if (updated?.pending_full) await enqueue(updated, true, true);
     },
 
     failSync: async (job) => {
       const payload = job.source as unknown as SyncPayload;
-      await store.transaction(async (tx) => {
-        const source = await tx.sources.lock(
+      await store.transaction(async () => {
+        const source = await store.sources.lock(
           job.workspace_id,
           payload.source_id,
         );
@@ -873,7 +871,7 @@ export const createSourceService = (
         const now = clock.now();
         const failures = source.consecutive_failures + 1;
         const paused = failures >= PAUSE_AFTER_FAILURES;
-        const updated = await tx.sources.update(source.id, {
+        const updated = await store.sources.update(source.id, {
           consecutive_failures: failures,
           // Worker errors are redacted (provider keys never reach them).
           last_error: (job.error ?? "The sync failed.").slice(
@@ -892,7 +890,7 @@ export const createSourceService = (
                 next_sync_at: nextScheduledSync(source.schedule, now, failures),
               }),
         });
-        if (updated?.pending_full) await enqueue(tx, updated, true, true);
+        if (updated?.pending_full) await enqueue(updated, true, true);
       });
     },
 

@@ -56,7 +56,6 @@ import type {
   JobRow,
   Page,
   PageRequest,
-  Repositories,
   RunPatch,
   RunRecord,
 } from "../store/types.js";
@@ -647,12 +646,8 @@ export const createRunLifecycle = (
     );
   };
 
-  const pinCheckpoints = async (
-    tx: Repositories,
-    run: RunRecord,
-    now: Date,
-  ): Promise<void> => {
-    const all = await tx.artifacts.allCheckpoints(run.id, now);
+  const pinCheckpoints = async (run: RunRecord, now: Date): Promise<void> => {
+    const all = await store.artifacts.allCheckpoints(run.id, now);
     if (all.length === 0) return;
 
     const best = bestCheckpoint(all);
@@ -662,7 +657,7 @@ export const createRunLifecycle = (
         : acc,
     );
 
-    await tx.artifacts.pinCheckpoints(run.id, {
+    await store.artifacts.pinCheckpoints(run.id, {
       bestId: best?.id ?? null,
       finalId: final.id,
     });
@@ -718,29 +713,28 @@ export const createRunLifecycle = (
     toPublicRun(run, await computeFor(run));
 
   /** The step the next attempt resumes from (its newest checkpoint), or null. */
-  const resumeStepOf = async (tx: Repositories, runId: string) => {
-    const steps = (await tx.artifacts.allCheckpoints(runId, clock.now())).map(
-      (c) => c.step,
-    );
+  const resumeStepOf = async (runId: string) => {
+    const steps = (
+      await store.artifacts.allCheckpoints(runId, clock.now())
+    ).map((c) => c.step);
 
     return steps.length > 0 ? Math.max(...steps) : null;
   };
 
   /** The `queued` phase of the run's next attempt. */
-  const markQueued = async (tx: Repositories, run: RunRecord) => {
+  const markQueued = async (run: RunRecord) => {
     const { queue_message, ...compute } = await computeFor(run);
-    await appendPhase(tx.jobs, {
+    await appendPhase(store.jobs, {
       jobId: run.id,
       attempt: run.attempt + 1,
       phase: "queued",
-      step: (await resumeStepOf(tx, run.id)) ?? 0,
+      step: (await resumeStepOf(run.id)) ?? 0,
       info: { ...compute, message: queue_message },
     });
   };
 
   /** Closes an open attempt: bills the rest of it and applies `patch`, atomically. */
   const closeAttempt = async (
-    tx: Repositories,
     run: RunRecord,
     tokens: number,
     patch: RunPatch,
@@ -749,20 +743,20 @@ export const createRunLifecycle = (
     const now = clock.now();
     // The fenced write locks the job row, so the progress reports that
     // committed before it are visible to the reads below.
-    const closed = await tx.runs.update(
+    const closed = await store.runs.update(
       run.id,
       { ...patch, ...RELEASE, updated_at: now.toISOString() },
       fence,
     );
     if (!closed) throw leaseLost(run.id);
     const used = Math.max(tokens, closed.attempt_tokens);
-    await usage.flush(tx, closed, attemptUsage(closed, used), true);
-    const updated = (await tx.runs.update(run.id, {
+    await usage.flush(closed, attemptUsage(closed, used), true);
+    const updated = (await store.runs.update(run.id, {
       billed_tokens: closed.billed_tokens + used,
       attempt_tokens: 0,
     })) as RunRecord;
     if (TERMINAL.includes(updated.status)) {
-      await pinCheckpoints(tx, updated, now);
+      await pinCheckpoints(updated, now);
     }
 
     return updated;
@@ -775,7 +769,6 @@ export const createRunLifecycle = (
    * max_attempts.
    */
   const interrupt = async (
-    tx: Repositories,
     run: RunRecord,
     input: {
       reason: InterruptionReason;
@@ -786,7 +779,6 @@ export const createRunLifecycle = (
   ): Promise<RunRecord> => {
     if (run.status === "cancelled") {
       return closeAttempt(
-        tx,
         run,
         input.tokens,
         { status: "cancelled", finished_at: input.now },
@@ -806,30 +798,24 @@ export const createRunLifecycle = (
             maxPreemptions: settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
             // A reclaim after a checkpoint lost little and moved the run on.
             progressed: (
-              await tx.artifacts.allCheckpoints(run.id, clock.now())
+              await store.artifacts.allCheckpoints(run.id, clock.now())
             ).some((c) => c.attempt === run.attempt),
           }
         : undefined,
     );
-    const updated = await closeAttempt(
-      tx,
-      run,
-      input.tokens,
-      patch,
-      input.fence,
-    );
+    const updated = await closeAttempt(run, input.tokens, patch, input.fence);
 
     const event = {
       jobId: run.id,
       attempt: run.attempt,
       reason: input.reason,
       step: run.current_step,
-      resumeStep: await resumeStepOf(tx, run.id),
+      resumeStep: await resumeStepOf(run.id),
       maxAttempts: run.max_attempts,
     };
-    await appendAttempt(tx.jobs, { ...event, event: "interrupted" });
-    if (updated.status === "queued") await markQueued(tx, updated);
-    else await appendAttempt(tx.jobs, { ...event, event: "gave_up" });
+    await appendAttempt(store.jobs, { ...event, event: "interrupted" });
+    if (updated.status === "queued") await markQueued(updated);
+    else await appendAttempt(store.jobs, { ...event, event: "gave_up" });
 
     return updated;
   };
@@ -994,8 +980,8 @@ export const createRunLifecycle = (
         run.max_cost_usd !== null &&
         billedCost(run) >= run.max_cost_usd
       ) {
-        await store.transaction((tx) =>
-          closeAttempt(tx, run, 0, {
+        await store.transaction(() =>
+          closeAttempt(run, 0, {
             status: "stopped_budget",
             finished_at: now,
             error: null,
@@ -1011,9 +997,8 @@ export const createRunLifecycle = (
         // spending the attempt; an unbuildable run fails.
         const message = errorMessage(error);
         const transient = isTransient(error);
-        const closed = await store.transaction(async (tx) => {
+        const closed = await store.transaction(async () => {
           const updated = await closeAttempt(
-            tx,
             run,
             0,
             transient
@@ -1024,7 +1009,7 @@ export const createRunLifecycle = (
                 )
               : { status: "failed", finished_at: now, error: message },
           );
-          if (updated.status === "queued") await markQueued(tx, updated);
+          if (updated.status === "queued") await markQueued(updated);
 
           return updated;
         });
@@ -1069,8 +1054,8 @@ export const createRunLifecycle = (
     onLeaseLost: async (row: JobRow, fence, now) => {
       const run = await loadById(row.id);
       // Re-checks expiry: a heartbeat that landed after the SELECT wins.
-      await store.transaction((tx) =>
-        interrupt(tx, run, {
+      await store.transaction(() =>
+        interrupt(run, {
           reason: "lease_lost",
           tokens: run.attempt_tokens,
           now: now.toISOString(),
@@ -1143,7 +1128,7 @@ export const createRunLifecycle = (
               waitingOn: labels?.id ?? null,
               idempotency,
             });
-            await markQueued(store, run);
+            await markQueued(run);
             for (const [i, message] of plan.warnings.entries()) {
               await appendNote(store.jobs, {
                 jobId: run.id,
@@ -1370,7 +1355,7 @@ export const createRunLifecycle = (
           "run_state_changed",
           `Run '${id}' changed concurrently; retry.`,
         );
-      await markQueued(store, updated);
+      await markQueued(updated);
 
       return publicRun(await loadById(id));
     },
@@ -1428,11 +1413,11 @@ export const createRunLifecycle = (
             throw error;
           });
       await copy();
-      const artifact = await store.transaction(async (tx) => {
+      const artifact = await store.transaction(async () => {
         // A delete of another release on this bundle removed it since the copy.
         if (!(await holdBlob(deps, storageKey))) await copy();
 
-        return tx.artifacts.createRelease({
+        return store.artifacts.createRelease({
           workspaceId,
           name: releaseName,
           runId: run.id,
@@ -1466,8 +1451,8 @@ export const createRunLifecycle = (
       const cost = runCost(run, attemptTokens);
       // One step's point is stored once per attempt (a retry returns it), and
       // only while this worker still holds the lease.
-      const updated = await store.transaction(async (tx) => {
-        const fenced = await tx.runs.update(
+      const updated = await store.transaction(async () => {
+        const fenced = await store.runs.update(
           id,
           {
             attempt_tokens: attemptTokens,
@@ -1486,7 +1471,7 @@ export const createRunLifecycle = (
           attemptTokens - run.attempt_tokens,
         );
         const point = toMetricPoint(
-          await tx.jobs.appendEvent({
+          await store.jobs.appendEvent({
             jobId: run.id,
             attempt: run.attempt,
             type: "metric",
@@ -1500,15 +1485,10 @@ export const createRunLifecycle = (
         );
 
         // Bill the attempt in increments (every N tokens or minutes).
-        await usage.flush(
-          tx,
-          fenced,
-          attemptUsage(fenced, attemptTokens),
-          false,
-        );
+        await usage.flush(fenced, attemptUsage(fenced, attemptTokens), false);
 
         return (
-          (await tx.runs.update(id, {
+          (await store.runs.update(id, {
             current_step: Math.max(run.current_step, point.step),
             latest_metric:
               point.step >= (run.latest_metric?.step ?? -1)
@@ -1569,8 +1549,8 @@ export const createRunLifecycle = (
       if (result.created) {
         observeCheckpoint(run.recipe_kind, blob.sizeBytes, body.metadata);
         await applyCheckpointRetention(run, clock.now());
-        await store.transaction((tx) =>
-          usage.flush(tx, run, attemptUsage(run, run.attempt_tokens), true),
+        await store.transaction(() =>
+          usage.flush(run, attemptUsage(run, run.attempt_tokens), true),
         );
         await evals.evaluateCheckpoint(run, result.checkpoint);
       }
@@ -1660,8 +1640,8 @@ export const createRunLifecycle = (
       const tokens = Math.max(body.tokens_processed, run.attempt_tokens);
       const now = clock.now().toISOString();
       if (body.status === "abandoned") {
-        const updated = await store.transaction((tx) =>
-          interrupt(tx, run, {
+        const updated = await store.transaction(() =>
+          interrupt(run, {
             reason: body.reason ?? "worker_error",
             tokens,
             now,
@@ -1680,12 +1660,12 @@ export const createRunLifecycle = (
         throw invalid("invalid_format", `Unknown artifact format '${format}'.`);
       }
 
-      const result = await store.transaction(async (tx) => {
+      const result = await store.transaction(async () => {
         if (blob && !(await holdBlob(deps, blob.key))) {
           throw uploadIncomplete(blob.sha256);
         }
         const artifact = blob
-          ? await tx.artifacts.createRelease({
+          ? await store.artifacts.createRelease({
               workspaceId: run.workspace_id,
               name: run.name,
               runId: run.id,
@@ -1733,10 +1713,10 @@ export const createRunLifecycle = (
                   : {}),
               };
 
-        const updated = await closeAttempt(tx, run, tokens, patch);
+        const updated = await closeAttempt(run, tokens, patch);
         const warnings = body.eval_report?.warnings ?? [];
         for (const [i, message] of warnings.entries()) {
-          await appendNote(tx.jobs, {
+          await appendNote(store.jobs, {
             jobId: run.id,
             attempt: run.attempt,
             type: "warning",

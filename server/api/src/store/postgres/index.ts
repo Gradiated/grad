@@ -106,7 +106,7 @@ export const createPostgresStore = (options: PostgresStoreOptions): Store => {
   return {
     ...repos,
     telemetry: createTelemetryRepository(db),
-    transaction: (fn) => db.atomic(() => fn(repos)),
+    transaction: (fn) => db.atomic(fn),
     migrate: async () => {
       // Its own connection: the serving pool's client-side query timeout
       // would cut a long migration off.

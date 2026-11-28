@@ -1332,11 +1332,12 @@ export interface TelemetryRepository {
 export interface Store extends Repositories {
   telemetry: TelemetryRepository;
   /**
-   * Runs `fn` atomically: one transaction on one connection. Nested calls
-   * join the outer transaction; an error thrown inside a nested call rolls
-   * back only that call (savepoint).
+   * Runs `fn` atomically: one transaction on one connection, which every
+   * store call made inside it joins (it is ambient, so there is no `tx` to
+   * pass around). Nested calls join the outer transaction; an error thrown
+   * inside a nested call rolls back only that call (savepoint).
    */
-  transaction<T>(fn: (tx: Repositories) => Promise<T>): Promise<T>;
+  transaction<T>(fn: () => Promise<T>): Promise<T>;
   migrate(): Promise<void>;
   ping(): Promise<boolean>;
   /** The database clock (`SELECT now()`). */

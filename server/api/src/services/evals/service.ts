@@ -45,7 +45,6 @@ import type {
   JobExpectation,
   Page,
   PageRequest,
-  Repositories,
   RunRecord,
 } from "../../store/types.js";
 
@@ -284,14 +283,12 @@ export const createEvalService = (
    * at its close (`final`), and in increments while it runs.
    */
   const billAttempt = async (
-    tx: Pick<Repositories, "evals" | "jobs" | "usage">,
     record: Pick<EvalRecord, "id" | "kind" | "workspace_id" | "attempt">,
     final = true,
   ): Promise<void> => {
     if (record.attempt < 1) return;
-    const spent = await tx.evals.attemptUsage(record.id, record.attempt);
+    const spent = await store.evals.attemptUsage(record.id, record.attempt);
     await usage.flush(
-      tx,
       record,
       { tokens: spent.tokens, costUsd: spent.cost_usd },
       final,
@@ -308,7 +305,7 @@ export const createEvalService = (
       "id" | "kind" | "workspace_id" | "status" | "error" | "attempt"
     >,
   ): Promise<void> => {
-    await billAttempt(store, record);
+    await billAttempt(record);
     await settleLabelledRuns(store, record, clock.now().toISOString());
     const full = await store.evals.getById(record.id);
     const result = full && checkpointResult(full);
@@ -428,8 +425,8 @@ export const createEvalService = (
     now: string,
     preempted = false,
   ): Promise<EvalRecord | null> =>
-    store.transaction(async (tx) => {
-      const closed = await tx.evals.update(
+    store.transaction(async () => {
+      const closed = await store.evals.update(
         row.id,
         requeuePatch(
           row,
@@ -441,10 +438,10 @@ export const createEvalService = (
                   deps.settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
               }
             : undefined,
-        ) as Parameters<typeof tx.evals.update>[1],
+        ) as Parameters<typeof store.evals.update>[1],
         fence,
       );
-      if (closed) await billAttempt(tx, { ...closed, attempt: row.attempt });
+      if (closed) await billAttempt({ ...closed, attempt: row.attempt });
       if (closed?.status === "failed") await onFinished(closed);
 
       return closed;
@@ -455,10 +452,9 @@ export const createEvalService = (
     row: Pick<EvalRecord, "id" | "attempt">,
     fence: JobExpectation,
   ): Promise<void> => {
-    await store.transaction(async (tx) => {
-      const released = await tx.evals.update(row.id, { ...RELEASE }, fence);
-      if (released)
-        await billAttempt(tx, { ...released, attempt: row.attempt });
+    await store.transaction(async () => {
+      const released = await store.evals.update(row.id, { ...RELEASE }, fence);
+      if (released) await billAttempt({ ...released, attempt: row.attempt });
     });
   };
 
@@ -611,8 +607,8 @@ export const createEvalService = (
         job.local_scorers,
       );
       if (missing > 0) {
-        await store.transaction(async (tx) => {
-          const waiting = await tx.evals.update(
+        await store.transaction(async () => {
+          const waiting = await store.evals.update(
             job.id,
             {
               ...RELEASE,
@@ -621,7 +617,7 @@ export const createEvalService = (
             },
             expect,
           );
-          if (waiting) await billAttempt(tx, waiting);
+          if (waiting) await billAttempt(waiting);
         });
         return;
       }
@@ -693,17 +689,17 @@ export const createEvalService = (
 
     // The outputs, the progress and the bill commit together, fenced on
     // the lease: a worker that lost it stores nothing.
-    const result = await store.transaction(async (tx) => {
-      const accepted = await tx.evals.insertOutputs(rows);
-      const generated = await tx.evals.countOutputs(id);
-      const progressed = await tx.evals.update(
+    const result = await store.transaction(async () => {
+      const accepted = await store.evals.insertOutputs(rows);
+      const generated = await store.evals.countOutputs(id);
+      const progressed = await store.evals.update(
         id,
         { generated },
         fenceOf(job, ["running", "cancelled"]),
       );
       if (!progressed) throw leaseLost(id);
       // A cancelled eval's last outputs bill now: its close may never come.
-      await billAttempt(tx, progressed, progressed.status === "cancelled");
+      await billAttempt(progressed, progressed.status === "cancelled");
 
       return {
         accepted,

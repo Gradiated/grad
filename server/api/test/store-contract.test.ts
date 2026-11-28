@@ -610,9 +610,9 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       let metricSeq = 0;
       let drawn = () => {};
       const metricDrawn = new Promise<void>((resolve) => (drawn = resolve));
-      const progress = store.transaction(async (tx) => {
+      const progress = store.transaction(async () => {
         metricSeq = (
-          await tx.jobs.appendEvent({
+          await store.jobs.appendEvent({
             jobId: run.id,
             attempt: 1,
             type: "metric",
@@ -675,11 +675,11 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       const gate = new Promise<void>((resolve) => (release = resolve));
       let recorded = () => {};
       const resultRecorded = new Promise<void>((r) => (recorded = r));
-      const finalize = store.transaction(async (tx) => {
-        await tx.runs.appendCheckpointEval(run.id, result);
+      const finalize = store.transaction(async () => {
+        await store.runs.appendCheckpointEval(run.id, result);
         recorded();
         await gate;
-        await tx.jobs.appendEvent({
+        await store.jobs.appendEvent({
           jobId: run.id,
           attempt: 0,
           type: "checkpoint_eval:holdout",
@@ -1314,24 +1314,24 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
     });
 
     it("transactions: commit, rollback on throw, nested reuse", async () => {
-      const committed = await store.transaction(async (tx) => {
+      const committed = await store.transaction(async () => {
         const run = await makeRun();
-        return tx.runs.update(run.id, { current_step: 9 });
+        return store.runs.update(run.id, { current_step: 9 });
       });
       expect((await store.runs.getById(committed!.id))?.current_step).toBe(9);
 
       let rolledBack: string | undefined;
       await expect(
-        store.transaction(async (tx) => {
-          const ds = await tx.datasets.create({
+        store.transaction(async () => {
+          const ds = await store.datasets.create({
             workspaceId: "ws_t",
             name: "tx",
             metadata: {},
           });
           rolledBack = ds?.id;
           await store.runs.update(committed!.id, { current_step: 50 });
-          await store.transaction(async (inner) => {
-            await inner.usage.record({
+          await store.transaction(async () => {
+            await store.usage.record({
               idempotencyKey: "nested",
               workspaceId: "ws_t",
               kind: "run",
@@ -1352,8 +1352,8 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       expect(await store.usage.listByRef(committed!.id)).toEqual([]);
 
       const nested = await store.transaction(async () =>
-        store.transaction(async (inner) => {
-          await inner.usage.record({
+        store.transaction(async () => {
+          await store.usage.record({
             idempotencyKey: "nested-ok",
             workspaceId: "ws_t",
             kind: "eval",
@@ -1374,15 +1374,15 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
     });
 
     it("transactions: a failed nested block rolls back alone; the outer one commits", async () => {
-      await store.transaction(async (tx) => {
-        await tx.datasets.create({
+      await store.transaction(async () => {
+        await store.datasets.create({
           workspaceId: "ws_t",
           name: "outer",
           metadata: {},
         });
         await expect(
-          store.transaction(async (inner) => {
-            await inner.datasets.create({
+          store.transaction(async () => {
+            await store.datasets.create({
               workspaceId: "ws_t",
               name: "inner",
               metadata: {},
@@ -1390,7 +1390,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
             throw new Error("inner failed");
           }),
         ).rejects.toThrow("inner failed");
-        await tx.datasets.create({
+        await store.datasets.create({
           workspaceId: "ws_t",
           name: "after",
           metadata: {},

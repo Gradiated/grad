@@ -65,8 +65,8 @@ export const deleteUnreferencedBlob = (
   deps: Pick<AppDependencies, "store" | "storage">,
   key: string,
 ): Promise<boolean> =>
-  deps.store.transaction(async (tx) => {
-    await tx.artifacts.lockBlob(key, "exclusive");
+  deps.store.transaction(async () => {
+    await deps.store.artifacts.lockBlob(key, "exclusive");
     if ((await deps.store.unreferencedKeys([key])).length === 0) return false;
     await deps.storage.delete(key);
 
@@ -95,8 +95,8 @@ export const createArtifactService = (
   return {
     delete: async (workspaceId, reference) => {
       const { id } = await load(workspaceId, reference);
-      await store.transaction(async (tx) => {
-        const result = await tx.artifacts.deleteRelease(workspaceId, id);
+      await store.transaction(async () => {
+        const result = await store.artifacts.deleteRelease(workspaceId, id);
         if (!result) throw notFound("artifact", reference);
         if (result.pins.length > 0) throw artifactPinned(id, result.pins);
         // Under the blob lock, before the commit: a release created on the

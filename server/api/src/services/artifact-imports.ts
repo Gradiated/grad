@@ -325,11 +325,11 @@ export const createArtifactImportService = (
       );
       const now = clock.now().toISOString();
 
-      return store.transaction(async (tx) => {
+      return store.transaction(async () => {
         if (!(await holdBlob(deps, blob.key))) {
           throw uploadIncomplete(blob.sha256);
         }
-        const release = await tx.artifacts.createRelease({
+        const release = await store.artifacts.createRelease({
           workspaceId: job.workspace_id,
           name: artifact.name,
           runId: null,
@@ -346,7 +346,7 @@ export const createArtifactImportService = (
           manifest: { ...manifest, provenance, import_id: job.id },
           evalReport: null,
         });
-        const updated = await tx.imports.update(
+        const updated = await store.imports.update(
           job.id,
           {
             ...RELEASE,

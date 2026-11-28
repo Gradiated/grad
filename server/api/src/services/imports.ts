@@ -560,15 +560,15 @@ export const createImportService = (
       const sync = isSyncPayload(job.source);
       const sourceId = sync ? String(job.source.source_id) : undefined;
       const { completed, orphans, dataset } = await store.transaction(
-        async (tx) => {
+        async () => {
           const benchmark = benchmarkMetadata(job.source);
           // A scheduled sync's parts may wait for the source's next version.
           const deferred =
             sourceId !== undefined &&
-            (await collaborators.sources.defersVersion(tx, job, staged.count));
+            (await collaborators.sources.defersVersion(job, staged.count));
           const { dataset, orphanKeys, created } = deferred
             ? {
-                ...(await tx.datasets.deferStaged({
+                ...(await store.datasets.deferStaged({
                   jobId: job.id,
                   attempt: job.attempt,
                   sourceId,
@@ -576,7 +576,7 @@ export const createImportService = (
                 dataset: null,
                 created: false,
               }
-            : await tx.datasets.commitStaged({
+            : await store.datasets.commitStaged({
                 datasetId: job.dataset_id,
                 jobId: job.id,
                 attempt: job.attempt,
@@ -585,7 +585,7 @@ export const createImportService = (
                 keepVersionIfEmpty: sync,
                 ...(sourceId !== undefined ? { sourceId } : {}),
               });
-          const updated = await tx.imports.update(
+          const updated = await store.imports.update(
             id,
             {
               ...RELEASE,
@@ -611,7 +611,7 @@ export const createImportService = (
           );
           if (!updated) throw leaseLost(id);
           if (sync) {
-            await collaborators.sources.completeSync(tx, job, summary, {
+            await collaborators.sources.completeSync(job, summary, {
               records: staged.count,
               deferred,
               versioned: created,

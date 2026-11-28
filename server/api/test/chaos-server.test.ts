@@ -81,8 +81,8 @@ describe("Postgres black-holed (a failover that leaves dead peers, no RST)", () 
       );
     }
     const tx = await within(
-      store.transaction(async (repos) => {
-        await repos.jobs.jobStates(["job_x"]);
+      store.transaction(async () => {
+        await store.jobs.jobStates(["job_x"]);
         return "committed";
       }),
       8_000,
@@ -94,8 +94,8 @@ describe("Postgres black-holed (a failover that leaves dead peers, no RST)", () 
     const after: string[] = [];
     for (let i = 0; i < 8; i += 1) {
       const r = await within(
-        store.transaction(async (repos) => {
-          await repos.jobs.jobStates(["job_x"]);
+        store.transaction(async () => {
+          await store.jobs.jobStates(["job_x"]);
           return "ok";
         }),
         5_000,
