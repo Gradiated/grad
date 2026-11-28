@@ -522,6 +522,7 @@ pub enum ImportsCmd {
         page: PageArgs,
     },
     /// Show one import job
+    #[command(visible_alias = "get")]
     Status {
         /// Import job id
         id: String,
@@ -661,6 +662,7 @@ pub enum RunsCmd {
     #[command(
         after_help = "Example:\n  grad runs inspect run_01J9X --yaml > recipe.yaml\n  grad train -f recipe.yaml --dry-run"
     )]
+    #[command(visible_alias = "get")]
     Inspect {
         /// Run id or run name
         run: String,
@@ -868,6 +870,7 @@ pub enum EvalCmd {
     /// Estimate tasks, model/judge calls and cost
     Plan(EvalRunArgs),
     /// Show an eval and its summary
+    #[command(visible_alias = "get")]
     Status {
         /// Eval id
         id: String,
@@ -926,6 +929,7 @@ pub enum ArtifactsCmd {
         page: PageArgs,
     },
     /// Show an artifact (id, NAME@VERSION or NAME@latest)
+    #[command(visible_alias = "get")]
     Inspect {
         /// Artifact reference
         reference: String,
@@ -1103,6 +1107,7 @@ pub enum SourcesCmd {
         idempotency_key: Option<String>,
     },
     /// Show a source: its effective filters, sampling, caps and last sync
+    #[command(visible_alias = "get")]
     Show {
         /// Source id
         id: String,
@@ -1153,6 +1158,7 @@ pub enum SourcesCmd {
         timeout: u64,
     },
     /// Disconnect a source (its dataset and versions stay)
+    #[command(visible_alias = "delete")]
     Remove {
         /// Source id
         id: String,

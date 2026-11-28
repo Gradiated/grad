@@ -586,6 +586,24 @@ fn completion_scripts_for_every_shell() {
 }
 
 #[test]
+fn every_show_one_command_answers_to_get() {
+    let sb = Sandbox::new("get-alias");
+    for group in [
+        "runs",
+        "artifacts",
+        "eval",
+        "imports",
+        "sources",
+        "datasets",
+    ] {
+        let r = run(sb.grad(None), &[group, "get", "--help"]);
+        expect(&r, 0);
+    }
+    let r = run(sb.grad(None), &["sources", "delete", "--help"]);
+    expect(&r, 0);
+}
+
+#[test]
 fn usage_errors_exit_2_and_json_mode_wraps_them() {
     let sb = Sandbox::new("usage");
     let r = run(sb.grad(None), &["train", "--bogus"]);
