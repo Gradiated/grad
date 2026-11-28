@@ -26,7 +26,6 @@ import type {
   IdempotencyInput,
   ImportJobPatch,
   ImportJobRecord,
-  JobRow,
   Page,
   ListFilter,
   PageRequest,
@@ -197,15 +196,32 @@ export const createImportService = (
     }
   };
 
+  /**
+   * A sync's source row lock, taken first in every transaction that closes
+   * the sync: source before job everywhere, so a completion and the reaper
+   * never deadlock, and a source's removal waits for its sync's commit.
+   */
+  const lockSyncSource = async (
+    job: Pick<ImportJobRecord, "workspace_id" | "source">,
+  ): Promise<void> => {
+    if (isSyncPayload(job.source)) {
+      await store.sources.lock(job.workspace_id, job.source.source_id);
+    }
+  };
+
   /** Closes the attempt; a terminal failure drops the staged parts. */
   const close = async (
-    job: Pick<JobRow, "id" | "worker_id" | "attempt">,
+    job: Pick<
+      ImportJobRecord,
+      "id" | "worker_id" | "attempt" | "workspace_id" | "source"
+    >,
     patch: ImportJobPatch,
     extra: { leaseExpiredBefore?: string } = {},
   ): Promise<ImportJobRecord> => {
     // The status, the discarded rows and the source's failure count commit
     // together; the objects go after (the orphaned-blob sweep backs it up).
     const { updated, discarded } = await store.transaction(async () => {
+      await lockSyncSource(job);
       const closed = await store.imports.update(
         job.id,
         { ...RELEASE, ...patch },
@@ -318,8 +334,10 @@ export const createImportService = (
       } satisfies TrainerJob;
     },
     onLeaseLost: async (job, fence, now) => {
+      const record = await store.imports.getById(job.id);
+      if (!record) return;
       await close(
-        job,
+        { ...record, worker_id: job.worker_id, attempt: job.attempt },
         requeuePatch(
           job,
           `Attempt ${job.attempt} lost its lease`,
@@ -597,6 +615,7 @@ export const createImportService = (
         : undefined;
       const { completed, orphans, dataset } = await store.transaction(
         async () => {
+          await lockSyncSource(job);
           const benchmark = benchmarkMetadata(job.source);
           // A scheduled sync's parts may wait for the source's next version.
           const deferred =

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
+import pg from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { TracesAdapter } from "../src/adapters.js";
@@ -17,6 +18,7 @@ import {
   WORKSPACE_A,
   type TestApp,
 } from "./fixtures/app.js";
+import { fileSchemaName, postgresUrl } from "./fixtures/postgres.js";
 import {
   createSftRun,
   FakeWorker,
@@ -760,6 +762,14 @@ describe("sources", () => {
     expect(after.data[0]?.metadata).toEqual({ model: "acme/support" });
   });
 
+  /** A raw connection to this file's schema (to hold row locks). */
+  const connect = async () => {
+    const schema = await fileSchemaName();
+    const client = new pg.Client({ connectionString: postgresUrl() });
+    await client.connect();
+    await client.query(`SET search_path TO "${schema}"`);
+    return client;
+  };
   const syncNow = async (id: string, full = false) => {
     t.clock.advanceSeconds(61);
     return t.json<{ id: string; source: Record<string, unknown> }>(
@@ -843,6 +853,83 @@ describe("sources", () => {
     });
     expect([failed.status, failed.body.status]).toEqual([200, "failed"]);
     expect(await getSource(source.id)).toMatchObject({ pending_full: true });
+  });
+
+  it("closes a sync under its source's lock before its job's: a completion and the reaper can't deadlock", async () => {
+    await t.close();
+    t = await makeTestApp({
+      secrets: createSecretsCipher({ key: randomBytes(32).toString("base64") }),
+      settings: { maxAttempts: 1 },
+    });
+    worker = new FakeWorker(t);
+    await t.json("/v1/secrets", {
+      body: { name: "langfuse-prod", value: KEY },
+    });
+    const holder = await connect();
+    const probe = await connect();
+    const jobLocked = async (id: string) => {
+      await probe.query("BEGIN");
+      try {
+        await probe.query(
+          "SELECT 1 FROM grad_jobs WHERE id = $1 FOR UPDATE NOWAIT",
+          [id],
+        );
+        return false;
+      } catch (error) {
+        if ((error as { code?: string }).code === "55P03") return true;
+        throw error;
+      } finally {
+        await probe.query("ROLLBACK");
+      }
+    };
+    // Another transaction holds the source: the closing sync waits for it
+    // before it locks its job (the reaper's close took them the other way).
+    const whileSourceHeld = async <T>(
+      sourceId: string,
+      jobId: string,
+      closing: () => Promise<T>,
+    ) => {
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT 1 FROM grad_sources WHERE id = $1 FOR UPDATE",
+        [sourceId],
+      );
+      const result = closing();
+      await new Promise((r) => setTimeout(r, 300));
+      const locked = await jobLocked(jobId);
+      await holder.query("COMMIT");
+      return { locked, result: await result };
+    };
+
+    try {
+      const source = (await addSource()).body;
+      await syncNow(source.id);
+      const job = await claimImport();
+      await worker.records(job, 0, [record("t1")]);
+      const completed = await whileSourceHeld(source.id, job.id, () =>
+        worker.complete(job, {
+          status: "completed",
+          import_summary: { watermark: null },
+        }),
+      );
+      expect([completed.locked, completed.result.status]).toEqual([false, 200]);
+
+      // The reaper failing a sync's last attempt.
+      await syncNow(source.id);
+      const lost = await claimImport();
+      t.clock.advanceSeconds(600);
+      const reaped = await whileSourceHeld(source.id, lost.id, () =>
+        t.services.queue.expireLeases(t.clock.now()),
+      );
+      expect(reaped).toEqual({ locked: false, result: 1 });
+      expect(await getSource(source.id)).toMatchObject({
+        consecutive_failures: 1,
+        last_sync: { import_id: lost.id, status: "failed" },
+      });
+    } finally {
+      await holder.end();
+      await probe.end();
+    }
   });
 
   it("records a failed sync, backs the schedule off, and clears it all on success", async () => {
@@ -1111,6 +1198,49 @@ describe("sources", () => {
       { method: "PATCH", body: { version_interval: 3600 } },
     );
     expect(patched.body.version_interval).toBe(3600);
+  });
+
+  it("counts a source's waiting records once when it's removed while a manual sync commits them", async () => {
+    const source = (
+      await addSource({
+        provider: LANGFUSE,
+        schedule: "* * * * *",
+        version_interval: 600,
+      })
+    ).body;
+    for (const ids of [["t1"], ["t2", "t3"]]) {
+      t.clock.advanceSeconds(61);
+      await t.services.sources.tick(t.clock.now());
+      await finish(await claimImport(), ids, null);
+    }
+    expect(await getSource(source.id)).toMatchObject({ pending_records: 2 });
+    await syncNow(source.id);
+    const manual = await claimImport();
+    await worker.records(manual, 0, [record("t4")]);
+
+    // Both commit the waiting records; the dataset's row lock lines them up.
+    const holder = await connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        "SELECT 1 FROM grad_datasets WHERE name = 'support-prod' FOR UPDATE",
+      );
+      const completed = worker.complete(manual, { status: "completed" });
+      await new Promise((r) => setTimeout(r, 200));
+      const removed = t.json(`/v1/sources/${source.id}`, { method: "DELETE" });
+      await new Promise((r) => setTimeout(r, 200));
+      await holder.query("COMMIT");
+      expect([(await completed).status, (await removed).status]).toEqual([
+        200, 204,
+      ]);
+    } finally {
+      await holder.end();
+    }
+
+    const dataset = await t.json<{ record_count: number }>(
+      "/v1/datasets/support-prod",
+    );
+    expect(dataset.body.record_count).toBe(4);
   });
 
   it("commits waiting records at once past SOURCE_VERSION_MAX_RECORDS (r8-sources)", async () => {
