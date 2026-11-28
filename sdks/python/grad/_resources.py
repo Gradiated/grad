@@ -77,7 +77,8 @@ if TYPE_CHECKING:
 
 TRANSIENT = (APIConnectionError, ServerError, RateLimitError)
 SSE_READ_TIMEOUT = 45.0
-MAX_SSE_RECONNECTS = 20
+#: Dropped or refused event streams in a row before ``events(follow=True)`` gives up (the same in all four SDKs).
+MAX_EVENT_RECONNECTS = 20
 #: Page size of ``runs.events()`` JSON pages.
 EVENTS_PAGE_LIMIT = 100
 
@@ -776,7 +777,7 @@ class Runs(_Resource):
                 resp = self._wire.list_run_events_stream(run_id, last_event_id=None if last_seq is None else str(last_seq), timeout=SSE_READ_TIMEOUT)
             except TRANSIENT as exc:
                 failures += 1
-                if failures > MAX_SSE_RECONNECTS:
+                if failures > MAX_EVENT_RECONNECTS:
                     raise exc
                 if self._expired(deadline):
                     return
@@ -808,7 +809,7 @@ class Runs(_Resource):
             if self._expired(deadline):
                 return
             failures += 1
-            if failures > MAX_SSE_RECONNECTS:
+            if failures > MAX_EVENT_RECONNECTS:
                 raise APIConnectionError(
                     f"Lost the event stream for run {run_id} {failures} times in a row.",
                     method="GET",

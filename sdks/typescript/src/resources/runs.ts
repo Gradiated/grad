@@ -12,7 +12,7 @@ import type {
   RunStatus,
   SplitSpec,
 } from "../generated/models.js";
-import { convertKeys, GradError, type RequestOptions } from "../transport.js";
+import { APIConnectionError, convertKeys, GradError, type RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { GradUsageError, RunFailedError, WaitTimeoutError } from "../errors.js";
 import { formatPlan } from "../format.js";
@@ -52,6 +52,8 @@ export interface EventsOptions extends RequestOptions {
 }
 
 const RUN_EVENT_TYPES = new Set<string>(["phase", "metric", "checkpoint", "attempt", "warning", "log", "completed"]);
+/** Dropped or refused event streams in a row before `events({ follow })` gives up (the same in all four SDKs). */
+export const MAX_EVENT_RECONNECTS = 20;
 const WAITING_PHASES = new Set<string>(["queued", "waiting_for_compute"]);
 
 export interface MetricsOptions extends RequestOptions {
@@ -243,10 +245,12 @@ export class Run {
     let lastEventId: string | undefined;
     let lastSeq = 0;
     let failures = 0;
+    let lastError: unknown;
     while (true) {
       try {
         for await (const sse of this.#core.api.listRunEventsStream(this.id, {}, { ...request, ...(lastEventId !== undefined ? { lastEventId } : {}) })) {
           failures = 0;
+          lastError = undefined;
           if (!RUN_EVENT_TYPES.has(sse.event)) continue;
           const event = decodeEvent(sse.data);
           if (event.type !== "completed") {
@@ -261,8 +265,12 @@ export class Run {
         // The stream closed without `completed` (proxy timeout, deploy): reconnect.
       } catch (error) {
         if (request.signal?.aborted || !isTransient(error)) throw error;
+        lastError = error;
       }
       failures += 1;
+      if (failures > MAX_EVENT_RECONNECTS) {
+        throw lastError ?? new APIConnectionError(`Lost the event stream for run ${this.id} ${failures} times in a row.`, { code: "connection_error" });
+      }
       await this.#core.poll.sleep(Math.min(500 * 2 ** Math.min(failures - 1, 4), 5_000), request.signal);
     }
   }

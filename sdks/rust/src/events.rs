@@ -246,6 +246,9 @@ pub struct RunEventStream {
     reconnect_base: Duration,
 }
 
+/// Dropped or refused event streams in a row before a followed stream gives up (the same in all four SDKs).
+pub const MAX_EVENT_RECONNECTS: u32 = 20;
+
 impl RunEventStream {
     pub(crate) fn new(transport: Transport, run_id: String, follow: bool) -> Self {
         RunEventStream {
@@ -262,7 +265,7 @@ impl RunEventStream {
             pending: VecDeque::new(),
             done: false,
             failures: 0,
-            max_reconnects: 8,
+            max_reconnects: MAX_EVENT_RECONNECTS,
             reconnect_base: Duration::from_millis(500),
         }
     }
@@ -281,7 +284,7 @@ impl RunEventStream {
         self
     }
 
-    /// How many consecutive failed reconnects to tolerate (default 8).
+    /// How many consecutive failed reconnects to tolerate (default [`MAX_EVENT_RECONNECTS`]).
     pub fn max_reconnects(mut self, n: u32) -> Self {
         self.max_reconnects = n;
         self

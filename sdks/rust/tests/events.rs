@@ -135,6 +135,32 @@ async fn follows_typed_events_and_reconnects_without_repeats() {
 }
 
 #[tokio::test]
+async fn gives_up_after_its_reconnect_budget_in_a_row() {
+    let srv = MockServer::start(|_| Reply::problem(503, "unavailable", "restarting"));
+    let c = Client::builder()
+        .ignore_env(true)
+        .ignore_config_file(true)
+        .base_url(&srv.url)
+        .api_key("grad_test_key")
+        .max_retries(0)
+        .build()
+        .unwrap();
+    let mut events = c
+        .runs()
+        .events("run_1", true)
+        .max_reconnects(3)
+        .reconnect_base(Duration::from_millis(1));
+    let mut last = None;
+    while let Some(ev) = events.next().await {
+        last = Some(ev);
+    }
+    assert!(matches!(last, Some(Err(_))));
+    assert_eq!(srv.count("GET", "/v1/runs/run_1/events"), 4);
+    // The default budget is the one all four SDKs share.
+    assert_eq!(MAX_EVENT_RECONNECTS, 20);
+}
+
+#[tokio::test]
 async fn pages_events_without_follow_and_waits_with_events() {
     let p = page();
     let id = p["run_id"].as_str().unwrap().to_string();

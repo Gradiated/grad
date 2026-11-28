@@ -225,7 +225,7 @@ func TestWaitOnEventsCallsBack(t *testing.T) {
 }
 
 // A proxy or cache that ignores Accept answers the event stream with the JSON page: that is an
-// error at once, not ten reconnects ending in "the stream closed".
+// error at once, not MaxEventReconnects reconnects ending in "the stream closed".
 func TestEventsFollowRefusesANonEventStream(t *testing.T) {
 	srv := newFake(t, map[string]route{
 		"GET /v1/runs/run_1/events": jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil}),
@@ -243,5 +243,23 @@ func TestEventsFollowRefusesANonEventStream(t *testing.T) {
 	}
 	if n := srv.count("GET", "/v1/runs/run_1/events"); n != 1 {
 		t.Fatalf("%d requests, want 1", n)
+	}
+}
+
+// A stream that keeps failing is given up after MaxEventReconnects reconnects in a row.
+func TestEventsFollowGivesUpAfterMaxEventReconnects(t *testing.T) {
+	srv := newFake(t, map[string]route{
+		"GET /v1/runs/run_1/events": jsonValue(502, map[string]any{"type": "about:blank", "title": "Bad Gateway", "status": 502, "code": "bad_gateway", "detail": "down"}),
+	})
+	c, _ := srv.client(grad.WithMaxRetries(0))
+	var got error
+	for _, err := range c.Runs.Events(context.Background(), "run_1", grad.EventsOptions{Follow: true}) {
+		got = err
+	}
+	if got == nil {
+		t.Fatal("want an error")
+	}
+	if n := srv.count("GET", "/v1/runs/run_1/events"); n != grad.MaxEventReconnects+1 {
+		t.Fatalf("%d requests, want %d", n, grad.MaxEventReconnects+1)
 	}
 }

@@ -41,6 +41,10 @@ const (
 	EventCompleted  = generated.RunEventTypeCompleted
 )
 
+// MaxEventReconnects is how many dropped or refused event streams in a row a
+// followed Events tolerates before it yields the error (the same in all four SDKs).
+const MaxEventReconnects = 20
+
 // EventsOptions configures Run.Events.
 type EventsOptions struct {
 	// Follow streams live over Server-Sent Events until the run finishes.
@@ -157,7 +161,7 @@ func (r *Run) Events(ctx context.Context, opts EventsOptions) iter.Seq2[RunEvent
 				return
 			}
 			failures++
-			if !isTransient(err) || failures > 10 {
+			if !isTransient(err) || failures > MaxEventReconnects {
 				yield(RunEvent{}, err)
 				return
 			}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { NotFoundError, ResponseDecodeError, type RunEvent, type RunStatus } from "../src/index.js";
+import { NotFoundError, ResponseDecodeError, ServerError, type RunEvent, type RunStatus } from "../src/index.js";
+import { MAX_EVENT_RECONNECTS } from "../src/resources/runs.js";
 import { FakeServer, json, makeGrad, problemFixture, wire } from "./helpers.js";
 
 const page = wire<{ run_id: string; data: Array<{ type: string; seq: number; run: Record<string, unknown> }> }>("run-events-page.json");
@@ -21,6 +22,16 @@ describe("run events", () => {
     expect(error).toBeInstanceOf(ResponseDecodeError);
     expect((error as ResponseDecodeError).code).toBe("not_event_stream");
     expect(server.callsTo("GET", `${RUN}/events`)).toHaveLength(1);
+  });
+
+  it("gives up after MAX_EVENT_RECONNECTS failed reconnects in a row", async () => {
+    const server = new FakeServer().on("GET", `${RUN}/events`, json({}, 502));
+    const { grad } = makeGrad(server, { maxRetries: 0 });
+    const error = await (async () => {
+      for await (const _ of grad.runs.events(page.run_id, { follow: true })) void _;
+    })().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ServerError);
+    expect(server.callsTo("GET", `${RUN}/events`)).toHaveLength(MAX_EVENT_RECONNECTS + 1);
   });
 
   it("follows the typed event stream, reconnecting with Last-Event-ID without repeating events", async () => {

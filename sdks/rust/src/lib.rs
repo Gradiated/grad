@@ -22,7 +22,7 @@ pub use download::{DownloadOptions, DownloadedArtifact, ExtractLimits};
 pub use error::{ApiErrorBody, Error, Result};
 pub use events::{
     AttemptEvent, AttemptKind, CheckpointEvent, CompletedEvent, EventMeta, GpuInfo, MessageEvent,
-    PhaseEvent, RunEvent, RunEventStream, RunEventsPage, RunMetricEvent,
+    PhaseEvent, RunEvent, RunEventStream, RunEventsPage, RunMetricEvent, MAX_EVENT_RECONNECTS,
 };
 pub use models::*;
 pub use resources::*;

@@ -156,7 +156,7 @@ class WaitEventsTests(unittest.TestCase):
             max_retries=0,
         )
         seen: list[Any] = []
-        with mock.patch("grad._resources.MAX_SSE_RECONNECTS", 1):
+        with mock.patch("grad._resources.MAX_EVENT_RECONNECTS", 1):
             with self.assertRaises(grad.APIConnectionError):
                 client.runs.wait(RID, on_event=seen.append, progress=False)
         self.assertEqual(len(seen), 3)
