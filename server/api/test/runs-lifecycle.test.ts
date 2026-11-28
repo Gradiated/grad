@@ -815,6 +815,27 @@ describe("run lifecycle and worker protocol", () => {
     expect(await t.services.queue.expireLeases(t.clock.now())).toBe(0);
   });
 
+  it("keeps claiming when closing one expired lease keeps failing", async () => {
+    const stuck = await createSftRun(t, { name: "stuck" });
+    await worker.claim();
+    t.clock.advanceSeconds(1);
+    const next = await createSftRun(t, { name: "next" });
+    t.clock.advanceSeconds(120);
+    // A bug or bad row makes closing the stuck run's attempt throw.
+    const runRead = t.deps.store.runs.getById;
+    t.deps.store.runs.getById = async (id) => {
+      if (id === stuck.id) throw new Error("corrupt row");
+      return runRead(id);
+    };
+
+    const other = new FakeWorker(t, "worker-2");
+    const claimed = await other.claim();
+    expect(claimed?.id).toBe(next.id);
+    expect(await t.services.queue.expireLeases(t.clock.now())).toBe(0);
+    t.deps.store.runs.getById = runRead;
+    expect(await t.services.queue.expireLeases(t.clock.now())).toBe(1);
+  });
+
   it("fences a worker write on the row its lease check read, not a later read", async () => {
     const run = await createSftRun(t);
     const job = (await worker.claim())!;
