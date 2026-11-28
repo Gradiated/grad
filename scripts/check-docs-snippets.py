@@ -778,7 +778,9 @@ def api_examples_check(examples_path: Path, base_url: str, api_key: str, capture
         res = client.request(method, url_of(path), json=body, headers=headers)
         if res.status_code < 300 and "json" in res.headers.get("content-type", ""):
             data = res.json()
-            recorded[op_id] = {"status": res.status_code, "body": data}
+            items = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), list) else [data]
+            if not any(isinstance(i, dict) and i.get("status") == "failed" for i in items):  # not an example to copy
+                recorded[op_id] = {"status": res.status_code, "body": data}
             if op_id in API_CREATES and isinstance(data, dict) and isinstance(data.get("id"), str):
                 created[API_CREATES[op_id]] = data["id"]
         return res
