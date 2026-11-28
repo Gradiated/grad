@@ -280,7 +280,8 @@ describe("artifact downloads", () => {
     new FakeServer().on(
       "GET",
       `${artifactPath}/download`,
-      new Response(body as BodyInit, { status: 200, headers: { "content-type": "application/octet-stream", "content-length": String(body.byteLength), ...headers } }),
+      // A fresh Response per request: cloning one shared Response flakes under undici ("Body has already been consumed").
+      () => new Response(body.slice() as BodyInit, { status: 200, headers: { "content-type": "application/octet-stream", "content-length": String(body.byteLength), ...headers } }),
     );
   const leftovers = (dir: string) => readdirSync(dir).filter((f) => f.includes(".grad-dl-"));
 
