@@ -56,7 +56,9 @@ export const Card = ({ title, count, actions, children, tight, className }: { ti
 export const Stat = ({ label, value, hint }: { label: ReactNode; value: ReactNode; hint?: ReactNode }) => (
   <div className="stat">
     <div className="stat-label">{label}</div>
-    <div className="stat-value">{value}</div>
+    <div className="stat-value" title={typeof value === "string" ? value : undefined}>
+      {value}
+    </div>
     {hint !== undefined && <div className="stat-hint">{hint}</div>}
   </div>
 );
