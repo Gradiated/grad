@@ -153,6 +153,24 @@ const problems = (expr: string, names: Map<string, Set<string>>): string[] => {
   }
   for (const l of grouped)
     if (!known.has(l)) out.push(`grouping by unknown label ${l}`);
+  // `a / b` matches series one-to-one on every label: a ratio (generate.mjs's
+  // ratio()) of sides grouped by different labels is always empty, unless it
+  // says ignoring/on.
+  const at = expr.indexOf(") / clamp_min(");
+  if (at >= 0) {
+    const by = (side: string) =>
+      (/^\(*(?:sum|max|min|avg)(?: by \(([^)]*)\))?/.exec(side)?.[1] ?? "")
+        .split(",")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .sort()
+        .join(", ");
+    const [num, den] = [by(expr.slice(0, at)), by(expr.slice(at + 14))];
+    if (num !== den)
+      out.push(
+        `ratio of (${num}) over (${den}) matches nothing: add ignoring(...) group_left`,
+      );
+  }
 
   return out;
 };
@@ -282,6 +300,14 @@ describe("Grafana dashboards", () => {
     ]);
     expect(problems("sum by (color) (grad_jobs)", names)).toEqual([
       "grouping by unknown label color",
+    ]);
+    expect(
+      problems(
+        "(sum by (kind) (rate(grad_jobs[5m]))) / clamp_min(sum (rate(grad_jobs[5m])), 1e-9)",
+        names,
+      ),
+    ).toEqual([
+      "ratio of (kind) over () matches nothing: add ignoring(...) group_left",
     ]);
   });
 });

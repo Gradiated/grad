@@ -1350,7 +1350,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "refId": "A",
-          "expr": "(sum by (phase) (rate(grad_run_phase_duration_seconds_sum{namespace=~\"$namespace\", phase!~\"queued|waiting_for_compute\"}[$__rate_interval]))) / clamp_min(sum (rate(grad_run_phase_duration_seconds_sum{namespace=~\"$namespace\", phase!~\"queued|waiting_for_compute\"}[$__rate_interval])), 1e-9)",
+          "expr": "(sum by (phase) (rate(grad_run_phase_duration_seconds_sum{namespace=~\"$namespace\", phase!~\"queued|waiting_for_compute\"}[$__rate_interval]))) / ignoring(phase) group_left clamp_min(sum (rate(grad_run_phase_duration_seconds_sum{namespace=~\"$namespace\", phase!~\"queued|waiting_for_compute\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "{{phase}}",
           "range": true,
           "instant": false
