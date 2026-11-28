@@ -172,23 +172,25 @@ export const createArtifactService = (
 
     delete: async (workspaceId, reference) => {
       const { id } = await get(workspaceId, reference);
-      await store.transaction(async () => {
-        const result = await store.artifacts.deleteRelease(workspaceId, id);
-        if (!result) throw notFound("artifact", reference);
-        if (result.pins.length > 0) throw artifactPinned(id, result.pins);
-        // Under the blob lock, before the commit: a release created on the
-        // same bundle meanwhile waits and then finds it gone (and copies or
-        // uploads it again). Best effort: the orphaned-blob sweep deletes
-        // what this misses.
-        if (result.orphanKey) {
-          await storage.delete(result.orphanKey).catch((error: unknown) => {
+      const result = await store.transaction(() =>
+        store.artifacts.deleteRelease(workspaceId, id),
+      );
+      if (!result) throw notFound("artifact", reference);
+      if (result.pins.length > 0) throw artifactPinned(id, result.pins);
+      // Only once the row's delete committed (a failed commit must not leave
+      // a release without its bundle), and kept if a release created on the
+      // same bundle since references it. Best effort: the orphaned-blob
+      // sweep deletes what this misses.
+      if (result.orphanKey) {
+        await deleteUnreferencedBlob(deps, result.orphanKey).catch(
+          (error: unknown) => {
             log("warn", "artifact blob delete failed", {
               artifact: id,
               error,
             });
-          });
-        }
-      });
+          },
+        );
+      }
     },
 
     pin: async (workspaceId, reference, holder, reason) => {

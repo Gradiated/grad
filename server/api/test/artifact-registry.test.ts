@@ -157,6 +157,25 @@ describe("artifact registry: layout, provenance, uploads, imports, pins", () => 
     ).toBe(403);
   });
 
+  it("keeps the bundle of a release whose delete didn't commit", async () => {
+    const artifact = await trained();
+    const key = artifactKey(WORKSPACE_A, sha256Hex("trained-bundle"));
+    // The delete's transaction fails at its end (a lost connection at COMMIT).
+    const transaction = t.deps.store.transaction;
+    t.deps.store.transaction = (fn) =>
+      transaction(async () => {
+        await fn();
+        throw new Error("connection lost at commit");
+      });
+    const failed = await t.request(`/v1/artifacts/${artifact.id}`, {
+      method: "DELETE",
+    });
+    t.deps.store.transaction = transaction;
+    expect(failed.status).toBe(500);
+    expect((await t.json(`/v1/artifacts/${artifact.id}`)).status).toBe(200);
+    expect(await t.deps.storage.head(key)).not.toBeNull();
+  });
+
   it("a pinned artifact can't be deleted by users, retention, sweeps or workspace cleanup", async () => {
     const artifact = await trained();
     const key = artifactKey(WORKSPACE_A, sha256Hex("trained-bundle"));
