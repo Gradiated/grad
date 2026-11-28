@@ -337,6 +337,47 @@ type FailureOptions struct {
 	Threshold *float64
 }
 
+// Results iterates over every task's outcome (each model's output and scores); a non-empty
+// model keeps one model's.
+func (s *EvalsService) Results(ctx context.Context, id, model string) iter.Seq2[EvalTaskOutcome, error] {
+	return paginate(ctx, func(ctx context.Context, cursor *string) ([]EvalTaskOutcome, *string, error) {
+		api, err := s.c.api()
+		if err != nil {
+			return nil, nil, err
+		}
+		page, err := api.ListEvalResults(ctx, id, &generated.ListEvalResultsParams{Cursor: cursor, Model: optString(model)})
+		if err != nil {
+			return nil, nil, err
+		}
+		return page.Data, page.NextCursor, nil
+	})
+}
+
+// Outputs iterates over the eval's generated outputs; a non-empty model keeps one model's.
+func (s *EvalsService) Outputs(ctx context.Context, id, model string) iter.Seq2[EvalOutput, error] {
+	return paginate(ctx, func(ctx context.Context, cursor *string) ([]EvalOutput, *string, error) {
+		api, err := s.c.api()
+		if err != nil {
+			return nil, nil, err
+		}
+		page, err := api.ListEvalOutputs(ctx, id, &generated.ListEvalOutputsParams{Cursor: cursor, Model: optString(model)})
+		if err != nil {
+			return nil, nil, err
+		}
+		return page.Data, page.NextCursor, nil
+	})
+}
+
+// Results iterates over this eval's task outcomes; see EvalsService.Results.
+func (e *Eval) Results(ctx context.Context, model string) iter.Seq2[EvalTaskOutcome, error] {
+	return e.c.Evals.Results(ctx, e.ID, model)
+}
+
+// Outputs iterates over this eval's generated outputs; see EvalsService.Outputs.
+func (e *Eval) Outputs(ctx context.Context, model string) iter.Seq2[EvalOutput, error] {
+	return e.c.Evals.Outputs(ctx, e.ID, model)
+}
+
 // EvalFailures are tasks scoring below the threshold; turn them into training data with ToDataset.
 type EvalFailures struct {
 	EvalID   string

@@ -315,3 +315,26 @@ func TestEvalNeedsADataset(t *testing.T) {
 		t.Fatalf("sent %d requests without a dataset", n)
 	}
 }
+
+func TestEvalResultsAndOutputsPage(t *testing.T) {
+	ctx := context.Background()
+	results, outputs := wireMap(t, "eval-results.json"), wireMap(t, "eval-outputs.json")
+	page2 := map[string]any{"data": results["data"], "next_cursor": nil}
+	results["next_cursor"] = "c2"
+	f := newFake(t, map[string]route{
+		"GET /v1/evals/ev_1/results": sequence(jsonValue(200, results), jsonValue(200, page2)),
+		"GET /v1/evals/ev_1/outputs": jsonValue(200, map[string]any{"data": outputs["data"], "next_cursor": nil}),
+	})
+	c, _ := f.client()
+	got, err := grad.Collect(c.Evals.Results(ctx, "ev_1", "m1"))
+	if err != nil || len(got) != 2*len(page2["data"].([]any)) {
+		t.Fatalf("results %d %v", len(got), err)
+	}
+	if q := f.last("GET", "/v1/evals/ev_1/results").Query; !strings.Contains(q, "cursor=c2") || !strings.Contains(q, "model=m1") {
+		t.Fatalf("second page query %q", q)
+	}
+	outs, err := grad.Collect(c.Evals.Outputs(ctx, "ev_1", ""))
+	if err != nil || len(outs) != len(outputs["data"].([]any)) || strings.Contains(f.last("GET", "/v1/evals/ev_1/outputs").Query, "model") {
+		t.Fatalf("outputs %d %v", len(outs), err)
+	}
+}
