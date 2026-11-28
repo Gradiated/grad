@@ -948,6 +948,12 @@ export interface ExportableUsage {
   created_at: string;
 }
 
+/** A row billing ingest refused for good, and its refusal code. */
+export interface ParkedUsage {
+  seq: number;
+  code: string;
+}
+
 /** `[from, to)`; either end may be open. */
 export interface UsageFilter {
   from?: Date | undefined;
@@ -990,15 +996,24 @@ export interface UsageRepository {
   /**
    * Cloud export: under the exporter cursor's row lock (SKIP LOCKED: null
    * when another replica holds it), passes the next `limit` grad-billed rows
-   * from committed transactions to `push` and advances the cursor past them
-   * once it resolves. A throw leaves the cursor where it was.
+   * from committed transactions to `push`. Once it resolves, parks the rows
+   * it returns (billing refused them for good) and advances the cursor past
+   * all of them; returns how many rows it read. A throw leaves the cursor
+   * where it was.
    */
   exportBatch(
     limit: number,
-    push: (rows: readonly ExportableUsage[]) => Promise<void>,
+    push: (rows: readonly ExportableUsage[]) => Promise<ParkedUsage[]>,
   ): Promise<number | null>;
-  /** Grad-billed rows not exported yet, and the oldest one's created_at. */
-  exportBacklog(): Promise<{ rows: number; oldest: Date | null }>;
+  /**
+   * Grad-billed rows not exported yet, the oldest one's created_at, and the
+   * rows parked after a permanent refusal.
+   */
+  exportBacklog(): Promise<{
+    rows: number;
+    oldest: Date | null;
+    parked: number;
+  }>;
   listByRef(refId: string): Promise<LedgerRow[]>;
 }
 

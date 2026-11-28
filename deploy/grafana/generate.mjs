@@ -339,6 +339,7 @@ const platform = dashboard({
       panels: [
         { title: "Usage push lag and backlog", unit: "s", description: "Cloud: age of the oldest ledger row not yet pushed to billing, and the rows waiting.", targets: [q(`max(grad_usage_export_lag_seconds${s()})`, "lag s"), q(`max(grad_usage_export_pending_rows${s()})`, "pending rows")] },
         { title: "Usage push failures/min", targets: [q(`${rate("grad_usage_export_failures_total")} * 60`, "failures/min")] },
+        { title: "Parked usage rows", description: "Cloud: ledger rows billing ingest refused for good (422/409). The rest keep exporting; retry these by hand once the cause is fixed (CLOUD_MODE.md).", targets: [q(`max(grad_usage_parked_rows${s()})`, "parked rows")] },
         { title: "Balance checks by op and result", unit: "ops", description: "start: a new run or eval (refused: 402-style insufficient balance); continue: a running job's heartbeat (refused: the job stops as stopped_balance). Errors never stop running work.", targets: [q(rate("grad_billing_checks_total", "op, result"), "{{op}} {{result}}")] },
         { title: "Balance stops", unit: "ops", description: "Runs that stopped because the workspace ran out of balance.", targets: [q(rate("grad_job_duration_seconds_count", "kind", 'status="stopped_balance"'), "{{kind}}")] },
         { title: "Price list age", unit: "s", description: "Cloud: since the price list was last confirmed; past 24 h new runs and evals are refused (503 billing_unavailable).", targets: [q(`max(grad_price_list_age_seconds${s()})`, "oldest replica")] },

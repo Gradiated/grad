@@ -65,6 +65,7 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_usage_export_lag_seconds` | gauge |  | Cloud: age of the oldest usage row not yet pushed to billing (0 when none). |
 | `grad_usage_export_pending_rows` | gauge |  | Cloud: usage ledger rows not yet pushed to billing. |
 | `grad_usage_flush_lag_seconds` | gauge |  | Longest time a running attempt has gone without writing usage. |
+| `grad_usage_parked_rows` | gauge |  | Cloud: usage ledger rows billing refused for good (422/409), parked and never pushed until retried by hand (docs/CLOUD_MODE.md). |
 | `grad_worker_auth_total` | counter | `mode`, `result` | Worker-protocol requests by auth mode (static, kubernetes, lease; none: no worker credential) and result (ok, rejected, unavailable). |
 | `grad_worker_gpu_memory_used_bytes` | gauge | `kind` | Sum of the GPU memory leased workers last reported. |
 | `grad_worker_gpu_utilization_ratio` | gauge | `kind` | Mean GPU utilisation (0-1) leased workers last reported. |

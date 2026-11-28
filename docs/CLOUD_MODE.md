@@ -163,13 +163,37 @@ by `event_id`, so a replay is free.
   transactions older than every open one, so a late commit is never skipped.
   A transaction left open anywhere on the Postgres cluster therefore delays
   the export until it ends.
-- Ingest down, or refusing a batch (422, 409): training goes on, the rows stay
-  in the ledger, and the push retries with backoff (15 s doubling to 5 min).
-  Nothing is dropped. Watch `grad_usage_export_lag_seconds` (age of the
-  oldest unpushed row) and `grad_usage_export_pending_rows`;
-  `grad_usage_export_failures_total` counts failed pushes. Starting runs
-  against a balance that lags the backlog is the accepted risk (the balance
-  check sees only pushed usage).
+- Ingest down or failing (5xx, timeouts, anything but 422/409): training
+  goes on, the rows stay in the ledger, and the push retries forever with
+  backoff (15 s doubling to 5 min). Nothing is dropped. Watch
+  `grad_usage_export_lag_seconds` (age of the oldest unpushed row) and
+  `grad_usage_export_pending_rows`; `grad_usage_export_failures_total` counts
+  failed pushes. Starting runs against a balance that lags the backlog is the
+  accepted risk (the balance check sees only pushed usage).
+- Ingest refusing a row for good (422, e.g. `price_mismatch` or
+  `unknown_workspace`; 409 `event_conflict`): the exporter parks the row the
+  refusal names (`event_id`; a refusal that names none is narrowed down by
+  pushing the batch one row at a time) and pushes the rest at once, with no
+  backoff. A parked row keeps its place in `grad_usage` with `parked_code`
+  (the refusal code) and `parked_at`, is never deleted and never pushed again
+  by itself. `grad_usage_parked_rows` counts them, and the `GradUsageRowsParked`
+  alert (`warning`) fires while any exist.
+
+#### Parked usage rows
+
+List them, fix the cause on the billing side (a price version or SKU it
+lacks, a workspace it doesn't know), then retry by hand. Re-stamping `txid`
+puts a row ahead of the export cursor again, so the next maintenance tick
+pushes it like a new row; if billing refuses it again it is parked again.
+
+```sql
+SELECT seq, idempotency_key, workspace_id, sku, price_version, parked_code, parked_at
+  FROM grad_usage WHERE parked_at IS NOT NULL ORDER BY seq;
+
+-- Retry all of them (or add AND seq IN (...)):
+UPDATE grad_usage SET parked_code = NULL, parked_at = NULL, txid = pg_current_xact_id()
+ WHERE parked_at IS NOT NULL;
+```
 
 ## Evals
 

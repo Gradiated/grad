@@ -248,6 +248,10 @@ export const metrics = {
     "grad_usage_export_lag_seconds",
     "Cloud: age of the oldest usage row not yet pushed to billing (0 when none).",
   ),
+  usageParkedRows: gauge(
+    "grad_usage_parked_rows",
+    "Cloud: usage ledger rows billing refused for good (422/409), parked and never pushed until retried by hand (docs/CLOUD_MODE.md).",
+  ),
   usageExportFailures: counter(
     "grad_usage_export_failures_total",
     "Cloud: usage pushes to billing that failed (the rows stay and are retried).",

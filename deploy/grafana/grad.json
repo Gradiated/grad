@@ -3180,8 +3180,8 @@
     {
       "type": "timeseries",
       "id": 56,
-      "title": "Balance checks by op and result",
-      "description": "start: a new run or eval (refused: 402-style insufficient balance); continue: a running job's heartbeat (refused: the job stops as stopped_balance). Errors never stop running work.",
+      "title": "Parked usage rows",
+      "description": "Cloud: ledger rows billing ingest refused for good (422/409). The rest keep exporting; retry these by hand once the cause is fixed (CLOUD_MODE.md).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -3191,6 +3191,61 @@
         "w": 8,
         "x": 16,
         "y": 115
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "refId": "A",
+          "expr": "max(grad_usage_parked_rows{namespace=~\"$namespace\"})",
+          "legendFormat": "parked rows",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 57,
+      "title": "Balance checks by op and result",
+      "description": "start: a new run or eval (refused: 402-style insufficient balance); continue: a running job's heartbeat (refused: the job stops as stopped_balance). Errors never stop running work.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 123
       },
       "targets": [
         {
@@ -3234,7 +3289,7 @@
     },
     {
       "type": "timeseries",
-      "id": 57,
+      "id": 58,
       "title": "Balance stops",
       "description": "Runs that stopped because the workspace ran out of balance.",
       "datasource": {
@@ -3244,7 +3299,7 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 8,
         "y": 123
       },
       "targets": [
@@ -3289,7 +3344,7 @@
     },
     {
       "type": "timeseries",
-      "id": 58,
+      "id": 59,
       "title": "Price list age",
       "description": "Cloud: since the price list was last confirmed; past 24 h new runs and evals are refused (503 billing_unavailable).",
       "datasource": {
@@ -3299,7 +3354,7 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
+        "x": 16,
         "y": 123
       },
       "targets": [
@@ -3344,7 +3399,7 @@
     },
     {
       "type": "timeseries",
-      "id": 59,
+      "id": 60,
       "title": "Billed cost per hour",
       "description": "",
       "datasource": {
@@ -3354,8 +3409,8 @@
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 123
+        "x": 0,
+        "y": 131
       },
       "targets": [
         {
@@ -3399,20 +3454,20 @@
     },
     {
       "type": "row",
-      "id": 60,
+      "id": 61,
       "title": "Auth & security",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 131
+        "y": 139
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 61,
+      "id": 62,
       "title": "Worker auth by mode and result",
       "description": "Worker-protocol requests: mode static, kubernetes (TokenReview) or lease; none = no worker credential (rejected).",
       "datasource": {
@@ -3423,7 +3478,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 132
+        "y": 140
       },
       "targets": [
         {
@@ -3467,7 +3522,7 @@
     },
     {
       "type": "timeseries",
-      "id": 62,
+      "id": 63,
       "title": "TokenReviews by result",
       "description": "saturated: refused because 8 reviews were already in flight on the replica (503 worker_auth_unavailable).",
       "datasource": {
@@ -3478,7 +3533,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 132
+        "y": 140
       },
       "targets": [
         {
@@ -3533,7 +3588,7 @@
     },
     {
       "type": "timeseries",
-      "id": 63,
+      "id": 64,
       "title": "TokenReview latency (p50, p95)",
       "description": "",
       "datasource": {
@@ -3544,7 +3599,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 132
+        "y": 140
       },
       "targets": [
         {
@@ -3599,7 +3654,7 @@
     },
     {
       "type": "timeseries",
-      "id": 64,
+      "id": 65,
       "title": "Credential cache hit ratio",
       "description": "cloud_key: the Cloud API-key cache (5 s); kubernetes: reviewed service-account tokens (60 s).",
       "datasource": {
@@ -3610,7 +3665,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 140
+        "y": 148
       },
       "targets": [
         {
@@ -3656,7 +3711,7 @@
     },
     {
       "type": "timeseries",
-      "id": 65,
+      "id": 66,
       "title": "Auth errors by code",
       "description": "401/403/503 answers about credentials: unauthorized, forbidden (scope), auth_unavailable (Cloud auth view down), worker_auth_unavailable, workspace_suspended, ...",
       "datasource": {
@@ -3667,7 +3722,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 140
+        "y": 148
       },
       "targets": [
         {
@@ -3711,7 +3766,7 @@
     },
     {
       "type": "timeseries",
-      "id": 66,
+      "id": 67,
       "title": "Cloud API-key lookups",
       "description": "",
       "datasource": {
@@ -3722,7 +3777,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 140
+        "y": 148
       },
       "targets": [
         {
@@ -3766,20 +3821,20 @@
     },
     {
       "type": "row",
-      "id": 67,
+      "id": 68,
       "title": "API & SSE",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 148
+        "y": 156
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 68,
+      "id": 69,
       "title": "Requests by status class",
       "description": "",
       "datasource": {
@@ -3790,7 +3845,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 149
+        "y": 157
       },
       "targets": [
         {
@@ -3834,7 +3889,7 @@
     },
     {
       "type": "timeseries",
-      "id": 69,
+      "id": 70,
       "title": "p95 latency by route",
       "description": "",
       "datasource": {
@@ -3845,7 +3900,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 149
+        "y": 157
       },
       "targets": [
         {
@@ -3889,7 +3944,7 @@
     },
     {
       "type": "timeseries",
-      "id": 70,
+      "id": 71,
       "title": "5xx by route",
       "description": "",
       "datasource": {
@@ -3900,7 +3955,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 149
+        "y": 157
       },
       "targets": [
         {
@@ -3944,7 +3999,7 @@
     },
     {
       "type": "timeseries",
-      "id": 71,
+      "id": 72,
       "title": "Errors by code",
       "description": "Every problem+json error response by its code.",
       "datasource": {
@@ -3955,7 +4010,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 157
+        "y": 165
       },
       "targets": [
         {
@@ -3999,7 +4054,7 @@
     },
     {
       "type": "timeseries",
-      "id": 72,
+      "id": 73,
       "title": "Requests in flight",
       "description": "",
       "datasource": {
@@ -4010,7 +4065,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 157
+        "y": 165
       },
       "targets": [
         {
@@ -4054,7 +4109,7 @@
     },
     {
       "type": "timeseries",
-      "id": 73,
+      "id": 74,
       "title": "Open SSE streams",
       "description": "Run event and metric streams per replica; a replica whose event hub isn't LISTENing falls back to the safety poll.",
       "datasource": {
@@ -4065,7 +4120,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 157
+        "y": 165
       },
       "targets": [
         {
@@ -4120,7 +4175,7 @@
     },
     {
       "type": "timeseries",
-      "id": 74,
+      "id": 75,
       "title": "Event hub fetches and notifications/s",
       "description": "",
       "datasource": {
@@ -4131,7 +4186,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 165
+        "y": 173
       },
       "targets": [
         {
@@ -4186,7 +4241,7 @@
     },
     {
       "type": "timeseries",
-      "id": 75,
+      "id": 76,
       "title": "Event dispatch latency (p50, p95)",
       "description": "",
       "datasource": {
@@ -4197,7 +4252,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 165
+        "y": 173
       },
       "targets": [
         {
@@ -4252,20 +4307,20 @@
     },
     {
       "type": "row",
-      "id": 76,
+      "id": 77,
       "title": "Dependencies (Postgres, S3)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 173
+        "y": 181
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 77,
+      "id": 78,
       "title": "Postgres pool",
       "description": "Connections per state; waiting > 0 means requests queue for a connection.",
       "datasource": {
@@ -4276,7 +4331,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 174
+        "y": 182
       },
       "targets": [
         {
@@ -4320,7 +4375,7 @@
     },
     {
       "type": "timeseries",
-      "id": 78,
+      "id": 79,
       "title": "Postgres queries (p95) and errors/s",
       "description": "",
       "datasource": {
@@ -4331,7 +4386,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 174
+        "y": 182
       },
       "targets": [
         {
@@ -4386,7 +4441,7 @@
     },
     {
       "type": "timeseries",
-      "id": 79,
+      "id": 80,
       "title": "Object storage p95 by op",
       "description": "",
       "datasource": {
@@ -4397,7 +4452,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 174
+        "y": 182
       },
       "targets": [
         {
@@ -4441,7 +4496,7 @@
     },
     {
       "type": "timeseries",
-      "id": 80,
+      "id": 81,
       "title": "Object storage errors/s by op",
       "description": "",
       "datasource": {
@@ -4452,7 +4507,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 182
+        "y": 190
       },
       "targets": [
         {
@@ -4496,7 +4551,7 @@
     },
     {
       "type": "timeseries",
-      "id": 81,
+      "id": 82,
       "title": "Maintenance step errors and p95",
       "description": "",
       "datasource": {
@@ -4507,7 +4562,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 182
+        "y": 190
       },
       "targets": [
         {
@@ -4562,7 +4617,7 @@
     },
     {
       "type": "timeseries",
-      "id": 82,
+      "id": 83,
       "title": "grad-server memory",
       "description": "Resident memory per API replica.",
       "datasource": {
@@ -4573,7 +4628,7 @@
         "h": 8,
         "w": 4,
         "x": 16,
-        "y": 182
+        "y": 190
       },
       "targets": [
         {
@@ -4617,7 +4672,7 @@
     },
     {
       "type": "timeseries",
-      "id": 83,
+      "id": 84,
       "title": "Event loop lag (p99)",
       "description": "",
       "datasource": {
@@ -4628,7 +4683,7 @@
         "h": 8,
         "w": 4,
         "x": 20,
-        "y": 182
+        "y": 190
       },
       "targets": [
         {
@@ -4672,20 +4727,20 @@
     },
     {
       "type": "row",
-      "id": 84,
+      "id": 85,
       "title": "Logs",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 190
+        "y": 198
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 85,
+      "id": 86,
       "title": "Log lines by level",
       "description": "Needs a Loki data source with the grad pods' logs (labels namespace and container).",
       "datasource": {
@@ -4696,7 +4751,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 191
+        "y": 199
       },
       "targets": [
         {
@@ -4739,7 +4794,7 @@
     },
     {
       "type": "logs",
-      "id": 86,
+      "id": 87,
       "title": "Errors and warnings",
       "description": "JSON lines with level warn or error; each carries request_id, job_id, workspace_id and trace_id where they apply, and errors their stack.",
       "datasource": {
@@ -4750,7 +4805,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 197
+        "y": 205
       },
       "targets": [
         {
@@ -4777,7 +4832,7 @@
     },
     {
       "type": "logs",
-      "id": 87,
+      "id": 88,
       "title": "All grad logs",
       "description": "",
       "datasource": {
@@ -4788,7 +4843,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 207
+        "y": 215
       },
       "targets": [
         {

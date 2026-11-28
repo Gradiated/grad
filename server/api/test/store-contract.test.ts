@@ -1173,6 +1173,7 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           pushed.push(
             rows.map((u) => `${u.idempotency_key}:${u.workspace_id}`),
           );
+          return [];
         }),
       ).toBe(2);
       await expect(
@@ -1180,18 +1181,21 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           throw new Error("ingest down");
         }),
       ).rejects.toThrow("ingest down");
+      // A refused row is parked and the cursor moves past it all the same.
       expect(
         await store.usage.exportBatch(2, async (rows) => {
           pushed.push(
             rows.map((u) => `${u.idempotency_key}:${u.workspace_id}`),
           );
+          return rows.map((u) => ({ seq: u.seq, code: "price_mismatch" }));
         }),
       ).toBe(1);
-      expect(await store.usage.exportBatch(2, async () => undefined)).toBe(0);
+      expect(await store.usage.exportBatch(2, async () => [])).toBe(0);
       expect(pushed).toEqual([["k1:ws_a", "k2:ws_a"], ["k3:ws_b"]]);
       expect(await store.usage.exportBacklog()).toEqual({
         rows: 0,
         oldest: null,
+        parked: 1,
       });
     });
 

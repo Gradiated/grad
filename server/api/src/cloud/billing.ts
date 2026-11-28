@@ -1,4 +1,8 @@
-import type { BillingAdapter, UsageEvent } from "../adapters.js";
+import {
+  UsageRefusedError,
+  type BillingAdapter,
+  type UsageEvent,
+} from "../adapters.js";
 import { nanoUsd } from "../catalog.js";
 import type { Clock } from "../clock.js";
 import { ApiError, errorMessage } from "../errors.js";
@@ -142,16 +146,21 @@ export const createCloudBilling = (
 
     pushUsage: async (events: readonly UsageEvent[]) => {
       const res = await post("/usage-events", { events });
-      if (!isOk(res.status)) {
-        const code = typeof res.json.code === "string" ? res.json.code : "";
-        const eventId =
-          typeof res.json.event_id === "string"
-            ? ` (${res.json.event_id})`
-            : "";
-        throw new Error(
-          `Gradiated Cloud usage ingest returned HTTP ${res.status}${code ? ` ${code}` : ""}${eventId}${detailOf(res)}`,
+      if (isOk(res.status)) return;
+      const code = typeof res.json.code === "string" ? res.json.code : "";
+      const eventId =
+        typeof res.json.event_id === "string" ? res.json.event_id : undefined;
+      const message = `Gradiated Cloud usage ingest returned HTTP ${res.status}${code ? ` ${code}` : ""}${eventId ? ` (${eventId})` : ""}${detailOf(res)}`;
+      // 422/409: refused for good (a replay is refused again). Anything else
+      // is transient and retried.
+      if (res.status === 422 || res.status === 409) {
+        throw new UsageRefusedError(
+          message,
+          code || `http_${res.status}`,
+          eventId,
         );
       }
+      throw new Error(message);
     },
   };
 };

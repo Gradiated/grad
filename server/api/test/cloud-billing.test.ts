@@ -23,7 +23,7 @@ import {
   usageCommitted,
 } from "./fixtures/cloud.js";
 import type { FakeCloudApi } from "./fixtures/fake-cloud-api.js";
-import { fileSchemaName, postgresUrl } from "./fixtures/postgres.js";
+import { fileSchemaName, postgresUrl, sql } from "./fixtures/postgres.js";
 import { createSftRun, FakeWorker } from "./fixtures/worker.js";
 
 const lag = async (): Promise<number> =>
@@ -289,28 +289,160 @@ describe("Cloud billing: balance check, stop on balance, usage push", () => {
     expect(await lag()).toBe(0);
   });
 
-  it("an ingest refusal (422) is never dropped: the batch is retried", async () => {
+  it("a row ingest refuses for good (422, 409) is parked; the rest go on and parked rows retry by hand", async () => {
     const clock = new ManualClock();
     t = await makeTestApp({
       clock,
       ...(await cloudBillingDeps(cloud, clock)),
     });
-    await t.deps.store.usage.record({
-      idempotencyKey: "run-usage:run_x:1:10",
-      workspaceId: WORKSPACE_A,
-      kind: "run",
-      refId: "run_x",
-      attempt: 1,
-      tokensFrom: 0,
-      tokensThrough: 10,
-      costUsd: 1,
-      amountNanoUsd: 7,
-      priceVersion: "pv_1",
-      sku: "train:test/tiny-qwen3",
+    const record = (key: string, amountNanoUsd: number) =>
+      t!.deps.store.usage.record({
+        idempotencyKey: key,
+        workspaceId: WORKSPACE_A,
+        kind: "run",
+        refId: "run_x",
+        attempt: 1,
+        tokensFrom: 0,
+        tokensThrough: 10,
+        costUsd: 0.00001,
+        amountNanoUsd,
+        priceVersion: "pv_1",
+        sku: "train:test/tiny-qwen3",
+      });
+    const good = amountNanoUsd(10, 1e9);
+    const parked = async () =>
+      (await metrics.usageParkedRows.get()).values[0]?.value;
+    await record("run-usage:run_x:1:1", good);
+    // Billing ingest prices it differently: 422 price_mismatch.
+    await record("run-usage:run_x:1:2", 7);
+    await record("run-usage:run_x:1:3", good);
+    await usageCommitted();
+    expect(await t.services.usage.exportPending()).toBe(2);
+    expect(cloud.usageEvents.map((e) => e.event_id)).toEqual([
+      "training:run-usage:run_x:1:1",
+      "training:run-usage:run_x:1:3",
+    ]);
+    expect(await parked()).toBe(1);
+    expect(await t.deps.store.usage.exportBacklog()).toMatchObject({
+      rows: 0,
+      parked: 1,
     });
-    expect((await t.services.maintenance.tick()).exportedUsage).toBe(0);
-    expect(cloud.usageEvents).toEqual([]);
-    expect((await t.deps.store.usage.exportBacklog()).rows).toBe(1);
+    const [mark] = await sql(
+      "SELECT parked_code, parked_at FROM grad_usage WHERE idempotency_key = $1",
+      ["run-usage:run_x:1:2"],
+    );
+    expect(mark?.parked_code).toBe("price_mismatch");
+    expect(mark?.parked_at).toBeInstanceOf(Date);
+
+    // No backoff: the next row goes out on the next tick; the parked one is
+    // never pushed again by itself.
+    await record("run-usage:run_x:1:4", good);
+    await usageCommitted();
+    const calls = cloud.callsTo("/api/internal/v1/billing/usage-events").length;
+    expect(await t.services.usage.exportPending()).toBe(1);
+    expect(
+      cloud.callsTo("/api/internal/v1/billing/usage-events").slice(calls),
+    ).toHaveLength(1);
+
+    // 409 event_conflict: billing already has this event id with other
+    // content. Parked the same way.
+    cloud.usageEvents.push({
+      ...cloud.usageEvents[0]!,
+      event_id: "training:run-usage:run_x:1:5",
+      quantity: 99,
+    });
+    await record("run-usage:run_x:1:5", good);
+    await usageCommitted();
+    expect(await t.services.usage.exportPending()).toBe(0);
+    expect(await parked()).toBe(2);
+
+    // Retry by hand (docs/CLOUD_MODE.md), once billing's price is fixed: the
+    // re-stamped rows are ahead of the cursor again.
+    cloud.usageEvents.pop();
+    await sql(
+      `UPDATE grad_usage SET parked_code = NULL, parked_at = NULL, txid = pg_current_xact_id()
+        WHERE parked_at IS NOT NULL AND parked_code = 'event_conflict'`,
+    );
+    await usageCommitted();
+    expect(await t.services.usage.exportPending()).toBe(1);
+    expect(cloud.usageEvents.at(-1)?.event_id).toBe(
+      "training:run-usage:run_x:1:5",
+    );
+    expect(await parked()).toBe(1);
+  });
+
+  it("a refusal that names no row of the batch is narrowed down row by row", async () => {
+    const clock = new ManualClock();
+    t = await makeTestApp({
+      clock,
+      ...(await cloudBillingDeps(cloud, clock)),
+    });
+    for (const [i, amount] of [amountNanoUsd(10, 1e9), 7].entries()) {
+      await t.deps.store.usage.record({
+        idempotencyKey: `run-usage:run_y:1:${i}`,
+        workspaceId: WORKSPACE_A,
+        kind: "run",
+        refId: "run_y",
+        attempt: 1,
+        tokensFrom: 0,
+        tokensThrough: 10,
+        costUsd: 0.00001,
+        amountNanoUsd: amount,
+        priceVersion: "pv_1",
+        sku: "train:test/tiny-qwen3",
+      });
+    }
+    await usageCommitted();
+    // A refusal without an event_id (a proxy, an older ingest).
+    cloud.failNext(1, 422, "/api/internal/v1/billing/usage-events");
+    expect(await t.services.usage.exportPending()).toBe(1);
+    expect(cloud.usageEvents.map((e) => e.event_id)).toEqual([
+      "training:run-usage:run_y:1:0",
+    ]);
+    expect((await t.deps.store.usage.exportBacklog()).parked).toBe(1);
+  });
+
+  it("a transient failure while parking keeps the cursor: nothing is skipped", async () => {
+    const clock = new ManualClock();
+    t = await makeTestApp({
+      clock,
+      ...(await cloudBillingDeps(cloud, clock)),
+    });
+    for (const [i, amount] of [7, amountNanoUsd(10, 1e9)].entries()) {
+      await t.deps.store.usage.record({
+        idempotencyKey: `run-usage:run_z:1:${i}`,
+        workspaceId: WORKSPACE_A,
+        kind: "run",
+        refId: "run_z",
+        attempt: 1,
+        tokensFrom: 0,
+        tokensThrough: 10,
+        costUsd: 0.00001,
+        amountNanoUsd: amount,
+        priceVersion: "pv_1",
+        sku: "train:test/tiny-qwen3",
+      });
+    }
+    await usageCommitted();
+    // The first push is refused (parks row 0); the retry of the rest is a 503.
+    cloud.respondOnce("/api/internal/v1/billing/usage-events", 422, {
+      code: "price_mismatch",
+      event_id: "training:run-usage:run_z:1:0",
+    });
+    cloud.respondOnce("/api/internal/v1/billing/usage-events", 503, {
+      detail: "down",
+    });
+    expect(await t.services.usage.exportPending()).toBe(0);
+    expect(await t.deps.store.usage.exportBacklog()).toMatchObject({
+      rows: 2,
+      parked: 0,
+    });
+    clock.advanceSeconds(16);
+    expect(await t.services.usage.exportPending()).toBe(1);
+    expect(await t.deps.store.usage.exportBacklog()).toMatchObject({
+      rows: 0,
+      parked: 1,
+    });
   });
 
   it("two replicas push every row exactly once (the cursor is SKIP LOCKED)", async () => {

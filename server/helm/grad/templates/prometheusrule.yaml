@@ -63,6 +63,13 @@ spec:
           annotations:
             summary: Gradiated Cloud has not received usage for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
             description: Cloud mode only. Usage rows stay in grad's ledger and are retried; check grad_usage_export_failures_total and the API logs for the billing ingest error.
+        - alert: GradUsageRowsParked
+          expr: max(grad_usage_parked_rows{ {{- $sel }}}) > 0
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ "{{" }} $value {{ "}}" }} usage row(s) refused by Gradiated Cloud billing ingest and parked."
+            description: Cloud mode only. Billing refused these rows for good (422/409, e.g. price_mismatch or event_conflict); the rest keep exporting. They stay in the usage ledger, marked parked_code and parked_at; fix the cause, then retry them by hand (docs/CLOUD_MODE.md, "Parked usage rows").
         - alert: GradUsageFlushLagging
           expr: max(grad_usage_flush_lag_seconds{ {{- $sel }}}) > {{ $r.usageFlushLagSeconds }}
           for: 10m

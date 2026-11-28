@@ -74,6 +74,20 @@ export interface UsageEvent {
   tags: Record<string, string>;
 }
 
+/**
+ * Billing ingest refused a usage batch for good (HTTP 422 or 409): a replay
+ * would be refused again. `eventId` names the refused event when ingest says.
+ */
+export class UsageRefusedError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly eventId: string | undefined,
+  ) {
+    super(message);
+  }
+}
+
 export interface BillingAdapter {
   checkCanStartRun(
     workspaceId: string,
@@ -87,6 +101,7 @@ export interface BillingAdapter {
   /**
    * Cloud only: pushes ledger rows to billing (idempotent by event_id; a
    * replay is free). Absent on self-hosted servers: the ledger stays local.
+   * Throws UsageRefusedError when billing refuses the batch for good.
    */
   pushUsage?(events: readonly UsageEvent[]): Promise<void>;
   /**

@@ -7,7 +7,7 @@ import {
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { invalid } from "../errors.js";
-import type { UsageEvent } from "../adapters.js";
+import { UsageRefusedError, type UsageEvent } from "../adapters.js";
 import { log } from "../telemetry/log.js";
 import { metrics } from "../telemetry/metrics.js";
 import type {
@@ -15,6 +15,7 @@ import type {
   JobRow,
   LedgerRow,
   Page,
+  ParkedUsage,
   Repositories,
 } from "../store/types.js";
 
@@ -121,8 +122,10 @@ export interface UsageService {
   ): Promise<void>;
   /**
    * Cloud: pushes new ledger rows to billing in batches (idempotent by
-   * event_id), from whichever replica holds the cursor; returns how many.
-   * A failed push backs off and keeps the rows (training goes on).
+   * event_id), from whichever replica holds the cursor; returns how many
+   * billing took. A failed push backs off and keeps the rows (training goes
+   * on); a row billing refuses for good (422/409) is parked instead, and the
+   * rest go on.
    */
   exportPending(): Promise<number>;
 }
@@ -146,11 +149,55 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
   const reportBacklog = async () => {
     const backlog = await store.usage.exportBacklog();
     metrics.usageExportPending.set(backlog.rows);
+    metrics.usageParkedRows.set(backlog.parked);
     metrics.usageExportLag.set(
       backlog.oldest
         ? Math.max(0, (clock.now().getTime() - backlog.oldest.getTime()) / 1000)
         : 0,
     );
+  };
+
+  /**
+   * Pushes `rows`; returns the ones billing refused for good. A refusal that
+   * names no row of the batch is narrowed down by pushing them one by one.
+   */
+  const pushOrPark = async (
+    send: (events: UsageEvent[]) => Promise<void>,
+    rows: readonly ExportableUsage[],
+  ): Promise<ParkedUsage[]> => {
+    if (rows.length === 0) return [];
+    try {
+      await send(rows.map(usageEventOf));
+      return [];
+    } catch (error) {
+      if (!(error instanceof UsageRefusedError)) throw error;
+      const refused =
+        rows.length === 1
+          ? rows[0]
+          : rows.find((r) => usageEventOf(r).event_id === error.eventId);
+      if (!refused) {
+        const parked: ParkedUsage[] = [];
+        for (const row of rows) parked.push(...(await pushOrPark(send, [row])));
+        return parked;
+      }
+      log(
+        "warn",
+        "billing refused a usage row; parked it, exporting the rest",
+        {
+          event_id: usageEventOf(refused).event_id,
+          code: error.code,
+          error,
+        },
+      );
+
+      return [
+        { seq: refused.seq, code: error.code },
+        ...(await pushOrPark(
+          send,
+          rows.filter((r) => r !== refused),
+        )),
+      ];
+    }
   };
 
   return {
@@ -232,12 +279,18 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
       let sent = 0;
       try {
         for (let i = 0; i < EXPORT_BATCHES_PER_TICK; i += 1) {
-          const n = await store.usage.exportBatch(EXPORT_BATCH, (rows) =>
-            push(rows.map(usageEventOf)),
+          let parked = 0;
+          const n = await store.usage.exportBatch(
+            EXPORT_BATCH,
+            async (rows) => {
+              const refused = await pushOrPark(push, rows);
+              parked = refused.length;
+              return refused;
+            },
           );
           // null: another replica holds the cursor this tick.
           if (n === null) return sent;
-          sent += n;
+          sent += n - parked;
           if (n < EXPORT_BATCH) break;
         }
         exportFailures = 0;

@@ -327,6 +327,7 @@ With `networkPolicy.enabled`, `metrics.allowFrom` says who may reach the metrics
 | `GradNoWorkersForQueuedJobs` | Train, import or eval jobs are queued and no worker of that kind has been online for 15 minutes | |
 | `GradJobFailureRateHigh` | More than 25% of a kind's jobs failed over 30 minutes, with at least 3 failures | `failureRatio`, `failureMinJobs` |
 | `GradUsagePushLagging` | Cloud: usage hasn't reached billing for 30 minutes | `usagePushLagSeconds` |
+| `GradUsageRowsParked` | Cloud: billing ingest refused a usage row for good (422/409) and it was parked ([retry by hand](CLOUD_MODE.md#parked-usage-rows)) | |
 | `GradUsageFlushLagging` | A running attempt has written no usage row for 15 minutes | `usageFlushLagSeconds` |
 | `GradTokenReviewSaturated` | Worker tokens keep being refused because 8 TokenReviews are in flight | |
 | `GradDatabaseErrors` | More than 5% of Postgres queries fail over 5 minutes | `dbErrorRatio` |

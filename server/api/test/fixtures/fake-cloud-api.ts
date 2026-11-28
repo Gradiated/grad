@@ -317,6 +317,10 @@ export const startFakeCloudApi = async (
       ) {
         return [422, { code: "price_mismatch", event_id: event.event_id }];
       }
+      const seen = usageEvents.find((e) => e.event_id === event.event_id);
+      if (seen && JSON.stringify(seen) !== JSON.stringify(event)) {
+        return [409, { code: "event_conflict", event_id: event.event_id }];
+      }
     }
     for (const event of events) {
       if (usageEvents.some((e) => e.event_id === event.event_id)) {

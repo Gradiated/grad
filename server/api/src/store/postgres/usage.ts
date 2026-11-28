@@ -237,7 +237,7 @@ export const createUsageRepository = (
         [cursor.txid, cursor.seq, limit],
       );
       if (rows.length === 0) return 0;
-      await push(
+      const parked = await push(
         rows.map((r) => ({
           seq: Number(r.seq),
           idempotency_key: String(r.idempotency_key),
@@ -253,6 +253,14 @@ export const createUsageRepository = (
           created_at: new Date(r.created_at as string).toISOString(),
         })),
       );
+      if (parked.length > 0) {
+        await db.query(
+          `UPDATE grad_usage u SET parked_code = p.code, parked_at = $3::timestamptz
+             FROM unnest($1::bigint[], $2::text[]) AS p(seq, code)
+            WHERE u.seq = p.seq`,
+          [parked.map((r) => r.seq), parked.map((r) => r.code), nowIso(clock)],
+        );
+      }
       const last = rows.at(-1) as { txid: string; seq: unknown };
       await db.query(
         `UPDATE grad_usage_export SET txid = $1::xid8, seq = $2::bigint, updated_at = now()
@@ -265,7 +273,8 @@ export const createUsageRepository = (
   exportBacklog: async () => {
     const row = first(
       await db.query(
-        `SELECT COUNT(*)::int AS rows, MIN(u.created_at) AS oldest
+        `SELECT COUNT(*)::int AS rows, MIN(u.created_at) AS oldest,
+                (SELECT COUNT(*)::int FROM grad_usage WHERE parked_at IS NOT NULL) AS parked
            FROM grad_usage u
            LEFT JOIN grad_usage_export c ON c.name = 'cloud'
           WHERE u.billed_by = 'grad'
@@ -276,6 +285,7 @@ export const createUsageRepository = (
     return {
       rows: Number(row?.rows ?? 0),
       oldest: row?.oldest ? new Date(row.oldest as string) : null,
+      parked: Number(row?.parked ?? 0),
     };
   },
   listByRef: async (refId) =>
