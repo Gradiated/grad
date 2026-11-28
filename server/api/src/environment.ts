@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 import { cloudUrl } from "./cloud/http.js";
-import { JOB_KINDS } from "./contracts.js";
 import { DEFAULT_SETTINGS } from "./deps.js";
 import { issuesOf } from "./errors.js";
+import type { TrainerKey } from "./adapters.js";
 import {
+  parseKeyList,
   parseWorkerAuthConfig,
   type WorkerAuthConfig,
 } from "./worker-auth/config.js";
@@ -215,44 +216,11 @@ export const EnvironmentSchema = z.object({
 
 type RawEnvironment = z.infer<typeof EnvironmentSchema>;
 
-const TrainerKeysSchema = z.array(
-  z.strictObject({
-    label: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
-    sha256: z
-      .string()
-      .regex(/^[0-9a-f]{64}$/, "a lowercase SHA-256 hex digest"),
-    kinds: z.array(z.enum(JOB_KINDS)).min(1),
-  }),
-);
-
-type TrainerKeyConfig = z.infer<typeof TrainerKeysSchema>[number];
-
-const parseTrainerKeys = (raw: string | undefined): TrainerKeyConfig[] => {
-  if (!raw) return [];
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    throw new Error(
-      'TRAINER_KEYS_JSON must be JSON: [{"label": "h100-01", "sha256": "<hex>", "kinds": ["train"]}].',
-    );
-  }
-  const parsed = TrainerKeysSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new Error(`Invalid TRAINER_KEYS_JSON: ${issuesOf(parsed.error)}`);
-  }
-  const labels = parsed.data.map((k) => k.label);
-  const dup = labels.find((l, i) => labels.indexOf(l) !== i);
-  if (dup) throw new Error(`TRAINER_KEYS_JSON has two keys labelled '${dup}'.`);
-
-  return parsed.data;
-};
-
 export interface ServerEnvironment extends RawEnvironment {
   /** GRAD_CORS_ORIGINS, split. */
   corsOrigins: string[];
   /** Labelled, kind-scoped trainer keys from TRAINER_KEYS_JSON. */
-  trainerKeys: TrainerKeyConfig[];
+  trainerKeys: TrainerKey[];
   /** How workers authenticate (GRAD_WORKER_AUTH and its settings). */
   workerAuth: WorkerAuthConfig;
   /** Whether to serve the web UI (UI_ENABLED, default off only for AUTH_MODE=cloud). */
@@ -393,7 +361,11 @@ export const parseServerEnvironment = (
     throw new Error("METRICS_PORT must differ from PORT.");
   }
 
-  const trainerKeys = parseTrainerKeys(env.TRAINER_KEYS_JSON);
+  const trainerKeys = parseKeyList(
+    "TRAINER_KEYS_JSON",
+    env.TRAINER_KEYS_JSON,
+    '[{"label": "h100-01", "sha256": "<hex>", "kinds": ["train"]}]',
+  );
   const workerAuth = parseWorkerAuthConfig(
     {
       ...env,

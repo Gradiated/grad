@@ -48,7 +48,7 @@ const parseJson = <T>(
 
 const ServiceAccountsSchema = z.record(z.string(), KindsSchema);
 
-const OrchestratorKeysSchema = z.array(
+const KeyListSchema = z.array(
   z.strictObject({
     label: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
     sha256: z
@@ -57,6 +57,23 @@ const OrchestratorKeysSchema = z.array(
     kinds: KindsSchema,
   }),
 );
+
+/**
+ * A JSON list of labelled, kind-scoped key digests (TRAINER_KEYS_JSON,
+ * GRAD_ORCHESTRATOR_KEYS_JSON); labels are unique. Unset: none.
+ */
+export const parseKeyList = (
+  name: string,
+  raw: string | undefined,
+  example: string,
+): TrainerKey[] => {
+  const keys = parseJson(name, raw, KeyListSchema, example) ?? [];
+  const labels = keys.map((k) => k.label);
+  const dup = labels.find((l, i) => labels.indexOf(l) !== i);
+  if (dup) throw new Error(`${name} has two keys labelled '${dup}'.`);
+
+  return keys;
+};
 
 /** Parses and cross-checks the worker-auth settings; `warnings` collects the harmless leftovers. */
 export const parseWorkerAuthConfig = (
@@ -107,20 +124,11 @@ export const parseWorkerAuthConfig = (
       `GRAD_WORKER_K8S_SERVICE_ACCOUNTS: '${badAccount}' is not a '<namespace>/<service-account>' name.`,
     );
   }
-  const orchestratorKeys =
-    parseJson(
-      "GRAD_ORCHESTRATOR_KEYS_JSON",
-      env.GRAD_ORCHESTRATOR_KEYS_JSON,
-      OrchestratorKeysSchema,
-      '[{"label": "gpu-fleet", "sha256": "<hex>", "kinds": ["train"]}]',
-    ) ?? [];
-  const labels = orchestratorKeys.map((k) => k.label);
-  const dup = labels.find((l, i) => labels.indexOf(l) !== i);
-  if (dup) {
-    throw new Error(
-      `GRAD_ORCHESTRATOR_KEYS_JSON has two keys labelled '${dup}'.`,
-    );
-  }
+  const orchestratorKeys = parseKeyList(
+    "GRAD_ORCHESTRATOR_KEYS_JSON",
+    env.GRAD_ORCHESTRATOR_KEYS_JSON,
+    '[{"label": "gpu-fleet", "sha256": "<hex>", "kinds": ["train"]}]',
+  );
 
   if (enabled("kubernetes") && Object.keys(serviceAccounts).length === 0) {
     throw new Error(
