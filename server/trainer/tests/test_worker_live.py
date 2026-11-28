@@ -8,7 +8,6 @@ import unittest
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from fixtures.live_server import LiveServer, http as _http
 from fixtures.stub_runners import StubRunner

@@ -10,7 +10,7 @@ import struct
 from pathlib import Path
 from typing import Any
 
-from helpers import BERT_ID, QWEN_ID, Recorder, TempDirCase, TorchCase
+from helpers import QWEN_ID, Recorder, TempDirCase, TorchCase
 
 from grad_trainer import __version__
 from grad_trainer import artifact_formats as formats

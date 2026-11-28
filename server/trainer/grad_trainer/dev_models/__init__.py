@@ -41,20 +41,6 @@ CORPUS = [
 QWEN_SPECIALS = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "<|vision_pad|>", "<|fim_pad|>"]
 QWEN_ADDED = ["<think>", "</think>", "<tool_call>", "</tool_call>", "<tool_response>", "</tool_response>"]
 
-CORPUS = [
-    "How do I reset my password? Open Settings and choose Reset Password.",
-    "The quick brown fox jumps over the lazy dog.",
-    "Billing invoices are sent monthly. Refunds take five days.",
-    "system user assistant tool call response think answer question",
-    "Merge this diff into the original file and return the merged code.",
-    "SELECT name FROM users WHERE id = 1; translate hello bonjour",
-    '{"name": "get_weather", "arguments": {"city": "Paris"}} weather sunny rain',
-    "To rotate an API key open Settings then API Keys and click Regenerate.",
-    "Charges payments broken urgent today wait ticket category effort",
-    "0 1 2 3 4 5 6 7 8 9 # Tools functions XML tags signatures provided",
-]
-
-
 
 def build_qwen(directory: Path, seed: int, layers: int = 2, hidden: int = 32) -> None:
     import torch

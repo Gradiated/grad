@@ -42,10 +42,10 @@ def _sniff(path: Path) -> bytes:
         return fh.read(4)
 
 
-def _open(path: Path) -> IO[str]:
+def _open(path: Path) -> IO[bytes]:
     if _sniff(path)[:2] == _GZIP_MAGIC:
-        return gzip.open(path, "rt", encoding="utf-8")
-    return open(path, "r", encoding="utf-8")
+        return gzip.open(path, "rb")
+    return open(path, "rb")
 
 
 def _parquet_rows(path: Path) -> Iterator[Row]:
@@ -74,13 +74,16 @@ def file_rows(path: Path, fmt: str = "auto") -> Iterator[Row]:
     if fmt == "parquet" or (fmt == "auto" and _sniff(path) == _PARQUET_MAGIC):
         yield from _parquet_rows(path)
         return
+    # Bytes, decoded per line (json.loads detects UTF-8/16/32 and a BOM): one row that isn't
+    # valid UTF-8 or JSON, or nests too deep to parse, is dropped with its line number
+    # instead of failing the import.
     with _open(path) as fh:
         head = fh.read(4096)
         fh.seek(0)
-        if fmt == "json" or (fmt == "auto" and head.lstrip().startswith("[")):
+        if fmt == "json" or (fmt == "auto" and head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"[")):
             try:
                 rows = json.load(fh)
-            except ValueError as exc:
+            except (ValueError, RecursionError) as exc:
                 raise SourceUnavailableError(f"{path.name} is not a valid JSON array: {exc}") from exc
             if not isinstance(rows, list):
                 raise SourceUnavailableError(f"{path.name} must contain a JSON array of records.")
@@ -92,8 +95,12 @@ def file_rows(path: Path, fmt: str = "auto") -> Iterator[Row]:
                 continue
             try:
                 yield f"line {number}", json.loads(line), None
+            except UnicodeDecodeError:
+                yield f"line {number}", None, "invalid UTF-8"
+            except RecursionError:
+                yield f"line {number}", None, "invalid JSON (nested too deeply)"
             except ValueError as exc:
-                yield f"line {number}", None, f"invalid JSON ({exc.msg})"
+                yield f"line {number}", None, f"invalid JSON ({getattr(exc, 'msg', exc)})"
 
 
 def hf_rows(source: dict[str, Any]) -> Iterator[Row]:

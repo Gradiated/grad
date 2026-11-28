@@ -29,7 +29,6 @@ import sys
 import tempfile
 import threading
 import time
-import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -609,7 +608,7 @@ class TrainerWorker:
                 },
                 force=True,
             )
-        except Exception as exc:  # the lease expiry requeues it anyway
+        except Exception:  # the lease expiry requeues it anyway
             _log_traceback(f"hand-back of job {state.job_id} failed; its lease expiry requeues it", "warn")
 
     def _report(self, state: _JobState, payload: dict[str, Any]) -> None:

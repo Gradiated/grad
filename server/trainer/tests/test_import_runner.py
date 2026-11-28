@@ -39,6 +39,18 @@ class ImportRunnerTests(TempDirCase):
         self.assertIn("line 5: skipped (not_an_object)", summary.errors)
         self.assertEqual(batches[0][1]["metadata"]["source"], "posthog")
 
+    def test_a_bad_row_drops_that_row_not_the_import(self) -> None:
+        # Bad bytes, a BOM (Windows editors) and a row nested past the parser's limit.
+        path = self.tmpdir() / "traces.jsonl"
+        good = json.dumps({"prompt": "p", "chosen": "c", "rejected": "r"}).encode()
+        path.write_bytes(b"\n".join([b"\xef\xbb\xbf" + good, b'{"prompt": "\xff\xfe"}', b"[" * 100_000, good]))
+        summary, batches = self.run_import({"type": "file", "path": str(path)})
+        self.assertEqual((summary.records, summary.skipped), (2, 2))
+        self.assertEqual(summary.errors, ["line 2: invalid UTF-8", "line 3: invalid JSON (nested too deeply)"])
+        array = self.tmpdir() / "rows.json"
+        array.write_bytes(b"\xef\xbb\xbf[" + good + b"]")
+        self.assertEqual(self.run_import({"type": "file", "path": str(array)})[0].records, 1)
+
     def test_json_array_gzip_and_forced_connector(self) -> None:
         path = self.tmpdir() / "rows.json.gz"
         rows = [{"input": "q", "output": "a", "sessionId": "s"}] * 2
