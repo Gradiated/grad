@@ -7,6 +7,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- Cloud: a deleted workspace's purge no longer stalls on a dataset that only evals use. A pass
+  deleted it while a remaining eval (past the pass's 500-row page, or still running) referenced
+  it, so the pass failed on `grad_evals_dataset_id_fkey`, rolled back and failed the same way
+  every minute; the dataset now waits for its evals like it waits for its runs.
 - An artifact upload whose archive is cut off (`EOFError` or `zlib.error` mid-stream) fails at once
   with `invalid_artifact` ("upload: the archive is truncated or corrupt"); it used to crash the
   import worker, retry until `max_attempts` and fail as "abandoned by its worker".

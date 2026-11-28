@@ -153,6 +153,7 @@ export const createWorkspaceRepository = (db: Db): WorkspaceRepository => ({
         `DELETE FROM grad_datasets d WHERE d.id IN (
            SELECT d.id FROM grad_datasets d WHERE d.workspace_id = $1
               AND NOT EXISTS (SELECT 1 FROM grad_runs r WHERE r.dataset_id = d.id)
+              AND NOT EXISTS (SELECT 1 FROM grad_evals e WHERE e.dataset_id = d.id)
             LIMIT $2) RETURNING 1`,
         [workspaceId, limit],
       );

@@ -13,6 +13,8 @@ import {
   type FakeCloudApi,
 } from "./fixtures/fake-cloud-api.js";
 import { createSftRun, FakeWorker } from "./fixtures/worker.js";
+import { createEval, qaRecords, seedDataset } from "./fixtures/evals.js";
+import { PlanEvalRequestSchema } from "../src/contracts.js";
 
 const LANGFUSE = {
   kind: "langfuse",
@@ -355,5 +357,38 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
       (await t.deps.store.workspaces.get(WORKSPACE_A))?.purged_at,
     ).not.toBeNull();
     expect(await t.deps.storage.head(key)).toBeNull();
+  });
+});
+
+describe("workspace purge passes", () => {
+  it("a dataset only evals use is purged once its evals are, never failing a pass", async () => {
+    const t = await makeTestApp({ inferenceConfigured: true });
+    try {
+      await seedDataset(t, "qa", qaRecords(3));
+      for (let i = 0; i < 3; i += 1) {
+        await createEval(
+          t.services.evals,
+          WORKSPACE_A,
+          PlanEvalRequestSchema.parse({
+            name: `e${i}`,
+            models: ["qwen/qwen3-8b"],
+            dataset: "qa",
+          }),
+        );
+      }
+      // One row per table per pass: the evals outlive the first passes, so
+      // their dataset must wait for them (grad_evals.dataset_id has no cascade).
+      for (let pass = 0; pass < 10; pass += 1) {
+        const { remainingRows } = await t.deps.store.workspaces.purgeRows(
+          WORKSPACE_A,
+          1,
+        );
+        if (remainingRows === 0) break;
+      }
+      expect((await t.json("/v1/evals")).body).toMatchObject({ data: [] });
+      expect((await t.json("/v1/datasets")).body).toMatchObject({ data: [] });
+    } finally {
+      await t.close();
+    }
   });
 });
