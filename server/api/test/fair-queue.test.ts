@@ -95,6 +95,51 @@ describe("fair claims (store)", () => {
       finished_at: clock.now().toISOString(),
     });
 
+  it("a poll that can claim nothing (every queued job capped) never waits on the claim lock", async () => {
+    await queueRun("ws_a");
+    await queueRun("ws_a");
+    expect(await claim("w1", { maxRunning: caps(1) })).not.toBeNull();
+
+    // Another replica holds the train claim lock (a slow claim).
+    const holder = new pg.Client({ connectionString: postgresUrl() });
+    await holder.connect();
+    try {
+      await holder.query(
+        "SELECT pg_advisory_lock(72419032, hashtext('train'))",
+      );
+      const started = Date.now();
+      expect(await claim("w2", { maxRunning: caps(1) })).toBeNull();
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      await holder.end();
+    }
+  });
+
+  it("claims queued on the lock leave the rest of the pool free", async () => {
+    for (let i = 0; i < 12; i += 1) await queueRun(`ws_${i}`);
+    const holder = new pg.Client({ connectionString: postgresUrl() });
+    await holder.connect();
+    try {
+      await holder.query(
+        "SELECT pg_advisory_lock(72419032, hashtext('train'))",
+      );
+      // More claims than the pool has connections (10), all behind the lock.
+      const claims = Array.from({ length: 12 }, (_, i) => claim(`w${i}`));
+      await new Promise((r) => setTimeout(r, 300));
+      const started = Date.now();
+      await store.datasets.list("ws_0", { limit: 10 });
+      expect(Date.now() - started).toBeLessThan(1000);
+
+      await holder.query(
+        "SELECT pg_advisory_unlock(72419032, hashtext('train'))",
+      );
+      const got = await Promise.all(claims);
+      expect(new Set(got.map((j) => j?.id)).size).toBe(12);
+    } finally {
+      await holder.end();
+    }
+  });
+
   it("a workspace with 2 queued runs starts both within the first round of 4 workers, behind one with 50", async () => {
     const big = [];
     for (let i = 0; i < 50; i += 1) big.push(await queueRun("ws_big"));
