@@ -255,6 +255,23 @@ describe("Grafana dashboards", () => {
     }
   });
 
+  it("every alert is a warning with a runbook entry in docs/SELF_HOSTING.md", () => {
+    const rules = readFileSync(
+      path.join(ROOT, "server/helm/grad/templates/prometheusrule.yaml"),
+      "utf8",
+    );
+    const docs = readFileSync(path.join(ROOT, "docs/SELF_HOSTING.md"), "utf8");
+    const alerts = [...rules.matchAll(/- alert: (\w+)/g)].map((m) => m[1]);
+    expect(alerts.length).toBeGreaterThan(5);
+    expect(rules.match(/runbook_url: /g)?.length).toBe(alerts.length);
+    expect(rules.match(/severity: warning/g)?.length).toBe(alerts.length);
+    expect(rules).not.toMatch(/severity: (critical|page)/);
+    for (const alert of alerts) {
+      expect(rules, alert).toContain(`#${alert?.toLowerCase()}`);
+      expect(docs, `runbook entry for ${alert}`).toContain(`\n#### ${alert}\n`);
+    }
+  });
+
   it("catches an unknown metric or label", async () => {
     const names = await exported();
     expect(problems('sum(grad_nope{job=~"$job"})', names)).toEqual([

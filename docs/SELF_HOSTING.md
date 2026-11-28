@@ -378,6 +378,46 @@ With `networkPolicy.enabled`, `metrics.allowFrom` says who may reach the metrics
 | `GradMaintenanceStalled` | The maintenance loop hasn't finished a tick for 5 minutes | |
 | `GradSourcePaused` | A source was paused after repeated sync failures | |
 
+### Runbook
+
+Each alert's `runbook_url` points at its entry here, at the chart's release tag. `kubectl` lines assume the release `grad` in namespace `grad`; every 5xx log line carries `request_id` and `trace_id`, and every job's lines carry `job_id`.
+
+#### GradApiErrorRateHigh
+More than 5% of API requests return 5xx. `kubectl -n grad logs -l app.kubernetes.io/component=api --since=15m | grep '"level":"error"'` shows the cause: `database_unavailable` (see [GradDatabaseErrors](#graddatabaseerrors)), `storage_unavailable` (see [GradStorageErrors](#gradstorageerrors)), `auth_unavailable` (Cloud: the auth view), or `internal_error` with a stack (a bug: report it with the `request_id`). If one replica alone fails (`sum by (pod)` on `grad_http_requests_total`), delete that pod.
+
+#### GradJobQueuedTooLong
+The oldest claimable job of a kind has waited 30 minutes. Check that the kind's pool has running pods (`kubectl -n grad get pods -l app.kubernetes.io/component=worker`), that KEDA scaled it (`kubectl -n grad get scaledobject`), and, for `train`, that a GPU node fits the run (`grad_jobs_unfit` counts runs that need more GPU memory than any online worker has). Jobs held only by their workspace's running cap don't count here.
+
+#### GradNoWorkersForQueuedJobs
+Jobs of a kind are queued and no worker of that kind has been online for 15 minutes. The pool is at zero, or its pods can't start or authenticate: `kubectl -n grad describe pod` (image pull, GPU quota, PriorityClass preemption) and `grad_worker_auth_total{result!="ok"}` (worker token refused: the ServiceAccount mapping with `workers.auth=kubernetes`, or the pool's key with `static`).
+
+#### GradJobFailureRateHigh
+More than 25% of a kind's jobs failed in 30 minutes. `grad_job_failures_total` by `error_code` says why: `attempts_exhausted` (workers keep crashing: their logs by `job_id`, often OOM), `preemptions_exhausted` (preempted with no checkpoint saved in a row: raise `GRAD_RECLAIM_GRACE_SECONDS` or checkpoint more often), `invalid_artifact`, `source_unavailable` (a provider or its key) or `job_error` (the job's own error, shown on the run).
+
+#### GradUsagePushLagging
+Cloud: usage hasn't reached billing for 30 minutes. Rows stay in grad's ledger and nothing is lost. `grad_usage_export_failures_total` and the API logs ("usage export") name the billing ingest's error; a long open transaction anywhere on the Postgres cluster also holds the export back (`pg_stat_activity` where `xact_start` is old).
+
+#### GradUsageRowsParked
+Cloud: billing refused a usage row for good (422/409) and it was parked; the rest keep exporting. Fix the cause (usually a price list mismatch), then retry the parked rows by hand ([Parked usage rows](CLOUD_MODE.md#parked-usage-rows)).
+
+#### GradUsageFlushLagging
+A running attempt has written no usage row for 15 minutes: its worker stopped reporting progress (hung, or partitioned from the API: its lease then expires and the job requeues), or billing writes fail (`grad_maintenance_step_errors_total`, API logs).
+
+#### GradTokenReviewSaturated
+Worker tokens are refused because 8 TokenReviews are in flight. The Kubernetes API is slow (`grad_token_review_duration_seconds`) or something floods grad-server with tokens. Workers retry, and tokens reviewed in the last 15 minutes keep working.
+
+#### GradDatabaseErrors
+More than 5% of Postgres queries fail. Check the database (failover, connections against `max_connections`, disk, CPU) and the API logs ("postgres connection lost"). Requests get `503 database_unavailable` with `Retry-After: 1` and clients retry; leases survive an outage shorter than a third of their length.
+
+#### GradStorageErrors
+Object storage operations of one `op` keep failing. Check the bucket, the API's credentials (IRSA / Pod Identity, or the static keys) and KMS grants; `kubectl -n grad logs` names the S3 error code. Uploads and downloads get `503 storage_unavailable` and retry; nothing is half-written.
+
+#### GradMaintenanceStalled
+No replica finished a maintenance tick for 5 minutes, so lease expiry, requeues, retention, usage export and the queue gauges KEDA reads are stale. Usually the database (see [GradDatabaseErrors](#graddatabaseerrors)); otherwise restart the API pods one at a time.
+
+#### GradSourcePaused
+A source was paused after 10 failed syncs in a row. `grad sources list` shows its error; fix the provider key (`grad secrets set NAME` resumes its sources) or run `grad sources sync ID`.
+
 ### KEDA
 
 `keda.trigger` picks one of two modes:

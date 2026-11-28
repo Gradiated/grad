@@ -1,6 +1,7 @@
 {{- if .Values.metrics.prometheusRule.enabled }}
 {{- $sel := include "grad.metricsSelector" . }}
 {{- $r := .Values.metrics.prometheusRule }}
+{{- $runbook := printf "https://github.com/Gradiated/grad/blob/v%s/docs/SELF_HOSTING.md" .Chart.AppVersion }}
 # The recommended alerts on grad's metrics. Every alert is a warning: none is
 # meant to page (raise `severity` in your own copy if you want that). Gauges
 # sampled from Postgres are the same on every API replica, so they are read
@@ -26,6 +27,7 @@ spec:
           for: 10m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradapierrorratehigh
             summary: grad-server answers {{ "{{" }} $value | humanizePercentage {{ "}}" }} of requests with a 5xx.
             description: Check `kubectl logs` of the API pods (5xx lines carry request_id and trace_id), the database and object storage.
         - alert: GradJobQueuedTooLong
@@ -33,6 +35,7 @@ spec:
           for: 5m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradjobqueuedtoolong
             summary: A {{ "{{" }} $labels.kind {{ "}}" }} job has waited {{ "{{" }} $value | humanizeDuration {{ "}}" }} for a worker.
             description: The queue is stuck for this kind. Check the worker pools, KEDA and GPU capacity (runs waiting for a GPU that fits show as waiting_for_compute).
         {{- range $kind := list "train" "import" "eval" }}
@@ -43,6 +46,7 @@ spec:
           for: 15m
           labels: {severity: warning, kind: {{ $kind }}}
           annotations:
+            runbook_url: {{ $runbook }}#gradnoworkersforqueuedjobs
             summary: {{ $kind }} jobs are queued and no {{ $kind }} worker has been online for 15 minutes.
             description: The {{ $kind }} worker pool is scaled to zero or can't start or authenticate (image, GPU quota, worker token; see grad_worker_auth_total).
         {{- end }}
@@ -54,6 +58,7 @@ spec:
           for: 10m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradjobfailureratehigh
             summary: "{{ "{{" }} $value | humanizePercentage {{ "}}" }} of {{ "{{" }} $labels.kind {{ "}}" }} jobs failed in the last 30 minutes."
             description: grad_job_failures_total's error_code says why (attempts_exhausted, preemptions_exhausted, invalid_artifact, source_unavailable, job_error); the worker logs carry the stack, keyed by job_id.
         - alert: GradUsagePushLagging
@@ -61,6 +66,7 @@ spec:
           for: 10m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradusagepushlagging
             summary: Gradiated Cloud has not received usage for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
             description: Cloud mode only. Usage rows stay in grad's ledger and are retried; check grad_usage_export_failures_total and the API logs for the billing ingest error.
         - alert: GradUsageRowsParked
@@ -68,6 +74,7 @@ spec:
           for: 5m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradusagerowsparked
             summary: "{{ "{{" }} $value {{ "}}" }} usage row(s) refused by Gradiated Cloud billing ingest and parked."
             description: Cloud mode only. Billing refused these rows for good (422/409, e.g. price_mismatch or event_conflict); the rest keep exporting. They stay in the usage ledger, marked parked_code and parked_at; fix the cause, then retry them by hand (docs/CLOUD_MODE.md, "Parked usage rows").
         - alert: GradUsageFlushLagging
@@ -75,6 +82,7 @@ spec:
           for: 10m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradusageflushlagging
             summary: A running attempt has written no usage for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
             description: Its worker stopped reporting progress, or billing writes are failing (see grad_maintenance_step_errors_total and the API logs).
         - alert: GradTokenReviewSaturated
@@ -82,6 +90,7 @@ spec:
           for: 10m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradtokenreviewsaturated
             summary: grad-server keeps refusing worker tokens because 8 TokenReviews are in flight.
             description: Workers get 503 worker_auth_unavailable and retry. The Kubernetes API is slow (grad_token_review_duration_seconds) or something floods grad-server with service-account tokens.
         - alert: GradDatabaseErrors
@@ -91,6 +100,7 @@ spec:
           for: 10m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#graddatabaseerrors
             summary: "{{ "{{" }} $value | humanizePercentage {{ "}}" }} of grad-server's Postgres queries fail."
             description: Check Postgres (connections, disk, failover) and the API logs ("postgres connection lost", 503 database_unavailable).
         - alert: GradStorageErrors
@@ -98,6 +108,7 @@ spec:
           for: 10m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradstorageerrors
             summary: grad-server object storage {{ "{{" }} $labels.op {{ "}}" }} operations are failing.
             description: Check the bucket, its credentials (IRSA / Pod Identity or the static keys) and KMS grants.
         - alert: GradMaintenanceStalled
@@ -105,6 +116,7 @@ spec:
           for: 5m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradmaintenancestalled
             summary: grad-server's maintenance loop has not finished a tick for {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
             description: Lease expiry, requeues, source syncs, usage pushes and the queue gauges (and KEDA) are stale. Check the API pods and the database.
         - alert: GradSourcePaused
@@ -112,6 +124,7 @@ spec:
           for: 5m
           labels: {severity: warning}
           annotations:
+            runbook_url: {{ $runbook }}#gradsourcepaused
             summary: "{{ "{{" }} $value {{ "}}" }} {{ "{{" }} $labels.provider {{ "}}" }} source(s) paused after repeated failed syncs."
             description: "`grad sources list` shows the error; fix the provider key (`grad secrets set NAME` resumes its sources) or run `grad sources sync ID`."
 {{- end }}
