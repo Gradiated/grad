@@ -117,6 +117,8 @@ export interface RunStreamState {
   phase: { phase: RunPhase; since: string; step: number; workersOnline: number | null; autoscaling: boolean | null } | null;
   gpu: { name: string; memoryGb: number } | null;
   final: Run | null;
+  /** The newest metric event's run totals (metric events carry the run's tokens and cost so far). */
+  latest: { step: number; attempt: number; tokens: number; costUsd: number } | null;
   lastSeq: number;
 }
 
@@ -126,6 +128,7 @@ export const emptyStream = (): RunStreamState => ({
   phase: null,
   gpu: null,
   final: null,
+  latest: null,
   lastSeq: 0,
 });
 
@@ -170,7 +173,7 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
   const series = state.series;
   let metrics = false;
   const timeline = [...state.timeline];
-  let { phase, gpu, final, lastSeq } = state;
+  let { phase, gpu, final, latest, lastSeq } = state;
   const seenTraining = new Set(timeline.filter((t) => t.kind === "phase" && t.title === PHASE_LABEL.training).map((t) => t.key.split(":")[1]));
 
   for (const ev of events) {
@@ -189,6 +192,12 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
         series.lr.push(m.lr ?? null);
         series.tokensPerSec.push(m.tokensPerSec ?? null);
         series.costUsd.push(m.costUsd);
+        latest = {
+          step: Math.max(latest?.step ?? 0, ev.step),
+          attempt: Math.max(latest?.attempt ?? 1, ev.attempt),
+          tokens: Math.max(latest?.tokens ?? 0, m.tokens),
+          costUsd: Math.max(latest?.costUsd ?? 0, m.costUsd),
+        };
         break;
       }
       case "phase": {
@@ -260,7 +269,7 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
       }
     }
   }
-  return { series: metrics ? { ...series, rev: series.rev + 1 } : series, timeline, phase, gpu, final, lastSeq };
+  return { series: metrics ? { ...series, rev: series.rev + 1 } : series, timeline, phase, gpu, final, latest, lastSeq };
 };
 
 /** Folds runs of three or more consecutive checkpoints into one row, so frequent checkpoints don't bury the other events. */

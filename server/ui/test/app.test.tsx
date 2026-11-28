@@ -6,6 +6,7 @@ import { createApi } from "../src/lib/api.js";
 import { navigate } from "../src/lib/router.js";
 import { followRun } from "../src/lib/stream.js";
 import { presets } from "../src/pages/usage.js";
+import { compact, usd } from "../src/lib/format.js";
 import { Turns } from "../src/components/record.js";
 import type { RunEvent } from "../src/lib/events.js";
 import type { DatasetRecord } from "@sdk/generated/models.js";
@@ -525,6 +526,18 @@ describe("runs", () => {
     expect(container.querySelector(".timeline li .t-detail")?.textContent).toBe("note 249");
     await click(byText(container, ".timeline button", "Show 150 older of 150"));
     await waitFor(() => expect(container.querySelectorAll(".timeline li").length).toBe(250));
+  });
+
+  it("shows a training run's step, tokens and cost from its metric events, ahead of the run's poll", async () => {
+    const running = { ...RUN, id: "run_live", status: "running", phase: "training", current_step: 0, tokens_processed: 0, cost_usd: 0, finished_at: null, latest_metric: null };
+    const metrics = fixtureText("events.sse")
+      .split("\n\n")
+      .filter((block) => block.startsWith("event: metric"))
+      .join("\n\n");
+    const { container } = await boot(fakeServer(routes({ "GET /v1/runs/run_live": running, "GET /v1/runs/run_live/events": () => sse(`${metrics}\n\n`), "GET /v1/runs/:id/checkpoints": { data: [], next_cursor: null } })), "/runs/run_live");
+    await waitFor(() => expect(container.querySelector(".lifecycle-figures")?.textContent).toContain("Step 3"));
+    expect(byText(container, ".stat", /^Tokens(?! \/)/)?.textContent).toContain(compact(11415));
+    expect(byText(container, ".stat", "Cost")?.textContent).toContain(usd(0.011415));
   });
 
   it("shows connecting, not live, while the event stream is down", async () => {

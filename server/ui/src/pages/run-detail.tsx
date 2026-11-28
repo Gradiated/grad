@@ -19,11 +19,15 @@ export const RunDetailPage = ({ id }: { id: string }) => {
   const api = useApi();
   const now = useNow(5000);
   const { state: stream, error: streamError, connected } = useRunStream(api, id);
+  // A training run's step, tokens and cost come live from its metric events, so
+  // the run itself is polled fast only while it waits (queue position) or the
+  // stream is down.
   const polled = useResource((signal) => api.client.getRun(id, { signal }), [id], {
-    pollMs: (r) => (r && isTerminalRun(r) ? undefined : 3000),
+    pollMs: (r) => (r && isTerminalRun(r) ? undefined : connected && r?.status === "running" ? 15_000 : 3000),
   });
   // The stream's final event is the freshest copy once the run ends.
-  const run = pickNewest(polled.data, stream.final);
+  const newest = pickNewest(polled.data, stream.final);
+  const run = newest && withLive(newest, stream);
   const [dialog, setDialog] = useState<"cancel" | "resume" | null>(null);
   useTitle(run?.name);
 
@@ -146,6 +150,19 @@ const LiveLed = ({ error, connected }: { error: unknown; connected: boolean }) =
       {state}
     </span>
   );
+};
+
+/** An active run with the stream's newer step, attempt, tokens and cost. */
+export const withLive = (run: Run, stream: RunStreamState): Run => {
+  const m = stream.latest;
+  if (!m || isTerminalRun(run)) return run;
+  return {
+    ...run,
+    currentStep: Math.max(run.currentStep, m.step),
+    attempt: Math.max(run.attempt, m.attempt),
+    tokensProcessed: Math.max(run.tokensProcessed, m.tokens),
+    costUsd: Math.max(run.costUsd, m.costUsd),
+  };
 };
 
 const pickNewest = (a: Run | undefined, b: Run | null): Run | undefined => {
