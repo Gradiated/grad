@@ -35,7 +35,7 @@ import { serveUiFallback, serveUiFile } from "./ui.js";
 export type { AppDependencies } from "./deps.js";
 
 export const API_TITLE = "Gradiated Training & Serving API";
-export const API_VERSION = "0.2.0-alpha.5";
+export const API_VERSION = "0.2.0-alpha.6";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 /** SDKs push records in 8-16 MiB batches; bigger files go through upload tickets. */

@@ -7,6 +7,32 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+## [0.2.0-alpha.6] - 2026-11-28
+
+No migrations. Fixes from the production end-to-end test of alpha.5, Postgres certificate
+verification and a console Artifacts page:
+
+- **Postgres verify-full.** Set `PGSSLROOTCERT` (Helm: `database.caBundle`, a ConfigMap or
+  inline PEM, mounted into the API pods and the migrations Job) and every Postgres connection
+  verifies the server certificate and hostname against that bundle whatever `ssl*` parameters
+  the URL carries (a stale `sslmode=no-verify` included). For RDS, use the AWS global bundle;
+  see docs/SELF_HOSTING.md "Postgres TLS". An IP-address host is checked against the
+  certificate's IP addresses (node-postgres alone checked it against `localhost`).
+- **Helm:** `GRAD_WORKER_AUTOSCALING` is set only when `keda.enabled` and an enabled pool takes
+  `train` jobs (`api.workerAutoscaling` overrides it), so a queued run without one says "Waiting
+  for a worker (none online)", not "Starting a worker (autoscaling)".
+- **Cloud evals before the gateway's eval lane** answer `501 inference_unavailable` with
+  "Evals aren't available on Gradiated Cloud yet"; `recipe.evals` on Cloud is always `422
+  checkpoint_evals_unsupported_on_cloud`.
+- **Web console: an Artifacts page** (`/artifacts`): every artifact as name@version with its
+  format, base model, provenance, size, age and pins; an artifact's page shows its manifest,
+  provenance and pins, downloads it and deletes it after a confirmation (a pinned one shows the
+  `409 artifact_pinned` holders).
+- **Artifacts list their pins.** Every `Artifact` (list, get, a run's artifact, import results,
+  the internal resolve and pin responses) carries `pins` (`holder`, `reason`, `created_at`;
+  `[]` when unpinned), in all four SDKs.
+- The trainer logs Hugging Face Hub warnings once, as JSON (no raw stderr duplicate).
+
 ## [0.2.0-alpha.5] - 2026-11-28
 
 Upgrading runs migration 0010 (`node dist/main.js migrate`, or the Helm chart's Job); an alpha.4

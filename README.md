@@ -43,7 +43,7 @@ pip install grad-sdk
 npm install @gradiated/grad
 ```
 
-Without Homebrew, take a binary from the [GitHub Releases](https://github.com/Gradiated/grad/releases) or build one with `cargo install --locked grad-cli@0.2.0-alpha.5` (cargo needs the version while every release is a pre-release).
+Without Homebrew, take a binary from the [GitHub Releases](https://github.com/Gradiated/grad/releases) or build one with `cargo install --locked grad-cli@0.2.0-alpha.6` (cargo needs the version while every release is a pre-release).
 
 Train a router on support traces that already carry a `resolved` score. [`examples/support_traces.jsonl`](examples/support_traces.jsonl) is a synthetic sample (two models answering 48 made-up tickets) you can use to try it:
 
