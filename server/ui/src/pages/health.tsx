@@ -4,7 +4,7 @@ import type { ImportJob, Run } from "@sdk/generated/models.js";
 
 import { IconCpu, IconEvals, IconImport, IconRuns } from "../components/icons.js";
 import { Badge, Banner, Card, Empty, ErrorBanner, Stat, StatusBadge, type Tone } from "../components/ui.js";
-import { useApi } from "../lib/api.js";
+import { APIError, useApi } from "../lib/api.js";
 import { PHASE_LABEL } from "../lib/events.js";
 import { duration, int } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
@@ -66,6 +66,13 @@ const readiness = async (signal: AbortSignal): Promise<{ ok: boolean; detail: st
   }
 };
 
+/** A list the key may not read (403): null, so only its section is empty. */
+const allowed = <T,>(page: Promise<T>): Promise<T | null> =>
+  page.catch((e: unknown) => {
+    if (e instanceof APIError && e.status === 403) return null;
+    throw e;
+  });
+
 /** In-flight jobs per kind and status this page reads; more show as "100+". */
 const CAP = 100;
 
@@ -77,23 +84,25 @@ export const HealthPage = () => {
   const work = useResource(
     async (signal) => {
       const [queued, running, imports, evals] = await Promise.all([
-        client.listRuns({ status: "queued", limit: CAP }, { signal }),
-        client.listRuns({ status: "running", limit: CAP }, { signal }),
-        client.listImports({ status: "queued,running", limit: CAP }, { signal }),
-        client.listEvals({ status: "queued,running,awaiting_scores", limit: CAP }, { signal }),
+        allowed(client.listRuns({ status: "queued", limit: CAP }, { signal })),
+        allowed(client.listRuns({ status: "running", limit: CAP }, { signal })),
+        allowed(client.listImports({ status: "queued,running", limit: CAP }, { signal })),
+        allowed(client.listEvals({ status: "queued,running,awaiting_scores", limit: CAP }, { signal })),
       ]);
-      return { queued, running, runs: [...queued.data, ...running.data], imports: imports.data, evals };
+      return { queued, running, runs: queued && running ? [...queued.data, ...running.data] : null, imports: imports?.data ?? null, evals };
     },
     [],
     { pollMs: 5000 },
   );
   const d = work.data;
-  const train = d ? trainPool(d.runs, now) : null;
-  const imp = d ? importPool(d.imports, now) : null;
-  const evalsRunning = d?.evals.data.filter((e) => e.status !== "awaiting_scores").length ?? 0;
-  const awaiting = d?.evals.data.filter((e) => e.status === "awaiting_scores").length ?? 0;
-  const queuedRuns = [...(d?.queued.data ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const more = (page: { nextCursor: string | null } | undefined) => (page?.nextCursor ? "+" : "");
+  const train = d?.runs ? trainPool(d.runs, now) : null;
+  const imp = d?.imports ? importPool(d.imports, now) : null;
+  const evalsRunning = d?.evals?.data.filter((e) => e.status !== "awaiting_scores").length ?? 0;
+  const awaiting = d?.evals?.data.filter((e) => e.status === "awaiting_scores").length ?? 0;
+  const queuedRuns = [...(d?.queued?.data ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // A key without one of the read scopes still sees the other sections.
+  const lacking = d ? [...new Set([!d.runs && "runs:read", !d.imports && "datasets:read", !d.evals && "runs:read"])].filter((x): x is string => Boolean(x)) : [];
+  const more = (page: { nextCursor: string | null } | null | undefined) => (page?.nextCursor ? "+" : "");
 
   return (
     <div className="page">
@@ -105,18 +114,23 @@ export const HealthPage = () => {
       </div>
       {ready.data && !ready.data.ok && <Banner>grad-server is not ready: {ready.data.detail}</Banner>}
       <ErrorBanner error={work.error} onRetry={work.reload} />
+      {lacking.length > 0 && (
+        <Banner tone="info">
+          This key lacks {lacking.join(", ")}, so the sections that need {lacking.length === 1 ? "it" : "them"} are empty.
+        </Banner>
+      )}
       <div className="stats">
         <Stat label="Server" value={ready.data ? <Badge tone={ready.data.ok ? "green" : "red"}>{ready.data.ok ? "ready" : "not ready"}</Badge> : "—"} hint={ready.data?.ok ? "database reachable" : ready.data?.detail} />
         <Stat label="Queued runs" value={train ? `${int(train.queued)}${more(d?.queued)}` : "—"} hint={train?.oldestQueuedMs ? `oldest ${duration(train.oldestQueuedMs)}` : "none waiting"} />
         <Stat label="Running runs" value={train ? `${int(train.running)}${more(d?.running)}` : "—"} />
         <Stat label="Imports in flight" value={imp ? int(imp.queued + imp.running) : "—"} />
-        <Stat label="Evals in flight" value={d ? `${int(evalsRunning)}${more(d.evals)}` : "—"} hint={awaiting ? `${awaiting} awaiting local scores` : undefined} />
+        <Stat label="Evals in flight" value={d?.evals ? `${int(evalsRunning)}${more(d.evals)}` : "—"} hint={awaiting ? `${awaiting} awaiting local scores` : undefined} />
       </div>
       <div className="grid-2">
         <Card title="Worker pools" tight>
           {train && <Pool icon={<IconCpu />} name="Training" sub="Training workers (kind train)" pool={train} />}
           {imp && <Pool icon={<IconImport />} name="Import" sub="CPU workers (kind import): files, Hugging Face, source syncs" pool={imp} />}
-          {d && (
+          {d?.evals && (
             <div className="item">
               <span className="item-icon">
                 <IconEvals />
@@ -139,7 +153,7 @@ export const HealthPage = () => {
           )}
         </Card>
         <Card title="Queue" count={queuedRuns.length ? `${queuedRuns.length}${more(d?.queued)}` : undefined} tight>
-          {d && queuedRuns.length === 0 && (
+          {d?.runs && queuedRuns.length === 0 && (
             <Empty title="Queue is empty" icon={<IconRuns />}>
               Every submitted run has a worker.
             </Empty>

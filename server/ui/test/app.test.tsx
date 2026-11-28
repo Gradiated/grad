@@ -760,6 +760,15 @@ describe("datasets, evals, usage, health", () => {
     expect(container.textContent).toContain("Queued behind 2 runs");
   });
 
+  it("shows the health sections a key may read when it lacks one scope", async () => {
+    const server = fakeServer(routes({ "GET /v1/imports": () => problem(403, "forbidden", "This endpoint requires the 'datasets:read' scope.") }));
+    const { container } = await boot(server, "/health");
+    await waitFor(() => expect(container.textContent).toContain("This key lacks datasets:read"));
+    expect(container.textContent).toContain("router-queued");
+    expect(container.textContent).toContain("Training");
+    expect(container.textContent).not.toContain("kind import");
+  });
+
   it("renders a not-found page for unknown routes", async () => {
     const { container } = await boot(undefined, "/nope");
     await waitFor(() => expect(container.textContent).toContain("Nothing here"));
