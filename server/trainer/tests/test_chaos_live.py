@@ -91,6 +91,16 @@ class ChaosLiveTest(unittest.TestCase):
             time.sleep(0.3)
         self.fail(f"run {run_id} did not finish: {run}\n{self.server.log_tail()}")
 
+    def why(self, run_id: str) -> str:
+        """On a failure: the run's warnings and logs, and every worker's warnings and errors."""
+        events = self.get(f"/v1/runs/{run_id}/events?limit=5000")["data"]
+        warnings = [e for e in events if e.get("type") in ("warning", "attempt", "log")]
+        logs = []
+        for path in sorted(self.server.dir.glob("worker-*.log")):
+            lines = [line for line in path.read_text(errors="replace").splitlines() if '"level":"info"' not in line]
+            logs.append(f"--- {path.name} (warnings, errors, output)\n" + "\n".join(lines[-40:]))
+        return "\n".join([json.dumps(warnings, indent=1)[-4000:], *logs, self.server.log_tail(2000)])
+
     def all_metrics(self, run_id: str) -> list[dict[str, Any]]:
         points, cursor = [], None
         for _ in range(100):
@@ -148,7 +158,7 @@ class ChaosLiveTest(unittest.TestCase):
         final = self.wait_run(run_id)
         self.assertEqual(final["status"], "completed", final)
         # (On a failure, last_interruption and the stack log say why another attempt started.)
-        self.assertEqual(final["attempt"], 2, f"{final.get('last_interruption')}\n{self.server.log_tail()}")
+        self.assertEqual(final["attempt"], 2, f"{final.get('last_interruption')}\n{self.why(run_id)}")
         # Billed: attempt 1 as reported up to the kill, plus attempt 2 from the
         # checkpoint on. The checkpoint prefix is never billed twice.
         expected = at_kill["tokens_processed"] + control["tokens_processed"] - tokens_at_resume
