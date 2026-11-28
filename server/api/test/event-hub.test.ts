@@ -192,8 +192,9 @@ describe("SSE event hub (one reader per replica)", () => {
     );
     for (const s of streams)
       expect(metricSteps(s.frames)).toEqual([1, 2, 3, 4, 5]);
-    // 25 writes; 100 per-stream pollers would be 100 queries per interval.
-    expect(counts.listEventsSince - backfillFetches).toBeLessThanOrEqual(25);
+    // 25 writes, plus a safety poll (one query, every 2 s) when a loaded host
+    // is slow; 100 per-stream pollers would be 100 queries per interval.
+    expect(counts.listEventsSince - backfillFetches).toBeLessThanOrEqual(30);
     expect(counts.jobStates).toBe(counts.listEventsSince);
     expect(counts.listEvents).toBe(0);
     expect(await dispatched()).toBe(dispatchedBefore + 25);
