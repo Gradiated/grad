@@ -7,6 +7,7 @@ import { maskKey, sessionKeyStore, takeFragmentKey } from "../src/lib/auth.js";
 import { smooth } from "../src/components/chart.js";
 import { applyEvents, decodeEvent, emptyStream, foldCheckpoints, type RunEvent, type TimelineItem } from "../src/lib/events.js";
 import { ago, bytes, compact, duration, int, num, pct, toYaml, usd } from "../src/lib/format.js";
+import { guardLocale } from "../src/lib/locale.js";
 import { renderReport } from "../src/lib/report.js";
 import { match } from "../src/lib/router.js";
 import { savedTheme } from "../src/lib/theme.js";
@@ -352,5 +353,23 @@ describe("presentation helpers", () => {
     } finally {
       Storage.prototype.getItem = get;
     }
+  });
+});
+
+describe("locale guard", () => {
+  it("swaps a locale Intl rejects (Chromium's en-US@posix) for en-US, so uPlot's import can't blank the UI", () => {
+    const posix = { language: "en-US@posix" };
+    expect(() => new Intl.NumberFormat(posix.language)).toThrow(RangeError);
+    guardLocale(posix);
+    expect(posix.language).toBe("en-US");
+    const german = { language: "de-DE" };
+    guardLocale(german);
+    expect(german.language).toBe("de-DE");
+  });
+
+  it("runs before anything imports uPlot", async () => {
+    const { readFileSync } = await import("node:fs");
+    const main = readFileSync(`${import.meta.dirname}/../src/main.tsx`, "utf8");
+    expect(main.split("\n").find((l) => l.startsWith("import "))).toBe('import "./lib/locale.js";');
   });
 });

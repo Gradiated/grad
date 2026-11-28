@@ -109,7 +109,7 @@ export const HealthPage = () => {
       </div>
       <div className="grid-2">
         <Card title="Worker pools" tight>
-          {train && <Pool icon={<IconCpu />} name="Training" sub="GPU workers (kind train)" pool={train} />}
+          {train && <Pool icon={<IconCpu />} name="Training" sub="Training workers (kind train)" pool={train} />}
           {imp && <Pool icon={<IconImport />} name="Import" sub="CPU workers (kind import): files, Hugging Face, source syncs" pool={imp} />}
           {d && (
             <div className="item">
@@ -118,7 +118,7 @@ export const HealthPage = () => {
               </span>
               <div>
                 <div className="item-name">Eval executor</div>
-                <div className="item-sub">Runs inside grad-server against the inference endpoint</div>
+                <div className="item-sub">Eval workers (kind eval) call the inference endpoint</div>
               </div>
               <div className="item-side">
                 <div className="big">{int(evalsRunning)}</div>

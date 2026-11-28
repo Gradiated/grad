@@ -59,7 +59,7 @@ export const DatasetsPage = () => {
         </div>
         {res.data && items.length === 0 && (
           <Empty title="No datasets yet" icon={<IconDatasets />}>
-            Push records with <code>grad datasets push</code> or import a file with <code>grad datasets import</code>.
+            Import a trace export with <code>grad import FILE --dataset NAME</code>, or push records with <code>grad datasets push</code>.
           </Empty>
         )}
       </div>
@@ -286,7 +286,7 @@ const Imports = ({ name }: { name: string }) => {
       <ErrorBanner error={res.error} />
       {res.data && jobs.length === 0 && (
         <Empty title="No imports" icon={<IconImport />}>
-          <code>grad datasets import</code> loads files and Hugging Face datasets.
+          <code>grad import</code> loads files; <code>grad datasets import hf</code> loads Hugging Face datasets.
         </Empty>
       )}
       {jobs.map((j) => (
