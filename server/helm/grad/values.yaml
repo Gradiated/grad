@@ -388,7 +388,7 @@ networkPolicy:
   #    ports: [{protocol: TCP, port: 8000}]
   inferenceEgress: []
 
-# The web UI (runs, datasets, evals, usage, worker health), served by grad-server
+# The web UI (runs, datasets, artifacts, evals, usage, worker health), served by grad-server
 # at / on the API Service and so behind the ingress below. It calls only the
 # public /v1 API with the viewer's API key, kept in the browser tab.
 ui:
