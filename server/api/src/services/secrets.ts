@@ -7,11 +7,6 @@ import { log } from "../telemetry/log.js";
 import type { Page, PageRequest } from "../store/types.js";
 import { resumeSource } from "./sources.js";
 
-/**
- * Workspace secrets (provider keys, HF tokens, logger keys): sealed at rest,
- * revealed only to send to a host the secret allows.
- */
-
 /** Where a secret is about to be sent: checked against its allowed_hosts. */
 export interface SecretUse {
   url: string;
@@ -19,7 +14,12 @@ export interface SecretUse {
   use: string;
 }
 
+/**
+ * Workspace secrets (provider keys, HF tokens, logger keys): sealed at rest,
+ * revealed only to send to a host the secret allows.
+ */
 export interface SecretService {
+  /** Stores (or replaces) a value; the paused sources that use it resume. */
   set(
     workspaceId: string,
     name: string,
@@ -28,6 +28,7 @@ export interface SecretService {
   ): Promise<Secret>;
   get(workspaceId: string, name: string): Promise<Secret>;
   list(workspaceId: string, page: PageRequest): Promise<Page<Secret>>;
+  /** 409 secret_in_use while a source uses it. */
   delete(workspaceId: string, name: string): Promise<void>;
   /**
    * KMS mode: re-seals up to `limit` values sealed under another key (a KMS

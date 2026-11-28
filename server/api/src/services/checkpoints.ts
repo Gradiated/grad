@@ -30,10 +30,11 @@ export interface CheckpointService {
   ): Promise<Artifact>;
   /**
    * As each checkpoint registers: the run keeps its last CHECKPOINTS_KEPT
-   * plus the best by eval so far; the others expire now.
+   * plus the best by eval so far; the others expire now (kept ones expire
+   * after checkpoint_ttl_days unless pinned at the end).
    */
   applyRetention(run: RunRecord, now: Date): Promise<void>;
-  /** At a run's end: its best and final checkpoints never expire. */
+  /** At a run's end: its best checkpoint (by eval) and its final one never expire. */
   pinBestAndFinal(run: RunRecord, now: Date): Promise<void>;
   /** Deletes expired checkpoints and their blobs (100 a pass). */
   collectExpired(now: Date): Promise<number>;
@@ -97,12 +98,6 @@ export const createCheckpointService = (
     return run;
   };
 
-  /**
-   * Checkpoint retention, applied as each one registers: a run keeps its last
-   * CHECKPOINTS_KEPT checkpoints plus the best by eval so far; the others expire
-   * now (best and final are pinned when the run ends; kept ones expire after
-   * checkpoint_ttl_days).
-   */
   const applyRetention = async (run: RunRecord, now: Date): Promise<void> => {
     const all = await store.artifacts.allCheckpoints(run.id, now);
     const keep = new Set(all.slice(-CHECKPOINTS_KEPT).map((c) => c.id));
@@ -115,7 +110,6 @@ export const createCheckpointService = (
     );
   };
 
-  /** At a run's end: its best checkpoint (by eval) and its final one never expire. */
   const pinBestAndFinal = async (run: RunRecord, now: Date): Promise<void> => {
     const all = await store.artifacts.allCheckpoints(run.id, now);
     if (all.length === 0) return;
