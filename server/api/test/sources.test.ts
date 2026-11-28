@@ -11,7 +11,12 @@ import {
   nextScheduledSync,
   PAUSE_AFTER_FAILURES,
 } from "../src/services/sources.js";
-import { ADMIN_KEY, makeTestApp, type TestApp } from "./fixtures/app.js";
+import {
+  ADMIN_KEY,
+  makeTestApp,
+  WORKSPACE_A,
+  type TestApp,
+} from "./fixtures/app.js";
 import {
   createSftRun,
   FakeWorker,
@@ -800,6 +805,44 @@ describe("sources", () => {
     await t.json(`/v1/sources/${source.id}/sync`, { body: { full: true } });
     await failNext();
     expect((await claimImport()).import?.source.full).toBe(true);
+  });
+
+  it("completes or fails a sync whose pending full sync can't be queued (workspace suspended meanwhile)", async () => {
+    const source = (await addSource()).body;
+    const askFullThenSuspend = async () => {
+      await syncNow(source.id);
+      await t.json(`/v1/sources/${source.id}/sync`, { body: { full: true } });
+      const job = await claimImport();
+      expect((await getSource(source.id)).pending_full).toBe(true);
+      await t.services.workspaces.set(WORKSPACE_A, "suspended");
+      return job;
+    };
+
+    // The sync's records and watermark still land; the full one waits.
+    const job = await askFullThenSuspend();
+    const done = await finish(job, ["t1"], { traces: "2026-11-27T10:00:00Z" });
+    expect([done.status, done.body.status]).toEqual([200, "completed"]);
+    expect(await getSource(source.id)).toMatchObject({
+      status: "paused",
+      pending_full: true,
+      last_sync: { import_id: job.id, status: "completed" },
+    });
+
+    // Reinstated: the next sync is the full one.
+    await t.services.workspaces.set(WORKSPACE_A, "active");
+    await syncNow(source.id);
+    const full = await claimImport();
+    expect(full.import?.source).toMatchObject({ full: true, watermark: null });
+    await finish(full, [], null);
+
+    // A failed sync closes the same way.
+    const failing = await askFullThenSuspend();
+    const failed = await worker.complete(failing, {
+      status: "failed",
+      error: "provider down",
+    });
+    expect([failed.status, failed.body.status]).toEqual([200, "failed"]);
+    expect(await getSource(source.id)).toMatchObject({ pending_full: true });
   });
 
   it("records a failed sync, backs the schedule off, and clears it all on success", async () => {

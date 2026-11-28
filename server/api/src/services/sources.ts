@@ -61,9 +61,6 @@ interface SyncOutcome {
   versioned: boolean;
 }
 
-/** Records waiting that commit a version whatever the interval. */
-/** A new source's version_interval. */
-
 /** The UTC day `records_today` counts. */
 const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
 
@@ -373,6 +370,25 @@ export const createSourceService = (
     });
 
     return { job, retryAfter: null };
+  };
+
+  /**
+   * The full sync asked for while `source`'s last one ran, queued as that one
+   * closes (inside its transaction). Best effort, under a savepoint: a source
+   * paused meanwhile (its workspace suspended, say) keeps pending_full, so
+   * its next sync is the full one, and the closing sync commits regardless.
+   */
+  const enqueuePendingFull = async (source: SourceRecord | null) => {
+    if (!source?.pending_full || source.status !== "active") return;
+    await store
+      .transaction(() => enqueue(source, true, true))
+      .catch((error: unknown) => {
+        log("warn", "pending full sync not queued", {
+          source_id: source.id,
+          workspace_id: source.workspace_id,
+          error,
+        });
+      });
   };
 
   const resume = (source: SourceRecord) =>
@@ -691,7 +707,7 @@ export const createSourceService = (
           ? { next_sync_at: nextScheduledSync(source.schedule, now, 0) }
           : {}),
       });
-      if (updated?.pending_full) await enqueue(updated, true, true);
+      await enqueuePendingFull(updated);
     },
 
     failSync: async (job) => {
@@ -724,7 +740,7 @@ export const createSourceService = (
                 next_sync_at: nextScheduledSync(source.schedule, now, failures),
               }),
         });
-        if (updated?.pending_full) await enqueue(updated, true, true);
+        await enqueuePendingFull(updated);
       });
     },
 
