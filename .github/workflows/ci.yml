@@ -419,6 +419,7 @@ jobs:
           refuses "the old docs' trainer.gpuCount" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set trainer.gpuCount=1
           refuses "the old docs' keda.maxReplicaCount" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set keda.maxReplicaCount=4
           refuses "the old docs' models.mirrorUri" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set models.mirrorUri=s3://m
+          refuses "a worker pod with 2 GPUs (a worker trains on one)" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set workers.train.gpuCount=2
           refuses "an unknown workers.auth" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set workers.auth=oauth
           refuses "lease without api.internalPort" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set 'workers.auth={kubernetes,lease}'
           refuses "lease without orchestrator keys" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set 'workers.auth={kubernetes,lease}' --set api.internalPort=8788

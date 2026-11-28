@@ -736,7 +736,9 @@
         },
         "gpuCount": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 1,
+          "description": "GPUs per worker pod: 0 or 1. A worker trains one run on one GPU, so a second GPU in the pod would sit idle; scale GPUs with replicaCount (or KEDA), one pod per GPU."
         },
         "terminationGracePeriodSeconds": {
           "type": "integer",

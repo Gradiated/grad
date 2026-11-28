@@ -264,6 +264,8 @@ workers:
     replicaCount: 1
     image:
       tag: "0.2.0-alpha.7-gpu"
+    # One GPU per pod: a worker trains one run on one GPU. Add GPUs with
+    # replicaCount (or KEDA), one pod per GPU.
     gpuCount: 1
     # On SIGTERM a worker releases its attempt, which is billed, requeued and
     # resumed from the latest checkpoint.
