@@ -754,6 +754,17 @@ export const ArtifactProvenanceSchema = z
 
 export type ArtifactProvenance = z.infer<typeof ArtifactProvenanceSchema>;
 
+export const ArtifactPinSchema = z
+  .object({
+    artifact_id: z.string().min(1),
+    holder: z.string().min(1),
+    reason: z.string(),
+    created_at: IsoTimestampSchema,
+  })
+  .openapi("ArtifactPin");
+
+export type ArtifactPin = z.infer<typeof ArtifactPinSchema>;
+
 export const ArtifactSchema = z
   .object({
     id: z.string().min(1),
@@ -770,6 +781,10 @@ export const ArtifactSchema = z
     manifest: z.record(z.string(), z.unknown()),
     provenance: ArtifactProvenanceSchema,
     eval_report: EvalReportSchema.nullable(),
+    pins: z.array(ArtifactPinSchema).openapi({
+      description:
+        "Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.",
+    }),
     created_at: IsoTimestampSchema,
   })
   .openapi("Artifact");

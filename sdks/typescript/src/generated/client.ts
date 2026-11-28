@@ -61,10 +61,11 @@ import type {
 export const CODEC: CodecTable = {
   "AdapterSpec": { u: { o: { o: [["mergeOnExport", "merge_on_export", 0], ["numTokens", "num_tokens", 0]] } } },
   "ApiKey": { o: [["workspaceId", "workspace_id", 0], ["createdAt", "created_at", 0], ["revokedAt", "revoked_at", 0]] },
-  "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["provenance", "provenance", "ArtifactProvenance"], ["evalReport", "eval_report", "EvalReport"], ["createdAt", "created_at", 0]] },
+  "Artifact": { o: [["workspaceId", "workspace_id", 0], ["runId", "run_id", 0], ["checkpointId", "checkpoint_id", 0], ["baseModel", "base_model", 0], ["recipeKind", "recipe_kind", 0], ["sizeBytes", "size_bytes", 0], ["provenance", "provenance", "ArtifactProvenance"], ["evalReport", "eval_report", "EvalReport"], ["pins", "pins", { a: "ArtifactPin" }], ["createdAt", "created_at", 0]] },
   "ArtifactDownloadUrl": { o: [["expiresAt", "expires_at", 0], ["sizeBytes", "size_bytes", 0]] },
   "ArtifactImport": { o: [["workspaceId", "workspace_id", 0], ["baseModel", "base_model", 0], ["source", "source", { o: [["uploadId", "upload_id", 0]] }], ["artifactId", "artifact_id", 0], ["errorCode", "error_code", 0], ["createdAt", "created_at", 0], ["updatedAt", "updated_at", 0]] },
   "ArtifactImportSource": { u: { o: { o: [["uploadId", "upload_id", 0]] } } },
+  "ArtifactPin": { o: [["artifactId", "artifact_id", 0], ["createdAt", "created_at", 0]] },
   "ArtifactProvenance": { o: [["runId", "run_id", 0]] },
   "AttemptEvent": { o: [["runId", "run_id", 0], ["resumeStep", "resume_step", 0], ["maxAttempts", "max_attempts", 0]] },
   "BaseArtifact": { o: [["recipeKind", "recipe_kind", 0]] },

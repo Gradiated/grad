@@ -18,6 +18,12 @@ const lockBlob = async (db: Db, key: string, mode: "shared" | "exclusive") => {
   );
 };
 
+/** A release row's pins as a JSON array (oldest first), selected as `pins`. */
+const PINS = `COALESCE((SELECT json_agg(p ORDER BY p.created_at, p.holder)
+    FROM grad_artifact_pins p
+    WHERE p.workspace_id = grad_artifacts.workspace_id AND p.artifact_id = grad_artifacts.id),
+  '[]'::json) AS pins`;
+
 const pinsOf = async (db: Db, workspaceId: string, artifactId: string) =>
   (
     await db.query(
@@ -183,7 +189,7 @@ export const createArtifactRepository = (
          VALUES ($1, $2, 'release', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                  $15::jsonb, $16::jsonb, $17::timestamptz)
          ON CONFLICT (workspace_id, source_id, name) WHERE kind = 'release' DO NOTHING
-         RETURNING *`,
+         RETURNING *, ${PINS}`,
         [
           `${input.name}@${version}`,
           input.workspaceId,
@@ -209,7 +215,7 @@ export const createArtifactRepository = (
         rows[0] ??
         first(
           await db.query(
-            `SELECT * FROM grad_artifacts
+            `SELECT *, ${PINS} FROM grad_artifacts
              WHERE kind = 'release' AND workspace_id = $1 AND source_id = $2 AND name = $3`,
             [input.workspaceId, input.sourceId, input.name],
           ),
@@ -222,7 +228,7 @@ export const createArtifactRepository = (
     const row = reference.endsWith("@latest")
       ? first(
           await db.query(
-            `SELECT * FROM grad_artifacts
+            `SELECT *, ${PINS} FROM grad_artifacts
              WHERE kind = 'release' AND workspace_id = $1 AND name = $2
              ORDER BY version_day DESC, version_seq DESC LIMIT 1`,
             [workspaceId, reference.slice(0, -"@latest".length)],
@@ -230,7 +236,7 @@ export const createArtifactRepository = (
         )
       : first(
           await db.query(
-            "SELECT * FROM grad_artifacts WHERE kind = 'release' AND workspace_id = $1 AND id = $2",
+            `SELECT *, ${PINS} FROM grad_artifacts WHERE kind = 'release' AND workspace_id = $1 AND id = $2`,
             [workspaceId, reference],
           ),
         );
@@ -320,6 +326,7 @@ export const createArtifactRepository = (
 
     return listNewest(db, {
       table: "grad_artifacts",
+      columns: `*, ${PINS}`,
       where,
       params,
       page,

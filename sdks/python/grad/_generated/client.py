@@ -55,6 +55,7 @@ Artifact = TypedDict(
         "manifest": "dict[str, Any]",
         "provenance": "ArtifactProvenance",
         "eval_report": "EvalReport",
+        "pins": "list[ArtifactPin]",
         "created_at": "str",
     },
 )
@@ -1614,7 +1615,7 @@ ListUsageResponse = TypedDict(
 
 SCHEMA_FIELDS: dict[str, frozenset[str]] = {
     "ApiKey": frozenset({"created_at", "id", "name", "prefix", "revoked_at", "scopes", "workspace_id"}),
-    "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "provenance", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
+    "Artifact": frozenset({"base_model", "checkpoint_id", "created_at", "eval_report", "format", "id", "manifest", "name", "pins", "provenance", "recipe_kind", "run_id", "sha256", "size_bytes", "version", "workspace_id"}),
     "ArtifactDownloadUrl": frozenset({"expires_at", "filename", "sha256", "size_bytes", "url"}),
     "ArtifactImport": frozenset({"artifact_id", "attempt", "base_model", "created_at", "error", "error_code", "format", "id", "name", "source", "status", "updated_at", "workspace_id"}),
     "ArtifactPin": frozenset({"artifact_id", "created_at", "holder", "reason"}),

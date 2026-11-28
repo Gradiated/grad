@@ -236,6 +236,7 @@ export const toArtifact = (r: Row): ArtifactRecord => ({
   manifest: j(r.manifest, {}),
   provenance: provenanceOf(j(r.manifest, {}), sn(r.run_id)),
   eval_report: j<EvalReport | null>(r.eval_report, null),
+  pins: j<Row[]>(r.pins, []).map(toArtifactPin),
   created_at: iso(r.created_at),
 });
 

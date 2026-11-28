@@ -43,6 +43,8 @@ export interface Artifact {
   manifest: Record<string, unknown>;
   provenance: ArtifactProvenance;
   evalReport: EvalReport | null;
+  /** Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted. */
+  pins: Array<ArtifactPin>;
   createdAt: string;
 }
 
@@ -101,6 +103,13 @@ export type ArtifactImportSource = {
 export type ArtifactImportStatus = "queued" | "running" | "completed" | "failed";
 
 export const ArtifactImportStatusValues = ["queued", "running", "completed", "failed"] as const;
+
+export interface ArtifactPin {
+  artifactId: string;
+  holder: string;
+  reason: string;
+  createdAt: string;
+}
 
 export interface ArtifactProvenance {
   /** run: trained by a grad run; upload: files uploaded with `grad artifacts upload`; import: pulled from the Hugging Face Hub with `grad artifacts import`. */

@@ -860,10 +860,17 @@ class Artifact(APIObject):
     provenance: AttrDict = field(default_factory=AttrDict)
     """Where it came from: ``source`` is ``run`` (with ``run_id``), ``upload`` (``uploader``) or ``import`` (``uri``, ``hf://owner/name@<commit>``)."""
     eval_report: EvalReport | None = None
+    pins: list[AttrDict] = field(default_factory=list)
+    """Holders keeping it (``holder``, ``reason``, ``created_at``); a pinned artifact can't be deleted."""
     created_at: str | None = None
 
     _repr_fields = ("id", "format", "base_model", "size_bytes")
-    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {"manifest": _attrdict, "provenance": _attrdict, "eval_report": _eval_report}
+    _converters: ClassVar[dict[str, Callable[[Any, Any], Any]]] = {
+        "manifest": _attrdict,
+        "provenance": _attrdict,
+        "eval_report": _eval_report,
+        "pins": lambda value, client: [_attrdict(v, client) for v in value] if isinstance(value, list) else value,
+    }
 
     @property
     def ref(self) -> str:

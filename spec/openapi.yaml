@@ -3356,6 +3356,11 @@ components:
           $ref: "#/components/schemas/ArtifactProvenance"
         eval_report:
           $ref: "#/components/schemas/EvalReport"
+        pins:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactPin"
+          description: Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.
         created_at:
           type: string
           format: date-time
@@ -3374,6 +3379,7 @@ components:
         - manifest
         - provenance
         - eval_report
+        - pins
         - created_at
     ArtifactProvenance:
       type: object
@@ -3406,6 +3412,25 @@ components:
         - run_id
         - uploader
         - uri
+    ArtifactPin:
+      type: object
+      properties:
+        artifact_id:
+          type: string
+          minLength: 1
+        holder:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - artifact_id
+        - holder
+        - reason
+        - created_at
     PromoteCheckpointRequest:
       type: object
       properties:
@@ -4558,25 +4583,6 @@ components:
         - sha256
         - size_bytes
         - filename
-    ArtifactPin:
-      type: object
-      properties:
-        artifact_id:
-          type: string
-          minLength: 1
-        holder:
-          type: string
-          minLength: 1
-        reason:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-      required:
-        - artifact_id
-        - holder
-        - reason
-        - created_at
     PinArtifactRequest:
       type: object
       properties:

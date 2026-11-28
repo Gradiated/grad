@@ -21,6 +21,7 @@
           "No held-out examples: eval_loss is null."
         ]
       },
+      "pins": [],
       "format": "reference",
       "id": "support-sft@2026-11-27-1",
       "manifest": {

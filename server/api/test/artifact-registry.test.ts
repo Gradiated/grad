@@ -185,6 +185,16 @@ describe("artifact registry: layout, provenance, uploads, imports, pins", () => 
         .status,
     ).toBe(404);
 
+    // Reads list the holders, so the console can say why delete is refused.
+    const read = await t.json<Json>(`/v1/artifacts/${artifact.id}`);
+    expect(read.body.pins).toEqual([first.body]);
+    const listed = await t.json<{ data: Json[] }>(
+      `/v1/artifacts?name=${artifact.name}`,
+    );
+    expect(listed.body.data.find((a) => a.id === artifact.id)?.pins).toEqual([
+      first.body,
+    ]);
+
     // User delete: 409 naming the holder.
     const refused = await t.json<Json>(`/v1/artifacts/${artifact.id}`, {
       method: "DELETE",
@@ -221,6 +231,9 @@ describe("artifact registry: layout, provenance, uploads, imports, pins", () => 
         })
       ).status,
     ).toBe(404);
+    expect(
+      (await t.json<Json>(`/v1/artifacts/${artifact.id}`)).body.pins,
+    ).toEqual([]);
     expect(
       (await t.request(`/v1/artifacts/${artifact.id}`, { method: "DELETE" }))
         .status,

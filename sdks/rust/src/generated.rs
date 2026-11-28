@@ -137,6 +137,8 @@ pub struct Artifact {
     pub manifest: BTreeMap<String, Value>,
     pub provenance: ArtifactProvenance,
     pub eval_report: Option<EvalReport>,
+    /// Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.
+    pub pins: Vec<ArtifactPin>,
     pub created_at: String,
 }
 
@@ -242,6 +244,16 @@ string_enum! {
         Completed => "completed",
         Failed => "failed",
     }
+}
+
+/// Generated from the OpenAPI schema `ArtifactPin`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactPin {
+    pub artifact_id: String,
+    pub holder: String,
+    pub reason: String,
+    pub created_at: String,
 }
 
 /// Generated from the OpenAPI schema `ArtifactProvenance`.

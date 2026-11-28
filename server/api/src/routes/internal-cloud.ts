@@ -183,8 +183,11 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
         reason,
       );
 
+      // Re-read: the artifact's pins include this one.
+      const pinned = await release(workspaceId, artifact.id);
+
       return c.json(
-        { pin, artifact: toPublicArtifact(artifact) },
+        { pin, artifact: toPublicArtifact(pinned) },
         created ? 201 : 200,
       );
     },

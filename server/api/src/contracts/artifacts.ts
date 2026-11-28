@@ -138,17 +138,6 @@ export const PinArtifactRequestSchema = z
   })
   .openapi("PinArtifactRequest");
 
-export const ArtifactPinSchema = z
-  .object({
-    artifact_id: z.string().min(1),
-    holder: z.string().min(1),
-    reason: z.string(),
-    created_at: IsoTimestampSchema,
-  })
-  .openapi("ArtifactPin");
-
-export type ArtifactPin = z.infer<typeof ArtifactPinSchema>;
-
 export const ArtifactDownloadUrlSchema = z
   .object({
     url: z.string().url().openapi({

@@ -72,7 +72,9 @@ type Artifact struct {
 	Manifest     map[string]any     `json:"manifest"`
 	Provenance   ArtifactProvenance `json:"provenance"`
 	EvalReport   *EvalReport        `json:"eval_report"`
-	CreatedAt    string             `json:"created_at"`
+	// Pins Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.
+	Pins      []ArtifactPin `json:"pins"`
+	CreatedAt string        `json:"created_at"`
 }
 
 // ArtifactDownloadURL is generated from the OpenAPI schema.
@@ -170,6 +172,14 @@ const (
 	ArtifactImportStatusCompleted ArtifactImportStatus = "completed"
 	ArtifactImportStatusFailed    ArtifactImportStatus = "failed"
 )
+
+// ArtifactPin is generated from the OpenAPI schema.
+type ArtifactPin struct {
+	ArtifactID string `json:"artifact_id"`
+	Holder     string `json:"holder"`
+	Reason     string `json:"reason"`
+	CreatedAt  string `json:"created_at"`
+}
 
 // ArtifactProvenance is generated from the OpenAPI schema.
 type ArtifactProvenance struct {

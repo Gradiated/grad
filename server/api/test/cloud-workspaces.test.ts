@@ -324,7 +324,13 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
     ).toBe(403);
 
     const holder = "inference:version:7b1c";
-    expect((await pin(artifact.id, holder)).status).toBe(201);
+    const pinned = await pin(artifact.id, holder);
+    expect(pinned.status).toBe(201);
+    // The artifact it returns already lists the new pin.
+    const pinnedBody = (await pinned.json()) as {
+      artifact: { pins: { holder: string }[] };
+    };
+    expect(pinnedBody.artifact.pins.map((p) => p.holder)).toEqual([holder]);
     expect((await pin(artifact.id, holder)).status).toBe(200);
     expect((await pin(artifact.id, "bad holder")).status).toBe(422);
     expect(

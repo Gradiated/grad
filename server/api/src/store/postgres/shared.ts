@@ -10,6 +10,8 @@ export const listNewest = async <T extends { created_at: string; id: string }>(
   db: Db,
   input: {
     table: string;
+    /** The select list (default `*`). */
+    columns?: string;
     where: string;
     params: Params;
     page: PageRequest;
@@ -23,7 +25,7 @@ export const listNewest = async <T extends { created_at: string; id: string }>(
     where += ` AND (created_at, id COLLATE "C") < (${params.add(after[0])}::timestamptz, ${params.add(String(after[1]))}::text)`;
   }
   const rows = await db.query(
-    `SELECT * FROM ${input.table} WHERE ${where}
+    `SELECT ${input.columns ?? "*"} FROM ${input.table} WHERE ${where}
      ORDER BY created_at DESC, id COLLATE "C" DESC
      LIMIT ${params.add(page.limit + 1)}`,
     params.values,
