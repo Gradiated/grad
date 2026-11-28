@@ -86,6 +86,24 @@ class LogsTests(unittest.TestCase):
         self.assertEqual(library["logger"], "some_library.loading")
         self.assertTrue(any("deprecated knob" in line["msg"] for line in lines))
 
+    def test_hugging_face_hub_warnings_are_json_only(self) -> None:
+        try:
+            import huggingface_hub.utils.logging  # noqa: F401
+        except ImportError:
+            self.skipTest("huggingface_hub is not installed")
+        root, hub = logging.getLogger(), logging.getLogger("huggingface_hub")
+        saved = (list(root.handlers), root.level, list(hub.handlers))
+        self.addCleanup(lambda: (root.handlers.clear(), root.handlers.extend(saved[0]), root.setLevel(saved[1])))
+        self.addCleanup(lambda: (hub.handlers.clear(), hub.handlers.extend(saved[2])))
+        self.addCleanup(logging.captureWarnings, False)
+        logs.install()
+        # Its own handler wrote a raw line to the stderr it saw at import.
+        self.assertEqual(hub.handlers, [])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            logging.getLogger("huggingface_hub.utils._http").warning("unauthenticated requests to the HF Hub")
+        self.assertEqual([line["msg"] for line in _lines(out)], ["unauthenticated requests to the HF Hub"])
+
 
 if __name__ == "__main__":
     unittest.main()

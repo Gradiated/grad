@@ -116,3 +116,12 @@ def install(level: int = logging.WARNING) -> None:
     root.addHandler(_JsonHandler())
     root.setLevel(level)
     logging.captureWarnings(True)
+    # huggingface_hub adds its own stderr handler when imported, so its warnings
+    # came out twice, once as a raw non-JSON line: import it now and drop that.
+    try:
+        import huggingface_hub.utils.logging  # noqa: F401
+    except ImportError:
+        return
+    hub = logging.getLogger("huggingface_hub")
+    for handler in list(hub.handlers):
+        hub.removeHandler(handler)
