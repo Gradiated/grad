@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { cloudUrl } from "./cloud/http.js";
+import { JOB_KINDS } from "./contracts.js";
 import { DEFAULT_SETTINGS } from "./deps.js";
 import { issuesOf } from "./errors.js";
 import {
@@ -220,7 +221,7 @@ const TrainerKeysSchema = z.array(
     sha256: z
       .string()
       .regex(/^[0-9a-f]{64}$/, "a lowercase SHA-256 hex digest"),
-    kinds: z.array(z.enum(["train", "import", "eval"])).min(1),
+    kinds: z.array(z.enum(JOB_KINDS)).min(1),
   }),
 );
 

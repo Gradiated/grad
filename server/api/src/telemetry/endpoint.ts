@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import type { Hono, MiddlewareHandler } from "hono";
 
+import { JOB_KINDS } from "../contracts.js";
 import { parseBearer } from "../errors.js";
 import { registry } from "./metrics.js";
 import type { TelemetrySampler } from "./sampler.js";
@@ -33,7 +34,7 @@ const bearer = (token: string | undefined): MiddlewareHandler => {
   };
 };
 
-const WORKER_KINDS = new Set(["train", "import", "eval"]);
+const WORKER_KINDS: ReadonlySet<string> = new Set(JOB_KINDS);
 
 /**
  * `GET /metrics` (Prometheus text format) and `GET /metrics/queue?kinds=...`

@@ -1,3 +1,4 @@
+import { JOB_KINDS } from "../contracts.js";
 import type { QueueCaps, Store, TelemetrySnapshot } from "../store/types.js";
 import { metrics, type MetricJobKind } from "./metrics.js";
 
@@ -9,7 +10,6 @@ const STATES = [
   "running",
   "awaiting_scores",
 ] as const;
-const WORKER_KINDS = ["train", "import", "eval"] as const;
 
 /** Worker `kinds` (claim vocabulary) -> metric kinds: imports include syncs. */
 const METRIC_KINDS: Record<string, readonly MetricJobKind[]> = {
@@ -81,7 +81,7 @@ export const createTelemetrySampler = (
       metrics.jobsOpen.set({ kind }, open.get(kind) ?? 0);
       metrics.oldestQueuedAge.set({ kind }, oldest.get(kind) ?? 0);
     }
-    for (const kind of WORKER_KINDS) {
+    for (const kind of JOB_KINDS) {
       const q = snap.queue.find((r) => r.kind === kind);
       metrics.jobsOverLimit.set({ kind }, q?.over_limit ?? 0);
       metrics.fairShareWait.set({ kind }, q?.fair_share_wait_seconds ?? 0);
@@ -104,7 +104,7 @@ export const createTelemetrySampler = (
     }
 
     let flushLag = 0;
-    for (const kind of WORKER_KINDS) {
+    for (const kind of JOB_KINDS) {
       const w = snap.workers.find((r) => r.kind === kind);
       metrics.workersOnline.set({ kind }, w?.online ?? 0);
       metrics.workerTokensPerSecond.set({ kind }, w?.tokens_per_second ?? 0);
