@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import socket
 import sys
+import time
 import types
 import unittest
 from datetime import datetime
@@ -114,14 +116,29 @@ class EventsIteratorTests(unittest.TestCase):
         with self.assertRaises(grad.APIConnectionError) as ctx:
             list(client.runs.events(RID, follow=True))
         self.assertIn("Lost the event stream", str(ctx.exception))
-        client, _, _ = make_client({f"GET /v1/runs/{RID}/events": refused()}, max_retries=0)
+        client, sender, _ = make_client({f"GET /v1/runs/{RID}/events": [sse_reply(frame(EVENTS[0])), refused()]}, max_retries=0)
+        seen: list[Any] = []
         with self.assertRaises(grad.APIConnectionError):
-            list(client.runs.events(RID, follow=True))
+            seen.extend(client.runs.events(RID, follow=True))
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(len(sender.sent), 1 + grad._resources.MAX_EVENT_RECONNECTS)
         client, _, clock = make_client({f"GET /v1/runs/{RID}/events": sse_reply(": ping\n\n")})
         self.assertEqual(list(client.runs.events(RID, follow=True, timeout=3)), [])
         self.assertGreaterEqual(clock.now, 1003)
-        client, _, _ = make_client({f"GET /v1/runs/{RID}/events": refused()}, max_retries=0)
-        self.assertEqual(list(client.runs.events(RID, follow=True, timeout=0)), [])
+
+    def test_a_server_that_was_never_up_fails_after_the_request_retries(self) -> None:
+        client, sender, clock = make_client({f"GET /v1/runs/{RID}/events": refused()})
+        with self.assertRaises(grad.APIConnectionError) as ctx:
+            list(client.runs.events(RID, follow=True))
+        self.assertIn("Cannot reach grad-server", str(ctx.exception))
+        self.assertEqual((len(sender.sent), len(clock.sleeps)), (3, 2), "the usual 2 request retries, not the reconnect budget")
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        started = time.monotonic()
+        with grad.Grad(base_url=f"http://127.0.0.1:{port}", api_key="grad_test_key") as real, self.assertRaises(grad.APIConnectionError):
+            list(real.runs.events(RID, follow=True))
+        self.assertLess(time.monotonic() - started, 5)
 
 
 class WaitEventsTests(unittest.TestCase):

@@ -369,6 +369,8 @@ export interface StreamOptions extends RequestOptions {
 export interface SSEOptions extends StreamOptions {
   /** Resume an event stream after this event id (`Last-Event-ID`). */
   lastEventId?: string | undefined;
+  /** Called once the server has answered with an event stream. */
+  onOpen?: (() => void) | undefined;
 }
 
 export interface RequestSpec {
@@ -836,6 +838,7 @@ export class Transport implements TransportLike {
         { status: raw.status, code: "not_event_stream", requestId: raw.requestId },
       );
     }
+    options?.onOpen?.();
     const reader = raw.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";

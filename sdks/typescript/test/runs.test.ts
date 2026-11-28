@@ -222,7 +222,9 @@ describe("runs", () => {
   });
 
   it("times out a metric-following wait", async () => {
-    const hang = new FakeServer().on("GET", `${RUN}/events`, (call) => new Promise<Response>((_r, reject) => {
+    // The stream opens once (so drops are reconnected, not a dead server), then every reconnect fails slowly.
+    const opened = new Response(": ping\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+    const hang = new FakeServer().on("GET", `${RUN}/events`, opened, (call) => new Promise<Response>((_r, reject) => {
       const signal = (call as unknown as { signal?: AbortSignal }).signal;
       void signal;
       setTimeout(() => reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } })), 5);

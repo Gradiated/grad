@@ -914,6 +914,21 @@ fn api_errors_map_to_exit_codes_and_json_envelopes() {
     );
     assert!(r.stderr.to_lowercase().contains("refused"), "{}", r.stderr);
     assert!(!r.stderr.contains("network_error"));
+
+    // Following a stream on a server that was never up fails after the usual request
+    // retries, not the 20-reconnect budget of an established stream (~3 minutes).
+    let started = std::time::Instant::now();
+    let r = run(
+        sb.grad(Some("http://127.0.0.1:9")),
+        &["runs", "events", "run_1", "--follow"],
+    );
+    expect(&r, 1);
+    assert!(r.stderr.to_lowercase().contains("refused"), "{}", r.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[test]

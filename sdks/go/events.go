@@ -43,6 +43,8 @@ const (
 
 // MaxEventReconnects is how many dropped or refused event streams in a row a
 // followed Events tolerates before it yields the error (the same in all four SDKs).
+// It applies once the stream has been open: a first connection that fails
+// (after the client's usual request retries) is yielded at once.
 const MaxEventReconnects = 20
 
 // EventsOptions configures Run.Events.
@@ -110,6 +112,7 @@ func (r *Run) Events(ctx context.Context, opts EventsOptions) iter.Seq2[RunEvent
 		lastID := ""
 		lastSeq := 0
 		failures := 0
+		connected := false
 		delay := 500 * time.Millisecond
 		for {
 			api, err := r.c.api()
@@ -123,6 +126,7 @@ func (r *Run) Events(ctx context.Context, opts EventsOptions) iter.Seq2[RunEvent
 			}
 			stream, err := api.ListRunEventsStream(ctx, r.ID, nil, ropts...)
 			if err == nil {
+				connected = true
 				for stream.Next() {
 					sse := stream.Event()
 					failures, delay = 0, 500*time.Millisecond
@@ -161,7 +165,7 @@ func (r *Run) Events(ctx context.Context, opts EventsOptions) iter.Seq2[RunEvent
 				return
 			}
 			failures++
-			if !isTransient(err) || failures > MaxEventReconnects {
+			if !connected || !isTransient(err) || failures > MaxEventReconnects {
 				yield(RunEvent{}, err)
 				return
 			}

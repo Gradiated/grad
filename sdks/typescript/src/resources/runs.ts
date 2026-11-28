@@ -52,7 +52,11 @@ export interface EventsOptions extends RequestOptions {
 }
 
 const RUN_EVENT_TYPES = new Set<string>(["phase", "metric", "checkpoint", "attempt", "warning", "log", "completed"]);
-/** Dropped or refused event streams in a row before `events({ follow })` gives up (the same in all four SDKs). */
+/**
+ * Dropped or refused event streams in a row before `events({ follow })` gives up (the same in all four SDKs).
+ * It applies once the stream has been open: a first connection that fails (after the client's usual
+ * request retries) throws at once.
+ */
 export const MAX_EVENT_RECONNECTS = 20;
 const WAITING_PHASES = new Set<string>(["queued", "waiting_for_compute"]);
 
@@ -245,10 +249,14 @@ export class Run {
     let lastEventId: string | undefined;
     let lastSeq = 0;
     let failures = 0;
+    let connected = false;
     let lastError: unknown;
+    const onOpen = () => {
+      connected = true;
+    };
     while (true) {
       try {
-        for await (const sse of this.#core.api.listRunEventsStream(this.id, {}, { ...request, ...(lastEventId !== undefined ? { lastEventId } : {}) })) {
+        for await (const sse of this.#core.api.listRunEventsStream(this.id, {}, { ...request, onOpen, ...(lastEventId !== undefined ? { lastEventId } : {}) })) {
           failures = 0;
           lastError = undefined;
           if (!RUN_EVENT_TYPES.has(sse.event)) continue;
@@ -264,7 +272,7 @@ export class Run {
         }
         // The stream closed without `completed` (proxy timeout, deploy): reconnect.
       } catch (error) {
-        if (request.signal?.aborted || !isTransient(error)) throw error;
+        if (request.signal?.aborted || !connected || !isTransient(error)) throw error;
         lastError = error;
       }
       failures += 1;

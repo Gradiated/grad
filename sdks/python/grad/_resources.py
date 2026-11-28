@@ -78,6 +78,8 @@ if TYPE_CHECKING:
 TRANSIENT = (APIConnectionError, ServerError, RateLimitError)
 SSE_READ_TIMEOUT = 45.0
 #: Dropped or refused event streams in a row before ``events(follow=True)`` gives up (the same in all four SDKs).
+#: It applies once the stream has been open: a first connection that fails (after the client's usual
+#: request retries) raises at once.
 MAX_EVENT_RECONNECTS = 20
 #: Page size of ``runs.events()`` JSON pages.
 EVENTS_PAGE_LIMIT = 100
@@ -770,6 +772,7 @@ class Runs(_Resource):
         """Live events until ``completed`` (or the deadline); reconnects resume after the last seq."""
         last_seq: int | None = None
         failures = 0
+        connected = False
         retry_ms = 1000
         path = f"/v1/runs/{quote_path_param(run_id, 'id')}/events"
         while True:
@@ -777,7 +780,7 @@ class Runs(_Resource):
                 resp = self._wire.list_run_events_stream(run_id, last_event_id=None if last_seq is None else str(last_seq), timeout=SSE_READ_TIMEOUT)
             except TRANSIENT as exc:
                 failures += 1
-                if failures > MAX_EVENT_RECONNECTS:
+                if not connected or failures > MAX_EVENT_RECONNECTS:
                     raise exc
                 if self._expired(deadline):
                     return
@@ -787,6 +790,7 @@ class Runs(_Resource):
                 resp.close()
                 yield from self._poll_events(run_id, deadline, last_seq)
                 return
+            connected = True
             try:
                 for sse in iter_sse(self._lines_until(resp, deadline), SSEDecoder()):
                     if sse.retry is not None:
@@ -1132,7 +1136,9 @@ class Artifacts(_Resource):
 
         * ``format="peft"`` (default): extract into directory ``path``, checking every file
           against the bundle manifest; the result loads with
-          ``vllm serve <base> --enable-lora --lora-modules name=<path>`` (or is merged weights).
+          ``vllm serve <base> --enable-lora --max-lora-rank 32 --lora-modules name=<path>``
+          (or is merged weights). Raise ``--max-lora-rank`` to the adapter's ``r`` above 32: vLLM
+          refuses an adapter above it (its own default is 16).
         * ``format="files"``: extract any artifact (routers, embeddings, cartridges).
         * ``format="bundle"``: keep the ``.grad.tar.gz`` (``path`` may be a file or a directory).
 

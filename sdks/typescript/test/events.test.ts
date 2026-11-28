@@ -1,6 +1,8 @@
+import net from "node:net";
+
 import { describe, expect, it } from "vitest";
 
-import { NotFoundError, ResponseDecodeError, ServerError, type RunEvent, type RunStatus } from "../src/index.js";
+import { APIConnectionError, NotFoundError, ResponseDecodeError, ServerError, type RunEvent, type RunStatus } from "../src/index.js";
 import { MAX_EVENT_RECONNECTS } from "../src/resources/runs.js";
 import { FakeServer, json, makeGrad, problemFixture, wire } from "./helpers.js";
 
@@ -24,14 +26,33 @@ describe("run events", () => {
     expect(server.callsTo("GET", `${RUN}/events`)).toHaveLength(1);
   });
 
-  it("gives up after MAX_EVENT_RECONNECTS failed reconnects in a row", async () => {
-    const server = new FakeServer().on("GET", `${RUN}/events`, json({}, 502));
+  it("gives up after MAX_EVENT_RECONNECTS failed reconnects in a row once the stream was open", async () => {
+    const server = new FakeServer().on("GET", `${RUN}/events`, sse(blocks.slice(0, 2)), json({}, 502));
     const { grad } = makeGrad(server, { maxRetries: 0 });
+    const seen: RunEvent[] = [];
+    const error = await (async () => {
+      for await (const ev of grad.runs.events(page.run_id, { follow: true })) seen.push(ev);
+    })().catch((e: unknown) => e);
+    expect(seen).toHaveLength(2);
+    expect(error).toBeInstanceOf(ServerError);
+    expect(server.callsTo("GET", `${RUN}/events`)).toHaveLength(MAX_EVENT_RECONNECTS + 1);
+  });
+
+  it("fails after the usual request retries when the server was never up", async () => {
+    const port = await new Promise<number>((resolve) => {
+      const probe = net.createServer().listen(0, "127.0.0.1", () => {
+        const { port } = probe.address() as net.AddressInfo;
+        probe.close(() => resolve(port));
+      });
+    });
+    const { grad, clock } = makeGrad(new FakeServer(), { baseURL: `http://127.0.0.1:${port}`, fetch: globalThis.fetch });
+    const started = Date.now();
     const error = await (async () => {
       for await (const _ of grad.runs.events(page.run_id, { follow: true })) void _;
     })().catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ServerError);
-    expect(server.callsTo("GET", `${RUN}/events`)).toHaveLength(MAX_EVENT_RECONNECTS + 1);
+    expect(error).toBeInstanceOf(APIConnectionError);
+    expect(clock.sleeps).toHaveLength(2);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   it("follows the typed event stream, reconnecting with Last-Event-ID without repeating events", async () => {

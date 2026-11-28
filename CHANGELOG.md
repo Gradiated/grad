@@ -41,6 +41,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   `manifest.eval_report_sha256`, as Python and Rust do, and TypeScript no longer accepts an unlisted
   bundle file named like an `Object` property (`constructor`). When a proxy answers the run event stream
   with JSON, TypeScript (which reconnected forever) and Go raise a `not_event_stream` decode error.
+- **SDKs: a followed event stream fails fast on a dead server.** `events(follow)` and `wait()` in all four SDKs
+  (and `grad runs events --follow`, `grad runs wait`) give up after 20 dropped or refused reconnects in a row
+  (Go allowed 10, Rust 8, TypeScript reconnected forever), counted only once the stream has been open: a server
+  that was never up fails after the usual request retries (about a second) instead of retrying for three minutes.
 
 - **Run comparison reads.** `GET /v1/runs/{id}/metrics?max_points=N` returns a run's whole curve in one page, thinned
   to at most N points spaced evenly back from the newest (eval points thinned separately, so a sparse eval curve

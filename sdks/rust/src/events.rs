@@ -241,12 +241,15 @@ pub struct RunEventStream {
     parser: SseParser,
     pending: VecDeque<RunEvent>,
     done: bool,
+    connected: bool,
     failures: u32,
     max_reconnects: u32,
     reconnect_base: Duration,
 }
 
 /// Dropped or refused event streams in a row before a followed stream gives up (the same in all four SDKs).
+/// It applies once the stream has been open: a first connection that fails (after the client's usual
+/// request retries) is returned at once.
 pub const MAX_EVENT_RECONNECTS: u32 = 20;
 
 impl RunEventStream {
@@ -264,6 +267,7 @@ impl RunEventStream {
             parser: SseParser::new(),
             pending: VecDeque::new(),
             done: false,
+            connected: false,
             failures: 0,
             max_reconnects: MAX_EVENT_RECONNECTS,
             reconnect_base: Duration::from_millis(500),
@@ -331,6 +335,7 @@ impl RunEventStream {
         }
         self.parser = SseParser::new();
         self.resp = Some(resp);
+        self.connected = true;
         Ok(())
     }
 
@@ -393,7 +398,7 @@ impl RunEventStream {
             }
             if self.resp.is_none() {
                 if let Err(e) = self.connect().await {
-                    if e.is_transient() && self.failures < self.max_reconnects {
+                    if self.connected && e.is_transient() && self.failures < self.max_reconnects {
                         self.backoff().await;
                         continue;
                     }

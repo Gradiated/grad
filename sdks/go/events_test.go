@@ -246,20 +246,47 @@ func TestEventsFollowRefusesANonEventStream(t *testing.T) {
 	}
 }
 
-// A stream that keeps failing is given up after MaxEventReconnects reconnects in a row.
+// A stream that keeps failing once it was open is given up after MaxEventReconnects reconnects in a row.
 func TestEventsFollowGivesUpAfterMaxEventReconnects(t *testing.T) {
-	srv := newFake(t, map[string]route{
-		"GET /v1/runs/run_1/events": jsonValue(502, map[string]any{"type": "about:blank", "title": "Bad Gateway", "status": 502, "code": "bad_gateway", "detail": "down"}),
-	})
+	page, blocks := loadEvents(t)
+	events, _ := sseRoute(t, blocks[:2], nil)
+	srv := newFake(t, map[string]route{"GET /v1/runs/" + page.RunID + "/events": events})
 	c, _ := srv.client(grad.WithMaxRetries(0))
+	var got error
+	n := 0
+	for _, err := range c.Runs.Events(context.Background(), page.RunID, grad.EventsOptions{Follow: true}) {
+		if err != nil {
+			got = err
+		} else {
+			n++
+		}
+	}
+	if got == nil || n != 2 {
+		t.Fatalf("want 2 events then an error, got %d and %v", n, got)
+	}
+	if n := srv.count("GET", "/v1/runs/"+page.RunID+"/events"); n != grad.MaxEventReconnects+1 {
+		t.Fatalf("%d requests, want %d", n, grad.MaxEventReconnects+1)
+	}
+}
+
+// A server that was never up fails after the usual request retries, not MaxEventReconnects of them.
+func TestEventsFollowFailsFastWhenTheServerIsDown(t *testing.T) {
+	srv := newFake(t, map[string]route{})
+	srv.srv.Close()
+	c, clk := srv.client()
+	start := time.Now()
 	var got error
 	for _, err := range c.Runs.Events(context.Background(), "run_1", grad.EventsOptions{Follow: true}) {
 		got = err
 	}
-	if got == nil {
-		t.Fatal("want an error")
+	var conn *grad.ConnectionError
+	if !errors.As(got, &conn) {
+		t.Fatalf("want a ConnectionError, got %v", got)
 	}
-	if n := srv.count("GET", "/v1/runs/run_1/events"); n != grad.MaxEventReconnects+1 {
-		t.Fatalf("%d requests, want %d", n, grad.MaxEventReconnects+1)
+	if sleeps := clk.Sleeps(); len(sleeps) != 2 {
+		t.Fatalf("slept %v, want only the 2 request retries", sleeps)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("took %s", took)
 	}
 }
