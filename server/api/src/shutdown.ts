@@ -1,8 +1,11 @@
 import type { Server } from "node:http";
 
 interface ShutdownSteps {
-  /** The HTTP server; stops accepting at once, open streams get `graceMs`. */
-  server: Pick<Server, "close" | "closeAllConnections">;
+  /**
+   * The HTTP listeners (the API, and the internal and metrics ones when
+   * configured); each stops accepting at once, open streams get `graceMs`.
+   */
+  servers: ReadonlyArray<Pick<Server, "close" | "closeAllConnections">>;
   /** Makes /health/ready answer 503 from now on. */
   startDraining: () => void;
   /**
@@ -31,16 +34,22 @@ export const gracefulShutdown = async (steps: ShutdownSteps): Promise<void> => {
   steps.startDraining();
   if (steps.drainMs) await sleep(steps.drainMs);
   await steps.stopBackground();
-  await new Promise<void>((resolve) => {
-    const cut = setTimeout(
-      () => steps.server.closeAllConnections(),
-      steps.graceMs ?? 5_000,
-    );
-    cut.unref();
-    steps.server.close(() => {
-      clearTimeout(cut);
-      resolve();
-    });
-  });
+  await Promise.all(
+    steps.servers.map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          const cut = setTimeout(
+            () => server.closeAllConnections(),
+            steps.graceMs ?? 5_000,
+          );
+          cut.unref();
+          server.close(() => {
+            clearTimeout(cut);
+            resolve();
+          });
+        }),
+    ),
+  );
+  // Only once no listener has a request in flight.
   await steps.closeResources();
 };

@@ -78,7 +78,9 @@ const main = async () => {
     stopping = true;
     log("info", "grad-server shutting down", { signal });
     await gracefulShutdown({
-      server: server as Server,
+      servers: [server, internalServer, metricsServer].filter(
+        (s) => s !== null,
+      ) as Server[],
       startDraining,
       drainMs: env.SHUTDOWN_DRAIN_SECONDS * 1000,
       stopBackground: async () => {
@@ -87,8 +89,6 @@ const main = async () => {
         await services.events.close();
       },
       closeResources: async () => {
-        metricsServer?.close();
-        internalServer?.close();
         await deps.store.close();
         await stopTracing();
       },

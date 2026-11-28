@@ -31,7 +31,7 @@ describe("gracefulShutdown", () => {
     const started = Date.now();
     let drainedAt = 0;
     const shutdown = gracefulShutdown({
-      server,
+      servers: [server],
       graceMs: 200,
       drainMs: 300,
       startDraining: () => {
