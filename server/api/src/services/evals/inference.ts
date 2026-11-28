@@ -30,8 +30,17 @@ const toWireMessage = (message: ChatMessage): Record<string, unknown> => {
   return rest;
 };
 
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits `ms`, or less when `signal` aborts first. */
+export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
 
 class CallError extends Error {
   constructor(
@@ -196,7 +205,9 @@ export const createOpenAICompatibleClient = (
         method: "POST",
         headers,
         redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: request.signal
+          ? AbortSignal.any([AbortSignal.timeout(timeoutMs), request.signal])
+          : AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           model: request.model,
           messages: request.messages.map(toWireMessage),
@@ -255,7 +266,8 @@ export const createOpenAICompatibleClient = (
           lastError = error;
           if (
             !(error instanceof CallError && error.retryable) ||
-            i === maxAttempts - 1
+            i === maxAttempts - 1 ||
+            request.signal?.aborted
           )
             break;
           await sleep(
@@ -263,7 +275,9 @@ export const createOpenAICompatibleClient = (
               retryDelayMs * 2 ** i,
               Math.min(MAX_RETRY_AFTER_MS, error.retryAfterMs ?? 0),
             ),
+            request.signal,
           );
+          if (request.signal?.aborted) break;
         }
       }
 

@@ -17,6 +17,7 @@ import {
   InferenceError,
   InferenceOutage,
   isInferenceUnavailable,
+  sleep,
 } from "../services/evals/inference.js";
 import { buildTasks } from "../services/evals/planner.js";
 import { scoreOutput, type ScoringContext } from "../services/evals/scoring.js";
@@ -91,6 +92,8 @@ const TASK_PAGE = 200;
 const DEFAULT_LEASE_SECONDS = 180;
 const OUTAGE_RETRY_MAX_MS = 30_000;
 const CAPACITY_RETRY_MAX_MS = 300_000;
+/** How soon a halt (stop, cancel, lost lease, outage) aborts a call in flight or a wait. */
+const HALT_POLL_MS = 500;
 
 /** What a waiting call waits for; the heartbeat reports it as the worker's phase. */
 type EvalWait =
@@ -104,9 +107,6 @@ const WAIT_PHASES = {
   rate_limited: "waiting_for_rate_limit",
   inference_unavailable: "waiting_for_inference",
 } as const satisfies Record<EvalWait, string>;
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
 
 /** What a failed call waits for, or null when it is the task's own failure. */
 const waitOf = (error: unknown): EvalWait | null =>
@@ -134,32 +134,50 @@ const patient = (
   onWait: (wait: EvalWait | null) => void,
 ): ChatCompletionClient => ({
   complete: async (input) => {
-    const since = Date.now();
-    for (let i = 0; ; i += 1) {
-      try {
-        const result = await client.complete(input);
-        if (i > 0) onWait(null);
-        return result;
-      } catch (error) {
-        const wait = waitOf(error);
-        if (wait === null) throw error;
-        const shed = wait !== "inference_unavailable";
-        const down = Date.now() - since;
-        if (halted() || down >= (shed ? limits.capacityMaxMs : limits.maxMs)) {
-          throw new InferenceOutage(
-            `${wait} for ${Math.round(down / 1000)} s: ${errorMessage(error)}`,
-            shed && !halted(),
+    // A halt aborts the call in flight and any wait at once: a stopping
+    // worker must hand its eval back within the pod's grace period, not
+    // after a 120 s call (or a 5 min Retry-After) runs out.
+    const abort = new AbortController();
+    const watch = setInterval(() => {
+      if (halted()) abort.abort();
+    }, HALT_POLL_MS);
+    try {
+      const since = Date.now();
+      for (let i = 0; ; i += 1) {
+        try {
+          const result = await client.complete({
+            ...input,
+            signal: abort.signal,
+          });
+          if (i > 0) onWait(null);
+          return result;
+        } catch (error) {
+          const wait = waitOf(error);
+          if (wait === null) throw error;
+          const shed = wait !== "inference_unavailable";
+          const down = Date.now() - since;
+          if (
+            halted() ||
+            down >= (shed ? limits.capacityMaxMs : limits.maxMs)
+          ) {
+            throw new InferenceOutage(
+              `${wait} for ${Math.round(down / 1000)} s: ${errorMessage(error)}`,
+              shed && !halted(),
+            );
+          }
+          onWait(wait);
+          const retryAfter = (error as { retryAfterMs?: number | null })
+            .retryAfterMs;
+          await sleep(
+            retryAfter !== null && retryAfter !== undefined
+              ? Math.min(CAPACITY_RETRY_MAX_MS, retryAfter)
+              : Math.min(OUTAGE_RETRY_MAX_MS, limits.retryMs * 2 ** i),
+            abort.signal,
           );
         }
-        onWait(wait);
-        const retryAfter = (error as { retryAfterMs?: number | null })
-          .retryAfterMs;
-        await sleep(
-          retryAfter !== null && retryAfter !== undefined
-            ? Math.min(CAPACITY_RETRY_MAX_MS, retryAfter)
-            : Math.min(OUTAGE_RETRY_MAX_MS, limits.retryMs * 2 ** i),
-        );
       }
+    } finally {
+      clearInterval(watch);
     }
   },
 });

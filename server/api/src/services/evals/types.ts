@@ -15,6 +15,8 @@ export interface ChatCompletionRequest {
   temperature: number;
   max_tokens: number;
   tools?: ReadonlyArray<Record<string, unknown>> | undefined;
+  /** Aborts the call and its retries (the eval worker is stopping or the eval halted). */
+  signal?: AbortSignal | undefined;
 }
 
 export interface ChatCompletionResult {

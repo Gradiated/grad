@@ -143,6 +143,44 @@ describe("eval worker (grad-server worker --kinds eval)", () => {
     for (const row of bill.perAttempt) expect(row.billed).toBe(row.stored);
   });
 
+  it("a stop hands the eval back at once, not after the calls in flight or a capacity wait", async () => {
+    // The pod's grace period (60 s on the eval pool) is shorter than one
+    // model call's timeout (120 s) and a cold pool's Retry-After (up to 5 min).
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(6));
+    const created = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      request({}),
+    );
+
+    for (const stall of ["slow call", "capacity wait"]) {
+      if (stall === "slow call")
+        fake.setModel("qwen/qwen3-8b", () => PRICED(30_000));
+      else
+        fake.failNext(50, 503, {
+          code: "capacity_unavailable",
+          retryAfter: "300",
+        });
+      const worker = startEvalWorker(t, fakeInference(fake), {
+        workerId: `stopping-${stall.replace(" ", "-")}`,
+        capacityMaxMs: 600_000,
+      });
+      const running = worker.drain();
+      await until(async () => fake.requests.length > 0);
+      await new Promise((r) => setTimeout(r, 50));
+      const started = Date.now();
+      await worker.close();
+      await running;
+      expect(Date.now() - started).toBeLessThan(3_000);
+      const job = await t.deps.store.jobs.getById(created.id);
+      // Handed back as a preemption: queued again, no failed attempt.
+      expect(job).toMatchObject({ status: "queued", failed_attempts: 0 });
+      fake.requests.length = 0;
+    }
+  }, 20_000);
+
   it("an API restart during an eval doesn't affect it", async () => {
     h = await makeEvalHarness();
     const { t, fake } = h;
