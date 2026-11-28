@@ -62,8 +62,8 @@ export const createMaintenance = (
     usage: UsageService;
     sources: SourceService;
     secrets: SecretService;
-    workspaces?: WorkspaceLifecycle | undefined;
-    telemetry?: TelemetrySampler;
+    workspaces: WorkspaceLifecycle;
+    telemetry: TelemetrySampler;
   },
 ): Maintenance => {
   let timer: NodeJS.Timeout | null = null;
@@ -185,14 +185,13 @@ export const createMaintenance = (
       resealedSecrets: await step("reseal_secrets", () =>
         services.secrets.reseal(),
       ),
-      purgedWorkspaces: await step(
-        "purge_workspaces",
-        async () => (await services.workspaces?.purgeDue(now)) ?? 0,
+      purgedWorkspaces: await step("purge_workspaces", () =>
+        services.workspaces.purgeDue(now),
       ),
       // Last: the gauges then reflect this tick's expiries and syncs.
       sampledMetrics: await step("sample_metrics", async () => {
-        await services.telemetry?.refresh(deps.clock.now());
-        return services.telemetry ? 1 : 0;
+        await services.telemetry.refresh(deps.clock.now());
+        return 1;
       }),
     };
     // A stale timestamp means the loop is stuck (GradMaintenanceStalled).
