@@ -155,9 +155,9 @@ class Datasets(_Resource):
         """A dataset by name."""
         return Dataset.from_api(self._wire.get_dataset(h.dataset_name(name)), self._client)
 
-    def list(self, *, limit: int | None = None) -> Page[Dataset]:
-        """Datasets, newest first (iterating walks every page)."""
-        return self._page(Dataset, lambda cursor: self._wire.list_datasets(limit=limit, cursor=cursor))
+    def list(self, *, search: str | None = None, limit: int | None = None) -> Page[Dataset]:
+        """Datasets, newest first (iterating walks every page); ``search`` keeps names containing it (any case) or the exact id."""
+        return self._page(Dataset, lambda cursor: self._wire.list_datasets(limit=limit, cursor=cursor, q=search))
 
     def count(self, dataset: Any) -> int:
         """Record count of the latest version."""
@@ -486,6 +486,14 @@ def _ref_id(value: Any) -> str | None:
     return None if value is None else str(getattr(value, "id", value))
 
 
+def _statuses(value: str | Iterable[str] | None) -> str | None:
+    """A ``status`` filter on the wire: comma-separated, and absent when empty."""
+    if value is None:
+        return None
+    joined = value if isinstance(value, str) else ",".join(value)
+    return joined or None
+
+
 class Secrets(_Resource):
     """Workspace secrets (provider keys, HF tokens). Values are write-only."""
 
@@ -615,9 +623,11 @@ class Imports(_Resource):
         """An import job."""
         return ImportJob.from_api(self._wire.get_import(import_id), self._client)
 
-    def list(self, *, limit: int | None = None) -> Page[ImportJob]:
-        """Import jobs, newest first."""
-        return self._page(ImportJob, lambda cursor: self._wire.list_imports(limit=limit, cursor=cursor))
+    def list(self, *, status: str | Iterable[str] | None = None, dataset: Any = None, limit: int | None = None) -> Page[ImportJob]:
+        """Import jobs, newest first; ``status`` keeps these statuses, ``dataset`` one dataset's imports."""
+        name = None if dataset is None else h.dataset_name(dataset)
+        statuses = _statuses(status)
+        return self._page(ImportJob, lambda cursor: self._wire.list_imports(limit=limit, cursor=cursor, status=statuses, dataset=name))
 
     def wait(self, import_id: str, *, timeout: float | None = None, poll_interval: float = 0.5) -> ImportJob:
         """Block until the import finishes; :class:`grad.ImportFailedError` if it failed."""
@@ -690,9 +700,11 @@ class Runs(_Resource):
         """A run by id."""
         return Run.from_api(self._wire.get_run(run_id), self._client)
 
-    def list(self, *, limit: int | None = None) -> Page[Run]:
-        """Runs, newest first."""
-        return self._page(Run, lambda cursor: self._wire.list_runs(limit=limit, cursor=cursor))
+    def list(self, *, status: str | Iterable[str] | None = None, search: str | None = None, limit: int | None = None) -> Page[Run]:
+        """Runs, newest first; ``status`` keeps these statuses (``"failed"`` or ``["failed", "cancelled"]``),
+        ``search`` names containing it (any case) or the exact id."""
+        statuses = _statuses(status)
+        return self._page(Run, lambda cursor: self._wire.list_runs(limit=limit, cursor=cursor, status=statuses, q=search))
 
     def cancel(self, run_id: str) -> Run:
         """Cancel a queued or running run."""
@@ -980,9 +992,9 @@ class Artifacts(_Resource):
         """An artifact by ``name@version``, ``name@latest`` or id."""
         return Artifact.from_api(self._wire.get_artifact(model_ref(ref)), self._client)
 
-    def list(self, *, name: str | None = None, limit: int | None = None) -> Page[Artifact]:
-        """Artifacts, newest first (optionally one name's versions)."""
-        return self._page(Artifact, lambda cursor: self._wire.list_artifacts(name=name, limit=limit, cursor=cursor))
+    def list(self, *, name: str | None = None, search: str | None = None, limit: int | None = None) -> Page[Artifact]:
+        """Artifacts, newest first; ``name`` keeps one name's versions, ``search`` names containing it (any case) or the exact id."""
+        return self._page(Artifact, lambda cursor: self._wire.list_artifacts(name=name, q=search, limit=limit, cursor=cursor))
 
     def upload(
         self,
@@ -1234,9 +1246,10 @@ class Evals(_Resource):
         """An eval by id."""
         return Eval.from_api(self._wire.get_eval(eval_id), self._client)
 
-    def list(self, *, limit: int | None = None) -> Page[Eval]:
-        """Evals, newest first."""
-        return self._page(Eval, lambda cursor: self._wire.list_evals(limit=limit, cursor=cursor))
+    def list(self, *, status: str | Iterable[str] | None = None, limit: int | None = None) -> Page[Eval]:
+        """Evals, newest first; ``status`` keeps these statuses (``"running"`` or a list)."""
+        statuses = _statuses(status)
+        return self._page(Eval, lambda cursor: self._wire.list_evals(limit=limit, cursor=cursor, status=statuses))
 
     def cancel(self, eval_id: str) -> Eval:
         """Cancel a queued, running or awaiting_scores eval."""

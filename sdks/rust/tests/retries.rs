@@ -63,7 +63,11 @@ async fn retry_conformance() {
             .unwrap();
         let start = Instant::now();
         let result = match method.as_str() {
-            "GET" => c.datasets().list(&ListParams::default()).await.map(|_| ()),
+            "GET" => c
+                .datasets()
+                .list(None, &ListParams::default())
+                .await
+                .map(|_| ()),
             "POST" => c.datasets().create("d", None).await.map(|_| ()),
             _ => c.secrets().delete("s").await,
         };

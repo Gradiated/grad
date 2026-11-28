@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use grad_sdk::{
-    Artifact, ArtifactHfOptions, ArtifactImport, ArtifactUploadOptions, DownloadOptions,
-    WaitOptions,
+    Artifact, ArtifactFilter, ArtifactHfOptions, ArtifactImport, ArtifactUploadOptions,
+    DownloadOptions, WaitOptions,
 };
 
 use super::{page, Ctx};
@@ -53,8 +53,15 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
     let c = ctx.client()?;
     let out = &ctx.out;
     match action {
-        ArtifactsCmd::List { name, page: p } => {
-            let res = c.artifacts().list(name.as_deref(), &page(&p)).await?;
+        ArtifactsCmd::List {
+            name,
+            search,
+            page: p,
+        } => {
+            let res = c
+                .artifacts()
+                .list(&ArtifactFilter { name, search }, &page(&p))
+                .await?;
             out.table(
                 &["artifact", "format", "base model", "size", "created"],
                 res.data

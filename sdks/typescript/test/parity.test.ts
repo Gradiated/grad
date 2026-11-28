@@ -172,13 +172,20 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
       .next(),
   usage_summary: () => grad.usage.summary({ from: "2026-11-01", to: "2026-11-30", groupBy: "model" }),
   list_run_events: () => grad.runs.events(parity.responses.run_events.run_id, { limit: 100 }).next(),
+  list_runs_filtered: () => grad.runs.list({ status: ["failed", "cancelled"], search: "sft" }).pages().next(),
+  list_evals_filtered: () => grad.evals.list({ status: "running" }).pages().next(),
+  list_imports_filtered: () => grad.imports.list({ status: "failed", dataset: "support" }).pages().next(),
+  list_datasets_search: () => grad.datasets.list({ search: "support" }).pages().next(),
+  list_artifacts_search: () => grad.artifacts.list({ search: "sft" }).pages().next(),
 });
 
 describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {
   it("sends the fixture's request for every case", async () => {
     const server = new FakeServer();
     for (const c of parity.requests) server.on(c.method, encodeURI(c.path).replace(/@/g, "%40"), () => json({ id: "x", status: "queued" }));
-    server.on("GET", "/v1/usage", () => json({ data: [], next_cursor: null }));
+    for (const list of ["/v1/usage", "/v1/runs", "/v1/evals", "/v1/imports", "/v1/datasets", "/v1/artifacts"]) {
+      server.on("GET", list, () => json({ data: [], next_cursor: null }));
+    }
     server.on("GET", `/v1/runs/${parity.responses.run_events.run_id}/events`, () => json({ data: [], next_cursor: null }));
     // fromBenchmark reads the dataset back.
     server.on("GET", "/v1/datasets/gsm8k-test-200", () => json({ id: "x", name: "gsm8k-test-200" }));

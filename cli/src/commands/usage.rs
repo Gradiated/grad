@@ -176,7 +176,7 @@ async fn resolve_eval(c: &Client, out: &Out, arg: &str) -> CliResult<String> {
     }
     let named: Vec<String> = c
         .evals()
-        .list_all()
+        .list_all(&Default::default())
         .await?
         .into_iter()
         .filter(|e| e.name == arg)

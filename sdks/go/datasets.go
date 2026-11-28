@@ -29,6 +29,8 @@ type (
 	Record = generated.DatasetRecord
 	// ImportJob is the status of a dataset import.
 	ImportJob = generated.ImportJob
+	// ImportStatus is an import job's lifecycle state.
+	ImportStatus = generated.ImportStatus
 	// RenderResult shows how records render with a model's chat template.
 	RenderResult = generated.RenderDatasetResponse
 )
@@ -111,14 +113,20 @@ func (s *DatasetsService) Get(ctx context.Context, name string) (*Dataset, error
 	return s.c.dataset(d), nil
 }
 
-// List iterates over every dataset, fetching pages as needed.
-func (s *DatasetsService) List(ctx context.Context) iter.Seq2[*Dataset, error] {
+// DatasetListOptions filters Datasets.List; the zero value lists every dataset.
+type DatasetListOptions struct {
+	// Search keeps datasets whose name contains it (any case) or whose id is exactly it.
+	Search string
+}
+
+// List iterates over datasets, newest first, fetching pages as needed.
+func (s *DatasetsService) List(ctx context.Context, o DatasetListOptions) iter.Seq2[*Dataset, error] {
 	return paginate(ctx, func(ctx context.Context, cursor *string) ([]*Dataset, *string, error) {
 		api, err := s.c.api()
 		if err != nil {
 			return nil, nil, err
 		}
-		page, err := api.ListDatasets(ctx, &generated.ListDatasetsParams{Cursor: cursor})
+		page, err := api.ListDatasets(ctx, &generated.ListDatasetsParams{Cursor: cursor, Q: optString(o.Search)})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -569,14 +577,26 @@ func (s *ImportsService) Get(ctx context.Context, id string) (*ImportJob, error)
 	return api.GetImport(ctx, id)
 }
 
+// ImportListOptions filters Imports.List; the zero value lists every import job.
+type ImportListOptions struct {
+	// Status keeps jobs in these statuses.
+	Status []ImportStatus
+	// Dataset keeps the jobs that import into this dataset.
+	Dataset DatasetRef
+}
+
 // List iterates over import jobs, newest first.
-func (s *ImportsService) List(ctx context.Context) iter.Seq2[*ImportJob, error] {
+func (s *ImportsService) List(ctx context.Context, o ImportListOptions) iter.Seq2[*ImportJob, error] {
+	var dataset *string
+	if o.Dataset != nil {
+		dataset = optString(o.Dataset.datasetName())
+	}
 	return paginate(ctx, func(ctx context.Context, cursor *string) ([]*ImportJob, *string, error) {
 		api, err := s.c.api()
 		if err != nil {
 			return nil, nil, err
 		}
-		page, err := api.ListImports(ctx, &generated.ListImportsParams{Cursor: cursor})
+		page, err := api.ListImports(ctx, &generated.ListImportsParams{Cursor: cursor, Status: statusQuery(o.Status), Dataset: dataset})
 		if err != nil {
 			return nil, nil, err
 		}

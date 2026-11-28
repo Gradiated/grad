@@ -54,7 +54,7 @@ func TestDatasetsCreateGetListPushRecordsRender(t *testing.T) {
 	if err != nil || got.RecordCount != 3 {
 		t.Fatalf("get: %+v %v", got, err)
 	}
-	all, err := grad.Collect(c.Datasets.List(ctx))
+	all, err := grad.Collect(c.Datasets.List(ctx, grad.DatasetListOptions{}))
 	if err != nil || len(all) != 2 || all[0].Name != "support-eval" || all[1].Name != "support-prod" {
 		t.Fatalf("list: %v %v", all, err)
 	}
@@ -231,7 +231,7 @@ func TestImportFailuresAndUploadErrors(t *testing.T) {
 	if !errors.As(err, &ife) || ife.Job.Status != "failed" || !strings.Contains(err.Error(), "not a trajectory") {
 		t.Fatalf("wait: %v", err)
 	}
-	jobs, err := grad.Collect(c.Imports.List(ctx))
+	jobs, err := grad.Collect(c.Imports.List(ctx, grad.ImportListOptions{}))
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("list %v %v", jobs, err)
 	}

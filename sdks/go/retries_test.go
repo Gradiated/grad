@@ -58,7 +58,7 @@ func TestRetryConformance(t *testing.T) {
 			var err error
 			switch c.Method {
 			case "GET":
-				for _, e := range client.Datasets.List(ctx) {
+				for _, e := range client.Datasets.List(ctx, grad.DatasetListOptions{}) {
 					err = e
 					break
 				}

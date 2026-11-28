@@ -173,7 +173,7 @@ func TestEvalWaitErrors(t *testing.T) {
 	if !errors.As(err, &ef) || !strings.Contains(err.Error(), "returned 500") || ef.Eval.Status != "failed" {
 		t.Fatalf("failed eval: %v", err)
 	}
-	if evs, err := grad.Collect(c.Evals.List(ctx)); err != nil || len(evs) != 1 {
+	if evs, err := grad.Collect(c.Evals.List(ctx, grad.EvalListOptions{})); err != nil || len(evs) != 1 {
 		t.Fatalf("list %v", err)
 	}
 	if e, err := c.Evals.Cancel(ctx, id); err != nil || e.Status != "failed" {

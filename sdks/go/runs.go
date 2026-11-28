@@ -174,14 +174,22 @@ func (s *RunsService) Get(ctx context.Context, id string) (*Run, error) {
 	return s.c.run(r), nil
 }
 
+// RunListOptions filters Runs.List; the zero value lists every run.
+type RunListOptions struct {
+	// Status keeps runs in these statuses.
+	Status []RunStatus
+	// Search keeps runs whose name contains it (any case) or whose id is exactly it.
+	Search string
+}
+
 // List iterates over runs, newest first.
-func (s *RunsService) List(ctx context.Context) iter.Seq2[*Run, error] {
+func (s *RunsService) List(ctx context.Context, o RunListOptions) iter.Seq2[*Run, error] {
 	return paginate(ctx, func(ctx context.Context, cursor *string) ([]*Run, *string, error) {
 		api, err := s.c.api()
 		if err != nil {
 			return nil, nil, err
 		}
-		page, err := api.ListRuns(ctx, &generated.ListRunsParams{Cursor: cursor})
+		page, err := api.ListRuns(ctx, &generated.ListRunsParams{Cursor: cursor, Status: statusQuery(o.Status), Q: optString(o.Search)})
 		if err != nil {
 			return nil, nil, err
 		}

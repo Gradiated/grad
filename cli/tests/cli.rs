@@ -3698,7 +3698,15 @@ fn parity_requests_match_the_shared_fixture() {
     .unwrap();
     let fx: Value = serde_json::from_str(&raw).unwrap();
     let srv = MockServer::start(|r| {
-        if r.path() == "/v1/usage" {
+        let lists = [
+            "/v1/usage",
+            "/v1/runs",
+            "/v1/evals",
+            "/v1/imports",
+            "/v1/datasets",
+            "/v1/artifacts",
+        ];
+        if r.method == "GET" && lists.contains(&r.path()) {
             Reply::json(200, json!({"data": [], "next_cursor": null}))
         } else {
             Reply::json(200, json!({"id": "x", "name": "x", "status": "queued"}))
@@ -3711,6 +3719,27 @@ fn parity_requests_match_the_shared_fixture() {
         let body = &case["body"];
         let s = |k: &str| body[k].to_string().trim_matches('"').to_string();
         let mut args: Vec<String> = match path {
+            "/v1/runs" | "/v1/evals" | "/v1/imports" | "/v1/datasets" | "/v1/artifacts"
+                if case["method"] == "GET" =>
+            {
+                let group = if path == "/v1/evals" {
+                    "eval"
+                } else {
+                    &path[4..]
+                };
+                let mut a: Vec<String> = vec![group.into(), "list".into()];
+                for (key, flag) in [
+                    ("status", "--status"),
+                    ("q", "--search"),
+                    ("dataset", "--dataset"),
+                ] {
+                    if let Some(v) = case["query"][key].as_str() {
+                        a.push(flag.into());
+                        a.push(v.into());
+                    }
+                }
+                a
+            }
             "/v1/runs/plan" | "/v1/runs" => {
                 std::fs::write(sb.path("run.yaml"), body.to_string()).unwrap();
                 let mut a = vec!["train".into(), "-f".into(), "run.yaml".into()];
@@ -3969,15 +3998,7 @@ fn parity_requests_match_the_shared_fixture() {
             .unwrap_or_else(|| panic!("{}: nothing sent", name));
         let key = sent.header("idempotency-key").unwrap_or_default();
         if case["method"] == "GET" {
-            let got: std::collections::BTreeMap<String, String> = sent
-                .query()
-                .split('&')
-                .filter(|kv| !kv.is_empty())
-                .map(|kv| {
-                    let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-                    (k.to_string(), v.to_string())
-                })
-                .collect();
+            let got = sent.query_map();
             let want: std::collections::BTreeMap<String, String> = case["query"]
                 .as_object()
                 .unwrap()

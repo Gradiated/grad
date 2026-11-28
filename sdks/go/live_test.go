@@ -377,12 +377,12 @@ func TestLiveSelfHosted(t *testing.T) {
 		if _, err := ci.Datasets.Push(ctx, "x", []grad.Trajectory{grad.TrajectoryFromMessages([]grad.Message{{Role: "user", Content: "hi"}})}); !errors.As(err, &denied) {
 			t.Fatalf("push with runs:read: %v", err)
 		}
-		if _, err := grad.Collect(ci.Runs.List(ctx)); err != nil {
+		if _, err := grad.Collect(ci.Runs.List(ctx, grad.RunListOptions{})); err != nil {
 			t.Fatal(err)
 		}
 		must(client.Keys.Revoke(ctx, key.Key.ID))(t)
 		var unauth *grad.AuthenticationError
-		if _, err := grad.Collect(ci.Runs.List(ctx)); !errors.As(err, &unauth) {
+		if _, err := grad.Collect(ci.Runs.List(ctx, grad.RunListOptions{})); !errors.As(err, &unauth) {
 			t.Fatalf("revoked key: %v", err)
 		}
 

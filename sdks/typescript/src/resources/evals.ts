@@ -11,7 +11,7 @@ import { LIST_EVAL_OUTPUTS_LIMIT_MAX } from "../generated/client.js";
 import { APIUserAbortError, type RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { EvalFailedError, GradUsageError } from "../errors.js";
-import { collect, pages, Paginator } from "../pagination.js";
+import { collect, pages, Paginator, statusQuery } from "../pagination.js";
 import { Pending } from "../pending.js";
 import { pollUntil, type WaitOptions } from "../polling.js";
 import { toRubric, type RubricInput, type ScoreFn } from "../rubrics.js";
@@ -291,10 +291,12 @@ export class EvalsResource {
     return new Eval(this.core, await this.core.api.getEval(id, options));
   }
 
-  list(options: { limit?: number } & RequestOptions = {}): Paginator<Eval> {
-    const { limit, ...request } = options;
+  /** Evals, newest first; `status` keeps these statuses. */
+  list(options: { status?: EvalStatus | readonly EvalStatus[]; limit?: number } & RequestOptions = {}): Paginator<Eval> {
+    const { status, limit, ...request } = options;
+    const filters = { status: statusQuery(status), limit };
     return new Paginator(async (cursor) => {
-      const page = await this.core.api.listEvals({ ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) }, request);
+      const page = await this.core.api.listEvals({ ...filters, cursor }, request);
       return { data: page.data.map((e) => new Eval(this.core, e)), nextCursor: page.nextCursor };
     }, request.signal);
   }

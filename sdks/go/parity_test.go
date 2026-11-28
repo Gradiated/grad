@@ -3,6 +3,7 @@ package grad_test
 import (
 	"context"
 	"encoding/json"
+	"iter"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -59,7 +60,9 @@ func TestParityRequests(t *testing.T) {
 	for _, c := range p.Requests {
 		routes[c.Method+" "+c.Path] = jsonValue(200, map[string]any{"id": "x", "status": "queued"})
 	}
-	routes["GET /v1/usage"] = jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil})
+	for _, list := range []string{"/v1/usage", "/v1/runs", "/v1/evals", "/v1/imports", "/v1/datasets", "/v1/artifacts"} {
+		routes["GET "+list] = jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil})
+	}
 	var events generated.RunEventsPage
 	if err := json.Unmarshal(p.Responses.RunEvents, &events); err != nil {
 		t.Fatal(err)
@@ -226,6 +229,21 @@ func TestParityRequests(t *testing.T) {
 			_, err := c.Usage.Summary(ctx, grad.WithUsageFrom("2026-11-01"), grad.WithUsageTo("2026-11-30"), grad.WithUsageGroupBy(grad.UsageByModel))
 			return err
 		},
+		"list_runs_filtered": func() error {
+			return firstErr(c.Runs.List(ctx, grad.RunListOptions{Status: []grad.RunStatus{grad.RunFailed, grad.RunCancelled}, Search: "sft"}))
+		},
+		"list_evals_filtered": func() error {
+			return firstErr(c.Evals.List(ctx, grad.EvalListOptions{Status: []grad.EvalStatus{"running"}}))
+		},
+		"list_imports_filtered": func() error {
+			return firstErr(c.Imports.List(ctx, grad.ImportListOptions{Status: []grad.ImportStatus{"failed"}, Dataset: grad.DatasetName("support")}))
+		},
+		"list_datasets_search": func() error {
+			return firstErr(c.Datasets.List(ctx, grad.DatasetListOptions{Search: "support"}))
+		},
+		"list_artifacts_search": func() error {
+			return firstErr(c.Artifacts.List(ctx, grad.ArtifactListOptions{Search: "sft"}))
+		},
 		"list_run_events": func() error {
 			for _, err := range c.Runs.Events(ctx, events.RunID, grad.EventsOptions{Limit: 100}) {
 				return err
@@ -285,6 +303,14 @@ func TestParityRequests(t *testing.T) {
 			t.Errorf("%s: Idempotency-Key %q", tc.Case, key)
 		}
 	}
+}
+
+// firstErr fetches a list's first page and returns its error.
+func firstErr[T any](seq iter.Seq2[T, error]) error {
+	for _, err := range seq {
+		return err
+	}
+	return nil
 }
 
 func TestParityTypedResponses(t *testing.T) {

@@ -59,14 +59,22 @@ func (s *ArtifactsService) Get(ctx context.Context, ref string) (*Artifact, erro
 	return s.c.artifact(a), nil
 }
 
-// List iterates over artifacts; name "" lists all.
-func (s *ArtifactsService) List(ctx context.Context, name string) iter.Seq2[*Artifact, error] {
+// ArtifactListOptions filters Artifacts.List; the zero value lists every artifact.
+type ArtifactListOptions struct {
+	// Name keeps one name's versions.
+	Name string
+	// Search keeps artifacts whose name contains it (any case) or whose id is exactly it.
+	Search string
+}
+
+// List iterates over artifacts, newest first.
+func (s *ArtifactsService) List(ctx context.Context, o ArtifactListOptions) iter.Seq2[*Artifact, error] {
 	return paginate(ctx, func(ctx context.Context, cursor *string) ([]*Artifact, *string, error) {
 		api, err := s.c.api()
 		if err != nil {
 			return nil, nil, err
 		}
-		page, err := api.ListArtifacts(ctx, &generated.ListArtifactsParams{Cursor: cursor, Name: optString(name)})
+		page, err := api.ListArtifacts(ctx, &generated.ListArtifactsParams{Cursor: cursor, Name: optString(o.Name), Q: optString(o.Search)})
 		if err != nil {
 			return nil, nil, err
 		}

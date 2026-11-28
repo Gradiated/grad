@@ -393,6 +393,54 @@ async fn call(c: &Client, case: &str) -> Result<()> {
                 .to_string();
             c.runs().events_page(&id, None, Some(100)).await.map(drop)
         }
+        "list_runs_filtered" => c
+            .runs()
+            .list(
+                &RunFilter {
+                    status: vec![RunStatus::Failed, RunStatus::Cancelled],
+                    search: Some("sft".into()),
+                },
+                &ListParams::default(),
+            )
+            .await
+            .map(drop),
+        "list_evals_filtered" => c
+            .evals()
+            .list(
+                &EvalFilter {
+                    status: vec![EvalStatus::Running],
+                },
+                &ListParams::default(),
+            )
+            .await
+            .map(drop),
+        "list_imports_filtered" => c
+            .imports()
+            .list(
+                &ImportFilter {
+                    status: vec![ImportStatus::Failed],
+                    dataset: Some("support".into()),
+                },
+                &ListParams::default(),
+            )
+            .await
+            .map(drop),
+        "list_datasets_search" => c
+            .datasets()
+            .list(Some("support"), &ListParams::default())
+            .await
+            .map(drop),
+        "list_artifacts_search" => c
+            .artifacts()
+            .list(
+                &ArtifactFilter {
+                    search: Some("sft".into()),
+                    ..Default::default()
+                },
+                &ListParams::default(),
+            )
+            .await
+            .map(drop),
         other => panic!("no Rust call for parity case {}", other),
     }
 }
@@ -400,7 +448,15 @@ async fn call(c: &Client, case: &str) -> Result<()> {
 #[tokio::test]
 async fn requests_match_the_shared_fixture() {
     let srv = MockServer::start(|r| {
-        if r.path() == "/v1/usage" {
+        let lists = [
+            "/v1/usage",
+            "/v1/runs",
+            "/v1/evals",
+            "/v1/imports",
+            "/v1/datasets",
+            "/v1/artifacts",
+        ];
+        if r.method == "GET" && lists.contains(&r.path()) {
             Reply::json(200, json!({"data": [], "next_cursor": null}))
         } else {
             Reply::json(200, json!({"id": "x", "status": "queued"}))
@@ -433,10 +489,9 @@ async fn requests_match_the_shared_fixture() {
         let key = sent.header("idempotency-key").unwrap_or_default();
         if case["method"] == "GET" {
             let query: Value = sent
-                .query()
-                .split('&')
-                .filter_map(|kv| kv.split_once('='))
-                .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+                .query_map()
+                .into_iter()
+                .map(|(k, v)| (k, Value::String(v)))
                 .collect::<serde_json::Map<_, _>>()
                 .into();
             assert_eq!(query, case["query"], "{}", name);

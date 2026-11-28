@@ -1,8 +1,8 @@
 //! `grad eval` and its subcommands.
 
 use grad_sdk::{
-    EvalRubricItem, EvalRubricItemKind, EvalRun, EvalStatus, PlanEvalRequest, PlanEvalResponse,
-    WaitOptions,
+    EvalFilter, EvalRubricItem, EvalRubricItemKind, EvalRun, EvalStatus, PlanEvalRequest,
+    PlanEvalResponse, WaitOptions,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -257,8 +257,11 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
                     print_summary(out, &ev);
                     out.done(&ev)
                 }
-                EvalCmd::List { page: p } => {
-                    let res = c.evals().list(&page(&p)).await?;
+                EvalCmd::List { status, page: p } => {
+                    let filter = EvalFilter {
+                        status: status.iter().map(|s| s.as_str().into()).collect(),
+                    };
+                    let res = c.evals().list(&filter, &page(&p)).await?;
                     out.table(
                         &["id", "name", "status", "models", "cost", "created"],
                         res.data

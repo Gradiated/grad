@@ -298,12 +298,23 @@ pub struct ImportFileOptions {
 }
 
 impl Datasets<'_> {
-    pub async fn list(&self, p: &ListParams) -> Result<Page<Dataset>> {
-        get(self.c, Req::get("/v1/datasets").query(p.query())).await
+    /// Datasets, newest first; `search` keeps names containing it (any case) or the exact id.
+    pub async fn list(&self, search: Option<&str>, p: &ListParams) -> Result<Page<Dataset>> {
+        get(
+            self.c,
+            Req::get("/v1/datasets")
+                .query(p.query())
+                .opt_param("q", search),
+        )
+        .await
     }
 
-    pub async fn list_all(&self) -> Result<Vec<Dataset>> {
-        collect_all(self.c, "/v1/datasets", LIST_DATASETS_LIMIT_MAX, vec![]).await
+    /// Every dataset (optionally matching `search`), newest first (all pages, bounded).
+    pub async fn list_all(&self, search: Option<&str>) -> Result<Vec<Dataset>> {
+        let extra = search
+            .map(|s| vec![("q".to_string(), s.to_string())])
+            .unwrap_or_default();
+        collect_all(self.c, "/v1/datasets", LIST_DATASETS_LIMIT_MAX, extra).await
     }
 
     pub async fn get(&self, name: &str) -> Result<Dataset> {
@@ -1092,13 +1103,18 @@ impl Imports<'_> {
         get(self.c, Req::get(format!("/v1/imports/{}", seg(id)))).await
     }
 
-    pub async fn list(&self, p: &ListParams) -> Result<Page<ImportJob>> {
-        get(self.c, Req::get("/v1/imports").query(p.query())).await
+    /// Import jobs matching `f`, newest first (one page).
+    pub async fn list(&self, f: &ImportFilter, p: &ListParams) -> Result<Page<ImportJob>> {
+        get(
+            self.c,
+            Req::get("/v1/imports").query(f.query()).query(p.query()),
+        )
+        .await
     }
 
-    /// Every import job, newest first (all pages, bounded).
-    pub async fn list_all(&self) -> Result<Vec<ImportJob>> {
-        collect_all(self.c, "/v1/imports", LIST_IMPORTS_LIMIT_MAX, vec![]).await
+    /// Every import job matching `f`, newest first (all pages, bounded).
+    pub async fn list_all(&self, f: &ImportFilter) -> Result<Vec<ImportJob>> {
+        collect_all(self.c, "/v1/imports", LIST_IMPORTS_LIMIT_MAX, f.query()).await
     }
 
     /// Poll until the job completes; a failed job is [`Error::ImportFailed`].
@@ -1158,16 +1174,27 @@ impl Runs<'_> {
         get(self.c, Req::get(format!("/v1/runs/{}", seg(id)))).await
     }
 
-    pub async fn list(&self, p: &ListParams) -> Result<Page<Run>> {
-        get(self.c, Req::get("/v1/runs").query(p.query())).await
+    /// Runs matching `f`, newest first (one page).
+    pub async fn list(&self, f: &RunFilter, p: &ListParams) -> Result<Page<Run>> {
+        get(
+            self.c,
+            Req::get("/v1/runs").query(f.query()).query(p.query()),
+        )
+        .await
     }
 
-    pub async fn list_all(&self) -> Result<Vec<Run>> {
-        collect_all(self.c, "/v1/runs", LIST_RUNS_LIMIT_MAX, vec![]).await
+    /// Every run matching `f`, newest first (all pages, bounded).
+    pub async fn list_all(&self, f: &RunFilter) -> Result<Vec<Run>> {
+        collect_all(self.c, "/v1/runs", LIST_RUNS_LIMIT_MAX, f.query()).await
     }
 
     /// Find the newest run with this `name` (runs are addressed by id on the wire).
+    /// The server narrows the walk to names containing `name`.
     pub async fn find_by_name(&self, name: &str) -> Result<Option<Run>> {
+        let by_name = RunFilter {
+            search: Some(name.to_string()),
+            ..RunFilter::default()
+        };
         let mut cursor: Option<String> = None;
         let mut trail = CursorTrail::new("/v1/runs");
         loop {
@@ -1175,10 +1202,13 @@ impl Runs<'_> {
                 return Err(trail.limit_error());
             }
             let page = self
-                .list(&ListParams {
-                    limit: Some(LIST_RUNS_LIMIT_MAX),
-                    cursor: cursor.clone(),
-                })
+                .list(
+                    &by_name,
+                    &ListParams {
+                        limit: Some(LIST_RUNS_LIMIT_MAX),
+                        cursor: cursor.clone(),
+                    },
+                )
                 .await?;
             let n = page.data.len();
             if let Some(r) = page.data.into_iter().find(|r| r.name == name) {
@@ -1358,22 +1388,18 @@ impl Checkpoints<'_> {
 }
 
 impl Artifacts<'_> {
-    pub async fn list(&self, name: Option<&str>, p: &ListParams) -> Result<Page<Artifact>> {
+    /// Artifacts matching `f`, newest first (one page).
+    pub async fn list(&self, f: &ArtifactFilter, p: &ListParams) -> Result<Page<Artifact>> {
         get(
             self.c,
-            Req::get("/v1/artifacts")
-                .query(p.query())
-                .opt_param("name", name.map(str::to_string)),
+            Req::get("/v1/artifacts").query(f.query()).query(p.query()),
         )
         .await
     }
 
-    /// Every artifact (optionally one name's versions), newest first (all pages, bounded).
-    pub async fn list_all(&self, name: Option<&str>) -> Result<Vec<Artifact>> {
-        let extra = name
-            .map(|n| vec![("name".to_string(), n.to_string())])
-            .unwrap_or_default();
-        collect_all(self.c, "/v1/artifacts", LIST_ARTIFACTS_LIMIT_MAX, extra).await
+    /// Every artifact matching `f`, newest first (all pages, bounded).
+    pub async fn list_all(&self, f: &ArtifactFilter) -> Result<Vec<Artifact>> {
+        collect_all(self.c, "/v1/artifacts", LIST_ARTIFACTS_LIMIT_MAX, f.query()).await
     }
 
     /// Get by id, `name@version` or `name@latest`.
@@ -1710,13 +1736,18 @@ impl Evals<'_> {
         get(self.c, Req::get(format!("/v1/evals/{}", seg(id)))).await
     }
 
-    pub async fn list(&self, p: &ListParams) -> Result<Page<EvalRun>> {
-        get(self.c, Req::get("/v1/evals").query(p.query())).await
+    /// Evals matching `f`, newest first (one page).
+    pub async fn list(&self, f: &EvalFilter, p: &ListParams) -> Result<Page<EvalRun>> {
+        get(
+            self.c,
+            Req::get("/v1/evals").query(f.query()).query(p.query()),
+        )
+        .await
     }
 
-    /// Every eval, newest first.
-    pub async fn list_all(&self) -> Result<Vec<EvalRun>> {
-        collect_all(self.c, "/v1/evals", LIST_EVALS_LIMIT_MAX, vec![]).await
+    /// Every eval matching `f`, newest first (all pages, bounded).
+    pub async fn list_all(&self, f: &EvalFilter) -> Result<Vec<EvalRun>> {
+        collect_all(self.c, "/v1/evals", LIST_EVALS_LIMIT_MAX, f.query()).await
     }
 
     pub async fn cancel(&self, id: &str) -> Result<EvalRun> {

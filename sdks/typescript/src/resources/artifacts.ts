@@ -258,13 +258,11 @@ export class ArtifactsResource {
     return new Artifact(this.core, await this.core.api.getArtifact(ref, options));
   }
 
-  list(options: { name?: string; limit?: number } & RequestOptions = {}): Paginator<Artifact> {
-    const { name, limit, ...request } = options;
+  /** Artifacts, newest first; `name` keeps one name's versions, `search` names containing it (any case) or the exact id. */
+  list(options: { name?: string; search?: string; limit?: number } & RequestOptions = {}): Paginator<Artifact> {
+    const { name, search, limit, ...request } = options;
     return new Paginator(async (cursor) => {
-      const page = await this.core.api.listArtifacts(
-        { ...(name !== undefined ? { name } : {}), ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) },
-        request,
-      );
+      const page = await this.core.api.listArtifacts({ name, q: search, limit, cursor }, request);
       return { data: page.data.map((a) => new Artifact(this.core, a)), nextCursor: page.nextCursor };
     }, request.signal);
   }

@@ -247,7 +247,11 @@ async fn idempotent_and_keyed_requests_retry_with_backoff() {
     assert_eq!(keys.len(), 1, "every retry reuses one Idempotency-Key");
     assert_eq!(keys.iter().next().unwrap().len(), 36);
 
-    let e = c.datasets().list(&ListParams::default()).await.unwrap_err();
+    let e = c
+        .datasets()
+        .list(None, &ListParams::default())
+        .await
+        .unwrap_err();
     assert!(
         matches!(e, Error::Connection { .. } | Error::Decode { .. }),
         "{:?}",
@@ -390,7 +394,11 @@ async fn redirects_same_origin_get_only() {
         Some("Bearer grad_test_key")
     );
 
-    let e = c.datasets().list(&ListParams::default()).await.unwrap_err();
+    let e = c
+        .datasets()
+        .list(None, &ListParams::default())
+        .await
+        .unwrap_err();
     assert!(matches!(e, Error::Redirect { .. }), "{:?}", e);
     assert!(e.to_string().contains("cross-origin"));
     assert!(
@@ -923,7 +931,7 @@ async fn list_all_follows_cursors_and_path_params_are_checked() {
         }
     });
     let c = client(&srv.url);
-    let all = c.runs().list_all().await.unwrap();
+    let all = c.runs().list_all(&RunFilter::default()).await.unwrap();
     assert_eq!(
         all.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
         vec!["r1", "r2", "r3"]
@@ -1125,7 +1133,7 @@ async fn pagers_stop_on_a_repeated_cursor() {
     });
     let c = client(&srv.url);
 
-    let e = c.runs().list_all().await.unwrap_err();
+    let e = c.runs().list_all(&RunFilter::default()).await.unwrap_err();
     assert!(is_loop(&e, "same"), "{:?}", e);
     assert_eq!(e.code(), "pagination_loop");
     assert!(
@@ -1137,7 +1145,7 @@ async fn pagers_stop_on_a_repeated_cursor() {
 
     let e = c.runs().find_by_name("zzz").await.unwrap_err();
     assert!(is_loop(&e, "same"), "{:?}", e);
-    let e = c.datasets().list_all().await.unwrap_err();
+    let e = c.datasets().list_all(None).await.unwrap_err();
     assert!(is_loop(&e, "same"), "{:?}", e);
     let e = c.keys().list_all().await.unwrap_err();
     assert!(is_loop(&e, "same"), "{:?}", e);
@@ -1157,7 +1165,12 @@ async fn pagers_stop_on_an_empty_page() {
         _ => Reply::problem(404, "nf", "nf"),
     });
     let c = client(&srv.url);
-    assert!(c.runs().list_all().await.unwrap().is_empty());
+    assert!(c
+        .runs()
+        .list_all(&RunFilter::default())
+        .await
+        .unwrap()
+        .is_empty());
     assert_eq!(srv.requests().len(), 1);
     assert!(c.runs().find_by_name("x").await.unwrap().is_none());
     assert_eq!(srv.requests().len(), 2);
@@ -1176,7 +1189,7 @@ async fn collect_all_is_bounded_by_a_page_budget() {
         )
     });
     let c = client(&srv.url);
-    let e = c.runs().list_all().await.unwrap_err();
+    let e = c.runs().list_all(&RunFilter::default()).await.unwrap_err();
     match &e {
         Error::PaginationLimit { path, pages } => {
             assert_eq!(path, "/v1/runs");
@@ -1207,8 +1220,25 @@ async fn collect_all_helpers_walk_every_page_with_their_filters() {
         Reply::json(200, json!({"data": [item], "next_cursor": next}))
     });
     let c = client(&srv.url);
-    assert_eq!(c.imports().list_all().await.unwrap().len(), 2);
-    assert_eq!(c.artifacts().list_all(Some("a")).await.unwrap().len(), 2);
+    assert_eq!(
+        c.imports()
+            .list_all(&ImportFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        c.artifacts()
+            .list_all(&ArtifactFilter {
+                name: Some("a".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(c.runs().checkpoints_all("r1").await.unwrap().len(), 2);
     assert_eq!(
         c.evals().results_all("e1", Some("m")).await.unwrap().len(),

@@ -26,6 +26,17 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   (a case-insensitive name substring, or an exact id); `GET /v1/evals` takes `status`;
   `GET /v1/imports` takes `status` and `dataset`; `GET /v1/datasets` and `GET /v1/artifacts` take
   `q`. Filters keep the same newest-first cursor. Every SDK's generated client has them.
+- **SDKs and CLI: list filters.** `runs.list(status=["failed", "cancelled"], search="sft")`,
+  `evals.list(status=)`, `imports.list(status=, dataset=)`, `datasets.list(search=)` and
+  `artifacts.list(search=)` in Python (TS takes the same options object; Rust takes `RunFilter`,
+  `EvalFilter`, `ImportFilter` and `ArtifactFilter`, and `datasets().list(search, page)`). **Breaking
+  (Go):** `Runs.List`, `Evals.List`, `Imports.List`, `Datasets.List` and `Artifacts.List` take an
+  options struct (`grad.RunListOptions{Status: ..., Search: ...}`; `Artifacts.List(ctx, name)` is
+  now `grad.ArtifactListOptions{Name: name}`). **Breaking (Rust):** those lists and their
+  `list_all` take the filter. The CLI has `grad runs list --status failed,cancelled --search sft`,
+  `grad eval list --status`, `grad imports list --status --dataset`, and `--search` on
+  `grad datasets list` and `grad artifacts list`. Resolving a run by name (`grad runs get NAME`,
+  Rust `find_by_name`) asks the server for matching names instead of walking every run.
 - **SDKs: uploads of any size.** The TypeScript SDK sent presigned uploads under the 60 s
   per-attempt timeout, so an upload slower than that (a few GB of weights) failed; uploads now have
   no per-attempt deadline (an `AbortSignal` still cancels them). It also read the whole file into

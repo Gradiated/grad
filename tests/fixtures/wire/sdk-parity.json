@@ -534,6 +534,58 @@
       },
       "idempotency_key": null,
       "body": null
+    },
+    {
+      "case": "list_runs_filtered",
+      "method": "GET",
+      "path": "/v1/runs",
+      "query": {
+        "status": "failed,cancelled",
+        "q": "sft"
+      },
+      "idempotency_key": null,
+      "body": null
+    },
+    {
+      "case": "list_evals_filtered",
+      "method": "GET",
+      "path": "/v1/evals",
+      "query": {
+        "status": "running"
+      },
+      "idempotency_key": null,
+      "body": null
+    },
+    {
+      "case": "list_imports_filtered",
+      "method": "GET",
+      "path": "/v1/imports",
+      "query": {
+        "status": "failed",
+        "dataset": "support"
+      },
+      "idempotency_key": null,
+      "body": null
+    },
+    {
+      "case": "list_datasets_search",
+      "method": "GET",
+      "path": "/v1/datasets",
+      "query": {
+        "q": "support"
+      },
+      "idempotency_key": null,
+      "body": null
+    },
+    {
+      "case": "list_artifacts_search",
+      "method": "GET",
+      "path": "/v1/artifacts",
+      "query": {
+        "q": "sft"
+      },
+      "idempotency_key": null,
+      "body": null
     }
   ],
   "responses": {

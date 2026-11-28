@@ -1,8 +1,8 @@
 //! `grad models`, `grad datasets`, `grad import`, `grad imports`, `grad render`.
 
 use grad_sdk::{
-    recipes, Client, FilterDatasetRequest, HfColumnMapping, ImportFileOptions, ImportJob,
-    ImportSource, ImportSourceKind, ImportStatus, PushOptions, RenderDatasetRequest,
+    recipes, Client, FilterDatasetRequest, HfColumnMapping, ImportFileOptions, ImportFilter,
+    ImportJob, ImportSource, ImportSourceKind, ImportStatus, PushOptions, RenderDatasetRequest,
     ScoreDatasetRequest, WaitOptions,
 };
 use serde_json::Value;
@@ -143,9 +143,9 @@ fn print_dataset(out: &Out, d: &grad_sdk::Dataset) {
 pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
     let out = &ctx.out;
     match action {
-        DatasetsCmd::List { page: p } => {
+        DatasetsCmd::List { search, page: p } => {
             let c = ctx.client()?;
-            let res = c.datasets().list(&page(&p)).await?;
+            let res = c.datasets().list(search.as_deref(), &page(&p)).await?;
             out.table(
                 &["name", "version", "records", "updated"],
                 res.data
@@ -504,8 +504,16 @@ pub async fn imports(ctx: &Ctx, action: ImportsCmd) -> CliResult {
     let c = ctx.client()?;
     let out = &ctx.out;
     match action {
-        ImportsCmd::List { page: p } => {
-            let res = c.imports().list(&page(&p)).await?;
+        ImportsCmd::List {
+            status,
+            dataset,
+            page: p,
+        } => {
+            let filter = ImportFilter {
+                status: status.iter().map(|s| s.as_str().into()).collect(),
+                dataset,
+            };
+            let res = c.imports().list(&filter, &page(&p)).await?;
             out.table(
                 &["id", "dataset", "status", "imported", "dropped", "created"],
                 res.data

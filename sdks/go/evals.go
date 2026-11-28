@@ -289,14 +289,20 @@ func (s *EvalsService) Get(ctx context.Context, id string) (*Eval, error) {
 	return s.c.eval(e, nil), nil
 }
 
-// List iterates over evals.
-func (s *EvalsService) List(ctx context.Context) iter.Seq2[*Eval, error] {
+// EvalListOptions filters Evals.List; the zero value lists every eval.
+type EvalListOptions struct {
+	// Status keeps evals in these statuses.
+	Status []EvalStatus
+}
+
+// List iterates over evals, newest first.
+func (s *EvalsService) List(ctx context.Context, o EvalListOptions) iter.Seq2[*Eval, error] {
 	return paginate(ctx, func(ctx context.Context, cursor *string) ([]*Eval, *string, error) {
 		api, err := s.c.api()
 		if err != nil {
 			return nil, nil, err
 		}
-		page, err := api.ListEvals(ctx, &generated.ListEvalsParams{Cursor: cursor})
+		page, err := api.ListEvals(ctx, &generated.ListEvalsParams{Cursor: cursor, Status: statusQuery(o.Status)})
 		if err != nil {
 			return nil, nil, err
 		}

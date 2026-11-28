@@ -6,6 +6,12 @@ export interface Page<T> {
   nextCursor: string | null;
 }
 
+/** A `status` list filter on the wire: comma-separated, absent when empty. */
+export const statusQuery = (status: string | readonly string[] | undefined): string | undefined => {
+  const joined = typeof status === "string" ? status : status?.join(",");
+  return joined || undefined;
+};
+
 /** Default cap for `Paginator.all()`; iterate with `for await` for larger lists. */
 export const DEFAULT_MAX_ITEMS = 100_000;
 

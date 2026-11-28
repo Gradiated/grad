@@ -2,7 +2,7 @@
 
 use grad_sdk::{
     Artifact, AttemptKind, Client, Error as SdkError, EvalReport, MetricPoint, MetricsQuery,
-    PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunPhase, RunStatus,
+    PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunFilter, RunPhase, RunStatus,
 };
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -1011,8 +1011,16 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
     let c = ctx.client()?;
     let out = &ctx.out;
     match action {
-        RunsCmd::List { page: p } => {
-            let res = c.runs().list(&page(&p)).await?;
+        RunsCmd::List {
+            status,
+            search,
+            page: p,
+        } => {
+            let filter = RunFilter {
+                status: status.iter().map(|s| s.as_str().into()).collect(),
+                search,
+            };
+            let res = c.runs().list(&filter, &page(&p)).await?;
             out.table(
                 &["id", "name", "recipe", "status", "step", "cost", "created"],
                 run_rows(&res.data),

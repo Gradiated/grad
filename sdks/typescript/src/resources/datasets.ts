@@ -4,6 +4,7 @@ import type {
   DatasetRecord,
   HfColumnMapping,
   ImportJob as ImportJobData,
+  ImportStatus,
   ImportSource,
   RenderDatasetRequest,
   RenderDatasetResponse,
@@ -11,7 +12,7 @@ import type {
 import type { RequestOptions } from "../transport.js";
 import { isNodeRuntime, type Core } from "../core.js";
 import { GradUsageError, ImportFailedError } from "../errors.js";
-import { Paginator } from "../pagination.js";
+import { Paginator, statusQuery } from "../pagination.js";
 import { Pending } from "../pending.js";
 import { pollUntil, type WaitOptions } from "../polling.js";
 import { toRubric, type RubricInput } from "../rubrics.js";
@@ -401,10 +402,11 @@ export class DatasetsResource {
     return new Dataset(this.core, await this.core.api.getDataset(name, options));
   }
 
-  list(options: { limit?: number } & RequestOptions = {}): Paginator<Dataset> {
-    const { limit, ...request } = options;
+  /** Datasets, newest first; `search` keeps names containing it (any case) or the exact id. */
+  list(options: { search?: string; limit?: number } & RequestOptions = {}): Paginator<Dataset> {
+    const { search, limit, ...request } = options;
     return new Paginator(async (cursor) => {
-      const page = await this.core.api.listDatasets({ ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) }, request);
+      const page = await this.core.api.listDatasets({ q: search, limit, cursor }, request);
       return { data: page.data.map((d) => new Dataset(this.core, d)), nextCursor: page.nextCursor };
     }, request.signal);
   }
@@ -465,10 +467,12 @@ export class ImportsResource {
     return new ImportJob(this.core, await this.core.api.getImport(id, options));
   }
 
-  list(options: { limit?: number } & RequestOptions = {}): Paginator<ImportJob> {
-    const { limit, ...request } = options;
+  /** Import jobs, newest first; `status` keeps these statuses, `dataset` one dataset's imports. */
+  list(options: { status?: ImportStatus | readonly ImportStatus[]; dataset?: DatasetRef; limit?: number } & RequestOptions = {}): Paginator<ImportJob> {
+    const { status, dataset, limit, ...request } = options;
+    const filters = { status: statusQuery(status), dataset: dataset === undefined ? undefined : datasetName(dataset), limit };
     return new Paginator(async (cursor) => {
-      const page = await this.core.api.listImports({ ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) }, request);
+      const page = await this.core.api.listImports({ ...filters, cursor }, request);
       return { data: page.data.map((j) => new ImportJob(this.core, j)), nextCursor: page.nextCursor };
     }, request.signal);
   }

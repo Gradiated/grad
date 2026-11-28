@@ -78,6 +78,80 @@ impl ListParams {
     }
 }
 
+/// List filters on the wire: `status` comma-separated, absent when empty, then the set options.
+fn filter_query(status: Vec<&str>, opts: &[(&str, &Option<String>)]) -> Vec<(String, String)> {
+    let mut q = Vec::new();
+    if !status.is_empty() {
+        q.push(("status".into(), status.join(",")));
+    }
+    for (k, v) in opts {
+        if let Some(v) = v {
+            q.push(((*k).into(), v.clone()));
+        }
+    }
+    q
+}
+
+/// Filters of [`Runs::list`](crate::Runs::list); the default lists every run.
+#[derive(Debug, Clone, Default)]
+pub struct RunFilter {
+    /// Only runs in these statuses.
+    pub status: Vec<RunStatus>,
+    /// Only runs whose name contains this (any case), or whose id is exactly this.
+    pub search: Option<String>,
+}
+
+impl RunFilter {
+    pub(crate) fn query(&self) -> Vec<(String, String)> {
+        let status = self.status.iter().map(RunStatus::as_str).collect();
+        filter_query(status, &[("q", &self.search)])
+    }
+}
+
+/// Filters of [`Evals::list`](crate::Evals::list); the default lists every eval.
+#[derive(Debug, Clone, Default)]
+pub struct EvalFilter {
+    /// Only evals in these statuses.
+    pub status: Vec<EvalStatus>,
+}
+
+impl EvalFilter {
+    pub(crate) fn query(&self) -> Vec<(String, String)> {
+        filter_query(self.status.iter().map(EvalStatus::as_str).collect(), &[])
+    }
+}
+
+/// Filters of [`Imports::list`](crate::Imports::list); the default lists every import job.
+#[derive(Debug, Clone, Default)]
+pub struct ImportFilter {
+    /// Only jobs in these statuses.
+    pub status: Vec<ImportStatus>,
+    /// Only jobs importing into this dataset.
+    pub dataset: Option<String>,
+}
+
+impl ImportFilter {
+    pub(crate) fn query(&self) -> Vec<(String, String)> {
+        let status = self.status.iter().map(ImportStatus::as_str).collect();
+        filter_query(status, &[("dataset", &self.dataset)])
+    }
+}
+
+/// Filters of [`Artifacts::list`](crate::Artifacts::list); the default lists every artifact.
+#[derive(Debug, Clone, Default)]
+pub struct ArtifactFilter {
+    /// Only this name's versions.
+    pub name: Option<String>,
+    /// Only artifacts whose name contains this (any case), or whose id is exactly this.
+    pub search: Option<String>,
+}
+
+impl ArtifactFilter {
+    pub(crate) fn query(&self) -> Vec<(String, String)> {
+        filter_query(vec![], &[("name", &self.name), ("q", &self.search)])
+    }
+}
+
 /// Query for `GET /v1/runs/{id}/metrics`.
 #[derive(Debug, Clone, Default)]
 pub struct MetricsQuery {

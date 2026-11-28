@@ -200,7 +200,7 @@ func TestRunListCancelResumeCheckpointsPromote(t *testing.T) {
 		"POST /v1/checkpoints/" + ckptID + "/promote": jsonBody(201, wire(t, "artifact.json")),
 	})
 	c, _ := f.client()
-	runs, err := grad.Collect(c.Runs.List(ctx))
+	runs, err := grad.Collect(c.Runs.List(ctx, grad.RunListOptions{}))
 	if err != nil || len(runs) == 0 {
 		t.Fatalf("list %v %v", runs, err)
 	}

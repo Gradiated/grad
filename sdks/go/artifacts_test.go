@@ -136,7 +136,7 @@ func TestArtifactsGetListAndHelpers(t *testing.T) {
 	if err != nil || a.Ref() != art["name"].(string)+"@"+art["version"].(string) {
 		t.Fatalf("get %v %v", a, err)
 	}
-	list, err := grad.Collect(c.Artifacts.List(ctx, "support-sft"))
+	list, err := grad.Collect(c.Artifacts.List(ctx, grad.ArtifactListOptions{Name: "support-sft"}))
 	if err != nil || len(list) == 0 {
 		t.Fatalf("list %v", err)
 	}
@@ -254,14 +254,14 @@ func TestEverythingSurfacesConfigErrors(t *testing.T) {
 	_, err = c.Evals.Failures(ctx, "e", grad.FailureOptions{})
 	check("failures", err)
 	for name, seq := range map[string]func() error{
-		"datasets":  func() error { _, err := grad.Collect(c.Datasets.List(ctx)); return err },
+		"datasets":  func() error { _, err := grad.Collect(c.Datasets.List(ctx, grad.DatasetListOptions{})); return err },
 		"records":   func() error { _, err := grad.Collect(c.Datasets.Records(ctx, "d")); return err },
-		"imports":   func() error { _, err := grad.Collect(c.Imports.List(ctx)); return err },
-		"runs":      func() error { _, err := grad.Collect(c.Runs.List(ctx)); return err },
+		"imports":   func() error { _, err := grad.Collect(c.Imports.List(ctx, grad.ImportListOptions{})); return err },
+		"runs":      func() error { _, err := grad.Collect(c.Runs.List(ctx, grad.RunListOptions{})); return err },
 		"metrics":   func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", false)); return err },
 		"follow":    func() error { _, err := grad.Collect(c.Runs.Metrics(ctx, "r", true)); return err },
-		"artifacts": func() error { _, err := grad.Collect(c.Artifacts.List(ctx, "")); return err },
-		"evals":     func() error { _, err := grad.Collect(c.Evals.List(ctx)); return err },
+		"artifacts": func() error { _, err := grad.Collect(c.Artifacts.List(ctx, grad.ArtifactListOptions{})); return err },
+		"evals":     func() error { _, err := grad.Collect(c.Evals.List(ctx, grad.EvalListOptions{})); return err },
 		"keys":      func() error { _, err := grad.Collect(c.Keys.List(ctx)); return err },
 	} {
 		check(name, seq())

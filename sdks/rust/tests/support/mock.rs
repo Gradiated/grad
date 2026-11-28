@@ -33,6 +33,39 @@ impl Recorded {
         self.target.split_once('?').map(|(_, q)| q).unwrap_or("")
     }
 
+    /// The query string as decoded key/value pairs (`%2C` and `+` decoded).
+    pub fn query_map(&self) -> std::collections::BTreeMap<String, String> {
+        let decode = |s: &str| {
+            let b = s.replace('+', " ").into_bytes();
+            let mut out = Vec::with_capacity(b.len());
+            let mut i = 0;
+            while i < b.len() {
+                let hex = b
+                    .get(i + 1..i + 3)
+                    .and_then(|h| std::str::from_utf8(h).ok());
+                match (b[i], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
+                    (b'%', Some(byte)) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    (c, _) => {
+                        out.push(c);
+                        i += 1;
+                    }
+                }
+            }
+            String::from_utf8_lossy(&out).into_owned()
+        };
+        self.query()
+            .split('&')
+            .filter(|kv| !kv.is_empty())
+            .map(|kv| {
+                let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+                (decode(k), decode(v))
+            })
+            .collect()
+    }
+
     pub fn header(&self, name: &str) -> Option<&str> {
         let n = name.to_ascii_lowercase();
         self.headers

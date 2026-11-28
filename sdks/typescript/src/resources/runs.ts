@@ -15,7 +15,7 @@ import { convertKeys, GradError, type RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { GradUsageError, RunFailedError, WaitTimeoutError } from "../errors.js";
 import { formatPlan } from "../format.js";
-import { collect, pages, Paginator } from "../pagination.js";
+import { collect, pages, Paginator, statusQuery } from "../pagination.js";
 import { Pending } from "../pending.js";
 import { isTransient, pollUntil, type WaitOptions } from "../polling.js";
 import { type Recipe, toRecipeSpec } from "../recipes.js";
@@ -352,10 +352,12 @@ export class RunsResource {
     return new Run(this.core, await this.core.api.getRun(id, options));
   }
 
-  list(options: { limit?: number } & RequestOptions = {}): Paginator<Run> {
-    const { limit, ...request } = options;
+  /** Runs, newest first; `status` keeps these statuses, `search` names containing it (any case) or the exact id. */
+  list(options: { status?: RunStatus | readonly RunStatus[]; search?: string; limit?: number } & RequestOptions = {}): Paginator<Run> {
+    const { status, search, limit, ...request } = options;
+    const filters = { status: statusQuery(status), q: search, limit };
     return new Paginator(async (cursor) => {
-      const page = await this.core.api.listRuns({ ...(limit !== undefined ? { limit } : {}), ...(cursor ? { cursor } : {}) }, request);
+      const page = await this.core.api.listRuns({ ...filters, cursor }, request);
       return { data: page.data.map((r) => new Run(this.core, r)), nextCursor: page.nextCursor };
     }, request.signal);
   }

@@ -334,8 +334,11 @@ pub enum ModelsCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum DatasetsCmd {
-    /// List datasets
+    /// List datasets (newest first)
     List {
+        /// Only names containing this text (any case), or this exact id
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
         #[command(flatten)]
         page: PageArgs,
     },
@@ -516,8 +519,14 @@ pub struct ImportArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ImportsCmd {
-    /// List import jobs
+    /// List import jobs (newest first)
     List {
+        /// Only these statuses, comma-separated: queued, running, completed, failed
+        #[arg(long, value_name = "STATUS", value_delimiter = ',')]
+        status: Vec<String>,
+        /// Only imports into this dataset
+        #[arg(long)]
+        dataset: Option<String>,
         #[command(flatten)]
         page: PageArgs,
     },
@@ -654,7 +663,16 @@ pub struct TrainArgs {
 #[derive(Subcommand, Debug)]
 pub enum RunsCmd {
     /// List runs (newest first)
+    #[command(
+        after_help = "Examples:\n  grad runs list --status failed,cancelled\n  grad runs list --search support --limit 5"
+    )]
     List {
+        /// Only these statuses, comma-separated: queued, running, completed, failed, cancelled, stopped_budget, stopped_balance
+        #[arg(long, value_name = "STATUS", value_delimiter = ',')]
+        status: Vec<String>,
+        /// Only names containing this text (any case), or this exact id
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
         #[command(flatten)]
         page: PageArgs,
     },
@@ -883,8 +901,11 @@ pub enum EvalCmd {
         /// Eval id
         id: String,
     },
-    /// List evals
+    /// List evals (newest first)
     List {
+        /// Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled
+        #[arg(long, value_name = "STATUS", value_delimiter = ',')]
+        status: Vec<String>,
         #[command(flatten)]
         page: PageArgs,
     },
@@ -935,6 +956,9 @@ pub enum ArtifactsCmd {
         /// Only artifacts with this name
         #[arg(long)]
         name: Option<String>,
+        /// Only names containing this text (any case), or this exact id
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
         #[command(flatten)]
         page: PageArgs,
     },

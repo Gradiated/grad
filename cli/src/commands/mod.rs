@@ -9,7 +9,7 @@ pub mod train;
 pub mod ui;
 pub mod usage;
 
-use grad_sdk::{Client, CursorTrail, Error as SdkError, ListParams, Run};
+use grad_sdk::{Client, CursorTrail, Error as SdkError, ListParams, Run, RunFilter};
 use std::sync::Mutex;
 
 use crate::cli::{Global, PageArgs};
@@ -86,10 +86,14 @@ pub fn more_hint(
     Ok(())
 }
 
-/// Runs with this exact name, newest first.
+/// Runs with this exact name, newest first (the server narrows by substring).
 async fn runs_named(c: &Client, name: &str) -> CliResult<Vec<Run>> {
+    let by_name = RunFilter {
+        search: Some(name.to_string()),
+        ..RunFilter::default()
+    };
     Ok(c.runs()
-        .list_all()
+        .list_all(&by_name)
         .await?
         .into_iter()
         .filter(|r| r.name == name)

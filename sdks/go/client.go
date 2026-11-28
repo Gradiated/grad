@@ -367,6 +367,15 @@ func optString(s string) *string {
 	return &s
 }
 
+// statusQuery joins a status filter for the wire; nil when empty.
+func statusQuery[S ~string](statuses []S) *string {
+	parts := make([]string, len(statuses))
+	for i, s := range statuses {
+		parts[i] = string(s)
+	}
+	return optString(strings.Join(parts, ","))
+}
+
 func optInt(n int) *int {
 	if n == 0 {
 		return nil
