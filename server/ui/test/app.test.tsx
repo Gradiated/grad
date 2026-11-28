@@ -90,7 +90,8 @@ const routes = (extra: Record<string, unknown> = {}) => ({
   "GET /v1/runs/counts": { total: 1302, by_status: { queued: 1, running: 0, completed: 1000, failed: 300, cancelled: 1, stopped_budget: 0, stopped_balance: 0 } },
   [`GET /v1/runs/${RUN_ID}`]: RUN,
   "GET /v1/runs/run_q1": QUEUED,
-  [`GET /v1/runs/${RUN_ID}/metrics`]: ({ url }: { url: URL }) => (url.searchParams.has("max_points") ? json(curve(RUN_ID, 1)) : sse(fixtureText("metrics.sse"))),
+  [`GET /v1/runs/${RUN_ID}/events`]: () => sse(fixtureText("events.sse")),
+  [`GET /v1/runs/${RUN_ID}/metrics`]: curve(RUN_ID, 1),
   [`GET /v1/runs/${RUN_ID}/checkpoints`]: fixture("checkpoints.json"),
   "GET /v1/artifacts/:id": fixture("artifact.json"),
   "GET /v1/datasets": { data: [DATASET], next_cursor: null },
@@ -463,9 +464,7 @@ describe("runs", () => {
     expect(container.querySelector("pre.code")?.textContent).toContain("checkpoint_every_steps: 1");
     expect(container.querySelectorAll(".table tbody tr").length).toBeGreaterThanOrEqual(3);
     expect(document.title).toBe("support-sft · grad");
-    // No /events on this server: the page fell back to the metrics stream.
     expect(server.calls.some((c) => c.path.startsWith(`/v1/runs/${RUN_ID}/events`))).toBe(true);
-    expect(server.calls.some((c) => c.path.startsWith(`/v1/runs/${RUN_ID}/metrics`))).toBe(true);
     expect(byText(container, "button", "Resume")).toBeUndefined();
     expect(byText(container, "button", "Cancel")).toBeUndefined();
   });
@@ -563,7 +562,7 @@ describe("runs", () => {
     const server = fakeServer(
       routes({
         "GET /v1/runs/run_f1": FAILED,
-        "GET /v1/runs/:id/metrics": () => sse(""),
+        "GET /v1/runs/:id/events": () => sse(""),
         "GET /v1/runs/:id/checkpoints": { data: [], next_cursor: null },
         "POST /v1/runs/:id/cancel": ({ url }: { url: URL }) => (posted.push(url.pathname), json({ ...QUEUED, status: "cancelled" })),
         "POST /v1/runs/:id/resume": ({ url, body }: { url: URL; body?: string }) => (posted.push(`${url.pathname} ${body}`), json({ ...FAILED, status: "queued" })),

@@ -3,8 +3,7 @@ import type { MetricPoint, Run } from "@sdk/generated/models.js";
 import { CODEC, convertKeys, type RunPhase } from "./api.js";
 
 // One run's lifecycle, decoded from `GET /v1/runs/{id}/events` (phase, metric,
-// checkpoint, attempt, warning, log, completed) or, on servers without it,
-// from `GET /v1/runs/{id}/metrics` (metric + status).
+// checkpoint, attempt, warning, log, completed).
 
 interface Base {
   seq: number;
@@ -41,8 +40,7 @@ export const decodeEvent = (name: string, data: string): RunEvent | null => {
   const base: Base = { seq: num(w.seq), attempt: num(w.attempt, 1), timestamp: str(w.timestamp) };
   switch (name) {
     case "metric": {
-      // /events wraps the point; /metrics sends it bare.
-      const metric = decodeMetric(w.metric ?? w);
+      const metric = decodeMetric(w.metric);
       return { ...base, seq: num(w.seq, metric.seq), attempt: num(w.attempt, metric.attempt), timestamp: base.timestamp || metric.timestamp, type: "metric", step: num(w.step, metric.step), metric };
     }
     case "phase": {
@@ -77,11 +75,6 @@ export const decodeEvent = (name: string, data: string): RunEvent | null => {
     case "completed": {
       const run = decodeRun(w.run);
       return { ...base, type: "completed", status: run.status, run };
-    }
-    case "status": {
-      // /metrics' final event carries the Run itself.
-      const run = decodeRun(w);
-      return { ...base, seq: 0, type: "completed", status: run.status, run, timestamp: run.finishedAt ?? run.updatedAt };
     }
     default:
       return null;

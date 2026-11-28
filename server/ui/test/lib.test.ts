@@ -152,8 +152,8 @@ const sseEvents = (text: string): { event: string; data: string }[] =>
     });
 
 describe("run events", () => {
-  it("decodes the metrics stream (metric + status) into series and a completion", () => {
-    const events = sseEvents(fixtureText("metrics.sse")).map((e) => decodeEvent(e.event, e.data)).filter((e): e is RunEvent => e !== null);
+  it("decodes the events stream (metrics, then completed) into series and a completion", () => {
+    const events = sseEvents(fixtureText("events.sse")).map((e) => decodeEvent(e.event, e.data)).filter((e): e is RunEvent => e !== null);
     expect(events.map((e) => e.type)).toEqual(["metric", "metric", "metric", "completed"]);
     const state = applyEvents(emptyStream(), events);
     expect(state.series.step).toEqual([1, 2, 3]);

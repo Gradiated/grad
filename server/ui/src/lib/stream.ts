@@ -17,8 +17,7 @@ const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * Follows a run's event stream until its final event, resuming with
- * Last-Event-ID after a dropped connection. Falls back to the metrics stream
- * on servers without `/events`. Calls `onBatch` with decoded events.
+ * Last-Event-ID after a dropped connection. Calls `onBatch` with decoded events.
  */
 export const followRun = async (
   api: Api,
@@ -29,7 +28,7 @@ export const followRun = async (
 ): Promise<void> => {
   const sleep = deps.sleep ?? wait;
   const flushMs = deps.flushMs ?? 200;
-  let path = `/v1/runs/${encodePathParam(runId, "id")}/events`;
+  const path = `/v1/runs/${encodePathParam(runId, "id")}/events`;
   let lastEventId: string | undefined;
   let failures = 0;
   let buffer: RunEvent[] = [];
@@ -66,10 +65,6 @@ export const followRun = async (
         }
       } catch (error) {
         if (signal.aborted) return;
-        if (error instanceof APIError && error.status === 404 && error.code === "route_not_found" && path.endsWith("/events")) {
-          path = path.replace(/\/events$/, "/metrics");
-          continue;
-        }
         if (error instanceof APIError && error.status < 500 && error.status !== 429) throw error;
       }
       flush();
