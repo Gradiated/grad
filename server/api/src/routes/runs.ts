@@ -20,6 +20,7 @@ import type { AppDependencies } from "../deps.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
 import { toRunEvent } from "../services/run-events.js";
+import type { JobEvent } from "../store/types.js";
 import { createSseLimits } from "./sse-limits.js";
 import {
   defaultErrors,
@@ -50,6 +51,26 @@ export const registerRunRoutes = (
   const tags = ["Runs"];
   const reserveStream = createSseLimits(deps.settings.sseStreamsPerKey);
 
+  // The hub hands every stream following a run the same event objects, so
+  // each event's SSE frame is built and encoded once, not once per stream
+  // (p1-scale: 20 streams a run made serialization most of the fan-out).
+  const encoder = new TextEncoder();
+  const frames = new WeakMap<JobEvent, Uint8Array | null>();
+  const frameOf = (runId: string, row: JobEvent): Uint8Array | null => {
+    let frame = frames.get(row);
+    if (frame === undefined) {
+      const event = toRunEvent(runId, row);
+      frame = event
+        ? encoder.encode(
+            `event: ${event.type}\ndata: ${JSON.stringify(event)}\nid: ${event.seq}\n\n`,
+          )
+        : null;
+      frames.set(row, frame);
+    }
+
+    return frame;
+  };
+
   /**
    * Streams a run's events from the replica's event hub: its history after
    * `afterSeq` first, then live events. Once the hub reports the run settled,
@@ -73,13 +94,8 @@ export const registerRunRoutes = (
         if (!batch) break;
         for (const row of batch.events) {
           lastSeq = row.seq;
-          const event = toRunEvent(runId, row);
-          if (!event) continue;
-          await stream.writeSSE({
-            event: event.type,
-            id: String(event.seq),
-            data: JSON.stringify(event),
-          });
+          const frame = frameOf(runId, row);
+          if (frame) await stream.write(frame);
         }
         if (batch.settled) {
           const end = await services.runs.streamEnd(
