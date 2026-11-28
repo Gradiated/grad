@@ -163,6 +163,19 @@ describe("grad-server HTTP API", () => {
     await broken.close();
   });
 
+  it("fails readiness while draining and keeps serving everything else", async () => {
+    const draining = await makeTestApp();
+    draining.startDraining();
+    const ready = await draining.json("/health/ready", { token: null });
+    expect(ready.status).toBe(503);
+    expect(ready.body).toMatchObject({ code: "shutting_down" });
+    expect(
+      (await draining.request("/health/live", { token: null })).status,
+    ).toBe(200);
+    expect((await draining.request("/v1/runs")).status).toBe(200);
+    await draining.close();
+  });
+
   it("renders every error as application/problem+json with a request id", async () => {
     const cases: Array<[Promise<Response>, number, string]> = [
       [t.request("/v1/nope"), 404, "route_not_found"],

@@ -25,7 +25,7 @@ const main = async () => {
   const tracing = await startTracing(process.env, { version: API_VERSION });
 
   const deps = await buildDependencies(env);
-  const { app, services } = createGradApp(deps);
+  const { app, services, startDraining } = createGradApp(deps);
 
   services.maintenance.start(env.MAINTENANCE_INTERVAL_MS);
 
@@ -79,6 +79,8 @@ const main = async () => {
     log("info", "grad-server shutting down", { signal });
     await gracefulShutdown({
       server: server as Server,
+      startDraining,
+      drainMs: env.SHUTDOWN_DRAIN_SECONDS * 1000,
       stopBackground: async () => {
         await services.maintenance.stop();
         // Ends every SSE stream now; clients resume on another replica with Last-Event-ID.

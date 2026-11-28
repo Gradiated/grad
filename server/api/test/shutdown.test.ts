@@ -8,8 +8,9 @@ import { describe, expect, it } from "vitest";
 import { gracefulShutdown } from "../src/shutdown.js";
 
 describe("gracefulShutdown", () => {
-  it("finishes with an SSE client connected, after stopping background work first", async () => {
+  it("drains (still serving) before stopping background work, and finishes with an SSE client connected", async () => {
     const app = new Hono();
+    app.get("/ping", (c) => c.text("pong"));
     app.get("/stream", (c) =>
       streamSSE(c, async (stream) => {
         while (!stream.aborted) await stream.sleep(20);
@@ -28,18 +29,30 @@ describe("gracefulShutdown", () => {
 
     const order: string[] = [];
     const started = Date.now();
-    await gracefulShutdown({
+    let drainedAt = 0;
+    const shutdown = gracefulShutdown({
       server,
       graceMs: 200,
+      drainMs: 300,
+      startDraining: () => {
+        order.push("drain");
+        drainedAt = Date.now();
+      },
       stopBackground: async () => {
+        expect(Date.now() - drainedAt).toBeGreaterThanOrEqual(290);
         order.push("background");
       },
       closeResources: async () => {
         order.push("resources");
       },
     });
+    // While draining the listener is still open: new requests are served.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const during = await fetch(`http://127.0.0.1:${port}/ping`);
+    expect(await during.text()).toBe("pong");
+    await shutdown;
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(order).toEqual(["background", "resources"]);
+    expect(order).toEqual(["drain", "background", "resources"]);
     await reader.read().catch(() => undefined);
   });
 });

@@ -55,6 +55,7 @@ export const TEST_JUDGES_JSON = JSON.stringify([
 export interface TestApp {
   app: ReturnType<typeof createGradApp>["app"];
   services: ReturnType<typeof createGradApp>["services"];
+  startDraining: () => void;
   deps: AppDependencies;
   clock: ManualClock;
   /** An API path (bearer `token`, default the admin key) or an absolute presigned URL (no token). */
@@ -109,7 +110,7 @@ export const makeTestApp = async (
     settings: { maxAttempts: 3 },
     ...overrides,
   };
-  const { app, services } = createGradApp(deps);
+  const { app, services, startDraining } = createGradApp(deps);
 
   const request: TestApp["request"] = (pathname, init = {}) => {
     const presigned = /^https?:\/\//.test(pathname);
@@ -141,6 +142,7 @@ export const makeTestApp = async (
   return {
     app,
     services,
+    startDraining,
     deps,
     clock,
     request,

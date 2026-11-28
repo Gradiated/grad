@@ -19,6 +19,10 @@ metadata:
     app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.api.replicaCount }}
+  # A new replica is ready before an old one stops: no capacity dip on upgrade.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
@@ -50,6 +54,20 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Prefer replicas on different nodes and zones, so one node or zone loss
+      # leaves one serving (soft: a one-node cluster still schedules them).
+      topologySpreadConstraints:
+        {{- range $key := list "kubernetes.io/hostname" "topology.kubernetes.io/zone" }}
+        - maxSkew: 1
+          topologyKey: {{ $key }}
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+              app.kubernetes.io/component: api
+        {{- end }}
+      # SHUTDOWN_DRAIN_SECONDS (5) + background stop + 5 s for open requests.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: grad-server
           image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
@@ -71,6 +89,9 @@ spec:
             {{- if gt (int .Values.api.internalPort) 0 }}
             - {name: INTERNAL_PORT, value: {{ .Values.api.internalPort | quote }}}
             {{- end }}
+            # SIGTERM: readiness fails and the server keeps serving for 5 s while
+            # the endpoint is removed, then closes (server/api/src/shutdown.ts).
+            - {name: SHUTDOWN_DRAIN_SECONDS, value: "5"}
             - {name: AUTH_MODE, value: {{ .Values.api.authMode | quote }}}
             - {name: BILLING_MODE, value: {{ .Values.api.billingMode | quote }}}
             - {name: DEFAULT_WORKSPACE_ID, value: {{ .Values.api.defaultWorkspaceId | quote }}}

@@ -164,6 +164,8 @@ export const EnvironmentSchema = z.object({
   /** Days an unreferenced job blob is kept before the sweep deletes it. */
   ORPHAN_BLOB_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
   MAINTENANCE_INTERVAL_MS: z.coerce.number().int().min(100).default(15_000),
+  /** SIGTERM: seconds /health/ready fails while the server keeps serving (Helm: 5). */
+  SHUTDOWN_DRAIN_SECONDS: z.coerce.number().int().min(0).max(120).default(0),
   /** The SSE event hub re-reads every followed job this often, in case a NOTIFY was missed. */
   SSE_POLL_MS: z.coerce.number().int().min(100).max(60_000).default(2_000),
   /** Serve Prometheus metrics at /metrics. */

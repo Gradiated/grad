@@ -79,10 +79,13 @@ const problemResponse = (
 export interface GradApp {
   app: OpenAPIHono<AppEnv>;
   services: Services;
+  /** SIGTERM: /health/ready answers 503 so traffic moves elsewhere first. */
+  startDraining: () => void;
 }
 
 export const createGradApp = (deps: AppDependencies): GradApp => {
   const services = createServices(deps);
+  let draining = false;
   metrics.buildInfo.set({ version: API_VERSION }, 1);
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result) => {
@@ -247,6 +250,15 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   app.get("/health/live", (c) => c.json({ status: "ok" }, 200));
 
   app.get("/health/ready", async (c) => {
+    if (draining) {
+      return problemResponse(
+        c,
+        503,
+        "shutting_down",
+        "Shutting down",
+        "This replica is draining; retry on another one.",
+      );
+    }
     if (!(await deps.store.ping())) {
       return problemResponse(
         c,
@@ -333,7 +345,13 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     info: { title: API_TITLE, version: API_VERSION },
   });
 
-  return { app, services };
+  return {
+    app,
+    services,
+    startDraining: () => {
+      draining = true;
+    },
+  };
 };
 
 export const createApp = (deps: AppDependencies): OpenAPIHono<AppEnv> =>
