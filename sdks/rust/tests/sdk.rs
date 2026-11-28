@@ -1189,6 +1189,53 @@ async fn collect_all_is_bounded_by_a_page_budget() {
     assert_eq!(n.load(Ordering::SeqCst), 500);
 }
 
+#[tokio::test]
+async fn collect_all_helpers_walk_every_page_with_their_filters() {
+    let srv = MockServer::start(|r| {
+        let item = match r.path() {
+            "/v1/imports" => json!({"id": "imp_1", "dataset": "d", "status": "completed"}),
+            "/v1/artifacts" => json!({"id": "art_1", "name": "a", "version": "v"}),
+            "/v1/runs/r1/checkpoints" => json!({"id": "ckpt_1", "step": 1}),
+            "/v1/evals/e1/outputs" => json!({"task_id": "t", "model": "m"}),
+            _ => json!({"task_id": "t", "model": "m", "scores": {}}),
+        };
+        let next = if r.query().contains("cursor=c2") {
+            Value::Null
+        } else {
+            json!("c2")
+        };
+        Reply::json(200, json!({"data": [item], "next_cursor": next}))
+    });
+    let c = client(&srv.url);
+    assert_eq!(c.imports().list_all().await.unwrap().len(), 2);
+    assert_eq!(c.artifacts().list_all(Some("a")).await.unwrap().len(), 2);
+    assert_eq!(c.runs().checkpoints_all("r1").await.unwrap().len(), 2);
+    assert_eq!(
+        c.evals().results_all("e1", Some("m")).await.unwrap().len(),
+        2
+    );
+    assert_eq!(
+        c.evals()
+            .failures_all("e1", None, Some(0.5))
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(c.evals().outputs_all("e1", None).await.unwrap().len(), 2);
+    let reqs = srv.requests();
+    assert_eq!(reqs.len(), 12, "two pages each");
+    assert!(reqs.iter().any(|r| r.path() == "/v1/artifacts"
+        && r.query().contains("name=a")
+        && r.query().contains("cursor=c2")));
+    assert!(reqs.iter().any(|r| r.path() == "/v1/evals/e1/failures"
+        && r.query().contains("threshold=0.5")
+        && r.query().contains("cursor=c2")));
+    assert!(reqs
+        .iter()
+        .any(|r| r.path() == "/v1/evals/e1/results" && r.query().contains("model=m")));
+}
+
 #[test]
 fn cursor_trail_rules() {
     let mut t = CursorTrail::new("/v1/x");

@@ -25,6 +25,9 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   checked against manifest.json, and nothing left behind on failure. TypeScript has the same as
   `download(dest, { extract: true })` (streamed, no tar dependency).
 - TypeScript: a CRLF split across two SSE chunks no longer splits an event.
+- Rust: collect-all helpers where the other SDKs iterate every page: `imports().list_all()`,
+  `artifacts().list_all(name)`, `runs().checkpoints_all(id)`, `evals().results_all`,
+  `failures_all` and `outputs_all` (bounded like every `list_all`).
 - SDK READMEs: one quickstart per SDK (push two records, plan, train `test/tiny-qwen3`,
   download) that runs on `grad local up --dev-models` in about 10 s; each SDK's test suite runs it
   verbatim (Python, TypeScript and Go live suites; the Rust README is the crate docs, so `cargo

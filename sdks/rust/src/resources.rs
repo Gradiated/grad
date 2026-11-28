@@ -1096,6 +1096,11 @@ impl Imports<'_> {
         get(self.c, Req::get("/v1/imports").query(p.query())).await
     }
 
+    /// Every import job, newest first (all pages, bounded).
+    pub async fn list_all(&self) -> Result<Vec<ImportJob>> {
+        collect_all(self.c, "/v1/imports", LIST_IMPORTS_LIMIT_MAX, vec![]).await
+    }
+
     /// Poll until the job completes; a failed job is [`Error::ImportFailed`].
     pub async fn wait(&self, id: &str, opts: &WaitOptions) -> Result<ImportJob> {
         let mut poll = Poller::new(opts);
@@ -1226,6 +1231,13 @@ impl Runs<'_> {
         .await
     }
 
+    /// Every unexpired checkpoint of a run (all pages, bounded).
+    pub async fn checkpoints_all(&self, id: &str) -> Result<Vec<Checkpoint>> {
+        check_path_param("run id", id)?;
+        let path = format!("/v1/runs/{}/checkpoints", seg(id));
+        collect_all(self.c, &path, LIST_RUN_CHECKPOINTS_LIMIT_MAX, vec![]).await
+    }
+
     /// The run's lifecycle events (phase, metric, checkpoint, attempt, warning,
     /// log, completed). With `follow` they stream live over SSE, reconnecting
     /// with `Last-Event-ID` (never repeating an event) until `completed`;
@@ -1354,6 +1366,14 @@ impl Artifacts<'_> {
                 .opt_param("name", name.map(str::to_string)),
         )
         .await
+    }
+
+    /// Every artifact (optionally one name's versions), newest first (all pages, bounded).
+    pub async fn list_all(&self, name: Option<&str>) -> Result<Vec<Artifact>> {
+        let extra = name
+            .map(|n| vec![("name".to_string(), n.to_string())])
+            .unwrap_or_default();
+        collect_all(self.c, "/v1/artifacts", LIST_ARTIFACTS_LIMIT_MAX, extra).await
     }
 
     /// Get by id, `name@version` or `name@latest`.
@@ -1754,6 +1774,44 @@ impl Evals<'_> {
                 .opt_param("missing_scorer", missing_scorer.map(str::to_string)),
         )
         .await
+    }
+
+    /// Every task outcome of an eval, optionally one model's (all pages, bounded).
+    pub async fn results_all(&self, id: &str, model: Option<&str>) -> Result<Vec<EvalTaskOutcome>> {
+        check_path_param("eval id", id)?;
+        let extra = model
+            .map(|m| vec![("model".to_string(), m.to_string())])
+            .unwrap_or_default();
+        let path = format!("/v1/evals/{}/results", seg(id));
+        collect_all(self.c, &path, LIST_EVAL_RESULTS_LIMIT_MAX, extra).await
+    }
+
+    /// Every failing task of an eval, below `threshold` (all pages, bounded).
+    pub async fn failures_all(
+        &self,
+        id: &str,
+        model: Option<&str>,
+        threshold: Option<f64>,
+    ) -> Result<Vec<EvalTaskOutcome>> {
+        check_path_param("eval id", id)?;
+        let mut extra = model
+            .map(|m| vec![("model".to_string(), m.to_string())])
+            .unwrap_or_default();
+        if let Some(t) = threshold {
+            extra.push(("threshold".to_string(), t.to_string()));
+        }
+        let path = format!("/v1/evals/{}/failures", seg(id));
+        collect_all(self.c, &path, LIST_EVAL_FAILURES_LIMIT_MAX, extra).await
+    }
+
+    /// Every generated output of an eval, optionally one model's (all pages, bounded).
+    pub async fn outputs_all(&self, id: &str, model: Option<&str>) -> Result<Vec<EvalOutput>> {
+        check_path_param("eval id", id)?;
+        let extra = model
+            .map(|m| vec![("model".to_string(), m.to_string())])
+            .unwrap_or_default();
+        let path = format!("/v1/evals/{}/outputs", seg(id));
+        collect_all(self.c, &path, LIST_EVAL_OUTPUTS_LIMIT_MAX, extra).await
     }
 
     pub async fn post_scores(
