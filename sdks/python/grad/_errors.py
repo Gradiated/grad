@@ -291,6 +291,11 @@ class GradAPIError(GradError):
         self.body = body
         self.errors = list(errors or [])
 
+    @property
+    def retry_after(self) -> float | None:
+        """Seconds the server asked to wait before retrying (``Retry-After``), if it said."""
+        return parse_retry_after(self.headers.get("retry-after"))
+
 
 GradApiError = GradAPIError
 """Backwards-compatible alias of :class:`GradAPIError`."""
@@ -339,11 +344,6 @@ class ValidationError(GradAPIError):
 
 class RateLimitError(GradAPIError):
     """429: too many requests. ``retry_after`` (seconds) is the server's suggested wait."""
-
-    @property
-    def retry_after(self) -> float | None:
-        """Seconds to wait before retrying, from the ``Retry-After`` header."""
-        return parse_retry_after(self.headers.get("retry-after"))
 
 
 class QueueLimitError(RateLimitError):
