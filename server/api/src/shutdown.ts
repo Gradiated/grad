@@ -1,5 +1,7 @@
 import type { Server } from "node:http";
 
+import { log } from "./telemetry/log.js";
+
 interface ShutdownSteps {
   /**
    * The HTTP listeners (the API, and the internal and metrics ones when
@@ -28,12 +30,23 @@ const sleep = (ms: number) =>
  * arrive until the endpoint is removed), then stop background work (a running
  * eval is requeued at once) and close the server; connections still open
  * after `graceMs` (SSE metric streams, which clients resume with
- * Last-Event-ID) are cut, so shutdown always finishes.
+ * Last-Event-ID) are cut, so shutdown always finishes. A step that fails is
+ * logged and the rest still run; the result is false if any failed.
  */
-export const gracefulShutdown = async (steps: ShutdownSteps): Promise<void> => {
+export const gracefulShutdown = async (
+  steps: ShutdownSteps,
+): Promise<boolean> => {
+  let ok = true;
+  const run = async (step: string, fn: () => Promise<unknown>) => {
+    await fn().catch((error: unknown) => {
+      ok = false;
+      log("error", "shutdown step failed", { step, error });
+    });
+  };
+
   steps.startDraining();
   if (steps.drainMs) await sleep(steps.drainMs);
-  await steps.stopBackground();
+  await run("stop_background", steps.stopBackground);
   await Promise.all(
     steps.servers.map(
       (server) =>
@@ -51,5 +64,7 @@ export const gracefulShutdown = async (steps: ShutdownSteps): Promise<void> => {
     ),
   );
   // Only once no listener has a request in flight.
-  await steps.closeResources();
+  await run("close_resources", steps.closeResources);
+
+  return ok;
 };

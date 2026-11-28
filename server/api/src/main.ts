@@ -77,7 +77,7 @@ const main = async () => {
     if (stopping) return;
     stopping = true;
     log("info", "grad-server shutting down", { signal });
-    await gracefulShutdown({
+    const ok = await gracefulShutdown({
       servers: [server, internalServer, metricsServer].filter(
         (s) => s !== null,
       ) as Server[],
@@ -93,7 +93,7 @@ const main = async () => {
         await stopTracing();
       },
     });
-    process.exit(0);
+    process.exit(ok ? 0 : 1);
   };
 
   process.once("SIGTERM", () => void shutdown("SIGTERM"));

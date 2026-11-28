@@ -55,4 +55,25 @@ describe("gracefulShutdown", () => {
     expect(order).toEqual(["drain", "background", "resources"]);
     await reader.read().catch(() => undefined);
   });
+
+  it("runs every step and finishes when one fails", async () => {
+    const server = serve({ fetch: new Hono().fetch, port: 0 }) as Server;
+    await new Promise((resolve) => server.once("listening", resolve));
+    const order: string[] = [];
+    const ok = await gracefulShutdown({
+      servers: [server],
+      startDraining: () => order.push("drain"),
+      stopBackground: async () => {
+        order.push("background");
+        throw new Error("maintenance stop failed");
+      },
+      closeResources: async () => {
+        order.push("resources");
+        throw new Error("pool close failed");
+      },
+    });
+    expect(ok).toBe(false);
+    expect(order).toEqual(["drain", "background", "resources"]);
+    expect(server.listening).toBe(false);
+  });
 });
