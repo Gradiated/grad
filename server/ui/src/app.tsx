@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 
 import { IconArtifacts, IconDatasets, IconEvals, IconHealth, IconLogout, IconMoon, IconRuns, IconSun, IconUsage, Wordmark } from "./components/icons.js";
 import { Empty, ToastProvider } from "./components/ui.js";
-import { ApiContext, createApi, errorMessage, isUnauthorized, type Api } from "./lib/api.js";
+import { ApiContext, APIError, createApi, errorMessage, isUnauthorized, type Api } from "./lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey, type KeyStore } from "./lib/auth.js";
 import { Link, match, RouterProvider, useLocation } from "./lib/router.js";
 import { setTheme, useTheme } from "./lib/theme.js";
@@ -46,7 +46,8 @@ export const App = ({ baseURL = location.origin, store: given, fetch: fetchImpl 
         await api.client.listRuns({ limit: 1 });
       } catch (e) {
         if (isUnauthorized(e)) return key ? "The server rejected that key." : "";
-        return `Cannot reach grad-server: ${errorMessage(e)}`;
+        // 403: the key is valid but lacks runs:read; each page says which scope it needs.
+        if (!(e instanceof APIError && e.status === 403)) return `Cannot reach grad-server: ${errorMessage(e)}`;
       }
       unauthorized = true;
       if (key) store.set(key);

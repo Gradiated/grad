@@ -193,6 +193,19 @@ describe("auth", () => {
     await waitFor(() => expect(container.textContent).toContain("Your session ended"));
   });
 
+  it("signs in with a valid key that may not list runs, and says on Runs which scope it lacks", async () => {
+    const server = fakeServer(routes({ "GET /v1/runs": () => problem(403, "forbidden", "This endpoint requires the 'runs:read' scope.") }), { key: "grad_datasets_only_1" });
+    const { container } = await boot(server);
+    await waitFor(() => expect(container.textContent).toContain("Sign in to grad"));
+    await type(container.querySelector("#api-key"), "grad_datasets_only_1");
+    await click(container.querySelector("button[type=submit]"));
+    await waitFor(() => expect(container.textContent).toContain("requires the 'runs:read' scope. Sign in with a key that has it"));
+    expect(container.textContent).not.toContain("Cannot reach grad-server");
+    expect(sessionStorage.getItem("grad.api_key")).toBe("grad_datasets_only_1");
+    navigate("/datasets");
+    await waitFor(() => expect(container.querySelector("h1")?.textContent).toBe("Datasets"));
+  });
+
   it("reports an unreachable server", async () => {
     const down = (async () => {
       throw new TypeError("fetch failed");
