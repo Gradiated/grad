@@ -1,0 +1,11 @@
+# The build context is server/trainer and the Dockerfile copies explicit paths; keep local
+# state, test output and credentials out of the context anyway.
+**/.env
+**/.env.*
+**/.grad-data
+**/.venv*
+**/__pycache__
+**/*.pyc
+tests
+.coverage
+coverage.xml
