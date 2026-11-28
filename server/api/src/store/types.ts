@@ -455,6 +455,8 @@ export interface JobRepository {
     limit: number,
     maxRunning?: number,
   ): Promise<JobRow[]>;
+  /** Queued jobs whose `waiting_for_compute` phase is written: listUnclaimedSince skips them. */
+  markWaiting(ids: readonly string[]): Promise<void>;
   /** Records a claiming worker (throttled: at most one write per worker per 10 s). */
   seeWorker(worker: WorkerSighting): Promise<void>;
   /** Forgets workers unseen since `before` that hold no lease. */

@@ -95,6 +95,50 @@ describe("fair claims (store)", () => {
       finished_at: clock.now().toISOString(),
     });
 
+  it("a run marked waiting for compute is skipped by later ticks until it queues again", async () => {
+    const queued = await queueRun("ws_a");
+    await store.jobs.appendEvent({
+      jobId: queued.id,
+      attempt: 1,
+      type: "phase",
+      step: 0,
+      key: "queued@0",
+      payload: { phase: "queued" },
+    });
+    clock.advanceSeconds(120);
+    const unclaimed = () =>
+      store.jobs.listUnclaimedSince(
+        "train",
+        new Date(clock.now().getTime() - 60_000),
+        100,
+        8,
+      );
+
+    expect((await unclaimed()).map((j) => j.id)).toEqual([queued.id]);
+    await store.jobs.markWaiting([queued.id]);
+    expect(await unclaimed()).toEqual([]);
+
+    // Claimed, then requeued (a lost lease): its new queued phase counts again.
+    const job = await claim("w1");
+    expect(job?.id).toBe(queued.id);
+    await store.jobs.update(queued.id, {
+      status: "queued",
+      worker_id: null,
+      worker_key: null,
+      lease_expires_at: null,
+    });
+    await store.jobs.appendEvent({
+      jobId: queued.id,
+      attempt: 2,
+      type: "phase",
+      step: 0,
+      key: "queued@0",
+      payload: { phase: "queued" },
+    });
+    clock.advanceSeconds(120);
+    expect((await unclaimed()).map((j) => j.id)).toEqual([queued.id]);
+  });
+
   it("a poll that can claim nothing (every queued job capped) never waits on the claim lock", async () => {
     await queueRun("ws_a");
     await queueRun("ws_a");

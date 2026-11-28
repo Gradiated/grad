@@ -69,6 +69,13 @@ const splitPatch = (
   return { job, rest };
 };
 
+/**
+ * Set in a queued job's payload once its `waiting_for_compute` phase is
+ * written, so the maintenance tick skips it without reading its events
+ * (cleared when the job is claimed or re-enters the queue).
+ */
+const WAITING_MARK = "waiting_marked";
+
 const updateJobRow = async (
   db: Db,
   clock: Clock,
@@ -83,10 +90,15 @@ const updateJobRow = async (
     JOB_TYPES,
     params,
   );
+  // A job that (re)enters the queue has not been marked waiting for compute.
+  const base =
+    columns.status === "queued" ? `(payload - '${WAITING_MARK}')` : "payload";
   if (payload && Object.keys(payload).length > 0) {
     sets.push(
-      `payload = payload || ${params.add(JSON.stringify(payload))}::jsonb`,
+      `payload = ${base} || ${params.add(JSON.stringify(payload))}::jsonb`,
     );
+  } else if (base !== "payload") {
+    sets.push(`payload = ${base}`);
   }
   const where = `id = ${params.add(id)}${expectClause(expect, params)}`;
   const finishing = typeof columns.finished_at === "string";
@@ -419,7 +431,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
              SET status = 'running', attempt = attempt + 1, worker_id = $7, worker_key = $8,
                  lease_expires_at = $9::timestamptz, lease_seconds = $10, updated_at = $6::timestamptz,
                  billed_through = 0, billed_cost = 0, billed_at = $6::timestamptz,
-                 payload = payload - 'worker_stats'
+                 payload = payload - 'worker_stats' - '${WAITING_MARK}'
              WHERE id = (SELECT id FROM locked)
              RETURNING *`,
             [
@@ -468,6 +480,13 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
         [id, attempt, from, through, cost, at.toISOString()],
       )
     ).length > 0,
+  markWaiting: async (ids) => {
+    await db.query(
+      `UPDATE grad_jobs SET payload = payload || jsonb_build_object('${WAITING_MARK}', true)
+       WHERE id = ANY($1::text[]) AND status = 'queued'`,
+      [[...ids]],
+    );
+  },
   recordWorkerStats: async (id, attempt, stats) => {
     await db.query(
       `UPDATE grad_jobs SET payload = payload || jsonb_build_object('worker_stats', $3::jsonb)
@@ -598,6 +617,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
            WHERE e.job_id = j.id AND e.type = 'phase' ORDER BY e.seq DESC LIMIT 1
          ) p ON true
          WHERE j.status = 'queued' AND j.waiting_on IS NULL AND j.kind = $1
+           AND NOT (j.payload ? '${WAITING_MARK}')
            AND p.phase = 'queued' AND p.phase_at < $2::timestamptz
            AND ($4::int IS NULL OR (
              SELECT count(*) FROM grad_jobs r

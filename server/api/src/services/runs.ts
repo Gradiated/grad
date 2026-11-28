@@ -1409,6 +1409,7 @@ export const createRunLifecycle = (
           },
         });
       }
+      await store.jobs.markWaiting(rows.map((r) => r.id));
 
       return rows.length;
     },
