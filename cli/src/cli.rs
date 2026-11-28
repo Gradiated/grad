@@ -981,7 +981,7 @@ pub enum ArtifactsCmd {
     #[command(after_help = "\
 Examples:
   grad artifacts download fast-diff-merge@latest --output ./fast-diff-merge
-  vllm serve Qwen/Qwen3-8B --enable-lora --lora-modules fast-diff-merge=./fast-diff-merge
+  vllm serve Qwen/Qwen3-8B --enable-lora --max-lora-rank 32 --lora-modules fast-diff-merge=./fast-diff-merge
   grad artifacts download fast-diff-merge@latest --archive ./fast-diff-merge.grad.tar.gz
   grad artifacts download fast-diff-merge@latest --url    # a presigned URL, valid 15 minutes
 

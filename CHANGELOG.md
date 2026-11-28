@@ -45,6 +45,8 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   (and `grad runs events --follow`, `grad runs wait`) give up after 20 dropped or refused reconnects in a row
   (Go allowed 10, Rust 8, TypeScript reconnected forever), counted only once the stream has been open: a server
   that was never up fails after the usual request retries (about a second) instead of retrying for three minutes.
+- **CLI:** the `vllm serve` line `grad artifacts download --output` prints carries `--max-lora-rank`, the adapter's
+  rank rounded up to a value vLLM accepts; vLLM's default (16) refuses grad's default rank-32 adapters.
 
 - **Run comparison reads.** `GET /v1/runs/{id}/metrics?max_points=N` returns a run's whole curve in one page, thinned
   to at most N points spaced evenly back from the newest (eval points thinned separately, so a sparse eval curve

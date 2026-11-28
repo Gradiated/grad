@@ -143,8 +143,9 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
                         .unwrap_or("<base-model>");
                     let name = reference.split('@').next().unwrap_or("adapter");
                     out.line(format!(
-                        "  Serve it: vllm serve {} --enable-lora --lora-modules {}={}",
+                        "  Serve it: vllm serve {} --enable-lora --max-lora-rank {} --lora-modules {}={}",
                         base,
+                        vllm_max_lora_rank(dir),
                         name,
                         dir.display()
                     ));
@@ -244,4 +245,44 @@ async fn finish_import(
     out.line(format!("✓ Registered artifact {}", a.reference()));
     print_artifact(out, &a);
     out.done(&a)
+}
+
+/// The `--max-lora-rank` vLLM needs for the adapter in `dir`: its largest rank
+/// (`r`, or a `rank_pattern` override) rounded up to a value vLLM accepts.
+/// vLLM's default (16) refuses grad's default rank-32 adapters.
+fn vllm_max_lora_rank(dir: &std::path::Path) -> u32 {
+    const VLLM_RANKS: [u64; 9] = [1, 8, 16, 32, 64, 128, 256, 320, 512];
+    let config: serde_json::Value = std::fs::read(dir.join("adapter_config.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let pattern = config["rank_pattern"].as_object().into_iter().flatten();
+    let rank = std::iter::once(&config["r"])
+        .chain(pattern.map(|(_, r)| r))
+        .filter_map(|r| r.as_u64())
+        .max()
+        .unwrap_or(32);
+    VLLM_RANKS.into_iter().find(|&r| r >= rank).unwrap_or(rank) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vllm_max_lora_rank;
+
+    #[test]
+    fn max_lora_rank_is_the_adapters_rank_rounded_up_to_one_vllm_accepts() {
+        let dir = std::env::temp_dir().join(format!("grad-rank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rank = |config: &str| {
+            std::fs::write(dir.join("adapter_config.json"), config).unwrap();
+            vllm_max_lora_rank(&dir)
+        };
+        assert_eq!(rank(r#"{"r": 32}"#), 32);
+        assert_eq!(rank(r#"{"r": 24}"#), 32);
+        assert_eq!(rank(r#"{"r": 4}"#), 8);
+        assert_eq!(rank(r#"{"r": 16, "rank_pattern": {"q_proj": 128}}"#), 128);
+        assert_eq!(rank("not json"), 32);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(vllm_max_lora_rank(&dir), 32);
+    }
 }

@@ -2518,7 +2518,10 @@ fn hf_import_with_a_secret_sends_its_name() {
 #[test]
 fn artifacts_download_extracts_a_verified_peft_directory() {
     let bundle = mock::bundle(&[
-        ("adapter_config.json", b"{\"peft_type\": \"LORA\"}"),
+        (
+            "adapter_config.json",
+            b"{\"peft_type\": \"LORA\", \"r\": 64}",
+        ),
         ("adapter_model.safetensors", &[1u8; 4096]),
     ]);
     let sha = mock::sha256_hex(&bundle);
@@ -2556,8 +2559,10 @@ fn artifacts_download_extracts_a_verified_peft_directory() {
     assert!(sb
         .path("fast-diff-merge/adapter_model.safetensors")
         .is_file());
+    // vLLM refuses an adapter above --max-lora-rank (default 16): the hint carries its rank.
     assert!(
-        r.stdout.contains("--lora-modules fast-diff-merge="),
+        r.stdout
+            .contains("--enable-lora --max-lora-rank 64 --lora-modules fast-diff-merge="),
         "{}",
         r.stdout
     );
