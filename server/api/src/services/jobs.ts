@@ -316,6 +316,28 @@ export const loadLeased = async (
   return job;
 };
 
+/**
+ * The job behind a worker's download of its data (no worker id on a GET):
+ * only the credential holding `attempt`'s lease reads it.
+ */
+export const loadForReader = async (
+  store: Pick<Store, "jobs">,
+  principal: AuthPrincipal,
+  id: string,
+  attempt: number,
+): Promise<JobRow> => {
+  const job = await loadForWorker(store, principal, id);
+  if (
+    job.attempt !== attempt ||
+    job.worker_id === null ||
+    job.worker_key !== workerKeyOf(principal)
+  ) {
+    throw leaseLost(id);
+  }
+
+  return job;
+};
+
 export interface JobQueue {
   /** Worker claim: its held job again (lost response), else the oldest claimable. */
   claim(

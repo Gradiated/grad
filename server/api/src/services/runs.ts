@@ -73,7 +73,7 @@ import {
   loadForWorker,
   loadLeased,
   type StopReason,
-  workerKeyOf,
+  loadForReader,
 } from "./jobs.js";
 import {
   REASON_TEXT,
@@ -1415,15 +1415,7 @@ export const createRunLifecycle = (
     },
 
     datasetStream: async (principal, id, attempt) => {
-      const row = await loadForWorker(store, principal, id);
-      // Only the credential holding the lease reads the training data.
-      if (
-        row.attempt !== attempt ||
-        row.worker_id === null ||
-        row.worker_key !== workerKeyOf(principal)
-      )
-        throw leaseLost(id);
-
+      await loadForReader(store, principal, id, attempt);
       const training = await trainingRecords(await loadById(id));
 
       return training.kind === "dataset"

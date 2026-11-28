@@ -60,7 +60,7 @@ import {
   observeInterruption,
   RELEASE,
   requeuePatch,
-  workerKeyOf,
+  loadForReader,
   type JobKindHandler,
   loadForWorker,
   isTerminal,
@@ -1190,16 +1190,8 @@ export const createEvalService = (
     complete,
 
     datasetStream: async (principal, id, attempt) => {
-      const row = await loadForWorker(store, principal, id);
+      const row = await loadForReader(store, principal, id, attempt);
       if (row.kind !== "eval") throw notFound("trainer_job", id);
-      // Only the credential holding the lease reads the eval's data.
-      if (
-        row.attempt !== attempt ||
-        row.worker_id === null ||
-        row.worker_key !== workerKeyOf(principal)
-      ) {
-        throw leaseLost(id);
-      }
       const record = await load(row.workspace_id, id);
       const resolved = await datasets.resolve(
         record.workspace_id,
