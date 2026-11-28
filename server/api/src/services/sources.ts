@@ -61,9 +61,7 @@ export interface SyncOutcome {
 }
 
 /** Records waiting that commit a version whatever the interval. */
-export const DEFAULT_VERSION_MAX_RECORDS = 100_000;
 /** A new source's version_interval. */
-export const DEFAULT_VERSION_INTERVAL_SECONDS = 900;
 
 /** The UTC day `records_today` counts. */
 const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
@@ -418,8 +416,7 @@ export const createSourceService = (
       return { job: current, retryAfter: null };
     }
     if (current && !force) {
-      const interval =
-        settings.sourceSyncIntervalSeconds ?? MIN_SYNC_INTERVAL_SECONDS;
+      const interval = settings.sourceSyncIntervalSeconds;
       const wait =
         Date.parse(current.created_at) +
         interval * 1000 -
@@ -657,9 +654,7 @@ export const createSourceService = (
             maxRecordsPerSync: body.max_records_per_sync ?? null,
             maxRecordsPerDay: body.max_records_per_day ?? null,
             versionInterval:
-              body.version_interval ??
-              settings.sourceVersionIntervalSeconds ??
-              DEFAULT_VERSION_INTERVAL_SECONDS,
+              body.version_interval ?? settings.sourceVersionIntervalSeconds,
             schedule,
             nextSyncAt,
             idempotency,
@@ -821,8 +816,7 @@ export const createSourceService = (
       if (!source || source.version_interval <= 0) return false;
       // The first version, and enough waiting records, commit at once.
       if (source.last_version_at === null) return false;
-      const max =
-        settings.sourceVersionMaxRecords ?? DEFAULT_VERSION_MAX_RECORDS;
+      const max = settings.sourceVersionMaxRecords;
       if (source.pending_records + records >= max) return false;
 
       return (

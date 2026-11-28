@@ -52,13 +52,11 @@ import type {
 import { streamVersionGzip, writeRecordsPart } from "../dataset-records.js";
 import { datasetPartKey, type DatasetService } from "../datasets.js";
 import {
-  DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
   closedBy,
   holdsLease,
   leaseLost,
   observeInterruption,
-  queueLimits,
   RELEASE,
   requeuePatch,
   workerKeyOf,
@@ -438,8 +436,7 @@ export const createEvalService = (
           now,
           preempted
             ? {
-                maxPreemptions:
-                  deps.settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
+                maxPreemptions: deps.settings.maxPreemptions,
               }
             : undefined,
         ) as Parameters<typeof store.evals.update>[1],
@@ -892,7 +889,7 @@ export const createEvalService = (
     return store.evals.create({
       workspaceId,
       maxAttempts: deps.settings.maxAttempts,
-      maxQueued: queueLimits(deps.settings).maxQueued,
+      maxQueued: deps.settings.queue.maxQueued,
       idempotency,
       name: request.name,
       models: request.models,

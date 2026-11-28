@@ -5,7 +5,11 @@ import {
 } from "../../src/adapters.js";
 import { createGradApp } from "../../src/app.js";
 import { createModelCatalog } from "../../src/catalog.js";
-import type { AppDependencies } from "../../src/deps.js";
+import {
+  resolveSettings,
+  type AppDependencies,
+  type SettingsOverrides,
+} from "../../src/deps.js";
 import { ManualClock } from "./clock.js";
 import { createTestStore } from "./postgres.js";
 import { testObjectStore } from "./s3.js";
@@ -84,7 +88,9 @@ export interface TestApp {
 
 /** Builds an app over this test file's (emptied) Postgres schema, its own prefix in the run's S3 bucket and a manual clock. */
 export const makeTestApp = async (
-  overrides: Partial<AppDependencies> = {},
+  overrides: Omit<Partial<AppDependencies>, "settings"> & {
+    settings?: SettingsOverrides;
+  } = {},
 ): Promise<TestApp> => {
   const clock =
     overrides.clock instanceof ManualClock
@@ -107,8 +113,8 @@ export const makeTestApp = async (
     catalog: createModelCatalog(TINY_MODELS_JSON, TEST_JUDGES_JSON),
     clock,
     inferenceConfigured: false,
-    settings: { maxAttempts: 3 },
     ...overrides,
+    settings: resolveSettings({ maxAttempts: 3, ...overrides.settings }),
   };
   const { app, services, startDraining } = createGradApp(deps);
 

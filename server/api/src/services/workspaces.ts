@@ -110,7 +110,7 @@ export const createWorkspaceLifecycle = (
       (await store.workspaces.get(workspaceId)) ?? activeRecord(workspaceId),
 
     set: async (workspaceId, state) => {
-      const delay = deps.settings.workspacePurgeDelaySeconds ?? 7 * 86_400;
+      const delay = deps.settings.workspacePurgeDelaySeconds;
       const record = await store.workspaces.set(
         workspaceId,
         state,

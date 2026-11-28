@@ -2,7 +2,7 @@ import { claimableKinds, type AuthPrincipal } from "../adapters.js";
 import { addSeconds, leaseGraceCutoff } from "../clock.js";
 import type { RecipeKind, TrainerJob } from "../contracts.js";
 import type { InterruptionReason } from "../contracts/runs.js";
-import type { AppDependencies, AppSettings } from "../deps.js";
+import type { AppDependencies } from "../deps.js";
 import { ApiError, conflict, notFound } from "../errors.js";
 import {
   WORKER_STAT_PHASES,
@@ -23,7 +23,6 @@ import type {
   JobPatch,
   JobRow,
   JobStatus,
-  QueueCaps,
   QueueSnapshot,
 } from "../store/types.js";
 
@@ -55,31 +54,6 @@ export const isSettled = (job: Pick<JobRow, "status" | "worker_id">): boolean =>
 export interface ClaimWorker {
   gpu: { name: string; memory_gb: number } | null;
 }
-
-/** Default per-workspace caps: running jobs per kind, and queued jobs. */
-export const DEFAULT_MAX_RUNNING_PER_WORKSPACE = 8;
-export const DEFAULT_MAX_QUEUED_PER_WORKSPACE = 500;
-
-export interface QueueLimits {
-  maxRunning: QueueCaps;
-  maxQueued: number;
-}
-
-/** The workspace caps in effect (GRAD_MAX_RUNNING_PER_WORKSPACE_*, GRAD_MAX_QUEUED_PER_WORKSPACE). */
-export const queueLimits = (settings: AppSettings): QueueLimits => {
-  const running = settings.queue?.maxRunning ?? {};
-  const cap = (kind: JobKind) =>
-    running[kind] ?? DEFAULT_MAX_RUNNING_PER_WORKSPACE;
-
-  return {
-    maxRunning: {
-      train: cap("train"),
-      import: cap("import"),
-      eval: cap("eval"),
-    },
-    maxQueued: settings.queue?.maxQueued ?? DEFAULT_MAX_QUEUED_PER_WORKSPACE,
-  };
-};
 
 /** Where a queued job stands: ready for the run's phase text. */
 export interface QueueView {
@@ -235,9 +209,6 @@ export const fenceOf = (
   status: statuses,
 });
 
-/** Default cap on preempted attempts (MAX_PREEMPTIONS). */
-export const DEFAULT_MAX_PREEMPTIONS = 20;
-
 /**
  * The one attempt rule: an attempt that ends without a result (lease
  * expired, a worker error) counts, and the job fails once max_attempts of
@@ -362,7 +333,7 @@ export const createJobQueue = (
   handlers: Record<JobKind, JobKindHandler>,
 ): JobQueue => {
   const { store, clock } = deps;
-  const limits = queueLimits(deps.settings);
+  const limits = deps.settings.queue;
 
   const renew = (job: JobRow, leaseSeconds = job.lease_seconds) =>
     store.jobs.update(

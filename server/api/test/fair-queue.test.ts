@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ResolvedRunConfig } from "../src/contracts.js";
 import { ApiError } from "../src/errors.js";
-import { queueView, type QueueLimits } from "../src/services/jobs.js";
+import type { QueueLimits } from "../src/deps.js";
+import { queueView } from "../src/services/jobs.js";
 import type { JobRow, QueueSnapshot, Store } from "../src/store/types.js";
 import { metrics, registry } from "../src/telemetry/metrics.js";
 import { makeTestApp, type TestApp } from "./fixtures/app.js";

@@ -15,7 +15,7 @@ import { createCloudPrices, pricedCatalog } from "./cloud/prices.js";
 import { createCloudTracesAdapter } from "./cloud/traces.js";
 import { createModelCatalog } from "./catalog.js";
 import { createDbAnchoredClock } from "./clock.js";
-import type { AppDependencies } from "./deps.js";
+import { resolveSettings, type AppDependencies } from "./deps.js";
 import type { ServerEnvironment } from "./environment.js";
 import { assertMigrated } from "./migrations.js";
 import { resolveUiBundle, type UiBundle } from "./ui.js";
@@ -159,7 +159,7 @@ export const buildDependencies = async (
             serviceToken: env.CLOUD_SERVICE_TOKEN,
           })
         : null,
-    settings: {
+    settings: resolveSettings({
       maxAttempts: env.MAX_ATTEMPTS,
       maxPreemptions: env.MAX_PREEMPTIONS,
       workerAutoscaling: env.GRAD_WORKER_AUTOSCALING,
@@ -186,6 +186,6 @@ export const buildDependencies = async (
         separatePort: env.METRICS_PORT !== undefined,
         workspaceLabel: env.METRICS_WORKSPACE_LABEL,
       },
-    },
+    }),
   };
 };

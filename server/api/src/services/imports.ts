@@ -37,13 +37,11 @@ import {
 import { toPublicArtifact } from "./artifacts.js";
 import type { DatasetService } from "./datasets.js";
 import {
-  DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
   closedBy,
   holdsLease,
   leaseLost,
   observeInterruption,
-  queueLimits,
   RELEASE,
   requeuePatch,
   type JobKindHandler,
@@ -327,7 +325,7 @@ export const createImportService = (
           const common = {
             workspaceId,
             maxAttempts: settings.maxAttempts,
-            maxQueued: queueLimits(settings).maxQueued,
+            maxQueued: settings.queue.maxQueued,
             datasetId: dataset.id,
             datasetName: dataset.name,
             connector: body.connector,
@@ -536,8 +534,7 @@ export const createImportService = (
                   now,
                   body.reason === "compute_reclaimed"
                     ? {
-                        maxPreemptions:
-                          settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
+                        maxPreemptions: settings.maxPreemptions,
                       }
                     : undefined,
                 )

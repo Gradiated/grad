@@ -27,8 +27,6 @@ export const usageKey = (
 ): string => `${kind}-usage:${refId}:${attempt}:${tokensThrough}`;
 
 /** Defaults: bill an open attempt every 5 minutes or 1M tokens. */
-export const DEFAULT_FLUSH_TOKENS = 1_000_000;
-export const DEFAULT_FLUSH_SECONDS = 300;
 
 /** Billing ingest takes at most 500 events per request. */
 const EXPORT_BATCH = 500;
@@ -247,9 +245,9 @@ export const createUsageService = (deps: AppDependencies): UsageService => {
       const now = clock.now();
       const due =
         final ||
-        tokens >= (deps.settings.usageFlushTokens ?? DEFAULT_FLUSH_TOKENS) ||
+        tokens >= deps.settings.usageFlushTokens ||
         now.getTime() - Date.parse(state.billed_at ?? state.updated_at) >=
-          (deps.settings.usageFlushSeconds ?? DEFAULT_FLUSH_SECONDS) * 1000;
+          deps.settings.usageFlushSeconds * 1000;
       if (!due) return;
       const advanced = await store.jobs.advanceBilling({
         id: job.id,

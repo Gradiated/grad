@@ -73,7 +73,6 @@ import {
   toLabelingPlan,
 } from "./router-labels.js";
 import {
-  DEFAULT_MAX_PREEMPTIONS,
   fenceOf,
   closedBy,
   isSettled,
@@ -84,7 +83,6 @@ import {
   requeuePatch,
   type JobKindHandler,
   observeInterruption,
-  queueLimits,
   queueView,
   type JobQueue,
   type StopReason,
@@ -666,7 +664,7 @@ export const createRunLifecycle = (
     };
   };
 
-  const limits = queueLimits(settings);
+  const limits = settings.queue;
   const waitingForWorker = (run: RunRecord): boolean =>
     run.status === "queued" && run.waiting_on === null;
 
@@ -687,7 +685,7 @@ export const createRunLifecycle = (
     for (const run of queued) {
       out.set(run.id, {
         workers_online: workers,
-        autoscaling: settings.workerAutoscaling ?? false,
+        autoscaling: settings.workerAutoscaling,
         ...queueView(run, snapshot, limits.maxRunning.train, "run"),
       });
     }
@@ -785,7 +783,7 @@ export const createRunLifecycle = (
       input.now,
       input.reason === "compute_reclaimed"
         ? {
-            maxPreemptions: settings.maxPreemptions ?? DEFAULT_MAX_PREEMPTIONS,
+            maxPreemptions: settings.maxPreemptions,
             // A reclaim after a checkpoint lost little and moved the run on.
             progressed: (
               await store.artifacts.allCheckpoints(run.id, clock.now())
@@ -1757,7 +1755,7 @@ export const createRunLifecycle = (
     },
 
     markWaitingForCompute: async (now) => {
-      const threshold = settings.waitingForComputeSeconds ?? 30;
+      const threshold = settings.waitingForComputeSeconds;
       // Runs whose workspace is at its running cap wait on themselves:
       // they stay `queued` (their queue_message says why).
       const rows = await store.jobs.listUnclaimedSince(
@@ -1781,7 +1779,7 @@ export const createRunLifecycle = (
           phase: "waiting_for_compute",
           info: {
             workers_online: workers,
-            autoscaling: settings.workerAutoscaling ?? false,
+            autoscaling: settings.workerAutoscaling,
             queue_position: view.queue_position,
             message: view.queue_message,
           },

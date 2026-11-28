@@ -12,8 +12,6 @@ import { ARTIFACTS_PREFIX, type UploadService } from "./uploads.js";
 import type { UsageService } from "./usage.js";
 import type { WorkspaceLifecycle } from "./workspaces.js";
 
-export const DEFAULT_JOB_EVENT_RETENTION_DAYS = 90;
-export const DEFAULT_ORPHAN_BLOB_DAYS = 7;
 /** Keys checked per tick while a pass over the bucket is in progress. */
 const ORPHAN_PAGE = 1000;
 /** A finished pass waits this long before the next one starts. */
@@ -88,7 +86,7 @@ export const createMaintenance = (
       for (const prefix of ORPHAN_PREFIXES)
         orphanCursors.set(prefix, undefined);
     }
-    const days = deps.settings.orphanBlobDays ?? DEFAULT_ORPHAN_BLOB_DAYS;
+    const days = deps.settings.orphanBlobDays;
     let deleted = 0;
     for (const [prefix, cursor] of [...orphanCursors]) {
       const keys = await deps.storage.listOlder(
@@ -138,8 +136,7 @@ export const createMaintenance = (
 
   const tick = async (): Promise<MaintenanceReport> => {
     const now = deps.clock.now();
-    const retentionDays =
-      deps.settings.jobEventRetentionDays ?? DEFAULT_JOB_EVENT_RETENTION_DAYS;
+    const retentionDays = deps.settings.jobEventRetentionDays;
 
     const report: MaintenanceReport = {
       expiredJobs: await step("expire_jobs", () =>

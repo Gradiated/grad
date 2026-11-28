@@ -10,6 +10,7 @@ import {
 import { buildOpenApiDocument, createApp } from "../src/app.js";
 import { createModelCatalog } from "../src/catalog.js";
 import { systemClock } from "../src/clock.js";
+import { resolveSettings } from "../src/deps.js";
 import { S3ObjectStore } from "../src/storage/s3.js";
 import type { Store } from "../src/store/types.js";
 
@@ -59,7 +60,7 @@ const run = async () => {
     catalog: createModelCatalog(),
     clock: systemClock,
     inferenceConfigured: false,
-    settings: { maxAttempts: 3 },
+    settings: resolveSettings(),
   });
 
   const document = buildOpenApiDocument(app);

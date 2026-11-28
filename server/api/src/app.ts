@@ -202,13 +202,13 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   if (deps.settings.unauthenticated) {
     app.use(
       "*",
-      unauthenticatedGuard(deps.settings.corsOrigins ?? [], (c, code, detail) =>
+      unauthenticatedGuard(deps.settings.corsOrigins, (c, code, detail) =>
         problemResponse(c, 403, code, "Forbidden", detail),
       ),
     );
   }
 
-  const metricsSettings = deps.settings.metrics ?? { enabled: true };
+  const metricsSettings = deps.settings.metrics;
   if (metricsSettings.enabled && !metricsSettings.separatePort) {
     registerMetricsEndpoints(app as unknown as Hono, {
       token: metricsSettings.token,
@@ -225,7 +225,7 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
 
   // Browser clients (the Gradiated console) on allowlisted origins: bearer
   // tokens only, never cookies, so no credentials mode. Off by default.
-  const corsOrigins = deps.settings.corsOrigins ?? [];
+  const corsOrigins = deps.settings.corsOrigins;
   if (corsOrigins.length > 0) {
     app.use(
       "/v1/*",

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { cloudUrl } from "./cloud/http.js";
+import { DEFAULT_SETTINGS } from "./deps.js";
 import { issuesOf } from "./errors.js";
 import {
   parseWorkerAuthConfig,
@@ -117,14 +118,24 @@ export const EnvironmentSchema = z.object({
     .number()
     .int()
     .min(0)
-    .default(7 * 86_400),
+    .default(DEFAULT_SETTINGS.workspacePurgeDelaySeconds),
   /** An AWS KMS key (id, ARN or alias): workspace secrets use envelope encryption under it. */
   GRAD_SECRETS_KMS_KEY_ID: optionalString,
   GRAD_EXTRA_MODELS_JSON: optionalString,
   GRAD_JUDGE_MODELS_JSON: optionalString,
-  MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
+  MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(DEFAULT_SETTINGS.maxAttempts),
   /** Preempted attempts in a row (SIGTERM, a cloud termination notice) a job survives; separate from MAX_ATTEMPTS. A run's preemption after a checkpoint starts the count again. */
-  MAX_PREEMPTIONS: z.coerce.number().int().min(1).max(1000).default(20),
+  MAX_PREEMPTIONS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .default(DEFAULT_SETTINGS.maxPreemptions),
   /** Workers scale from zero (KEDA): say "a GPU worker is starting". */
   GRAD_WORKER_AUTOSCALING: booleanFlag("false"),
   /** Running jobs per workspace and kind; past it the workspace's jobs wait (fair share). */
@@ -132,19 +143,23 @@ export const EnvironmentSchema = z.object({
     .number()
     .int()
     .min(1)
-    .default(8),
+    .default(DEFAULT_SETTINGS.queue.maxRunning.train),
   GRAD_MAX_RUNNING_PER_WORKSPACE_IMPORT: z.coerce
     .number()
     .int()
     .min(1)
-    .default(8),
+    .default(DEFAULT_SETTINGS.queue.maxRunning.import),
   GRAD_MAX_RUNNING_PER_WORKSPACE_EVAL: z.coerce
     .number()
     .int()
     .min(1)
-    .default(8),
+    .default(DEFAULT_SETTINGS.queue.maxRunning.eval),
   /** Queued jobs per workspace (runs, imports, evals); past it creates answer 429 queue_limit. */
-  GRAD_MAX_QUEUED_PER_WORKSPACE: z.coerce.number().int().min(1).default(500),
+  GRAD_MAX_QUEUED_PER_WORKSPACE: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(DEFAULT_SETTINGS.queue.maxQueued),
   MIGRATE_ON_BOOT: booleanFlag("true"),
   AUTH_MODE_NONE_ALLOW_REMOTE: booleanFlag("false"),
   /** A source starts at most one sync per this many seconds (live tests: 0). */
@@ -153,21 +168,31 @@ export const EnvironmentSchema = z.object({
     .int()
     .min(0)
     .max(3600)
-    .default(60),
+    .default(DEFAULT_SETTINGS.sourceSyncIntervalSeconds),
   /** Days job events (metrics) are kept. */
   JOB_EVENT_RETENTION_DAYS: z.coerce
     .number()
     .int()
     .min(1)
     .max(3650)
-    .default(90),
+    .default(DEFAULT_SETTINGS.jobEventRetentionDays),
   /** Days an unreferenced job blob is kept before the sweep deletes it. */
-  ORPHAN_BLOB_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
+  ORPHAN_BLOB_DAYS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(3650)
+    .default(DEFAULT_SETTINGS.orphanBlobDays),
   MAINTENANCE_INTERVAL_MS: z.coerce.number().int().min(100).default(15_000),
   /** SIGTERM: seconds /health/ready fails while the server keeps serving (Helm: 5). */
   SHUTDOWN_DRAIN_SECONDS: z.coerce.number().int().min(0).max(120).default(0),
   /** The SSE event hub re-reads every followed job this often, in case a NOTIFY was missed. */
-  SSE_POLL_MS: z.coerce.number().int().min(100).max(60_000).default(2_000),
+  SSE_POLL_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(60_000)
+    .default(DEFAULT_SETTINGS.ssePollMs),
   /** Serve Prometheus metrics at /metrics. */
   METRICS_ENABLED: booleanFlag("true"),
   /** Scrapes must send this bearer token. */

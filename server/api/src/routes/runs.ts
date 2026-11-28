@@ -49,7 +49,7 @@ export const registerRunRoutes = (
   services: Services,
 ): void => {
   const tags = ["Runs"];
-  const reserveStream = createSseLimits(deps.settings.sseStreamsPerKey ?? 20);
+  const reserveStream = createSseLimits(deps.settings.sseStreamsPerKey);
 
   /**
    * Streams a run's events from the replica's event hub: its history after
