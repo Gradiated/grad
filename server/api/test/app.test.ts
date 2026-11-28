@@ -380,6 +380,20 @@ describe("grad-server HTTP API", () => {
     const key = await t.json<{ key: { id: string } }>("/v1/keys", {
       body: { name: "k", scopes: ["runs:read"] },
     });
+    const artifactImport = await t.json<{ id: string }>(
+      "/v1/artifact-imports",
+      {
+        body: {
+          source: { kind: "hf", repo: "acme/lora" },
+          base_model: "test/tiny-qwen3",
+        },
+      },
+    );
+    expect(artifactImport.status).toBe(202);
+    const pin = await t.json(`/v1/artifacts/${artifactId}/pins`, {
+      body: { holder: "inference:version:v1", reason: "test" },
+    });
+    expect(pin.status).toBe(201);
 
     const other = await t.mintKey("ws_b", ["admin"]);
     const notFound: Array<[string, string, unknown?]> = [
@@ -394,6 +408,16 @@ describe("grad-server HTTP API", () => {
       ["POST", `/v1/checkpoints/${ckpts.body.data[0]!.id}/promote`, {}],
       ["GET", `/v1/artifacts/${artifactId}`],
       ["GET", `/v1/artifacts/${artifactId}/download`],
+      ["GET", `/v1/artifacts/${artifactId}/download-url`],
+      [
+        "POST",
+        `/v1/artifacts/${artifactId}/pins`,
+        { holder: "x", reason: "r" },
+      ],
+      ["DELETE", `/v1/artifacts/${artifactId}/pins/inference:version:v1`],
+      ["DELETE", `/v1/artifacts/${artifactId}`],
+      ["GET", `/v1/artifact-imports/${artifactImport.body.id}`],
+      ["GET", `/v1/runs/${run.id}/events`],
       ["GET", "/v1/artifacts/support-sft@latest"],
       ["GET", `/v1/imports/${imp.body.id}`],
       ["DELETE", `/v1/keys/${key.body.key.id}`],
