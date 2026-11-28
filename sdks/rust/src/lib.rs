@@ -4,6 +4,7 @@ pub mod config;
 pub mod download;
 pub mod error;
 pub mod events;
+mod format;
 #[rustfmt::skip]
 pub mod generated;
 pub mod models;

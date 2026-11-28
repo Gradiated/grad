@@ -14,7 +14,7 @@ export GRADIATED_PROFILE=local    # or GRADIATED_BASE_URL + GRADIATED_API_KEY fo
 ## Quickstart
 
 ```rust,no_run
-use grad::{Client, DownloadOptions, PlanRunRequest, RecipeKind, RecipeSpec, WaitOptions};
+use grad::{Client, CreateOptions, DownloadOptions, PlanRunRequest, RecipeKind, RecipeSpec, WaitOptions};
 use serde_json::json;
 
 #[tokio::main]
@@ -28,7 +28,7 @@ async fn main() -> grad::Result<()> {
     let req = PlanRunRequest::new("sql-quickstart", "sql-helper", recipe).max_cost_usd(5.0);
     let plan = client.runs().plan(&req).await?; // $0 preview: defaults, warnings, cost
     println!("~${:.4} for {} steps, {} warnings", plan.estimated_cost_usd, plan.estimated_steps, plan.warnings.len());
-    let run = client.runs().create(&req, None).await?;
+    let run = client.runs().create(&req, &CreateOptions::default()).await?;
     let run = client.runs().wait(&run.id, &WaitOptions::default()).await?;
     println!("{} {}", run.status, run.artifact_id.clone().unwrap_or_default()); // completed sql-helper@2026-11-28-1
     let dir = DownloadOptions::extract("./sql-helper"); // the PEFT adapter, verified against its SHA-256

@@ -79,7 +79,7 @@ async fn typed_errors_carry_status_code_request_id_and_url() {
 
     let e = c
         .evals()
-        .create(&PlanEvalRequest::default(), None)
+        .create(&PlanEvalRequest::default(), &CreateOptions::default())
         .await
         .unwrap_err();
     assert!(matches!(e, Error::InferenceUnavailable(_)));
@@ -228,7 +228,7 @@ async fn idempotent_and_keyed_requests_retry_with_backoff() {
         .runs()
         .create(
             &PlanRunRequest::new("d", "n", RecipeSpec::new(RecipeKind::Sft)),
-            None,
+            &CreateOptions::default(),
         )
         .await
         .unwrap_err();
@@ -410,7 +410,7 @@ async fn redirects_same_origin_get_only() {
         .runs()
         .create(
             &PlanRunRequest::new("d", "n", RecipeSpec::new(RecipeKind::Sft)),
-            None,
+            &CreateOptions::default(),
         )
         .await
         .unwrap_err();
@@ -1386,7 +1386,7 @@ async fn dataset_scoring_waits_and_filters_stream_ids() {
                 rubric: vec![item],
                 ..Default::default()
             },
-            None,
+            &CreateOptions::default(),
         )
         .await
         .unwrap();
@@ -1431,7 +1431,7 @@ async fn create_returns_the_plan_warnings() {
         .runs()
         .create(
             &PlanRunRequest::new("d", "support-sft", RecipeSpec::new(RecipeKind::Sft)),
-            None,
+            &CreateOptions::default(),
         )
         .await
         .unwrap();
@@ -1566,4 +1566,84 @@ async fn artifact_import_failure_is_a_422_naming_the_file() {
         artifact_name(std::path::Path::new("/x/My LoRA.tar.gz")),
         "my-lora"
     );
+}
+
+#[tokio::test]
+async fn post_scores_chunks_and_sums_accepted() {
+    let srv = MockServer::start(|r| {
+        let n = r.json()["scores"].as_array().map_or(0, Vec::len);
+        Reply::json(
+            200,
+            json!({"accepted": n, "status": "awaiting_scores", "pending_local_scores": 0}),
+        )
+    });
+    let c = client(&srv.url);
+    let scores: Vec<LocalScore> = (0..2500)
+        .map(|i| LocalScore {
+            output_id: format!("out_{}", i),
+            scorer: "short".into(),
+            score: 1.0,
+        })
+        .collect();
+    let res = c.evals().post_scores("e1", &scores).await.unwrap();
+    assert_eq!(res.accepted, 2500);
+    let sizes: Vec<usize> = srv
+        .requests()
+        .iter()
+        .map(|r| r.json()["scores"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(sizes, vec![1000, 1000, 500]);
+    assert!(matches!(
+        c.evals().post_scores("e1", &[]).await,
+        Err(Error::InvalidInput(_))
+    ));
+}
+
+#[test]
+fn plan_readout_matches_the_other_sdks() {
+    let raw = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/wire/plan-run.json"
+    ));
+    let plan: PlanRunResponse = serde_json::from_str(raw).unwrap();
+    let text = plan.to_string();
+    for want in [
+        "Dataset     support-prod v2",
+        "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=",
+        "Estimate    ~",
+        "Breakdown   train ~$0.0002 · teacher ~$0.00 · evals ~$0.00 (held-out evals during training aren't billed)",
+        "Duration    ~",
+        "on one GPU",
+        "Warnings    2",
+        "  ! 6 steps are below",
+    ] {
+        assert!(text.contains(want), "readout lacks {:?}:\n{}", want, text);
+    }
+    let mut labeled = PlanRunResponse::default();
+    labeled.resolved_config.recipe_params = serde_json::from_value(
+        json!({"context_text": "abcd", "max_quality_drop": 0.02, "models": ["a", "b"]}),
+    )
+    .unwrap();
+    labeled.labeling = Some(PlanRunResponseLabeling {
+        estimated_model_calls: 1200,
+        estimated_judge_calls: 3,
+        estimated_cost_usd: 0.004,
+    });
+    labeled.teacher = Some(PlanRunResponseTeacher {
+        model: "big".into(),
+        estimated_tokens: 25_000_000,
+        estimated_cost_usd: 1234.5,
+        ..Default::default()
+    });
+    labeled.estimated_duration_s = 843;
+    labeled.min_gpu_memory_gb = Some(36.0);
+    let text = labeled.to_string();
+    for want in [
+        "Params      context_text=<4 chars>, max_quality_drop=0.02, models=[\"a\",\"b\"]",
+        "Labeling    1,200 model · 3 judge calls, ~$0.0040",
+        "Teacher     big: ~25.0M tokens, ~$1,234.50",
+        "Duration    ~14 min on one GPU · needs 36 GB of GPU memory",
+    ] {
+        assert!(text.contains(want), "readout lacks {:?}:\n{}", want, text);
+    }
 }

@@ -1,9 +1,9 @@
 //! `grad train` and `grad runs`.
 
 use grad_sdk::{
-    Artifact, ArtifactFormat, AttemptKind, Client, Error as SdkError, EvalReport, MetricPoint,
-    MetricsQuery, PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunFilter, RunPhase,
-    RunStatus,
+    Artifact, ArtifactFormat, AttemptKind, Client, CreateOptions, Error as SdkError, EvalReport,
+    MetricPoint, MetricsQuery, PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent,
+    RunFilter, RunPhase, RunStatus,
 };
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -284,7 +284,15 @@ pub async fn train(ctx: &Ctx, a: TrainArgs) -> CliResult {
             Err(e) => return Err(e.into()),
         }
     }
-    let run = c.runs().create(&req, a.idempotency_key.as_deref()).await?;
+    let run = c
+        .runs()
+        .create(
+            &req,
+            &CreateOptions {
+                idempotency_key: a.idempotency_key.clone(),
+            },
+        )
+        .await?;
     // The plan's warnings (e.g. "run X is already running"); --wait shows them as events.
     if !a.wait || out.json {
         for w in run.warnings.iter().flatten() {
@@ -1034,6 +1042,27 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
                 res.next_cursor.as_deref(),
             )?;
             out.done(&res)
+        }
+        RunsCmd::Counts { search } => {
+            let n = c.runs().counts(search.as_deref()).await?;
+            let s = &n.by_status;
+            out.table(
+                &["status", "runs"],
+                [
+                    ("queued", s.queued),
+                    ("running", s.running),
+                    ("completed", s.completed),
+                    ("failed", s.failed),
+                    ("cancelled", s.cancelled),
+                    ("stopped_budget", s.stopped_budget),
+                    ("stopped_balance", s.stopped_balance),
+                    ("total", n.total),
+                ]
+                .iter()
+                .map(|(k, v)| vec![k.to_string(), thousands(*v)])
+                .collect(),
+            );
+            out.done(&n)
         }
         RunsCmd::Inspect { run, yaml } => {
             let r = resolve_run(&c, out, &run).await?;

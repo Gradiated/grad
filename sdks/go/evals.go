@@ -26,6 +26,10 @@ type (
 	EvalPlan = generated.PlanEvalResponse
 	// EvalStatus is an eval's lifecycle state.
 	EvalStatus = generated.EvalStatus
+	// EvalScore is one score for one output: OutputID, Scorer (a local scorer's name) and Score in [0, 1].
+	EvalScore = generated.PostEvalScoresRequestScoresItem
+	// PostEvalScoresResponse is what posting scores returns: Accepted, the eval's Status and PendingLocalScores.
+	PostEvalScoresResponse = generated.PostEvalScoresResponse
 )
 
 // Float returns a pointer to v, for optional numeric fields where 0 is meaningful.
@@ -325,6 +329,33 @@ func (s *EvalsService) Cancel(ctx context.Context, id string) (*Eval, error) {
 		return nil, err
 	}
 	return s.c.eval(e, nil), nil
+}
+
+// scoresPerRequest is how many scores PostScores sends per request (the server takes up to 10,000).
+const scoresPerRequest = 1000
+
+// PostScores posts scores for an awaiting_scores eval's outputs, 1,000 per request. It
+// returns the last response with Accepted summed over every request.
+func (s *EvalsService) PostScores(ctx context.Context, id string, scores []EvalScore) (*PostEvalScoresResponse, error) {
+	if len(scores) == 0 {
+		return nil, newError("invalid_request", "PostScores needs at least one score")
+	}
+	api, err := s.c.api()
+	if err != nil {
+		return nil, err
+	}
+	var last *PostEvalScoresResponse
+	accepted := 0
+	for start := 0; start < len(scores); start += scoresPerRequest {
+		chunk := scores[start:min(start+scoresPerRequest, len(scores))]
+		last, err = api.PostEvalScores(ctx, id, &generated.PostEvalScoresRequest{Scores: chunk})
+		if err != nil {
+			return nil, err
+		}
+		accepted += last.Accepted
+	}
+	last.Accepted = accepted
+	return last, nil
 }
 
 // Wait fetches an eval and waits for it (pass WithRubric for its local scorers).

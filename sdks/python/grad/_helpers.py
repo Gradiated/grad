@@ -26,6 +26,8 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_PUSH_RECORDS = 50_000
 DEFAULT_CHUNK_RECORDS = 5_000
+# Scores per POST /v1/evals/{id}/scores (the server takes up to 10,000).
+SCORES_PER_REQUEST = 1_000
 DEFAULT_CHUNK_BYTES = 16 * 1024 * 1024
 MAX_BUNDLE_MEMBERS = 10_000
 MAX_EXTRACT_BYTES = 512 * 1024**3

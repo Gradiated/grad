@@ -1805,6 +1805,7 @@ fn sources_api() -> MockServer {
         };
         match (r.method.as_str(), r.path()) {
             ("POST", "/v1/secrets") => Reply::json(200, secret),
+            ("GET", "/v1/secrets/langfuse-prod") => Reply::json(200, secret),
             ("GET", "/v1/secrets") => {
                 Reply::json(200, json!({"data": [secret], "next_cursor": null}))
             }
@@ -1924,6 +1925,24 @@ fn sources_show_and_update_print_the_effective_filters() {
     );
     expect(&r, 5);
     assert!(r.stderr.contains("no filter 'tag'"), "{}", r.stderr);
+}
+
+#[test]
+fn secrets_get_shows_metadata_only() {
+    let srv = sources_api();
+    let sb = Sandbox::new("secrets-get");
+    let u = Some(srv.url.as_str());
+    let r = run(sb.grad(u), &["secrets", "get", "langfuse-prod"]);
+    expect(&r, 0);
+    assert!(r.stdout.contains("langfuse-prod"), "{}", r.stdout);
+    assert!(r.stdout.contains("cloud.langfuse.com"), "{}", r.stdout);
+    let r = run(sb.grad(u), &["secrets", "get", "langfuse-prod", "--json"]);
+    expect(&r, 0);
+    assert_eq!(
+        r.json()["data"]["allowed_hosts"],
+        json!(["cloud.langfuse.com"])
+    );
+    assert!(r.json()["data"].get("value").is_none());
 }
 
 #[test]
@@ -2629,6 +2648,13 @@ fn artifact_upload_import_delete_and_keys() {
     );
     expect(&r, 0);
     assert_eq!(r.json()["data"]["id"], "imp_9");
+    let r = run(sb.grad(u), &["artifacts", "import-status", "imp_9"]);
+    expect(&r, 0);
+    assert!(
+        r.stdout.contains("completed") && r.stdout.contains("art_1"),
+        "{}",
+        r.stdout
+    );
     let r = run(
         sb.grad(u),
         &["artifacts", "import", "hf://../x", "--base", "b"],
@@ -3720,14 +3746,15 @@ fn parity_requests_match_the_shared_fixture() {
         let s = |k: &str| body[k].to_string().trim_matches('"').to_string();
         let mut args: Vec<String> = match path {
             "/v1/runs" | "/v1/evals" | "/v1/imports" | "/v1/datasets" | "/v1/artifacts"
+            | "/v1/runs/counts"
                 if case["method"] == "GET" =>
             {
-                let group = if path == "/v1/evals" {
-                    "eval"
-                } else {
-                    &path[4..]
+                let (group, verb) = match path {
+                    "/v1/evals" => ("eval", "list"),
+                    "/v1/runs/counts" => ("runs", "counts"),
+                    p => (&p[4..], "list"),
                 };
-                let mut a: Vec<String> = vec![group.into(), "list".into()];
+                let mut a: Vec<String> = vec![group.into(), verb.into()];
                 for (key, flag) in [
                     ("status", "--status"),
                     ("q", "--search"),

@@ -98,8 +98,9 @@ describe("sources", () => {
     expect((await grad.sources.list({ dataset: dataset }).all()).length).toBe(1);
     expect(server.calls.at(-1)?.url.searchParams.get("dataset")).toBe("support-prod");
     expect(JSON.stringify(source)).toContain("src_01J9X");
-    await source.remove();
-    await grad.sources.remove("src_01J9X");
+    await source.delete();
+    await grad.sources.delete("src_01J9X");
+    await grad.sources.remove("src_01J9X"); // deprecated alias
     expect(server.calls.at(-1)?.method).toBe("DELETE");
   });
 

@@ -29,6 +29,19 @@ const rubric = () =>
   ]);
 
 describe("evals", () => {
+  it("posts scores 1,000 per request and sums accepted", async () => {
+    const server = new FakeServer().on("POST", `${EVAL}/scores`, (call) =>
+      json({ accepted: (JSON.parse(call.body ?? "{}") as { scores: unknown[] }).scores.length, status: "awaiting_scores", pending_local_scores: 0 }),
+    );
+    const { grad } = makeGrad(server);
+    const scores = Array.from({ length: 2500 }, (_, i) => ({ outputId: `out_${i}`, scorer: "short", score: 1 }));
+    const result = await grad.evals.postScores(awaiting.id, scores);
+    expect(server.callsTo("POST", `${EVAL}/scores`).map((c) => (JSON.parse(c.body ?? "{}") as { scores: unknown[] }).scores.length)).toEqual([1000, 1000, 500]);
+    expect(server.lastBody<{ scores: Array<Record<string, unknown>> }>("POST", `${EVAL}/scores`).scores[0]).toEqual({ output_id: "out_2000", scorer: "short", score: 1 });
+    expect(result).toEqual({ accepted: 2500, status: "awaiting_scores", pendingLocalScores: 0 });
+    await expect(grad.evals.postScores(awaiting.id, [])).rejects.toBeInstanceOf(GradUsageError);
+  });
+
   it("plans with the wire rubric and creates with local scorers kept in-process", async () => {
     const server = new FakeServer()
       .on("POST", "/v1/evals/plan", json(wire("plan-eval.json")))

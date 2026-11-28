@@ -586,6 +586,16 @@
       },
       "idempotency_key": null,
       "body": null
+    },
+    {
+      "case": "count_runs",
+      "method": "GET",
+      "path": "/v1/runs/counts",
+      "query": {
+        "q": "sft"
+      },
+      "idempotency_key": null,
+      "body": null
     }
   ],
   "responses": {

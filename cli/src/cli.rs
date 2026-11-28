@@ -676,6 +676,12 @@ pub enum RunsCmd {
         #[command(flatten)]
         page: PageArgs,
     },
+    /// Count runs per status (optionally of the runs --search matches)
+    Counts {
+        /// Only names containing this text (any case), or this exact id
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
+    },
     /// Show a run; --yaml prints a config you can re-run with `grad train -f`
     #[command(
         after_help = "Example:\n  grad runs inspect run_01J9X --yaml > recipe.yaml\n  grad train -f recipe.yaml --dry-run"
@@ -1029,6 +1035,11 @@ revision resolved to (its provenance uri).")]
         #[arg(long)]
         secret: Option<String>,
     },
+    /// Show an artifact import (from upload or import --no-wait): status, error, the artifact
+    ImportStatus {
+        /// Artifact import id
+        id: String,
+    },
     /// Delete an artifact and its bundle (refused while a published model version pins it)
     Delete {
         /// Artifact reference (NAME@VERSION or NAME@latest)
@@ -1098,6 +1109,11 @@ pub enum SecretsCmd {
         /// public provider hosts). Replacing a secret replaces its hosts.
         #[arg(long = "allowed-host", value_name = "HOST")]
         allowed_hosts: Vec<String>,
+    },
+    /// Show a secret's metadata: name, allowed hosts, dates (never its value)
+    Get {
+        /// Secret name
+        name: String,
     },
     /// List secret names (values are never shown)
     List {
@@ -1201,8 +1217,8 @@ pub enum SourcesCmd {
         timeout: u64,
     },
     /// Disconnect a source (its dataset and versions stay)
-    #[command(visible_alias = "delete")]
-    Remove {
+    #[command(visible_alias = "remove")]
+    Delete {
         /// Source id
         id: String,
     },

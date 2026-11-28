@@ -77,6 +77,17 @@ pub async fn secrets(ctx: &Ctx, action: SecretsCmd) -> CliResult {
             ));
             out.done(&s)
         }
+        SecretsCmd::Get { name } => {
+            let c = ctx.client()?;
+            let s = c.secrets().get(name.as_str()).await?;
+            out.kv(&[
+                ("name", s.name.clone()),
+                ("allowed hosts", s.allowed_hosts.join(",")),
+                ("created", when(&s.created_at)),
+                ("updated", when(&s.updated_at)),
+            ]);
+            out.done(&s)
+        }
         SecretsCmd::List { page: p } => {
             let c = ctx.client()?;
             let res = c.secrets().list(&page(&p)).await?;
@@ -228,12 +239,10 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
                 max_records_per_sync,
                 max_records_per_day,
                 version_interval,
+                idempotency_key,
             };
             let c = ctx.client()?;
-            let s = c
-                .sources()
-                .create_with(&dataset, &p, &opts, idempotency_key.as_deref())
-                .await?;
+            let s = c.sources().create_with(&dataset, &p, &opts).await?;
             out.line(format!(
                 "✓ Added source {} ({}) to dataset {}",
                 s.id,
@@ -439,10 +448,10 @@ pub async fn sources(ctx: &Ctx, action: SourcesCmd) -> CliResult {
             }
             wait_sync(ctx, &c, &job.id, timeout).await
         }
-        SourcesCmd::Remove { id } => {
+        SourcesCmd::Delete { id } => {
             let c = ctx.client()?;
-            c.sources().remove(&id).await?;
-            out.line(format!("✓ Removed source {} (the dataset stays)", id));
+            c.sources().delete(&id).await?;
+            out.line(format!("✓ Deleted source {} (the dataset stays)", id));
             out.done(&json!({ "id": id, "removed": true }))
         }
     }

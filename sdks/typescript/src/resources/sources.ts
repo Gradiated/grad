@@ -158,8 +158,13 @@ export class Source {
   }
 
   /** Disconnects the source; the dataset and its versions stay. */
-  async remove(options?: RequestOptions): Promise<void> {
+  async delete(options?: RequestOptions): Promise<void> {
     await this.#core.api.deleteSource(this.id, options);
+  }
+
+  /** @deprecated Use `delete`. */
+  remove(options?: RequestOptions): Promise<void> {
+    return this.delete(options);
   }
 
   toJSON(): SourceData {
@@ -274,7 +279,13 @@ export class SourcesResource {
     return new Source(this.core, await updateSource(this.core, id, options));
   }
 
-  async remove(id: string, options?: RequestOptions): Promise<void> {
+  /** Disconnects a source; its dataset and versions stay. */
+  async delete(id: string, options?: RequestOptions): Promise<void> {
     await this.core.api.deleteSource(id, options);
+  }
+
+  /** @deprecated Use `delete`. */
+  remove(id: string, options?: RequestOptions): Promise<void> {
+    return this.delete(id, options);
   }
 }

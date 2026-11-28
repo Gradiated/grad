@@ -177,6 +177,7 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
   list_imports_filtered: () => grad.imports.list({ status: "failed", dataset: "support" }).pages().next(),
   list_datasets_search: () => grad.datasets.list({ search: "support" }).pages().next(),
   list_artifacts_search: () => grad.artifacts.list({ search: "sft" }).pages().next(),
+  count_runs: () => grad.runs.counts({ search: "sft" }),
 });
 
 describe("shared parity fixture (tests/fixtures/wire/sdk-parity.json)", () => {

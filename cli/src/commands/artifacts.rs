@@ -196,6 +196,22 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
                 .await?;
             finish_import(ctx, &c, job, &import.wait).await
         }
+        ArtifactsCmd::ImportStatus { id } => {
+            let j = c.artifacts().get_import(&id).await?;
+            out.kv(&[
+                ("id", j.id.clone()),
+                ("name", j.name.clone()),
+                ("status", j.status.to_string()),
+                ("base model", j.base_model.clone()),
+                ("format", j.format.to_string()),
+                (
+                    "artifact",
+                    j.artifact_id.clone().unwrap_or_else(|| "-".into()),
+                ),
+                ("error", j.error.clone().unwrap_or_else(|| "-".into())),
+            ]);
+            out.done(&j)
+        }
         ArtifactsCmd::Delete { reference } => {
             c.artifacts().delete(&reference).await?;
             out.line(format!("✓ Deleted artifact {}", reference));
@@ -215,6 +231,10 @@ async fn finish_import(
         out.line(format!(
             "✓ Queued artifact import {} ({})",
             job.id, job.name
+        ));
+        out.line(format!(
+            "  Check it with: grad artifacts import-status {}",
+            job.id
         ));
         return out.done(&job);
     }

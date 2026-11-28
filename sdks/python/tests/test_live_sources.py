@@ -167,7 +167,7 @@ class LangfuseSyncLiveTests(_SourcesLive):
         # The secret can't be deleted while the source uses it.
         with self.assertRaises(grad.ConflictError):
             client.secrets.delete("langfuse-prod")
-        source.remove()
+        source.delete()
         client.secrets.delete("langfuse-prod")
 
     def test_filters_sampling_caps_and_update(self) -> None:
@@ -196,7 +196,7 @@ class LangfuseSyncLiveTests(_SourcesLive):
         self.assertEqual((source.filters, source.max_records_per_sync), ({"version": ["v41"]}, None))
         self.assertEqual(source.sync(full=True).wait(timeout=120).status, "completed")
         self.assertEqual(sorted(self.records(client, "filtered")), ["trace-11"])
-        source.remove()
+        source.delete()
         client.secrets.delete("langfuse-filtered")
 
     def test_typed_errors(self) -> None:

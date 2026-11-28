@@ -1966,6 +1966,28 @@ pub struct Run {
     pub warnings: Option<Vec<String>>,
 }
 
+/// Generated from the OpenAPI schema `RunCounts`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RunCounts {
+    pub total: i64,
+    /// Runs per status (0 when none).
+    pub by_status: RunCountsByStatus,
+}
+
+/// Runs per status (0 when none).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RunCountsByStatus {
+    pub queued: i64,
+    pub running: i64,
+    pub completed: i64,
+    pub failed: i64,
+    pub cancelled: i64,
+    pub stopped_budget: i64,
+    pub stopped_balance: i64,
+}
+
 /// Generated from the OpenAPI schema `RunInterruption`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]

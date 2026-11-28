@@ -87,7 +87,12 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             };
             let req = PlanRunRequest::new("prefs", "dpo-continued", recipe);
             c.runs()
-                .create(&req, Some("parity-run-key"))
+                .create(
+                    &req,
+                    &CreateOptions {
+                        idempotency_key: Some("parity-run-key".into()),
+                    },
+                )
                 .await
                 .map(drop)
         }
@@ -241,7 +246,12 @@ async fn call(c: &Client, case: &str) -> Result<()> {
                 pass_threshold: Some(0.5),
             };
             c.evals()
-                .create(&req, Some("parity-eval-key"))
+                .create(
+                    &req,
+                    &CreateOptions {
+                        idempotency_key: Some("parity-eval-key".into()),
+                    },
+                )
                 .await
                 .map(drop)
         }
@@ -273,7 +283,13 @@ async fn call(c: &Client, case: &str) -> Result<()> {
                 limit: Some(100),
             };
             c.datasets()
-                .score("support-logs", &req, Some("parity-score-key"))
+                .score(
+                    "support-logs",
+                    &req,
+                    &CreateOptions {
+                        idempotency_key: Some("parity-score-key".into()),
+                    },
+                )
                 .await
                 .map(drop)
         }
@@ -318,13 +334,13 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             let provider = SourceProvider::langfuse()
                 .host("https://cloud.langfuse.com")
                 .secret(SecretRef::named("langfuse-prod"));
+            let opts = SourceOptions {
+                schedule: Some("*/15 * * * *".into()),
+                idempotency_key: Some("parity-source-key".into()),
+                ..Default::default()
+            };
             c.sources()
-                .create(
-                    "support-prod",
-                    &provider,
-                    Some("*/15 * * * *"),
-                    Some("parity-source-key"),
-                )
+                .create_with("support-prod", &provider, &opts)
                 .await
                 .map(drop)
         }
@@ -349,7 +365,7 @@ async fn call(c: &Client, case: &str) -> Result<()> {
                 ..Default::default()
             };
             c.sources()
-                .create_with("support-prod", &provider, &opts, None)
+                .create_with("support-prod", &provider, &opts)
                 .await
                 .map(drop)
         }
@@ -441,6 +457,7 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             )
             .await
             .map(drop),
+        "count_runs" => c.runs().counts(Some("sft")).await.map(drop),
         other => panic!("no Rust call for parity case {}", other),
     }
 }

@@ -8,6 +8,7 @@ Every object is a dataclass with attribute access to the fields in ``spec/openap
 from __future__ import annotations
 
 import builtins
+import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
@@ -446,9 +447,14 @@ class Source(APIObject):
         job: ImportJob = self._need_client().sources.sync(self.id, full=full)
         return job
 
-    def remove(self) -> None:
+    def delete(self) -> None:
         """Disconnect the source. The dataset and its versions stay."""
-        self._need_client().sources.remove(self.id)
+        self._need_client().sources.delete(self.id)
+
+    def remove(self) -> None:
+        """Deprecated: use :meth:`delete`."""
+        warnings.warn("Source.remove() is deprecated; use Source.delete()", DeprecationWarning, stacklevel=2)
+        self.delete()
 
 
 @dataclass(kw_only=True, repr=False, eq=False)

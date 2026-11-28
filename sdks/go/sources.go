@@ -265,8 +265,13 @@ func (s *Source) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Remove disconnects the source; the dataset and its versions stay.
-func (s *Source) Remove(ctx context.Context) error { return s.c.Sources.Remove(ctx, s.ID) }
+// Delete disconnects the source; the dataset and its versions stay.
+func (s *Source) Delete(ctx context.Context) error { return s.c.Sources.Delete(ctx, s.ID) }
+
+// Remove disconnects the source.
+//
+// Deprecated: use Delete.
+func (s *Source) Remove(ctx context.Context) error { return s.Delete(ctx) }
 
 // Filters are the effective filters, as the server validated them (single values as lists).
 func (s *Source) Filters() map[string]any { return s.Provider.Filters }
@@ -392,8 +397,13 @@ func (s *SourcesService) Update(ctx context.Context, id string, u SourceUpdate) 
 	return &Source{Source: src, c: s.c}, nil
 }
 
-// Remove disconnects a source; its dataset and versions stay.
-func (s *SourcesService) Remove(ctx context.Context, id string) error {
+// Remove disconnects a source.
+//
+// Deprecated: use Delete.
+func (s *SourcesService) Remove(ctx context.Context, id string) error { return s.Delete(ctx, id) }
+
+// Delete disconnects a source; its dataset and versions stay.
+func (s *SourcesService) Delete(ctx context.Context, id string) error {
 	api, err := s.c.api()
 	if err != nil {
 		return err

@@ -7,6 +7,22 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **SDKs: one name per verb.** `sources.delete` (Python, TS), `Sources.Delete` (Go) and `sources().delete` (Rust)
+  replace `remove`, which stays as a deprecated alias (it shipped in 0.2.0-alpha.7); `grad sources delete` is the
+  CLI verb and `remove` its alias. **Breaking (Go):** `Runs.Resume(ctx, id, grad.ResumeOptions{MaxCostUSD: 10})`
+  and `run.Resume(ctx, grad.ResumeOptions{})` take an options struct instead of a required cap. **Breaking
+  (Rust):** `runs().create`, `evals().create`, `datasets().score` and `artifacts().create_import` take
+  `&CreateOptions { idempotency_key }` instead of a positional key; `sources().create_with` reads the key from
+  `SourceOptions::idempotency_key`, and `sources().create` no longer takes one.
+- **SDKs: scores and counts.** TypeScript `evals.postScores(id, scores)` and Go `Evals.PostScores` post scores for
+  an `awaiting_scores` eval, as Python and Rust do; all four send 1,000 per request and return `accepted` summed
+  over the requests (Python returned the last request's count, Rust sent everything in one request). `runs.counts`
+  (Python, TS), `Runs.Counts` (Go), `runs().counts` (Rust) and `grad runs counts [--search]` read
+  `GET /v1/runs/counts`. The Rust SDK prints a run plan with `println!("{plan}")`, like the other SDKs.
+- **CLI:** `grad secrets get NAME` shows a secret's metadata (never its value); `grad artifacts import-status ID`
+  shows an artifact import queued with `--no-wait`. The Homebrew formula installs the bash, zsh and fish
+  completions.
+
 - **Run comparison reads.** `GET /v1/runs/{id}/metrics?max_points=N` returns a run's whole curve in one page, thinned
   to at most N points spaced evenly back from the newest (eval points thinned separately, so a sparse eval curve
   survives) and without the steps a resumed attempt replayed. A 100,000-point run answers in about 300 ms.

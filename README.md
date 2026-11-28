@@ -135,7 +135,7 @@ _, _ = run.Download(ctx, "./support-router", grad.Extract())
 ```
 
 ```rust
-use grad::{Client, DownloadOptions, PlanRunRequest, PushOptions, RecipeKind, RecipeSpec, WaitOptions};
+use grad::{Client, CreateOptions, DownloadOptions, PlanRunRequest, PushOptions, RecipeKind, RecipeSpec, WaitOptions};
 
 let client = Client::new();
 let path = std::path::Path::new("./examples/support_traces.jsonl");
@@ -144,7 +144,7 @@ client.datasets().push_file("support-prod", path, &PushOptions::default(), |_| {
 let recipe = RecipeSpec { rubric: Some("resolved".into()), ..RecipeSpec::new(RecipeKind::Router) };
 let req = PlanRunRequest::new("support-prod", "support-router", recipe).max_cost_usd(20.0);
 println!("~${:.2}", client.runs().plan(&req).await?.estimated_cost_usd);
-let run = client.runs().create(&req, None).await?;
+let run = client.runs().create(&req, &CreateOptions::default()).await?;
 client.runs().wait(&run.id, &WaitOptions::default()).await?;
 
 client.artifacts().download("support-router@latest", &DownloadOptions::extract("./support-router")).await?;

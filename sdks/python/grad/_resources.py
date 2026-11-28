@@ -65,7 +65,7 @@ from ._models import (
     TERMINAL_IMPORT_STATUSES,
     TERMINAL_RUN_STATUSES,
 )
-from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX, ArtifactDownloadUrl
+from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX, ArtifactDownloadUrl, RunCounts
 from ._transport import SSEDecoder, iter_sse, quote_path_param
 from .recipes import _thinking
 from .records import Trajectory
@@ -611,9 +611,14 @@ class Sources(_Resource):
         source_id = source.id if isinstance(source, Source) else str(source)
         return ImportJob.from_api(self._wire.sync_source(source_id, {"full": full}), self._client)
 
-    def remove(self, source: Any) -> None:
+    def delete(self, source: Any) -> None:
         """Disconnect a source; its dataset and versions stay."""
         self._wire.delete_source(source.id if isinstance(source, Source) else str(source))
+
+    def remove(self, source: Any) -> None:
+        """Deprecated: use :meth:`delete`."""
+        warnings.warn("sources.remove() is deprecated; use sources.delete()", DeprecationWarning, stacklevel=2)
+        self.delete(source)
 
 
 class Imports(_Resource):
@@ -705,6 +710,10 @@ class Runs(_Resource):
         ``search`` names containing it (any case) or the exact id."""
         statuses = _statuses(status)
         return self._page(Run, lambda cursor: self._wire.list_runs(limit=limit, cursor=cursor, status=statuses, q=search))
+
+    def counts(self, *, search: str | None = None) -> RunCounts:
+        """Runs per status (``{"total": n, "by_status": {"failed": 2, ...}}``), optionally of the runs ``search`` matches."""
+        return self._wire.count_runs(q=search)
 
     def cancel(self, run_id: str) -> Run:
         """Cancel a queued or running run."""
@@ -1272,12 +1281,16 @@ class Evals(_Resource):
         return EvalFailures(eval_id, page.to_list(), self._client)
 
     def post_scores(self, eval_id: str, scores: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-        """Low level: post ``{"output_id", "scorer", "score"}`` items (chunked)."""
+        """Post ``{"output_id", "scorer", "score"}`` items in requests of 1,000.
+
+        Returns the last response with ``accepted`` summed over every request."""
         result: dict[str, Any] = {}
+        accepted = 0
         items = list(scores)
-        for start in range(0, len(items), 1000):
-            result = dict(self._wire.post_eval_scores(eval_id, {"scores": items[start : start + 1000]}))
-        return result
+        for start in range(0, len(items), h.SCORES_PER_REQUEST):
+            result = dict(self._wire.post_eval_scores(eval_id, {"scores": items[start : start + h.SCORES_PER_REQUEST]}))
+            accepted += int(result.get("accepted") or 0)
+        return {**result, "accepted": accepted} if result else result
 
     def score_pending(self, eval_id: str, rubric: Any) -> int:
         """Run local scorers on every output still missing their score and post them."""

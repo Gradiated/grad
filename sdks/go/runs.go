@@ -15,6 +15,8 @@ type (
 	ResolvedRunConfig = generated.ResolvedRunConfig
 	// RunStatus is a run's lifecycle state.
 	RunStatus = generated.RunStatus
+	// RunCounts is the number of runs per status (Runs.Counts).
+	RunCounts = generated.RunCounts
 	// EvalReport is a run's held-out report: the shared core plus the fields its recipe writes.
 	EvalReport = generated.EvalReport
 	// RouterParetoSummary is a router run's quality vs. cost summary (EvalReport.ParetoSummary).
@@ -214,14 +216,29 @@ func (s *RunsService) Cancel(ctx context.Context, id string) (*Run, error) {
 	return s.c.run(r), nil
 }
 
-// Resume continues a stopped run from its last checkpoint; pass a higher maxCostUSD to
-// resume a stopped_budget run (0 keeps the current cap).
-func (s *RunsService) Resume(ctx context.Context, id string, maxCostUSD float64) (*Run, error) {
+// Counts returns the number of runs per status, optionally of the runs search matches
+// (names containing it, any case, or the exact id); "" counts every run.
+func (s *RunsService) Counts(ctx context.Context, search string) (*RunCounts, error) {
 	api, err := s.c.api()
 	if err != nil {
 		return nil, err
 	}
-	r, err := api.ResumeRun(ctx, id, &generated.ResumeRunRequest{MaxCostUSD: optFloat(maxCostUSD)})
+	return api.CountRuns(ctx, &generated.CountRunsParams{Q: optString(search)})
+}
+
+// ResumeOptions are the options of Runs.Resume; the zero value keeps the run's cap.
+type ResumeOptions struct {
+	// MaxCostUSD raises the run's spend cap (resume a stopped_budget run with a higher one).
+	MaxCostUSD float64
+}
+
+// Resume continues a stopped, failed or cancelled run from its last checkpoint.
+func (s *RunsService) Resume(ctx context.Context, id string, o ResumeOptions) (*Run, error) {
+	api, err := s.c.api()
+	if err != nil {
+		return nil, err
+	}
+	r, err := api.ResumeRun(ctx, id, &generated.ResumeRunRequest{MaxCostUSD: optFloat(o.MaxCostUSD)})
 	if err != nil {
 		return nil, err
 	}
@@ -347,9 +364,9 @@ func (r *Run) finish(ctx context.Context) error {
 		}
 		switch r.Status {
 		case RunStoppedBudget:
-			msg = "the spend cap was reached; raise it with Run.Resume(ctx, maxCostUSD)"
+			msg = "the spend cap was reached; raise it with Run.Resume(ctx, grad.ResumeOptions{MaxCostUSD: ...})"
 		case RunStoppedBalance:
-			msg = "the workspace ran out of balance; top up, then Run.Resume(ctx, 0)"
+			msg = "the workspace ran out of balance; top up, then Run.Resume(ctx, grad.ResumeOptions{})"
 		}
 		return &RunFailedError{GradError: newError("run_"+string(r.Status), "run %s (%s) ended %s: %s", r.ID, r.Name, r.Status, msg), Run: r}
 	}
@@ -399,9 +416,9 @@ func (r *Run) Cancel(ctx context.Context) error {
 	return nil
 }
 
-// Resume continues the run (raise maxCostUSD after stopped_budget; 0 keeps the cap).
-func (r *Run) Resume(ctx context.Context, maxCostUSD float64) error {
-	fresh, err := r.c.Runs.Resume(ctx, r.ID, maxCostUSD)
+// Resume continues the run (raise ResumeOptions.MaxCostUSD after stopped_budget).
+func (r *Run) Resume(ctx context.Context, o ResumeOptions) error {
+	fresh, err := r.c.Runs.Resume(ctx, r.ID, o)
 	if err != nil {
 		return err
 	}

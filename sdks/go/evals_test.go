@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -336,5 +337,37 @@ func TestEvalResultsAndOutputsPage(t *testing.T) {
 	outs, err := grad.Collect(c.Evals.Outputs(ctx, "ev_1", ""))
 	if err != nil || len(outs) != len(outputs["data"].([]any)) || strings.Contains(f.last("GET", "/v1/evals/ev_1/outputs").Query, "model") {
 		t.Fatalf("outputs %d %v", len(outs), err)
+	}
+}
+
+func TestEvalPostScoresChunksAndSumsAccepted(t *testing.T) {
+	ctx := context.Background()
+	f := newFake(t, map[string]route{
+		"POST /v1/evals/eval_1/scores": func(w http.ResponseWriter, r *http.Request, body []byte) {
+			var req struct {
+				Scores []any `json:"scores"`
+			}
+			_ = json.Unmarshal(body, &req)
+			jsonValue(200, map[string]any{"accepted": len(req.Scores), "status": "awaiting_scores", "pending_local_scores": 0})(w, r, body)
+		},
+	})
+	c, _ := f.client()
+	scores := make([]grad.EvalScore, 2500)
+	for i := range scores {
+		scores[i] = grad.EvalScore{OutputID: fmt.Sprintf("out_%d", i), Scorer: "short", Score: 1}
+	}
+	res, err := c.Evals.PostScores(ctx, "eval_1", scores)
+	if err != nil || res.Accepted != 2500 || res.Status != "awaiting_scores" {
+		t.Fatalf("PostScores = %+v, %v", res, err)
+	}
+	var sizes []int
+	for _, r := range f.requests() {
+		sizes = append(sizes, len(r.JSON(t)["scores"].([]any)))
+	}
+	if !reflect.DeepEqual(sizes, []int{1000, 1000, 500}) {
+		t.Fatalf("chunks %v", sizes)
+	}
+	if _, err := c.Evals.PostScores(ctx, "eval_1", nil); err == nil {
+		t.Fatal("PostScores with no scores should fail")
 	}
 }

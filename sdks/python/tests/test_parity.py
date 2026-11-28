@@ -165,6 +165,7 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "list_imports_filtered": lambda: client.imports.list(status="failed", dataset="support"),
         "list_datasets_search": lambda: client.datasets.list(search="support"),
         "list_artifacts_search": lambda: client.artifacts.list(search="sft"),
+        "count_runs": lambda: client.runs.counts(search="sft"),
     }
 
 

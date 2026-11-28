@@ -1,8 +1,8 @@
 //! `grad eval` and its subcommands.
 
 use grad_sdk::{
-    EvalFilter, EvalRubricItem, EvalRubricItemKind, EvalRun, EvalStatus, PlanEvalRequest,
-    PlanEvalResponse, WaitOptions,
+    CreateOptions, EvalFilter, EvalRubricItem, EvalRubricItemKind, EvalRun, EvalStatus,
+    PlanEvalRequest, PlanEvalResponse, WaitOptions,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -229,7 +229,15 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
                 print_plan(out, &plan);
                 return out.done(&plan);
             }
-            let ev = c.evals().create(&req, a.idempotency_key.as_deref()).await?;
+            let ev = c
+                .evals()
+                .create(
+                    &req,
+                    &CreateOptions {
+                        idempotency_key: a.idempotency_key.clone(),
+                    },
+                )
+                .await?;
             if !a.wait {
                 out.line(format!(
                     "✓ Queued eval {} ({} models)",

@@ -244,6 +244,10 @@ func TestParityRequests(t *testing.T) {
 		"list_artifacts_search": func() error {
 			return firstErr(c.Artifacts.List(ctx, grad.ArtifactListOptions{Search: "sft"}))
 		},
+		"count_runs": func() error {
+			_, err := c.Runs.Counts(ctx, "sft")
+			return err
+		},
 		"list_run_events": func() error {
 			for _, err := range c.Runs.Events(ctx, events.RunID, grad.EventsOptions{Limit: 100}) {
 				return err

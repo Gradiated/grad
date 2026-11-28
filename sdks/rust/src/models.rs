@@ -508,6 +508,9 @@ pub struct SourceOptions {
     /// Five-field UTC cron (at most once a minute); None syncs only on request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+    /// Your own key, to retry the call without connecting a second source (not sent in the body).
+    #[serde(skip)]
+    pub idempotency_key: Option<String>,
     /// The share of traces to sync, in (0, 1], chosen by a hash of the trace id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<f64>,

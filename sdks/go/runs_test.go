@@ -211,13 +211,13 @@ func TestRunListCancelResumeCheckpointsPromote(t *testing.T) {
 	if err := r.Cancel(ctx); err != nil || r.Status != grad.RunCancelled {
 		t.Fatalf("cancel %v %v", r.Status, err)
 	}
-	if err := r.Resume(ctx, 25); err != nil || r.Status != grad.RunQueued {
+	if err := r.Resume(ctx, grad.ResumeOptions{MaxCostUSD: 25}); err != nil || r.Status != grad.RunQueued {
 		t.Fatalf("resume %v %v", r.Status, err)
 	}
 	if body := f.last("POST", "/v1/runs/"+id+"/resume").JSON(t); body["max_cost_usd"] != 25.0 {
 		t.Fatalf("resume body %v", body)
 	}
-	if _, err := c.Runs.Resume(ctx, id, 0); err != nil {
+	if _, err := c.Runs.Resume(ctx, id, grad.ResumeOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if body := f.last("POST", "/v1/runs/"+id+"/resume").JSON(t); len(body) != 0 {

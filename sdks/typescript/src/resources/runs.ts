@@ -7,6 +7,7 @@ import type {
   RecipeSpec,
   ResolvedRunConfig,
   Run as RunData,
+  RunCounts,
   RunEvent,
   RunStatus,
   SplitSpec,
@@ -360,6 +361,12 @@ export class RunsResource {
       const page = await this.core.api.listRuns({ ...filters, cursor }, request);
       return { data: page.data.map((r) => new Run(this.core, r)), nextCursor: page.nextCursor };
     }, request.signal);
+  }
+
+  /** Runs per status (`{ total, byStatus: { failed, ... } }`), optionally of the runs `search` matches. */
+  counts(options: { search?: string } & RequestOptions = {}): Promise<RunCounts> {
+    const { search, ...request } = options;
+    return this.core.api.countRuns({ q: search }, request);
   }
 
   async wait(id: string, options?: RunWaitOptions): Promise<CompletedRun> {

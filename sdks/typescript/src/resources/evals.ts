@@ -6,8 +6,13 @@ import type {
   EvalTaskOutcome,
   PlanEvalRequest,
   PlanEvalResponse,
+  PostEvalScoresRequest,
+  PostEvalScoresResponse,
 } from "../generated/models.js";
 import { LIST_EVAL_OUTPUTS_LIMIT_MAX } from "../generated/client.js";
+
+/** Scores per `POST /v1/evals/{id}/scores` (the server takes up to 10,000). */
+const SCORES_PER_REQUEST = 1000;
 import { APIUserAbortError, type RequestOptions } from "../transport.js";
 import type { Core } from "../core.js";
 import { EvalFailedError, GradUsageError } from "../errors.js";
@@ -307,6 +312,21 @@ export class EvalsResource {
 
   async cancel(id: string, options?: RequestOptions): Promise<Eval> {
     return new Eval(this.core, await this.core.api.cancelEval(id, options));
+  }
+
+  /**
+   * Posts scores for an awaiting_scores eval's outputs, 1,000 per request. Returns the
+   * last response with `accepted` summed over every request.
+   */
+  async postScores(id: string, scores: PostEvalScoresRequest["scores"], options?: RequestOptions): Promise<PostEvalScoresResponse> {
+    let result: PostEvalScoresResponse | undefined;
+    let accepted = 0;
+    for (let start = 0; start < scores.length; start += SCORES_PER_REQUEST) {
+      result = await this.core.api.postEvalScores(id, { scores: scores.slice(start, start + SCORES_PER_REQUEST) }, options);
+      accepted += result.accepted;
+    }
+    if (!result) throw new GradUsageError("postScores needs at least one score.", "invalid_request");
+    return { ...result, accepted };
   }
 
   async failures(id: string, options: { model?: string; threshold?: number } & RequestOptions = {}): Promise<EvalFailures> {

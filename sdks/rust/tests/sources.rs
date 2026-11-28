@@ -207,24 +207,24 @@ async fn sources_create_list_sync_remove() {
             .json(),
         json!({"full": false})
     );
-    c.sources().remove("src_01J9X").await.unwrap();
+    c.sources().delete("src_01J9X").await.unwrap();
     assert_eq!(srv.count("DELETE", "/v1/sources/src_01J9X"), 1);
 
     let e = c
         .sources()
-        .create("d", &SourceProvider::new("helicone"), None, None)
+        .create("d", &SourceProvider::new("helicone"), None)
         .await
         .unwrap_err();
     assert!(matches!(e, Error::Validation(_)), "{:?}", e);
     assert_eq!(e.code(), "source_provider_unsupported");
     let e = c
         .sources()
-        .create("c", &SourceProvider::gradiated(), None, None)
+        .create("c", &SourceProvider::gradiated(), None)
         .await
         .unwrap_err();
     assert!(matches!(e, Error::FeatureUnavailable(_)), "{:?}", e);
     assert!(c.sources().sync("", true).await.is_err());
-    assert!(c.sources().remove("..").await.is_err());
+    assert!(c.sources().delete("..").await.is_err());
 }
 
 #[tokio::test]

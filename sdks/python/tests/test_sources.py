@@ -116,9 +116,13 @@ class SourcesTests(unittest.TestCase):
         self.assertEqual([s.id for s in dataset.sources()], ["src_01J9X"])
         self.assertEqual(sender.sent[-1].query.get("dataset"), ["support-prod"])
         self.assertEqual(len(client.sources.list().to_list()), 1)
-        source.remove()
+        source.delete()
         self.assertEqual((sender.sent[-1].method, sender.sent[-1].path), ("DELETE", "/v1/sources/src_01J9X"))
-        client.sources.remove("src_01J9X")
+        client.sources.delete("src_01J9X")
+        with self.assertWarns(DeprecationWarning):
+            client.sources.remove("src_01J9X")
+        with self.assertWarns(DeprecationWarning):
+            source.remove()
 
     def test_filters_sampling_caps_and_update(self) -> None:
         client, sender, _ = make_client(

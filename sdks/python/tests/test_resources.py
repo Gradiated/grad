@@ -789,6 +789,16 @@ class EvalTests(unittest.TestCase):
         self.assertIn("short", text)
         self.assertIn("run in this process", text)
 
+    def test_post_scores_chunks_and_sums_accepted(self) -> None:
+        def handler(sent: Any) -> Any:
+            return json_reply({"accepted": len(sent.json["scores"]), "status": "awaiting_scores", "pending_local_scores": 0})
+
+        client, sender, _ = make_client(handler=handler)
+        scores = [{"output_id": f"out_{i}", "scorer": "short", "score": 1.0} for i in range(2500)]
+        result = client.evals.post_scores("eval_1", scores)
+        self.assertEqual([len(s.json["scores"]) for s in sender.sent], [1000, 1000, 500])
+        self.assertEqual(result["accepted"], 2500)
+
     def test_eval_inputs(self) -> None:
         client, sender, _ = make_client({"POST /v1/evals/plan": json_reply(fixture("python-eval-plan.json"))})
         client.evals.plan(models="test/tiny-qwen3", dataset="support", rubric=[{"name": "x", "kind": "validator", "validator": "json"}])

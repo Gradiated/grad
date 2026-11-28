@@ -216,7 +216,7 @@ func TestEverythingSurfacesConfigErrors(t *testing.T) {
 	check("get run", err)
 	_, err = c.Runs.Cancel(ctx, "r")
 	check("cancel", err)
-	_, err = c.Runs.Resume(ctx, "r", 0)
+	_, err = c.Runs.Resume(ctx, "r", grad.ResumeOptions{})
 	check("resume", err)
 	_, err = c.Runs.Checkpoints(ctx, "r")
 	check("checkpoints", err)

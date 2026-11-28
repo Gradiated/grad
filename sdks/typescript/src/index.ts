@@ -112,6 +112,7 @@ export type {
   RecipeSpec,
   ResolvedRunConfig,
   RouterParetoSummary,
+  RunCounts,
   RunEvent,
   RunInterruption,
   RunPhase,

@@ -16,6 +16,18 @@ use crate::usage::{UsageQuery, UsageSummaryQuery};
 use crate::util::{self, check_path_param, encode_segment as seg};
 use crate::{enc, Client};
 
+/// Scores per `POST /v1/evals/{id}/scores` (the server takes up to 10,000).
+const SCORES_PER_REQUEST: usize = 1000;
+
+/// Options of the calls that create a job ([`Runs::create`], [`Evals::create`],
+/// [`Datasets::score`], [`Artifacts::create_import`]).
+#[derive(Debug, Clone, Default)]
+pub struct CreateOptions {
+    /// Your own key, to retry the call (even from another process) without
+    /// creating a second job. Default: a fresh key, reused by the SDK's retries.
+    pub idempotency_key: Option<String>,
+}
+
 /// Polling options for `wait` helpers.
 #[derive(Debug, Clone)]
 pub struct WaitOptions {
@@ -470,13 +482,13 @@ impl Datasets<'_> {
         &self,
         name: &str,
         req: &ScoreDatasetRequest,
-        idempotency_key: Option<&str>,
+        opts: &CreateOptions,
     ) -> Result<EvalRun> {
         check_path_param("dataset name", name)?;
         get(
             self.c,
             Req::post(format!("/v1/datasets/{}/score", seg(name)))
-                .key(idempotency_key)
+                .key(opts.idempotency_key.as_deref())
                 .json(body(req)?),
         )
         .await
@@ -619,10 +631,7 @@ impl Datasets<'_> {
         provider: &SourceProvider,
         schedule: Option<&str>,
     ) -> Result<Source> {
-        self.c
-            .sources()
-            .create(name, provider, schedule, None)
-            .await
+        self.c.sources().create(name, provider, schedule).await
     }
 
     /// The sources syncing into dataset `name`.
@@ -715,14 +724,12 @@ impl Sources<'_> {
         dataset: &str,
         provider: &SourceProvider,
         schedule: Option<&str>,
-        idempotency_key: Option<&str>,
     ) -> Result<Source> {
         let opts = SourceOptions {
             schedule: schedule.map(str::to_string),
             ..Default::default()
         };
-        self.create_with(dataset, provider, &opts, idempotency_key)
-            .await
+        self.create_with(dataset, provider, &opts).await
     }
 
     /// [`Sources::create`] with sampling and record caps: `opts.sample_rate` keeps that
@@ -733,7 +740,6 @@ impl Sources<'_> {
         dataset: &str,
         provider: &SourceProvider,
         opts: &SourceOptions,
-        idempotency_key: Option<&str>,
     ) -> Result<Source> {
         check_path_param("dataset name", dataset)?;
         let mut b = body(opts)?;
@@ -741,7 +747,7 @@ impl Sources<'_> {
         get(
             self.c,
             Req::post(format!("/v1/datasets/{}/sources", seg(dataset)))
-                .key(idempotency_key)
+                .key(opts.idempotency_key.as_deref())
                 .json(b),
         )
         .await
@@ -796,10 +802,16 @@ impl Sources<'_> {
     }
 
     /// Disconnect a source; its dataset and versions stay.
-    pub async fn remove(&self, id: &str) -> Result<()> {
+    pub async fn delete(&self, id: &str) -> Result<()> {
         check_path_param("source id", id)?;
         let req = Req::new(Method::DELETE, format!("/v1/sources/{}", seg(id)));
         self.c.t().send(&req).await.map(drop)
+    }
+
+    /// Disconnect a source.
+    #[deprecated(note = "use `delete`")]
+    pub async fn remove(&self, id: &str) -> Result<()> {
+        self.delete(id).await
     }
 }
 
@@ -1161,10 +1173,12 @@ impl Runs<'_> {
     /// call (even from another process) without starting a second run. The
     /// returned run's `warnings` holds the plan's warnings, such as another
     /// queued or running run with the same name (names aren't unique).
-    pub async fn create(&self, req: &PlanRunRequest, idempotency_key: Option<&str>) -> Result<Run> {
+    pub async fn create(&self, req: &PlanRunRequest, opts: &CreateOptions) -> Result<Run> {
         get(
             self.c,
-            Req::post("/v1/runs").key(idempotency_key).json(body(req)?),
+            Req::post("/v1/runs")
+                .key(opts.idempotency_key.as_deref())
+                .json(body(req)?),
         )
         .await
     }
@@ -1186,6 +1200,12 @@ impl Runs<'_> {
     /// Every run matching `f`, newest first (all pages, bounded).
     pub async fn list_all(&self, f: &RunFilter) -> Result<Vec<Run>> {
         collect_all(self.c, "/v1/runs", LIST_RUNS_LIMIT_MAX, f.query()).await
+    }
+
+    /// Runs per status, optionally of the runs `search` matches (names
+    /// containing it, any case, or the exact id).
+    pub async fn counts(&self, search: Option<&str>) -> Result<RunCounts> {
+        get(self.c, Req::get("/v1/runs/counts").opt_param("q", search)).await
     }
 
     /// Find the newest run with this `name` (runs are addressed by id on the wire).
@@ -1460,7 +1480,9 @@ impl Artifacts<'_> {
                 )),
                 name: Some(name),
             },
-            opts.idempotency_key.as_deref(),
+            &CreateOptions {
+                idempotency_key: opts.idempotency_key.clone(),
+            },
         )
         .await
     }
@@ -1485,7 +1507,9 @@ impl Artifacts<'_> {
                 )),
                 name: opts.name.clone(),
             },
-            opts.idempotency_key.as_deref(),
+            &CreateOptions {
+                idempotency_key: opts.idempotency_key.clone(),
+            },
         )
         .await
     }
@@ -1494,12 +1518,12 @@ impl Artifacts<'_> {
     pub async fn create_import(
         &self,
         req: &CreateArtifactImportRequest,
-        idempotency_key: Option<&str>,
+        opts: &CreateOptions,
     ) -> Result<ArtifactImport> {
         get(
             self.c,
             Req::post("/v1/artifact-imports")
-                .key(idempotency_key)
+                .key(opts.idempotency_key.as_deref())
                 .json(body(req)?),
         )
         .await
@@ -1719,14 +1743,12 @@ impl Evals<'_> {
     }
 
     /// Queue an eval (billed; `total_cost_usd` on the result).
-    pub async fn create(
-        &self,
-        req: &PlanEvalRequest,
-        idempotency_key: Option<&str>,
-    ) -> Result<EvalRun> {
+    pub async fn create(&self, req: &PlanEvalRequest, opts: &CreateOptions) -> Result<EvalRun> {
         get(
             self.c,
-            Req::post("/v1/evals").key(idempotency_key).json(body(req)?),
+            Req::post("/v1/evals")
+                .key(opts.idempotency_key.as_deref())
+                .json(body(req)?),
         )
         .await
     }
@@ -1845,17 +1867,29 @@ impl Evals<'_> {
         collect_all(self.c, &path, LIST_EVAL_OUTPUTS_LIMIT_MAX, extra).await
     }
 
+    /// Post scores 1,000 per request; the last response, with `accepted`
+    /// summed over every request. An empty `scores` is [`Error::InvalidInput`].
     pub async fn post_scores(
         &self,
         id: &str,
         scores: &[LocalScore],
     ) -> Result<PostEvalScoresResponse> {
         check_path_param("eval id", id)?;
-        get(
-            self.c,
-            Req::post(format!("/v1/evals/{}/scores", seg(id))).json(json!({ "scores": scores })),
-        )
-        .await
+        let mut last: Option<PostEvalScoresResponse> = None;
+        let mut accepted = 0;
+        for chunk in scores.chunks(SCORES_PER_REQUEST) {
+            let res: PostEvalScoresResponse = get(
+                self.c,
+                Req::post(format!("/v1/evals/{}/scores", seg(id))).json(json!({ "scores": chunk })),
+            )
+            .await?;
+            accepted += res.accepted;
+            last = Some(res);
+        }
+        let mut last =
+            last.ok_or_else(|| Error::InvalidInput("post_scores needs at least one score".into()))?;
+        last.accepted = accepted;
+        Ok(last)
     }
 
     /// Poll until terminal, calling `on_progress` on every poll.

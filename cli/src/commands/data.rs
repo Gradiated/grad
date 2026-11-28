@@ -1,9 +1,9 @@
 //! `grad models`, `grad datasets`, `grad import`, `grad imports`, `grad render`.
 
 use grad_sdk::{
-    recipes, Client, FilterDatasetRequest, HfColumnMapping, ImportFileOptions, ImportFilter,
-    ImportJob, ImportSource, ImportSourceKind, ImportStatus, PushOptions, RenderDatasetRequest,
-    ScoreDatasetRequest, WaitOptions,
+    recipes, Client, CreateOptions, FilterDatasetRequest, HfColumnMapping, ImportFileOptions,
+    ImportFilter, ImportJob, ImportSource, ImportSourceKind, ImportStatus, PushOptions,
+    RenderDatasetRequest, ScoreDatasetRequest, WaitOptions,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -261,7 +261,7 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
             let c = ctx.client()?;
             let job = c
                 .datasets()
-                .score(&name, &req, idempotency_key.as_deref())
+                .score(&name, &req, &CreateOptions { idempotency_key })
                 .await?;
             if !wait {
                 out.line(format!(

@@ -33,6 +33,7 @@ export const RUST_MODELS = [
   "RenderDatasetRequest",
   "RenderDatasetResponse",
   "Run",
+  "RunCounts",
   "ScoreDatasetRequest",
   "TrainableModel",
   "UploadTicket",
