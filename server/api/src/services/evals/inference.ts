@@ -7,7 +7,7 @@ import type {
   ChatCompletionResult,
 } from "./types.js";
 
-export interface OpenAICompatibleOptions {
+interface OpenAICompatibleOptions {
   baseUrl: string;
   apiKey?: string | undefined;
   timeoutMs?: number;
@@ -20,7 +20,7 @@ export interface OpenAICompatibleOptions {
 }
 
 /** Names the workspace of every inference and judge call. */
-export const WORKSPACE_HEADER = "X-Grad-Workspace";
+const WORKSPACE_HEADER = "X-Grad-Workspace";
 
 const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
 

@@ -27,7 +27,7 @@ import {
   type StoredObject,
 } from "./types.js";
 
-export interface S3ObjectStoreOptions {
+interface S3ObjectStoreOptions {
   bucket: string;
   region?: string | undefined;
   endpoint?: string | undefined;

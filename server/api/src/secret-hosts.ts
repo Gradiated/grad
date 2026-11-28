@@ -20,7 +20,7 @@ export const PROVIDER_DEFAULT_HOSTS: Readonly<
 };
 
 export const HF_HOST = "huggingface.co";
-export const WANDB_DEFAULT_HOST = "https://api.wandb.ai";
+const WANDB_DEFAULT_HOST = "https://api.wandb.ai";
 
 /** Where a run logger sends its secret: the W&B host or the MLflow server. */
 export const loggerUrl = (logger: LoggerSpec): string =>
@@ -33,7 +33,7 @@ export const loggerUrl = (logger: LoggerSpec): string =>
  * providers grad talks to. A secret for a self-hosted tool (Phoenix, a
  * self-hosted Langfuse, MLflow, W&B server) must name its host.
  */
-export const DEFAULT_SECRET_HOSTS: readonly string[] = [
+const DEFAULT_SECRET_HOSTS: readonly string[] = [
   "cloud.langfuse.com",
   "us.cloud.langfuse.com",
   "api.smith.langchain.com",
@@ -50,7 +50,7 @@ const HOST_RE =
   /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/;
 
 /** `host[:port]` of a URL or bare host, lowercased; null when it is neither. */
-export const hostOf = (value: string): string | null => {
+const hostOf = (value: string): string | null => {
   const raw = value.trim();
   try {
     const url = new URL(raw.includes("://") ? raw : `https://${raw}`);

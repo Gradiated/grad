@@ -40,14 +40,14 @@ type CreateSourceBody = z.infer<typeof CreateSourceRequestSchema>;
 type UpdateSourceBody = z.infer<typeof UpdateSourceRequestSchema>;
 
 /** What a completed sync reports back (the import summary's source fields). */
-export interface SyncSummary {
+interface SyncSummary {
   watermark?: Record<string, unknown> | null | undefined;
   /** New traces taken: what the record caps count. */
   traces?: number | undefined;
 }
 
 /** What the sync's completion did with its parts. */
-export interface SyncOutcome {
+interface SyncOutcome {
   /** Records the parts added (staged.count). */
   records: number;
   /** The parts wait for the next version (version_interval). */
@@ -69,7 +69,7 @@ const recordsToday = (source: SourceRecord, now: Date): number =>
  * New traces the next sync may take: the smaller of the per-sync cap and
  * what is left of today's. Null without a cap.
  */
-export const syncBudget = (source: SourceRecord, now: Date): number | null => {
+const syncBudget = (source: SourceRecord, now: Date): number | null => {
   const caps = [
     source.max_records_per_sync,
     source.max_records_per_day === null
@@ -81,7 +81,7 @@ export const syncBudget = (source: SourceRecord, now: Date): number | null => {
 };
 
 /** The `source` payload of a sync's import job (no secret: that is added at claim). */
-export interface SyncPayload {
+interface SyncPayload {
   kind: "provider";
   source_id: string;
   provider: SourceProviderKind;
@@ -104,7 +104,7 @@ const TICK_BATCHES = 20;
 const ACTIVE = new Set(["queued", "running"]);
 
 /** A source starts at most one sync per minute (manual or scheduled). */
-export const MIN_SYNC_INTERVAL_SECONDS = 60;
+const MIN_SYNC_INTERVAL_SECONDS = 60;
 /** A failing schedule backs off to at most this. */
 export const MAX_BACKOFF_SECONDS = 3600;
 /** Consecutive failed syncs that pause a source. */
@@ -142,7 +142,7 @@ export const nextScheduledSync = (
 };
 
 /** A sync request's job, and how long to wait before asking again. */
-export interface SyncRequest {
+interface SyncRequest {
   job: ImportJob;
   /** Seconds until a new sync may start; null when this one is new or active. */
   retryAfter: number | null;

@@ -20,11 +20,11 @@ import { type ApiError, conflict, invalid } from "../errors.js";
  * after STAGING_TTL_SECONDS.
  */
 
-export const UPLOAD_URL_TTL_SECONDS = 6 * 3600;
-export const DOWNLOAD_URL_TTL_SECONDS = 3600;
+const UPLOAD_URL_TTL_SECONDS = 6 * 3600;
+const DOWNLOAD_URL_TTL_SECONDS = 3600;
 /** User uploads expire this long after upload (the import must be claimed by then). */
-export const STAGING_TTL_SECONDS = 7 * 86_400;
-export const STAGING_PREFIX = "uploads";
+const STAGING_TTL_SECONDS = 7 * 86_400;
+const STAGING_PREFIX = "uploads";
 export const ARTIFACTS_PREFIX = "artifacts";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -43,7 +43,7 @@ export const artifactKey = (workspaceId: string, sha256: string): string =>
 export const stagingKey = (workspaceId: string, sha256: string): string =>
   `${STAGING_PREFIX}/${ws(workspaceId)}/${sha256}`;
 
-export interface VerifiedBlob {
+interface VerifiedBlob {
   key: string;
   sha256: string;
   sizeBytes: number;

@@ -13,7 +13,7 @@ import { cloudRequest, cloudUrl, detailOf, isOk } from "./http.js";
  * did not wake in time, which the eval worker waits out) and bills the
  * tokens itself, tagged with the eval.
  */
-export const GATEWAY_HEADERS = {
+const GATEWAY_HEADERS = {
   workspace: "X-Gradiated-Workspace",
   source: "X-Gradiated-Source",
   evalId: "X-Gradiated-Eval-Id",
@@ -81,7 +81,7 @@ export interface EvalModelResolver {
 }
 
 /** The product streams the whole bundle on an artifact's first eval-versions call. */
-export const EVAL_VERSION_TIMEOUT_MS = 600_000;
+const EVAL_VERSION_TIMEOUT_MS = 600_000;
 const EVAL_VERSION_TRIES = 3;
 
 export const createEvalModelResolver = (options: {

@@ -35,7 +35,7 @@ const HF_USE: SecretUse = { url: `https://${HF_HOST}`, use: "HF import" };
 const COMMIT_RE = /^[0-9a-f]{40}$/;
 
 /** An HF import's default name: the repo's name as a slug. */
-export const nameFromRepo = (repo: string): string =>
+const nameFromRepo = (repo: string): string =>
   (repo.split("/").pop() ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")

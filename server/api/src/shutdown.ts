@@ -1,6 +1,6 @@
 import type { Server } from "node:http";
 
-export interface ShutdownSteps {
+interface ShutdownSteps {
   /** The HTTP server; stops accepting at once, open streams get `graceMs`. */
   server: Pick<Server, "close" | "closeAllConnections">;
   /** Makes /health/ready answer 503 from now on. */

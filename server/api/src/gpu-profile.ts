@@ -7,7 +7,7 @@ import { invalid } from "./errors.js";
  * packing) on one H100 80 GB: see "GPU memory and throughput" in
  * server/trainer/README.md. v0 trains on one GPU, so a run must fit one.
  */
-export const TRAINING_GPU_MEMORY_GB = 80;
+const TRAINING_GPU_MEMORY_GB = 80;
 
 interface GpuProfile {
   /** bf16 weight bytes in GB (what a frozen teacher adds to the GPU). */
@@ -149,4 +149,4 @@ export const estimateDurationS = (input: {
 };
 
 /** The trainer's wall-clock checkpoint interval (config.DEFAULT_CHECKPOINT_MINUTES). */
-export const CHECKPOINT_MINUTES = 5;
+const CHECKPOINT_MINUTES = 5;

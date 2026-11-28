@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { Pool, PoolClient } from "pg";
 
 /** Arbitrary constant shared by every replica: serializes concurrent boots. */
-export const MIGRATION_LOCK_KEY = 7_241_903_118;
+const MIGRATION_LOCK_KEY = 7_241_903_118;
 
 const MIGRATION_FILE_RE = /^(\d{4})_[a-z0-9_]+\.sql$/;
 
@@ -15,7 +15,7 @@ export const defaultMigrationsDir = (): string =>
     "../../migrations",
   );
 
-export interface MigrationFile {
+interface MigrationFile {
   version: string;
   name: string;
   sql: string;
@@ -47,7 +47,7 @@ export const loadMigrations = async (
 
 const quoteIdent = (ident: string): string => `"${ident.replace(/"/g, '""')}"`;
 
-export interface MigrateOptions {
+interface MigrateOptions {
   schema?: string | undefined;
   dir?: string;
   /** How long one DDL statement may wait for a table lock (default 5 s). */

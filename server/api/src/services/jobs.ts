@@ -52,12 +52,12 @@ export const isSettled = (job: Pick<JobRow, "status" | "worker_id">): boolean =>
   isTerminal(job.status) && job.worker_id === null;
 
 /** What a claiming worker says about itself (shown on the run, never its id). */
-export interface ClaimWorker {
+interface ClaimWorker {
   gpu: { name: string; memory_gb: number } | null;
 }
 
 /** Where a queued job stands: ready for the run's phase text. */
-export interface QueueView {
+interface QueueView {
   /** About how many claimable jobs of its kind start before it. */
   queue_position: number;
   /** "Queued behind 3 runs", a workspace cap or a GPU nobody has; null when next in line. */
@@ -143,7 +143,7 @@ export const leaseLost = (id: string): ApiError =>
   );
 
 /** Throws 404 when a worker may not see a job (workspace-scoped worker keys). */
-export const assertWorkerScope = (
+const assertWorkerScope = (
   principal: AuthPrincipal,
   workspaceId: string,
   id: string,
@@ -265,7 +265,7 @@ export const requeuePatch = (
 };
 
 /** Counts a started attempt, and a first claim's wait since creation. */
-export const observeClaim = (job: JobRow, now: Date): void => {
+const observeClaim = (job: JobRow, now: Date): void => {
   const kind = metricKind(job);
   metrics.attempts.inc({ kind });
   if (job.attempt === 1) {

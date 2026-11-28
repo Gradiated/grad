@@ -118,7 +118,7 @@ export const loadUiBundle = (dir: string): UiBundle | null => {
 };
 
 /** Where a built UI lives: UI_DIR, the image's `/app/ui`, or a checkout's `server/ui/dist`. */
-export const defaultUiDirs = (): string[] => {
+const defaultUiDirs = (): string[] => {
   const apiRoot = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "..",

@@ -21,7 +21,7 @@ const ORPHAN_PASS_INTERVAL_MS = 3_600_000;
 /** Swept for orphans: job blobs under `ws/`, released bundles under `artifacts/`. */
 const ORPHAN_PREFIXES = ["ws", ARTIFACTS_PREFIX];
 
-export interface MaintenanceReport {
+interface MaintenanceReport {
   expiredJobs: number;
   waitingForCompute: number;
   settledEvals: number;

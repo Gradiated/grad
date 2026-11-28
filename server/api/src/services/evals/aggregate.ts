@@ -14,7 +14,7 @@ interface TaskCell {
   errors: number;
 }
 
-export interface Aggregation {
+interface Aggregation {
   summary: EvalModelSummary[];
   /** Each output's combined rubric score (0 for a failed generation). */
   outputScores: Array<{ id: string; score: number }>;

@@ -19,7 +19,7 @@ import type {
 } from "../store/types.js";
 
 /** A usage row's key: the attempt and the token count it bills through. */
-export const usageKey = (
+const usageKey = (
   kind: LedgerRow["kind"],
   refId: string,
   attempt: number,
@@ -50,7 +50,7 @@ export const amountNanoUsd = (tokens: number, nanoPerMtok: number): number =>
   Number((BigInt(tokens) * BigInt(nanoPerMtok) + 500_000n) / 1_000_000n);
 
 /** The usage event billing ingests for a ledger row (`event_id` = its key). */
-export const usageEventOf = (row: ExportableUsage): UsageEvent => ({
+const usageEventOf = (row: ExportableUsage): UsageEvent => ({
   event_id: `training:${row.idempotency_key}`,
   workspace_id: row.workspace_id,
   product: "training",

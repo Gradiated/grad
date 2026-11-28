@@ -15,7 +15,7 @@ const JOB_PATH =
  * The route template that served `c` (`/v1/runs/:id`), never the raw path:
  * a bounded label. Middleware-only matches (404s) are `unmatched`.
  */
-export const routeTemplate = (c: Context): string =>
+const routeTemplate = (c: Context): string =>
   matchedRoutes(c)
     .filter((r) => r.method !== "ALL" && !r.path.includes("*"))
     .at(-1)?.path ?? "unmatched";

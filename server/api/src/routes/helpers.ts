@@ -13,7 +13,7 @@ export type AppEnv = {
   };
 };
 
-export const problemContent = {
+const problemContent = {
   "application/problem+json": { schema: ProblemSchema },
 } as const;
 
@@ -57,7 +57,7 @@ const CODE_RE = /^[a-z][a-z0-9_]{0,63}$/;
  * here, so it also counts the response on grad_http_errors_total{code}
  * (codes are a fixed vocabulary; anything else is `other`).
  */
-export const problemBody = (
+const problemBody = (
   status: number,
   code: string,
   title: string,

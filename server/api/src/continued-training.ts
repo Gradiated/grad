@@ -10,12 +10,12 @@ import type {
 import { invalid } from "./errors.js";
 
 /** Recipes that can keep training a LoRA adapter from an earlier artifact. */
-export const CONTINUABLE_RECIPES: readonly RecipeKind[] = ["sft", "dpo"];
+const CONTINUABLE_RECIPES: readonly RecipeKind[] = ["sft", "dpo"];
 
 export const isArtifactRef = (model: string | undefined): model is string =>
   model?.includes("@") ?? false;
 
-export interface Continuation {
+interface Continuation {
   model: TrainableModel;
   adapter: Extract<AdapterSpec, { kind: "lora" }>;
   base: BaseArtifact;
@@ -50,7 +50,7 @@ const loraOf = (artifact: Artifact): { rank: number; alpha: number } => {
   return { rank: adapter.rank, alpha: adapter.alpha };
 };
 
-export const toBaseArtifact = (artifact: Artifact): BaseArtifact => ({
+const toBaseArtifact = (artifact: Artifact): BaseArtifact => ({
   id: artifact.id,
   recipe_kind: artifact.recipe_kind,
   format: "peft_lora",

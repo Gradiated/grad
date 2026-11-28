@@ -1,7 +1,7 @@
 import { invalid } from "../errors.js";
 import type { Page } from "./types.js";
 
-export type CursorValue = string | number;
+type CursorValue = string | number;
 
 /** Opaque keyset cursor: base64url JSON array of the sort key of the last row. */
 export const encodeCursor = (values: readonly CursorValue[]): string =>

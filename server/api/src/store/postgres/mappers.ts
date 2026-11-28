@@ -24,7 +24,7 @@ import type {
 import type { Row } from "./db.js";
 
 /** One place for pg → domain coercion (BIGINT strings, Dates, jsonb). */
-export const s = (v: unknown): string => String(v);
+const s = (v: unknown): string => String(v);
 export const sn = (v: unknown): string | null =>
   v === null || v === undefined ? null : String(v);
 export const n = (v: unknown): number => Number(v ?? 0);
@@ -92,7 +92,7 @@ export const toJob = <S extends string>(r: Row): JobFields<S> => ({
 });
 
 /** The telemetry fields a job keeps in its payload. */
-export const jobTelemetry = (
+const jobTelemetry = (
   r: Row,
 ): {
   traceparent: string | null;
@@ -197,7 +197,7 @@ export const toCheckpoint = (r: Row): CheckpointRecord => ({
  * The manifest's provenance (format_version 2 bundles write it); older
  * releases are a run's, so they read as `source: run`.
  */
-export const provenanceOf = (
+const provenanceOf = (
   manifest: Record<string, unknown>,
   runId: string | null,
 ): ArtifactProvenance => {

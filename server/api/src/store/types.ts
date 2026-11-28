@@ -299,7 +299,7 @@ export interface JobExpectation<S extends string = JobStatus> {
   attempt?: number;
 }
 
-export interface ClaimInput {
+interface ClaimInput {
   workerId: string;
   /** The claiming key's identity (`workerKeyOf`), stored on the lease. */
   workerKey: string;
@@ -320,7 +320,7 @@ export interface ClaimInput {
 export type QueueCaps = Readonly<Record<JobKind, number>>;
 
 /** One workspace's share of a kind's queue (queue position and phase text). */
-export interface QueueShare {
+interface QueueShare {
   workspace_id: string;
   /** Claimable queued jobs (not waiting on another job). */
   queued: number;
@@ -341,7 +341,7 @@ export interface QueueSnapshot {
 }
 
 /** What a claiming worker said about itself (grad_workers). */
-export interface WorkerSighting {
+interface WorkerSighting {
   id: string;
   kinds: readonly JobKind[];
   device: "cpu" | "gpu" | null;
@@ -805,7 +805,7 @@ export interface EvalDomain {
 
 export type EvalRecord = JobFields<EvalStatus> & EvalDomain;
 
-export type EvalPatch = JobPatch &
+type EvalPatch = JobPatch &
   Partial<
     Pick<
       EvalDomain,
@@ -979,7 +979,7 @@ export interface ParkedUsage {
 }
 
 /** `[from, to)`; either end may be open. */
-export interface UsageFilter {
+interface UsageFilter {
   from?: Date | undefined;
   to?: Date | undefined;
   runId?: string | undefined;
@@ -1123,7 +1123,7 @@ export interface SourceRecord {
   updated_at: string;
 }
 
-export type SourceStatus = "active" | "paused";
+type SourceStatus = "active" | "paused";
 
 export type SourcePatch = Partial<
   Pick<
@@ -1257,7 +1257,7 @@ export interface WorkspaceStateRecord {
 }
 
 /** What one bounded purge pass deleted, and what still blocks it. */
-export interface PurgePass {
+interface PurgePass {
   deletedRows: number;
   /** Jobs still running (they stop at their next heartbeat or lease expiry). */
   runningJobs: number;

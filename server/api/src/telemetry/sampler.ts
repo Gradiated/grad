@@ -18,7 +18,7 @@ const METRIC_KINDS: Record<string, readonly MetricJobKind[]> = {
   eval: ["eval"],
 };
 
-export interface QueueDepth {
+interface QueueDepth {
   /** Claimable queued plus leased jobs (KEDA's target value). */
   open: number;
   queued: number;

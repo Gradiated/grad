@@ -34,7 +34,7 @@ import {
   type RecipeUsability,
 } from "./records.js";
 
-export const AUTO_RULE_VERSION = "auto@2";
+const AUTO_RULE_VERSION = "auto@2";
 
 /**
  * Rough text token estimate (chars / the base tokenizer's characters per
@@ -133,7 +133,7 @@ const EMPTY_THINK_TOKENS = 4;
 /** The generation header the trainer appends to router/classifier prompts. */
 const GENERATION_HEADER_TOKENS = 3;
 /** The trainer cuts every sequence to this many tokens (torch_common.model_max_len). */
-export const TRAINER_MAX_SEQ_LEN = 8192;
+const TRAINER_MAX_SEQ_LEN = 8192;
 
 const stripThinking = (text: string): string =>
   text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
@@ -273,7 +273,7 @@ export const formatUsd = (usd: number): string => {
 };
 
 /** The batch size the auto learning rates were calibrated at, and the default. */
-export const CALIBRATED_BATCH_SIZE = 128;
+const CALIBRATED_BATCH_SIZE = 128;
 
 /**
  * The default batch size: 128, or a quarter of the training items (at least
@@ -281,7 +281,7 @@ export const CALIBRATED_BATCH_SIZE = 128;
  * steps per epoch. Embedding keeps 128: its in-batch negatives need the
  * batch.
  */
-export const defaultBatchSize = (kind: RecipeKind, items: number): number =>
+const defaultBatchSize = (kind: RecipeKind, items: number): number =>
   kind === "embedding"
     ? CALIBRATED_BATCH_SIZE
     : Math.min(CALIBRATED_BATCH_SIZE, Math.max(8, Math.floor(items / 4)));
@@ -338,7 +338,7 @@ const pythonJson = (value: unknown): string => {
  * The router's prompt group, as recipes/router.py prompt_key: the record's
  * group_id, else a hash of its prompt messages.
  */
-export const routerGroupKey = (record: DatasetRecord): string => {
+const routerGroupKey = (record: DatasetRecord): string => {
   if (record.group_id !== undefined && record.group_id !== null) {
     return record.group_id;
   }
@@ -405,7 +405,7 @@ const routerGroups = (
   return [...tokens.values()];
 };
 
-export const isV0Recipe = (kind: RecipeKind): boolean =>
+const isV0Recipe = (kind: RecipeKind): boolean =>
   (V0_RECIPE_KINDS as readonly string[]).includes(kind);
 
 const assertRecipeSupported = (
@@ -457,7 +457,7 @@ const closestModel = (
 };
 
 /** "Not in the catalog", the closest id, and how to list the catalog. */
-export const unknownModelMessage = (
+const unknownModelMessage = (
   requested: string,
   catalog: ModelCatalog,
 ): string => {
@@ -574,7 +574,7 @@ const resolveRouterCandidates = (
 
 export type LabelingPlan = NonNullable<PlanRunResponse["labeling"]>;
 
-export interface PlanContext {
+interface PlanContext {
   /** Router runs with rubric items: the labeling eval's estimate. */
   labeling?: LabelingPlan | null;
   catalog: ModelCatalog;

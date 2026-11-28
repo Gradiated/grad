@@ -34,7 +34,7 @@ import { serveUiFallback, serveUiFile } from "./ui.js";
 
 export type { AppDependencies } from "./deps.js";
 
-export const API_TITLE = "Gradiated Training & Serving API";
+const API_TITLE = "Gradiated Training & Serving API";
 export const API_VERSION = "0.2.0-alpha.7";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -44,7 +44,7 @@ export const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
 const LARGE_BODY_SLOTS = 2;
 
 /** What a browser may send cross-origin (GRAD_CORS_ORIGINS). */
-export const CORS_REQUEST_HEADERS = [
+const CORS_REQUEST_HEADERS = [
   "Authorization",
   "Content-Type",
   "Idempotency-Key",
@@ -52,7 +52,7 @@ export const CORS_REQUEST_HEADERS = [
   "X-Request-Id",
 ];
 /** What it may read back. */
-export const CORS_EXPOSED_HEADERS = [
+const CORS_EXPOSED_HEADERS = [
   "x-request-id",
   "Retry-After",
   "X-Artifact-Sha256",
@@ -68,7 +68,7 @@ const problemResponse = (
 ): Response =>
   problemJson(c.get("requestId") ?? "req_unknown", status, code, title, detail);
 
-export interface GradApp {
+interface GradApp {
   app: OpenAPIHono<AppEnv>;
   services: Services;
   /** SIGTERM: /health/ready answers 503 so traffic moves elsewhere first. */

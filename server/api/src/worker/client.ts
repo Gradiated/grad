@@ -32,7 +32,7 @@ export class ServerUnavailable extends Error {}
 /** grad-server refused the worker token (401/403): expired, revoked or wrong. */
 export class WorkerAuthRejected extends Error {}
 
-export interface WorkerClientOptions {
+interface WorkerClientOptions {
   serverUrl: string;
   /** The bearer token, or a source read on every request (GRAD_WORKER_TOKEN_FILE rotation). */
   apiKey?: string | (() => string | undefined) | undefined;
@@ -58,7 +58,7 @@ type OutputsBody = Omit<
 >;
 
 const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
-export const DEFAULT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+const DEFAULT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

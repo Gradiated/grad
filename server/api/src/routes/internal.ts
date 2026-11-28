@@ -42,7 +42,7 @@ import {
 const HOST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const LEASE_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 
-export const MintWorkerTokenSchema = z.strictObject({
+const MintWorkerTokenSchema = z.strictObject({
   host_id: z.string().regex(HOST_ID_RE, "1-128 of A-Z a-z 0-9 . _ - (no ':')"),
   lease_id: z.string().regex(LEASE_ID_RE, "1-128 of A-Z a-z 0-9 . _ : -"),
   kinds: z

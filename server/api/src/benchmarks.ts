@@ -6,7 +6,7 @@ import type { EvalRubricItem } from "./contracts.js";
  * (`grad_trainer/benchmarks.py`), with the rubric that scores them. An eval
  * on a benchmark dataset without a rubric uses this one.
  */
-export interface Benchmark {
+interface Benchmark {
   repo: string;
   config: string;
   split: string;
@@ -55,7 +55,7 @@ export const BENCHMARKS = {
   },
 } as const satisfies Record<string, Benchmark>;
 
-export type BenchmarkName = keyof typeof BENCHMARKS;
+type BenchmarkName = keyof typeof BENCHMARKS;
 
 export const BENCHMARK_NAMES = Object.keys(BENCHMARKS) as [
   BenchmarkName,

@@ -28,11 +28,11 @@ import { recordPromptAndReference } from "./records.js";
  * from a labeling eval, which is billed as an eval.
  */
 
-export const DEFAULT_MAX_NEW_TOKENS = 256;
+const DEFAULT_MAX_NEW_TOKENS = 256;
 /** The eval default for max_tokens, which the teacher's labeling eval uses. */
 const OFF_POLICY_MAX_TOKENS = 1024;
 
-export type TeacherPlan = NonNullable<PlanRunResponse["teacher"]>;
+type TeacherPlan = NonNullable<PlanRunResponse["teacher"]>;
 
 export interface DistillPlan {
   rollout: { kind: RolloutSpec["kind"]; max_new_tokens: number };

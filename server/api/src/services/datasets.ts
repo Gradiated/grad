@@ -134,9 +134,7 @@ export const datasetPartKey = (
  * ids, so its part is byte-identical and the push is a no-op; identical
  * records within a batch, or in different batches, stay distinct records.
  */
-export const pushRecordIds = (
-  records: readonly DatasetRecord[],
-): DatasetRecord[] => {
+const pushRecordIds = (records: readonly DatasetRecord[]): DatasetRecord[] => {
   const batch = createHash("sha256")
     .update(canonicalJson(records))
     .digest("hex");

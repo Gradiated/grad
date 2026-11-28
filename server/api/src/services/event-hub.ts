@@ -23,13 +23,13 @@ import { isSettled } from "./jobs.js";
 /** Rows per job per fetch; a subscription with this many queued is skipped until it drains. */
 export const HUB_BATCH = 500;
 /** Jobs per fetch query (bounds one fetch to JOBS_PER_QUERY * HUB_BATCH rows). */
-export const JOBS_PER_QUERY = 100;
+const JOBS_PER_QUERY = 100;
 /** Fetches start at most this often, however fast notifications arrive. */
 const MIN_FETCH_GAP_MS = 25;
 const RELISTEN_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-export const CHANNEL = "grad_job_events";
+const CHANNEL = "grad_job_events";
 
-export interface HubBatch {
+interface HubBatch {
   /** New events of every type, ascending by seq. */
   events: JobEvent[];
   /**
@@ -40,7 +40,7 @@ export interface HubBatch {
   settled: boolean;
 }
 
-export interface Subscription {
+interface Subscription {
   /** The next batch; `{events: [], settled: false}` after `timeoutMs` with nothing new; null once closed. */
   next(timeoutMs: number): Promise<HubBatch | null>;
   close(): void;
@@ -64,7 +64,7 @@ interface Sub {
   wake: (() => void) | null;
 }
 
-export interface EventHubOptions {
+interface EventHubOptions {
   /** Safety poll interval (SSE_POLL_MS). */
   pollMs: number;
   clock: Clock;

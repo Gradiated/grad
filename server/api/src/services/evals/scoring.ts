@@ -8,15 +8,15 @@ import { choiceMatches, finalNumberMatches } from "./answers.js";
 import { InferenceOutage } from "./inference.js";
 import type { ChatCompletionClient, RegexEvaluator } from "./types.js";
 
-export const MAX_SCORED_CHARS = 16_384;
+const MAX_SCORED_CHARS = 16_384;
 
-export interface ScoringInput {
+interface ScoringInput {
   prompt: readonly ChatMessage[];
   output: string;
   reference: string | null;
 }
 
-export interface ScoringResult {
+interface ScoringResult {
   scores: Record<string, number>;
   errors: string[];
   /** Items that produced no real score (their entry in `scores` is 0). */

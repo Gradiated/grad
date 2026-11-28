@@ -32,10 +32,7 @@ import type { Services } from "../services/index.js";
 import { log } from "../telemetry/log.js";
 import { readJson } from "./helpers.js";
 
-export const CLOUD_SERVICE_SCOPES = [
-  "workspaces:admin",
-  "artifacts:pin",
-] as const;
+const CLOUD_SERVICE_SCOPES = ["workspaces:admin", "artifacts:pin"] as const;
 type ServiceScope = (typeof CLOUD_SERVICE_SCOPES)[number];
 
 const WORKSPACE_RE = /^[A-Za-z0-9_-]{1,64}$/;

@@ -18,7 +18,7 @@ import { createWorkerTokenRepository } from "./worker-tokens.js";
 import { postgresConnection } from "./tls.js";
 import { watchPool } from "../../telemetry/metrics.js";
 
-export interface PostgresStoreOptions {
+interface PostgresStoreOptions {
   connectionString: string;
   clock: Clock;
   /** Schema to create and use (search_path); tests isolate with one per case. */
@@ -39,20 +39,20 @@ const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,62}$/;
  * without a RST can't enforce statement_timeout, so the client gives up on a
  * query after QUERY_TIMEOUT_MS and the pool drops that connection.
  */
-export const POOL_TIMEOUTS = {
+const POOL_TIMEOUTS = {
   connectionTimeoutMillis: 5_000,
   keepAlive: true,
   keepAliveInitialDelayMillis: 10_000,
 } as const;
-export const STATEMENT_TIMEOUT_MS = 30_000;
-export const QUERY_TIMEOUT_MS = STATEMENT_TIMEOUT_MS + 5_000;
-export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
+const STATEMENT_TIMEOUT_MS = 30_000;
+const QUERY_TIMEOUT_MS = STATEMENT_TIMEOUT_MS + 5_000;
+const IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
 /**
  * A LISTEN connection only reads, so a dead peer that sent no RST would go
  * unnoticed for the kernel's keepalive (minutes): it runs `SELECT 1` this
  * often and counts as lost when that fails.
  */
-export const LISTEN_PING_MS = 30_000;
+const LISTEN_PING_MS = 30_000;
 
 /**
  * PostgreSQL-backed Store. Repositories share one pool; `transaction` runs on

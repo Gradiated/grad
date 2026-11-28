@@ -212,7 +212,7 @@ export const EnvironmentSchema = z.object({
   UI_DIR: optionalString,
 });
 
-export type RawEnvironment = z.infer<typeof EnvironmentSchema>;
+type RawEnvironment = z.infer<typeof EnvironmentSchema>;
 
 const TrainerKeysSchema = z.array(
   z.strictObject({
@@ -224,7 +224,7 @@ const TrainerKeysSchema = z.array(
   }),
 );
 
-export type TrainerKeyConfig = z.infer<typeof TrainerKeysSchema>[number];
+type TrainerKeyConfig = z.infer<typeof TrainerKeysSchema>[number];
 
 const parseTrainerKeys = (raw: string | undefined): TrainerKeyConfig[] => {
   if (!raw) return [];
@@ -436,7 +436,7 @@ export const WorkerEnvironmentSchema = z.object({
   ...EndpointShape,
 });
 
-export type EvalWorkerEnvironment = z.infer<typeof WorkerEnvironmentSchema> &
+type EvalWorkerEnvironment = z.infer<typeof WorkerEnvironmentSchema> &
   EvalEndpoints & { warnings: string[] };
 
 /** Configuration of `grad-server worker --kinds eval`. */

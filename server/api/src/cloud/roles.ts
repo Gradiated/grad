@@ -2,15 +2,15 @@ import type { AuthPrincipal } from "../adapters.js";
 import { WORKSPACE_SCOPES, type ApiKeyScope } from "../contracts.js";
 
 /** The roles Gradiated Cloud members (and their keys) have. */
-export const CLOUD_ROLES = ["admin", "member"] as const;
-export type CloudRole = (typeof CLOUD_ROLES)[number];
+const CLOUD_ROLES = ["admin", "member"] as const;
+type CloudRole = (typeof CLOUD_ROLES)[number];
 
 /**
  * A role's grad scopes. Admins have every workspace scope. Members train:
  * datasets, runs (evals included) and artifacts, and they can read sources;
  * secrets, source writes and deploys stay with admins.
  */
-export const ROLE_SCOPES: Record<CloudRole, readonly ApiKeyScope[]> = {
+const ROLE_SCOPES: Record<CloudRole, readonly ApiKeyScope[]> = {
   admin: ["admin"],
   member: [
     "datasets:read",

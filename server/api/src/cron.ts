@@ -4,7 +4,7 @@
  * lists. When both day fields are restricted a day matches either, as in Vixie
  * cron. No names or `@hourly` shorthands.
  */
-export interface CronSchedule {
+interface CronSchedule {
   readonly expression: string;
   /** The first matching minute strictly after `after`. */
   next(after: Date): Date;

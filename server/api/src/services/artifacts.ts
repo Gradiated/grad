@@ -33,10 +33,7 @@ export const toPublicArtifact = ({
 const describePins = (pins: readonly ArtifactPin[]): string =>
   pins.map((p) => `${p.holder} (${p.reason})`).join(", ");
 
-export const artifactPinned = (
-  id: string,
-  pins: readonly ArtifactPin[],
-): ApiError =>
+const artifactPinned = (id: string, pins: readonly ArtifactPin[]): ApiError =>
   new ApiError(
     409,
     "artifact_pinned",

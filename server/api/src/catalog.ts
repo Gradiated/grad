@@ -85,7 +85,7 @@ const qwen = (
   min_gpu_memory_gb: minGpuMemoryGb,
 });
 
-export const BUILTIN_MODELS: readonly CatalogEntry[] = [
+const BUILTIN_MODELS: readonly CatalogEntry[] = [
   // min_gpu_memory_gb: peak reserved memory at the defaults (SFT, the most demanding
   // recipe), measured on an H100 80 GB, plus headroom; see server/trainer/README.md.
   qwen("qwen/qwen3-0.6b", "Qwen/Qwen3-0.6B", 0.15, 8, ["lora"], ["router"]),

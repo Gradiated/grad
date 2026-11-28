@@ -169,7 +169,7 @@ const observeJobFinished = (row: Row): void => {
   );
 };
 
-export const insertJob = async (
+const insertJob = async (
   db: Db,
   clock: Clock,
   input: {

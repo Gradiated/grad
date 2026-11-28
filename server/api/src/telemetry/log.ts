@@ -11,7 +11,7 @@ import { currentTraceId } from "./tracing.js";
  * URL signatures) are masked before the line is written.
  */
 
-export interface LogContext {
+interface LogContext {
   request_id?: string;
   job_id?: string;
   workspace_id?: string;
@@ -32,7 +32,7 @@ export const setLogComponent = (name: string): void => {
 export const withLogContext = <T>(fields: LogContext, fn: () => T): T =>
   ambient.run({ ...ambient.getStore(), ...fields }, fn);
 
-export const logContext = (): LogContext & { trace_id?: string } => {
+const logContext = (): LogContext & { trace_id?: string } => {
   const traceId = currentTraceId();
 
   return { ...ambient.getStore(), ...(traceId ? { trace_id: traceId } : {}) };

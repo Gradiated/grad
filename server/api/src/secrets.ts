@@ -21,7 +21,7 @@ import { unavailable } from "./errors.js";
  *   new KMS key re-wraps data keys (`reseal`, KMS ReEncrypt) without touching
  *   the ciphertext, and values sealed by a local key move onto KMS the same way.
  */
-export interface SealedSecret {
+interface SealedSecret {
   keyId: string;
   nonce: Buffer;
   /** Ciphertext followed by the 16-byte GCM tag. */

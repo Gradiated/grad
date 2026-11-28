@@ -85,7 +85,7 @@ const turnsOf = (value: unknown): ChatMessage[] | null => {
  * messages or `{messages}` map directly; a one-key object with a string value
  * (`{"answer": ...}`) is that string; any other object is its JSON.
  */
-export const expectedTurns = (value: unknown): ChatMessage[] => {
+const expectedTurns = (value: unknown): ChatMessage[] => {
   if (value === null || value === undefined || typeof value === "boolean") {
     return [];
   }
@@ -139,7 +139,7 @@ export const ownConversation = (record: DatasetRecord): ChatMessage[] => {
 };
 
 /** (prompt, answer): the answer is the run of assistant turns ending the conversation. */
-export const splitAnswer = (
+const splitAnswer = (
   messages: readonly ChatMessage[],
 ): [ChatMessage[], ChatMessage[]] => {
   let cut = messages.length;
@@ -264,7 +264,7 @@ const isPreferencePair = (r: DatasetRecord): boolean =>
     r.messages !== undefined ||
     (Array.isArray(r.chosen) && Array.isArray(r.rejected)));
 
-export interface RouterLabelOptions {
+interface RouterLabelOptions {
   /** Score name that measures quality (`scores[rubric]`). */
   rubric?: string | undefined;
   /** A labeling eval scores the prompts first: records only need a prompt. */

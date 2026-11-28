@@ -20,7 +20,7 @@ import { metrics, secondsSince } from "../telemetry/metrics.js";
 import type { WorkerAuthenticator, WorkerPrincipal } from "./principal.js";
 
 /** The audience worker tokens are minted for; tokens for any other audience fail review. */
-export const WORKER_TOKEN_AUDIENCE = "grad";
+const WORKER_TOKEN_AUDIENCE = "grad";
 
 /** `status` of an authentication.k8s.io/v1 TokenReview. */
 export interface TokenReviewStatus {

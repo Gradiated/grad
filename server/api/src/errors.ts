@@ -1,4 +1,4 @@
-export type ProblemStatus =
+type ProblemStatus =
   | 400
   | 401
   | 403

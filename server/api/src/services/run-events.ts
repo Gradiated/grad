@@ -50,7 +50,7 @@ export const appendPhase = (
   });
 };
 
-export interface AttemptInput {
+interface AttemptInput {
   jobId: string;
   attempt: number;
   event: "started" | "interrupted" | "gave_up";
@@ -60,7 +60,7 @@ export interface AttemptInput {
   maxAttempts: number;
 }
 
-export const attemptMessage = (input: AttemptInput): string => {
+const attemptMessage = (input: AttemptInput): string => {
   const resume =
     input.resumeStep === null || input.resumeStep === undefined
       ? "from scratch"

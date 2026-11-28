@@ -19,7 +19,7 @@ import { cloudPrincipal, isCloudRole } from "./roles.js";
 
 const WORKSPACE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-export interface CloudAuthOptions {
+interface CloudAuthOptions {
   view: AuthView;
   jwt: JwtVerifier;
   clock: Clock;
@@ -54,7 +54,7 @@ const keySuspended = () =>
   );
 
 /** A console JWT's principal: a member of `ws` with `role`; service tokens are internal only. */
-export const principalOfClaims = (claims: JwtClaims): AuthPrincipal | null => {
+const principalOfClaims = (claims: JwtClaims): AuthPrincipal | null => {
   const ws = claims.ws;
   if (
     typeof ws !== "string" ||

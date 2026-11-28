@@ -38,7 +38,7 @@ const DEFAULT_OPTIMIZER: OptimizerSpec = {
   grad_clip: 1.0,
 };
 
-export interface ResolvedRecipeParams {
+interface ResolvedRecipeParams {
   /** Recipe-specific values forwarded to the trainer as `recipe_params`. */
   params: Record<string, unknown>;
   optimizer: OptimizerSpec;

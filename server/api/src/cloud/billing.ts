@@ -19,7 +19,7 @@ import {
  * heartbeat (cached 30 s per workspace), and the usage push. Prices come
  * from the versioned price list; past its stale limit, new work is refused.
  */
-export interface CloudBillingOptions {
+interface CloudBillingOptions {
   /** `GRAD_CLOUD_BILLING_URL`: `<base>/check` and `<base>/usage-events`. */
   baseUrl: string;
   token: string;

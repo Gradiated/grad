@@ -109,7 +109,7 @@ type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
 type EventBody = z.infer<typeof ReportEventRequestSchema>;
 
 /** Live queue context of a queued run (null fields otherwise). */
-export interface RunCompute {
+interface RunCompute {
   workers_online: number | null;
   autoscaling: boolean | null;
   queue_position: number | null;
@@ -123,7 +123,7 @@ const NO_COMPUTE: RunCompute = {
   queue_message: null,
 };
 
-export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
+const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
   switch (kind) {
     case "cartridge":
       return "cartridge";
@@ -153,7 +153,7 @@ const billedCost = (run: RunRecord): number => runCost(run, 0);
  * The tokens of an open attempt the run bills: a step can carry a run a little
  * past max_cost_usd before it stops, and that overshoot isn't billed.
  */
-export const billableTokens = (run: RunRecord, tokens: number): number => {
+const billableTokens = (run: RunRecord, tokens: number): number => {
   const price = nanoUsd(run.price_per_million_tokens);
   if (run.max_cost_usd === null || price <= 0) return tokens;
   const capTokens = Number(
@@ -163,7 +163,7 @@ export const billableTokens = (run: RunRecord, tokens: number): number => {
   return Math.max(0, Math.min(tokens, capTokens - run.billed_tokens));
 };
 
-export const toPublicRun = (
+const toPublicRun = (
   run: RunRecord,
   compute: RunCompute = NO_COMPUTE,
 ): Run => ({
@@ -225,12 +225,12 @@ const stopReason = (run: RunRecord): StopReason => {
   return null;
 };
 
-export interface EventsQuery {
+interface EventsQuery {
   cursor?: string | undefined;
   limit: number;
 }
 
-export interface MetricsQuery {
+interface MetricsQuery {
   cursor?: string | undefined;
   after_step?: number | undefined;
   limit: number;

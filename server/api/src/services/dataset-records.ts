@@ -103,7 +103,7 @@ export const partLines = (stored: Uint8Array, part: DatasetPart): string[] => {
 };
 
 /** Yields every record of a dataset version, part by part. */
-export async function* iterateVersionRecords(
+async function* iterateVersionRecords(
   storage: ObjectStore,
   version: Pick<DatasetVersion, "parts">,
 ): AsyncGenerator<DatasetRecord> {

@@ -13,7 +13,7 @@ interface MigrationOptions {
 }
 
 /** How long `migrate` and a booting replica wait out an unreachable database. */
-export const DATABASE_WAIT_MS = 120_000;
+const DATABASE_WAIT_MS = 120_000;
 
 /**
  * Runs `fn` on a one-connection pool. While the database is unreachable (not

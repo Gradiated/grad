@@ -49,7 +49,7 @@ type EvalJob = NonNullable<TrainerJob["eval"]>;
 type OutputInput = z.input<typeof EvalOutputInputSchema>;
 type CallCounts = z.infer<typeof EvalCallCountsSchema>;
 
-export interface EvalWorkerOptions {
+interface EvalWorkerOptions {
   client: WorkerClient;
   inference: InferenceClients;
   regex: RegexEvaluator;
@@ -93,13 +93,13 @@ const OUTAGE_RETRY_MAX_MS = 30_000;
 const CAPACITY_RETRY_MAX_MS = 300_000;
 
 /** What a waiting call waits for; the heartbeat reports it as the worker's phase. */
-export type EvalWait =
+type EvalWait =
   | "capacity_unavailable"
   | "rate_limited"
   | "inference_unavailable";
 
 /** The eval's `waiting_reason` comes back from these heartbeat phases. */
-export const WAIT_PHASES = {
+const WAIT_PHASES = {
   capacity_unavailable: "waiting_for_capacity",
   rate_limited: "waiting_for_rate_limit",
   inference_unavailable: "waiting_for_inference",
@@ -273,7 +273,7 @@ export const unconfiguredInference = (): InferenceClients => {
 };
 
 /** The eval's tasks: the usable records of its pinned dataset version. */
-export const evalTasks = (
+const evalTasks = (
   ev: Pick<EvalJob, "limit" | "mode" | "rubric">,
   rawRecords: Parameters<typeof mergeRecords>[0],
 ): EvalTask[] =>

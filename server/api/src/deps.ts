@@ -10,7 +10,7 @@ import type { JobKind, QueueCaps, Store } from "./store/types.js";
 import type { UiBundle } from "./ui.js";
 
 /** Server settings, every one resolved (resolveSettings applies the defaults). */
-export interface AppSettings {
+interface AppSettings {
   /** Attempts that end without a result (a lost lease, a worker error) before a job fails. */
   maxAttempts: number;
   /** Preempted attempts in a row a job survives (MAX_PREEMPTIONS). */
@@ -63,7 +63,7 @@ export interface QueueLimits {
   maxQueued: number;
 }
 
-export interface MetricsSettings {
+interface MetricsSettings {
   enabled: boolean;
   token?: string | undefined;
   /** Served on METRICS_PORT by main.ts instead of the API app. */

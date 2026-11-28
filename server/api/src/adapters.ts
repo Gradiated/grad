@@ -150,7 +150,7 @@ export const createLocalNoneAuth = (workspaceId = "local"): AuthAdapter => ({
   }),
 });
 
-export interface KeyLookup {
+interface KeyLookup {
   findActiveByHash(keyHash: string): Promise<KeyLookupResult | null>;
 }
 

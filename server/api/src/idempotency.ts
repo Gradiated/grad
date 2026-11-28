@@ -15,8 +15,8 @@ import type { IdempotencyInput, IdempotentHit } from "./store/types.js";
  * natural keys) or read-only.
  */
 
-export const IDEMPOTENCY_HEADER = "Idempotency-Key";
-export const REPLAYED_HEADER = "Idempotent-Replayed";
+const IDEMPOTENCY_HEADER = "Idempotency-Key";
+const REPLAYED_HEADER = "Idempotent-Replayed";
 const KEY_RE = /^[\x21-\x7e]{1,255}$/;
 
 const IdempotencyKeySchema = z
@@ -113,7 +113,7 @@ export const createOnce = async <T>(
 };
 
 /** Every public POST takes a key; internal worker protocols use natural keys. */
-export const acceptsIdempotencyKey = (route: RouteConfig): boolean =>
+const acceptsIdempotencyKey = (route: RouteConfig): boolean =>
   route.method === "post" &&
   (route as { "x-internal"?: unknown })["x-internal"] !== true;
 

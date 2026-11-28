@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { checkServerIdentity, type ConnectionOptions } from "node:tls";
 
-export interface PostgresConnection {
+interface PostgresConnection {
   connectionString: string;
   ssl?: ConnectionOptions;
 }

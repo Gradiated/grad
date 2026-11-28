@@ -37,7 +37,7 @@ export const cloudUrl = (setting: string, raw: string): string => {
 };
 
 /** The Cloud endpoint could not be reached (network error or timeout). */
-export class CloudUnreachableError extends Error {}
+class CloudUnreachableError extends Error {}
 
 export interface CloudResponse {
   status: number;

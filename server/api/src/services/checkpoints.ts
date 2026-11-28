@@ -40,14 +40,14 @@ export interface CheckpointService {
 }
 
 /** Retention: the last N checkpoints of a run stay, plus the best and final ones. */
-export const CHECKPOINTS_KEPT = 3;
+const CHECKPOINTS_KEPT = 3;
 
 /**
  * The best checkpoint by eval score, in the direction of the run's metric
  * (`metadata.metric_mode`: eval_loss is "min", accuracy-style metrics "max").
  * Ties go to the later checkpoint, like the trainer's select="best".
  */
-export const bestCheckpoint = (
+const bestCheckpoint = (
   checkpoints: readonly CheckpointRecord[],
 ): CheckpointRecord | null =>
   checkpoints.reduce<CheckpointRecord | null>((acc, c) => {
@@ -72,9 +72,7 @@ export const toPublicCheckpoint = ({
 /** Losses are minimised; a checkpoint without metric_mode falls back on its metric name. */
 const MINIMISED_METRICS = new Set(["eval_loss", "eval_kl", "loss"]);
 
-export const metricMode = (
-  metadata: Record<string, unknown>,
-): "min" | "max" => {
+const metricMode = (metadata: Record<string, unknown>): "min" | "max" => {
   const mode = metadata["metric_mode"];
   if (mode === "min" || mode === "max") return mode;
   const name = metadata["metric_name"];

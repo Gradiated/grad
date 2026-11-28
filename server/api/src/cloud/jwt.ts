@@ -13,7 +13,7 @@ import { cloudRequest, isOk } from "./http.js";
  */
 
 /** Asymmetric algorithms only; Better Auth signs EdDSA (Ed25519) by default. */
-export const JWT_ALGORITHMS = ["EdDSA", "ES256", "RS256"] as const;
+const JWT_ALGORITHMS = ["EdDSA", "ES256", "RS256"] as const;
 type JwtAlgorithm = (typeof JWT_ALGORITHMS)[number];
 
 export interface JwtClaims {
@@ -34,7 +34,7 @@ export interface JwtVerifier {
   issuedHere(token: string): boolean;
 }
 
-export interface JwtVerifierOptions {
+interface JwtVerifierOptions {
   jwksUrl: string;
   issuer: string;
   audience: string;

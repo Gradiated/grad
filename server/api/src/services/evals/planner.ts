@@ -22,10 +22,10 @@ import {
 import type { EvalRecord, EvalTask } from "../../store/types.js";
 import type { DatasetService, ResolvedDatasetVersion } from "../datasets.js";
 
-export type ModelTargets = EvalRecord["model_targets"];
-export type JudgeTargets = EvalRecord["judge_targets"];
+type ModelTargets = EvalRecord["model_targets"];
+type JudgeTargets = EvalRecord["judge_targets"];
 
-export interface ResolvedEvalPlan {
+interface ResolvedEvalPlan {
   response: PlanEvalResponse;
   dataset: ResolvedDatasetVersion;
   targets: ModelTargets;
@@ -55,7 +55,7 @@ export const resolvePassThreshold = (
 };
 
 /** Resolves catalog ids and workspace artifact refs to inference model names and prices. */
-export const resolveModelTargets = async (
+const resolveModelTargets = async (
   deps: Pick<AppDependencies, "catalog" | "store">,
   workspaceId: string,
   models: readonly string[],
@@ -107,7 +107,7 @@ export const resolveModelTargets = async (
  * is 422 unknown_judge_model, so no judge runs unbilled and no workspace can
  * judge with another's artifact.
  */
-export const resolveJudgeTargets = async (
+const resolveJudgeTargets = async (
   deps: Pick<AppDependencies, "catalog" | "store">,
   workspaceId: string,
   judges: readonly string[],
@@ -229,19 +229,19 @@ export const buildTasks = (
   return built;
 };
 
-export const INFERENCE_UNAVAILABLE_DETAIL =
+const INFERENCE_UNAVAILABLE_DETAIL =
   "Evals need model outputs: set GRAD_INFERENCE_BASE_URL on the server (an OpenAI-compatible vLLM/SGLang endpoint serving your base models and LoRA artifacts by name, or the Gradiated gateway; for `grad local up`, export it before starting the stack) and optionally GRAD_JUDGE_BASE_URL.";
 
 /** Gradiated Cloud before its gateway's eval lane is connected: nothing for the caller to set. */
-export const CLOUD_EVALS_UNAVAILABLE_DETAIL =
+const CLOUD_EVALS_UNAVAILABLE_DETAIL =
   "Evals aren't available on Gradiated Cloud yet: they are coming soon. Training, datasets and artifact downloads work now.";
 
-export const DEFAULT_RUBRIC: EvalRubricItem[] = [
+const DEFAULT_RUBRIC: EvalRubricItem[] = [
   { name: "non_empty", kind: "validator", weight: 1, validator: "non_empty" },
 ];
 
 /** A dataset's own rubric (`metadata.rubric`, set by benchmark imports), else non_empty. */
-export const datasetRubric = (dataset: {
+const datasetRubric = (dataset: {
   metadata: Record<string, unknown>;
 }): EvalRubricItem[] => {
   const parsed = z
@@ -252,7 +252,7 @@ export const datasetRubric = (dataset: {
   return parsed.success ? parsed.data : DEFAULT_RUBRIC;
 };
 
-export const JUDGE_UNAVAILABLE_DETAIL =
+const JUDGE_UNAVAILABLE_DETAIL =
   "Judges need a model endpoint: set GRAD_INFERENCE_BASE_URL on the server and the eval workers (and GRAD_JUDGE_BASE_URL on the eval workers when judges are served elsewhere). Regex, validator and code scorers need no endpoint.";
 
 /**

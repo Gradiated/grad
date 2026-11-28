@@ -39,7 +39,7 @@ export const LABELS = [
   "workspace",
 ] as const;
 
-export type LabelName = (typeof LABELS)[number];
+type LabelName = (typeof LABELS)[number];
 
 /** Metric `kind` label: the job kind, with source syncs split from imports. */
 export type MetricJobKind = "train" | "import" | "sync" | "eval";
@@ -534,7 +534,7 @@ export const modelFamily = (model: string): string =>
 export const secondsSince = (start: number): number =>
   (performance.now() - start) / 1000;
 
-export interface MetricDescription {
+interface MetricDescription {
   name: string;
   type: string;
   help: string;

@@ -46,7 +46,7 @@ export const pricesUnavailable = (): ApiError =>
 /** A failed fetch with no list at all retries at this pace, not the slower backoff. */
 const UNPRICED_RETRY_MS = 30_000;
 
-export interface PriceList {
+interface PriceList {
   version: string;
   /** SKU → nano-USD per million units (tokens). */
   skus: ReadonlyMap<string, number>;
@@ -61,7 +61,7 @@ export interface CloudPrices {
   refresh(force?: boolean): Promise<boolean>;
 }
 
-export interface CloudPricesOptions {
+interface CloudPricesOptions {
   url: string;
   token: string;
   clock: Clock;

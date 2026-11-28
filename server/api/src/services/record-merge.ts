@@ -18,7 +18,7 @@ import type { DatasetRecord } from "../contracts.js";
  *   `min_score`, which can't be judged until feedback arrives) is kept only
  *   once its merged scores pass, and loses the key.
  */
-export const SCORE_UPDATE = "score_update";
+const SCORE_UPDATE = "score_update";
 export const SCORE_FILTER = "score_filter";
 
 const meta = (record: DatasetRecord): Record<string, unknown> | undefined =>

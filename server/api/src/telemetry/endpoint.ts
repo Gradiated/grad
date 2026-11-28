@@ -6,7 +6,7 @@ import { parseBearer } from "../errors.js";
 import { registry } from "./metrics.js";
 import type { TelemetrySampler } from "./sampler.js";
 
-export interface MetricsEndpointOptions {
+interface MetricsEndpointOptions {
   /** When set, scrapes must send `Authorization: Bearer <token>`. */
   token?: string | undefined;
   sampler: TelemetrySampler;

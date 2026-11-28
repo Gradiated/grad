@@ -33,7 +33,7 @@ import {
  * filter are dropped at the end and the rest renumbered, so `total` and pages
  * count only admitted records.
  */
-export interface VersionIndex {
+interface VersionIndex {
   /** Merged records in the version. */
   total: number;
   /** Line → slot, or -1. Lines are numbered across parts in order. */
@@ -154,7 +154,7 @@ export const buildVersionIndex = async (
 };
 
 /** A part's JSONL lines (`createPartLinesCache`, or a fresh read). */
-export type PartLines = (part: DatasetPart) => Promise<string[]>;
+type PartLines = (part: DatasetPart) => Promise<string[]>;
 
 /**
  * A byte-bounded LRU of parts' JSONL lines. A page parses only its own
