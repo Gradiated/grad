@@ -10,6 +10,7 @@ export {
   BadRequestError,
   ConflictError,
   GradError,
+  FeatureUnavailableError,
   InferenceUnavailableError,
   NotFoundError,
   PermissionDeniedError,

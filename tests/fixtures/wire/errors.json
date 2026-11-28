@@ -369,6 +369,29 @@
       }
     },
     {
+      "name": "501 another capability (secrets_unavailable)",
+      "status": 501,
+      "headers": {
+        "content-type": "application/problem+json",
+        "x-request-id": "req_501s"
+      },
+      "body": {
+        "type": "about:blank",
+        "title": "Not implemented",
+        "status": 501,
+        "detail": "Workspace secrets need GRAD_SECRETS_KEY on the server.",
+        "code": "secrets_unavailable",
+        "request_id": "req_501s"
+      },
+      "expect": {
+        "class": "FeatureUnavailableError",
+        "status": 501,
+        "code": "secrets_unavailable",
+        "request_id": "req_501s",
+        "retryable": false
+      }
+    },
+    {
       "name": "410 maps to the base API error",
       "status": 410,
       "headers": {

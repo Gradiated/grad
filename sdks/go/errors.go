@@ -41,6 +41,8 @@ type (
 	QueueLimitError = generated.QueueLimitError
 	// ServerError is a 5xx response.
 	ServerError = generated.ServerError
+	// FeatureUnavailableError is 501: the server doesn't offer this capability as configured.
+	FeatureUnavailableError = generated.FeatureUnavailableError
 	// InferenceUnavailableError is 501 inference_unavailable: no inference endpoint is configured.
 	InferenceUnavailableError = generated.InferenceUnavailableError
 	// ConnectionError means no response was received.

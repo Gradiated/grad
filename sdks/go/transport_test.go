@@ -50,6 +50,7 @@ func matchClass(err error, class string) bool {
 		"QueueLimitError":           new(*grad.QueueLimitError),
 		"ServerError":               new(*grad.ServerError),
 		"InferenceUnavailableError": new(*grad.InferenceUnavailableError),
+		"FeatureUnavailableError":   new(*grad.FeatureUnavailableError),
 	}
 	target, ok := targets[class]
 	if !ok || !errors.As(err, target) {

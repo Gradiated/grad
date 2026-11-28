@@ -109,8 +109,13 @@ type QueueLimitError struct{ *RateLimitError }
 // ServerError is a 5xx response.
 type ServerError struct{ *APIError }
 
-// InferenceUnavailableError is a 501 inference_unavailable response: no inference endpoint is configured.
-type InferenceUnavailableError struct{ *APIError }
+// FeatureUnavailableError is a 501 response: the server doesn't offer this capability as
+// configured. It is never retried.
+type FeatureUnavailableError struct{ *APIError }
+
+// InferenceUnavailableError is a 501 inference_unavailable response: no inference endpoint is
+// configured. It unwraps to *FeatureUnavailableError, so errors.As matches either.
+type InferenceUnavailableError struct{ *FeatureUnavailableError }
 
 func (e *BadRequestError) Unwrap() error           { return e.APIError }
 func (e *AuthenticationError) Unwrap() error       { return e.APIError }
@@ -121,7 +126,8 @@ func (e *ValidationError) Unwrap() error           { return e.APIError }
 func (e *RateLimitError) Unwrap() error            { return e.APIError }
 func (e *QueueLimitError) Unwrap() error           { return e.RateLimitError }
 func (e *ServerError) Unwrap() error               { return e.APIError }
-func (e *InferenceUnavailableError) Unwrap() error { return e.APIError }
+func (e *FeatureUnavailableError) Unwrap() error   { return e.APIError }
+func (e *InferenceUnavailableError) Unwrap() error { return e.FeatureUnavailableError }
 
 // ConnectionError means no HTTP response was received (DNS, refused, reset, TLS).
 type ConnectionError struct{ *GradError }
@@ -273,7 +279,7 @@ func NewAPIError(status int, header http.Header, body []byte, method, rawURL str
 	}
 	switch {
 	case code == "inference_unavailable":
-		return &InferenceUnavailableError{base}
+		return &InferenceUnavailableError{&FeatureUnavailableError{base}}
 	case status == http.StatusTooManyRequests && code == "queue_limit":
 		return &QueueLimitError{&RateLimitError{base}}
 	case status == http.StatusBadRequest:
@@ -290,6 +296,8 @@ func NewAPIError(status int, header http.Header, body []byte, method, rawURL str
 		return &ValidationError{base}
 	case status == http.StatusTooManyRequests:
 		return &RateLimitError{base}
+	case status == http.StatusNotImplemented:
+		return &FeatureUnavailableError{base}
 	case status >= 500:
 		return &ServerError{base}
 	}

@@ -105,8 +105,10 @@ export class RateLimitError extends APIError {}
  */
 export class QueueLimitError extends RateLimitError {}
 export class ServerError extends APIError {}
+/** 501: the server doesn't offer this capability as configured (never retried). */
+export class FeatureUnavailableError extends APIError {}
 /** 501 `inference_unavailable`: no inference endpoint is configured, so evals cannot generate outputs. */
-export class InferenceUnavailableError extends APIError {}
+export class InferenceUnavailableError extends FeatureUnavailableError {}
 
 /** The request never produced an HTTP response (DNS, refused, reset, TLS). */
 export class APIConnectionError extends GradError {}
@@ -169,6 +171,7 @@ const errorClassFor = (status: number, code: string): typeof APIError => {
   if (status === 409) return ConflictError;
   if (status === 422) return ValidationError;
   if (status === 429) return RateLimitError;
+  if (status === 501) return FeatureUnavailableError;
   if (status >= 500) return ServerError;
   return APIError;
 };
