@@ -542,7 +542,7 @@ async fn pull_images(
         })
         .stderr(Stdio::piped());
     ctx.out.note(format!(
-        "Pulling docker.io/gradiated images tagged {} (about 600 MB the first time)",
+        "Pulling docker.io/gradiated images tagged {} (about 3 GB the first time, most of it the trainer's torch)",
         tag
     ));
     let mut child = cmd.spawn().map_err(|e| {

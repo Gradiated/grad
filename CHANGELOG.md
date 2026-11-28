@@ -11,6 +11,21 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   (a case-insensitive name substring, or an exact id); `GET /v1/evals` takes `status`;
   `GET /v1/imports` takes `status` and `dataset`; `GET /v1/datasets` and `GET /v1/artifacts` take
   `q`. Filters keep the same newest-first cursor. Every SDK's generated client has them.
+- **SDKs: uploads of any size.** The TypeScript SDK sent presigned uploads under the 60 s
+  per-attempt timeout, so an upload slower than that (a few GB of weights) failed; uploads now have
+  no per-attempt deadline (an `AbortSignal` still cancels them). The Go SDK now retries an upload
+  (dropped connection, 5xx), rewinding the file each time.
+- **SDKs: one retry rule everywhere**, pinned by `tests/fixtures/wire/retries.json`, which every
+  SDK replays: a `Retry-After` above 60 s raises the typed error at once in every SDK (Python and
+  Rust used to sleep 60 s and retry). Python's `retry_after` is on every API error, not only 429.
+  The Rust SDK closes idle connections after 4 s, below grad-server's keep-alive, as Python does.
+- Go: `Evals.Results` and `Evals.Outputs` (and on `*Eval`), as the other SDKs have.
+- TypeScript: a CRLF split across two SSE chunks no longer splits an event.
+- SDK READMEs: one quickstart per SDK (push two records, plan, train `test/tiny-qwen3`,
+  download) that runs on `grad local up --dev-models` in about 10 s; each SDK's test suite runs it
+  verbatim (Python, TypeScript and Go live suites; the Rust README is the crate docs, so `cargo
+  test` compiles it). The Rust SDK has a README.
+- `grad local up` says the first pull is about 3 GB, not 600 MB.
 - **SDKs: one live stream per run.** `metrics(follow=True)` (Python, TypeScript, Go) and
   `grad runs logs --follow` now read the metric events of the run's event stream
   (`GET /v1/runs/{id}/events`), the stream `wait()` already follows, instead of a second SSE
