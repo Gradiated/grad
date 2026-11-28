@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { EvalReport, Run } from "@sdk/generated/models.js";
+import type { EvalReport, MetricPoint, Run } from "@sdk/generated/models.js";
 
 import { CODEC, convertKeys, isTerminalRun } from "../src/lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey } from "../src/lib/auth.js";
-import { smooth } from "../src/components/chart.js";
+import { nearestAt, smooth } from "../src/components/chart.js";
+import { compareHref, configRows, flatten, labelsOf, lastOf, MAX_COMPARE, metricByKey, metricsOf, overlay, parseIds, runStyle } from "../src/lib/compare.js";
 import { applyEvents, decodeEvent, emptyStream, foldCheckpoints, type RunEvent, type TimelineItem } from "../src/lib/events.js";
 import { ago, bytes, compact, dateTime, duration, int, num, pct, plural, toYaml, usd } from "../src/lib/format.js";
 import { guardLocale } from "../src/lib/locale.js";
@@ -13,6 +14,7 @@ import { match } from "../src/lib/router.js";
 import { savedTheme } from "../src/lib/theme.js";
 import { passLabel } from "../src/pages/evals.js";
 import { importPool, poolState, trainPool } from "../src/pages/health.js";
+import { countOf } from "../src/pages/runs.js";
 import { defaultPeriod, presets } from "../src/pages/usage.js";
 import { fixture, fixtureText } from "./helpers.js";
 
@@ -377,5 +379,82 @@ describe("locale guard", () => {
     const { readFileSync } = await import("node:fs");
     const main = readFileSync(`${import.meta.dirname}/../src/main.tsx`, "utf8");
     expect(main.split("\n").find((l) => l.startsWith("import "))).toBe('import "./lib/locale.js";');
+  });
+});
+
+describe("run comparison", () => {
+  const point = (step: number, over: Partial<MetricPoint> = {}): MetricPoint => ({ seq: step, attempt: 1, step, loss: 1 / step, tokens: step, costUsd: step / 100, timestamp: "t", ...over }) as MetricPoint;
+
+  it("reads ?ids= as distinct ids, at most ten, and writes it back", () => {
+    expect(parseIds(" run_a,run_b,,run_a ")).toEqual(["run_a", "run_b"]);
+    expect(parseIds(null)).toEqual([]);
+    expect(parseIds(Array.from({ length: 14 }, (_, i) => `r${i}`).join(","))).toHaveLength(MAX_COMPARE);
+    expect(compareHref(["run_a", "a/b"])).toBe("/runs/compare?ids=run_a,a%2Fb");
+    // Five palette colours, then the same five dashed.
+    expect([runStyle(0), runStyle(5)]).toEqual([
+      { color: "--chart-1", dashed: false },
+      { color: "--chart-1", dashed: true },
+    ]);
+  });
+
+  it("offers the metrics some run logged, each eval metric after eval loss", () => {
+    const a = [point(1, { lr: 0.1 }), point(2, { evalMetrics: { eval_loss: 0.5, accuracy: 0.7 } })];
+    const b = [point(1, { evalMetrics: { bleu: 0.2 } })];
+    expect(metricsOf([a, b]).map((m) => m.key)).toEqual(["loss", "eval_loss", "eval.accuracy", "eval.bleu", "lr", "cost_usd"]);
+    expect(metricByKey("eval.accuracy").of(a[1] as MetricPoint)).toBe(0.7);
+    expect(metricByKey("nope").key).toBe("loss");
+    expect(lastOf(a, metricByKey("eval_loss"))).toBe(0.5);
+    expect(lastOf(b, metricByKey("lr"))).toBeNull();
+  });
+
+  it("overlays runs logged at different steps on their union, smoothing each over its own points", () => {
+    const loss = metricByKey("loss");
+    const out = overlay(
+      [
+        { label: "a", points: [point(1), point(3)] },
+        { label: "b", points: [point(2), point(3), point(4)] },
+      ],
+      loss,
+      0,
+    );
+    expect(out.x).toEqual([1, 2, 3, 4]);
+    expect(out.series.map((s) => s.values)).toEqual([
+      [1, null, 1 / 3, null],
+      [null, 1 / 2, 1 / 3, 1 / 4],
+    ]);
+    const smoothed = overlay([{ label: "a", points: [point(1, { loss: 1 }), point(2, { loss: 3 })] }], loss, 0.5);
+    expect(smoothed.series[0]?.values).toEqual(smooth([1, 3], 0.5));
+    // A sparse eval curve draws its points.
+    expect(overlay([{ label: "a", points: [point(10, { evalLoss: 0.4 })] }], metricByKey("eval_loss"), 0).series[0]?.sparse).toBe(true);
+  });
+
+  it("reads a hovered step's nearest value only inside the series' range", () => {
+    expect(nearestAt([1, null, null, 4, null], 1)).toBe(1);
+    expect(nearestAt([1, null, null, 4, null], 2)).toBe(4);
+    expect(nearestAt([1, null, null, 4, null], 4)).toBeNull();
+  });
+
+  it("names runs that share a name by id, and lists their settings with what differs", () => {
+    const a = run({ id: "run_a", name: "sft" });
+    const b = run({ id: "run_b", name: "sft", resolved_config: { ...(fixture<Record<string, unknown>>("run.json").resolved_config as object), lr: 0.5 } });
+    expect(labelsOf([a, b])).toEqual(["sft (run_a)", "sft (run_b)"]);
+    const rows = configRows([a, b]);
+    expect(rows.filter((r) => r.differs).map((r) => r.key)).toEqual(["lr"]);
+    expect(rows.find((r) => r.key === "name")).toBeUndefined();
+    // Wire names, nested keys dotted.
+    expect(rows.some((r) => r.key === "adapter.kind")).toBe(true);
+    expect(flatten({ a: { b: 1 }, c: [1, 2], d: null })).toEqual([
+      ["a.b", "1"],
+      ["c", "[1,2]"],
+      ["d", "—"],
+    ]);
+  });
+
+  it("sums a status tab's counts", () => {
+    const counts = { total: 9, byStatus: { queued: 1, running: 2, completed: 3, failed: 1, cancelled: 1, stoppedBudget: 1, stoppedBalance: 0 } };
+    expect(countOf(counts, "all")).toBe(9);
+    expect(countOf(counts, "active")).toBe(3);
+    expect(countOf(counts, "stopped")).toBe(2);
+    expect(countOf(undefined, "failed")).toBeUndefined();
   });
 });

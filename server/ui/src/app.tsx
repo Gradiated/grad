@@ -7,6 +7,7 @@ import { maskKey, sessionKeyStore, takeFragmentKey, type KeyStore } from "./lib/
 import { Link, match, RouterProvider, useLocation } from "./lib/router.js";
 import { setTheme, useTheme } from "./lib/theme.js";
 import { ArtifactDetailPage, ArtifactsPage } from "./pages/artifacts.js";
+import { ComparePage } from "./pages/compare.js";
 import { DatasetDetailPage, DatasetsPage } from "./pages/datasets.js";
 import { EvalDetailPage, EvalsPage } from "./pages/evals.js";
 import { HealthPage } from "./pages/health.js";
@@ -174,6 +175,7 @@ const ThemeToggle = () => {
 export const route = (path: string): { node: ReactNode; title: string } => {
   let m: Record<string, string> | null;
   if (path === "/" || path === "/runs") return { node: <RunsPage />, title: "Runs" };
+  if (path === "/runs/compare") return { node: <ComparePage />, title: "Compare runs" };
   if ((m = match("/runs/:id", path))) return { node: <RunDetailPage key={m.id} id={m.id as string} />, title: m.id as string };
   if (path === "/datasets") return { node: <DatasetsPage />, title: "Datasets" };
   if ((m = match("/datasets/:name", path))) return { node: <DatasetDetailPage key={m.name} name={m.name as string} />, title: m.name as string };

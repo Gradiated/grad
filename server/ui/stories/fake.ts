@@ -400,10 +400,25 @@ const listed = (items: Wire[]) => (url: URL) => {
   return json({ data: data.slice(0, limit), next_cursor: null });
 };
 
+/** A run's metric points from its event stream, as `GET /v1/runs/{id}/metrics?max_points=` answers (replayed steps dropped). */
+const curveOf = (stream: string): Wire[] => {
+  const points: Wire[] = [];
+  for (const block of stream.split("\n\n")) {
+    if (!block.startsWith("event: metric")) continue;
+    const ev = JSON.parse(block.split("\n")[1]?.slice(6) ?? "{}") as { seq: number; attempt: number; step: number; metric: Wire };
+    while (points.length > 0 && Number(points[points.length - 1]?.step) >= ev.step) points.pop();
+    points.push({ ...ev.metric, seq: ev.seq, attempt: ev.attempt });
+  }
+  return points;
+};
+
 export const workspace = (over: Routes = {}): Routes => {
   const allRuns = Object.values(RUNS);
+  const byStatus = Object.fromEntries(["queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance"].map((st) => [st, allRuns.filter((r) => r.status === st).length]));
   return {
     "GET /v1/runs": listed(allRuns as Wire[]),
+    "GET /v1/runs/counts": { total: allRuns.length, by_status: byStatus },
+    ...Object.fromEntries(allRuns.map((r) => [`GET /v1/runs/${r.id}/metrics`, { run_id: r.id, status: r.status, data: curveOf(RUN_STREAMS[r.id as string] ?? ""), next_cursor: null, tail_cursor: "c" }])),
     ...Object.fromEntries(allRuns.map((r) => [`GET /v1/runs/${r.id}`, r])),
     ...Object.fromEntries(
       allRuns.map((r) => [

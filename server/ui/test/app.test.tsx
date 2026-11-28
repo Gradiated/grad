@@ -63,6 +63,15 @@ const EVAL = {
   completed_at: "2026-11-27T13:01:00Z",
 };
 
+/** A thinned curve (GET /v1/runs/{id}/metrics?max_points=): train loss each step, an eval every other. */
+const curve = (runId: string, scale: number) => ({
+  run_id: runId,
+  status: "completed",
+  data: [1, 2, 3, 4].map((step) => ({ seq: step, attempt: 1, step, loss: scale / step, tokens: step * 10, cost_usd: 0, timestamp: "t", ...(step % 2 === 0 ? { eval_loss: scale / step + 0.1, eval_metrics: { accuracy: 0.5 + step / 10 } } : {}) })),
+  next_cursor: null,
+  tail_cursor: "c4",
+});
+
 /** A list answered like grad-server: `status` (comma-separated), `q` (name substring or id) and `dataset` filter it. */
 const listed =
   (items: Record<string, unknown>[]) =>
@@ -78,9 +87,10 @@ const listed =
 
 const routes = (extra: Record<string, unknown> = {}) => ({
   "GET /v1/runs": listed([QUEUED, RUN, FAILED]),
+  "GET /v1/runs/counts": { total: 1302, by_status: { queued: 1, running: 0, completed: 1000, failed: 300, cancelled: 1, stopped_budget: 0, stopped_balance: 0 } },
   [`GET /v1/runs/${RUN_ID}`]: RUN,
   "GET /v1/runs/run_q1": QUEUED,
-  [`GET /v1/runs/${RUN_ID}/metrics`]: () => sse(fixtureText("metrics.sse")),
+  [`GET /v1/runs/${RUN_ID}/metrics`]: ({ url }: { url: URL }) => (url.searchParams.has("max_points") ? json(curve(RUN_ID, 1)) : sse(fixtureText("metrics.sse"))),
   [`GET /v1/runs/${RUN_ID}/checkpoints`]: fixture("checkpoints.json"),
   "GET /v1/artifacts/:id": fixture("artifact.json"),
   "GET /v1/datasets": { data: [DATASET], next_cursor: null },
@@ -217,6 +227,72 @@ describe("runs", () => {
     expect(server.calls.some((c) => c.path === "/v1/runs?limit=50&q=router")).toBe(true);
     await type(container.querySelector("input[type=search]"), "zzz");
     await waitFor(() => expect(container.textContent).toContain("No runs match"));
+  });
+
+  it("ticks runs to compare from the list, with the server's count on each tab", async () => {
+    const { container, server } = await boot();
+    await waitFor(() => expect(byText(container, ".segmented button", "Failed")?.textContent).toBe("Failed300"));
+    expect(byText(container, ".segmented button", "All")?.textContent).toBe("All1,302");
+    expect(byText(container, ".segmented button", "Stopped")?.textContent).toBe("Stopped1");
+    await type(container.querySelector("input[type=search]"), "support");
+    await waitFor(() => expect(server.calls.some((c) => c.path === "/v1/runs/counts?q=support")).toBe(true));
+    await type(container.querySelector("input[type=search]"), "");
+    await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(3));
+
+    const compare = () => byText(container, ".toolbar .btn", "Compare");
+    expect(compare()?.hasAttribute("disabled")).toBe(true);
+    // Ticking a box doesn't open the row.
+    await click(container.querySelector('input[aria-label="Compare support-sft"]'));
+    expect(location.pathname).toBe("/");
+    expect(compare()?.textContent).toBe("Compare 1");
+    await click(container.querySelector('input[aria-label="Compare broken-dpo"]'));
+    expect(container.querySelectorAll("tr.picked").length).toBe(2);
+    await click(compare());
+    await waitFor(() => expect(location.pathname).toBe("/runs/compare"));
+    expect(new URLSearchParams(location.search).get("ids")).toBe(`${RUN_ID},run_f1`);
+  });
+
+  it("compares runs: one metric overlaid, the results, the settings that differ, and runs that failed to load", async () => {
+    const config = RUN.resolved_config as Record<string, unknown>;
+    const server = fakeServer(
+      routes({
+        "GET /v1/runs/run_f1": { ...FAILED, resolved_config: { ...config, lr: 0.5 } },
+        "GET /v1/runs/run_f1/metrics": curve("run_f1", 2),
+      }),
+    );
+    const { container } = await boot(server, `/runs/compare?ids=${RUN_ID},run_f1,run_gone`);
+    await waitFor(() => expect(container.querySelector("h1")?.textContent).toBe("Compare 3 runs"));
+    await waitFor(() => expect(charts.created.at(-1)?.series).toEqual(["step", "support-sft", "broken-dpo"]));
+    expect(server.calls.some((c) => c.path === `/v1/runs/${RUN_ID}/metrics?max_points=1000`)).toBe(true);
+    expect(charts.created.at(-1)?.data[0]).toEqual([1, 2, 3, 4]);
+    expect(container.textContent).toContain("Couldn't load run_gone");
+    const results = byText(container, ".card", "Results");
+    expect(byText(results as HTMLElement, "tr", "Final train loss")?.textContent).toContain("0.25");
+    expect(byText(results as HTMLElement, "tr", "Final eval accuracy")?.textContent).toContain("0.9");
+    const settings = byText(container, ".card", "Settings") as HTMLElement;
+    expect(settings.textContent).toContain("1 of");
+    expect([...settings.querySelectorAll("tbody th")].map((th) => th.textContent)).toEqual(["lr"]);
+    expect(settings.querySelector("td.changed")?.textContent).toBe("0.5");
+    await click(settings.querySelector("input[type=checkbox]"));
+    await waitFor(() => expect(settings.querySelectorAll("tbody th").length).toBeGreaterThan(5));
+    expect(location.search).toContain("config=all");
+
+    const select = container.querySelector<HTMLSelectElement>("#compare-metric");
+    expect([...(select?.options ?? [])].map((o) => o.value)).toEqual(["loss", "eval_loss", "eval.accuracy", "cost_usd"]);
+    await act(async () => {
+      if (!select) return;
+      select.value = "eval.accuracy";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await waitFor(() => expect(container.querySelector(".chart-card h2")?.textContent).toBe("Eval accuracy"));
+    expect(new URLSearchParams(location.search).get("metric")).toBe("eval.accuracy");
+    // The axis is the steps that have the metric: evals at steps 2 and 4.
+    expect(charts.created.at(-1)?.data[0]).toEqual([2, 4]);
+
+    await click(container.querySelector('button[aria-label="Remove broken-dpo from the comparison"]'));
+    await waitFor(() => expect(new URLSearchParams(location.search).get("ids")).toBe(`${RUN_ID},run_gone`));
+    await click(byText(container, ".banner button", "Remove"));
+    await waitFor(() => expect(container.textContent).toContain("Pick two or more runs"));
   });
 
   it("opens a row in this tab, or a new one with Cmd/Ctrl or the middle button; its title is a real link", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import uPlot, { type AlignedData, type Options } from "uplot";
 import "uplot/dist/uPlot.min.css";
 
@@ -27,6 +27,8 @@ export interface LineChartProps {
   xLabel?: string;
   height?: number;
   empty?: string;
+  /** The readout shows each series' nearest point when it has none at the hovered step (runs logged at different steps). */
+  nearest?: boolean;
 }
 
 /** Exponential moving average (TensorBoard-style smoothing); nulls pass through. */
@@ -46,6 +48,16 @@ const cssVar = (name: string): string => getComputedStyle(document.documentEleme
 
 const withAlpha = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`;
 
+/** The value of the closer of a series' neighbours around `idx`; none outside the series' own range. */
+export const nearestAt = (col: ArrayLike<number | null | undefined>, idx: number): number | null => {
+  let l = idx - 1;
+  while (l >= 0 && (col[l] === null || col[l] === undefined)) l--;
+  let r = idx + 1;
+  while (r < col.length && (col[r] === null || col[r] === undefined)) r++;
+  if (l < 0 || r >= col.length) return null;
+  return (idx - l <= r - idx ? col[l] : col[r]) ?? null;
+};
+
 const readout = (el: HTMLElement | null, u: uPlot, props: LineChartProps) => {
   if (!el) return;
   const idx = u.cursor.idx;
@@ -63,7 +75,9 @@ const readout = (el: HTMLElement | null, u: uPlot, props: LineChartProps) => {
   };
   add(props.xLabel ?? "step", (u.data[0][idx] ?? 0).toLocaleString("en-US"));
   props.series.forEach((s, i) => {
-    const v = u.data[i + 1]?.[idx];
+    const col = u.data[i + 1];
+    let v = col?.[idx];
+    if (props.nearest && col && (v === null || v === undefined)) v = nearestAt(col, idx);
     if (!s.faint && v !== null && v !== undefined) add(s.label, props.format(v));
   });
   el.replaceChildren(...parts);
@@ -157,3 +171,36 @@ export const LineChart = (props: LineChartProps) => {
     </div>
   );
 };
+
+export interface LegendKey {
+  label: string;
+  color: ChartColor;
+  dashed?: boolean;
+}
+
+/** A chart in a card: its title, the current value and a legend. */
+export const ChartCard = ({ title, value, legend, children }: { title: string; value?: string; legend?: LegendKey[] | undefined; children: ReactNode }) => (
+  <section className="card chart-card">
+    <header className="card-header">
+      <h2 className="card-title">
+        {title}
+        {value !== undefined && (
+          <span className="chart-value">
+            <b>{value}</b>
+          </span>
+        )}
+      </h2>
+      {legend && (
+        <div className="chart-legend">
+          {legend.map((l) => (
+            <span key={l.label} className="key">
+              <span className={`swatch${l.dashed ? " dashed" : ""}`} style={{ borderColor: `var(${l.color})` }} />
+              {l.label}
+            </span>
+          ))}
+        </div>
+      )}
+    </header>
+    {children}
+  </section>
+);

@@ -36,6 +36,7 @@ export const RunsError: Story = {
 
 // ------------------------------------------------------------ run detail
 
+export const RunsCompare: Story = { name: "Runs / compare", args: { path: `/runs/compare?ids=${[RUNS.finished, RUNS.interrupted, RUNS.capped].map(idOf).join(",")}` } };
 export const RunFinished: Story = { name: "Run / finished", args: { path: `/runs/${idOf(RUNS.finished)}` } };
 export const RunTraining: Story = { name: "Run / training", args: { path: `/runs/${idOf(RUNS.training)}` } };
 export const RunWaitingForGpu: Story = { name: "Run / waiting for a GPU", args: { path: `/runs/${idOf(RUNS.waiting)}` } };

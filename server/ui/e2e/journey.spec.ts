@@ -95,7 +95,8 @@ test("follows a run live to completion and opens its artifact", async ({ page })
   const run = await api<{ id: string }>("POST", "/v1/runs", { dataset: DATASET, name: RUN, recipe: { kind: "sft", model: MODEL, batch_size: 4 }, max_cost_usd: 5 }, key);
   runId = run.id;
 
-  await open(page, "/runs?status=active");
+  // Not the Active tab: the reference worker can finish the run before the page loads.
+  await open(page, `/runs?q=${RUN}`);
   await page.getByRole("row", { name: new RegExp(RUN) }).click();
   await expect(page).toHaveURL(new RegExp(`/runs/${runId}$`));
   await expect(page.getByRole("heading", { name: new RegExp(RUN), level: 1 })).toBeVisible();
@@ -169,6 +170,41 @@ test("keeps filters in the URL across a reload and a deep link", async ({ page }
   await expect(page.getByText("No runs match")).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("row", { name: new RegExp(RUN) })).toBeVisible();
+});
+
+test("compares two runs: tab counts, overlaid curves, results and the settings that differ", async ({ page }) => {
+  const other = await api<{ id: string }>("POST", "/v1/runs", { dataset: DATASET, name: `${RUN}-lr`, recipe: { kind: "sft", model: MODEL, batch_size: 4, lr: 1e-4 }, max_cost_usd: 5 }, key);
+  await expect.poll(async () => (await api<{ status: string }>("GET", `/v1/runs/${other.id}`, undefined, key)).status, { timeout: 90_000 }).toBe("completed");
+
+  // Tab counts come from GET /v1/runs/counts and follow the filter like the list.
+  await open(page, `/runs?q=${RUN}`);
+  await expect(page.getByRole("button", { name: "All" })).toHaveText("All2");
+  await expect(page.getByRole("button", { name: "Completed" })).toHaveText("Completed2");
+  await expect(page.getByRole("button", { name: "Failed" })).toHaveText("Failed0");
+
+  await page.getByLabel(`Compare ${RUN}`, { exact: true }).check();
+  await expect(page.getByRole("button", { name: "Compare 1" })).toBeDisabled();
+  await page.getByLabel(`Compare ${RUN}-lr`).check();
+  await page.getByRole("link", { name: "Compare 2" }).click();
+  await expect(page).toHaveURL(new RegExp(`/runs/compare\\?ids=${runId},${other.id}$`));
+  await expect(page.getByRole("heading", { name: "Compare 2 runs", level: 1 })).toBeVisible();
+  await expect(page.locator(".chart canvas")).toBeVisible();
+  await expect(card(page, "Results")).toContainText("Final train loss");
+  const settings = card(page, "Settings");
+  await expect(settings.getByRole("rowheader", { name: "lr", exact: true })).toBeVisible();
+  await expect(settings.getByRole("rowheader", { name: "batch_size" })).toHaveCount(0);
+  await settings.getByLabel("Show identical").check();
+  await expect(settings.getByRole("rowheader", { name: "batch_size" })).toBeVisible();
+  await page.getByLabel("Metric").selectOption("lr");
+  await expect(page.getByRole("heading", { name: "Learning rate" })).toBeVisible();
+  expect(await axeViolations(page)).toEqual([]);
+
+  // The URL is the selection: a reload keeps it; removing a run leaves too few to compare.
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Learning rate" })).toBeVisible();
+  await page.getByRole("button", { name: `Remove ${RUN}-lr from the comparison` }).click();
+  await expect(page).toHaveURL(new RegExp(`ids=${runId}$`));
+  await expect(page.getByText("Pick two or more runs")).toBeVisible();
 });
 
 test("a read-only key sees the server's refusal, not a broken page", async ({ page }) => {

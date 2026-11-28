@@ -225,6 +225,8 @@ textarea {
   max-width: 1280px;
   margin: 0 auto;
   display: grid;
+  /* Children narrower than their content (a toolbar's tabs) shrink and scroll instead of widening the page. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
 
@@ -582,6 +584,31 @@ table.table {
 .table tbody tr.clickable:hover td,
 .table tbody tr.clickable:focus-within td {
   background: var(--hover);
+}
+
+/* A run ticked for comparison; the whole cell toggles it. */
+.table .cell-check {
+  width: 1%;
+  padding-right: 0;
+}
+
+.table .cell-check label {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 36px;
+  cursor: pointer;
+}
+
+.table .cell-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.table tbody tr.picked td {
+  background: var(--accent-soft);
 }
 
 /* The row's title is its link: plain text until hovered, the focus ring on the link. */
@@ -2000,4 +2027,78 @@ details.disclosure:not([open]) > summary.card-header {
 
 .main:focus {
   outline: none;
+}
+
+/* ------------------------------------------------------------ run comparison */
+
+.compare-runs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compare-runs .chip {
+  height: 30px;
+  gap: 8px;
+  padding: 0 2px 0 10px;
+  font-size: var(--text-sm);
+  max-width: 100%;
+}
+
+.compare-runs .chip .link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swatch {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  height: 0;
+  border-top: 2px solid;
+  border-radius: 1px;
+}
+
+.swatch.dashed {
+  border-top-style: dashed;
+}
+
+.compare-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compare-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+
+.compare-table tbody th {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  height: 40px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-table tbody tr:last-child th {
+  border-bottom: 0;
+}
+
+.compare-table tbody tr.differs th {
+  color: var(--text);
+}
+
+.compare-table td.changed {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--accent-soft);
 }

@@ -135,12 +135,12 @@ export const Meter = ({ value, max, label }: { value: number; max: number | null
   );
 };
 
-export const Segmented = <T extends string>({ value, options, onChange, label }: { value: T; options: { value: T; label: ReactNode; count?: number }[]; onChange: (v: T) => void; label: string }) => (
+export const Segmented = <T extends string>({ value, options, onChange, label }: { value: T; options: { value: T; label: ReactNode; count?: number | undefined }[]; onChange: (v: T) => void; label: string }) => (
   <div className="segmented" role="group" aria-label={label}>
     {options.map((o) => (
       <button key={o.value} type="button" aria-pressed={o.value === value} className={o.value === value ? "on" : ""} onClick={() => onChange(o.value)}>
         {o.label}
-        {o.count !== undefined && <span className="n">{o.count}</span>}
+        {o.count !== undefined && <span className="n">{o.count.toLocaleString("en-US")}</span>}
       </button>
     ))}
   </div>
@@ -198,7 +198,7 @@ export const SearchBox = ({ value, onChange, placeholder, label }: { value: stri
  * title is a real link (`RowTitle`), so keyboards and screen readers get one.
  */
 export const rowLink = (href: string) => {
-  const away = (e: ReactMouseEvent<HTMLTableRowElement>) => (e.target as HTMLElement).closest("a, button, input") !== null || (globalThis.getSelection?.()?.toString() ?? "") !== "";
+  const away = (e: ReactMouseEvent<HTMLTableRowElement>) => (e.target as HTMLElement).closest("a, button, input, label") !== null || (globalThis.getSelection?.()?.toString() ?? "") !== "";
   return {
     className: "clickable",
     onClick: (e: ReactMouseEvent<HTMLTableRowElement>) => {

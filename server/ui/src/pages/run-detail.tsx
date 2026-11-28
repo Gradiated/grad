@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { Artifact, Checkpoint, Run } from "@sdk/generated/models.js";
 
-import { LineChart, smooth, type ChartColor } from "../components/chart.js";
+import { ChartCard, LineChart, smooth } from "../components/chart.js";
 import { IconChevron, IconDownload, IconPlay, IconRuns as IconChart, IconStop } from "../components/icons.js";
 import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Kv, LoadMore, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { CODEC, convertKeys, errorMessage, isTerminalRun, useApi, type RunPhase } from "../lib/api.js";
@@ -337,30 +337,6 @@ const Charts = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
     </div>
   );
 };
-
-const ChartCard = ({ title, value, legend, children }: { title: string; value: string; legend?: { label: string; color: ChartColor; dashed?: boolean }[] | undefined; children: ReactNode }) => (
-  <section className="card chart-card">
-    <header className="card-header">
-      <h2 className="card-title">
-        {title}
-        <span className="chart-value">
-          <b>{value}</b>
-        </span>
-      </h2>
-      {legend && (
-        <div className="chart-legend">
-          {legend.map((l) => (
-            <span key={l.label} className="key">
-              <span className={`swatch${l.dashed ? " dashed" : ""}`} style={{ borderColor: `var(${l.color})` }} />
-              {l.label}
-            </span>
-          ))}
-        </div>
-      )}
-    </header>
-    {children}
-  </section>
-);
 
 // ------------------------------------------------------------ checkpoints
 
