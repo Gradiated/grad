@@ -396,7 +396,7 @@ export const extractBundle = async (archive: string, dest: string): Promise<void
   );
   const listed = manifest.files;
   if (typeof listed !== "object" || listed === null) throw unsafe("manifest.json has no 'files' checksum map.");
-  const unlisted = [...seen.keys()].filter((name) => !RESERVED.has(name) && !(name in listed)).sort();
+  const unlisted = [...seen.keys()].filter((name) => !RESERVED.has(name) && !Object.hasOwn(listed, name)).sort();
   if (unlisted.length > 0) throw unsafe(`The bundle has files manifest.json does not list: ${unlisted.join(", ")}.`);
   for (const [name, want] of Object.entries(listed)) {
     const got = seen.get(name);

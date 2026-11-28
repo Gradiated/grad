@@ -42,6 +42,8 @@ const BUNDLES: Record<string, Uint8Array> = {
   symlink: tarGz([["manifest.json", manifest({})], ["link", "", "2"]]),
   tampered: tarGz([["manifest.json", manifest(FILES)], ["adapter_config.json", "{}"], ["adapter_model.safetensors", "weights"]]),
   unlisted: tarGz([["manifest.json", manifest({})], ["extra.bin", "x"]]),
+  // A name that is a property of every object ("constructor" in {} is true) is still unlisted.
+  "unlisted-proto": tarGz([["manifest.json", manifest({})], ["constructor", "x"]]),
 };
 
 const server = () => {
@@ -64,7 +66,7 @@ describe("artifact downloads with extract", () => {
     await expect(grad.artifacts.download("good", dest, { extract: true })).rejects.toThrow(/not empty/);
   });
 
-  it.each(["traversal", "symlink", "tampered", "unlisted"])("refuses a %s bundle and leaves nothing behind", async (ref) => {
+  it.each(["traversal", "symlink", "tampered", "unlisted", "unlisted-proto"])("refuses a %s bundle and leaves nothing behind", async (ref) => {
     const { grad } = makeGrad(server());
     const root = mkdtempSync(path.join(tmpdir(), "grad-extract-"));
     const dest = path.join(root, "out");
