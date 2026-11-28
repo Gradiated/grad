@@ -325,6 +325,7 @@ export const ToastProvider = ({ children }: { children: ReactNode }) => {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setMsg(null), 2600);
   }, []);
+  useEffect(() => () => clearTimeout(timer.current), []);
   return (
     <ToastContext.Provider value={show}>
       {children}
