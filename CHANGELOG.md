@@ -22,7 +22,8 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - Go: `Evals.Results` and `Evals.Outputs` (and on `*Eval`), as the other SDKs have, and
   `Download(ctx, dir, grad.Extract())` (also on `Run.Download`) writes the bundle's verified files
   into a new directory, as Python, Rust and the CLI do: regular files with safe paths only, each
-  checked against manifest.json, and nothing left behind on failure.
+  checked against manifest.json, and nothing left behind on failure. TypeScript has the same as
+  `download(dest, { extract: true })` (streamed, no tar dependency).
 - TypeScript: a CRLF split across two SSE chunks no longer splits an event.
 - SDK READMEs: one quickstart per SDK (push two records, plan, train `test/tiny-qwen3`,
   download) that runs on `grad local up --dev-models` in about 10 s; each SDK's test suite runs it

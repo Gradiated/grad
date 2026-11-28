@@ -1,16 +1,16 @@
 /* Node-only file helpers. Loaded with dynamic import so the browser build never touches node:fs. */
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, openAsBlob } from "node:fs";
-import { lstat, mkdir, mkdtemp, open, readdir, rename, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { createGzip } from "node:zlib";
+import { createGunzip, createGzip } from "node:zlib";
 
 import { ChecksumMismatchError, GradUsageError } from "../errors.js";
-import type { RawResponse } from "../transport.js";
+import { GradError, type RawResponse } from "../transport.js";
 
 export interface LocalFile {
   path: string;
@@ -232,5 +232,147 @@ export const streamToFile = async (
       await rm(tmp, { force: true });
       await raw.cancel().catch(() => undefined);
     }
+  }
+};
+
+// Limits on what extraction writes (the same as the Python and Go SDKs).
+const MAX_MEMBERS = 10_000;
+const MAX_EXTRACT_BYTES = 512 * 1024 ** 3;
+const RESERVED = new Set(["manifest.json", "eval_report.json"]);
+
+const unsafe = (message: string): GradError => new GradError(message, { code: "unsafe_archive" });
+
+const memberName = (raw: string): string => {
+  if (raw === "" || /[\0\\]/.test(raw) || raw.startsWith("/") || /^[A-Za-z]:/.test(raw)) {
+    throw unsafe(`Refusing to extract unsafe archive entry ${JSON.stringify(raw)}.`);
+  }
+  const parts = raw.replace(/\/$/, "").split("/");
+  if (parts.some((p) => p === "" || p === "." || p === "..")) {
+    throw unsafe(`Refusing to extract unsafe archive entry ${JSON.stringify(raw)} (path traversal).`);
+  }
+  return parts.join("/");
+};
+
+const field = (block: Buffer, offset: number, width: number): string => {
+  const raw = block.subarray(offset, offset + width);
+  const end = raw.indexOf(0);
+  return raw.subarray(0, end < 0 ? width : end).toString("utf8");
+};
+
+/** Pax records (`len key=value\n`): only `path` and `size` matter for a bundle. */
+const paxRecords = (data: Buffer): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const line of data.toString("utf8").split("\n")) {
+    const m = /^\d+ ([^=]+)=(.*)$/s.exec(line);
+    if (m?.[1] !== undefined && m[2] !== undefined) out[m[1]] = m[2];
+  }
+  return out;
+};
+
+/**
+ * Writes a `.grad.tar.gz` into the empty directory `dest`, streaming: only regular files with
+ * safe relative paths, each checked against the SHA-256 that `manifest.json` lists.
+ */
+export const extractBundle = async (archive: string, dest: string): Promise<void> => {
+  const chunks = createReadStream(archive).pipe(createGunzip())[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
+  let buf: Buffer = Buffer.alloc(0);
+  let ended = false;
+  const fill = async (n: number): Promise<boolean> => {
+    while (buf.length < n && !ended) {
+      const next = await chunks.next().catch((error: unknown) => {
+        throw unsafe(`The download is not a valid .grad.tar.gz bundle: ${(error as Error).message}`);
+      });
+      if (next.done) ended = true;
+      else buf = buf.length === 0 ? next.value : Buffer.concat([buf, next.value]);
+    }
+    return buf.length >= n;
+  };
+  const read = async (n: number): Promise<Buffer> => {
+    if (!(await fill(n))) throw unsafe("The bundle is truncated.");
+    const out = buf.subarray(0, n);
+    buf = buf.subarray(n);
+    return out;
+  };
+  const seen = new Map<string, string>();
+  let total = 0;
+  let pax: Record<string, string> = {};
+  for (let count = 1; ; count += 1) {
+    if (!(await fill(BLOCK))) break;
+    const header = await read(BLOCK);
+    if (header.every((b) => b === 0)) break;
+    if (count > MAX_MEMBERS) throw unsafe(`The bundle has more than ${MAX_MEMBERS} entries.`);
+    const type = String.fromCharCode(header[156] ?? 0);
+    const ustarPrefix = field(header, 257, 6) === "ustar" ? field(header, 345, 155) : "";
+    const size = pax.size !== undefined ? Number(pax.size) : parseInt(field(header, 124, 12).trim() || "0", 8);
+    const rawName = pax.path ?? (ustarPrefix ? `${ustarPrefix}/${field(header, 0, 100)}` : field(header, 0, 100));
+    pax = {};
+    if (!Number.isSafeInteger(size) || size < 0) throw unsafe(`Archive entry ${JSON.stringify(rawName)} has an invalid size.`);
+    const padding = (BLOCK - (size % BLOCK)) % BLOCK;
+    if (type === "x" || type === "g") {
+      const data = await read(size + padding);
+      if (type === "x") pax = paxRecords(data.subarray(0, size));
+      continue;
+    }
+    const name = memberName(rawName);
+    if (type === "5") {
+      await read(size + padding);
+      continue;
+    }
+    if (type !== "0" && type !== "\0") throw unsafe(`Refusing to extract ${JSON.stringify(name)}: only regular files are allowed (no links or devices).`);
+    if (seen.has(name)) throw unsafe(`Duplicate archive entry ${JSON.stringify(name)}.`);
+    total += size;
+    if (total > MAX_EXTRACT_BYTES) throw unsafe(`The bundle expands beyond ${MAX_EXTRACT_BYTES} bytes.`);
+    const out = path.join(dest, ...name.split("/"));
+    await mkdir(path.dirname(out), { recursive: true });
+    const handle = await open(out, "wx", 0o644);
+    const hash = createHash("sha256");
+    try {
+      for (let left = size; left > 0; ) {
+        if (buf.length === 0 && !(await fill(1))) throw unsafe(`The bundle is truncated inside ${JSON.stringify(name)}.`);
+        const part = buf.subarray(0, Math.min(left, buf.length));
+        buf = buf.subarray(part.length);
+        hash.update(part);
+        await handle.write(part);
+        left -= part.length;
+      }
+    } finally {
+      await handle.close();
+    }
+    await read(padding);
+    seen.set(name, hash.digest("hex"));
+  }
+  const manifest = await readFile(path.join(dest, "manifest.json"), "utf8").then(
+    (text) => JSON.parse(text) as { files?: Record<string, string> },
+    () => {
+      throw unsafe("The bundle has no valid manifest.json.");
+    },
+  );
+  const listed = manifest.files;
+  if (typeof listed !== "object" || listed === null) throw unsafe("manifest.json has no 'files' checksum map.");
+  const unlisted = [...seen.keys()].filter((name) => !RESERVED.has(name) && !(name in listed)).sort();
+  if (unlisted.length > 0) throw unsafe(`The bundle has files manifest.json does not list: ${unlisted.join(", ")}.`);
+  for (const [name, want] of Object.entries(listed)) {
+    const got = seen.get(name);
+    if (got === undefined) throw unsafe(`manifest.json lists ${JSON.stringify(name)}, which is missing from the bundle.`);
+    if (got !== String(want).toLowerCase()) throw new ChecksumMismatchError(`file ${name} of the bundle`, String(want), got);
+  }
+};
+
+/** Extracts the verified bundle at `archive` into `dest` through a staging directory beside it. */
+export const extractInto = async (archive: string, dest: string): Promise<void> => {
+  const existing = await readdir(dest).catch(() => undefined);
+  if (existing !== undefined && existing.length > 0) {
+    throw new GradUsageError(`${dest} is not empty; pick a new directory.`, "destination_not_empty");
+  }
+  const parent = path.dirname(path.resolve(dest));
+  await mkdir(parent, { recursive: true });
+  const staging = await mkdtemp(path.join(parent, ".grad-extract-"));
+  try {
+    await extractBundle(archive, staging);
+    await rm(dest, { recursive: true, force: true });
+    await rename(staging, dest);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
   }
 };

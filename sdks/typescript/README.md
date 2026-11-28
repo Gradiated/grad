@@ -32,8 +32,9 @@ This runs in about 10 seconds on `grad local up --dev-models`; the live suite ru
 verbatim against a real server (`test/live/self-hosted.live.test.ts`, "README quickstart").
 `test/tiny-qwen3` has random weights, so its adapter is for trying the workflow; the same code on
 a GPU server with a real base model trains a real adapter. The bundle is a `.tar.gz` of the PEFT
-adapter (`adapter_config.json`, `adapter_model.safetensors`) and its manifest: `tar xzf` it and
-serve the directory with vLLM or SGLang.
+adapter (`adapter_config.json`, `adapter_model.safetensors`) and its manifest;
+`run.download("./sql-helper", { extract: true })` writes the verified files instead (each checked
+against the manifest's SHA-256), a directory vLLM and SGLang load.
 
 Weights trained elsewhere become artifacts too:
 `await grad.artifacts.upload("./my-lora", { base: "qwen/qwen3-8b" }).wait()` checks them against

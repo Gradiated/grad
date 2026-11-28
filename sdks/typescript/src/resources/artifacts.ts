@@ -42,6 +42,12 @@ export interface ArtifactFromHfOptions extends Omit<ArtifactUploadOptions, "name
 export interface DownloadOptions extends StreamOptions {
   /** Verify `X-Artifact-Sha256` (default true). Disable only for debugging. */
   verifyChecksum?: boolean;
+  /**
+   * Write the bundle's files (for an LLM artifact, the PEFT adapter vLLM and SGLang load) into
+   * `dest`, a directory that must not exist or be empty, instead of the `.grad.tar.gz`. Every
+   * file is checked against the manifest's SHA-256; on failure `dest` is left as it was.
+   */
+  extract?: boolean;
 }
 
 export interface ArtifactStream {
@@ -184,8 +190,8 @@ export const downloadArtifact = async (core: Core, ref: string, dest: string, op
   if (!isNodeRuntime()) {
     throw new GradUsageError("artifacts.download writes to disk and needs Node.js; use artifacts.stream() in a browser.", "node_only");
   }
-  const { verifyChecksum = true, ...request } = options;
-  const { streamToFile } = await import("../node/files.js");
+  const { verifyChecksum = true, extract = false, ...request } = options;
+  const { extractInto, streamToFile } = await import("../node/files.js");
   const opened = await openArtifact(core, ref, request);
   if (verifyChecksum && opened.sha256 === undefined) {
     await opened.response.cancel();
@@ -194,7 +200,19 @@ export const downloadArtifact = async (core: Core, ref: string, dest: string, op
       { code: "missing_checksum", requestId: opened.response.requestId },
     );
   }
-  return streamToFile(opened.response, dest, ref, verifyChecksum ? opened.sha256 : undefined);
+  if (!extract) return streamToFile(opened.response, dest, ref, verifyChecksum ? opened.sha256 : undefined);
+  const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const parent = path.dirname(path.resolve(dest));
+  await mkdir(parent, { recursive: true });
+  const scratch = await mkdtemp(path.join(parent, ".grad-download-"));
+  try {
+    const bundle = await streamToFile(opened.response, path.join(scratch, "bundle.grad.tar.gz"), ref, verifyChecksum ? opened.sha256 : undefined);
+    await extractInto(bundle.path, dest);
+    return { ...bundle, path: dest };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 };
 
 /** An immutable, versioned training output (`name@YYYY-MM-DD-n`). */
