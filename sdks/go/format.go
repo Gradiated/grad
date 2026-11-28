@@ -37,9 +37,10 @@ func (p *RunPlan) String() string {
 	lines = append(lines, fmt.Sprintf("Estimate    ~%s tokens (~%s at %s/M)", fmtTokens(p.EstimatedTokens), fmtUSD(p.EstimatedCostUSD), fmtUSD(p.PricePerMillionTokens)))
 	b := p.CostBreakdown
 	lines = append(lines, fmt.Sprintf("Breakdown   train ~%s · teacher ~%s · evals ~%s (held-out evals during training aren't billed)", fmtUSD(b.TrainUSD), fmtUSD(b.TeacherUSD), fmtUSD(b.EvalUSD)))
-	duration := fmt.Sprintf("Duration    ~%s on one GPU", fmtDuration(p.EstimatedDurationS))
+	duration := fmt.Sprintf("Duration    ~%s", fmtDuration(p.EstimatedDurationS))
+	// "on one GPU" only for a base with a GPU requirement (the CPU dev models have none).
 	if p.MinGPUMemoryGb != nil {
-		duration += fmt.Sprintf(" · needs %s GB of GPU memory", fmtNum(*p.MinGPUMemoryGb))
+		duration += fmt.Sprintf(" on one GPU · needs %s GB of GPU memory", fmtNum(*p.MinGPUMemoryGb))
 	}
 	lines = append(lines, duration)
 	if t := p.Teacher; t != nil {

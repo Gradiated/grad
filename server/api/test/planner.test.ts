@@ -572,6 +572,10 @@ describe("planRun", () => {
     expect(slower.estimated_duration_s).toBeGreaterThan(
       big.estimated_duration_s,
     );
+    // The CPU dev models finish in seconds, not an 8B's minutes.
+    const dev = plan({ kind: "sft", model: "test/tiny-qwen3" }, records);
+    expect(dev.min_gpu_memory_gb).toBeNull();
+    expect(dev.estimated_duration_s).toBeLessThan(30);
     // qwen3-32b is an eval/judge model only: no recipe trains it on one GPU.
     expectCode(
       () => plan({ kind: "sft", model: "qwen/qwen3-32b" }, records),

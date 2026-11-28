@@ -25,6 +25,13 @@ interface GpuProfile {
   checkpoint_s: number;
 }
 
+const DEV_PROFILE: GpuProfile = {
+  weights_gb: 0.01,
+  train_tokens_per_s: 20_000,
+  load_s: 8,
+  checkpoint_s: 0,
+};
+
 const PROFILES: Record<string, GpuProfile> = {
   // Measured on an H100 80 GB (r7): train_tokens_per_s is the median SFT step rate; load_s
   // is create-to-first-step plus last-step-to-completed through the stack, less the final
@@ -65,6 +72,11 @@ const PROFILES: Record<string, GpuProfile> = {
     load_s: 250,
     checkpoint_s: 3,
   },
+  // The CPU dev models (`grad local up --dev-models`): measured, a run trains in
+  // 3-6 s and finishes about 10 s after it is claimed on a laptop-class CPU.
+  "test/tiny-qwen3": DEV_PROFILE,
+  "test/tiny-qwen3-teacher": DEV_PROFILE,
+  "test/tiny-bert": DEV_PROFILE,
   "baai/bge-small-en-v1.5": {
     weights_gb: 0.1,
     train_tokens_per_s: 100_000,

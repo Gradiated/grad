@@ -197,10 +197,11 @@ fn print_plan(out: &Out, req: &PlanRunRequest, plan: &PlanRunResponse) {
         (
             "duration",
             format!(
-                "~{} on one GPU{}",
+                "~{}{}",
                 fmt_duration(plan.estimated_duration_s),
+                // "on one GPU" only for a base with a GPU requirement (the CPU dev models have none).
                 plan.min_gpu_memory_gb
-                    .map(|gb| format!(" (needs {} GB of GPU memory)", num(gb)))
+                    .map(|gb| format!(" on one GPU (needs {} GB of GPU memory)", num(gb)))
                     .unwrap_or_default()
             ),
         ),

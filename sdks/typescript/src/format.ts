@@ -67,7 +67,8 @@ export const formatPlan = (plan: PlanRunResponse): string => {
     );
   }
   const gpu = plan.minGpuMemoryGb;
-  lines.push(`Duration    ~${duration(plan.estimatedDurationS)} on one GPU${gpu != null ? ` · needs ${num(gpu)} GB of GPU memory` : ""}`);
+  // "on one GPU" only for a base with a GPU requirement (the CPU dev models have none).
+  lines.push(`Duration    ~${duration(plan.estimatedDurationS)}${gpu != null ? ` on one GPU · needs ${num(gpu)} GB of GPU memory` : ""}`);
   const t = plan.teacher;
   if (t) {
     lines.push(

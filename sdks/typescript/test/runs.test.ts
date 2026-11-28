@@ -51,12 +51,12 @@ describe("runs", () => {
       "Dataset     support-prod v2",
       "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=",
       "Breakdown   train ~$0.0002 · teacher ~$0.00 · evals ~$0.00 (held-out evals during training aren't billed)",
-      "on one GPU",
       "Warnings    2",
       "  ! 6 steps are below",
     ]) {
       expect(text).toContain(want);
     }
+    expect(text).not.toContain("on one GPU"); // the CPU test model needs none
     expect(server.lastBody("POST", "/v1/runs/plan")).toEqual({
       dataset: "support-prod",
       name: "support-sft",

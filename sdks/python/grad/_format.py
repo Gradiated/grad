@@ -93,8 +93,9 @@ def format_plan(plan: Any, max_cost_usd: float | None = None) -> str:
         )
     gpu = getattr(plan, "min_gpu_memory_gb", None)
     lines.append(
-        f"Duration    ~{_duration(getattr(plan, 'estimated_duration_s', None))} on one GPU"
-        + (f" · needs {_num(gpu)} GB of GPU memory" if gpu is not None else "")
+        f"Duration    ~{_duration(getattr(plan, 'estimated_duration_s', None))}"
+        # "on one GPU" only for a base with a GPU requirement (the CPU dev models have none).
+        + (f" on one GPU · needs {_num(gpu)} GB of GPU memory" if gpu is not None else "")
     )
     teacher = getattr(plan, "teacher", None)
     if teacher:

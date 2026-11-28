@@ -1632,12 +1632,13 @@ fn plan_readout_matches_the_other_sdks() {
         "Estimate    ~",
         "Breakdown   train ~$0.0002 · teacher ~$0.00 · evals ~$0.00 (held-out evals during training aren't billed)",
         "Duration    ~",
-        "on one GPU",
         "Warnings    2",
         "  ! 6 steps are below",
     ] {
         assert!(text.contains(want), "readout lacks {:?}:\n{}", want, text);
     }
+    // The CPU test model needs no GPU.
+    assert!(!text.contains("on one GPU"), "{}", text);
     let mut labeled = PlanRunResponse::default();
     labeled.resolved_config.recipe_params = serde_json::from_value(
         json!({"context_text": "abcd", "max_quality_drop": 0.02, "models": ["a", "b"]}),

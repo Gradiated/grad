@@ -82,10 +82,11 @@ impl fmt::Display for PlanRunResponse {
         ));
         let gpu = self
             .min_gpu_memory_gb
-            .map(|gb| format!(" · needs {} GB of GPU memory", num(gb)))
+            // "on one GPU" only for a base with a GPU requirement (the CPU dev models have none).
+            .map(|gb| format!(" on one GPU · needs {} GB of GPU memory", num(gb)))
             .unwrap_or_default();
         lines.push(format!(
-            "Duration    ~{} on one GPU{}",
+            "Duration    ~{}{}",
             duration(self.estimated_duration_s),
             gpu
         ));

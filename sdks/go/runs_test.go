@@ -56,10 +56,13 @@ func TestRunsPlanCreateWait(t *testing.T) {
 	}
 	// fmt.Println(plan) prints the same readout as Python's print(plan) and the CLI.
 	text := fmt.Sprint(plan)
-	for _, want := range []string{"Dataset     support-prod v2", "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=", "Estimate    ~", "Breakdown   train ~$0.0002 · teacher ~$0.00 · evals ~$0.00 (held-out evals during training aren't billed)", "Duration    ~", "on one GPU", "Warnings    2", "  ! 6 steps are below"} {
+	for _, want := range []string{"Dataset     support-prod v2", "Recipe      sft · model test/tiny-qwen3 · LoRA(rank=", "Estimate    ~", "Breakdown   train ~$0.0002 · teacher ~$0.00 · evals ~$0.00 (held-out evals during training aren't billed)", "Duration    ~", "Warnings    2", "  ! 6 steps are below"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan readout lacks %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "on one GPU") {
+		t.Fatalf("the CPU test model needs no GPU:\n%s", text)
 	}
 	labeled := &grad.RunPlan{}
 	labeled.ResolvedConfig.RecipeParams = map[string]any{"context_text": "abcd", "max_quality_drop": 0.02, "models": []any{"a", "b"}}
