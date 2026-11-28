@@ -96,6 +96,33 @@ describe("grad-server HTTP API", () => {
     await t.close();
   });
 
+  it("AUTH_MODE=cloud: every /v1/keys route answers 501 keys_managed_by_cloud", async () => {
+    const cloud = await makeTestApp({ settings: { keysManagedByCloud: true } });
+    try {
+      for (const [path, method] of [
+        ["/v1/keys", "GET"],
+        ["/v1/keys", "POST"],
+        ["/v1/keys/key_1", "DELETE"],
+      ] as const) {
+        const res = await cloud.json(path, {
+          method,
+          ...(method === "POST"
+            ? { body: { name: "k", scopes: ["admin"] } }
+            : {}),
+        });
+        expect([path, method, res.status, res.body.code]).toEqual([
+          path,
+          method,
+          501,
+          "keys_managed_by_cloud",
+        ]);
+      }
+      expect((await cloud.json("/v1/base-models")).status).toBe(200);
+    } finally {
+      await cloud.close();
+    }
+  });
+
   it("exposes health probes and an OpenAPI 3.1 document", async () => {
     expect((await t.request("/health/live", { token: null })).status).toBe(200);
     expect((await t.request("/health/ready", { token: null })).status).toBe(
