@@ -1184,8 +1184,7 @@ fn train_wait_streams_metrics_and_prints_the_readout() {
 
 #[cfg(unix)]
 #[test]
-fn a_closed_stdout_pipe_ends_grad_quietly_instead_of_panicking() {
-    use std::os::unix::process::ExitStatusExt;
+fn a_closed_stdout_pipe_neither_panics_nor_fails_grad() {
     let srv = api();
     let sb = Sandbox::new("pipe");
     let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("grad"))
@@ -1215,13 +1214,8 @@ fn a_closed_stdout_pipe_ends_grad_quietly_instead_of_panicking() {
     let out = child.wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("panicked"), "{}", stderr);
-    assert_ne!(out.status.code(), Some(101), "{}", stderr);
-    assert!(
-        out.status.success() || out.status.signal() == Some(13),
-        "status {:?}: {}",
-        out.status,
-        stderr
-    );
+    // Exit 0, not a SIGPIPE death: `grad ... | grep -q` under `set -o pipefail` must pass.
+    assert_eq!(out.status.code(), Some(0), "{}", stderr);
 }
 
 fn failing_server(status: &'static str) -> MockServer {

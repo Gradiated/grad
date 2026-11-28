@@ -5,14 +5,13 @@ use grad_sdk::{
     MetricsQuery, PhaseEvent, PlanRunRequest, PlanRunResponse, Run, RunEvent, RunPhase, RunStatus,
 };
 use serde_json::{json, Value};
-use std::io::Write;
 use std::time::{Duration, Instant};
 
 use super::{
     in_range, more_hint, on_interrupt, page, positive, resolve_run, resolve_run_to_change, Ctx,
 };
 use crate::cli::{RunsCmd, TrainArgs};
-use crate::output::{compact, num, opt, pct, thousands, usd, when, CliError, CliResult, Out};
+use crate::output::{self, compact, num, opt, pct, thousands, usd, when, CliError, CliResult, Out};
 use crate::trainfile::{self, RunFile};
 use crate::tui;
 
@@ -384,15 +383,14 @@ pub(crate) fn event_line(ev: &RunEvent) -> Option<String> {
 impl Live {
     fn clear(&mut self) {
         if self.open_line {
-            print!("\r\x1b[2K");
-            let _ = std::io::stdout().flush();
+            output::stdout(format_args!("\r\x1b[2K"));
             self.open_line = false;
         }
     }
 
     fn print(&mut self, line: &str) {
         self.clear();
-        println!("{}", line);
+        output::stdout(format_args!("{}\n", line));
     }
 
     /// Redraw the in-place waiting line (TTY only).
@@ -402,8 +400,7 @@ impl Live {
         }
         if let Some((p, since)) = &self.waiting {
             let line = waiting_line(p, since.map(|s| (now_secs() - s).max(0)));
-            print!("\r\x1b[2K{}", line);
-            let _ = std::io::stdout().flush();
+            output::stdout(format_args!("\r\x1b[2K{}", line));
             self.open_line = true;
         }
     }
@@ -428,10 +425,8 @@ impl Live {
                 if self.tty {
                     self.tick();
                 } else if changed {
-                    println!(
-                        "{}",
-                        waiting_line(p, since.map(|s| (now_secs() - s).max(0)))
-                    );
+                    let line = waiting_line(p, since.map(|s| (now_secs() - s).max(0)));
+                    output::stdout(format_args!("{}\n", line));
                 }
                 return;
             }
@@ -472,8 +467,7 @@ impl Live {
             usd(m.cost_usd)
         );
         if self.tty {
-            print!("\r\x1b[2K{}", line);
-            let _ = std::io::stdout().flush();
+            output::stdout(format_args!("\r\x1b[2K{}", line));
             self.open_line = true;
         } else {
             let every = (self.total / 10).max(1);
@@ -481,7 +475,7 @@ impl Live {
                 .last_print
                 .is_none_or(|t| t.elapsed() >= Duration::from_secs(5));
             if due || m.step % every == 0 || m.step == self.total || m.eval_loss.is_some() {
-                println!("{}", line);
+                output::stdout(format_args!("{}\n", line));
                 self.last_print = Some(Instant::now());
             }
         }
@@ -490,7 +484,7 @@ impl Live {
     fn end(&mut self) {
         self.waiting = None;
         if self.open_line {
-            println!();
+            output::stdout(format_args!("\n"));
             self.open_line = false;
         }
     }
@@ -1039,7 +1033,7 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
                 if out.json {
                     return out.done(&json!({ "yaml": text, "run_id": r.id }));
                 }
-                print!("{}", text);
+                output::stdout(format_args!("{}", text));
                 return Ok(());
             }
             print_run(out, &r);

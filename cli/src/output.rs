@@ -159,6 +159,14 @@ pub struct Out {
     warnings: std::sync::Mutex<Vec<String>>,
 }
 
+/// Write to stdout and ignore errors: a reader that went away (`grad ... | grep -q`,
+/// `grad train --wait | head`) must neither panic grad nor change its exit code.
+pub fn stdout(args: std::fmt::Arguments) {
+    let mut o = std::io::stdout().lock();
+    let _ = o.write_fmt(args);
+    let _ = o.flush();
+}
+
 impl Out {
     pub fn new(json: bool) -> Self {
         Out {

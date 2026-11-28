@@ -26,8 +26,9 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   progress writes (alpha.5's event-ordering lock took the run's rows in the opposite order from
   every other run write; Postgres aborted one side with `deadlock detected`, a 500 the worker
   retried).
-- `grad` exits quietly when its stdout pipe closes (`grad train --wait | head`) instead of
-  panicking with exit code 101.
+- `grad train --wait | head` and other pipes whose reader leaves early no longer panic the CLI
+  with exit code 101; `grad` ignores the closed pipe and exits as it would have (so
+  `grad ... | grep -q` still passes under `set -o pipefail`).
 - The web console no longer renders a blank page in a browser whose locale Intl rejects
   (Chromium on Linux with `LANG` unset reports `en-US@posix`); it falls back to en-US. The
   Datasets empty state points at `grad import FILE --dataset NAME` (it named

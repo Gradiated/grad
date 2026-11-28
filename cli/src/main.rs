@@ -39,29 +39,8 @@ async fn dispatch(cli: Cli, ctx: &Ctx) -> CliResult {
     }
 }
 
-/// Rust ignores SIGPIPE, so a `println!` into a closed pipe (`grad train --wait | head`)
-/// panics. Restore the default so `grad` exits quietly like other Unix tools.
-#[cfg(unix)]
-fn reset_sigpipe() {
-    // SAFETY: called first thing in main, before any thread is spawned.
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
-}
-
-#[cfg(not(unix))]
-fn reset_sigpipe() {}
-
-fn main() -> ExitCode {
-    reset_sigpipe();
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime")
-        .block_on(run())
-}
-
-async fn run() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let json_requested = argv.iter().any(|a| a == "--json");
     let cli = match Cli::try_parse_from(&argv) {
