@@ -540,6 +540,26 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(len(srv.calls("complete")), 6)
         self.assertEqual(len(set(b["upload_id"] for b in srv.bodies("complete"))), 1)
 
+    def test_lost_acks_on_the_artifact_upload_ticket_dont_cost_the_attempt(self) -> None:
+        # The chaos flake (CI, 3 of ~10 runs): a fault proxy over a failing-over API lost the
+        # ticket's response on each of its 3 tries; the attempt crashed (worker_error) and the
+        # run finished one attempt later. Lost responses past one retry round are retried in place.
+        srv = self.server(jobs=[train_job()], fail_next={"uploads": [0, 0, 0, 0, 503]})
+        result = self.worker(srv, StubRunner(checkpoint_at=None)).run_once()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(srv.calls("uploads")), 6)
+        self.assertEqual([b["status"] for b in srv.bodies("complete")], ["completed"])
+        self.assertEqual(len(srv.uploads), 1)
+
+    def test_lost_acks_on_an_import_part_ticket_dont_cost_the_attempt(self) -> None:
+        srv = self.server(jobs=[import_job({"kind": "upload", "upload_id": "upl_x", "format": "jsonl", "download_url": "/blobs/objects?key=raw"})])
+        srv.blobs["/blobs/objects"] = b'{"a": 1}\n'
+        srv.fail_next["uploads"] = [0, 0, 0, 0]
+        result = self.worker(srv, importer=StubImporter(batches=2, batch_size=3)).run_once()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual([b["status"] for b in srv.bodies("complete")], ["completed"])
+        self.assertEqual(srv.bodies("parts")[0]["count"], 6)
+
     def test_complete_stops_retrying_when_the_lease_is_lost(self) -> None:
         srv = self.server(jobs=[train_job()], fail_next={"complete": [503, 409]})
         result = self.worker(srv, StubRunner(checkpoint_at=None), complete_attempts=1).run_once()

@@ -37,7 +37,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, BinaryIO, Callable, Mapping, Sequence
+from typing import Any, BinaryIO, Callable, Mapping, Sequence, TypeVar
 
 from . import artifact_import
 from . import logs
@@ -55,6 +55,7 @@ from .telemetry import WorkerTelemetry, recording_setup, setup_step, setup_summa
 
 PROTOCOL_VERSION = "grad.trainer-protocol/1"
 JOB_KINDS = ("train", "import")
+T = TypeVar("T")
 _CHUNK = 1024 * 1024
 
 
@@ -342,7 +343,8 @@ class ProtocolClient:
         self, url: str, path: Path, headers: dict[str, str], *, attempts: int = 6
     ) -> None:
         """PUT a bundle; storage throttling (S3 503 SlowDown) and resets back off about 15 s
-        in all before the attempt is handed back (a final artifact is then exported again)."""
+        in all before this gives up (a checkpoint is then skipped; a final bundle gets a new
+        ticket and tries again, see ``TrainerWorker._until_answered``)."""
         delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
         size = path.stat().st_size
         for attempt in range(1, attempts + 1):
@@ -994,18 +996,25 @@ class TrainerWorker:
         if not force:
             state.completing = True
         self.telemetry.set_phase("completing")
+        return self._until_answered(
+            "complete",
+            lambda: self._post(state, "complete", payload, attempts=self.complete_attempts, force=force),
+        )
+
+    def _until_answered(self, what: str, call: Callable[[], T]) -> T:
+        """``call()`` again after a transient failure (unreachable, a lost response, 429/5xx)
+        until it goes through. For the requests a finished attempt still has to make (its
+        upload tickets and /complete, all idempotent, the bundle on disk meanwhile): a server
+        blip there must not cost the attempt. Gives up when the lease is lost (LeaseLost) or
+        the worker is shutting down."""
         while True:
             try:
-                return self._post(
-                    state, "complete", payload, attempts=self.complete_attempts, force=force
-                )
-            except ServerUnreachable as exc:
-                error: Exception = exc
-            except ServerError as exc:
-                if not exc.transient:
+                return call()
+            except (ServerError, ServerUnreachable) as exc:
+                if not _transient(exc):
                     raise
                 error = exc
-            _log(f"complete failed ({error}); retrying until the server answers", "warn")
+            _log(f"{what} failed ({error}); retrying until the server answers", "warn")
             if self._shutdown.wait(self.client.retry_cap_s):
                 raise error
 
@@ -1299,7 +1308,9 @@ class TrainerWorker:
                 )
             self.telemetry.set_phase("uploading")
             try:
-                payload["upload_id"] = self._upload(state, "artifact", bundle, info.sha256, info.size_bytes)
+                payload["upload_id"] = self._until_answered(
+                    "artifact upload", lambda: self._upload(state, "artifact", bundle, info.sha256, info.size_bytes)
+                )
             except BundleTooLarge as exc:
                 return self._complete(state, {"status": "failed", "error": str(exc), "tokens_processed": tokens})
             # The server stores the bundle's own manifest: files, format_version, created_by.
@@ -1374,7 +1385,9 @@ class TrainerWorker:
             )
         self.telemetry.set_phase("uploading")
         try:
-            upload_id = self._upload(state, "artifact", info.path, info.sha256, info.size_bytes)
+            upload_id = self._until_answered(
+                "artifact upload", lambda: self._upload(state, "artifact", info.path, info.sha256, info.size_bytes)
+            )
         except BundleTooLarge as exc:
             return self._complete(state, {"status": "failed", "error_code": "invalid_artifact", "error": str(exc)})
         return self._complete(
@@ -1410,7 +1423,9 @@ class TrainerWorker:
             )
 
         def upload_part(part: Part) -> None:
-            upload_id = self._upload(state, "records", part.path, part.upload_sha256, part.size)
+            upload_id = self._until_answered(
+                "records upload", lambda: self._upload(state, "records", part.path, part.upload_sha256, part.size)
+            )
             self._post(
                 state,
                 "parts",

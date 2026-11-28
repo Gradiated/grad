@@ -3,8 +3,9 @@
 The proxy (tests/harness/fault-proxy.ts) cuts every few worker POST responses
 after the server committed them (the lost ack), and fails over from a dead
 replica. Mid-run, the worker and one API replica are killed with SIGKILL; a
-fresh worker finishes the run. Invariants: the run completes on exactly one
-more attempt, it is billed for the tokens it really processed (no checkpoint
+fresh worker finishes the run. Invariants: lost acks cost no attempt (the
+control run completes on its first, the chaos run on exactly one more after the
+kill), it is billed for the tokens it really processed (no checkpoint
 prefix billed twice), one metric per (attempt, step), and an import through
 the same proxy stores each record once.
 
@@ -132,7 +133,8 @@ class ChaosLiveTest(unittest.TestCase):
         imp = http_json(f"{self.api}/v1/datasets/imported/imports", "POST", {"source": {"kind": "upload", "upload_id": upload["upload_id"], "format": "jsonl"}})
 
         control = self.wait_run(self.new_run("control"))
-        self.assertEqual(control["status"], "completed")
+        # Lost acks and retries never cost an attempt: only the kill below does.
+        self.assertEqual((control["status"], control["attempt"]), ("completed", 1), self.why(control["id"]))
         deadline = time.time() + 60
         while self.get(f"/v1/imports/{imp['id']}")["status"] not in ("completed", "failed") and time.time() < deadline:
             time.sleep(0.3)
@@ -157,7 +159,7 @@ class ChaosLiveTest(unittest.TestCase):
         self.start_worker("b")
         final = self.wait_run(run_id)
         self.assertEqual(final["status"], "completed", final)
-        # (On a failure, last_interruption and the stack log say why another attempt started.)
+        # The kill costs exactly one attempt; the lost acks and the replica failover cost none.
         self.assertEqual(final["attempt"], 2, f"{final.get('last_interruption')}\n{self.why(run_id)}")
         # Billed: attempt 1 as reported up to the kill, plus attempt 2 from the
         # checkpoint on. The checkpoint prefix is never billed twice.
