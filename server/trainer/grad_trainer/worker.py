@@ -1185,6 +1185,7 @@ class TrainerWorker:
             )
             config = {**config, "micro_batch_tokens": retry_tokens}
             retried = True
+            self._phase(state, "loading_model")  # the retry reloads the model: not a hung step
         if failure is not None:
             return self._complete(
                 state,
