@@ -5,7 +5,7 @@
 | Python | `sdks/python` | `grad.Grad` (blocking, on `httpx`) | `grad/_generated/client.py` (wire client, TypedDicts) |
 | TypeScript | `sdks/typescript` | `Grad` | `src/generated/` (models, client); `src/transport.ts` is hand-written |
 | Go | `sdks/go` | `grad.NewClient` | `generated/models.go`, `client.go`; `generated/transport.go` is hand-written |
-| Rust | `sdks/rust` | `grad_sdk::Client` (used by the CLI) | `src/generated.rs`: the models the hand-written client uses |
+| Rust | `sdks/rust` | `grad::Client` (crate `grad-sdk`, used by the CLI) | `src/generated.rs`: the models the hand-written client uses |
 | CLI | `cli` | `grad` | through the Rust SDK |
 
 Regenerate after a contract change: `pnpm -C server/api openapi:generate`, then

@@ -1,6 +1,6 @@
 # grad-trainer
 
-Training runtime for `grad-server`: the six v0 recipes on torch + transformers + peft, the
+Training runtime for `grad-server`: the eight v0 recipes on torch + transformers + peft, the
 `.grad.tar.gz` artifact bundle format, the import runner, file formats (`grad_trainer/formats.py`)
 and the observability source providers (`grad_trainer/providers/`, see its README).
 Every artifact bundle format is specified in [`docs/ARTIFACT_FORMATS.md`](../../docs/ARTIFACT_FORMATS.md),
