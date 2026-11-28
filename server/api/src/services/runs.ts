@@ -33,8 +33,10 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import {
   conflict,
+  errorMessage,
   forbidden,
   invalid,
+  isTransient,
   notFound,
   unavailable,
   workspaceInactive,
@@ -602,7 +604,8 @@ export const createRunLifecycle = (
     if (evalId) {
       const labels = await store.evals.getById(evalId);
       if (!labels) {
-        throw new Error(
+        throw conflict(
+          "run_unbuildable",
           `Labeling eval '${evalId}' of run '${run.id}' is missing.`,
         );
       }
@@ -842,7 +845,8 @@ export const createRunLifecycle = (
       ? await store.artifacts.get(run.workspace_id, baseRef.id)
       : null;
     if (baseRef && base?.sha256 !== baseRef.sha256) {
-      throw new Error(
+      throw conflict(
+        "run_unbuildable",
         `Starting artifact '${baseRef.id}' of run '${run.id}' is missing or changed.`,
       );
     }
@@ -1003,13 +1007,30 @@ export const createRunLifecycle = (
       try {
         job = await buildJob(run);
       } catch (error) {
-        await store.transaction((tx) =>
-          closeAttempt(tx, run, 0, {
-            status: "failed",
-            finished_at: now,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
+        // A transient failure (storage, KMS, the database) requeues the run,
+        // spending the attempt; an unbuildable run fails.
+        const message = errorMessage(error);
+        const transient = isTransient(error);
+        const closed = await store.transaction(async (tx) => {
+          const updated = await closeAttempt(
+            tx,
+            run,
+            0,
+            transient
+              ? requeuePatch(
+                  run,
+                  `Attempt ${run.attempt} couldn't start (${message})`,
+                  now,
+                )
+              : { status: "failed", finished_at: now, error: message },
+          );
+          if (updated.status === "queued") await markQueued(tx, updated);
+
+          return updated;
+        });
+        // Answer the claim with the error: the worker backs off before it
+        // claims again, instead of this claim picking the run straight back up.
+        if (closed.status === "queued") throw error;
         return null;
       }
       // Keyed per attempt: a claim retried after a lost response adds nothing.

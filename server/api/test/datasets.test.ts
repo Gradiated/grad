@@ -1,6 +1,6 @@
 import { gunzipSync, gzipSync } from "node:zlib";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeTestApp, TRAINER_KEY, type TestApp } from "./fixtures/app.js";
 import {
@@ -378,6 +378,52 @@ describe("datasets, uploads and imports", () => {
     });
     expect(conflict.status).toBe(422);
     expect(conflict.body).toMatchObject({ code: "render_conflict" });
+  });
+
+  it("a transient error while building a claimed import requeues it (spending the attempt) and fails the claim", async () => {
+    const file = Buffer.from('{"messages":[]}\n');
+    const ticket = await t.json<{
+      upload_id: string;
+      url: string;
+      headers: Record<string, string>;
+    }>("/v1/uploads", {
+      body: {
+        purpose: "dataset_import",
+        filename: "traces.jsonl",
+        size_bytes: file.byteLength,
+        sha256: sha256Hex(file),
+      },
+    });
+    await t.request(ticket.body.url, {
+      method: "PUT",
+      headers: ticket.body.headers,
+      body: file,
+    });
+    const imp = await t.json<{ id: string }>("/v1/datasets/traces/imports", {
+      body: { source: { kind: "upload", upload_id: ticket.body.upload_id } },
+    });
+    const presign = vi
+      .spyOn(t.deps.storage, "presignDownload")
+      .mockRejectedValueOnce(new Error("The security token has expired"));
+    const claim = () =>
+      worker.call<{ job: { id: string; attempt: number } | null }>(
+        "/v1/trainer-jobs/claim",
+        { worker_id: worker.workerId, lease_seconds: 60, kinds: ["import"] },
+      );
+    expect((await claim()).status).toBe(500);
+    expect(
+      (await t.json<Record<string, unknown>>(`/v1/imports/${imp.body.id}`))
+        .body,
+    ).toMatchObject({
+      status: "queued",
+      error:
+        "Attempt 1 couldn't start (The security token has expired); requeued.",
+    });
+    expect((await claim()).body.job).toMatchObject({
+      id: imp.body.id,
+      attempt: 2,
+    });
+    presign.mockRestore();
   });
 
   it("imports an uploaded file through an import job", async () => {

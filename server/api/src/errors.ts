@@ -72,6 +72,13 @@ export const parseBearer = (header: string | undefined): string | undefined =>
 export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+/**
+ * Whether a failure may pass on retry: anything but an ApiError (storage,
+ * KMS, a database timeout), or a 503. ApiErrors are the job's own problem.
+ */
+export const isTransient = (error: unknown): boolean =>
+  !(error instanceof ApiError) || error.status === 503;
+
 /** 403: Gradiated Cloud suspended or deleted the workspace. */
 export const workspaceInactive = (state: string): ApiError =>
   state === "deleted"

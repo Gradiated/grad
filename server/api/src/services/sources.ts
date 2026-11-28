@@ -12,7 +12,14 @@ import {
 } from "../contracts.js";
 import { CronError, parseCron } from "../cron.js";
 import type { AppDependencies } from "../deps.js";
-import { conflict, invalid, notFound, unavailable } from "../errors.js";
+import {
+  conflict,
+  errorMessage,
+  invalid,
+  isTransient,
+  notFound,
+  unavailable,
+} from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import {
   assertSecretHost,
@@ -778,7 +785,8 @@ export const createSourceService = (
       const payload = job.source as unknown as SyncPayload;
       const source = await store.sources.getById(payload.source_id);
       if (!source || source.workspace_id !== job.workspace_id) {
-        throw new Error(
+        throw conflict(
+          "source_removed",
           `Source ${payload.source_id} was removed; nothing to sync.`,
         );
       }
@@ -788,8 +796,10 @@ export const createSourceService = (
             url: sourceUrl(source.provider, source.host),
             use: `${source.provider} source`,
           }).catch((error: unknown) => {
-            throw new Error(
-              `The source's secret '${source.secret_name}' can't be read: ${error instanceof Error ? error.message : String(error)}`,
+            if (isTransient(error)) throw error;
+            throw conflict(
+              "secret_unreadable",
+              `The source's secret '${source.secret_name}' can't be read: ${errorMessage(error)}`,
             );
           })
         : null;

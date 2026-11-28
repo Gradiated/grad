@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { costForTokens } from "../src/catalog.js";
+import { conflict } from "../src/errors.js";
 import {
   ADMIN_KEY,
   makeTestApp,
@@ -8,7 +9,12 @@ import {
   type TestApp,
 } from "./fixtures/app.js";
 import { evalReport } from "./fixtures/eval-report.js";
-import { createSftRun, FakeWorker, sha256Hex } from "./fixtures/worker.js";
+import {
+  createSftRun,
+  FakeWorker,
+  sha256Hex,
+  type ClaimedJob,
+} from "./fixtures/worker.js";
 
 describe("run lifecycle and worker protocol", () => {
   let t: TestApp;
@@ -797,6 +803,54 @@ describe("run lifecycle and worker protocol", () => {
     );
     expect(done.status).toBe(200);
     expect(done.body.run).toMatchObject({ status: "completed" });
+  });
+
+  it("a transient error while building a claimed run requeues it (spending the attempt) and fails the claim; an unbuildable run fails", async () => {
+    const claim = () =>
+      worker.call<{ job: ClaimedJob | null }>("/v1/trainer-jobs/claim", {
+        worker_id: worker.workerId,
+        lease_seconds: 60,
+      });
+    const run = await createSftRun(t);
+    const versions = vi.spyOn(t.deps.store.datasets, "getVersion");
+    versions.mockRejectedValueOnce(
+      new Error("Connection terminated due to connection timeout"),
+    );
+    // The worker gets the error (and backs off), not another job or the same run again.
+    expect((await claim()).status).toBe(503);
+    const requeued = await t.json<Record<string, unknown>>(
+      `/v1/runs/${run.id}`,
+    );
+    expect(requeued.body).toMatchObject({
+      status: "queued",
+      attempt: 1,
+      error:
+        "Attempt 1 couldn't start (Connection terminated due to connection timeout); requeued.",
+    });
+    const next = await claim();
+    expect(next.body.job).toMatchObject({ id: run.id, attempt: 2 });
+    await worker.complete(next.body.job!, { status: "completed" }, "a");
+
+    // A failure that keeps coming back still ends at max_attempts.
+    const stuck = await createSftRun(t, { name: "stuck" });
+    versions.mockRejectedValue(new Error("KMS throttled"));
+    for (let i = 0; i < 2; i += 1) expect((await claim()).status).toBe(500);
+    expect((await claim()).body.job).toBeNull();
+    const failed = await t.json<Record<string, unknown>>(
+      `/v1/runs/${stuck.id}`,
+    );
+    expect(failed.body.status).toBe("failed");
+    expect(failed.body.error).toMatch(/KMS throttled.*max_attempts=3/);
+
+    // An error about the run itself fails it at once.
+    versions.mockReset();
+    const gone = await createSftRun(t, { name: "gone" });
+    versions.mockRejectedValueOnce(conflict("run_unbuildable", "it's gone"));
+    expect((await claim()).body.job).toBeNull();
+    expect(
+      (await t.json<Record<string, unknown>>(`/v1/runs/${gone.id}`)).body,
+    ).toMatchObject({ status: "failed", attempt: 1, error: "it's gone" });
+    versions.mockRestore();
   });
 
   it("abandoned attempts are billed and count toward max_attempts, so preemption cannot loop forever", async () => {

@@ -16,7 +16,7 @@ import type {
   WorkerUploadRequestSchema,
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
-import { conflict, errorMessage, notFound } from "../errors.js";
+import { conflict, errorMessage, isTransient, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { HF_HOST } from "../secret-hosts.js";
 import type {
@@ -240,12 +240,23 @@ export const createImportService = (
         if (job.artifact) return await collaborators.artifactImports.claim(job);
         source = await claimSource(job);
       } catch (error) {
-        // Unbuildable (source removed, secret gone): fail it, claim the next.
-        await close(job, {
-          status: "failed",
-          finished_at: clock.now().toISOString(),
-          error: errorMessage(error),
-        });
+        // A transient failure (storage, KMS, the database) requeues it,
+        // spending the attempt, and answers the claim with the error so the
+        // worker backs off. Unbuildable (source removed, secret gone): fail it,
+        // claim the next.
+        const now = clock.now().toISOString();
+        const message = errorMessage(error);
+        const closed = await close(
+          job,
+          isTransient(error)
+            ? requeuePatch(
+                job,
+                `Attempt ${job.attempt} couldn't start (${message})`,
+                now,
+              )
+            : { status: "failed", finished_at: now, error: message },
+        );
+        if (closed.status === "queued") throw error;
         return null;
       }
 
