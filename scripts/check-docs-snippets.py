@@ -5,6 +5,7 @@
     python3 scripts/check-docs-snippets.py --docs DOCS --cloud      # torch-worker blocks (uploads, adapters)
     python3 scripts/check-docs-snippets.py --docs DOCS --list       # show blocks, run nothing
     python3 scripts/check-docs-snippets.py --docs DOCS --offline    # skip the Hugging Face blocks
+    python3 scripts/check-docs-snippets.py --docs DOCS --local --only evaluations  # on `grad local up --dev-models`
 
 It starts tests/harness/stack.ts (reference worker; with --cloud the fake Cloud API and
 the torch worker, since reference artifacts aren't real adapters), extracts every ```python
@@ -15,6 +16,13 @@ Blocks that can't run self-contained are listed in SKIP with a reason. Hugging F
 imports run online (with a small `limit` injected) unless --offline. Blocks that load a
 downloaded artifact with torch run in --cloud mode under GRAD_TRAINER_PYTHON. Stdlib + the
 Python SDK only (PYTHONPATH=sdks/python is set for the blocks; the SDK needs httpx).
+
+--local runs every block (with and without --cloud) against a running `grad local up --dev-models`
+stack instead (the 'local' profile, or --base-url/--api-key): its CPU torch trainer trains the
+seeds, and its grad-dev-inference answers the evals, so every catalog model becomes a dev model
+(the 8B-and-smaller Qwens test/tiny-qwen3, the larger ones test/tiny-qwen3-teacher) and every
+judge test/tiny-judge. Blocks that need the harness's fixtures (the fake Cloud API, the fake
+Langfuse, its tiny LoRA for uploads) are skipped.
 
     python3 scripts/check-docs-snippets.py --docs DOCS --compile    # TypeScript, Go and Rust blocks
 
@@ -112,6 +120,21 @@ CLOUD = re.compile(
 )
 
 MODELS = {"{{SONNET_MODEL}}": "anthropic/claude-sonnet-5-5", "{{OPUS_MODEL}}": "anthropic/claude-opus-5-5", "{{GPT_MODEL}}": "openai/gpt-6.1-sol"}
+# --local: what grad-dev-inference serves in their place (a larger Qwen stays a different model).
+LOCAL_JUDGE = "test/tiny-judge"
+LOCAL_MODELS = re.compile(r"\bqwen/qwen3-([0-9.]+)b\b|\bgradiated/linden-1\b|\bbaai/bge-small-en-v1\.5\b")
+# --local: blocks that need a fixture only the harness has.
+LOCAL_SKIP = [
+    (re.compile(r"sources add gradiated|sources\.Gradiated"), "needs the harness's fake Gradiated Cloud API (--cloud)"),
+    (re.compile(r"\./my-lora"), "uploads the harness's tiny LoRA (--cloud)"),
+    (re.compile(r"langfuse|Langfuse|src_01"), "needs the harness's fake Langfuse"),
+]
+
+
+def local_model(m: re.Match) -> str:
+    if m.group(1) is not None:
+        return "test/tiny-qwen3" if float(m.group(1)) <= 8 else "test/tiny-qwen3-teacher"
+    return "test/tiny-bert" if m.group(0).startswith("baai/") else "test/tiny-qwen3"
 # --cloud trains real (tiny) adapters with the torch worker, so catalog models map to the harness's tiny ones.
 TINY = {"baai/bge-small-en-v1.5": "test/tiny-bert", "gradiated/linden-1": "test/tiny-qwen3"}
 # ... including the recipes' default models, for blocks that don't pass `model=`.
@@ -270,14 +293,16 @@ class Stack:
 
 
 class Runner:
-    def __init__(self, base_url: str, api_key: str, cloud: bool, grad_bin: str, work: Path, timeout: int, info: dict | None = None) -> None:
+    def __init__(self, base_url: str, api_key: str, cloud: bool, grad_bin: str, work: Path, timeout: int, info: dict | None = None,
+                 local: bool = False) -> None:
         from grad import Grad
 
         self.client = Grad(api_key=api_key, base_url=base_url)
         self.langfuse_url = (info or {}).get("langfuse_url")
         self.provider_key = (info or {}).get("langfuse_secret") or "pk-lf-docs:sk-lf-docs"
         self.source_id: str | None = None
-        self.base_url, self.cloud, self.work, self.timeout = base_url, cloud, work, timeout
+        # --local trains real tiny adapters like --cloud does.
+        self.base_url, self.cloud, self.local, self.work, self.timeout = base_url, cloud or local, local, work, timeout
         self.run_id: str | None = None
         bindir = str(Path(grad_bin).resolve().parent)
         self.env = {
@@ -302,7 +327,9 @@ class Runner:
 
     def rewrite(self, code: str, n: int) -> str:
         for k, v in MODELS.items():
-            code = code.replace(k, v)
+            code = code.replace(k, LOCAL_JUDGE if self.local else v)
+        if self.local:
+            code = LOCAL_MODELS.sub(local_model, code)
         for host in HOSTS:
             code = code.replace(host, self.base_url)
         for k, v in ALIASES.items():
@@ -660,10 +687,19 @@ def compile_check(docs: Path, only: str | None) -> int:
     return 1 if results["fail"] else 0
 
 
+def skip_reason(b: dict, args: argparse.Namespace) -> str | None:
+    """Why a block can't run in this mode at all (--cloud and plain runs split the rest between them)."""
+    reason = b["skip"] or ("needs network access to Hugging Face (--offline)" if b["hf"] and args.offline else None)
+    if args.local:
+        reason = reason or next((why for pattern, why in LOCAL_SKIP if pattern.search(b["code"])), None)
+    return reason
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--docs", required=True, type=Path, help="product/website/src/docs/training in the docs repo (with --compile, also one .md file)")
     ap.add_argument("--cloud", action="store_true", help="run the blocks that need the torch worker (fake Cloud API)")
+    ap.add_argument("--local", action="store_true", help="run every block on `grad local up --dev-models` (the 'local' profile)")
     ap.add_argument("--base-url", help="use a running stack instead of starting one (with --api-key)")
     ap.add_argument("--api-key", default="")
     ap.add_argument("--grad-bin", default=shutil.which("grad") or str(Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target")) / "debug" / "grad"))
@@ -681,8 +717,9 @@ def main() -> int:
         for b in found:
             if b["lang"] == "file":
                 continue
-            skip = b["skip"] or ("needs network access to Hugging Face" if b["hf"] and args.offline else None)
-            tag = f"skip: {skip}" if skip else ("cloud" if b["cloud"] else "run")
+            skip = skip_reason(b, args)
+            skip = skip and skip.removesuffix(" (--offline)")
+            tag = f"skip: {skip}" if skip else ("cloud" if b["cloud"] and not args.local else "run")
             print(f"{b['page']}:{b['line']} {b['lang']} [{tag}]")
         return 0
     if not Path(args.grad_bin).exists():
@@ -690,20 +727,27 @@ def main() -> int:
 
     work = Path(tempfile.mkdtemp(prefix="grad-docs-"))
     stack = None
+    if args.local and not args.base_url:
+        from grad import _config
+
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GRADIATED_")}
+        profile = _config.resolve_config(profile="local", env=env)
+        args.base_url, args.api_key = profile.base_url, profile.api_key or ""
     if not args.base_url:
         worker = "torch" if args.cloud else "reference"
         stack = Stack(args.cloud, worker, work / "stack.log", online=not args.offline)
         args.base_url, args.api_key = stack.info["base_url"], stack.info["api_key"]
     results = {"pass": 0, "fail": 0, "skip": 0}
     try:
-        runner = Runner(args.base_url, args.api_key, args.cloud, args.grad_bin, work, args.timeout, stack.info if stack else None)
+        runner = Runner(args.base_url, args.api_key, args.cloud, args.grad_bin, work, args.timeout, stack.info if stack else None, args.local)
         for n, b in enumerate(found):
             if b["lang"] == "file":
                 (work / b["name"]).write_text(runner.rewrite(b["code"], n))
                 continue
             where = f"{b['page']}:{b['line']} ({b['lang']})"
-            reason = b["skip"] or ("needs network access to Hugging Face (--offline)" if b["hf"] and args.offline else None)
-            reason = reason or (None if b["cloud"] == args.cloud else ("needs --cloud" if b["cloud"] else "runs without --cloud"))
+            reason = skip_reason(b, args)
+            if not args.local:  # a local stack runs both halves
+                reason = reason or (None if b["cloud"] == args.cloud else ("needs --cloud" if b["cloud"] else "runs without --cloud"))
             if reason:
                 results["skip"] += 1
                 print(f"SKIP {where}: {reason}", flush=True)
