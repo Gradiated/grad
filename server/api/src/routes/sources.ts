@@ -22,6 +22,7 @@ import {
   jsonBody,
   jsonResponse,
   notImplementedError,
+  optionalJson,
   requireScope,
   requireSecretUse,
   workspaceOf,
@@ -205,10 +206,7 @@ export const registerSourceRoutes = (
     }),
     async (c) => {
       const workspaceId = workspaceOf(c, "sources:write");
-      const text = await c.req.text();
-      const input = SyncSourceRequestSchema.parse(
-        text.trim() ? JSON.parse(text) : {},
-      );
+      const input = await optionalJson(c, SyncSourceRequestSchema);
 
       const { job, retryAfter } = await services.sources.sync(
         workspaceId,

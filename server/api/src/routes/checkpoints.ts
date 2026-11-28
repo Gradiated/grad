@@ -1,4 +1,4 @@
-import { createRoute, type OpenAPIHono, z } from "@hono/zod-openapi";
+import { createRoute, type OpenAPIHono } from "@hono/zod-openapi";
 
 import {
   ArtifactSchema,
@@ -12,6 +12,7 @@ import {
   defaultErrors,
   IdParamSchema,
   jsonResponse,
+  optionalJson,
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
@@ -71,8 +72,7 @@ export const registerCheckpointRoutes = (
     }),
     async (c) => {
       const workspaceId = workspaceOf(c, "artifacts:write");
-      const input: z.infer<typeof PromoteCheckpointRequestSchema> =
-        c.req.valid("json") ?? {};
+      const input = await optionalJson(c, PromoteCheckpointRequestSchema);
 
       return c.json(
         await services.checkpoints.promote(

@@ -4,7 +4,12 @@ import { z } from "@hono/zod-openapi";
 
 import { hasScope, type AuthPrincipal } from "../adapters.js";
 import { ProblemSchema, type Scope } from "../contracts.js";
-import { ApiError, insufficientScope } from "../errors.js";
+import {
+  ApiError,
+  insufficientScope,
+  issuesOf,
+  validationFailed,
+} from "../errors.js";
 import {
   ObjectNotFoundError,
   StorageUnavailableError,
@@ -205,13 +210,40 @@ export const readJson = async (c: Context): Promise<unknown> => {
   try {
     return await c.req.json();
   } catch {
-    throw new ApiError(
-      400,
-      "malformed_request",
-      "Malformed request",
-      "The body must be JSON.",
-    );
+    throw malformedJson();
   }
+};
+
+const malformedJson = (): ApiError =>
+  new ApiError(
+    400,
+    "malformed_request",
+    "Malformed request",
+    "The body must be JSON.",
+  );
+
+/**
+ * An optional JSON body (`{}` when empty), validated whatever its
+ * Content-Type: the OpenAPI validator skips a body that isn't sent as JSON
+ * (`curl -d` sends a form type), which would drop it silently.
+ */
+export const optionalJson = async <T extends z.ZodType>(
+  c: Context,
+  schema: T,
+): Promise<z.infer<T>> => {
+  const text = (await c.req.text()).trim();
+  let raw: unknown = {};
+  if (text) {
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      throw malformedJson();
+    }
+  }
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) throw validationFailed(issuesOf(parsed.error, "body"));
+
+  return parsed.data;
 };
 
 /** Throws 403 unless the authenticated principal holds `scope`. */

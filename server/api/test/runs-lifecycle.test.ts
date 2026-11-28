@@ -402,9 +402,19 @@ describe("run lifecycle and worker protocol", () => {
     });
     expect(tooLow.status).toBe(409);
 
+    const garbled = await t.json(`/v1/runs/${run.id}/resume`, {
+      method: "POST",
+      body: "{max_cost_usd: 2",
+    });
+    expect([garbled.status, garbled.body.code]).toEqual([
+      400,
+      "malformed_request",
+    ]);
+    // Sent the way `curl -d` sends it (a form Content-Type): still the body.
     const resumed = await t.json(`/v1/runs/${run.id}/resume`, {
       method: "POST",
-      body: { max_cost_usd: 2 },
+      body: JSON.stringify({ max_cost_usd: 2 }),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
     expect(resumed.body).toMatchObject({ status: "queued", max_cost_usd: 2 });
 

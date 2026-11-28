@@ -27,6 +27,7 @@ import {
   IdParamSchema,
   jsonBody,
   jsonResponse,
+  optionalJson,
   requireSecretUse,
   workspaceOf,
   type AppEnv,
@@ -390,7 +391,7 @@ export const registerRunRoutes = (
     }),
     async (c) => {
       const workspaceId = workspaceOf(c, "runs:write");
-      const input = c.req.valid("json") ?? {};
+      const input = await optionalJson(c, ResumeRunRequestSchema);
 
       return c.json(
         await services.runs.resume(
