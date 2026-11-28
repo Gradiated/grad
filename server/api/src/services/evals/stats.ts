@@ -37,8 +37,10 @@ export const bootstrapMeanCI = (
   }
   means.sort((a, b) => a - b);
 
-  const lowIdx = Math.floor(resamples * 0.025);
-  const highIdx = Math.min(resamples - 1, Math.floor(resamples * 0.975));
+  // The trainer's percentile rule (metrics.py bootstrap_ci): as many
+  // resamples cut from each tail.
+  const lowIdx = Math.floor(0.025 * (resamples - 1));
+  const highIdx = Math.ceil(0.975 * (resamples - 1));
 
   return {
     mean: round4(mean),

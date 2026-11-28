@@ -209,6 +209,7 @@ export const splitForRecipe = (
 };
 
 /** Router training items: one per scored prompt group, metered on its prompt tokens only. */
+/** Each router prompt group's prompt tokens (uncapped). */
 const routerGroups = (
   records: readonly DatasetRecord[],
   recipe: PlanRunRequest["recipe"],
@@ -226,7 +227,7 @@ const routerGroups = (
         candidates: recipe.models?.map((m) => m.trim().toLowerCase()),
       }).models.length > 0;
     const count = scored ? promptTokens(record, options) : null;
-    if (count !== null) tokens.set(key, Math.min(count, TRAINER_MAX_SEQ_LEN));
+    if (count !== null) tokens.set(key, count);
   }
 
   return [...tokens.values()];
@@ -464,12 +465,14 @@ const countTokens = (
   let trainItems = train.length;
   if (recipe.kind === "router") {
     // One item per prompt group, prompt tokens only (recipes/router.py).
+    // Capped at the model's sequence length, like every sequence.
     const groups = routerGroups(train, recipe, renderOptions);
     trainItems = groups.length;
-    totalTokens = groups.reduce((sum, t) => sum + t, 0);
+    totalTokens = groups.reduce((sum, t) => sum + Math.min(t, maxSeqLen), 0);
     trainedTokens = totalTokens;
+    truncated = groups.filter((t) => t > maxSeqLen).length;
     evalTokens = routerGroups(evalSet, recipe, renderOptions).reduce(
-      (sum, t) => sum + t,
+      (sum, t) => sum + Math.min(t, maxSeqLen),
       0,
     );
   } else if (recipe.kind === "dpo" || recipe.kind === "reward") {
