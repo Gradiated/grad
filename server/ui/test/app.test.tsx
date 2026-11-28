@@ -412,6 +412,20 @@ describe("runs", () => {
     expect(container.querySelector(".led")?.className).toContain("connecting");
   });
 
+  it("pages through a run's checkpoints", async () => {
+    const page1 = fixture<{ data: Record<string, unknown>[] }>("checkpoints.json");
+    const old = { ...page1.data[0], id: "ckpt_old", step: 1, best: false, final: false };
+    const server = fakeServer(
+      routes({ [`GET /v1/runs/${RUN_ID}/checkpoints`]: ({ url }: { url: URL }) => (url.searchParams.get("cursor") === "k2" ? json({ data: [old], next_cursor: null }) : json({ ...page1, next_cursor: "k2" })) }),
+    );
+    const { container } = await boot(server, `/runs/${RUN_ID}`);
+    await waitFor(() => expect(byText(container, "button", "Older checkpoints")).toBeTruthy());
+    expect(byText(container, ".card-title", "Checkpoints")?.textContent).toContain("+");
+    const before = byText(container, ".card", "Checkpoints")?.querySelectorAll("tbody tr").length ?? 0;
+    await click(byText(container, "button", "Older checkpoints"));
+    await waitFor(() => expect(byText(container, ".card", "Checkpoints")?.querySelectorAll("tbody tr").length).toBe(before + 1));
+  });
+
   it("promotes a checkpoint", async () => {
     const promoted: string[] = [];
     const server = fakeServer(
@@ -514,6 +528,17 @@ describe("datasets, evals, usage, health", () => {
     await click(byText(container, ".dialog button", "Sync"));
     await waitFor(() => expect(posted).toEqual(["sync"]));
     await waitFor(() => expect(container.textContent).toContain("Sync queued: imp_2"));
+  });
+
+  it("picks among thousands of versions with a number field, not thousands of options", async () => {
+    const many = { ...DATASET, version: 8760 };
+    const { container } = await boot(fakeServer(routes({ "GET /v1/datasets/support": many })), "/datasets/support");
+    await waitFor(() => expect(container.querySelector("input#version")).toBeTruthy());
+    expect(container.querySelectorAll("option").length).toBe(0);
+    await type(container.querySelector("input#version"), "12");
+    await waitFor(() => expect(location.search).toBe("?version=12"));
+    await type(container.querySelector("input#version"), "99999");
+    expect(location.search).toBe("?version=12");
   });
 
   it("clamps a long record message and expands it in place", async () => {

@@ -1978,3 +1978,7 @@ details.disclosure:not([open]) > summary.card-header {
   max-width: 1280px;
   backdrop-filter: blur(8px);
 }
+
+.version-input {
+  width: 96px;
+}

@@ -4,11 +4,11 @@ import type { Artifact, Checkpoint, Run } from "@sdk/generated/models.js";
 
 import { LineChart, smooth, type ChartColor } from "../components/chart.js";
 import { IconChevron, IconDownload, IconPlay, IconRuns as IconChart, IconStop } from "../components/icons.js";
-import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Kv, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
+import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Kv, LoadMore, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { CODEC, convertKeys, errorMessage, isTerminalRun, useApi, type RunPhase } from "../lib/api.js";
 import { evalLossOf, foldCheckpoints, PHASE_LABEL, REASON_LABEL, type RunStreamState, type TimelineItem } from "../lib/events.js";
 import { ago, bytes, compact, dateTime, duration, int, num, plural, time, toYaml, usd } from "../lib/format.js";
-import { useNow, useResource } from "../lib/hooks.js";
+import { useNow, usePagedList, useResource } from "../lib/hooks.js";
 import { renderReport } from "../lib/report.js";
 import { Link } from "../lib/router.js";
 import { useRunStream } from "../lib/stream.js";
@@ -366,15 +366,15 @@ const ChartCard = ({ title, value, legend, children }: { title: string; value: s
 const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpointEvents: number; onPromoted: () => void }) => {
   const { client } = useApi();
   const toast = useToast();
-  const res = useResource((signal) => client.listRunCheckpoints(run.id, { limit: 100 }, { signal }), [run.id, checkpointEvents, run.status], {
+  const list = usePagedList((cursor, signal) => client.listRunCheckpoints(run.id, { limit: 50, cursor }, { signal }), [run.id, checkpointEvents, run.status], {
     pollMs: isTerminalRun(run) ? undefined : 15_000,
   });
   const [promote, setPromote] = useState<Checkpoint | null>(null);
   const [name, setName] = useState("");
-  const rows = [...(res.data?.data ?? [])].sort((a, b) => b.step - a.step);
+  const rows = [...list.items].sort((a, b) => b.step - a.step);
   return (
-    <Card title="Checkpoints" count={rows.length || undefined} tight>
-      <ErrorBanner error={res.error} />
+    <Card title="Checkpoints" count={rows.length ? `${rows.length}${list.hasMore ? "+" : ""}` : undefined} tight>
+      <ErrorBanner error={list.error} onRetry={list.reload} />
       <div className="table-wrap" tabIndex={0}>
         <table className="table">
           <thead>
@@ -391,7 +391,7 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
             </tr>
           </thead>
           <tbody>
-            {res.loading && !res.data && <SkeletonRows rows={2} cols={7} />}
+            {list.loading && <SkeletonRows rows={2} cols={7} />}
             {rows.map((c) => (
               <tr key={c.id}>
                 <td className="num">
@@ -423,7 +423,8 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
           </tbody>
         </table>
       </div>
-      {res.data && rows.length === 0 && <Empty title="No checkpoints yet">{isTerminalRun(run) ? "This run saved no checkpoints." : `Checkpoints appear every ${plural(run.resolvedConfig.checkpointEverySteps, "step")}.`}</Empty>}
+      <LoadMore list={list} label="Older checkpoints" />
+      {!list.loading && !list.error && rows.length === 0 && <Empty title="No checkpoints yet">{isTerminalRun(run) ? "This run saved no checkpoints." : `Checkpoints appear every ${plural(run.resolvedConfig.checkpointEverySteps, "step")}.`}</Empty>}
       {promote && (
         <Confirm
           title={`Promote step ${promote.step}?`}
@@ -440,7 +441,7 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
           onConfirm={async () => {
             const art = await client.promoteCheckpoint(promote.id, name.trim() ? { name: name.trim() } : {});
             toast(`Promoted to ${art.name}@${art.version}`);
-            res.reload();
+            list.reload();
             onPromoted();
           }}
           onClose={() => setPromote(null)}

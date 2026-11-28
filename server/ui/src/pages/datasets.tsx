@@ -82,6 +82,9 @@ export const DatasetsPage = () => {
   );
 };
 
+/** Up to this many versions the picker is a select. */
+const VERSION_OPTIONS = 200;
+
 export const DatasetDetailPage = ({ name }: { name: string }) => {
   const { client } = useApi();
   const { query } = useLocation();
@@ -89,6 +92,10 @@ export const DatasetDetailPage = ({ name }: { name: string }) => {
   const ds = useResource((signal) => client.getDataset(name, { signal }), [name], { pollMs: 10_000 });
   const d = ds.data;
   const version = Number(query.get("version")) || d?.version || 0;
+  const pick = (v: string) => {
+    const n = Math.trunc(Number(v));
+    if (d && n >= 1 && n <= d.version) setQuery({ version: n === d.version ? undefined : String(n) });
+  };
   return (
     <div className="page">
       <div className="crumbs">
@@ -110,14 +117,19 @@ export const DatasetDetailPage = ({ name }: { name: string }) => {
         {d && d.version > 0 && (
           <div className="actions field-inline">
             <label htmlFor="version">Version</label>
-            <select id="version" className="input" value={version} onChange={(e) => setQuery({ version: e.target.value === String(d.version) ? undefined : e.target.value })}>
-              {Array.from({ length: d.version }, (_, i) => d.version - i).map((v) => (
-                <option key={v} value={v}>
-                  v{v}
-                  {v === d.version ? " (latest)" : ""}
-                </option>
-              ))}
-            </select>
+            {d.version <= VERSION_OPTIONS ? (
+              <select id="version" className="input" value={version} onChange={(e) => pick(e.target.value)}>
+                {Array.from({ length: d.version }, (_, i) => d.version - i).map((v) => (
+                  <option key={v} value={v}>
+                    v{v}
+                    {v === d.version ? " (latest)" : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              // An hourly source sync makes thousands of versions: a number field, not thousands of options.
+              <input id="version" className="input version-input" type="number" min={1} max={d.version} value={version} onChange={(e) => pick(e.target.value)} />
+            )}
           </div>
         )}
       </div>
