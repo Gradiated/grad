@@ -43,9 +43,7 @@ import { createOnce, type Created } from "../idempotency.js";
 import { assertSecretHost, loggerUrl } from "../secret-hosts.js";
 import { log } from "../telemetry/log.js";
 import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
-import { ObjectNotFoundError } from "../storage/types.js";
 import type {
-  CheckpointRecord,
   DatasetVersion,
   IdempotencyInput,
   JobExpectation,
@@ -87,6 +85,7 @@ import {
   toRunEvent,
 } from "./run-events.js";
 import { holdBlob, toPublicArtifact } from "./artifacts.js";
+import { toPublicCheckpoint, type CheckpointService } from "./checkpoints.js";
 import { createRunPlanner } from "./run-plan.js";
 import {
   artifactKey,
@@ -139,31 +138,6 @@ export const defaultFormatForRecipe = (kind: RecipeKind): ArtifactFormat => {
       return "peft_lora";
   }
 };
-
-/** Retention: the last N checkpoints of a run stay, plus the best and final ones. */
-export const CHECKPOINTS_KEPT = 3;
-
-/**
- * The best checkpoint by eval score, in the direction of the run's metric
- * (`metadata.metric_mode`: eval_loss is "min", accuracy-style metrics "max").
- * Ties go to the later checkpoint, like the trainer's select="best".
- */
-export const bestCheckpoint = (
-  checkpoints: readonly CheckpointRecord[],
-): CheckpointRecord | null =>
-  checkpoints.reduce<CheckpointRecord | null>((acc, c) => {
-    if (c.eval_score === null) return acc;
-    if (acc === null || acc.eval_score === null) return c;
-    // The trainer stores the selection metric's direction with it: minimised
-    // (eval_loss, eval_kl) or maximised (accuracy, recall@10).
-    const lower = metricMode(c.metadata) === "min";
-
-    return (
-      lower ? c.eval_score <= acc.eval_score : c.eval_score >= acc.eval_score
-    )
-      ? c
-      : acc;
-  }, null);
 
 /** Tokens are the source of truth; cost is derived from them in one place. */
 const runCost = (run: RunRecord, attemptTokens = run.attempt_tokens): number =>
@@ -229,26 +203,6 @@ export const toPublicRun = (
   updated_at: run.updated_at,
   finished_at: run.finished_at,
 });
-
-export const toPublicCheckpoint = ({
-  storage_key: _key,
-  ...checkpoint
-}: CheckpointRecord): Checkpoint => checkpoint;
-
-/** Losses are minimised; a checkpoint without metric_mode falls back on its metric name. */
-const MINIMISED_METRICS = new Set(["eval_loss", "eval_kl", "loss"]);
-
-export const metricMode = (
-  metadata: Record<string, unknown>,
-): "min" | "max" => {
-  const mode = metadata["metric_mode"];
-  if (mode === "min" || mode === "max") return mode;
-  const name = metadata["metric_name"];
-
-  return typeof name === "string" && MINIMISED_METRICS.has(name)
-    ? "min"
-    : "max";
-};
 
 /** The error of a run stopped for lack of workspace balance (stopped_balance). */
 export const BALANCE_STOPPED =
@@ -317,17 +271,6 @@ export interface RunLifecycle {
   /** A queued run of a suspended workspace: stopped_balance (resumable), no attempt spent. */
   stopForSuspension(id: string): Promise<void>;
   resume(workspaceId: string, id: string, maxCostUsd?: number): Promise<Run>;
-  listCheckpoints(
-    workspaceId: string,
-    runId: string,
-    page: PageRequest,
-  ): Promise<Page<Checkpoint>>;
-  promoteCheckpoint(
-    workspaceId: string,
-    checkpointId: string,
-    name?: string,
-  ): Promise<Artifact>;
-
   // Worker protocol (train jobs).
   progress(
     principal: AuthPrincipal,
@@ -367,8 +310,6 @@ export interface RunLifecycle {
 
   /** The train kind's hooks in the job queue. */
   handler: JobKindHandler;
-  /** Deletes expired checkpoints (and blobs no release shares). */
-  collectExpiredCheckpoints(now: Date): Promise<number>;
   /** Marks queued runs nobody claimed in time waiting_for_compute. */
   markWaitingForCompute(now: Date): Promise<number>;
 }
@@ -380,10 +321,11 @@ export const createRunLifecycle = (
     uploads: UploadService;
     usage: UsageService;
     evals: EvalService;
+    checkpoints: CheckpointService;
   },
 ): RunLifecycle => {
   const { store, storage, clock, settings } = deps;
-  const { datasets, uploads, usage, evals } = collaborators;
+  const { datasets, uploads, usage, evals, checkpoints } = collaborators;
   const planFor = createRunPlanner(deps, { datasets, evals });
 
   const loadRun = async (
@@ -445,44 +387,6 @@ export const createRunLifecycle = (
     }
 
     return { kind: "dataset", version };
-  };
-
-  /**
-   * Checkpoint retention, applied as each one registers: a run keeps its last
-   * CHECKPOINTS_KEPT checkpoints plus the best by eval so far; the others expire
-   * now (best and final are pinned when the run ends; kept ones expire after
-   * checkpoint_ttl_days).
-   */
-  const applyCheckpointRetention = async (
-    run: RunRecord,
-    now: Date,
-  ): Promise<void> => {
-    const all = await store.artifacts.allCheckpoints(run.id, now);
-    const keep = new Set(all.slice(-CHECKPOINTS_KEPT).map((c) => c.id));
-    const best = bestCheckpoint(all);
-    if (best) keep.add(best.id);
-    await store.artifacts.expireCheckpoints(
-      run.id,
-      all.filter((c) => !keep.has(c.id)).map((c) => c.id),
-      now,
-    );
-  };
-
-  const pinCheckpoints = async (run: RunRecord, now: Date): Promise<void> => {
-    const all = await store.artifacts.allCheckpoints(run.id, now);
-    if (all.length === 0) return;
-
-    const best = bestCheckpoint(all);
-    const final = all.reduce((acc, c) =>
-      c.step > acc.step || (c.step === acc.step && c.attempt >= acc.attempt)
-        ? c
-        : acc,
-    );
-
-    await store.artifacts.pinCheckpoints(run.id, {
-      bestId: best?.id ?? null,
-      finalId: final.id,
-    });
   };
 
   /** The open attempt's billed usage once it has processed `processed` tokens. */
@@ -578,7 +482,7 @@ export const createRunLifecycle = (
       attempt_tokens: 0,
     })) as RunRecord;
     if (isTerminal(updated.status)) {
-      await pinCheckpoints(updated, now);
+      await checkpoints.pinBestAndFinal(updated, now);
     }
 
     return updated;
@@ -1165,91 +1069,6 @@ export const createRunLifecycle = (
       return publicRun(await loadById(id));
     },
 
-    listCheckpoints: async (workspaceId, runId, page) => {
-      await loadRun(workspaceId, runId);
-      const result = await store.artifacts.listCheckpoints(
-        workspaceId,
-        runId,
-        page,
-        clock.now(),
-      );
-
-      return {
-        data: result.data.map(toPublicCheckpoint),
-        next_cursor: result.next_cursor,
-      };
-    },
-
-    promoteCheckpoint: async (workspaceId, checkpointId, name) => {
-      const checkpoint = await store.artifacts.getCheckpoint(
-        workspaceId,
-        checkpointId,
-      );
-      const now = clock.now();
-      if (
-        !checkpoint ||
-        (checkpoint.expires_at !== null &&
-          Date.parse(checkpoint.expires_at) <= now.getTime())
-      ) {
-        throw notFound("checkpoint", checkpointId);
-      }
-      const { format } = checkpoint;
-      if (format === null) {
-        throw conflict(
-          "checkpoint_not_exportable",
-          `Checkpoint '${checkpointId}' holds training state only (the recipe did not export it as an artifact); promote the run's final artifact or a checkpoint with a format.`,
-        );
-      }
-
-      const run = await loadRun(workspaceId, checkpoint.run_id);
-      const releaseName = name ?? run.name;
-      // Checkpoints are never servable: the release gets its own copy under
-      // the content-addressed artifacts/ prefix. Natural key (checkpoint,
-      // name): promoting twice returns the first release.
-      const storageKey = artifactKey(workspaceId, checkpoint.sha256);
-      // Its blob expired (retention) between the read and the copy: gone.
-      const copy = () =>
-        storage
-          .copy(checkpoint.storage_key, storageKey)
-          .catch((error: unknown) => {
-            if (error instanceof ObjectNotFoundError) {
-              throw notFound("checkpoint", checkpointId);
-            }
-            throw error;
-          });
-      await copy();
-      const artifact = await store.transaction(async () => {
-        // A delete of another release on this bundle removed it since the copy.
-        if (!(await holdBlob(deps, storageKey))) await copy();
-
-        return store.artifacts.createRelease({
-          workspaceId,
-          name: releaseName,
-          runId: run.id,
-          sourceId: checkpoint.id,
-          baseModel: run.resolved_config.model,
-          recipeKind: run.recipe_kind,
-          format,
-          storageKey,
-          sha256: checkpoint.sha256,
-          sizeBytes: checkpoint.size_bytes,
-          manifest: {
-            ...checkpoint.metadata,
-            schema: "grad.artifact/1",
-            run_id: run.id,
-            provenance: { source: "run", run_id: run.id },
-            promoted_from_checkpoint: checkpoint.id,
-            step: checkpoint.step,
-            attempt: checkpoint.attempt,
-            resolved_config: run.resolved_config,
-          },
-          evalReport: null,
-        });
-      });
-
-      return toPublicArtifact(artifact);
-    },
-
     progress: async (principal, id, body) => {
       const run = await loadLeasedRun(principal, id, body);
       const attemptTokens = Math.max(run.attempt_tokens, body.metric.tokens);
@@ -1354,7 +1173,7 @@ export const createRunLifecycle = (
       // A checkpoint bills the attempt's usage so far.
       if (result.created) {
         observeCheckpoint(run.recipe_kind, blob.sizeBytes, body.metadata);
-        await applyCheckpointRetention(run, clock.now());
+        await checkpoints.applyRetention(run, clock.now());
         await store.transaction(() =>
           usage.flush(run, attemptUsage(run, run.attempt_tokens), true),
         );
@@ -1609,13 +1428,6 @@ export const createRunLifecycle = (
       return training.kind === "dataset"
         ? streamVersionGzip(storage, training.version)
         : gzipJsonlStream(training.records);
-    },
-
-    collectExpiredCheckpoints: async (now) => {
-      const keys = await store.artifacts.deleteExpiredCheckpoints(now, 100);
-      for (const key of keys) await storage.delete(key);
-
-      return keys.length;
     },
   };
 };

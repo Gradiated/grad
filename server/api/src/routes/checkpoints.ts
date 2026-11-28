@@ -40,7 +40,7 @@ export const registerCheckpointRoutes = (
     }),
     async (c) =>
       c.json(
-        await services.runs.listCheckpoints(
+        await services.checkpoints.list(
           workspaceOf(c, "runs:read"),
           c.req.valid("param").id,
           c.req.valid("query"),
@@ -77,7 +77,7 @@ export const registerCheckpointRoutes = (
         c.req.valid("json") ?? {};
 
       return c.json(
-        await services.runs.promoteCheckpoint(
+        await services.checkpoints.promote(
           workspaceId,
           c.req.valid("param").id,
           input.name,

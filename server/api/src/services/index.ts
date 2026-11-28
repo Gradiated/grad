@@ -5,6 +5,10 @@ import {
 } from "./artifact-imports.js";
 import { createArtifactService, type ArtifactService } from "./artifacts.js";
 import {
+  createCheckpointService,
+  type CheckpointService,
+} from "./checkpoints.js";
+import {
   createTelemetrySampler,
   type TelemetrySampler,
 } from "../telemetry/sampler.js";
@@ -28,6 +32,7 @@ export interface Services {
   uploads: UploadService;
   imports: ImportService;
   artifacts: ArtifactService;
+  checkpoints: CheckpointService;
   artifactImports: ArtifactImportService;
   runs: RunLifecycle;
   usage: UsageService;
@@ -48,6 +53,7 @@ export const createServices = (deps: AppDependencies): Services => {
   const usage = createUsageService(deps);
   const sources = createSourceService(deps);
   const artifacts = createArtifactService(deps);
+  const checkpoints = createCheckpointService(deps);
   const artifactImports = createArtifactImportService(deps, {
     uploads,
     sources,
@@ -64,6 +70,7 @@ export const createServices = (deps: AppDependencies): Services => {
     uploads,
     usage,
     evals,
+    checkpoints,
   });
   const queue = createJobQueue(deps, {
     train: runs.handler,
@@ -80,6 +87,7 @@ export const createServices = (deps: AppDependencies): Services => {
     telemetry,
     queue,
     runs,
+    checkpoints,
     evals,
     uploads,
     usage,
@@ -91,6 +99,7 @@ export const createServices = (deps: AppDependencies): Services => {
     uploads,
     imports,
     artifacts,
+    checkpoints,
     artifactImports,
     runs,
     usage,

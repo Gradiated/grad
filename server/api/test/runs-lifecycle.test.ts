@@ -1176,7 +1176,7 @@ describe("run lifecycle and worker protocol", () => {
       throw new Error("S3 unavailable");
     };
     t.deps.storage.delete = storageDown;
-    t.services.runs.collectExpiredCheckpoints = storageDown;
+    t.services.checkpoints.collectExpired = storageDown;
     t.services.uploads.sweepStaging = storageDown;
     const errors = vi.spyOn(console, "log").mockImplementation(() => {});
     t.clock.advanceSeconds(600);

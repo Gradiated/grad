@@ -5,6 +5,7 @@ import { metrics, secondsSince } from "../telemetry/metrics.js";
 import type { TelemetrySampler } from "../telemetry/sampler.js";
 import type { EvalService } from "./evals/service.js";
 import type { JobQueue } from "./jobs.js";
+import type { CheckpointService } from "./checkpoints.js";
 import type { RunLifecycle } from "./runs.js";
 import type { SourceService } from "./sources.js";
 import { deleteUnreferencedBlob } from "./artifacts.js";
@@ -54,6 +55,7 @@ export const createMaintenance = (
   services: {
     queue: JobQueue;
     runs: RunLifecycle;
+    checkpoints: CheckpointService;
     evals: EvalService;
     uploads: UploadService;
     usage: UsageService;
@@ -149,7 +151,7 @@ export const createMaintenance = (
         services.evals.settleAwaitingScores(now),
       ),
       deletedCheckpoints: await step("gc_checkpoints", () =>
-        services.runs.collectExpiredCheckpoints(now),
+        services.checkpoints.collectExpired(now),
       ),
       deletedUploads: await step("gc_staged_uploads", () =>
         services.uploads.sweepStaging(now),
