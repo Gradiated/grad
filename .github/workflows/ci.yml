@@ -419,7 +419,10 @@ jobs:
           refuses "the old docs' trainer.gpuCount" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set trainer.gpuCount=1
           refuses "the old docs' keda.maxReplicaCount" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set keda.maxReplicaCount=4
           refuses "the old docs' models.mirrorUri" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set models.mirrorUri=s3://m
-          refuses "an unknown workers.auth" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set workers.auth=lease
+          refuses "an unknown workers.auth" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set workers.auth=oauth
+          refuses "lease without api.internalPort" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set 'workers.auth={kubernetes,lease}'
+          refuses "lease without orchestrator keys" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set 'workers.auth={kubernetes,lease}' --set api.internalPort=8788
+          refuses "in-cluster pools with lease only" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set workers.auth=lease --set api.internalPort=8788 --set secrets.orchestratorKeysJson=x
           refuses "a key under database other than caBundle" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set database.awsAccessKeyId=x
           refuses "both database.caBundle sources" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set database.caBundle.configMap.name=rds-ca --set database.caBundle.pem=x
           autoscaling() {  # autoscaling <want> <helm template args...>: a waiting run says a worker is starting only if one can
@@ -438,6 +441,14 @@ jobs:
             helm template grad "$chart" -f "$chart/ci/kind-values.yaml"
             echo ---
             helm template grad "$chart" -f "$chart/ci/kind-values.yaml" --set workers.auth=static --set trainingPriorityClass.enabled=false
+            echo ---
+            # In-cluster pools on service-account tokens, leased GPU hosts beside them; API HPA.
+            printf '[{"label":"gpu-fleet","sha256":"%064d","kinds":["train"]}]' 0 > "$RUNNER_TEMP/orchestrator-keys.json"
+            helm template grad "$chart" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" \
+              --set 'workers.auth={kubernetes,lease}' --set api.internalPort=8788 \
+              --set-file secrets.orchestratorKeysJson="$RUNNER_TEMP/orchestrator-keys.json" \
+              --set networkPolicy.enabled=true --set 'networkPolicy.internalIngressFrom[0].ipBlock.cidr=10.20.0.0/16' \
+              --set api.autoscaling.enabled=true
             echo ---
             # An inline Postgres CA bundle (kind-values.yaml names a ConfigMap).
             helm template grad "$chart" --set storage.s3Bucket=artifacts --set secrets.databaseUrl="$db" --set-file database.caBundle.pem=/etc/ssl/certs/ca-certificates.crt
@@ -475,7 +486,7 @@ jobs:
               --set workers.train.enabled=false
           } > "$RUNNER_TEMP/rendered.yaml"
           # KEDA's and prometheus-operator's CRDs have no schema in the default catalog.
-          for want in 'GRAD_WORKER_AUTH, value: "static"' 'GRAD_WORKER_AUTH, value: "kubernetes"' 'kind: PriorityClass' 'resources: [tokenreviews]' 'name: PGSSLROOTCERT' 'name: grad-grad-postgres-ca'; do
+          for want in 'GRAD_WORKER_AUTH, value: "static"' 'GRAD_WORKER_AUTH, value: "kubernetes"' 'GRAD_WORKER_AUTH, value: "kubernetes,lease"' 'key: orchestrator-keys-json' 'kind: HorizontalPodAutoscaler' 'kind: PriorityClass' 'resources: [tokenreviews]' 'name: PGSSLROOTCERT' 'name: grad-grad-postgres-ca'; do
             grep -qF "$want" "$RUNNER_TEMP/rendered.yaml" || { echo "rendered charts lack: $want"; exit 1; }
           done
           kubeconform -strict -summary -kubernetes-version 1.37.0 \

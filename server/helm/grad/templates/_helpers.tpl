@@ -30,9 +30,16 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- end -}}
 {{- end -}}
 
-{{/* How workers authenticate: kubernetes (service-account tokens) or static (per-pool keys). */}}
+{{/* GRAD_WORKER_AUTH: workers.auth, one mode or a list tried in order. */}}
+{{- define "grad.workerAuthModes" -}}
+{{- $auth := .Values.workers.auth | default "kubernetes" -}}
+{{- if kindIs "string" $auth }}{{ $auth }}{{ else }}{{ join "," $auth }}{{ end -}}
+{{- end -}}
+
+{{/* How the chart's own pools authenticate: kubernetes (service-account tokens) when listed, else static (per-pool keys). */}}
 {{- define "grad.workerAuth" -}}
-{{- .Values.workers.auth | default "kubernetes" -}}
+{{- $modes := splitList "," (include "grad.workerAuthModes" .) -}}
+{{- if has "kubernetes" $modes }}kubernetes{{ else if has "static" $modes }}static{{ else }}none{{ end -}}
 {{- end -}}
 
 {{/* A pool's ServiceAccount in workers.auth=kubernetes: (list ctx poolName) */}}
@@ -133,8 +140,18 @@ capabilities:
 {{- if and (or .Values.metrics.serviceMonitor.enabled .Values.metrics.prometheusRule.enabled) (not .Values.metrics.enabled) -}}
 {{- fail "metrics.serviceMonitor and metrics.prometheusRule need metrics.enabled." -}}
 {{- end -}}
+{{- $modes := splitList "," (include "grad.workerAuthModes" .) -}}
+{{- if and (has "lease" $modes) (eq (int .Values.api.internalPort) 0) -}}
+{{- fail "workers.auth with lease needs api.internalPort: orchestrators mint lease tokens on the internal listener (Gradiated Cloud uses 8788)." -}}
+{{- end -}}
+{{- if and (has "lease" $modes) .Values.secrets.create (not .Values.secrets.orchestratorKeysJson) -}}
+{{- fail "workers.auth with lease needs secrets.orchestratorKeysJson: who may mint lease tokens, e.g. [{\"label\": \"gpu-fleet\", \"sha256\": \"<hex>\", \"kinds\": [\"train\"]}]." -}}
+{{- end -}}
 {{- range $name, $w := omit .Values.workers "auth" -}}
 {{- if $w.enabled -}}
+{{- if eq (include "grad.workerAuth" $) "none" -}}
+{{- fail (printf "workers.%s: the chart's pools authenticate with kubernetes or static; add one to workers.auth, or disable the pool (lease is for hosts outside the cluster)." $name) -}}
+{{- end -}}
 {{- if and (has "eval" $w.kinds) (gt (int $w.gpuCount) 0) -}}
 {{- fail (printf "workers.%s: eval jobs run on CPU workers (they only call the inference endpoint); move kind eval to a pool with gpuCount 0, such as import." $name) -}}
 {{- end -}}

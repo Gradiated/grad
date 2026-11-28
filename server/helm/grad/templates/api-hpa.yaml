@@ -1,0 +1,22 @@
+{{- if .Values.api.autoscaling.enabled }}
+# CPU-driven API replicas; SSE clients resume on any replica (Last-Event-ID).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "grad.fullname" . }}-api
+  labels:
+    {{- include "grad.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "grad.fullname" . }}-api
+  minReplicas: {{ .Values.api.replicaCount }}
+  maxReplicas: {{ max .Values.api.autoscaling.maxReplicas .Values.api.replicaCount }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ .Values.api.autoscaling.targetCPUUtilizationPercentage }}}
+{{- end }}

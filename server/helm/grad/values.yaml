@@ -26,6 +26,8 @@ secrets:
   #   cloud-auth-database-url  AUTH_MODE=cloud: read-only URL (role grad_auth_reader) of the product DB's auth view
   #   cloud-gateway-token   Cloud evals: the gateway service credential (eval workers only)
   #   metrics-token         bearer token for /metrics and /metrics/queue (metrics.requireToken)
+  #   orchestrator-keys-json  workers.auth with lease: GRAD_ORCHESTRATOR_KEYS_JSON, who may mint lease tokens
+  #                         [{"label": "gpu-fleet", "sha256": "<hex of the key>", "kinds": ["train"]}]
   #   aws-access-key-id / aws-secret-access-key   static S3 keys (SeaweedFS, MinIO, R2); omit them with Pod Identity or IRSA
   existingSecret: ""
   # The values below are used only with create: true.
@@ -42,6 +44,9 @@ secrets:
   cloudGatewayToken: ""
   # Bearer token for /metrics (metrics.requireToken); empty generates one.
   metricsToken: ""
+  # workers.auth with lease: who may mint lease tokens (GRAD_ORCHESTRATOR_KEYS_JSON),
+  # e.g. '[{"label": "gpu-fleet", "sha256": "<sha256 hex of the key>", "kinds": ["train"]}]'.
+  orchestratorKeysJson: ""
   # Static S3 keys (SeaweedFS, MinIO, R2); leave empty with Pod Identity or IRSA.
   awsAccessKeyId: ""
   awsSecretAccessKey: ""
@@ -79,8 +84,8 @@ api:
   billingMode: noop
   # The internal listener (INTERNAL_PORT; 0: off): Gradiated Cloud's product
   # API routes (authMode cloud: workspace state, artifact resolve and pins,
-  # with service JWTs) and lease-token minting (lease worker auth with
-  # GRAD_ORCHESTRATOR_KEYS_JSON in api.env). It is served only by the
+  # with service JWTs) and lease-token minting (workers.auth with lease and
+  # secrets.orchestratorKeysJson). It is served only by the
   # ClusterIP Service <fullname>-internal, never by the API Service or the
   # Ingress. Gradiated Cloud uses 8788.
   internalPort: 0
@@ -121,6 +126,12 @@ api:
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
+  # A HorizontalPodAutoscaler on CPU from replicaCount up to maxReplicas (needs
+  # metrics-server). Each replica holds up to 11 Postgres connections.
+  autoscaling:
+    enabled: false
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
 
 # The API's ServiceAccount: bind an AWS role to it for S3 (EKS Pod Identity needs
 # no annotation; IRSA or GKE Workload Identity use annotations).
@@ -222,6 +233,14 @@ workers:
   #               account to the pool's kinds. No worker keys to store or rotate.
   #   static      one generated key per pool (TRAINER_KEYS_JSON in the Secret),
   #               for clusters where grad-server may not call TokenReview.
+  #   lease       tokens an orchestrator mints for GPU hosts outside the cluster
+  #               (docs/SELF_HOSTING.md "Worker authentication"). Needs
+  #               api.internalPort, secrets.orchestratorKeysJson (or the Secret key
+  #               orchestrator-keys-json) and, with networkPolicy.enabled, the
+  #               orchestrator in internalIngressFrom and the hosts in apiIngressFrom.
+  # One mode, or a list tried in order: [kubernetes, lease] runs the chart's pools
+  # on service-account tokens and lets leased GPU hosts in beside them. The
+  # chart's pools use kubernetes when it is listed, else static.
   auth: kubernetes
   train:
     enabled: true
@@ -371,12 +390,16 @@ keda:
 networkPolicy:
   enabled: false
   # Extra peers allowed to reach the API (ingress controller, gateway, other
-  # namespaces). Workers of this release are always allowed.
+  # namespaces, leased GPU hosts outside the cluster). Workers of this release
+  # are always allowed.
   apiIngressFrom: []
   #  - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
-  # Peers allowed to reach the internal listener (api.internalPort), e.g. the
-  # product API's namespace. Empty: nobody, not even this release's workers.
+  # Peers allowed to reach the internal listener (api.internalPort): the lease
+  # orchestrator, or Gradiated Cloud's product API. Empty: nobody, not even this
+  # release's workers.
   internalIngressFrom: []
+  #  - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: gpu-fleet}}
+  #  - ipBlock: {cidr: 10.20.0.0/16}
   # Egress allowlist for worker pods besides DNS and the API: by default HTTPS to
   # public addresses only (S3, the Hugging Face Hub, observability providers),
   # never private ranges, CGNAT or link-local (cloud metadata).

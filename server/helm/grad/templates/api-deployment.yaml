@@ -18,7 +18,9 @@ metadata:
     {{- include "grad.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
+  {{- if not .Values.api.autoscaling.enabled }}
   replicas: {{ .Values.api.replicaCount }}
+  {{- end }}
   # A new replica is ready before an old one stops: no capacity dip on upgrade.
   strategy:
     type: RollingUpdate
@@ -139,12 +141,17 @@ spec:
             - {name: PGSSLROOTCERT, value: /etc/grad/postgres-ca/ca.pem}
             {{- end }}
             {{- include "grad.secretEnv" (list . "ADMIN_API_KEY_HASH" "admin-api-key-hash" true) | nindent 12 }}
-            - {name: GRAD_WORKER_AUTH, value: {{ include "grad.workerAuth" . | quote }}}
-            {{- if eq (include "grad.workerAuth" .) "kubernetes" }}
+            {{- $modes := splitList "," (include "grad.workerAuthModes" .) }}
+            - {name: GRAD_WORKER_AUTH, value: {{ include "grad.workerAuthModes" . | quote }}}
+            {{- if has "kubernetes" $modes }}
             - {name: GRAD_WORKER_K8S_SERVICE_ACCOUNTS, value: {{ include "grad.workerServiceAccountsJson" . | quote }}}
-            {{- else }}
+            {{- end }}
+            {{- if has "static" $modes }}
             {{- include "grad.secretEnv" (list . "TRAINER_API_KEY" "trainer-api-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "TRAINER_KEYS_JSON" "trainer-keys-json" true) | nindent 12 }}
+            {{- end }}
+            {{- if has "lease" $modes }}
+            {{- include "grad.secretEnv" (list . "GRAD_ORCHESTRATOR_KEYS_JSON" "orchestrator-keys-json" false) | nindent 12 }}
             {{- end }}
             {{- include "grad.secretEnv" (list . "GRAD_SECRETS_KEY" "secrets-key" true) | nindent 12 }}
             {{- include "grad.secretEnv" (list . "CLOUD_SERVICE_TOKEN" "cloud-service-token" true) | nindent 12 }}
