@@ -28,7 +28,6 @@ import type {
 } from "../../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../../deps.js";
 import {
-  ApiError,
   conflict,
   errorMessage,
   forbidden,
@@ -614,13 +613,13 @@ export const createEvalService = (
     await finalize({ ...job, generated: outputs.length }, expect);
   };
 
-  /** Fails the eval; the status and its bill commit together. */
-  const failAttempt = async (
-    job: EvalRecord,
+  /** Fails the eval (false: `expect` no longer held); the status and its bill commit together. */
+  const failAttempt = (
+    job: Pick<EvalRecord, "id">,
     expect: JobExpectation,
     error: string,
-  ): Promise<void> => {
-    await store.transaction(async () => {
+  ): Promise<boolean> =>
+    store.transaction(async () => {
       const failed = await store.evals.update(
         job.id,
         {
@@ -632,8 +631,9 @@ export const createEvalService = (
         expect,
       );
       if (failed) await onFinished(failed);
+
+      return failed !== null;
     });
-  };
 
   const postOutputs: EvalService["postOutputs"] = async (
     principal,
@@ -1176,10 +1176,8 @@ export const createEvalService = (
       if (!updated) {
         const now = await load(workspaceId, id);
         if (now.status === "cancelled") return toPublic(now);
-        throw new ApiError(
-          409,
+        throw conflict(
           "eval_not_cancellable",
-          "Eval cannot be cancelled",
           `Eval '${id}' is already ${now.status}.`,
         );
       }
@@ -1227,19 +1225,12 @@ export const createEvalService = (
           continue;
         }
         if (Date.parse(record.updated_at) > cutoff.getTime()) continue;
-        const failed = await store.evals.update(
-          record.id,
-          {
-            status: "failed",
-            error: `Timed out after ${AWAITING_SCORES_TIMEOUT_SECONDS / 3600} h waiting for ${missing} local score(s) (code scorers ${record.local_scorers.join(", ")}). They are computed by the SDK: keep ev.wait() running until the eval completes, or run the scorers server-side.`,
-            finished_at: now.toISOString(),
-          },
+        const failed = await failAttempt(
+          record,
           { status: ["awaiting_scores"] },
+          `Timed out after ${AWAITING_SCORES_TIMEOUT_SECONDS / 3600} h waiting for ${missing} local score(s) (code scorers ${record.local_scorers.join(", ")}). They are computed by the SDK: keep ev.wait() running until the eval completes, or run the scorers server-side.`,
         );
-        if (failed) {
-          await onFinished(failed);
-          settled += 1;
-        }
+        if (failed) settled += 1;
       }
 
       return settled;

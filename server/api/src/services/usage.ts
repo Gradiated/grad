@@ -26,8 +26,6 @@ const usageKey = (
   tokensThrough: number,
 ): string => `${kind}-usage:${refId}:${attempt}:${tokensThrough}`;
 
-/** Defaults: bill an open attempt every 5 minutes or 1M tokens. */
-
 /** Billing ingest takes at most 500 events per request. */
 const EXPORT_BATCH = 500;
 /** Batches per tick: a backlog drains at 10k rows per tick. */
