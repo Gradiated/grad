@@ -1,8 +1,9 @@
 /**
  * Five-field cron (`minute hour day-of-month month day-of-week`, UTC) for
  * source schedules: numbers, `*`, ranges `a-b`, steps `*\/n` or `a-b/n`, and
- * lists. When both day fields are restricted a day matches either, as in Vixie
- * cron. No names or `@hourly` shorthands.
+ * lists. As in Vixie cron, a day matches either day field when neither
+ * starts with `*`, else both (`*\/2 * 1`: odd days that are Mondays). No
+ * names or `@hourly` shorthands.
  */
 interface CronSchedule {
   readonly expression: string;
@@ -74,6 +75,8 @@ const parseField = (text: string, index: number): Set<number> => {
 };
 
 const MAX_SEARCH_MINUTES = 5 * 366 * 24 * 60;
+/** The most days each month can have (February in a leap year). */
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 export const parseCron = (expression: string): CronSchedule => {
   const parts = expression.trim().split(/\s+/);
@@ -90,16 +93,24 @@ export const parseCron = (expression: string): CronSchedule => {
     Set<number>,
     Set<number>,
   ];
-  const anyDay = parts[2] === "*";
-  const anyWeekday = parts[4] === "*";
+  const either = !parts[2]?.startsWith("*") && !parts[4]?.startsWith("*");
+  // Days of the month alone (or with a starred weekday) must exist in some
+  // listed month, else `next` would search for years ("0 0 30 2 *").
+  if (
+    !either &&
+    !parts[2]?.startsWith("*") &&
+    ![...months].some((m) =>
+      [...days].some((d) => d <= (DAYS_IN_MONTH[m - 1] as number)),
+    )
+  ) {
+    throw new CronError(`The schedule '${expression}' never fires.`);
+  }
 
   const dayMatches = (d: Date): boolean => {
     const dom = days.has(d.getUTCDate());
     const dow = weekdays.has(d.getUTCDay());
-    if (anyDay && anyWeekday) return true;
-    if (anyDay) return dow;
-    if (anyWeekday) return dom;
-    return dom || dow;
+
+    return either ? dom || dow : dom && dow;
   };
 
   return {

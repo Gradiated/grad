@@ -47,6 +47,13 @@ describe("parseCron", () => {
     );
   });
 
+  it("matches both day fields when either starts with *, as Vixie cron does", () => {
+    // 2026-12-01 is a Tuesday; the first Monday on an odd date after it is 2026-12-07.
+    expect(next("0 0 */2 * 1", "2026-11-30T12:00:00Z")).toBe(
+      "2026-12-07T00:00:00.000Z",
+    );
+  });
+
   it("normalises whitespace", () => {
     expect(parseCron("  */5   *  * * * ").expression).toBe("*/5 * * * *");
   });
@@ -67,9 +74,12 @@ describe("parseCron", () => {
       expect(() => parseCron(bad), bad).toThrow(CronError);
     }
 
-    expect(() =>
-      parseCron("0 0 30 2 *").next(at("2026-01-01T00:00:00Z")),
-    ).toThrow(/never fires/);
+    // Refused when parsed (a create answers 422), not after years of search.
+    expect(() => parseCron("0 0 30 2 *")).toThrow(/never fires/);
+    expect(() => parseCron("0 0 31 4,6,9,11 *")).toThrow(/never fires/);
+    expect(next("0 0 30,31 2,3 *", "2026-01-01T00:00:00Z")).toBe(
+      "2026-03-30T00:00:00.000Z",
+    );
   });
 
   it("has minute resolution: a seconds field is rejected, so nothing fires more than once a minute", () => {
