@@ -324,6 +324,14 @@ describe("buildDependencies", () => {
         expect(deps.traces !== null && deps.traces !== undefined).toBe(traced);
         await deps.store.close();
       }
+      // Switched on without the product's address: off, and said so at boot.
+      const { CLOUD_INTERNAL_API_URL: _url, ...unaddressed } = cloudEnv;
+      expect(
+        parseServerEnvironment({
+          ...unaddressed,
+          GRAD_CLOUD_TRACES_ENABLED: "true",
+        }).warnings.join(" "),
+      ).toMatch(/GRAD_CLOUD_TRACES_ENABLED=true needs CLOUD_INTERNAL_API_URL/);
     } finally {
       process.env = saved;
     }

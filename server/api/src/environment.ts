@@ -324,6 +324,15 @@ export const parseServerEnvironment = (
       );
     }
   }
+  if (
+    env.AUTH_MODE === "cloud" &&
+    env.GRAD_CLOUD_TRACES_ENABLED &&
+    !(env.CLOUD_INTERNAL_API_URL && env.CLOUD_SERVICE_TOKEN)
+  ) {
+    warnings.push(
+      "GRAD_CLOUD_TRACES_ENABLED=true needs CLOUD_INTERNAL_API_URL and CLOUD_SERVICE_TOKEN; without them the gradiated source answers source_unavailable.",
+    );
+  }
   if (env.GRAD_CLOUD_GATEWAY_URL) {
     requireAll("GRAD_CLOUD_GATEWAY_URL", [
       "CLOUD_INTERNAL_API_URL",
