@@ -59,8 +59,8 @@ the new watermark in the `ImportSummary`.
    failure, secret redaction, metadata mapping, every filter key with its push-down, score
    filters, sampling and the record cap). The fixture stores each trace's `profile(i)` in the
    provider's native fields and answers pushed-down filters the way the API does. Put only quirks in `test_quirks.py`.
-4. **One docs page**, `product/website/src/docs/training/integrations/<name>.mdx`, with the
-   field mapping, the key it needs and its hosts.
+4. **One docs page** on the public docs site ([Trace integrations](https://gradiated.com/docs/training/integrations/),
+   kept outside this repository), with the field mapping, the key it needs and its hosts.
 
 ## Behaviour every provider gets
 

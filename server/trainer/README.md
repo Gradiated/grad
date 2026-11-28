@@ -62,12 +62,18 @@ summary = import_runner.run(source, connector, emit_batch=post_records, workdir=
 
 ## Running the worker
 
-`grad-trainer` (the image's command) polls `GRAD_SERVER_URL` with `TRAINER_API_KEY` and claims
+`grad-trainer` (the image's command) polls `GRAD_SERVER_URL` (default `GRADIATED_BASE_URL`, else
+`http://127.0.0.1:8787`), authenticating with `GRAD_WORKER_TOKEN`, else the file in `GRAD_WORKER_TOKEN_FILE`
+(re-read on every request, so a rotated token needs no restart), else `TRAINER_API_KEY` (then `GRAD_API_KEY`,
+`GRADIATED_API_KEY`), and claims
 the job kinds in `GRAD_WORKER_KINDS` (default `train,import`). Run GPU pools with `train` and a
 CPU pool with `import`: imports and source syncs are the only jobs that carry workspace secrets.
 Also: `GRAD_WORKER_ID` (a name prefix, default host-pid; every process appends a random suffix), `GRAD_LEASE_SECONDS` (180),
 `GRAD_POLL_INTERVAL_S` (1.0), `GRAD_WORKDIR` (a temp dir; each job gets a locked directory in it,
 and a restarted worker deletes the ones a killed worker left, so a crash loop can't fill the disk).
+`GRAD_WORKER_GPU` (default: detected; `"none"` or `{"name": ..., "memory_gb": ...}` to declare it),
+`GRAD_RECLAIM_GRACE_SECONDS` (25: how long a reclaimed worker may spend saving a checkpoint),
+`GRAD_TERMINATION_NOTICE` (`aws` polls the spot interruption notice) and `GRAD_WORKER_METRICS_HOST` (`0.0.0.0`).
 
 A training step that hasn't finished in 10 times the run's step time (at least 30 min) is hung (a
 wedged GPU, a stuck read): the worker hands the attempt back with a warning event and exits with

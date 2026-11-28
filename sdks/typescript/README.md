@@ -70,7 +70,7 @@ real `grad-server` started by `tests/harness/stack.ts`.
 | Runs | `grad.runs.plan/create/get/list/cancel/resume`, `run.wait({ onEvent, onMetric, onStatus })`, `run.events({ follow: true })` (typed lifecycle events: phase, metric, checkpoint, attempt, warning, log, completed), `run.metrics({ follow: true })` (SSE with reconnect), `run.checkpoints()`, `checkpoint.promote()` |
 | Recipes | `recipes.sft/dpo/router/decisionModel/cartridge/embedding/distill/rewardModel`, `rollouts`, `adapters`, `splits`, `Context` |
 | Artifacts | `grad.artifacts.get/list/stream/delete`, `artifact.download(dest)` (streams to disk, verifies SHA-256), `grad.artifacts.upload(path, { base }).wait()` and `grad.artifacts.fromHf("hf://owner/name@rev", { base }).wait()` (an `ArtifactImportFailedError`, `code` `invalid_artifact` and `status` 422, names the file that failed validation), `artifact.provenance` |
-| Evals | `grad.evals.plan/create/get/list`, `ev.wait()` (runs local scorers), `ev.summaryTable()`, `ev.failures().toDataset()`; `Rubric`, `Scorer`, `Judge`, `validators` |
+| Evals | `grad.evals.plan/create/get/list`, `ev.wait()` (runs local scorers), `ev.summaryTable()`, `(await ev.failures()).toDataset(name)`; `Rubric`, `Scorer`, `Judge`, `validators` |
 | Keys, models | `grad.keys.create/list/revoke`, `grad.models.list()` |
 | Low level | `grad.api`: one typed method per OpenAPI operation |
 

@@ -46,7 +46,7 @@ python3 -m unittest discover -s sdks/python/tests
 # TypeScript SDK
 pnpm -C sdks/typescript install --frozen-lockfile
 pnpm -C sdks/typescript check
-pnpm -C sdks/typescript test:live        # against a live local stack
+pnpm -C sdks/typescript test:live        # boots tests/harness/stack.ts (needs Docker and server/api node_modules)
 
 # Go SDK
 (cd sdks/go && gofmt -l . && go vet ./... && go test ./...)
@@ -57,7 +57,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 
 # Helm chart
-helm lint server/helm/grad --strict
+helm lint server/helm/grad --strict --set storage.s3Bucket=lint --set secrets.databaseUrl=postgres://grad:x@postgres:5432/grad
 ```
 
 The SDK and CLI live suites boot a real stack from [`tests/harness/stack.ts`](tests/harness/stack.ts).
@@ -82,7 +82,7 @@ in `tests/fixtures/wire/`, so the four SDKs stay at parity.
 Two rules hold everywhere:
 
 - Self-hosted `grad` needs only PostgreSQL and S3-compatible storage. Cloud-only features
-  go through the narrow auth, billing and deploy adapters, never as a hard dependency.
+  go through the narrow auth, billing and traces adapters, never as a hard dependency.
 - Never commit credentials, API keys or customer data, including in test fixtures.
 
 ## Pull requests

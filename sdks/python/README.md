@@ -38,7 +38,7 @@ real base model trains a real adapter.
 
 `run.artifact.download("./sql-helper")` (the default `format="peft"`) extracts a verified PEFT
 directory (`adapter_config.json` + `adapter_model.safetensors`) that `vllm serve <base>
---enable-lora --lora-modules sql-helper=./sql-helper` loads directly.
+--enable-lora --max-lora-rank 32 --lora-modules sql-helper=./sql-helper` loads directly.
 
 Weights trained elsewhere become artifacts too: `client.artifacts.upload("./my-lora",
 base="qwen/qwen3-8b").wait()` uploads a directory (tarred) or a `.tar.gz`, and
@@ -111,7 +111,7 @@ Every error subclasses `grad.GradError`. HTTP errors are `grad.GradAPIError` sub
 workspace's queued-jobs cap, raised at once and never retried), `InferenceUnavailableError` and
 `FeatureUnavailableError` (501), `ServerError` (5xx). Network failures raise
 `APIConnectionError` / `APITimeoutError`; `wait()` raises `RunFailedError` (code `run_failed`,
-`run_cancelled` or `run_stopped_budget`: anything but `completed`), `EvalFailedError`,
+`run_cancelled`, `run_stopped_budget` or, on Gradiated Cloud, `run_stopped_balance`: anything but `completed`), `EvalFailedError`,
 `ImportFailedError`, `ArtifactImportFailedError` or `WaitTimeoutError`; a list endpoint that repeats its cursor raises
 `PaginationLoopError` instead of looping. Features documented for later waves raise
 `NotAvailableInV0Error` with an alternative.

@@ -56,7 +56,7 @@ The stable fields are below. [`manifest.schema.json`](../spec/artifacts/manifest
 | `base_model_repo` | string | The Hugging Face repo (or local path) to load the base weights from, such as `Qwen/Qwen3-8B`. Only `reference` bundles have `null`. |
 | `base_model_revision` | string \| null | The 40-hex Hugging Face commit of those weights. It is `null` when the trainer loaded weights from a path or mirror with no revision marker (`.grad_revision`). Cloud serving requires it to equal the pool's revision, so it refuses `null`. |
 | `deployable` | boolean | `false` only for `reference` bundles, which hold no trained weights. Which formats Cloud serves is in the table above, not here. |
-| `created_by` | `{"name": "grad-trainer", "version": "0.2.0"}` | The trainer version that wrote the bundle. |
+| `created_by` | `{"name": "grad-trainer", "version": "0.2.0-alpha.7"}` (for example) | The trainer version that wrote the bundle. |
 | `provenance` | object | Where the artifact came from (required in final manifests from `format_version` 2). `source` is `run` (with `run_id`), `upload` (with `uploader`, the API key that uploaded it) or `import` (with `uri`, `hf://owner/name@<40-hex commit>`). |
 | `files` | object | Maps each payload path to its lowercase hex SHA-256. It never lists `manifest.json` or `eval_report.json`. |
 | `eval_report_sha256` | string | SHA-256 of `eval_report.json`, when the bundle has one. |

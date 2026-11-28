@@ -1,6 +1,6 @@
 # grad (Go)
 
-Go SDK for the Gradiated training and serving platform. Standard library only;
+Go SDK for the Gradiated training platform. Standard library only;
 Go 1.24+ (iterators).
 
 ```sh

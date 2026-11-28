@@ -30,7 +30,7 @@
 
 ---
 
-`grad` trains, evaluates and serves small task-specific models: a router that sends easy requests to a cheap model, an 8B fine-tune that replaces a frontier call, an embedding model tuned to your docs. You bring the traces you already log. `grad` tells you what a run will cost before it starts, scores the result against a baseline with confidence intervals, and ships it with one command.
+`grad` trains and evaluates small task-specific models: a router that sends easy requests to a cheap model, an 8B fine-tune that replaces a frontier call, an embedding model tuned to your docs. You bring the traces you already log. `grad` tells you what a run will cost before it starts, scores the result against a baseline with confidence intervals, and hands you verified weights to serve on vLLM or SGLang (or, soon, publish on Gradiated Cloud).
 
 It is one open-source codebase. The same server runs on your laptop (`grad local up`), in your Kubernetes cluster (Helm), and soon as [Gradiated Cloud](https://gradiated.com/docs/training/).
 
@@ -115,7 +115,7 @@ const dataset = await grad.datasets.push("support-prod", "./examples/support_tra
 const params = { dataset, name: "support-router", recipe: recipes.router({ rubric: "resolved" }), maxCostUsd: 20 };
 console.log(await grad.runs.plan(params));
 const run = await grad.runs.create(params).wait();
-await run.download("./support-router");
+await run.download("./support-router", { extract: true });
 ```
 
 ```go
@@ -131,7 +131,7 @@ params := grad.RunParams{
 plan, _ := client.Runs.Plan(ctx, params)
 fmt.Println(plan)
 run, _ := client.Runs.Create(ctx, params).Wait(ctx)
-_, _ = run.Download(ctx, "./support-router")
+_, _ = run.Download(ctx, "./support-router", grad.Extract())
 ```
 
 ```rust
@@ -195,7 +195,7 @@ What every run gives you:
 
 - **Datasets from anywhere.** Push records or a `.jsonl`/`.json`/`.parquet` file (trace exports from OpenAI, OTel, Langfuse, PostHog, Braintrust and LangSmith are detected automatically), or pull a Hugging Face dataset server-side with `client.datasets.from_hf(...)`. Datasets are versioned, and every run pins the version it trained on.
 - **Cost before compute.** `runs.plan(...)` (`grad train --dry-run`) returns the resolved recipe, data warnings, token count and price. `max_cost_usd` is a hard cap: the run stops and keeps its checkpoint, and it is never billed past the cap (the step that crosses it is billed only up to it).
-- **Real weights.** LLM runs train LoRA adapters (or PrefixKV cartridges). Downloads are SHA-256-verified PEFT directories (`adapter_config.json`, `adapter_model.safetensors`) that load straight into vLLM or SGLang. `SFTRecipe(merge_on_export=True)` exports merged safetensors instead.
+- **Real weights.** LLM runs train LoRA adapters (or PrefixKV cartridges). Downloads are SHA-256-verified PEFT directories (`adapter_config.json`, `adapter_model.safetensors`) that load straight into vLLM or SGLang. `SFTRecipe(model="qwen/qwen3-1.7b", merge_on_export=True)` exports merged safetensors instead (bases up to about 2B parameters: a bundle is at most 5 GiB).
 - **Checkpoints and resume.** A run keeps its last three checkpoints and its best for 30 days (its best and final forever); `runs.resume(...)` continues a stopped run, and any checkpoint can be promoted to an artifact.
 
 ## Evaluate before you ship
@@ -225,7 +225,7 @@ Every run produces a versioned, immutable artifact (`sql-helper@2026-11-27-1`) u
 
 ```bash
 grad artifacts download sql-helper@latest --output ./sql-helper
-vllm serve Qwen/Qwen3-8B --enable-lora --lora-modules sql-helper=./sql-helper
+vllm serve Qwen/Qwen3-8B --enable-lora --max-lora-rank 32 --lora-modules sql-helper=./sql-helper
 ```
 
 Weights trained elsewhere become artifacts too. `grad artifacts upload ./my-lora --base qwen/qwen3-8b` and `grad artifacts import hf://acme/support-lora --base qwen/qwen3-8b` check the files against the [format spec](docs/ARTIFACT_FORMATS.md) and the base model (for a LoRA: the adapter config, base and revision, target modules and every tensor shape), then register `my-lora@YYYY-MM-DD-n`. You can evaluate an uploaded artifact, download it or continue training from it like a trained one, and its `provenance` records where it came from.
@@ -271,13 +271,14 @@ The first run generates an admin key, a trainer key and the workspace-secrets ke
 
 `grad-server` also serves a web UI at `http://127.0.0.1:18787/` (if that port is busy, `grad local up` picks a free one and says so; `grad local status` prints the real URLs); `grad ui` opens it signed in. It lists runs with their status, phase, model and cost, and each run page shows live loss, learning-rate, throughput and cost-versus-cap charts, the attempt and phase, the event timeline, checkpoints (promote them there), the eval report, the artifact download and the resolved config. Artifacts (provenance, pins, manifest, download, delete), datasets (versions, records with scores, source syncs), evals (scores with confidence intervals and failures), usage and worker health have pages too. It calls only the public `/v1` API with your key, kept in the browser tab. See [Web UI](docs/SELF_HOSTING.md#web-ui).
 
-For production, create the `grad` Secret described in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) (database URL, admin key hash, trainer key), then install the Helm chart against your own Postgres and S3 bucket. It runs migrations in a Job, two API replicas, a GPU `train` worker pool and a CPU `import` worker pool, with optional KEDA scale-to-zero and NetworkPolicies:
+For production, create the `grad` Secret described in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) (database URL, admin key hash, secrets key), then install the Helm chart with `secrets.existingSecret=grad` against your own Postgres and S3 bucket. It runs migrations in a Job, two API replicas, a GPU `train` worker pool and a CPU `import` worker pool, with optional KEDA scale-to-zero and NetworkPolicies:
 
 ```bash
 helm upgrade --install grad server/helm/grad --namespace grad \
+  --set secrets.create=false --set secrets.existingSecret=grad \
   --set storage.s3Bucket=my-grad-artifacts \
   --set evals.inferenceBaseUrl=https://vllm.internal.example.com/v1 \
-  --set keda.enabled=true
+  --set keda.enabled=true --set keda.trigger=metrics-api
 ```
 
 Datasets, training, evals (against your own OpenAI-compatible endpoint), artifact uploads, imports and downloads all work self-hosted; hosted serving is a Gradiated Cloud feature. Server configuration and retention are in [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) and the [self-hosting guide](https://gradiated.com/docs/training/self-hosting/).
@@ -346,7 +347,7 @@ To check the code blocks of the public training docs (a checkout of the website 
 
 ```bash
 python3 scripts/check-docs-snippets.py --docs ../workspace/product/website/src/docs/training          # reference worker
-GRAD_TRAINER_PYTHON=/path/to/torch/python python3 scripts/check-docs-snippets.py --docs ... --cloud   # deploy blocks
+GRAD_TRAINER_PYTHON=/path/to/torch/python python3 scripts/check-docs-snippets.py --docs ... --cloud   # blocks that need the torch worker (fake Cloud API)
 python3 scripts/check-docs-snippets.py --docs ... --compile    # type-check the TypeScript, Go and Rust blocks (no stack)
 python3 scripts/check-docs-snippets.py --docs README.md --compile
 ```

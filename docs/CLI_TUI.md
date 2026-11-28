@@ -64,10 +64,10 @@ q detach  c cancel  l logs  ? help
 
 | Key            | Action                                                                     |
 | -------------- | -------------------------------------------------------------------------- |
-| `q` / `Ctrl-C` | Detach (exit `130`). The run keeps going; reattach with `grad runs watch`. |
+| `q` / `Esc` / `Ctrl-C` | Detach (exit `130`). The run keeps going; reattach with `grad runs watch`. |
 | `c`            | Cancel the run, after a `y` to confirm.                                    |
 | `l`            | Show or hide the full event log.                                           |
-| `?`            | Help.                                                                      |
+| `?` / `h`      | Help.                                                                      |
 
 Attaching to a run that's already going (`grad runs watch`, or `grad train --wait` again) replays its event stream from the first event, so the chart and the log show the whole run, then follows it live; a dropped connection resumes after the last event id. The phase clock starts when the server says the phase began (`phase_since`, or the phase event), not when you attached. The chart always spans step 0 to the run's total steps: each series is cut to the plot's width with the lowest and highest point per column, and the y axis covers the 1st to 99th percentile once there are 100 points, so a few spikes don't flatten the curve; a clipped spike is a yellow dot on the edge. Before the first step the chart says what the run is doing ("Waiting for a GPU (2 workers online, all busy)…", "Loading the model…"). While the run is queued, the phase line shows the server's reason when it gives one (`queue_message`, live from the polled run): "Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", or "Waiting for a GPU with ≥46 GB; online workers have 24 GB".
 
