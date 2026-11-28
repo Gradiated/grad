@@ -33,7 +33,8 @@ the page's earlier blocks of its language, and only errors inside the block itse
 Blocks that import another vendor's SDK are skipped. It also checks the API reference's request
 samples (components/docs/training/api-samples.md next to DOCS, or that file as --docs), each on
 its own: TypeScript, Go and Rust as above, Python with mypy against the SDK (attribute names
-included), and CLI commands with grad's own argument parser (--grad-bin; nothing reaches a server).
+included), and CLI commands with grad's own argument parser (--grad-bin; they reach only a
+local stub that answers 404).
 
     python3 scripts/check-docs-snippets.py --docs DOCS --api-examples   # the API reference's requests
 
@@ -665,6 +666,36 @@ def _samples_path(docs: Path) -> Path | None:
     return None
 
 
+_NOT_FOUND_URL: list[str] = []
+
+
+def _not_found_url() -> str:
+    """A loopback server that answers every request with a 404 problem at once, so a parsed
+    command fails fast instead of retrying a refused port (`--follow` reconnects for minutes)."""
+    if not _NOT_FOUND_URL:
+        import http.server
+        import threading
+
+        class NotFound(http.server.BaseHTTPRequestHandler):
+            def _answer(self) -> None:
+                body = b'{"type":"about:blank","title":"Not Found","status":404,"code":"route_not_found"}'
+                self.send_response(404)
+                self.send_header("Content-Type", "application/problem+json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = _answer
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), NotFound)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        _NOT_FOUND_URL.append(f"http://127.0.0.1:{server.server_address[1]}")
+    return _NOT_FOUND_URL[0]
+
+
 def _cli_check(code: str, grad_bin: str, work: Path) -> str | None:
     """None when grad parses every command of the block, else clap's complaint."""
     bindir = work / "cli-bin"
@@ -674,7 +705,7 @@ def _cli_check(code: str, grad_bin: str, work: Path) -> str | None:
     home = work / "cli-home"
     home.mkdir(exist_ok=True)
     env = {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}", "HOME": str(home), "XDG_CONFIG_HOME": str(home),
-           "GRADIATED_BASE_URL": "http://127.0.0.1:9", "GRADIATED_API_KEY": "docs-compile-check", "NO_COLOR": "1"}
+           "GRADIATED_BASE_URL": _not_found_url(), "GRADIATED_API_KEY": "docs-compile-check", "NO_COLOR": "1"}
     try:
         p = subprocess.run(["bash", "-c", code], cwd=home, env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
