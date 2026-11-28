@@ -38,6 +38,15 @@ spec:
             runbook_url: {{ $runbook }}#gradjobqueuedtoolong
             summary: A {{ "{{" }} $labels.kind {{ "}}" }} job has waited {{ "{{" }} $value | humanizeDuration {{ "}}" }} for a worker.
             description: The queue is stuck for this kind. Check the worker pools, KEDA and GPU capacity (runs waiting for a GPU that fits show as waiting_for_compute).
+        - alert: GradRunSetupSlow
+          expr: |
+            histogram_quantile(0.9, sum by (le) (rate(grad_run_phase_duration_seconds_bucket{ {{- $sel }}, phase="loading_model"}[1h]))) > {{ $r.runSetupSeconds }}
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            runbook_url: {{ $runbook }}#gradrunsetupslow
+            summary: Runs take {{ "{{" }} $value | humanizeDuration {{ "}}" }} (p90) from claim to their first training step.
+            description: A claimed GPU sits idle while the worker downloads and loads the base model and the dataset. Each run's log event "Ready to train in ..." names the slow step; cold model caches are the usual cause.
         {{- range $kind := list "train" "import" "eval" }}
         - alert: GradNoWorkersForQueuedJobs
           expr: |

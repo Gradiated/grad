@@ -366,6 +366,8 @@ metrics:
     labels: {}
     # Alert when the oldest claimable job has waited this long.
     oldestQueuedSeconds: 1800
+    # Alert when runs take this long (p90 over an hour) from claim to their first step.
+    runSetupSeconds: 600
     # Alert when this share of API requests fail with 5xx (over 5 minutes).
     error5xxRatio: 0.05
     # Alert when this share of a kind's jobs failed over 30 minutes, with at least failureMinJobs failures.

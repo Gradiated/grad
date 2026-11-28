@@ -378,6 +378,7 @@ With `networkPolicy.enabled`, `metrics.allowFrom` says who may reach the metrics
 | --- | --- | --- |
 | `GradApiErrorRateHigh` | More than 5% of API requests return 5xx over 5 minutes (at more than 0.1 requests/s) | `error5xxRatio` |
 | `GradJobQueuedTooLong` | The oldest claimable job of a kind has waited over 30 minutes, for 5 minutes (the queue is stuck) | `oldestQueuedSeconds` |
+| `GradRunSetupSlow` | Runs take over 10 minutes (p90 over an hour) from claim to their first training step, for 30 minutes | `runSetupSeconds` |
 | `GradNoWorkersForQueuedJobs` | Train, import or eval jobs are queued and no worker of that kind has been online for 15 minutes | |
 | `GradJobFailureRateHigh` | More than 25% of a kind's jobs failed over 30 minutes, with at least 3 failures | `failureRatio`, `failureMinJobs` |
 | `GradUsagePushLagging` | Cloud: usage hasn't reached billing for over 30 minutes, for 10 minutes | `usagePushLagSeconds` |
@@ -400,6 +401,9 @@ More than 5% of API requests return 5xx. `kubectl -n grad logs -l app.kubernetes
 
 #### GradJobQueuedTooLong
 The oldest claimable job of a kind has waited 30 minutes. Check that the kind's pool has running pods (`kubectl -n grad get pods -l app.kubernetes.io/component=worker`), that KEDA scaled it (`kubectl -n grad get scaledobject`), and, for `train`, that a GPU node fits the run (`grad_jobs_unfit` counts runs that need more GPU memory than any online worker has). Jobs held only by their workspace's running cap don't count here.
+
+#### GradRunSetupSlow
+Claimed GPUs sit idle for over 10 minutes per run before training starts: the worker is downloading or loading the base model, downloading the dataset, or tokenizing. Each run's events carry a log line `Ready to train in N s: model download ..., loading the weights ..., tokenizing ...` naming the slow step, and scraped workers export `grad_trainer_setup_duration_seconds{step}`. Model downloads are the usual cause: with the default `emptyDir` model cache every new worker pod downloads its base again (Qwen3-8B is 16 GB); set `models.cache` to a node-local `hostPath` (or point `models.mirror` at an `s3://` copy in the GPUs' region). Weight loads from a slow network disk with a cold page cache are the next (Qwen3-8B took 138 s at about 120 MB/s on a cloud VM's boot disk).
 
 #### GradNoWorkersForQueuedJobs
 Jobs of a kind are queued and no worker of that kind has been online for 15 minutes. The pool is at zero, or its pods can't start or authenticate: `kubectl -n grad describe pod` (image pull, GPU quota, PriorityClass preemption) and `grad_worker_auth_total{result!="ok"}` (worker token refused: the ServiceAccount mapping with `workers.auth=kubernetes`, or the pool's key with `static`).

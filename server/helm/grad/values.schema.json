@@ -540,6 +540,10 @@
               "type": "number",
               "minimum": 0
             },
+            "runSetupSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
             "error5xxRatio": {
               "type": "number",
               "minimum": 0
