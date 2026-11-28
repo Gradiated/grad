@@ -1,7 +1,7 @@
 import type { AuthPrincipal } from "../adapters.js";
 import { costForTokens, nanoUsd, trainSku } from "../catalog.js";
 import { checkpointEvalsUnsupported, evalsOnCloud } from "../cloud/gateway.js";
-import { addDays } from "../clock.js";
+import { addDays, addSeconds } from "../clock.js";
 import {
   ArtifactFormatSchema,
   PlanEvalRequestSchema,
@@ -46,7 +46,7 @@ import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
 import { assertSecretHost, loggerUrl } from "../secret-hosts.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./evals/planner.js";
-import { decodeCursor, encodeCursor } from "../store/cursor.js";
+import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
 import { ObjectNotFoundError } from "../storage/types.js";
 import type {
   CheckpointRecord,
@@ -1175,11 +1175,7 @@ export const createRunLifecycle = (
 
     events: async (workspaceId, id, query) => {
       const run = await loadRun(workspaceId, id);
-      const after = decodeCursor(query.cursor, 1);
-      const afterSeq = after ? Number(after[0]) : 0;
-      if (!Number.isInteger(afterSeq) || afterSeq < 0) {
-        throw invalid("invalid_cursor", "The pagination cursor is malformed.");
-      }
+      const afterSeq = decodeIntCursor(query.cursor);
 
       const rows = await store.jobs.listEvents(
         run.id,
@@ -1214,11 +1210,7 @@ export const createRunLifecycle = (
 
     metrics: async (workspaceId, id, query) => {
       const run = await loadRun(workspaceId, id);
-      const after = decodeCursor(query.cursor, 1);
-      const afterSeq = after ? Number(after[0]) : 0;
-      if (!Number.isInteger(afterSeq) || afterSeq < 0) {
-        throw invalid("invalid_cursor", "The pagination cursor is malformed.");
-      }
+      const afterSeq = decodeIntCursor(query.cursor);
 
       const rows = (
         await store.jobs.listEvents(run.id, "metric", afterSeq, query.limit + 1)
@@ -1459,8 +1451,9 @@ export const createRunLifecycle = (
           id,
           {
             attempt_tokens: attemptTokens,
-            lease_expires_at: new Date(
-              clock.now().getTime() + run.lease_seconds * 1000,
+            lease_expires_at: addSeconds(
+              clock.now(),
+              run.lease_seconds,
             ).toISOString(),
           },
           fenceOf(run),

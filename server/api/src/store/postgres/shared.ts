@@ -37,7 +37,4 @@ export const listNewest = async <T extends { created_at: string; id: string }>(
 export const nowIso = (clock: { now(): Date }): string =>
   clock.now().toISOString();
 
-export const addSecondsIso = (at: Date, seconds: number): string =>
-  new Date(at.getTime() + seconds * 1000).toISOString();
-
 export const first = <T>(rows: readonly T[]): T | null => rows[0] ?? null;

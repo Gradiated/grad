@@ -13,7 +13,8 @@ import {
   SlugSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
-import { forbidden, notFound } from "../errors.js";
+import { forbidden } from "../errors.js";
+import { addSeconds } from "../clock.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import { toPublicArtifact } from "../services/artifacts.js";
 import type { Services } from "../services/index.js";
@@ -21,6 +22,7 @@ import { attachmentDisposition } from "../storage/types.js";
 import {
   defaultErrors,
   IdParamSchema,
+  jsonBody,
   jsonResponse,
   requireScope,
   requireSecretUse,
@@ -32,10 +34,6 @@ import {
 const bundleFilename = (a: { name: string; version: string }): string =>
   `${a.name}-${a.version}.grad.tar.gz`;
 
-const jsonBody = <T extends z.ZodType>(schema: T) => ({
-  body: { required: true, content: { "application/json": { schema } } },
-});
-
 /** Holders Gradiated Cloud's inference side pins with (model versions). */
 const INFERENCE_HOLDER_PREFIX = "inference:";
 
@@ -45,13 +43,6 @@ export const registerArtifactRoutes = (
   services: Services,
 ): void => {
   const tags = ["Artifacts"];
-
-  const load = async (workspaceId: string, id: string) => {
-    const artifact = await deps.store.artifacts.get(workspaceId, id);
-    if (!artifact) throw notFound("artifact", id);
-
-    return artifact;
-  };
 
   app.openapi(
     createRoute({
@@ -103,7 +94,10 @@ export const registerArtifactRoutes = (
     async (c) =>
       c.json(
         toPublicArtifact(
-          await load(workspaceOf(c, "artifacts:read"), c.req.valid("param").id),
+          await services.artifacts.get(
+            workspaceOf(c, "artifacts:read"),
+            c.req.valid("param").id,
+          ),
         ),
         200,
       ),
@@ -124,7 +118,7 @@ export const registerArtifactRoutes = (
       },
     }),
     async (c) => {
-      const artifact = await load(
+      const artifact = await services.artifacts.get(
         workspaceOf(c, "artifacts:read"),
         c.req.valid("param").id,
       );
@@ -138,9 +132,7 @@ export const registerArtifactRoutes = (
             seconds,
             { forClient: true, filename },
           ),
-          expires_at: new Date(
-            deps.clock.now().getTime() + seconds * 1000,
-          ).toISOString(),
+          expires_at: addSeconds(deps.clock.now(), seconds).toISOString(),
           sha256: artifact.sha256,
           size_bytes: artifact.size_bytes,
           filename,
@@ -173,7 +165,7 @@ export const registerArtifactRoutes = (
       },
     }),
     async (c) => {
-      const artifact = await load(
+      const artifact = await services.artifacts.get(
         workspaceOf(c, "artifacts:read"),
         c.req.valid("param").id,
       );

@@ -16,12 +16,13 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 
+import { addSeconds } from "../clock.js";
 import type { JwtVerifier } from "../cloud/jwt.js";
 import { PinHolderSchema } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import {
   ApiError,
-  notFound,
+  insufficientScope,
   parseBearer,
   unauthorized,
   validationFailed,
@@ -45,7 +46,7 @@ const StateSchema = z.strictObject({
 
 export interface CloudInternalDeps {
   jwt: JwtVerifier;
-  deps: Pick<AppDependencies, "store" | "storage" | "clock">;
+  deps: Pick<AppDependencies, "storage" | "clock">;
   services: Pick<Services, "workspaces" | "artifacts">;
 }
 
@@ -71,11 +72,9 @@ const authorize = async (
   }
   const scopes = Array.isArray(claims.scopes) ? claims.scopes : [];
   if (claims.ws !== workspaceId || !scopes.includes(scope)) {
-    throw new ApiError(
-      403,
-      "insufficient_scope",
-      "Insufficient scope",
+    throw insufficientScope(
       `This route needs a service token for workspace '${workspaceId}' with scope '${scope}'.`,
+      "insufficient_scope",
     );
   }
 
@@ -86,7 +85,7 @@ const authorize = async (
 export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
   const app = new Hono();
   const { workspaces, artifacts } = deps.services;
-  const { store, storage, clock } = deps.deps;
+  const { storage, clock } = deps.deps;
 
   const holderOf = (c: Context): string => {
     const holder = PinHolderSchema.safeParse(c.req.param("holder"));
@@ -101,8 +100,7 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
 
   /** A release of the workspace (checkpoints are not found) that can be served. */
   const release = async (workspaceId: string, reference: string) => {
-    const artifact = await store.artifacts.get(workspaceId, reference);
-    if (!artifact) throw notFound("artifact", reference);
+    const artifact = await artifacts.get(workspaceId, reference);
     if (artifact.format === "reference") {
       throw new ApiError(
         409,
@@ -131,9 +129,7 @@ export const createCloudInternalRoutes = (deps: CloudInternalDeps): Hono => {
         `The stored bundle of '${artifact.id}' has no full-object SHA-256 checksum equal to its recorded sha256 (${head ? (head.sha256 ?? "none") : "missing object"}).`,
       );
     }
-    const expiresAt = new Date(
-      clock.now().getTime() + RESOLVE_URL_SECONDS * 1000,
-    );
+    const expiresAt = addSeconds(clock.now(), RESOLVE_URL_SECONDS);
 
     return c.json(
       {

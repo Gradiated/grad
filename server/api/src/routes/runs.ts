@@ -23,6 +23,7 @@ import { createSseLimits } from "./sse-limits.js";
 import {
   defaultErrors,
   IdParamSchema,
+  jsonBody,
   jsonResponse,
   requireSecretUse,
   workspaceOf,
@@ -39,10 +40,6 @@ const lastEventIdOf = (c: {
 
   return Number.isInteger(id) && id > 0 ? id : 0;
 };
-
-const jsonBody = <T extends z.ZodType>(schema: T, required = true) => ({
-  body: { required, content: { "application/json": { schema } } },
-});
 
 export const registerRunRoutes = (
   app: OpenAPIHono<AppEnv>,

@@ -23,6 +23,7 @@ import type { Services } from "../services/index.js";
 import {
   defaultErrors,
   IdParamSchema,
+  jsonBody,
   jsonResponse,
   notImplementedError,
   requireScope,
@@ -30,14 +31,6 @@ import {
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
-
-const jsonBody = <T extends z.ZodType>(schema: T) => ({
-  body: { required: true, content: { "application/json": { schema } } },
-});
-
-const optionalJsonBody = <T extends z.ZodType>(schema: T) => ({
-  body: { required: false, content: { "application/json": { schema } } },
-});
 
 export const registerSourceRoutes = (
   app: OpenAPIHono<AppEnv>,
@@ -302,7 +295,7 @@ export const registerSourceRoutes = (
       tags,
       request: {
         params: IdParamSchema,
-        ...optionalJsonBody(SyncSourceRequestSchema),
+        ...jsonBody(SyncSourceRequestSchema, false),
       },
       responses: {
         202: {

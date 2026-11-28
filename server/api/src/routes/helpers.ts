@@ -3,7 +3,7 @@ import { z } from "@hono/zod-openapi";
 
 import { hasScope, type AuthPrincipal } from "../adapters.js";
 import { ProblemSchema, type Scope } from "../contracts.js";
-import { ApiError } from "../errors.js";
+import { ApiError, insufficientScope } from "../errors.js";
 import { metrics } from "../telemetry/metrics.js";
 
 export type AppEnv = {
@@ -16,6 +16,11 @@ export type AppEnv = {
 export const problemContent = {
   "application/problem+json": { schema: ProblemSchema },
 } as const;
+
+/** A JSON request body (`required` false: the body may be omitted). */
+export const jsonBody = <T extends z.ZodType>(schema: T, required = true) => ({
+  body: { required, content: { "application/json": { schema } } },
+});
 
 export const jsonResponse = <T extends z.ZodType>(
   schema: T,
@@ -111,12 +116,7 @@ export const requireScope = (
 ): AuthPrincipal => {
   const principal = c.get("principal");
   if (!hasScope(principal, scope)) {
-    throw new ApiError(
-      403,
-      "forbidden",
-      "Insufficient scope",
-      `This endpoint requires the '${scope}' scope.`,
-    );
+    throw insufficientScope(`This endpoint requires the '${scope}' scope.`);
   }
 
   return principal;
@@ -136,10 +136,7 @@ export const requireSecretUse = (
   if (named.length === 0 || hasScope(c.get("principal"), "secrets:read")) {
     return;
   }
-  throw new ApiError(
-    403,
-    "forbidden",
-    "Insufficient scope",
+  throw insufficientScope(
     `Using workspace secret '${named[0]}' needs the 'secrets:read' scope (or admin) as well.`,
   );
 };

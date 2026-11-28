@@ -27,6 +27,7 @@ import type { Services } from "../services/index.js";
 import {
   defaultErrors,
   IdParamSchema,
+  jsonBody,
   jsonResponse,
   requireScope,
   type AppEnv,
@@ -64,10 +65,6 @@ const UPLOADERS: Readonly<
   records: ["import"],
 };
 
-const body = <T extends z.ZodType>(schema: T) => ({
-  body: { required: true, content: { "application/json": { schema } } },
-});
-
 export const registerTrainerJobRoutes = (
   app: OpenAPIHono<AppEnv>,
   _deps: AppDependencies,
@@ -84,7 +81,7 @@ export const registerTrainerJobRoutes = (
         "Claim the next queued train, import or eval job (trainer:worker)",
       tags,
       "x-internal": true,
-      request: body(ClaimJobRequestSchema),
+      request: jsonBody(ClaimJobRequestSchema),
       responses: {
         200: jsonResponse(
           ClaimJobResponseSchema,
@@ -134,7 +131,7 @@ export const registerTrainerJobRoutes = (
       summary: "Renew the job lease; reports whether the worker should stop",
       tags,
       "x-internal": true,
-      request: { params: IdParamSchema, ...body(HeartbeatRequestSchema) },
+      request: { params: IdParamSchema, ...jsonBody(HeartbeatRequestSchema) },
       responses: {
         200: jsonResponse(HeartbeatResponseSchema, "Lease renewed."),
         ...defaultErrors,
@@ -161,7 +158,7 @@ export const registerTrainerJobRoutes = (
       summary: "Report a train job's phase, or a log or warning line",
       tags,
       "x-internal": true,
-      request: { params: IdParamSchema, ...body(ReportEventRequestSchema) },
+      request: { params: IdParamSchema, ...jsonBody(ReportEventRequestSchema) },
       responses: {
         204: { description: "Stored (a replay is stored once)." },
         ...defaultErrors,
@@ -185,7 +182,10 @@ export const registerTrainerJobRoutes = (
       summary: "Report one training step's metrics",
       tags,
       "x-internal": true,
-      request: { params: IdParamSchema, ...body(ReportProgressRequestSchema) },
+      request: {
+        params: IdParamSchema,
+        ...jsonBody(ReportProgressRequestSchema),
+      },
       responses: {
         200: jsonResponse(
           ReportProgressResponseSchema,
@@ -215,7 +215,10 @@ export const registerTrainerJobRoutes = (
         "Get an upload URL for a checkpoint or artifact bundle, or an import's dataset part",
       tags,
       "x-internal": true,
-      request: { params: IdParamSchema, ...body(WorkerUploadRequestSchema) },
+      request: {
+        params: IdParamSchema,
+        ...jsonBody(WorkerUploadRequestSchema),
+      },
       responses: {
         201: jsonResponse(UploadTicketSchema, "Upload ticket."),
         ...defaultErrors,
@@ -249,7 +252,7 @@ export const registerTrainerJobRoutes = (
       "x-internal": true,
       request: {
         params: IdParamSchema,
-        ...body(RegisterCheckpointRequestSchema),
+        ...jsonBody(RegisterCheckpointRequestSchema),
       },
       responses: {
         200: jsonResponse(CheckpointSchema, "Existing identical checkpoint."),
@@ -282,7 +285,7 @@ export const registerTrainerJobRoutes = (
       "x-internal": true,
       request: {
         params: IdParamSchema,
-        ...body(RegisterImportPartRequestSchema),
+        ...jsonBody(RegisterImportPartRequestSchema),
       },
       responses: {
         200: jsonResponse(RegisterImportPartResponseSchema, "Staged."),
@@ -312,7 +315,7 @@ export const registerTrainerJobRoutes = (
       "x-internal": true,
       request: {
         params: IdParamSchema,
-        ...body(PostEvalOutputsRequestSchema),
+        ...jsonBody(PostEvalOutputsRequestSchema),
       },
       responses: {
         200: jsonResponse(PostEvalOutputsResponseSchema, "Stored."),
@@ -340,7 +343,7 @@ export const registerTrainerJobRoutes = (
         "Finish a job attempt: publish its artifact, bill it, release the lease",
       tags,
       "x-internal": true,
-      request: { params: IdParamSchema, ...body(CompleteJobRequestSchema) },
+      request: { params: IdParamSchema, ...jsonBody(CompleteJobRequestSchema) },
       responses: {
         200: jsonResponse(CompleteJobResponseSchema, "Final job state."),
         ...defaultErrors,

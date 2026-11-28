@@ -1,4 +1,4 @@
-import type { Clock } from "../../clock.js";
+import { addSeconds, type Clock } from "../../clock.js";
 import { queueLimit, workspaceInactive } from "../../errors.js";
 import { newJobId } from "../../ids.js";
 import {
@@ -28,7 +28,7 @@ import {
   type Row,
 } from "./db.js";
 import { toEvent, toJob } from "./mappers.js";
-import { addSecondsIso, first, listNewest, nowIso } from "./shared.js";
+import { first, listNewest, nowIso } from "./shared.js";
 
 /** Record fields stored on grad_jobs (`error` is the last_error column). */
 const JOB_FIELDS: Readonly<Record<string, string>> = {
@@ -401,7 +401,7 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
             JSON.stringify(maxRunning ?? UNCAPPED),
             workerId,
             workerKey,
-            addSecondsIso(now, leaseSeconds),
+            addSeconds(now, leaseSeconds).toISOString(),
             leaseSeconds,
             now.toISOString(),
           ],

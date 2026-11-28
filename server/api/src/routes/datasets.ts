@@ -29,6 +29,7 @@ import { stagingKey } from "../services/uploads.js";
 import {
   defaultErrors,
   IdParamSchema,
+  jsonBody,
   jsonResponse,
   requireSecretUse,
   workspaceOf,
@@ -36,10 +37,6 @@ import {
 } from "./helpers.js";
 
 const NameParamSchema = z.object({ name: SlugSchema });
-
-const jsonBody = <T extends z.ZodType>(schema: T) => ({
-  body: { required: true, content: { "application/json": { schema } } },
-});
 
 export const registerDatasetRoutes = (
   app: OpenAPIHono<AppEnv>,

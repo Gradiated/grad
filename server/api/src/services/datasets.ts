@@ -8,7 +8,7 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
-import { decodeCursor, encodeCursor } from "../store/cursor.js";
+import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
 import type {
   DatasetPart,
   DatasetVersion,
@@ -307,11 +307,7 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
         name,
         input.version,
       );
-      const after = decodeCursor(input.cursor, 1);
-      const offset = after ? Number(after[0]) : 0;
-      if (!Number.isInteger(offset) || offset < 0) {
-        throw invalid("invalid_cursor", "The pagination cursor is malformed.");
-      }
+      const offset = decodeIntCursor(input.cursor);
 
       // One page without loading the version (dataset-pages.ts).
       const index = await indexes.get(version);

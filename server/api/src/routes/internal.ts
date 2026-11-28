@@ -25,6 +25,7 @@ import {
 import type { Clock } from "../clock.js";
 import {
   ApiError,
+  insufficientScope,
   issuesOf,
   parseBearer,
   unauthorized,
@@ -152,11 +153,9 @@ export const createInternalApp = (deps: {
     const input = parsed.data;
     const denied = input.kinds.filter((k) => !orchestrator.kinds.includes(k));
     if (denied.length > 0) {
-      throw new ApiError(
-        403,
-        "job_kind_forbidden",
-        "Insufficient scope",
+      throw insufficientScope(
         `Orchestrator '${orchestrator.label}' may mint tokens only for ${orchestrator.kinds.join(", ")} jobs, not ${denied.join(", ")}.`,
+        "job_kind_forbidden",
       );
     }
     const now = deps.clock.now();

@@ -5,13 +5,15 @@ import { log } from "../telemetry/log.js";
 import type { ArtifactRecord } from "../store/types.js";
 
 /**
- * The artifact registry's write side: deleting a release and pinning it.
+ * The artifact registry: reading a release, deleting it and pinning it.
  * A pin (Gradiated Cloud publishing a model version, say) makes a release
  * undeletable: grad_artifact_pins references it ON DELETE RESTRICT, so no
  * path removes its row, and the orphaned-blob sweep keeps every object a row
  * references.
  */
 export interface ArtifactService {
+  /** A release (or checkpoint) by id or `name@version|latest`, else 404. */
+  get(workspaceId: string, reference: string): Promise<ArtifactRecord>;
   /** 409 `artifact_pinned` (naming the holders) while it is pinned. */
   delete(workspaceId: string, reference: string): Promise<void>;
   pin(
@@ -82,7 +84,7 @@ export const createArtifactService = (
 ): ArtifactService => {
   const { store, storage } = deps;
 
-  const load = async (
+  const get = async (
     workspaceId: string,
     reference: string,
   ): Promise<ArtifactRecord> => {
@@ -93,8 +95,10 @@ export const createArtifactService = (
   };
 
   return {
+    get,
+
     delete: async (workspaceId, reference) => {
-      const { id } = await load(workspaceId, reference);
+      const { id } = await get(workspaceId, reference);
       await store.transaction(async () => {
         const result = await store.artifacts.deleteRelease(workspaceId, id);
         if (!result) throw notFound("artifact", reference);
@@ -115,7 +119,7 @@ export const createArtifactService = (
     },
 
     pin: async (workspaceId, reference, holder, reason) => {
-      const { id } = await load(workspaceId, reference);
+      const { id } = await get(workspaceId, reference);
       const pinned = await store.artifacts
         .pin({ workspaceId, artifactId: id, holder, reason })
         .catch((error: unknown) => {
@@ -129,7 +133,7 @@ export const createArtifactService = (
     },
 
     unpin: async (workspaceId, reference, holder) => {
-      const { id } = await load(workspaceId, reference);
+      const { id } = await get(workspaceId, reference);
       if (!(await store.artifacts.unpin(workspaceId, id, holder))) {
         throw notFound("artifact_pin", `${id} ${holder}`);
       }

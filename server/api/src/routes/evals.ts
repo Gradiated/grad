@@ -17,19 +17,13 @@ import type { Services } from "../services/index.js";
 import {
   defaultErrors,
   IdParamSchema,
+  jsonBody,
   jsonResponse,
   notImplementedError,
   workspaceOf,
   type AppEnv,
 } from "./helpers.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
-
-const jsonBody = <T extends z.ZodType>(schema: T) => ({
-  body: {
-    required: true,
-    content: { "application/json": { schema } },
-  },
-});
 
 const ModelFilterSchema = z.string().min(1).max(200).optional();
 

@@ -17,6 +17,7 @@ import type {
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
 import { conflict, errorMessage, isTransient, notFound } from "../errors.js";
+import { addSeconds } from "../clock.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { HF_HOST } from "../secret-hosts.js";
 import type {
@@ -450,8 +451,9 @@ export const createImportService = (
           detected_scores: [
             ...new Set([...job.detected_scores, ...body.detected_scores]),
           ].sort(),
-          lease_expires_at: new Date(
-            clock.now().getTime() + job.lease_seconds * 1000,
+          lease_expires_at: addSeconds(
+            clock.now(),
+            job.lease_seconds,
           ).toISOString(),
         },
         {

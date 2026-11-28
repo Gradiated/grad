@@ -30,8 +30,6 @@ export const createDbAnchoredClock = (
   };
 };
 
-export const nowIso = (clock: Clock): string => clock.now().toISOString();
-
 export const addSeconds = (date: Date, seconds: number): Date =>
   new Date(date.getTime() + seconds * 1000);
 

@@ -7,6 +7,9 @@ export type CursorValue = string | number;
 export const encodeCursor = (values: readonly CursorValue[]): string =>
   Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
 
+const malformed = () =>
+  invalid("invalid_cursor", "The pagination cursor is malformed.");
+
 export const decodeCursor = (
   cursor: string | undefined,
   arity: number,
@@ -17,7 +20,7 @@ export const decodeCursor = (
   try {
     parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
   } catch {
-    throw invalid("invalid_cursor", "The pagination cursor is malformed.");
+    throw malformed();
   }
 
   if (
@@ -25,10 +28,19 @@ export const decodeCursor = (
     (arity >= 0 && parsed.length !== arity) ||
     !parsed.every((v) => typeof v === "string" || typeof v === "number")
   ) {
-    throw invalid("invalid_cursor", "The pagination cursor is malformed.");
+    throw malformed();
   }
 
   return parsed as CursorValue[];
+};
+
+/** A cursor holding one non-negative integer (an offset or an event seq); 0 without one. */
+export const decodeIntCursor = (cursor: string | undefined): number => {
+  const after = decodeCursor(cursor, 1);
+  const value = after ? Number(after[0]) : 0;
+  if (!Number.isInteger(value) || value < 0) throw malformed();
+
+  return value;
 };
 
 /**

@@ -46,6 +46,12 @@ export const invalid = (code: string, detail: string): ApiError =>
 export const forbidden = (code: string, detail: string): ApiError =>
   new ApiError(403, code, "Forbidden", detail);
 
+/** 403 for a caller without the scope a route or action needs. */
+export const insufficientScope = (
+  detail: string,
+  code = "forbidden",
+): ApiError => new ApiError(403, code, "Insufficient scope", detail);
+
 export const unavailable = (code: string, detail: string): ApiError =>
   new ApiError(501, code, "Not available on this server", detail);
 
