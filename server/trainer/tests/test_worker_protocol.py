@@ -908,6 +908,25 @@ class WorkerProtocolTests(unittest.TestCase):
         seqs = [e["seq"] for e in srv.bodies("events")]
         self.assertEqual(sorted(seqs), list(range(100)))
 
+    def test_a_sigterm_landing_while_a_note_holds_the_lock_does_not_deadlock(self) -> None:
+        # The SIGTERM handler runs on the training thread, between two bytecodes of whatever it
+        # was doing: inside _note's critical section, a plain Lock deadlocked the worker.
+        srv = self.server()
+        worker = self.worker(srv)
+        state = worker_module._JobState(job_id="run_1", attempt=1)
+        state.phase = "training"
+        worker._current = state
+
+        def note_interrupted_by_sigterm() -> None:
+            with worker._lock:  # where _note is when the signal lands
+                worker.request_shutdown(grace_s=60)
+
+        thread = threading.Thread(target=note_interrupted_by_sigterm, daemon=True)
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive(), "request_shutdown deadlocked on the worker lock")
+        self.assertEqual(state.stop_reason, "reclaimed")
+
     def test_a_hung_training_step_hands_the_run_back_and_restarts_the_worker(self) -> None:
         # The heartbeat thread would keep a hung run's lease (and its GPU) forever.
         srv = self.server(jobs=[train_job()])

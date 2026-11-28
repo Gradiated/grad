@@ -544,7 +544,8 @@ class TrainerWorker:
         self._exit: Callable[[int], None] = os._exit
         self._shutdown = threading.Event()
         self._current: _JobState | None = None
-        self._lock = threading.Lock()
+        # Reentrant: the SIGTERM handler takes it on the training thread, which may hold it.
+        self._lock = threading.RLock()
         # Step reports (trackers, then /progress) run here, one at a time and in order.
         self._reports = ThreadPoolExecutor(max_workers=1, thread_name_prefix="grad-progress")
         # Steps shorter than this report in the background (see _report_step).
