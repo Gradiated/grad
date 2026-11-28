@@ -385,7 +385,7 @@ With `networkPolicy.enabled`, `metrics.allowFrom` says who may reach the metrics
 Each alert's `runbook_url` points at its entry here, at the chart's release tag. `kubectl` lines assume the release `grad` in namespace `grad`; every 5xx log line carries `request_id` and `trace_id`, and every job's lines carry `job_id`.
 
 #### GradApiErrorRateHigh
-More than 5% of API requests return 5xx. `kubectl -n grad logs -l app.kubernetes.io/component=api --since=15m | grep '"level":"error"'` shows the cause: `database_unavailable` (see [GradDatabaseErrors](#graddatabaseerrors)), `storage_unavailable` (see [GradStorageErrors](#gradstorageerrors)), `auth_unavailable` (Cloud: the auth view), or `internal_error` with a stack (a bug: report it with the `request_id`). If one replica alone fails (`sum by (pod)` on `grad_http_requests_total`), delete that pod.
+More than 5% of API requests return 5xx. `kubectl -n grad logs -l app.kubernetes.io/component=api --since=15m | grep '"level":"error"'` shows the cause: `database_unavailable` (see [GradDatabaseErrors](#graddatabaseerrors)), `storage_unavailable` (see [GradStorageErrors](#gradstorageerrors)), `auth_unavailable` (Cloud: the auth view), `storage_object_missing` (the bucket lost objects the database names, or was restored from a copy older than the database: see [Backup and restore](#backup-and-restore)), or `internal_error` with a stack (a bug: report it with the `request_id`). If one replica alone fails (`sum by (pod)` on `grad_http_requests_total`), delete that pod.
 
 #### GradJobQueuedTooLong
 The oldest claimable job of a kind has waited 30 minutes. Check that the kind's pool has running pods (`kubectl -n grad get pods -l app.kubernetes.io/component=worker`), that KEDA scaled it (`kubectl -n grad get scaledobject`), and, for `train`, that a GPU node fits the run (`grad_jobs_unfit` counts runs that need more GPU memory than any online worker has). Jobs held only by their workspace's running cap don't count here.
@@ -436,6 +436,35 @@ Both send `metrics-token` when `metrics.requireToken` is on, and neither needs d
 Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) is set. grad-server then exports spans for HTTP requests, Postgres queries and storage operations, and passes a W3C `traceparent` to the worker in the job payload, so one trace links a run's creation, claim, training and completion.
 
 Every component logs one JSON object per line to stdout: `time`, `level` (`info`, `warn`, `error`), `component` (`api`, `eval-worker`, `migrate`, `trainer`) and `msg`, plus `request_id`, `trace_id`, `job_id`, `run_id`, `attempt`, `worker_id` and `workspace_id` where they apply (ids belong in logs, never in metric labels). Errors carry `error`, `error_type` and `stack`. The trainer logs each claim, phase change, checkpoint (step, reason, size, upload time), reclaim and termination notice, OOM retry, lease loss and the attempt's outcome, and routes library warnings (transformers, peft) through the same format. API keys, lease tokens, bearer tokens and presigned-URL signatures are masked if one ever reaches a log line, and import workers also mask the provider keys and Hugging Face tokens their job carries.
+
+## Backup and restore
+
+grad keeps state in two places, and both must be backed up together: **Postgres** (runs, jobs, datasets' versions and parts index, artifacts and pins, evals, the usage ledger, API key hashes and encrypted workspace secrets) and **the bucket** (dataset parts, checkpoints, artifact bundles, uploads). Also keep the Secret's `secrets-key` (`GRAD_SECRETS_KEY`; without it workspace secrets can't be decrypted) and `admin-api-key-hash`, or the KMS key with `GRAD_SECRETS_KMS_KEY_ID`.
+
+**Order: Postgres first, then the bucket.** grad writes an object before the row that references it commits, never overwrites an object (keys are content-addressed), and deletes the row before the object. So a bucket copy started after a database snapshot finished holds every object the snapshot references, except objects deleted in between: checkpoints that expired (a running run keeps three), artifacts deleted with `grad artifacts delete`, purged workspaces and unused uploads. Bucket versioning closes that gap: keep noncurrent versions longer than your copy takes (a lifecycle rule expiring them after 7 days is plenty) and restore the objects as of the snapshot's time. A bucket copy older than the database is not consistent: rows would name objects it never had. Objects the snapshot doesn't reference (written after it) are harmless; the orphan sweep deletes them after `ORPHAN_BLOB_DAYS` (7).
+
+Both copies can be taken live. With managed Postgres, use its snapshots or point-in-time recovery and S3 versioning or replication; elsewhere:
+
+```bash
+pg_dump -Fc "$DATABASE_URL" > grad.dump                      # 1. the database (a consistent snapshot)
+aws s3 sync s3://my-grad-artifacts s3://my-grad-backup/latest  # 2. then the bucket
+```
+
+To restore, stop grad, restore the database, then the bucket, then start it again:
+
+```bash
+kubectl -n grad scale deploy -l app.kubernetes.io/instance=grad --replicas 0
+pg_restore --no-owner --exit-on-error -d "$DATABASE_URL" grad.dump   # into an empty database
+aws s3 sync s3://my-grad-backup/latest s3://my-grad-artifacts
+helm upgrade grad server/helm/grad --namespace grad --reuse-values  # migrates an older backup, restores the replica counts
+```
+
+What a restore to time T guarantees:
+
+- Everything committed before T is back: datasets, artifacts (each still matches its SHA-256), evals, keys, secrets and the usage ledger.
+- Work after T is lost: runs created or finished after T, newer checkpoints and releases. Their objects stay in the bucket until the orphan sweep deletes them.
+- A job that was running at T still names its old lease. The lease expires (lease + lease/3), the job requeues as the next attempt and resumes from its latest checkpoint before T. Usage chains per attempt, so nothing is billed twice in grad's ledger.
+- Cloud: usage rows already exported after T are exported again with the same `event_id`, which billing counts as duplicates. A replayed attempt that billing refuses as a conflict is parked ([GradUsageRowsParked](#gradusagerowsparked)), never dropped.
 
 ## Retention
 
