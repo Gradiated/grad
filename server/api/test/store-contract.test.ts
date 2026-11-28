@@ -600,6 +600,59 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
       );
     });
 
+    it("jobs: a job's events commit in seq order, so a reader following seq never skips one", async () => {
+      // A metric drawn inside a still-open transaction (progress bills usage
+      // after it) and a checkpoint event written meanwhile: a stream that saw
+      // the checkpoint first would move its cursor past the metric for good.
+      const run = await makeRun();
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let metricSeq = 0;
+      let drawn = () => {};
+      const metricDrawn = new Promise<void>((resolve) => (drawn = resolve));
+      const progress = store.transaction(async (tx) => {
+        metricSeq = (
+          await tx.jobs.appendEvent({
+            jobId: run.id,
+            attempt: 1,
+            type: "metric",
+            step: 5,
+            payload: { step: 5 },
+          })
+        ).seq;
+        drawn();
+        await gate;
+      });
+      await metricDrawn;
+      const checkpoint = store.jobs.appendEvent({
+        jobId: run.id,
+        attempt: 1,
+        type: "checkpoint",
+        step: 5,
+        payload: {},
+      });
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        // Nothing of the job is visible yet: the checkpoint waits for the metric.
+        expect(
+          await store.jobs.listEventsSince(
+            [{ jobId: run.id, afterSeq: 0 }],
+            10,
+          ),
+        ).toEqual([]);
+      } finally {
+        release();
+        await progress;
+      }
+      const checkpointSeq = (await checkpoint).seq;
+      expect(checkpointSeq).toBeGreaterThan(metricSeq);
+      expect(
+        (
+          await store.jobs.listEventsSince([{ jobId: run.id, afterSeq: 0 }], 10)
+        ).map((e) => e.type),
+      ).toEqual(["metric", "checkpoint"]);
+    });
+
     // --- Imports and staged parts -----------------------------------------
 
     it("imports: payload fields update with the job, staged parts commit as one version", async () => {

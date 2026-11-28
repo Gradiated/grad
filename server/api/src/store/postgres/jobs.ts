@@ -468,10 +468,17 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
     ),
   appendEvent: async ({ jobId, attempt, type, step, key, payload }) => {
     const natural = key ?? String(step);
+    // A job's events commit in seq order: the insert takes the job row's lock
+    // (held to the end of the caller's transaction) before it draws a seq. A
+    // reader follows a job by `seq > cursor`, so an event that drew a lower
+    // seq but committed later (a metric still billing while a checkpoint
+    // event commits) would otherwise be skipped by every live stream.
     const inserted = first(
       await db.query(
-        `INSERT INTO grad_job_events (job_id, attempt, type, step, key, payload, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)
+        `WITH job AS (SELECT id FROM grad_jobs WHERE id = $1 FOR NO KEY UPDATE)
+         INSERT INTO grad_job_events (job_id, attempt, type, step, key, payload, created_at)
+         SELECT $1::text, $2::int, $3::text, $4::int, $5::text, $6::jsonb, $7::timestamptz
+           FROM (SELECT 1) AS one LEFT JOIN job ON true
          ON CONFLICT (job_id, attempt, type, key) DO NOTHING RETURNING *`,
         [
           jobId,
