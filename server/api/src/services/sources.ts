@@ -38,7 +38,7 @@ import type {
 import { log } from "../telemetry/log.js";
 import { toPublicImport } from "./imports.js";
 import { cloudFilters, effectiveFilters } from "./source-filters.js";
-import type { JobQueue } from "./jobs.js";
+import { loadLeased } from "./jobs.js";
 
 type CreateSourceBody = z.infer<typeof CreateSourceRequestSchema>;
 type UpdateSourceBody = z.infer<typeof UpdateSourceRequestSchema>;
@@ -258,10 +258,7 @@ const sourceUnavailable = () =>
     "The 'gradiated' source isn't available on this server: it reads traces recorded by the Gradiated Cloud gateway, and is coming soon on Gradiated Cloud. Meanwhile, connect your observability tool instead (langfuse, langsmith, braintrust, posthog or phoenix).",
   );
 
-export const createSourceService = (
-  deps: AppDependencies,
-  collaborators: { queue: () => JobQueue },
-): SourceService => {
+export const createSourceService = (deps: AppDependencies): SourceService => {
   const { store, clock, settings } = deps;
 
   // The re-seal pass's position (by secret id); "" starts a new pass.
@@ -890,9 +887,7 @@ export const createSourceService = (
 
     pullTracesFor: async (principal, jobId, { worker_id, attempt, cursor }) => {
       if (!deps.traces) throw sourceUnavailable();
-      await collaborators
-        .queue()
-        .loadLeased(principal, jobId, worker_id, attempt);
+      await loadLeased(store, principal, jobId, worker_id, attempt);
       const job = await store.imports.getById(jobId);
       if (!job) throw notFound("trainer_job", jobId);
       const payload = job.source as unknown as SyncPayload;

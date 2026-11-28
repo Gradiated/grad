@@ -45,7 +45,8 @@ import {
   RELEASE,
   requeuePatch,
   type JobKindHandler,
-  type JobQueue,
+  loadForWorker,
+  loadLeased,
 } from "./jobs.js";
 import {
   isSyncPayload,
@@ -149,7 +150,6 @@ export const createImportService = (
     sources: SourceService;
     datasets: Pick<DatasetService, "settleCount">;
     artifactImports: ArtifactImportService;
-    queue: () => JobQueue;
   },
 ): ImportService => {
   const { store, storage, clock, settings } = deps;
@@ -403,9 +403,7 @@ export const createImportService = (
     },
 
     createUpload: async (principal, id, body) => {
-      await collaborators
-        .queue()
-        .loadLeased(principal, id, body.worker_id, body.attempt);
+      await loadLeased(store, principal, id, body.worker_id, body.attempt);
       const job = await load(id);
       // An artifact import uploads its bundle to the released-artifacts
       // prefix; a dataset import uploads gzip JSONL parts.
@@ -428,9 +426,7 @@ export const createImportService = (
     },
 
     registerPart: async (principal, id, body) => {
-      await collaborators
-        .queue()
-        .loadLeased(principal, id, body.worker_id, body.attempt);
+      await loadLeased(store, principal, id, body.worker_id, body.attempt);
       const job = await load(id);
       if (job.artifact) {
         throw conflict("wrong_job_kind", "Artifact imports stage no parts.");
@@ -484,7 +480,7 @@ export const createImportService = (
     },
 
     complete: async (principal, id, body) => {
-      const row = await collaborators.queue().loadForWorker(principal, id);
+      const row = await loadForWorker(store, principal, id);
       const job = await load(row.id);
       const done = async (
         final: ImportJobRecord,

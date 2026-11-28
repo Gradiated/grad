@@ -24,6 +24,7 @@ import type {
   JobRow,
   JobStatus,
   QueueSnapshot,
+  Store,
 } from "../store/types.js";
 
 /**
@@ -285,6 +286,36 @@ export const observeInterruption = (
 
 const STAT_PHASES = new Set<string>(WORKER_STAT_PHASES);
 
+/** A job this worker principal may see (its key's workspace and kinds), else 404. */
+export const loadForWorker = async (
+  store: Pick<Store, "jobs">,
+  principal: AuthPrincipal,
+  id: string,
+): Promise<JobRow> => {
+  const job = await store.jobs.getById(id);
+  if (!job) throw notFound("trainer_job", id);
+  assertWorkerScope(principal, job.workspace_id, id);
+  if (claimableKinds(principal, [job.kind]).length === 0) {
+    throw notFound("trainer_job", id);
+  }
+
+  return job;
+};
+
+/** The job behind a worker write, if this worker holds `attempt`'s lease. */
+export const loadLeased = async (
+  store: Pick<Store, "jobs">,
+  principal: AuthPrincipal,
+  id: string,
+  workerId: string,
+  attempt: number,
+): Promise<JobRow> => {
+  const job = await loadForWorker(store, principal, id);
+  if (!holdsLease(principal, job, workerId, attempt)) throw leaseLost(id);
+
+  return job;
+};
+
 export interface JobQueue {
   /** Worker claim: its held job again (lost response), else the oldest claimable. */
   claim(
@@ -315,15 +346,6 @@ export interface JobQueue {
   }>;
   /** Extends `job`'s lease if this holder still has it; false when lost. */
   renew(job: JobRow, leaseSeconds?: number): Promise<JobRow | null>;
-  /** The job behind a worker write, if this worker holds `attempt`'s lease. */
-  loadLeased(
-    principal: AuthPrincipal,
-    id: string,
-    workerId: string,
-    attempt: number,
-  ): Promise<JobRow>;
-  /** A job visible to this worker principal, or 404. */
-  loadForWorker(principal: AuthPrincipal, id: string): Promise<JobRow>;
   /** Reaper: closes attempts whose lease expired (one heartbeat of grace). */
   expireLeases(now: Date): Promise<number>;
 }
@@ -393,17 +415,6 @@ export const createJobQueue = (
       { parent: contextFromTraceparent(job.traceparent) },
     );
 
-  const loadForWorker = async (principal: AuthPrincipal, id: string) => {
-    const job = await store.jobs.getById(id);
-    if (!job) throw notFound("trainer_job", id);
-    assertWorkerScope(principal, job.workspace_id, id);
-    if (claimableKinds(principal, [job.kind]).length === 0) {
-      throw notFound("trainer_job", id);
-    }
-
-    return job;
-  };
-
   return {
     claim: async (principal, input) => {
       await expireLeases(clock.now());
@@ -457,7 +468,7 @@ export const createJobQueue = (
     },
 
     heartbeat: async (principal, id, body) => {
-      const job = await loadForWorker(principal, id);
+      const job = await loadForWorker(store, principal, id);
       if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
         throw leaseLost(id);
       }
@@ -482,15 +493,6 @@ export const createJobQueue = (
     },
 
     renew,
-
-    loadLeased: async (principal, id, workerId, attempt) => {
-      const job = await loadForWorker(principal, id);
-      if (!holdsLease(principal, job, workerId, attempt)) throw leaseLost(id);
-
-      return job;
-    },
-
-    loadForWorker,
 
     expireLeases,
   };

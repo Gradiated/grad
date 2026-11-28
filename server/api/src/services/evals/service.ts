@@ -62,7 +62,7 @@ import {
   requeuePatch,
   workerKeyOf,
   type JobKindHandler,
-  type JobQueue,
+  loadForWorker,
   isTerminal,
 } from "../jobs.js";
 import { metrics } from "../../telemetry/metrics.js";
@@ -209,7 +209,6 @@ export const createEvalService = (
   collaborators: {
     datasets: DatasetService;
     usage: UsageService;
-    queue: () => JobQueue;
   },
 ): EvalService => {
   const { datasets, usage } = collaborators;
@@ -577,7 +576,7 @@ export const createEvalService = (
     workerId: string,
     attempt: number,
   ): Promise<EvalRecord> => {
-    const row = await collaborators.queue().loadForWorker(principal, id);
+    const row = await loadForWorker(store, principal, id);
     const record = row.kind === "eval" && (await store.evals.getById(id));
     if (!record) throw notFound("trainer_job", id);
     if (!holdsLease(principal, record, workerId, attempt)) throw leaseLost(id);
@@ -735,7 +734,7 @@ export const createEvalService = (
   };
 
   const complete: EvalService["complete"] = async (principal, id, body) => {
-    const row = await collaborators.queue().loadForWorker(principal, id);
+    const row = await loadForWorker(store, principal, id);
     const job = row.kind === "eval" ? await store.evals.getById(id) : null;
     if (!job) throw notFound("trainer_job", id);
     if (!holdsLease(principal, job, body.worker_id, body.attempt)) {
@@ -1208,7 +1207,7 @@ export const createEvalService = (
     complete,
 
     datasetStream: async (principal, id, attempt) => {
-      const row = await collaborators.queue().loadForWorker(principal, id);
+      const row = await loadForWorker(store, principal, id);
       if (row.kind !== "eval") throw notFound("trainer_job", id);
       // Only the credential holding the lease reads the eval's data.
       if (

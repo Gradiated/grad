@@ -72,7 +72,8 @@ import {
   type JobKindHandler,
   observeInterruption,
   queueView,
-  type JobQueue,
+  loadForWorker,
+  loadLeased,
   type StopReason,
   workerKeyOf,
 } from "./jobs.js";
@@ -379,7 +380,6 @@ export const createRunLifecycle = (
     uploads: UploadService;
     usage: UsageService;
     evals: EvalService;
-    queue: () => JobQueue;
   },
 ): RunLifecycle => {
   const { store, storage, clock, settings } = deps;
@@ -404,13 +404,12 @@ export const createRunLifecycle = (
   };
 
   /** The run behind a worker write, if this worker holds `attempt`'s lease. */
-  const loadLeased = async (
+  const loadLeasedRun = async (
     principal: AuthPrincipal,
     id: string,
-    workerId: string,
-    attempt: number,
+    holder: { worker_id: string; attempt: number },
   ): Promise<RunRecord> => {
-    await collaborators.queue().loadLeased(principal, id, workerId, attempt);
+    await loadLeased(store, principal, id, holder.worker_id, holder.attempt);
 
     return loadById(id);
   };
@@ -1252,7 +1251,7 @@ export const createRunLifecycle = (
     },
 
     progress: async (principal, id, body) => {
-      const run = await loadLeased(principal, id, body.worker_id, body.attempt);
+      const run = await loadLeasedRun(principal, id, body);
       const attemptTokens = Math.max(run.attempt_tokens, body.metric.tokens);
       const cost = runCost(run, attemptTokens);
       // One step's point is stored once per attempt (a retry returns it), and
@@ -1316,7 +1315,7 @@ export const createRunLifecycle = (
     },
 
     createUpload: async (principal, id, body) => {
-      const run = await loadLeased(principal, id, body.worker_id, body.attempt);
+      const run = await loadLeasedRun(principal, id, body);
 
       return uploads.ticket(
         // The final bundle goes straight to the released-artifacts prefix;
@@ -1329,7 +1328,7 @@ export const createRunLifecycle = (
     },
 
     registerCheckpoint: async (principal, id, body) => {
-      const run = await loadLeased(principal, id, body.worker_id, body.attempt);
+      const run = await loadLeasedRun(principal, id, body);
       const blob = await uploads.commit(body.upload_id, (sha) =>
         jobBlobKey(run, run.attempt, sha),
       );
@@ -1389,7 +1388,7 @@ export const createRunLifecycle = (
     },
 
     complete: async (principal, id, body) => {
-      await collaborators.queue().loadForWorker(principal, id);
+      await loadForWorker(store, principal, id);
       const run = await loadById(id);
 
       if (!holdsLease(principal, run, body.worker_id, body.attempt)) {
@@ -1540,7 +1539,7 @@ export const createRunLifecycle = (
     },
 
     reportEvent: async (principal, id, body) => {
-      const run = await loadLeased(principal, id, body.worker_id, body.attempt);
+      const run = await loadLeasedRun(principal, id, body);
       if (body.type === "phase") {
         await appendPhase(store.jobs, {
           jobId: run.id,
@@ -1596,7 +1595,7 @@ export const createRunLifecycle = (
     },
 
     datasetStream: async (principal, id, attempt) => {
-      const row = await collaborators.queue().loadForWorker(principal, id);
+      const row = await loadForWorker(store, principal, id);
       // Only the credential holding the lease reads the training data.
       if (
         row.attempt !== attempt ||

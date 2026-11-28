@@ -43,18 +43,10 @@ export interface Services {
 }
 
 export const createServices = (deps: AppDependencies): Services => {
-  // The queue calls back into each kind's handler, and the kinds use the
-  // queue: they reach it through this getter.
-  let queue: JobQueue | null = null;
-  const getQueue = (): JobQueue => {
-    if (!queue) throw new Error("The job queue is not wired yet.");
-    return queue;
-  };
-
   const datasets = createDatasetService(deps);
   const uploads = createUploadService(deps);
   const usage = createUsageService(deps);
-  const sources = createSourceService(deps, { queue: getQueue });
+  const sources = createSourceService(deps);
   const artifacts = createArtifactService(deps);
   const artifactImports = createArtifactImportService(deps, {
     uploads,
@@ -65,17 +57,15 @@ export const createServices = (deps: AppDependencies): Services => {
     sources,
     datasets,
     artifactImports,
-    queue: getQueue,
   });
-  const evals = createEvalService(deps, { datasets, usage, queue: getQueue });
+  const evals = createEvalService(deps, { datasets, usage });
   const runs = createRunLifecycle(deps, {
     datasets,
     uploads,
     usage,
     evals,
-    queue: getQueue,
   });
-  queue = createJobQueue(deps, {
+  const queue = createJobQueue(deps, {
     train: runs.handler,
     import: imports.handler,
     eval: evals.handler,
