@@ -228,7 +228,7 @@ grad artifacts download sql-helper@latest --output ./sql-helper
 vllm serve Qwen/Qwen3-8B --enable-lora --max-lora-rank 32 --lora-modules sql-helper=./sql-helper
 ```
 
-Weights trained elsewhere become artifacts too. `grad artifacts upload ./my-lora --base qwen/qwen3-8b` and `grad artifacts import hf://acme/support-lora --base qwen/qwen3-8b` check the files against the [format spec](docs/ARTIFACT_FORMATS.md) and the base model (for a LoRA: the adapter config, base and revision, target modules and every tensor shape), then register `my-lora@YYYY-MM-DD-n`. You can evaluate an uploaded artifact, download it or continue training from it like a trained one, and its `provenance` records where it came from.
+Weights trained elsewhere become artifacts too. `grad artifacts upload ./my-lora --base qwen/qwen3-8b` and `grad artifacts import hf://acme/support-lora --base qwen/qwen3-8b` check the files against the [format spec](docs/ARTIFACT_FORMATS.md) and the base model (for a LoRA: the adapter config, base and revision, target modules and every tensor shape), then register `my-lora@YYYY-MM-DD-n`. A directory is first packed into a `.tar.gz` in the system temporary directory (as much disk as the directory holds; set `TMPDIR` to put it elsewhere when `/tmp` is a small tmpfs). You can evaluate an uploaded artifact, download it or continue training from it like a trained one, and its `provenance` records where it came from.
 
 On Gradiated Cloud, publishing an artifact as a model version goes through the Cloud Models API, which pins the artifact so grad never deletes it. See [Deploying](https://gradiated.com/docs/training/deploying/) for SGLang and the other bundle formats.
 

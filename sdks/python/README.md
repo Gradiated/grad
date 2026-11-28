@@ -41,7 +41,7 @@ directory (`adapter_config.json` + `adapter_model.safetensors`) that `vllm serve
 --enable-lora --max-lora-rank 32 --lora-modules sql-helper=./sql-helper` loads directly.
 
 Weights trained elsewhere become artifacts too: `client.artifacts.upload("./my-lora",
-base="qwen/qwen3-8b").wait()` uploads a directory (tarred) or a `.tar.gz`, and
+base="qwen/qwen3-8b").wait()` uploads a directory (tarred first in `TMPDIR`, so it needs that much free disk there) or a `.tar.gz`, and
 `client.artifacts.from_hf("hf://acme/support-lora@main", base="qwen/qwen3-8b").wait()` imports a
 Hugging Face repo at a pinned commit. An import worker checks the files against the artifact
 format spec and the base model; a failure raises `grad.ArtifactImportFailedError` (`code`
