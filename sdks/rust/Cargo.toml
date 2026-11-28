@@ -8,6 +8,7 @@ rust-version = "1.82"
 repository = "https://github.com/Gradiated/grad"
 homepage = "https://gradiated.com/docs/training/"
 documentation = "https://docs.rs/grad-sdk"
+readme = "README.md"
 keywords = ["llm", "fine-tuning", "lora", "sdk", "gradiated"]
 categories = ["api-bindings"]
 

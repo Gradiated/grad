@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { inspect } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -52,6 +53,33 @@ describe.skipIf(skip !== undefined)("live: self-hosted with the reference worker
   afterAll(async () => {
     await stack?.stop();
     home?.cleanup();
+  });
+
+  it("README quickstart, verbatim", async () => {
+    const readme = readFileSync(path.resolve(import.meta.dirname, "../../README.md"), "utf8");
+    const block = /```ts\n([\s\S]*?)```/.exec(readme)?.[1] ?? "";
+    expect(block).toContain('recipes.sft({ model: "test/tiny-qwen3" })');
+    const module = path.join(home.dir, "readme-quickstart.ts");
+    writeFileSync(module, block.replace('"@gradiated/grad"', JSON.stringify(path.resolve(import.meta.dirname, "../../src/index.ts"))));
+    const saved = { cwd: process.cwd(), key: process.env.GRADIATED_API_KEY, url: process.env.GRADIATED_BASE_URL, log: console.log };
+    const printed: unknown[][] = [];
+    process.chdir(home.dir);
+    Object.assign(process.env, { GRADIATED_API_KEY: stack.apiKey, GRADIATED_BASE_URL: stack.baseURL });
+    console.log = (...args: unknown[]) => void printed.push(args);
+    try {
+      await import(module);
+    } finally {
+      console.log = saved.log;
+      process.chdir(saved.cwd);
+      for (const [name, value] of [["GRADIATED_API_KEY", saved.key], ["GRADIATED_BASE_URL", saved.url]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    expect(inspect(printed[0]?.[0])).toContain("Estimate");
+    expect(printed[1]?.[0]).toBe("completed");
+    expect(String(printed[1]?.[1])).toMatch(/^sql-helper@/);
+    expect(readFileSync(path.join(home.dir, "sql-helper.grad.tar.gz")).length).toBeGreaterThan(0);
   });
 
   it("quickstart: create, importFile().wait(), plan, train with .wait(), metrics, download, provenance", async () => {

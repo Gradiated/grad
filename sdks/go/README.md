@@ -5,6 +5,8 @@ Go 1.24+ (iterators).
 
 ```sh
 go get github.com/Gradiated/grad/sdks/go
+grad local up --dev-models        # a server on this machine with tiny CPU test models (brew install gradiated/tap/grad)
+export GRADIATED_PROFILE=local    # or GRADIATED_BASE_URL + GRADIATED_API_KEY for your own server
 ```
 
 ## Quickstart
@@ -22,32 +24,37 @@ import (
 
 func main() {
 	ctx := context.Background()
-	// GRADIATED_API_KEY and GRADIATED_BASE_URL, else the profile `grad login` wrote.
-	client := grad.NewClient()
-
-	dataset, err := client.Datasets.Create(ctx, "support-prod")
+	client := grad.NewClient() // GRADIATED_PROFILE, else GRADIATED_API_KEY and GRADIATED_BASE_URL, else `grad login`
+	dataset, err := client.Datasets.Push(ctx, "sql-quickstart", []grad.Trajectory{
+		{Messages: []grad.Message{{Role: "user", Content: "Count active users."}, {Role: "assistant", Content: "SELECT count(*) FROM users WHERE active;"}}},
+		{Messages: []grad.Message{{Role: "user", Content: "Revenue by plan."}, {Role: "assistant", Content: "SELECT plan, sum(amount_usd) FROM invoices GROUP BY plan;"}}},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	if _, err := dataset.ImportFile(ctx, "./support_traces.jsonl").Wait(ctx); err != nil {
-		log.Fatal(err)
-	}
-
-	run, err := client.Runs.Create(ctx, grad.RunParams{
-		Dataset: dataset,
-		Name:    "support-router",
-		Recipe:  grad.RouterRecipe{},
-	}).Wait(ctx, grad.WithOnMetric(func(m grad.MetricPoint) { fmt.Println(m.Step, m.Loss) }))
+	params := grad.RunParams{Dataset: dataset, Name: "sql-helper", MaxCostUSD: 5,
+		Recipe: grad.SFTRecipe{Common: grad.Common{Model: "test/tiny-qwen3"}}} // a dev model; on a GPU server e.g. "qwen/qwen3-8b"
+	plan, err := client.Runs.Plan(ctx, params) // $0 preview: defaults, warnings, cost
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	// The PEFT LoRA, verified against its SHA-256, for vLLM or SGLang.
-	if _, err := run.Download(ctx, "./support-router"); err != nil {
+	fmt.Println(plan)
+	run, err := client.Runs.Create(ctx, params).Wait(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(run.Status, *run.ArtifactID) // completed sql-helper@2026-11-28-1
+	if _, err := run.Download(ctx, "./sql-helper.grad.tar.gz"); err != nil { // the bundle, verified against its SHA-256
 		log.Fatal(err)
 	}
 }
 ```
+
+This runs in about 10 seconds on `grad local up --dev-models`; `live_test.go`
+(`TestLiveSelfHosted/README_quickstart_verbatim`) builds and runs this block verbatim against a real server.
+`test/tiny-qwen3` has random weights, so its adapter is for trying the workflow; the same code on
+a GPU server with a real base model trains a real adapter. The bundle is a `.tar.gz` of the PEFT
+adapter and its manifest: `tar xzf` it and serve the directory with vLLM or SGLang.
 
 Against a self-hosted server:
 `grad.NewClient(grad.WithBaseURL("https://grad.internal.example"), grad.WithAPIKey(key))`.

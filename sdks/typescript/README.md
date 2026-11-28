@@ -7,6 +7,8 @@ types, Node 20+. Browser-safe except the file helpers (`importFile`,
 
 ```sh
 npm install @gradiated/grad
+grad local up --dev-models        # a server on this machine with tiny CPU test models (brew install gradiated/tap/grad)
+export GRADIATED_PROFILE=local    # or GRADIATED_BASE_URL + GRADIATED_API_KEY for your own server
 ```
 
 ## Quickstart
@@ -14,21 +16,28 @@ npm install @gradiated/grad
 ```ts
 import { Grad, recipes } from "@gradiated/grad";
 
-// GRADIATED_API_KEY and GRADIATED_BASE_URL, else the profile `grad login` wrote.
-const grad = new Grad();
-
-const dataset = await grad.datasets.create("support-prod");
-await dataset.importFile("./support_traces.jsonl").wait();
-
-const run = await grad.runs
-  .create({ dataset, name: "support-router", recipe: recipes.router() })
-  .wait({ onMetric: (m) => console.log(m.step, m.loss) });
-
-await run.download("./support-router"); // verified against its SHA-256
-
-// Weights trained elsewhere: validated against the format spec and the base model.
-const lora = await grad.artifacts.upload("./my-lora", { base: "qwen/qwen3-8b" }).wait();
+const grad = new Grad(); // GRADIATED_PROFILE, else GRADIATED_API_KEY and GRADIATED_BASE_URL, else `grad login`
+const dataset = await grad.datasets.push("sql-quickstart", [
+  { messages: [{ role: "user", content: "Count active users." }, { role: "assistant", content: "SELECT count(*) FROM users WHERE active;" }] },
+  { messages: [{ role: "user", content: "Revenue by plan." }, { role: "assistant", content: "SELECT plan, sum(amount_usd) FROM invoices GROUP BY plan;" }] },
+]);
+const recipe = recipes.sft({ model: "test/tiny-qwen3" }); // a dev model; on a GPU server e.g. "qwen/qwen3-8b"
+console.log(await grad.runs.plan({ dataset, name: "sql-helper", recipe })); // $0 preview: defaults, warnings, cost
+const run = await grad.runs.create({ dataset, name: "sql-helper", recipe, maxCostUsd: 5 }).wait();
+console.log(run.status, run.artifactId); // completed sql-helper@2026-11-28-1
+await run.download("./sql-helper.grad.tar.gz"); // the bundle, verified against its SHA-256
 ```
+
+This runs in about 10 seconds on `grad local up --dev-models`; the live suite runs this block
+verbatim against a real server (`test/live/self-hosted.live.test.ts`, "README quickstart").
+`test/tiny-qwen3` has random weights, so its adapter is for trying the workflow; the same code on
+a GPU server with a real base model trains a real adapter. The bundle is a `.tar.gz` of the PEFT
+adapter (`adapter_config.json`, `adapter_model.safetensors`) and its manifest: `tar xzf` it and
+serve the directory with vLLM or SGLang.
+
+Weights trained elsewhere become artifacts too:
+`await grad.artifacts.upload("./my-lora", { base: "qwen/qwen3-8b" }).wait()` checks them against
+the format spec and the base model.
 
 Follow a run's lifecycle as typed events (narrow on `ev.type`; reconnects are
 invisible, the stream ends after `completed`):

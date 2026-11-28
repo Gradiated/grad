@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -176,6 +177,36 @@ func TestLiveSelfHosted(t *testing.T) {
 		var conflict *grad.ConflictError
 		if _, err := client.Datasets.Create(ctx, "go-idempotent-create"); !errors.As(err, &conflict) {
 			t.Fatalf("a new logical create must not be replayed: %v", err)
+		}
+	})
+
+	t.Run("README quickstart verbatim", func(t *testing.T) {
+		// Build the README's program in its own module (replace points at this checkout) and run it.
+		root := repoRoot(t)
+		readme := string(must(os.ReadFile(filepath.Join(root, "sdks", "go", "README.md")))(t))
+		block := regexp.MustCompile("(?s)```go\n(.*?)```").FindStringSubmatch(readme)
+		if block == nil || !strings.Contains(block[1], `Model: "test/tiny-qwen3"`) {
+			t.Fatal("the README's first go block is not the dev-model quickstart")
+		}
+		qs := t.TempDir()
+		gomod := "module readmeqs\n\ngo 1.24\n\nrequire github.com/Gradiated/grad/sdks/go v0.0.0\n\nreplace github.com/Gradiated/grad/sdks/go => " + filepath.Join(root, "sdks", "go") + "\n"
+		for name, body := range map[string]string{"go.mod": gomod, "main.go": block[1]} {
+			if err := os.WriteFile(filepath.Join(qs, name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "run", ".")
+		cmd.Dir = qs
+		cmd.Env = append(os.Environ(), "GRADIATED_BASE_URL="+stack.BaseURL, "GRADIATED_API_KEY="+stack.APIKey, "GOFLAGS=-mod=mod")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("README quickstart: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "Estimate") || !regexp.MustCompile(`(?m)^completed sql-helper@`).Match(out) {
+			t.Fatalf("README quickstart printed:\n%s", out)
+		}
+		if info, err := os.Stat(filepath.Join(qs, "sql-helper.grad.tar.gz")); err != nil || info.Size() == 0 {
+			t.Fatalf("bundle: %v", err)
 		}
 	})
 

@@ -1,29 +1,4 @@
-//! Rust SDK for the Gradiated `grad` training and serving platform.
-//!
-//! ```no_run
-//! # async fn demo() -> grad::Result<()> {
-//! use grad::{Client, PlanRunRequest, RecipeKind, RecipeSpec};
-//!
-//! // Reads GRADIATED_API_KEY / GRADIATED_BASE_URL, then the `grad login` config file.
-//! let client = Client::new();
-//! let plan = client
-//!     .runs()
-//!     .plan(&PlanRunRequest::new("support-prod", "support-router", RecipeSpec::new(RecipeKind::Router)))
-//!     .await?;
-//! println!("~${:.2} for {} steps", plan.estimated_cost_usd, plan.estimated_steps);
-//! # Ok(()) }
-//! ```
-//!
-//! Resources hang off [`Client`]: [`Client::datasets`], [`Client::runs`],
-//! [`Client::artifacts`], [`Client::evals`], ...
-//! Every call returns [`Result`] with a typed [`Error`]. The request and
-//! response models are generated from `spec/openapi.yaml` (`generated`).
-//!
-//! A run's lifecycle streams as typed [`RunEvent`]s (phase, metric,
-//! checkpoint, attempt, warning, log, completed): `client.runs().events(id,
-//! true)` returns a [`RunEventStream`] whose `next().await` reconnects with
-//! `Last-Event-ID` invisibly and ends after `completed`; `wait_with_events`
-//! waits with a callback.
+#![doc = include_str!("../README.md")]
 
 pub mod config;
 pub mod download;

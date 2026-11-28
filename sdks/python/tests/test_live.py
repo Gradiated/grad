@@ -128,14 +128,15 @@ class SelfHostedLiveTests(_LiveCase):
         self.assertGreater(bundle.stat().st_size, 0)
 
     def test_readme_snippets_run(self) -> None:
-        # The SDK README's Python blocks, run as written with only the model swapped.
+        # The SDK README's Python blocks, run as written (the quickstart uses the dev model).
         readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
         blocks = re.findall(r"```python\n(.*?)```", readme, flags=re.S)
         self.assertEqual(len(blocks), 3)
         cwd = os.getcwd()
         os.chdir(self.tmp)
         self.addCleanup(os.chdir, cwd)
-        code = blocks[0].replace('SFTRecipe(model="qwen/qwen3-8b")', f'SFTRecipe(model="{LLM}")')
+        code = blocks[0]
+        self.assertIn(f'SFTRecipe(model="{LLM}")', code)
         scope: dict[str, Any] = {"__name__": "readme"}
         with contextlib.redirect_stdout(io.StringIO()) as out:
             exec(compile(code, "README.md", "exec"), scope)

@@ -9,8 +9,8 @@ fine-tuning runs, evaluate models, download PEFT adapters, and upload or import 
 
 ```bash
 pip install grad-sdk
-export GRADIATED_API_KEY=grad_...
-# Self-hosted server: export GRADIATED_BASE_URL=http://localhost:18787
+grad local up --dev-models        # a server on this machine with tiny CPU test models (brew install gradiated/tap/grad)
+export GRADIATED_PROFILE=local    # or GRADIATED_BASE_URL + GRADIATED_API_KEY for your own server
 ```
 
 ## Quickstart
@@ -19,30 +19,22 @@ export GRADIATED_API_KEY=grad_...
 from grad import Grad
 from grad.recipes import SFTRecipe
 
-client = Grad()  # reads GRADIATED_API_KEY and GRADIATED_BASE_URL
-
+client = Grad()  # GRADIATED_PROFILE, else GRADIATED_API_KEY and GRADIATED_BASE_URL, else `grad login`
 dataset = client.datasets.push("sql-quickstart", [
-    {"messages": [
-        {"role": "user", "content": "Count active users from yesterday."},
-        {"role": "assistant", "content": "SELECT count(*) FROM users WHERE active_at >= current_date - 1;"},
-    ]},
-    {"messages": [
-        {"role": "user", "content": "Total revenue by plan this month."},
-        {"role": "assistant", "content": "SELECT plan, sum(amount_usd) FROM invoices GROUP BY plan;"},
-    ]},
+    {"messages": [{"role": "user", "content": "Count active users."}, {"role": "assistant", "content": "SELECT count(*) FROM users WHERE active;"}]},
+    {"messages": [{"role": "user", "content": "Revenue by plan."}, {"role": "assistant", "content": "SELECT plan, sum(amount_usd) FROM invoices GROUP BY plan;"}]},
 ])
-
-recipe = SFTRecipe(model="qwen/qwen3-8b")
-
-# $0 preview: resolved defaults, warnings, tokens and cost
-print(client.runs.plan(dataset=dataset, name="sql-helper", recipe=recipe))
-
+recipe = SFTRecipe(model="test/tiny-qwen3")  # a dev model; on a GPU server e.g. "qwen/qwen3-8b"
+print(client.runs.plan(dataset=dataset, name="sql-helper", recipe=recipe))  # $0 preview: defaults, warnings, cost
 run = client.runs.create(dataset=dataset, name="sql-helper", recipe=recipe, max_cost_usd=5).wait()
-print(run.status, run.artifact)
-
-# Download the PEFT LoRA and serve it with vLLM or SGLang.
+print(run.status, run.artifact)  # completed sql-helper@2026-11-28-1
 run.artifact.download("./sql-helper-bundle.grad.tar.gz", format="bundle")
 ```
+
+This runs in about 10 seconds on `grad local up --dev-models` (the test suite runs this block
+verbatim against a real server: `tests/test_live.py`, `test_readme_snippets_run`). `test/tiny-qwen3`
+has random weights, so its adapter is for trying the workflow; the same code on a GPU server with a
+real base model trains a real adapter.
 
 `run.artifact.download("./sql-helper")` (the default `format="peft"`) extracts a verified PEFT
 directory (`adapter_config.json` + `adapter_model.safetensors`) that `vllm serve <base>

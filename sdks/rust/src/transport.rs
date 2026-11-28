@@ -152,6 +152,8 @@ pub(crate) fn build_http(connect_timeout: Duration, read_timeout: Duration) -> r
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(connect_timeout)
         .read_timeout(read_timeout)
+        // Below grad-server's 5 s keep-alive, so a pooled connection is never reused as the server closes it.
+        .pool_idle_timeout(Duration::from_secs(4))
         .user_agent(concat!("grad-sdk-rust/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("reqwest client with rustls builds")
