@@ -79,9 +79,9 @@ describe("parseServerEnvironment", () => {
     expect(
       parseServerEnvironment({
         ...billing,
-        GRAD_CLOUD_BILLING_URL: "http://api.gradiated.svc:3005/billing",
+        GRAD_CLOUD_BILLING_URL: "http://billing.cloud.svc:8080/billing",
       }).GRAD_CLOUD_BILLING_URL,
-    ).toBe("http://api.gradiated.svc:3005/billing");
+    ).toBe("http://billing.cloud.svc:8080/billing");
     expect(() =>
       parseServerEnvironment({
         ...billing,

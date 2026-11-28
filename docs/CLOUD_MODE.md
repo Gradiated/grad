@@ -16,17 +16,17 @@ all of it, used by the server tests and by `tests/harness/stack.ts --cloud`.
 | --- | --- | --- |
 | `AUTH_MODE=cloud` | auth | API keys from the product's auth view, console JWTs. `/v1/keys` is not used. |
 | `GRAD_CLOUD_AUTH_DATABASE_URL` | `AUTH_MODE=cloud` | Read-only Postgres URL of the product database (role `grad_auth_reader`, `SELECT` on `auth_principals_v1` only). With `PGSSLROOTCERT` (Helm `database.caBundle`) it is verified like `DATABASE_URL` ([Postgres TLS](SELF_HOSTING.md#postgres-tls)). |
-| `GRAD_CLOUD_JWKS_URL` | `AUTH_MODE=cloud` | The control plane's JWKS, e.g. `https://api.gradiated.com/api/auth/jwks`. |
-| `GRAD_CLOUD_JWT_ISSUER` | `AUTH_MODE=cloud` | The tokens' `iss`, e.g. `https://api.gradiated.com`. |
+| `GRAD_CLOUD_JWKS_URL` | `AUTH_MODE=cloud` | The control plane's JWKS, e.g. `https://cloud.example.com/.well-known/jwks.json`. |
+| `GRAD_CLOUD_JWT_ISSUER` | `AUTH_MODE=cloud` | The tokens' `iss`, e.g. `https://cloud.example.com`. |
 | `BILLING_MODE=cloud` | billing | Balance checks, usage push, the price list. |
-| `GRAD_CLOUD_BILLING_URL` | `BILLING_MODE=cloud` | Billing's base URL on the product's internal listener, e.g. `http://api-training-internal.gradiated.svc:3005/api/internal/v1/billing` (`/check`, `/usage-events`). |
-| `GRAD_CLOUD_PRICES_URL` | `BILLING_MODE=cloud` | The price list, e.g. `…/api/internal/v1/billing/prices?product=training`. |
-| `CLOUD_SERVICE_TOKEN` | `BILLING_MODE=cloud`, gateway evals | grad's bearer for the product's internal listener (the product's `TRAINING_INTERNAL_TOKEN`). |
-| `CLOUD_INTERNAL_API_URL` | gateway evals, the `gradiated` source | The product's internal listener, e.g. `http://api-training-internal.gradiated.svc:3005`. |
-| `GRAD_CLOUD_TRACES_ENABLED` | the `gradiated` source | Default `false`: the product's `training/traces:pull` isn't shipped yet, so the `gradiated` source answers `501 source_unavailable` ("coming soon on Gradiated Cloud") at create and sync instead of failing at sync time. Set `true` once the product serves it. |
+| `GRAD_CLOUD_BILLING_URL` | `BILLING_MODE=cloud` | Billing's base URL on the product's internal API, e.g. `https://cloud.example.internal/billing`; grad calls `/check` and `/usage-events` under it. |
+| `GRAD_CLOUD_PRICES_URL` | `BILLING_MODE=cloud` | The price list's full URL, e.g. `https://cloud.example.internal/billing/prices?product=training`. |
+| `CLOUD_SERVICE_TOKEN` | `BILLING_MODE=cloud`, gateway evals | grad's bearer token for the product's internal API. |
+| `CLOUD_INTERNAL_API_URL` | gateway evals, the `gradiated` source | The product's internal API, e.g. `https://cloud.example.internal`; grad calls the `/api/internal/v1/training/...` paths below under it. |
+| `GRAD_CLOUD_TRACES_ENABLED` | the `gradiated` source | Default `false`: the product's trace pull (`{CLOUD_INTERNAL_API_URL}/api/internal/v1/training/traces:pull`) isn't shipped yet, so the `gradiated` source answers `501 source_unavailable` ("coming soon on Gradiated Cloud") at create and sync instead of failing at sync time. Set `true` once the product serves it. |
 | `GRAD_CLOUD_GATEWAY_URL` | evals | The inference gateway's OpenAI-compatible base URL. On the API: evals are allowed (no `GRAD_INFERENCE_BASE_URL`; with `BILLING_MODE=cloud` that one is refused). On eval workers: where they call. |
 | `GRAD_CLOUD_GATEWAY_TOKEN` | eval workers | The gateway service credential. Only eval workers hold it. |
-| `INTERNAL_PORT` | workspace hooks, pins | The internal listener (ClusterIP only). With `AUTH_MODE=cloud` it serves the product's routes below; lease-token minting is mounted too only with `lease` worker auth and `GRAD_ORCHESTRATOR_KEYS_JSON`. Helm: `api.internalPort` (Gradiated Cloud: 8788, Service `<fullname>-internal`). |
+| `INTERNAL_PORT` | workspace hooks, pins | The internal listener (ClusterIP only). With `AUTH_MODE=cloud` it serves the product's routes below; lease-token minting is mounted too only with `lease` worker auth and `GRAD_ORCHESTRATOR_KEYS_JSON`. Helm: `api.internalPort`, served by the ClusterIP Service `<fullname>-internal`. |
 | `GRAD_WORKSPACE_PURGE_DELAY_SECONDS` | | Delay between a workspace delete and its purge (default 7 days). |
 | `GRAD_CORS_ORIGINS` | the console | Comma-separated browser origins allowed on `/v1` (exact `https://host[:port]`; `http` only for localhost). Default: CORS off. |
 | `GRAD_SECRETS_KMS_KEY_ID` | secrets | An AWS KMS key id, ARN or alias: workspace secrets use envelope encryption. Credentials and region come from the AWS chain (Pod Identity); `AWS_ENDPOINT_URL_KMS` overrides the endpoint. |
@@ -72,8 +72,8 @@ SELECT api_key_id::text, org_id::text, org_slug, workspace_id::text,
 
 ### Console JWTs
 
-Issued by the product (`POST /api/v1/workspaces/{ws}/training-tokens`, Better
-Auth's jwt() plugin), sent as `Authorization: Bearer` (never cookies).
+Issued by the product's control plane and sent as `Authorization: Bearer`
+(never cookies).
 
 - Header: `alg` EdDSA, ES256 or RS256 (≥ 2048-bit), and the JWK's key type
   must be that algorithm's; `kid` required; `crit` refused.
@@ -217,8 +217,7 @@ X-Gradiated-Eval-Id: ev_…
 ```
 
 - The gateway authorizes and bills the call as that workspace in its
-  low-priority eval lane (its own limit, 20 calls in flight per workspace by
-  default, never autoscaling demand, shed first with `429
+  low-priority eval lane (its own per-workspace limit, shed first with `429
   eval_lane_limited`). The worker retries 408, 425, 429 and 5xx six times
   with backoff from 1 s (at least the response's `Retry-After`, up to 60 s).
   None of what follows is stored as an output error or a zero judge score,
@@ -283,7 +282,7 @@ route's scope in `scopes`.
 | `GET /internal/v1/workspaces/{ws}/state` | `workspaces:admin` | The workspace's state. |
 | `PUT /internal/v1/workspaces/{ws}/state {state}` | `workspaces:admin` | `active`, `suspended` or `deleted`; idempotent. |
 | `GET /internal/v1/workspaces/{ws}/artifacts/{id}` | `artifacts:pin` | Serving's resolve: `{artifact, object, download_url, expires_at}`: the artifact (format, `sha256`, `size_bytes`, base model, manifest, provenance); `object` = `{key, sha256, checksum_sha256, checksum_type: "FULL_OBJECT", size_bytes}`, the bundle's key under `artifacts/` and its full-object SHA-256 (hex, and base64 as S3 returns `x-amz-checksum-sha256` on a `ChecksumMode=ENABLED` HEAD or GET), equal to the recorded `sha256` and checked against the store on every resolve; and a presigned GET of the bundle valid 15 minutes. 404 when the workspace has no such release; 409 `artifact_not_servable` for a `reference` bundle, 409 `artifact_checksum_mismatch` when the stored object's checksum isn't the recorded one. |
-| `PUT /internal/v1/workspaces/{ws}/artifacts/{id}/pins/{holder}` `{reason?}` | `artifacts:pin` | Pins it for `holder` (e.g. `inference:version:<task_versions.id>`): 201, or 200 when that holder already pinned it, with `{pin, artifact}`. A pinned artifact is never deleted (409 `artifact_pinned` on delete; retention, purges and sweeps skip it). |
+| `PUT /internal/v1/workspaces/{ws}/artifacts/{id}/pins/{holder}` `{reason?}` | `artifacts:pin` | Pins it for `holder` (e.g. `inference:version:<version id>`): 201, or 200 when that holder already pinned it, with `{pin, artifact}`. A pinned artifact is never deleted (409 `artifact_pinned` on delete; retention, purges and sweeps skip it). |
 | `DELETE /internal/v1/workspaces/{ws}/artifacts/{id}/pins/{holder}` | `artifacts:pin` | Removes the pin; 204, also when there was none. |
 
 Only these routes remove an `inference:` pin. The public `DELETE
@@ -347,7 +346,7 @@ returns, sending the ticket's `headers` (a browser drops `content-length`
 and sets the same value itself). The bucket needs a CORS rule for the console origin:
 
 ```json
-[{"AllowedOrigins": ["https://console.gradiated.com"],
+[{"AllowedOrigins": ["https://console.example.com"],
   "AllowedMethods": ["PUT", "GET", "HEAD"],
   "AllowedHeaders": ["content-type", "content-length", "x-amz-checksum-sha256",
                      "x-amz-sdk-checksum-algorithm", "x-amz-tagging"],
