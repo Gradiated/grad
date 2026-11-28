@@ -98,16 +98,23 @@ const metricSteps = (frames: Frame[]) =>
 /** Counts the store calls the SSE path makes. */
 const countQueries = (store: Store) => {
   const counts = { listEventsSince: 0, jobStates: 0, listEvents: 0 };
+  const io = { inFlight: 0, lastCall: Date.now() };
   const jobs = store.jobs;
   for (const name of Object.keys(counts) as Array<keyof typeof counts>) {
-    const original = jobs[name].bind(jobs) as (...a: unknown[]) => unknown;
+    const original = jobs[name].bind(jobs) as (
+      ...a: unknown[]
+    ) => Promise<unknown>;
     (jobs as unknown as Record<string, unknown>)[name] = (...a: unknown[]) => {
       counts[name] += 1;
-      return original(...a);
+      io.inFlight += 1;
+      io.lastCall = Date.now();
+      return original(...a).finally(() => {
+        io.inFlight -= 1;
+      });
     };
   }
 
-  return counts;
+  return { counts, io };
 };
 
 const untilListening = async (value: 0 | 1) => {
@@ -117,6 +124,21 @@ const untilListening = async (value: 0 | 1) => {
       throw new Error(`grad_sse_hub_listening != ${value}`);
     await sleep(10);
   }
+};
+
+/**
+ * Waits until the hub listens and has no fetch running or scheduled: no
+ * query in flight and none started for longer than its 25 ms fetch gap.
+ * The fetch it makes once LISTEN connects (everything written while it
+ * wasn't listening) can land after a stream's backfill; counted as a live
+ * query, it made "25 writes" read 26 on a loaded host.
+ */
+const untilHubIdle = async (io: { inFlight: number; lastCall: number }) => {
+  await untilListening(1);
+  await until(
+    "the event hub to go idle",
+    () => io.inFlight === 0 && Date.now() - io.lastCall > 100,
+  );
 };
 
 const dispatched = async (): Promise<number> =>
@@ -161,7 +183,7 @@ describe("SSE event hub (one reader per replica)", () => {
 
   it("fans 100 streams over 5 running jobs out of one hub: queries track writes, not streams", async () => {
     const jobs = await startRuns(5);
-    const counts = countQueries(t.deps.store);
+    const { counts, io } = countQueries(t.deps.store);
     const streamsBefore = await openStreams();
     const dispatchedBefore = await dispatched();
 
@@ -178,6 +200,7 @@ describe("SSE event hub (one reader per replica)", () => {
     );
     expect(await openStreams()).toBe(streamsBefore + 100);
     expect(t.services.events.size()).toEqual({ jobs: 5, subscriptions: 100 });
+    await untilHubIdle(io);
     const backfillFetches = counts.listEventsSince;
     // Backfilled rows are not timed as dispatches; live ones are.
     expect(await dispatched()).toBe(dispatchedBefore);
@@ -192,9 +215,10 @@ describe("SSE event hub (one reader per replica)", () => {
     );
     for (const s of streams)
       expect(metricSteps(s.frames)).toEqual([1, 2, 3, 4, 5]);
-    // 25 writes, plus a safety poll (one query, every 2 s) when a loaded host
-    // is slow; 100 per-stream pollers would be 100 queries per interval.
-    expect(counts.listEventsSince - backfillFetches).toBeLessThanOrEqual(30);
+    await untilHubIdle(io);
+    // At most one fetch per write's notification (the safety poll is off);
+    // 100 per-stream pollers would be 100 queries per interval.
+    expect(counts.listEventsSince - backfillFetches).toBeLessThanOrEqual(25);
     expect(counts.jobStates).toBe(counts.listEventsSince);
     expect(counts.listEvents).toBe(0);
     expect(await dispatched()).toBe(dispatchedBefore + 25);
