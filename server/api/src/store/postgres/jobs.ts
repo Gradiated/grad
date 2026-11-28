@@ -112,7 +112,8 @@ const updateJobRow = async (
       params.values,
     ),
   );
-  if (row && finishing) observeJobFinished(row);
+  // Counted once it commits: a close that rolls back (and is retried) isn't.
+  if (row && finishing) db.afterCommit(() => observeJobFinished(row));
 
   return row;
 };

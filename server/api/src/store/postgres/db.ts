@@ -18,18 +18,34 @@ export interface Db {
     params?: readonly unknown[],
   ): Promise<R[]>;
   atomic<T>(fn: () => Promise<T>): Promise<T>;
+  /**
+   * Runs `fn` once the ambient transaction commits (at once outside one);
+   * never when it, or the savepoint `fn` was registered under, rolls back.
+   * For side effects outside the database, such as metrics.
+   */
+  afterCommit(fn: () => void): void;
+}
+
+interface Transaction {
+  client: PoolClient;
+  committed: Array<() => void>;
 }
 
 export const createDb = (pool: Pool): Db => {
-  const ambient = new AsyncLocalStorage<PoolClient>();
+  const ambient = new AsyncLocalStorage<Transaction>();
   let savepoints = 0;
 
   return {
+    afterCommit: (fn) => {
+      const tx = ambient.getStore();
+      if (tx) tx.committed.push(fn);
+      else fn();
+    },
     query: async <R extends Row = Row>(
       sql: string,
       params: readonly unknown[] = [],
     ) => {
-      const client = ambient.getStore();
+      const client = ambient.getStore()?.client;
       const start = performance.now();
       try {
         const result = await withSpan(
@@ -56,14 +72,16 @@ export const createDb = (pool: Pool): Db => {
         // Nested: join the outer transaction, but roll back only this block on error.
         savepoints += 1;
         const name = `grad_sp_${savepoints}`;
-        await outer.query(`SAVEPOINT ${name}`);
+        const pending = outer.committed.length;
+        await outer.client.query(`SAVEPOINT ${name}`);
         try {
           const value = await fn();
-          await outer.query(`RELEASE SAVEPOINT ${name}`);
+          await outer.client.query(`RELEASE SAVEPOINT ${name}`);
 
           return value;
         } catch (error) {
-          await outer
+          outer.committed.length = pending;
+          await outer.client
             .query(`ROLLBACK TO SAVEPOINT ${name}`)
             .catch(() => undefined);
           throw error;
@@ -76,8 +94,10 @@ export const createDb = (pool: Pool): Db => {
       let broken: Error | undefined;
       try {
         await client.query("BEGIN");
-        const value = await ambient.run(client, fn);
+        const tx: Transaction = { client, committed: [] };
+        const value = await ambient.run(tx, fn);
         await client.query("COMMIT");
+        for (const committed of tx.committed) committed();
 
         return value;
       } catch (error) {

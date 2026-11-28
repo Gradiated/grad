@@ -317,6 +317,40 @@ describe("Prometheus metrics", () => {
     ).toBeGreaterThanOrEqual(1);
   });
 
+  it("counts a finished job once its close commits, never a rolled-back one", async () => {
+    const failures = async () =>
+      value(await scrape(t), "grad_job_failures_total", {
+        kind: "train",
+        error_code: "job_error",
+      });
+    const run = await createSftRun(t);
+    const fail = () =>
+      t.deps.store.runs.update(run.id, {
+        status: "failed",
+        finished_at: t.clock.now().toISOString(),
+      });
+    const before = await failures();
+
+    await expect(
+      t.deps.store.transaction(async () => {
+        await fail();
+        throw new Error("rolled back");
+      }),
+    ).rejects.toThrow("rolled back");
+    await t.deps.store.transaction(async () => {
+      await t.deps.store
+        .transaction(async () => {
+          await fail();
+          throw new Error("savepoint rolled back");
+        })
+        .catch(() => undefined);
+    });
+    expect(await failures()).toBe(before);
+
+    await t.deps.store.transaction(fail);
+    expect(await failures()).toBe(before + 1);
+  });
+
   it("classifies failed jobs by error code", () => {
     const job = { failed_attempts: 0, max_attempts: 3, error: "boom" };
     expect(failureCode(job, {})).toBe("job_error");
