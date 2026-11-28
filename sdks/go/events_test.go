@@ -223,3 +223,25 @@ func TestWaitOnEventsCallsBack(t *testing.T) {
 		t.Fatalf("want WaitTimeoutError, got %v", werr)
 	}
 }
+
+// A proxy or cache that ignores Accept answers the event stream with the JSON page: that is an
+// error at once, not ten reconnects ending in "the stream closed".
+func TestEventsFollowRefusesANonEventStream(t *testing.T) {
+	srv := newFake(t, map[string]route{
+		"GET /v1/runs/run_1/events": jsonValue(200, map[string]any{"data": []any{}, "next_cursor": nil}),
+	})
+	c, _ := srv.client()
+	run := &grad.Run{}
+	run.ID = "run_1"
+	var got error
+	for _, err := range c.Runs.Events(context.Background(), "run_1", grad.EventsOptions{Follow: true}) {
+		got = err
+	}
+	var decode *grad.DecodeError
+	if !errors.As(got, &decode) || decode.Code != "not_event_stream" {
+		t.Fatalf("want a not_event_stream DecodeError, got %v", got)
+	}
+	if n := srv.count("GET", "/v1/runs/run_1/events"); n != 1 {
+		t.Fatalf("%d requests, want 1", n)
+	}
+}

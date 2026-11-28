@@ -828,6 +828,14 @@ export class Transport implements TransportLike {
     const extra: Record<string, string> = { ...(options?.headers ?? {}) };
     if (options?.lastEventId !== undefined) extra["Last-Event-ID"] = options.lastEventId;
     const raw = await this.raw({ ...spec, accept: "text/event-stream" }, { ...options, headers: extra });
+    const type = raw.headers.get("content-type") ?? "";
+    if (!type.startsWith("text/event-stream")) {
+      await raw.cancel();
+      throw new ResponseDecodeError(
+        `GET ${redactURL(raw.url)} answered ${type || "no content type"} instead of an event stream; a proxy or cache between you and the server may ignore the Accept header.`,
+        { status: raw.status, code: "not_event_stream", requestId: raw.requestId },
+      );
+    }
     const reader = raw.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";

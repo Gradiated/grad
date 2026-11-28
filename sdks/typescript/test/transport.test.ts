@@ -532,7 +532,7 @@ describe("server-sent events", () => {
     expect(JSON.parse(metrics[0]?.data ?? "{}").step).toBe(1);
     expect(events[events.length - 1]?.event).toBe("status");
 
-    const crlf = new FakeServer().on("GET", "/s", new Response(": hi\r\nretry: 1500\r\nid: 7\r\ndata: a\r\ndata: b\r\n\r\nevent: x\rdata\r\r", { status: 200 }));
+    const crlf = new FakeServer().on("GET", "/s", new Response(": hi\r\nretry: 1500\r\nid: 7\r\ndata: a\r\ndata: b\r\n\r\nevent: x\rdata\r\r", { status: 200, headers: { "content-type": "text/event-stream" } }));
     const out = [];
     for await (const e of transport(crlf).sse({ method: "GET", path: "/s" })) out.push(e);
     expect(out).toEqual([
@@ -549,7 +549,7 @@ describe("server-sent events", () => {
         controller.close();
       },
     });
-    const server = new FakeServer().on("GET", "/s", new Response(body, { status: 200 }));
+    const server = new FakeServer().on("GET", "/s", new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }));
     const out = [];
     for await (const e of transport(server).sse({ method: "GET", path: "/s" })) out.push(e.data);
     expect(out).toEqual(["a\nb"]);

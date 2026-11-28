@@ -197,7 +197,7 @@ describe("runs", () => {
 
   it("follows metrics for docs-style `for await` and pages JSON metrics", async () => {
     const server = new FakeServer()
-      .on("GET", `${RUN}/events`, () => new Response(wire<string>("run-events.sse"), { status: 200 }))
+      .on("GET", `${RUN}/events`, () => new Response(wire<string>("run-events.sse"), { status: 200, headers: { "content-type": "text/event-stream" } }))
       .on("GET", `${RUN}/metrics`, (call) =>
         call.url.searchParams.get("cursor")
           ? json({ ...wire<Record<string, unknown>>("metrics-page.json"), data: [null], next_cursor: null })

@@ -898,6 +898,11 @@ func (t *Transport) DoSSE(ctx context.Context, spec RequestSpec, opts ...Request
 	if err != nil {
 		return nil, err
 	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		resp.Body.Close()
+		return nil, &DecodeError{&GradError{Status: resp.StatusCode, Code: "not_event_stream", RequestID: resp.RequestID,
+			Message: fmt.Sprintf("GET %s answered %q instead of an event stream; a proxy or cache between you and the server may ignore the Accept header", redactURL(resp.URL), ct)}}
+	}
 	return &SSEStream{resp: resp, reader: bufio.NewReader(resp.Body)}, nil
 }
 

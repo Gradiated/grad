@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { NotFoundError, type RunEvent, type RunStatus } from "../src/index.js";
+import { NotFoundError, ResponseDecodeError, type RunEvent, type RunStatus } from "../src/index.js";
 import { FakeServer, json, makeGrad, problemFixture, wire } from "./helpers.js";
 
 const page = wire<{ run_id: string; data: Array<{ type: string; seq: number; run: Record<string, unknown> }> }>("run-events-page.json");
@@ -11,6 +11,18 @@ const sse = (list: string[]) => new Response(`${list.join("\n\n")}\n\n`, { statu
 const queuedRun = { ...finalRun, status: "queued", phase: "queued", artifact_id: null, finished_at: null };
 
 describe("run events", () => {
+  it("fails on a JSON answer to the event stream instead of reconnecting forever", async () => {
+    // A proxy or cache that ignores Accept hands back the JSON page; it parsed as an empty stream.
+    const server = new FakeServer().on("GET", `${RUN}/events`, json(page));
+    const { grad } = makeGrad(server, { maxRetries: 0 });
+    const error = await (async () => {
+      for await (const _ of grad.runs.events(page.run_id, { follow: true })) void _;
+    })().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ResponseDecodeError);
+    expect((error as ResponseDecodeError).code).toBe("not_event_stream");
+    expect(server.callsTo("GET", `${RUN}/events`)).toHaveLength(1);
+  });
+
   it("follows the typed event stream, reconnecting with Last-Event-ID without repeating events", async () => {
     const server = new FakeServer()
       // Drop after 8 events, then replay a duplicate before the rest (a proxy that re-sent one).
