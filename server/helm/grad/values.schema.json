@@ -216,7 +216,11 @@
               "type": "boolean"
             },
             "minAvailable": {
-              "type": "integer"
+              "description": "Pods kept up through voluntary disruptions: a count, or a percentage of replicas such as \"50%\".",
+              "anyOf": [
+                { "type": "integer", "minimum": 0 },
+                { "type": "string", "pattern": "^[0-9]{1,3}%$" }
+              ]
             }
           }
         },

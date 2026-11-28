@@ -126,7 +126,8 @@ api:
   # behind a load balancer that registers pod IPs itself (AWS ALB IP targets),
   # use its deregistration delay. The pod's termination grace is this + 25 s.
   shutdownDrainSeconds: 5
-  # Keeps one replica up through node drains when replicaCount > 1.
+  # Keeps one replica up through node drains when replicaCount > 1. A
+  # percentage of replicas ("50%") also works, for an autoscaled API.
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
