@@ -127,7 +127,8 @@ grep -q "Web UI:     $API_URL/" status.out || fail "status UI URL"
 step "restart: data persists"
 "$GRAD" local down
 "$GRAD" local up --build --dev-models --timeout 600
-"$GRAD" --json runs list | grep -q '"support-sft"' || fail "run lost across restart"
+"$GRAD" --json runs list > runs.out || true
+grep -q '"support-sft"' runs.out || fail "run lost across restart: $(cat runs.out)"
 [ "$(local_url)" = "$API_URL" ] || fail "URL changed across restart"
 "$GRAD" secrets list | grep -q hf-token || fail "secret lost across restart"
 rm -rf support-sft
