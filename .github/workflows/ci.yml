@@ -486,7 +486,7 @@ jobs:
               --set workers.train.enabled=false
           } > "$RUNNER_TEMP/rendered.yaml"
           # KEDA's and prometheus-operator's CRDs have no schema in the default catalog.
-          for want in 'GRAD_WORKER_AUTH, value: "static"' 'GRAD_WORKER_AUTH, value: "kubernetes"' 'GRAD_WORKER_AUTH, value: "kubernetes,lease"' 'key: orchestrator-keys-json' 'kind: HorizontalPodAutoscaler' 'kind: PriorityClass' 'resources: [tokenreviews]' 'name: PGSSLROOTCERT' 'name: grad-grad-postgres-ca'; do
+          for want in 'GRAD_WORKER_AUTH, value: "static"' 'GRAD_WORKER_AUTH, value: "kubernetes"' 'GRAD_WORKER_AUTH, value: "kubernetes,lease"' 'key: orchestrator-keys-json' 'kind: HorizontalPodAutoscaler' 'rollingUpdate: {maxSurge: 0, maxUnavailable: 1}' 'kind: PriorityClass' 'resources: [tokenreviews]' 'name: PGSSLROOTCERT' 'name: grad-grad-postgres-ca'; do
             grep -qF "$want" "$RUNNER_TEMP/rendered.yaml" || { echo "rendered charts lack: $want"; exit 1; }
           done
           kubeconform -strict -summary -kubernetes-version 1.37.0 \

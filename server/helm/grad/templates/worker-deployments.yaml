@@ -18,6 +18,13 @@ spec:
   {{- if not $.Values.keda.enabled }}
   replicas: {{ $w.replicaCount }}
   {{- end }}
+  {{- if gt (int $w.gpuCount) 0 }}
+  # GPU pools stop a worker (it checkpoints on SIGTERM and its run resumes)
+  # before starting its replacement, so an upgrade needs no spare GPU.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ $.Release.Name }}
