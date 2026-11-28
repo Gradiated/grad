@@ -88,6 +88,17 @@ class MergedDatasetTests(unittest.TestCase):
         self.assertNotIn("messages", merged.heads[0])
         self.assertEqual(merged[49]["messages"][0]["content"], "x" * 2000)
 
+    def test_matches_the_parity_fixture_server_api_replays(self) -> None:
+        # merge_parity.json: parts -> merge_records(). server/api/test/trainer-parity.test.ts
+        # checks mergeRecords and the dataset page index against the same file.
+        for case in json.loads((Path(__file__).parent / "fixtures" / "merge_parity.json").read_text()):
+            with self.subTest(case["name"]):
+                flat = [r for part in case["parts"] for r in part]
+                self.assertEqual(merge_records(json.loads(json.dumps(flat))), case["merged"])
+                write_parts(self.tmp / "d.jsonl.gz", flat, len(case["parts"]))
+                merged = MergedDataset.from_parts(self.tmp / "d.jsonl.gz", self.tmp / "d.jsonl")
+                self.assertEqual(list(merged), case["merged"])
+
     def test_a_truncated_download_raises(self) -> None:
         write_parts(self.tmp / "d.jsonl.gz", stream(random.Random(1), 50), 1)
         data = (self.tmp / "d.jsonl.gz").read_bytes()

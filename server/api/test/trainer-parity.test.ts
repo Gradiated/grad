@@ -1,8 +1,17 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import type { DatasetRecord } from "../src/contracts.js";
 import { splitForRecipe, splitRecords } from "../src/planner.js";
+import {
+  extendIndex,
+  finishIndex,
+  newIndexBuilder,
+  readVersionPage,
+} from "../src/services/dataset-pages.js";
+import { writeRecordsPart } from "../src/services/dataset-records.js";
+import { mergeRecords } from "../src/services/record-merge.js";
+import { testObjectStore } from "./fixtures/s3.js";
 
 // Golden files shared with the trainer's tests (server/trainer/tests): both
 // sides replay the same inputs and must produce the same output.
@@ -37,5 +46,54 @@ describe("trainer parity", () => {
     });
 
     expect(actual).toEqual(expected);
+  });
+
+  describe("merges dataset parts like grad_trainer.records", () => {
+    const s3 = testObjectStore();
+    afterAll(() => s3.close());
+    const cases = fixture<
+      Array<{
+        name: string;
+        parts: DatasetRecord[][];
+        merged: DatasetRecord[];
+      }>
+    >("merge_parity.json");
+
+    it.each(cases)("$name", async ({ parts, merged }) => {
+      expect(mergeRecords(parts.flat())).toEqual(merged);
+
+      // The page index, built part by part like successive pushes: every
+      // prefix pages exactly what mergeRecords makes of it.
+      const stored = [];
+      const builder = newIndexBuilder();
+      for (const [k, records] of parts.entries()) {
+        stored.push(
+          await writeRecordsPart(
+            s3.storage,
+            (sha) => `parity/${sha}.jsonl.gz`,
+            records,
+          ),
+        );
+        await extendIndex(s3.storage, builder, stored.slice(k));
+        const index = finishIndex(builder);
+        const expected = mergeRecords(parts.slice(0, k + 1).flat());
+        expect(index.total).toBe(expected.length);
+        for (const limit of [1, 100]) {
+          const pages: DatasetRecord[] = [];
+          for (let from = 0; from < index.total; from += limit) {
+            pages.push(
+              ...(await readVersionPage(
+                s3.storage,
+                stored,
+                index,
+                from,
+                limit,
+              )),
+            );
+          }
+          expect(pages).toEqual(expected);
+        }
+      }
+    });
   });
 });

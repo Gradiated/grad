@@ -31,9 +31,12 @@ import {
  * cached per version in a byte-bounded LRU.
  *
  * A record with a source's score filter (`metadata.score_filter`) also keeps
- * its merged scores while the index is built; slots whose scores fail the
- * filter are dropped at the end and the rest renumbered, so `total` and pages
- * count only admitted records.
+ * its merged scores while the index is built (a record that gets a rule
+ * after unfiltered lines has their scores folded in by one more read of the
+ * parts holding them); slots whose scores fail the filter are dropped at the
+ * end and the rest renumbered, so `total` and pages count only admitted
+ * records. server/api/test/trainer-parity.test.ts holds it to the trainer's
+ * merge.
  */
 export interface VersionIndex {
   /** Merged records in the version. */
@@ -60,23 +63,21 @@ const indexBytes = (index: VersionIndex): number =>
  */
 export interface IndexBuilder {
   /** Parts folded in so far (a prefix of every version built from it). */
-  parts: number;
+  parts: DatasetPart[];
   lineSlots: number[];
   partStarts: number[];
   slotOf: Map<string, number>;
   /** Lines of updates that arrived before their id's first record. */
   early: Map<string, number[]>;
-  /**
-   * Score-filtered slots: their rule and merged scores, and (once the
-   * version has a rule) the facts of early updates.
-   */
+  /** Score-filtered slots: their rule and merged scores. */
   ruled: Map<number, DatasetRecord>;
+  /** The merged facts of the updates in `early`. */
   earlyFacts: Map<string, DatasetRecord>;
   next: number;
 }
 
 export const newIndexBuilder = (): IndexBuilder => ({
-  parts: 0,
+  parts: [],
   lineSlots: [],
   partStarts: [],
   slotOf: new Map(),
@@ -98,16 +99,27 @@ export const extendIndex = async (
   b: IndexBuilder,
   parts: readonly DatasetPart[],
 ): Promise<IndexBuilder> => {
+  /**
+   * Slots that got a rule while unruled after earlier lines (the line it
+   * came at): their earlier facts are folded in by `foldHistory` once the
+   * parts are read, since only ruled slots carry their facts along.
+   */
+  const history = new Map<number, number>();
+
+  /** `at`: the line, for a slot that has earlier lines. */
   const rule = (
     record: DatasetRecord,
     slot: number,
     before?: DatasetRecord,
+    at?: number,
   ) => {
     const filter = record.metadata?.[SCORE_FILTER];
     if (filter === undefined) {
       b.ruled.delete(slot); // the latest content decides
+      history.delete(slot);
       return;
     }
+    if (!before && at !== undefined) history.set(slot, at);
     b.ruled.set(
       slot,
       applyFacts(
@@ -136,6 +148,7 @@ export const extendIndex = async (
         b.ruled = new Map();
         b.earlyFacts = new Map();
         b.next = 0;
+        history.clear();
         continue;
       }
       const id = record.id;
@@ -148,15 +161,13 @@ export const extendIndex = async (
       if (known !== undefined) {
         b.lineSlots[at] = known;
         const state = b.ruled.get(known);
-        if (!isScoreUpdate(record)) rule(record, known, state);
+        if (!isScoreUpdate(record)) rule(record, known, state, at);
         else if (state) b.ruled.set(known, applyFacts(state, record));
       } else if (isScoreUpdate(record)) {
         const waiting = b.early.get(id);
         if (waiting) waiting.push(at);
         else b.early.set(id, [at]);
-        if (b.ruled.size > 0) {
-          b.earlyFacts.set(id, applyFacts(b.earlyFacts.get(id) ?? {}, record));
-        }
+        b.earlyFacts.set(id, applyFacts(b.earlyFacts.get(id) ?? {}, record));
       } else {
         const slot = b.next;
         b.slotOf.set(id, slot);
@@ -172,10 +183,66 @@ export const extendIndex = async (
         b.next += 1;
       }
     }
-    b.parts += 1;
+    b.parts.push(part);
   }
+  await foldHistory(storage, b, history);
 
   return b;
+};
+
+/**
+ * Folds into each slot of `history` the facts of its lines before the line
+ * its current rule came at, in merge order (its first content, then the
+ * updates that arrived before it, then the rest): one more read of the
+ * parts that hold such lines.
+ */
+const foldHistory = async (
+  storage: ObjectStore,
+  b: IndexBuilder,
+  history: ReadonlyMap<number, number>,
+): Promise<void> => {
+  if (history.size === 0) return;
+
+  const facts = new Map<
+    number,
+    { early: DatasetRecord; merged?: DatasetRecord }
+  >();
+  const starts = [...b.partStarts, b.lineSlots.length];
+  for (const [p, part] of b.parts.entries()) {
+    const start = starts[p] as number;
+    const end = starts[p + 1] as number;
+    const wanted = (i: number): boolean => {
+      const until = history.get(b.lineSlots[i] as number);
+      return until !== undefined && i < until;
+    };
+    let any = false;
+    for (let i = start; i < end && !any; i += 1) any = wanted(i);
+    if (!any) continue;
+
+    const lines = await partLines(await readPart(storage, part), part);
+    for (const [offset, text] of lines.entries()) {
+      const i = start + offset;
+      if (!wanted(i)) continue;
+      const slot = b.lineSlots[i] as number;
+      const record = JSON.parse(text) as DatasetRecord;
+      const seen = facts.get(slot) ?? { early: {} };
+      if (seen.merged) seen.merged = applyFacts(seen.merged, record);
+      else if (isScoreUpdate(record))
+        seen.early = applyFacts(seen.early, record);
+      else seen.merged = applyFacts(applyFacts({}, record), seen.early);
+      facts.set(slot, seen);
+    }
+  }
+
+  for (const [slot, seen] of facts) {
+    const state = b.ruled.get(slot);
+    const before = seen.merged ?? seen.early;
+    if (state)
+      b.ruled.set(slot, {
+        ...applyFacts(before, state),
+        metadata: state.metadata,
+      });
+  }
 };
 
 /** The index of the version `b` has folded in (`b` stays extendable). */
@@ -373,7 +440,11 @@ export const createVersionIndexCache = (
 
       const build = (async () => {
         const builder = takeBuilder(keys);
-        await extendIndex(storage, builder, version.parts.slice(builder.parts));
+        await extendIndex(
+          storage,
+          builder,
+          version.parts.slice(builder.parts.length),
+        );
         const index = finishIndex(builder);
         remember(key, index);
         keepBuilder(key, builder);
