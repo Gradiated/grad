@@ -174,9 +174,9 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
       if (filter.missingScorer) {
         where += ` AND error IS NULL AND NOT (scores ? ${params.add(filter.missingScorer)})`;
       }
-      const after = decodeCursor(page.cursor, 3);
+      const after = decodeCursor(page.cursor, ["int", "text", "int"]);
       if (after) {
-        where += ` AND (task_index, model COLLATE "C", sample_index) > (${params.add(Number(after[0]))}::int, ${params.add(String(after[1]))}::text, ${params.add(Number(after[2]))}::int)`;
+        where += ` AND (task_index, model COLLATE "C", sample_index) > (${params.add(after[0])}::int, ${params.add(after[1])}::text, ${params.add(after[2])}::int)`;
       }
       const rows = await db.query(
         `SELECT * FROM grad_eval_outputs WHERE ${where}
@@ -267,9 +267,9 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
       const params = new Params();
       let where = `eval_id = ${params.add(evalId)}`;
       if (filter.model) where += ` AND model = ${params.add(filter.model)}`;
-      const after = decodeCursor(page.cursor, 2);
+      const after = decodeCursor(page.cursor, ["int", "text"]);
       if (after) {
-        where += ` AND (task_index, model COLLATE "C") > (${params.add(Number(after[0]))}::int, ${params.add(String(after[1]))}::text)`;
+        where += ` AND (task_index, model COLLATE "C") > (${params.add(after[0])}::int, ${params.add(after[1])}::text)`;
       }
       const threshold = params.add(filter.passThreshold);
       const having =

@@ -144,8 +144,8 @@ export const createUsageRepository = (
       outer.push(`run_id = ${run}`);
     }
     if (filter.kind) outer.push(`usage_kind = ${params.add(filter.kind)}`);
-    const after = decodeCursor(page.cursor, 1);
-    if (after) inner.push(`u.seq < ${params.add(Number(after[0]))}::bigint`);
+    const after = decodeCursor(page.cursor, ["int"]);
+    if (after) inner.push(`u.seq < ${params.add(after[0])}::bigint`);
 
     const rows = await db.query(
       `SELECT * FROM (${usageRows(inner.join(" AND "))}) b

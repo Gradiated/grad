@@ -19,10 +19,10 @@ export const listNewest = async <T extends { created_at: string; id: string }>(
   },
 ): Promise<Page<T>> => {
   const { params, page } = input;
-  const after = decodeCursor(page.cursor, 2);
+  const after = decodeCursor(page.cursor, ["time", "text"]);
   let where = input.where;
   if (after) {
-    where += ` AND (created_at, id COLLATE "C") < (${params.add(after[0])}::timestamptz, ${params.add(String(after[1]))}::text)`;
+    where += ` AND (created_at, id COLLATE "C") < (${params.add(after[0])}::timestamptz, ${params.add(after[1])}::text)`;
   }
   const rows = await db.query(
     `SELECT ${input.columns ?? "*"} FROM ${input.table} WHERE ${where}

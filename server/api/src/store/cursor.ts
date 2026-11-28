@@ -10,10 +10,28 @@ export const encodeCursor = (values: readonly CursorValue[]): string =>
 const malformed = () =>
   invalid("invalid_cursor", "The pagination cursor is malformed.");
 
-export const decodeCursor = (
+/** A cursor field: an integer, a string, or an ISO timestamp (a string). */
+type CursorField = "int" | "text" | "time";
+
+type Decoded<F extends readonly CursorField[]> = {
+  [K in keyof F]: F[K] extends "int" ? number : string;
+};
+
+const fits = (field: CursorField, value: unknown): boolean =>
+  field === "int"
+    ? Number.isSafeInteger(value)
+    : typeof value === "string" &&
+      (field === "text" || !Number.isNaN(Date.parse(value)));
+
+/**
+ * The sort key a cursor holds, one value per `fields` entry. A cursor that
+ * isn't one (tampered, or from another list) is a 422 invalid_cursor, never
+ * a value the query would choke on.
+ */
+export const decodeCursor = <const F extends readonly CursorField[]>(
   cursor: string | undefined,
-  arity: number,
-): CursorValue[] | null => {
+  fields: F,
+): Decoded<F> | null => {
   if (cursor === undefined) return null;
 
   let parsed: unknown;
@@ -25,20 +43,19 @@ export const decodeCursor = (
 
   if (
     !Array.isArray(parsed) ||
-    (arity >= 0 && parsed.length !== arity) ||
-    !parsed.every((v) => typeof v === "string" || typeof v === "number")
+    parsed.length !== fields.length ||
+    !fields.every((field, i) => fits(field, parsed[i]))
   ) {
     throw malformed();
   }
 
-  return parsed as CursorValue[];
+  return parsed as Decoded<F>;
 };
 
 /** A cursor holding one non-negative integer (an offset or an event seq); 0 without one. */
 export const decodeIntCursor = (cursor: string | undefined): number => {
-  const after = decodeCursor(cursor, 1);
-  const value = after ? Number(after[0]) : 0;
-  if (!Number.isInteger(value) || value < 0) throw malformed();
+  const value = decodeCursor(cursor, ["int"])?.[0] ?? 0;
+  if (value < 0) throw malformed();
 
   return value;
 };

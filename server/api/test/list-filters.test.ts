@@ -73,6 +73,26 @@ describe("list filters: status, q and an import's dataset", () => {
       `/v1/runs?q=keep&limit=2&cursor=${encodeURIComponent(first.body.next_cursor ?? "")}`,
     );
     expect(rest).toEqual(["keep-0"]);
+
+    // A tampered cursor is a 422, never a value the query chokes on (500).
+    const cursor = (v: unknown) =>
+      Buffer.from(JSON.stringify(v)).toString("base64url");
+    const cases: Array<[string, unknown[]]> = [
+      ["/v1/runs", ["not-a-time", "run_x"]],
+      ["/v1/runs", [5, 6]],
+      ["/v1/datasets", ["2026-11-27T12:00:00.000Z", 7]],
+      ["/v1/usage", ["x"]],
+      [`/v1/runs/${first.body.data[0]?.id}/metrics`, [1.5]],
+    ];
+    for (const [path, bad] of cases) {
+      const res = await t.json(`${path}?cursor=${cursor(bad)}`);
+      expect([path, bad, res.status, res.body.code]).toEqual([
+        path,
+        bad,
+        422,
+        "invalid_cursor",
+      ]);
+    }
   });
 
   it("narrows datasets by name, and imports by dataset and status", async () => {

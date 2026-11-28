@@ -94,9 +94,9 @@ export const createArtifactRepository = (
     const params = new Params();
     const nowRef = params.add(now.toISOString());
     let where = `kind = 'checkpoint' AND workspace_id = ${params.add(workspaceId)} AND run_id = ${params.add(runId)} AND ${UNEXPIRED.replace("$NOW", nowRef)}`;
-    const after = decodeCursor(page.cursor, 3);
+    const after = decodeCursor(page.cursor, ["int", "int", "text"]);
     if (after) {
-      where += ` AND (step, attempt, id COLLATE "C") > (${params.add(Number(after[0]))}::int, ${params.add(Number(after[1]))}::int, ${params.add(String(after[2]))}::text)`;
+      where += ` AND (step, attempt, id COLLATE "C") > (${params.add(after[0])}::int, ${params.add(after[1])}::int, ${params.add(after[2])}::text)`;
     }
     const rows = await db.query(
       `SELECT * FROM grad_artifacts WHERE ${where}
