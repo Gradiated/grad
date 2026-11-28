@@ -12,6 +12,7 @@ import {
   type PlanEvalRequest,
   type PlanEvalResponse,
 } from "../../contracts.js";
+import { evalsOnCloud } from "../../cloud/gateway.js";
 import type { AppDependencies } from "../../deps.js";
 import { ApiError, invalid, unavailable } from "../../errors.js";
 import {
@@ -231,6 +232,10 @@ export const buildTasks = (
 export const INFERENCE_UNAVAILABLE_DETAIL =
   "Evals need model outputs: set GRAD_INFERENCE_BASE_URL on the server (an OpenAI-compatible vLLM/SGLang endpoint serving your base models and LoRA artifacts by name, or the Gradiated gateway; for `grad local up`, export it before starting the stack) and optionally GRAD_JUDGE_BASE_URL.";
 
+/** Gradiated Cloud before its gateway's eval lane is connected: nothing for the caller to set. */
+export const CLOUD_EVALS_UNAVAILABLE_DETAIL =
+  "Evals aren't available on Gradiated Cloud yet: they are coming soon. Training, datasets and artifact downloads work now.";
+
 export const DEFAULT_RUBRIC: EvalRubricItem[] = [
   { name: "non_empty", kind: "validator", weight: 1, validator: "non_empty" },
 ];
@@ -265,7 +270,12 @@ export const planEvalRequest = async (
 ): Promise<ResolvedEvalPlan> => {
   const scoring = mode === "score";
   if (!deps.inferenceConfigured && !scoring) {
-    throw unavailable("inference_unavailable", INFERENCE_UNAVAILABLE_DETAIL);
+    throw unavailable(
+      "inference_unavailable",
+      evalsOnCloud(deps)
+        ? CLOUD_EVALS_UNAVAILABLE_DETAIL
+        : INFERENCE_UNAVAILABLE_DETAIL,
+    );
   }
 
   const dataset = await datasets.resolve(

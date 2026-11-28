@@ -267,6 +267,50 @@ describe("evals on Gradiated Cloud: the gateway's eval lane", () => {
     expect(cloud.evalVersions).toEqual([]);
   });
 
+  it("on Cloud before the gateway is connected: evals say so, recipe.evals is still refused", async () => {
+    const clock = new ManualClock();
+    t = await makeTestApp({
+      clock,
+      ...(await cloudBillingDeps(cloud, clock)),
+      inferenceConfigured: false,
+    });
+    await seedDataset(t, "support", sftRecords(20) as never);
+    await seedDataset(t, "holdout", qaRecords(3));
+    const evalBody = {
+      models: ["test/tiny-qwen3"],
+      dataset: "holdout",
+      rubric: [{ name: "a", kind: "regex", pattern: "answer" }],
+    };
+    for (const path of ["/v1/evals/plan", "/v1/evals"]) {
+      const res = await t.request(path, { method: "POST", body: evalBody });
+      expect(res.status).toBe(501);
+      const problem = (await res.json()) as { code: string; detail: string };
+      expect(problem.code).toBe("inference_unavailable");
+      // Nothing a Cloud customer could set: no server settings named.
+      expect(problem.detail).toMatch(/available on Gradiated Cloud yet/);
+      expect(problem.detail).not.toMatch(
+        /GRAD_INFERENCE_BASE_URL|grad local up/,
+      );
+    }
+    // Checkpoint evals never work on Cloud: the permanent 422, not the 501.
+    const runBody = {
+      dataset: "support",
+      name: "support-sft",
+      recipe: {
+        kind: "sft",
+        model: "test/tiny-qwen3",
+        evals: [{ dataset: "holdout", rubric: evalBody.rubric }],
+      },
+    };
+    for (const path of ["/v1/runs/plan", "/v1/runs"]) {
+      const res = await t.request(path, { method: "POST", body: runBody });
+      expect(res.status).toBe(422);
+      expect(((await res.json()) as { code: string }).code).toBe(
+        "checkpoint_evals_unsupported_on_cloud",
+      );
+    }
+  });
+
   it("maps the product's refusals to typed errors", async () => {
     const resolver = createEvalModelResolver({
       internalApiBaseUrl: cloud.url,

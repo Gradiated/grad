@@ -196,8 +196,11 @@ UPDATE grad_usage SET parked_code = NULL, parked_at = NULL, txid = pg_current_xa
 
 ## Evals
 
-Evals run on eval workers (`grad-server worker --kinds eval`). With
-`GRAD_CLOUD_GATEWAY_URL` set they call the gateway:
+Evals run on eval workers (`grad-server worker --kinds eval`). Without
+`GRAD_CLOUD_GATEWAY_URL` on a `BILLING_MODE=cloud` server, eval plans and
+creates answer `501 inference_unavailable` ("Evals aren't available on
+Gradiated Cloud yet"), naming no server setting. With it set they call the
+gateway:
 
 ```
 POST {GRAD_CLOUD_GATEWAY_URL}/chat/completions
@@ -249,7 +252,8 @@ X-Gradiated-Eval-Id: ev_…
   `artifact_not_servable`; still unreachable → 503 `inference_unavailable`.
 - Checkpoint evals during training (`recipe.evals`) aren't supported on
   Cloud: a checkpoint has no eval-only Version, so creating or planning
-  such a run answers `422 checkpoint_evals_unsupported_on_cloud`. Evaluate
+  such a run answers `422 checkpoint_evals_unsupported_on_cloud`, with or
+  without the gateway. Evaluate
   the run's artifact after training instead.
 - The gateway bills these tokens. grad records the eval's usage rows with
   `billed_by: gateway` (shown in `/v1/usage`) and never pushes them.

@@ -2,7 +2,10 @@ import type { z } from "@hono/zod-openapi";
 
 import type { AuthPrincipal } from "../../adapters.js";
 import { costForTokens } from "../../catalog.js";
-import { checkpointEvalsUnsupported } from "../../cloud/gateway.js";
+import {
+  checkpointEvalsUnsupported,
+  evalsOnCloud,
+} from "../../cloud/gateway.js";
 import { addSeconds } from "../../clock.js";
 import {
   NON_DEPLOYABLE_FORMATS,
@@ -860,7 +863,7 @@ export const createEvalService = (
       targets: EvalRecord["model_targets"];
     },
   ): Promise<EvalRecord> => {
-    if (checkpoint && deps.evalModels) throw checkpointEvalsUnsupported();
+    if (checkpoint && evalsOnCloud(deps)) throw checkpointEvalsUnsupported();
     const plan = await planEvalRequest(
       deps,
       datasets,

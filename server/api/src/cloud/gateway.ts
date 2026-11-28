@@ -1,3 +1,4 @@
+import type { AppDependencies } from "../deps.js";
 import { ApiError, errorMessage } from "../errors.js";
 import { createOpenAICompatibleClient } from "../services/evals/inference.js";
 import type { InferenceClients } from "../services/evals/types.js";
@@ -47,6 +48,15 @@ export const createGatewayInference = (options: {
 
   return { models: client, judge: client };
 };
+
+/**
+ * Evals on this server go through the Gradiated gateway: it has one
+ * (GRAD_CLOUD_GATEWAY_URL), or it bills on Cloud (BILLING_MODE=cloud refuses
+ * GRAD_INFERENCE_BASE_URL), so they wait for the gateway's eval lane.
+ */
+export const evalsOnCloud = (
+  deps: Pick<AppDependencies, "evalModels" | "prices">,
+): boolean => Boolean(deps.evalModels || deps.prices);
 
 /**
  * Gradiated Cloud serves evals only from published artifacts (eval-only
