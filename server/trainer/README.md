@@ -68,6 +68,11 @@ Also: `GRAD_WORKER_ID` (a name prefix, default host-pid; every process appends a
 `GRAD_POLL_INTERVAL_S` (1.0), `GRAD_WORKDIR` (a temp dir; each job gets a locked directory in it,
 and a restarted worker deletes the ones a killed worker left, so a crash loop can't fill the disk).
 
+A training step that hasn't finished in 10 times the run's step time (at least 30 min) is hung (a
+wedged GPU, a stuck read): the worker hands the attempt back with a warning event and exits with
+code 70, so the container restarts and the run resumes from its last checkpoint elsewhere. Model
+loading, preparation and evals are not timed.
+
 `GRAD_WORKER_METRICS_PORT` serves Prometheus metrics (`grad_trainer_*`: phase, step time,
 tokens/s, GPU utilisation and memory, checkpoint and upload times) on that port. Every
 heartbeat also carries the phase, tokens/s and GPU numbers, which grad-server aggregates into

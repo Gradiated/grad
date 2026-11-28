@@ -849,6 +849,25 @@ class WorkerProtocolTests(unittest.TestCase):
         seqs = [e["seq"] for e in srv.bodies("events")]
         self.assertEqual(sorted(seqs), list(range(100)))
 
+    def test_a_hung_training_step_hands_the_run_back_and_restarts_the_worker(self) -> None:
+        # The heartbeat thread would keep a hung run's lease (and its GPU) forever.
+        srv = self.server(jobs=[train_job()])
+        worker = self.worker(srv, StubRunner(steps=3, checkpoint_at=None, step_sleep=1.5), stall_min_s=0.4)
+        exits: list[int] = []
+        worker._exit = exits.append
+        worker.run_once()
+        self.assertEqual(exits, [70])
+        complete = srv.bodies("complete")[0]
+        self.assertEqual((complete["status"], complete["reason"]), ("abandoned", "worker_error"))
+        warning = [e["message"] for e in srv.bodies("events") if e.get("type") == "warning"]
+        self.assertIn("No training step finished", warning[0])
+        # A steady run is never flagged: steps well inside the limit.
+        srv2 = self.server(jobs=[train_job()])
+        steady = self.worker(srv2, StubRunner(steps=6, checkpoint_at=None, step_sleep=0.1), stall_min_s=0.4)
+        steady._exit = exits.append
+        self.assertEqual(steady.run_once()["status"], "completed")
+        self.assertEqual(exits, [70])
+
     def test_kinds_from_the_environment(self) -> None:
         srv = self.server()
         worker = worker_from_env(

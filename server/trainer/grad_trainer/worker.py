@@ -390,8 +390,9 @@ class _JobState:
     auth_error: WorkerAuthError | None = None
     max_tokens: int = 0
     final_status: str = "failed"
-    # Lifecycle: the phase last reported, log line numbering, step/checkpoint timing.
+    # Lifecycle: the phase last reported (and when), log line numbering, step/checkpoint timing.
     phase: str | None = None
+    phase_at: float | None = None
     step: int = 0
     notes: int = 0
     last_step_at: float | None = None
@@ -460,6 +461,10 @@ class _Heartbeat(threading.Thread):
             wait = self.interval_s
             if resp.get("should_stop"):
                 self.state.request_stop(str(resp.get("stop_reason") or "cancelled"))
+            idle = self.worker._stalled(self.state)
+            if idle is not None:
+                self.worker._abandon_stalled(self.state, idle)
+                return
 
 
 class TrainerWorker:
@@ -485,6 +490,7 @@ class TrainerWorker:
         reclaim_grace_s: float = 25.0,
         termination_notice: str | None = None,
         gpu: dict[str, Any] | None | bool = True,
+        stall_min_s: float = 1800.0,
     ) -> None:
         unknown = sorted(set(kinds) - set(JOB_KINDS))
         if not kinds or unknown:
@@ -523,6 +529,9 @@ class TrainerWorker:
         self.termination_notice = termination_notice
         # True: detect with nvidia-smi on first claim; a dict or None: use as given.
         self._gpu: dict[str, Any] | None | bool = gpu
+        # A training step this much past the run's pace (at least stall_min_s) is hung.
+        self.stall_min_s = stall_min_s
+        self._exit: Callable[[int], None] = os._exit
         self._shutdown = threading.Event()
         self._current: _JobState | None = None
         self._lock = threading.Lock()
@@ -588,20 +597,47 @@ class TrainerWorker:
             return 0.0
         return max(0.0, state.step_seconds - (now - state.last_step_at))
 
-    def _hand_back(self, state: _JobState) -> None:
+    def _hand_back(self, state: _JobState, reason: str = "compute_reclaimed") -> None:
         state.handed_back = True
         try:
             self._complete(
                 state,
                 {
                     "status": "abandoned",
-                    "reason": "compute_reclaimed",
+                    "reason": reason,
                     "tokens_processed": state.max_tokens,
                 },
                 force=True,
             )
         except Exception:  # the lease expiry requeues it anyway
             _log_traceback(f"hand-back of job {state.job_id} failed; its lease expiry requeues it", "warn")
+
+    def _stalled(self, state: _JobState) -> float | None:
+        """Seconds since training last moved, when that is far past its pace (a hung step: a
+        wedged GPU, a stuck read). Only the training phase is timed: a model download or a large
+        eval has no pace to compare against."""
+        if state.phase != "training" or state.handed_back or state.completing:
+            return None
+        since = max(t for t in (state.phase_at, state.last_step_at, 0.0) if t is not None)
+        idle = time.monotonic() - since
+        return idle if idle > max(self.stall_min_s, 10 * (state.step_seconds or 0.0)) else None
+
+    def _abandon_stalled(self, state: _JobState, idle: float) -> None:
+        """The heartbeat would keep a hung run's lease forever: hand it back, then exit so the
+        container restarts (the training thread can't be interrupted, and its GPU may be wedged)."""
+        message = (
+            f"No training step finished in {idle / 60:.0f} min (last step {state.step}); the worker "
+            "is restarting, and the run resumes from its last checkpoint."
+        )
+        _log(f"job {state.job_id}: {message}", "error", step=state.step, idle_s=round(idle))
+        self._shutdown.set()  # claim nothing more; the hand-back gives up after one retry round
+        state.request_stop("stalled")
+        try:
+            self._note(state, "warning", message)
+        except Exception:  # the hand-back below matters more than the note
+            pass
+        self._hand_back(state, reason="worker_error")
+        self._exit(70)
 
     def _report(self, state: _JobState, payload: dict[str, Any]) -> None:
         """Best effort: a lifecycle event never fails the job."""
@@ -615,7 +651,7 @@ class TrainerWorker:
     def _phase(self, state: _JobState, phase: str, step: int | None = None) -> None:
         if state.phase == phase:
             return
-        state.phase = phase
+        state.phase, state.phase_at = phase, time.monotonic()
         self.telemetry.set_phase(phase)
         _log(f"phase {phase}", phase=phase, step=state.step if step is None else step)
         if phase == "checkpointing":
