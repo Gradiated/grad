@@ -553,7 +553,9 @@ export const createRunLifecycle = (
    * A GPU-sized base model when every online training worker is CPU-only (`grad local up`
    * without --gpu): the run would download the full model and crawl, or run out of memory.
    */
-  const cpuOnlyWarning = async (plan: PlanRunResponse): Promise<string | null> => {
+  const cpuOnlyWarning = async (
+    plan: PlanRunResponse,
+  ): Promise<string | null> => {
     const need = plan.min_gpu_memory_gb;
     if (need === null || need <= CPU_TRAINABLE_GB) return null;
     const { workerGpus, cpuWorkers } = await store.jobs.queueSnapshot(
