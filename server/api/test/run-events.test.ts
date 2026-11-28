@@ -207,6 +207,7 @@ describe("run lifecycle events", () => {
     const res = await t.request(`/v1/runs/${run.id}/events`, {
       headers: { Accept: "text/event-stream", "Last-Event-ID": String(middle) },
     });
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
     const frames = (await res.text())
       .split("\n\n")
       .filter((f) => f.includes("event:"));

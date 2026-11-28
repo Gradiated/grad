@@ -1057,6 +1057,7 @@ describe("run lifecycle and worker protocol", () => {
       },
     });
     expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
     const text = await res.text();
     await finish;
     const events = text.split("\n\n").filter((e) => e.includes("event:"));

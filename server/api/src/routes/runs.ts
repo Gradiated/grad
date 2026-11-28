@@ -257,6 +257,8 @@ export const registerRunRoutes = (
       }
 
       await services.runs.get(workspaceId, id);
+      // nginx (ingress-nginx) buffers responses by default, holding events back.
+      c.header("X-Accel-Buffering", "no");
 
       return streamSSE(
         c,
@@ -331,6 +333,8 @@ export const registerRunRoutes = (
       }
 
       await services.runs.get(workspaceId, id);
+      // nginx (ingress-nginx) buffers responses by default, holding events back.
+      c.header("X-Accel-Buffering", "no");
 
       return streamSSE(
         c,
