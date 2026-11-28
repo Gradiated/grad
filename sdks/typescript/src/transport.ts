@@ -829,6 +829,8 @@ export class Transport implements TransportLike {
         buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
         let newline: number;
         while ((newline = buffer.search(/\r\n|\r|\n/)) >= 0) {
+          // A trailing "\r" may be the first half of a "\r\n" split across chunks: wait for the next one.
+          if (!done && newline === buffer.length - 1 && buffer.endsWith("\r")) break;
           const line = buffer.slice(0, newline);
           const sep = buffer.startsWith("\r\n", newline) ? 2 : 1;
           buffer = buffer.slice(newline + sep);

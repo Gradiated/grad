@@ -540,4 +540,18 @@ describe("server-sent events", () => {
       { event: "x", data: "", id: "7", retry: undefined },
     ]);
   });
+
+  it("keeps a CRLF split across two chunks as one line break", async () => {
+    const chunks = ["data: a\r", "\ndata: b\r", "\n\r", "\n"];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      },
+    });
+    const server = new FakeServer().on("GET", "/s", new Response(body, { status: 200 }));
+    const out = [];
+    for await (const e of transport(server).sse({ method: "GET", path: "/s" })) out.push(e.data);
+    expect(out).toEqual(["a\nb"]);
+  });
 });
