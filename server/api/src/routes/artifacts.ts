@@ -13,7 +13,7 @@ import {
   SlugSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
-import { notFound } from "../errors.js";
+import { forbidden, notFound } from "../errors.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import { toPublicArtifact } from "../services/artifacts.js";
 import type { Services } from "../services/index.js";
@@ -35,6 +35,9 @@ const bundleFilename = (a: { name: string; version: string }): string =>
 const jsonBody = <T extends z.ZodType>(schema: T) => ({
   body: { required: true, content: { "application/json": { schema } } },
 });
+
+/** Holders Gradiated Cloud's inference side pins with (model versions). */
+const INFERENCE_HOLDER_PREFIX = "inference:";
 
 export const registerArtifactRoutes = (
   app: OpenAPIHono<AppEnv>,
@@ -253,6 +256,8 @@ export const registerArtifactRoutes = (
       path: "/v1/artifacts/{id}/pins/{holder}",
       operationId: "unpinArtifact",
       summary: "Remove a holder's pin (artifacts:pin)",
+      description:
+        "On Gradiated Cloud, `inference:` holders (published model versions) are removed only by Cloud itself: this answers 403 `pin_managed_by_cloud` for them.",
       tags,
       "x-internal": true,
       request: {
@@ -266,6 +271,17 @@ export const registerArtifactRoutes = (
     async (c) => {
       const { workspaceId } = requireScope(c, "artifacts:pin");
       const { id, holder } = c.req.valid("param");
+      // A published model version's pin: removing it here would let the
+      // artifact be deleted under a live version.
+      if (
+        deps.settings.inferencePinsManagedByCloud &&
+        holder.startsWith(INFERENCE_HOLDER_PREFIX)
+      ) {
+        throw forbidden(
+          "pin_managed_by_cloud",
+          `Pin '${holder}' belongs to a published model version on Gradiated Cloud; it goes away when that version is retired in the Gradiated console or API, not through this endpoint.`,
+        );
+      }
       await services.artifacts.unpin(workspaceId, id, holder);
 
       return c.body(null, 204);

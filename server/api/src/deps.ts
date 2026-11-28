@@ -28,6 +28,11 @@ export interface AppSettings {
   usageFlushSeconds?: number;
   /** AUTH_MODE=cloud: /v1/keys answers 501 keys_managed_by_cloud. */
   keysManagedByCloud?: boolean;
+  /**
+   * AUTH_MODE=cloud: the public unpin refuses `inference:` holders (403
+   * pin_managed_by_cloud); only the internal service-JWT routes remove them.
+   */
+  inferencePinsManagedByCloud?: boolean;
   /** AUTH_MODE=none: refuse public Host names and cross-site browser requests. */
   unauthenticated?: boolean;
   /** Browser origins allowed cross-origin on /v1 (GRAD_CORS_ORIGINS; default none). */

@@ -8839,6 +8839,8 @@ paths:
     delete:
       operationId: unpinArtifact
       summary: Remove a holder's pin (artifacts:pin)
+      description: "On Gradiated Cloud, `inference:` holders (published model versions) are removed only by Cloud itself: this
+        answers 403 `pin_managed_by_cloud` for them."
       tags: *a5
       x-internal: true
       parameters:

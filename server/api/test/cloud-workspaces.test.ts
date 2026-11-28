@@ -39,7 +39,11 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
     t = await makeTestApp({
       clock,
       secrets: createSecretsCipher({ key: randomBytes(32).toString("base64") }),
-      settings: { maxAttempts: 3, workspacePurgeDelaySeconds: 0 },
+      settings: {
+        maxAttempts: 3,
+        workspacePurgeDelaySeconds: 0,
+        inferencePinsManagedByCloud: true,
+      },
     });
     internal = createInternalApp({
       tokens: t.deps.store.workerTokens,
@@ -339,6 +343,26 @@ describe("Cloud workspace lifecycle on the internal listener", () => {
       (await t.json(`/v1/artifacts/${artifact.id}`, { method: "DELETE" }))
         .status,
     ).toBe(409);
+    // A workspace admin can't drop serving's pin through the public API.
+    const publicUnpin = await t.json<{ code: string; detail: string }>(
+      `/v1/artifacts/${artifact.id}/pins/${encodeURIComponent(holder)}`,
+      { method: "DELETE" },
+    );
+    expect(publicUnpin.status).toBe(403);
+    expect(publicUnpin.body.code).toBe("pin_managed_by_cloud");
+    expect(publicUnpin.body.detail).toMatch(/published model version/);
+    // Other holders and pinning stay public.
+    const own = await t.json(`/v1/artifacts/${artifact.id}/pins`, {
+      body: { holder: "team:keep", reason: "kept by hand" },
+    });
+    expect(own.status).toBe(201);
+    expect(
+      (
+        await t.json(`/v1/artifacts/${artifact.id}/pins/team:keep`, {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(204);
 
     expect((await setState("deleted")).status).toBe(200);
     await t.services.maintenance.tick();

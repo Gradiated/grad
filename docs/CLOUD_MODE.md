@@ -280,6 +280,12 @@ route's scope in `scopes`.
 | `PUT /internal/v1/workspaces/{ws}/artifacts/{id}/pins/{holder}` `{reason?}` | `artifacts:pin` | Pins it for `holder` (e.g. `inference:version:<task_versions.id>`): 201, or 200 when that holder already pinned it, with `{pin, artifact}`. A pinned artifact is never deleted (409 `artifact_pinned` on delete; retention, purges and sweeps skip it). |
 | `DELETE /internal/v1/workspaces/{ws}/artifacts/{id}/pins/{holder}` | `artifacts:pin` | Removes the pin; 204, also when there was none. |
 
+Only these routes remove an `inference:` pin. The public `DELETE
+/v1/artifacts/{id}/pins/{holder}` answers 403 `pin_managed_by_cloud` for an
+`inference:` holder with `AUTH_MODE=cloud` (a workspace admin could otherwise
+unpin a published version's artifact and delete it); other holders, and
+pinning, are unchanged. Self-hosted servers don't refuse it.
+
 Workspace states (`services/workspaces.ts`, table `grad_workspace_states`; no
 row is `active`):
 

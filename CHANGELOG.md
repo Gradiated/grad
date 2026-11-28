@@ -7,6 +7,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **Gradiated Cloud:** the public `DELETE /v1/artifacts/{id}/pins/{holder}` answers 403
+  `pin_managed_by_cloud` for `inference:` holders (a published model version's pin), so a
+  workspace admin can no longer unpin a live version's artifact and delete it. Only Cloud's
+  internal routes remove those pins; self-hosted servers are unchanged.
 - Cloud: a deleted workspace's purge no longer stalls on a dataset that only evals use. A pass
   deleted it while a remaining eval (past the pass's 500-row page, or still running) referenced
   it, so the pass failed on `grad_evals_dataset_id_fkey`, rolled back and failed the same way

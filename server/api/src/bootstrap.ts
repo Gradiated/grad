@@ -177,6 +177,7 @@ export const buildDependencies = async (
       corsOrigins: env.corsOrigins,
       unauthenticated: env.AUTH_MODE === "none",
       keysManagedByCloud: env.AUTH_MODE === "cloud",
+      inferencePinsManagedByCloud: env.AUTH_MODE === "cloud",
       sourceSyncIntervalSeconds: env.SOURCE_SYNC_INTERVAL_SECONDS,
       metrics: {
         enabled: env.METRICS_ENABLED,
