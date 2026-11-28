@@ -28,7 +28,7 @@ Gradiated Cloud serving of published artifacts starts with `peft_lora` adapters 
 
 ## The bundle: `grad.artifact/1`
 
-A bundle is a gzip-compressed tar of regular files. `manifest.json` sits at the root, and `eval_report.json` is there when the run produced an evaluation report. Every other file is payload, at the paths the format sections give. Bundles are reproducible: the same inputs give the same bytes, because entries are sorted, `mtime` is 0, uid and gid are 0, and owner names are empty.
+A bundle is a gzip-compressed tar of regular files. `manifest.json` sits at the root, and `eval_report.json` is there when the run produced an evaluation report. Every other file is payload, at the paths the format sections give. Bundles are reproducible: the same inputs give the same bytes, because entries are sorted, `mtime` is 0, uid and gid are 0, and owner names are empty. grad writes them uncompressed inside the gzip stream (deflate level 0): weights and optimizer state shrink only 7% (fp32) to 20% (bf16) at level 1, which runs at about 30 MB/s on one core, so compressing kept the GPU waiting on every export. Any gzip reader opens either.
 
 Read bundles with a hardened reader. grad's own reader (`server/trainer/grad_trainer/bundles.py`) follows these rules:
 

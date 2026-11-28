@@ -128,7 +128,11 @@ holds the same numbers for `estimated_duration_s`.
 Qwen3-32B leaves under 4 GB of an 80 GB GPU free even with 4,096-token micro-batches, so it is
 an eval and judge model only. A held-out eval costs about 20 s at 8B (285 records), against
 under 2 s of training pause for a checkpoint, which is why evals default to every 25% of the
-run while checkpoints are taken every 10% of steps or 5 minutes.
+run while checkpoints are taken every 10% of steps or 5 minutes. Writing a checkpoint
+(snapshot files, bundle, upload) runs beside training; a periodic one that falls due while the
+previous one is still being written is taken at the first step after it, never waited for, so
+short steps with big checkpoints (Qwen3-0.6B: 0.5 s steps, 374 MB checkpoints) keep the GPU busy.
+The last step and every eval step are always saved.
 
 `GRAD_TRAINER_BACKEND=reference` selects a stdlib-only **test double** that runs the same loop
 over a hashed bag-of-words model. Its artifacts are `format: reference`, `deployable: false`.

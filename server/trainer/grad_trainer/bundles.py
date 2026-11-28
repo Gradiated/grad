@@ -9,6 +9,10 @@ stamps ``format_version`` and ``created_by`` and validates the bundle against th
 
 Bundles are byte-for-byte reproducible for the same inputs and zlib build: sorted entries,
 ``mtime=0``, uid/gid 0, empty owner names, an empty gzip filename and fixed compression.
+That compression is level 0 (stored deflate blocks, still gzip to every reader): weights and
+optimizer state barely compress (fp32 7%, bf16 20% at level 1) and level 1 runs at ~30 MB/s on
+one core, so a 374 MB checkpoint took 12 s to bundle against 1 s stored, with the GPU waiting
+on the final export.
 
 Reading never trusts the archive: members are counted while iterating (no ``getmembers()``),
 only regular files with safe relative paths are accepted, duplicates are rejected, and both
@@ -140,7 +144,7 @@ def bundle_directory(
     *,
     manifest: dict[str, Any],
     eval_report: dict[str, Any] | None = None,
-    compresslevel: int = 1,
+    compresslevel: int = 0,
     validate: bool = True,
 ) -> BundleInfo:
     """Stream every regular file under ``src_dir`` into a deterministic bundle at ``out_path``.

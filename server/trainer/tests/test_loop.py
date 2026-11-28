@@ -95,9 +95,11 @@ class LoopTests(TempDirCase):
         self.assertEqual(result.tokens_total, 2 * sum(10 + i for i in range(8)))  # 2 epochs, every item twice
         tokens = [m["tokens"] for m in rec.metrics]
         self.assertEqual(tokens, sorted(tokens))
-        # Every eval step is a checkpoint too, so the best one can be promoted.
-        self.assertEqual([c[0] for c in rec.checkpoints], [2, 3, 4, 6, 8])
-        self.assertEqual([c[1] for c in rec.checkpoints], [3.0, None, 1.0, 2.0, 4.0])
+        # Every eval step is a checkpoint too, so the best one can be promoted (step 3's
+        # periodic one is skipped if step 2's is still being written).
+        scores = {c[0]: c[1] for c in rec.checkpoints}
+        self.assertIn([c[0] for c in rec.checkpoints], ([2, 3, 4, 6, 8], [2, 4, 6, 8]))
+        self.assertEqual([scores[s] for s in (2, 4, 6, 8)], [3.0, 1.0, 2.0, 4.0])
         self.assertNotIn("eval_metrics", rec.metrics[0])
         self.assertEqual(rec.metrics[1]["eval_metrics"], {"eval_loss": 3.0, "extra": 1})
         meta = rec.checkpoints[-1][3]
@@ -125,7 +127,7 @@ class LoopTests(TempDirCase):
         self.assertEqual(default_eval_every(22), 20)
         self.assertEqual(default_eval_every(5), 5)
 
-    def test_checkpoints_hand_over_in_the_background_one_at_a_time_in_order(self) -> None:
+    def test_checkpoints_hand_over_in_the_background_and_never_hold_up_training(self) -> None:
         import threading
 
         release = threading.Event()
@@ -142,17 +144,22 @@ class LoopTests(TempDirCase):
                 active.remove(step)
 
             def on_step(self, metric):  # type: ignore[no-untyped-def]
-                if metric["step"] == 2:
-                    release.set()
+                if metric["step"] == 3:
+                    release.set()  # only reached if step 2 didn't wait for checkpoint 1
                 return super().on_step(metric)
 
         rec = Slow(self.tmpdir())
         workdir = self.tmpdir()
         result = loop(FakeTask(), workdir, recorder=rec, checkpoint_every_steps=1).run()
         self.assertEqual(result.status, "completed")
-        self.assertEqual([c[0] for c in rec.checkpoints], list(range(1, 9)))
+        steps = [c[0] for c in rec.checkpoints]
+        self.assertTrue(release.is_set())
+        # Step 2's checkpoint fell due while checkpoint 1 was still being written: skipped,
+        # not waited for; a later step takes the next one, and the last step is always saved.
+        self.assertEqual((steps[0], steps[-1]), (1, 8))
+        self.assertNotIn(2, steps)
+        self.assertEqual(steps, sorted(set(steps)))
         self.assertTrue(all(alone for *_, alone in seen))  # never two in flight
-        self.assertGreaterEqual(seen[1][1], 2)  # step 2 ran before checkpoint 2 was handed over
         # The checkpoint directory holds the state as of its step, and is deleted afterwards.
         self.assertEqual((rec.checkpoints[0][2] / "weights.txt").read_text(), "1")
         self.assertEqual(list((workdir / "checkpoints").iterdir()), [])

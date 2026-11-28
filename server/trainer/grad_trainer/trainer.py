@@ -174,6 +174,8 @@ class TrainingLoop:
         self.last_checkpoint_step: int | None = None
         self.last_checkpoint_time = time.monotonic()
         self._checkpoint_seq = 0
+        # A periodic checkpoint fell due while the writer was busy: take it once it is free.
+        self._checkpoint_owed = False
         self._writer: threading.Thread | None = None
         self._writer_queue: queue.Queue[Any] = queue.Queue(maxsize=1)
         self._writer_error: BaseException | None = None
@@ -290,20 +292,30 @@ class TrainingLoop:
                 shutil.rmtree(directory, ignore_errors=True)
 
         self._writer_submit(finish)
+        self._checkpoint_owed = False
         self.last_checkpoint_step = step
         self.last_checkpoint_time = time.monotonic()
 
     # -- background checkpoint writer ----------------------------------------------------
-    # One thread, one checkpoint at a time, in order: never two uploads in flight. A second
-    # checkpoint waits (the queue holds one), and an error (lease lost, auth) surfaces on the
-    # training thread at the next checkpoint or when the loop ends.
+    # One thread, one checkpoint at a time, in order: never two uploads in flight. A periodic
+    # checkpoint is not taken while one is still being written (see _checkpoint_due); a
+    # required one (the last step, an eval step, an emergency) waits for it. An error (lease
+    # lost, auth) surfaces on the training thread at the next checkpoint or when the loop ends.
     def _writer_loop(self) -> None:
-        while (job := self._writer_queue.get()) is not None:
+        while True:
+            job = self._writer_queue.get()
             try:
+                if job is None:
+                    return
                 if self._writer_error is None:
                     job()
             except BaseException as exc:  # re-raised on the training thread
                 self._writer_error = exc
+            finally:
+                self._writer_queue.task_done()
+
+    def _writer_busy(self) -> bool:
+        return self._writer_queue.unfinished_tasks > 0
 
     def _writer_check(self) -> None:
         if self._writer_error is not None:
@@ -323,13 +335,19 @@ class TrainingLoop:
             self._writer = None
 
     def _checkpoint_due(self) -> bool:
+        """The last step and eval steps are always saved. A periodic checkpoint (every
+        ``checkpoint_every`` steps or ``checkpoint_every_minutes``) never makes training wait
+        for the previous one to finish writing: it is taken at the first step after that.
+        Short steps with big checkpoints (0.6B: 0.5 s steps, 14 s to write 374 MB) otherwise
+        left the GPU idle most of the run."""
+        if self.step == self.total_steps or self.last_eval_step == self.step:
+            return True
         minutes = self.spec.checkpoint_every_minutes
-        return (
-            self.step % self.checkpoint_every == 0
-            or self.step == self.total_steps
-            or self.last_eval_step == self.step
-            or (minutes is not None and time.monotonic() - self.last_checkpoint_time >= minutes * 60)
-        )
+        if self.step % self.checkpoint_every == 0 or (
+            minutes is not None and time.monotonic() - self.last_checkpoint_time >= minutes * 60
+        ):
+            self._checkpoint_owed = True
+        return self._checkpoint_owed and not self._writer_busy()
 
     @property
     def last_eval_score(self) -> float | None:
