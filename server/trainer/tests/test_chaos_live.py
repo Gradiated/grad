@@ -147,7 +147,8 @@ class ChaosLiveTest(unittest.TestCase):
         self.start_worker("b")
         final = self.wait_run(run_id)
         self.assertEqual(final["status"], "completed", final)
-        self.assertEqual(final["attempt"], 2)
+        # (On a failure, last_interruption and the stack log say why another attempt started.)
+        self.assertEqual(final["attempt"], 2, f"{final.get('last_interruption')}\n{self.server.log_tail()}")
         # Billed: attempt 1 as reported up to the kill, plus attempt 2 from the
         # checkpoint on. The checkpoint prefix is never billed twice.
         expected = at_kill["tokens_processed"] + control["tokens_processed"] - tokens_at_resume
