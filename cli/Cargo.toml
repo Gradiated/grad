@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = "4.5"
 crossterm = "=0.28.1"
 getrandom = "0.2"
 # Imported as `grad_sdk` inside the CLI so it never clashes with the `grad` binary.

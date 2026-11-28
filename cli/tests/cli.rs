@@ -562,6 +562,30 @@ fn help_documents_exit_codes_and_every_command_has_help() {
 }
 
 #[test]
+fn completion_scripts_for_every_shell() {
+    let sb = Sandbox::new("completion");
+    for (shell, needle) in [
+        ("bash", "_grad()"),
+        ("zsh", "#compdef grad"),
+        ("fish", "complete -c grad"),
+    ] {
+        let r = run(sb.grad(None), &["completion", shell]);
+        expect(&r, 0);
+        assert!(
+            r.stdout.contains(needle),
+            "{shell}: {}",
+            &r.stdout[..r.stdout.len().min(200)]
+        );
+        assert!(
+            r.stdout.contains("artifacts"),
+            "{shell} completes subcommands"
+        );
+    }
+    let r = run(sb.grad(None), &["completion", "tcsh"]);
+    expect(&r, 2);
+}
+
+#[test]
 fn usage_errors_exit_2_and_json_mode_wraps_them() {
     let sb = Sandbox::new("usage");
     let r = run(sb.grad(None), &["train", "--bogus"]);

@@ -26,6 +26,7 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   verbatim (Python, TypeScript and Go live suites; the Rust README is the crate docs, so `cargo
   test` compiles it). The Rust SDK has a README.
 - `grad local up` says the first pull is about 3 GB, not 600 MB.
+- `grad completion bash|zsh|fish|elvish|powershell` prints a shell completion script.
 - **SDKs: one live stream per run.** `metrics(follow=True)` (Python, TypeScript, Go) and
   `grad runs logs --follow` now read the metric events of the run's event stream
   (`GET /v1/runs/{id}/events`), the stream `wait()` already follows, instead of a second SSE

@@ -274,6 +274,17 @@ the server; the page keeps it in that tab's sessionStorage only. BROWSER
 overrides the browser command.")]
     Ui(UiArgs),
 
+    /// Print a shell completion script (bash, zsh, fish, elvish or powershell)
+    #[command(after_help = "\
+Examples:
+  grad completion bash > ~/.local/share/bash-completion/completions/grad
+  grad completion zsh > \"${fpath[1]}/_grad\"
+  grad completion fish > ~/.config/fish/completions/grad.fish")]
+    Completion {
+        /// The shell to complete for
+        shell: clap_complete::Shell,
+    },
+
     /// Run a local grad stack with Docker Compose
     Local {
         #[command(subcommand)]

@@ -43,7 +43,7 @@ pip install grad-sdk
 npm install @gradiated/grad
 ```
 
-Without Homebrew, take a binary from the [GitHub Releases](https://github.com/Gradiated/grad/releases) or build one with `cargo install --locked grad-cli@0.2.0-alpha.7` (cargo needs the version while every release is a pre-release).
+Without Homebrew, take a binary from the [GitHub Releases](https://github.com/Gradiated/grad/releases) or build one with `cargo install --locked grad-cli@0.2.0-alpha.7` (cargo needs the version while every release is a pre-release). `grad completion bash|zsh|fish` prints a shell completion script.
 
 Start a server. `grad local up` runs grad-server, Postgres, S3 storage and a trainer in Docker from the public [Docker Hub images](#self-hosting); on Kubernetes, install the [Helm chart](#self-hosting) instead.
 
