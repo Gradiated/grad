@@ -37,7 +37,7 @@ on:
         type: string
         required: true
       environment:
-        description: Deployment environment for the publish jobs (approval gate)
+        description: Deployment environment for the publish jobs (release, for a tag)
         type: string
         default: ""
     secrets:

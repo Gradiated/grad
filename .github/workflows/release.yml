@@ -1,7 +1,7 @@
 name: Release
 
-# Pushing a tag like v0.3.0 builds everything, then waits in the `release` environment for a
-# maintainer to approve before anything is published. See "Releasing" in CONTRIBUTING.md.
+# Pushing a tag like v0.3.0 builds everything, then publishes it from the `release`
+# environment (v* tags only, no approval step). See "Releasing" in CONTRIBUTING.md.
 
 on:
   push:
@@ -147,8 +147,8 @@ jobs:
           name: cli-${{ matrix.target }}
           path: grad-${{ matrix.target }}.tar.gz*
 
-  # Everything below publishes. Each job runs in the `release` environment, which requires a
-  # maintainer's approval, and starts only after every build above has passed. The registry
+  # Everything below publishes. Each job runs in the `release` environment (v* tags only) and
+  # starts only after every build above has passed. The registry
   # jobs (PyPI, npm, crates.io, Go) are independent: one failing fails the run but doesn't hold
   # back the others, the GitHub Release or Homebrew, and re-running it alone touches nothing else.
 
