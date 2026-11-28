@@ -31,6 +31,13 @@ checkout's SDK (tsc with sdks/typescript's node_modules, `go build`, `cargo chec
 continue an earlier one on its page (`dataset` from the block above), so each is compiled after
 the page's earlier blocks of its language, and only errors inside the block itself count.
 Blocks that import another vendor's SDK are skipped.
+
+    python3 scripts/check-docs-snippets.py --docs DOCS --api-examples   # the API reference's requests
+
+--api-examples sends every request body the generated API reference shows
+(components/docs/training/api-examples.json, next to DOCS) to a live stack, in file order, and
+fails on any the server can't parse (400, or 422 validation_error). The core creates must
+succeed; the rest may answer with a state error (a 404 for a placeholder id, a 409, a 501).
 """
 
 from __future__ import annotations
@@ -244,7 +251,7 @@ def blocks(docs: Path) -> list[dict]:
         lines = path.read_text().split("\n")
         i = 0
         while i < len(lines):
-            m = re.match(r"^```(python|bash|sh|shell|yaml)\s*$", lines[i])
+            m = re.match(r"^```(python|bash|sh|shell|yaml)(?:\s+[^`]*)?$", lines[i])
             if m:
                 j = next(k for k in range(i + 1, len(lines)) if lines[k].startswith("```"))
                 code = "\n".join(lines[i + 1 : j]) + "\n"
@@ -534,7 +541,7 @@ def compile_blocks(docs: Path) -> list[dict]:
         lines = path.read_text().split("\n")
         i = 0
         while i < len(lines):
-            m = re.match(r"^```(\w+)\s*$", lines[i])
+            m = re.match(r"^```(\w+)(?:\s+[^`]*)?$", lines[i])
             if m and m.group(1) in COMPILE_LANGS:
                 lang = COMPILE_LANGS[m.group(1)]
                 j = next(k for k in range(i + 1, len(lines)) if lines[k].startswith("```"))
@@ -695,6 +702,61 @@ def skip_reason(b: dict, args: argparse.Namespace) -> str | None:
     return reason
 
 
+# The API reference's examples that must succeed on a fresh harness stack.
+API_EXAMPLES_MUST_SUCCEED = {
+    "createApiKey", "createDataset", "pushDatasetRecords", "scoreDataset", "filterDataset", "renderDataset",
+    "planRun", "createRun", "setSecret", "createDatasetSource", "updateSource",
+}
+
+
+def api_examples_check(examples_path: Path, base_url: str, api_key: str) -> int:
+    """Send each example body of the API reference; see the module docstring."""
+    import uuid
+
+    import httpx
+
+    examples = json.loads(examples_path.read_text())
+    client = httpx.Client(base_url=base_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=120)
+    spec = client.get("/openapi.json").json()
+    ops = {
+        op["operationId"]: (method.upper(), path)
+        for path, item in spec["paths"].items()
+        for method, op in item.items()
+        if isinstance(op, dict) and "operationId" in op
+    }
+    created: dict[str, str] = {}
+    owner = {"Runs": "run", "Checkpoints": "checkpoint", "Artifacts": "artifact", "Evals": "eval", "Sources": "source"}
+    failures = 0
+    for op_id, body in examples.items():
+        method, path = ops[op_id]
+        tag = next(op["tags"][0] for item in spec["paths"].values() for op in item.values()
+                   if isinstance(op, dict) and op.get("operationId") == op_id)
+
+        def fill(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name == "name":
+                return "support-prod"
+            kind = "checkpoint" if path.startswith("/v1/checkpoints") else owner.get(tag, "obj")
+            return created.get(kind, f"{kind}_01JDS4QW8X3B9N7G6K2M5P0RTV")
+
+        url = re.sub(r"\{(\w+)\}", fill, path)
+        headers = {"Idempotency-Key": str(uuid.uuid4())} if method == "POST" else {}
+        res = client.request(method, url, json=body, headers=headers)
+        problem = res.json() if "json" in res.headers.get("content-type", "") else {}
+        code = problem.get("code") if res.status_code >= 400 else None
+        unparsed = res.status_code == 400 or code == "validation_error"
+        ok = res.status_code < 300 if op_id in API_EXAMPLES_MUST_SUCCEED else not unparsed
+        if res.status_code < 300 and isinstance(problem, dict) and isinstance(problem.get("id"), str):
+            kind = {"createRun": "run", "createEval": "eval", "createDatasetSource": "source"}.get(op_id)
+            if kind:
+                created[kind] = problem["id"]
+        failures += not ok
+        detail = f" {code}: {problem.get('detail', '')[:160]}" if code else ""
+        print(f"{'PASS' if ok else 'FAIL'} {op_id} {method} {url} -> {res.status_code}{detail}", flush=True)
+    print(f"\n{len(examples) - failures} passed, {failures} failed")
+    return 1 if failures else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--docs", required=True, type=Path, help="product/website/src/docs/training in the docs repo (with --compile, also one .md file)")
@@ -708,6 +770,7 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="list the blocks and exit")
     ap.add_argument("--offline", action="store_true", help="skip the blocks that download from Hugging Face")
     ap.add_argument("--compile", action="store_true", help="type-check the TypeScript, Go and Rust blocks instead (no stack)")
+    ap.add_argument("--api-examples", action="store_true", help="send the API reference's request bodies to the stack instead")
     args = ap.parse_args()
     if args.compile:
         return compile_check(args.docs, args.only)
@@ -733,6 +796,16 @@ def main() -> int:
         env = {k: v for k, v in os.environ.items() if not k.startswith("GRADIATED_")}
         profile = _config.resolve_config(profile="local", env=env)
         args.base_url, args.api_key = profile.base_url, profile.api_key or ""
+    if args.api_examples:
+        examples = args.docs.resolve().parents[1] / "components" / "docs" / "training" / "api-examples.json"
+        if not args.base_url:
+            stack = Stack(False, "reference", work / "stack.log", online=False)
+            args.base_url, args.api_key = stack.info["base_url"], stack.info["api_key"]
+        try:
+            return api_examples_check(examples, args.base_url, args.api_key)
+        finally:
+            if stack:
+                stack.close()
     if not args.base_url:
         worker = "torch" if args.cloud else "reference"
         stack = Stack(args.cloud, worker, work / "stack.log", online=not args.offline)
