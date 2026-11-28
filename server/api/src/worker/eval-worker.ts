@@ -190,6 +190,9 @@ const patient = (
   },
 });
 
+/** The attempt halted (a stop, a cancel, a lost lease) while its dataset version downloaded. */
+class Halted extends Error {}
+
 const doneKey = (model: string, index: number) => `${model}\u0000${index}`;
 
 /** The next `n` items of `items` (fewer at its end). */
@@ -516,6 +519,8 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     // work is unref'd (the regex sandbox thread), so the worker can't exit
     // mid-eval. Cleared when the attempt ends.
     const heartbeat = setInterval(() => void beat(), (leaseSeconds * 1000) / 3);
+    // Calls a previous attempt counted but never stored are not this eval's.
+    counts = emptyCounts();
     // A change in what the calls wait for shows on the eval at once.
     waiting = null;
     onWait = (wait) => {
@@ -575,22 +580,36 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
     try {
       // The version is read from local disk a page at a time and its tasks
       // made as they come: memory is bounded by the page, not the dataset.
-      version = await openDownloadedVersion(
-        client.datasetLines(job.dataset.download_url),
-        { maxBytes: options.tmpMaxBytes },
-      );
-      const tasks = evalTasks(
-        version.records(),
-        ev.limit ?? undefined,
-        ev.mode === "score" ? ev.rubric.map((r) => r.name) : null,
-      );
+      // A halt ends the download (minutes for a large version) at once:
+      // a stopping worker hands its eval back within the pod's grace period.
+      const url = job.dataset.download_url;
+      const lines = async function* () {
+        for await (const line of client.datasetLines(url)) {
+          if (halted()) throw new Halted();
+          yield line;
+        }
+      };
+      version = await openDownloadedVersion(lines(), {
+        maxBytes: options.tmpMaxBytes,
+      }).catch((error: unknown) => {
+        if (error instanceof Halted) return null;
+        throw error;
+      });
+      const tasks =
+        version &&
+        evalTasks(
+          version.records(),
+          ev.limit ?? undefined,
+          ev.mode === "score" ? ev.rubric.map((r) => r.name) : null,
+        );
       const done = new Set(
         Object.entries(ev.done).flatMap(([model, indices]) =>
           indices.map((i) => doneKey(model, i)),
         ),
       );
 
-      for (let page = await take(tasks, TASK_PAGE); page.length > 0; ) {
+      let page = tasks ? await take(tasks, TASK_PAGE) : [];
+      while (page.length > 0) {
         const work: Array<{ task: EvalTask; model: string; sample: number }> =
           [];
         for (const task of page) {
@@ -616,7 +635,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
           }
         });
         await send();
-        if (halted()) break;
+        if (halted() || !tasks) break;
         page = await take(tasks, TASK_PAGE);
       }
       if (halt === "lost") return "lease_lost";
