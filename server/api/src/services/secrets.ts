@@ -60,10 +60,17 @@ export const createSecretService = (deps: AppDependencies): SecretService => {
     return deps.secrets;
   };
 
+  /** 422: a request or job names a secret the workspace doesn't have. */
+  const missing = (name: string) =>
+    invalid(
+      "secret_not_found",
+      `No secret named '${name}' in this workspace. Store it first with 'grad secrets set ${name}' (the value is read from stdin).`,
+    );
+
   const reveal = async (workspaceId: string, name: string, to: SecretUse) => {
     const secret = await store.secrets.get(workspaceId, name);
     const sealed = await store.secrets.getSealed(workspaceId, name);
-    if (!secret || !sealed) throw notFound("secret", name);
+    if (!secret || !sealed) throw missing(name);
     assertSecretHost(secret, to.url, to.use);
 
     return await cipher().open(workspaceId, name, sealed);
@@ -72,12 +79,7 @@ export const createSecretService = (deps: AppDependencies): SecretService => {
   const require = async (workspaceId: string, name: string, to: SecretUse) => {
     cipher();
     const secret = await store.secrets.get(workspaceId, name);
-    if (!secret) {
-      throw invalid(
-        "secret_not_found",
-        `No secret named '${name}' in this workspace. Store it first with 'grad secrets set ${name}' (the value is read from stdin).`,
-      );
-    }
+    if (!secret) throw missing(name);
     assertSecretHost(secret, to.url, to.use);
   };
 
