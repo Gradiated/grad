@@ -6,7 +6,7 @@ import {
   Sha256HexSchema,
   SlugSchema,
 } from "./common.js";
-import { HfRepoSchema } from "./datasets.js";
+import { HfRepoSchema, HfRevisionSchema } from "./datasets.js";
 import {
   ArtifactFormatSchema,
   type ArtifactFormat,
@@ -57,7 +57,7 @@ export const ArtifactImportSourceSchema = z
     z.object({
       kind: z.literal("hf"),
       repo: HfRepoSchema,
-      revision: z.string().min(1).max(128).optional().openapi({
+      revision: HfRevisionSchema.optional().openapi({
         description:
           "Branch, tag or commit (default main). The import pins the commit it resolves.",
       }),

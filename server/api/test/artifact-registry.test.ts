@@ -380,6 +380,32 @@ describe("artifact registry: layout, provenance, uploads, imports, pins", () => 
     expect((await t.json<Json>("/v1/artifacts")).body.data).toEqual([]);
   });
 
+  it("HF import revisions are branch, tag or commit names (security review 2026-11-28)", async () => {
+    for (const revision of [
+      "../../api/whoami",
+      "main/../x",
+      "http://169.254.169.254/",
+      "main?x=1",
+      "main#x",
+      "-rf",
+      "main%2F..",
+    ]) {
+      const bad = await createImport({
+        source: { kind: "hf", repo: "acme/lora", revision },
+        base_model: "test/tiny-qwen3",
+      });
+      expect(bad.status, revision).toBe(422);
+    }
+    for (const revision of ["main", "v1.0", "refs/pr/1", "a".repeat(40)]) {
+      const ok = await createImport({
+        source: { kind: "hf", repo: "acme/lora", revision },
+        base_model: "test/tiny-qwen3",
+        name: `ok-${revision.replace(/[^a-z0-9]/g, "-").slice(0, 20)}`,
+      });
+      expect(ok.status, revision).toBe(202);
+    }
+  });
+
   it("HF imports pin the commit the worker resolved", async () => {
     const created = await createImport({
       source: { kind: "hf", repo: "acme/Support-LoRA", revision: "main" },

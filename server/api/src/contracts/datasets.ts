@@ -232,6 +232,16 @@ export const HfRepoSchema = z
     "Expected 'owner/name'.",
   );
 
+/** A Hub revision: a branch, tag, commit or `refs/pr/<n>`; never `..` or URL syntax. */
+export const HfRevisionSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(
+    /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*$/,
+    "Expected a branch, tag or commit.",
+  );
+
 export const ImportSourceSchema = z
   .discriminatedUnion("kind", [
     z.object({
@@ -244,7 +254,7 @@ export const ImportSourceSchema = z
       repo: HfRepoSchema,
       split: z.string().min(1).max(64).default("train"),
       config: z.string().min(1).max(128).optional(),
-      revision: z.string().min(1).max(128).optional(),
+      revision: HfRevisionSchema.optional(),
       columns: HfColumnMappingSchema.default({}),
       limit: z.number().int().min(1).max(10_000_000).optional(),
       secret: SlugSchema.optional().openapi({
