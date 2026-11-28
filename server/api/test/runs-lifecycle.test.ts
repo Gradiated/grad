@@ -417,9 +417,11 @@ describe("run lifecycle and worker protocol", () => {
       `run-usage:${run.id}:1`,
       `run-usage:${run.id}:2`,
     ]);
-    expect((await billed()).map((c) => c.costUsd)).toEqual([
-      1.1,
-      costForTokens(950_000, 1),
+    // Each stop overshoots the cap by part of a step; the overshoot isn't billed,
+    // so the run never bills more than its cap ($1, then $2 in all).
+    expect((await billed()).map((c) => c.costUsd)).toEqual([1, 0.9]);
+    expect((await billed()).map((c) => c.tokensProcessed)).toEqual([
+      1_000_000, 900_000,
     ]);
     const final = await t.json<{ cost_usd: number; tokens_processed: number }>(
       `/v1/runs/${run.id}`,

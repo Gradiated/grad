@@ -212,6 +212,20 @@ const runCost = (run: RunRecord, attemptTokens = run.attempt_tokens): number =>
 
 const billedCost = (run: RunRecord): number => runCost(run, 0);
 
+/**
+ * The tokens of an open attempt the run bills: a step can carry a run a little
+ * past max_cost_usd before it stops, and that overshoot isn't billed.
+ */
+export const billableTokens = (run: RunRecord, tokens: number): number => {
+  const price = nanoUsd(run.price_per_million_tokens);
+  if (run.max_cost_usd === null || price <= 0) return tokens;
+  const capTokens = Number(
+    (BigInt(nanoUsd(run.max_cost_usd)) * 1_000_000n) / BigInt(price),
+  );
+
+  return Math.max(0, Math.min(tokens, capTokens - run.billed_tokens));
+};
+
 export const toPublicRun = (
   run: RunRecord,
   compute: RunCompute = NO_COMPUTE,
@@ -651,14 +665,18 @@ export const createRunLifecycle = (
     });
   };
 
-  /** The open attempt's usage when it has processed `tokens`. */
-  const attemptUsage = (run: RunRecord, tokens: number): AttemptUsage => ({
-    tokens,
-    costUsd: costForTokens(tokens, run.price_per_million_tokens),
-    sku: trainSku(run.resolved_config.model),
-    priceNanoPerMtok: nanoUsd(run.price_per_million_tokens),
-    priceVersion: run.price_version ?? undefined,
-  });
+  /** The open attempt's billed usage once it has processed `processed` tokens. */
+  const attemptUsage = (run: RunRecord, processed: number): AttemptUsage => {
+    const tokens = billableTokens(run, processed);
+
+    return {
+      tokens,
+      costUsd: costForTokens(tokens, run.price_per_million_tokens),
+      sku: trainSku(run.resolved_config.model),
+      priceNanoPerMtok: nanoUsd(run.price_per_million_tokens),
+      priceVersion: run.price_version ?? undefined,
+    };
+  };
 
   const limits = queueLimits(settings);
   const waitingForWorker = (run: RunRecord): boolean =>

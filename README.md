@@ -193,7 +193,7 @@ The `gradiated/linden-1` weights are not public. Self-hosted, train a decision m
 What every run gives you:
 
 - **Datasets from anywhere.** Push records or a `.jsonl`/`.json`/`.parquet` file (trace exports from OpenAI, OTel, Langfuse, PostHog, Braintrust and LangSmith are detected automatically), or pull a Hugging Face dataset server-side with `client.datasets.from_hf(...)`. Datasets are versioned, and every run pins the version it trained on.
-- **Cost before compute.** `runs.plan(...)` (`grad train --dry-run`) returns the resolved recipe, data warnings, token count and price. `max_cost_usd` is a hard cap: the run stops and keeps its checkpoint.
+- **Cost before compute.** `runs.plan(...)` (`grad train --dry-run`) returns the resolved recipe, data warnings, token count and price. `max_cost_usd` is a hard cap: the run stops and keeps its checkpoint, and it is never billed past the cap (the step that crosses it is billed only up to it).
 - **Real weights.** LLM runs train LoRA adapters (or PrefixKV cartridges). Downloads are SHA-256-verified PEFT directories (`adapter_config.json`, `adapter_model.safetensors`) that load straight into vLLM or SGLang. `SFTRecipe(merge_on_export=True)` exports merged safetensors instead.
 - **Checkpoints and resume.** A run keeps its last three checkpoints and its best for 30 days (its best and final forever); `runs.resume(...)` continues a stopped run, and any checkpoint can be promoted to an artifact.
 

@@ -98,6 +98,46 @@ describe("usage ledger: incremental billing while a run trains", () => {
     expect(listed.body.next_cursor).not.toBeNull();
   });
 
+  it("never bills past max_cost_usd: the step that crosses the cap is billed only up to it", async () => {
+    t = await app();
+    const worker = new FakeWorker(t);
+    // test/tiny-qwen3 costs $1 per million tokens: the cap is 2,000 tokens.
+    const run = await createSftRun(t, { maxCostUsd: 0.002 });
+    const job = (await worker.claim())!;
+    await worker.progress(job, 1, 1500);
+    expect((await worker.progress(job, 2, 2500)).body).toMatchObject({
+      should_stop: true,
+      stop_reason: "budget",
+    });
+    const done = await worker.complete(
+      job,
+      { status: "stopped_budget", tokens_processed: 2600 },
+      "partial",
+    );
+    expect(done.body.run).toMatchObject({
+      status: "stopped_budget",
+      tokens_processed: 2600,
+    });
+    const rows = await ledger(t, run.id);
+    expectTiled(rows, { 1: 2000 });
+    expect(rows.reduce((total, r) => total + r.cost_usd, 0)).toBeCloseTo(
+      0.002,
+      9,
+    );
+
+    // A resume under a higher cap bills the new attempt up to the run's cap, no further.
+    await t.json(`/v1/runs/${run.id}/resume`, {
+      body: { max_cost_usd: 0.003 },
+    });
+    const again = (await worker.claim())!;
+    await worker.complete(
+      again,
+      { status: "stopped_budget", tokens_processed: 1000 },
+      "partial-2",
+    );
+    expectTiled(await ledger(t, run.id), { 1: 2000, 2: 400 });
+  });
+
   it("a cancel bills exactly what ran, with no rows after it", async () => {
     t = await app();
     const worker = new FakeWorker(t);

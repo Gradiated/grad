@@ -142,7 +142,9 @@ price they were created with.
 ### Usage push
 
 Every `grad_usage` row grad bills (`billed_by = grad`: training) becomes one
-usage event:
+usage event. A run's rows never add up to more than its `max_cost_usd`: the
+step that carries a run past its cap is billed only up to the cap, though the
+run's `tokens_processed` and `cost_usd` count the whole step.
 
 ```json
 {"event_id": "training:run-usage:<run_id>:<attempt>:<tokens_through>",
