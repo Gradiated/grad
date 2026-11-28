@@ -490,11 +490,14 @@ describe("eval service", () => {
       accepted: 1,
       generated: 1,
     });
-    // A replayed batch is stored once.
-    expect(await dead.postOutputs(ref, { outputs: [pre] })).toMatchObject({
-      accepted: 0,
-      generated: 1,
-    });
+    // A replayed batch is stored once, even racing its original: generated
+    // counts each output once (it is a running count, not a count(*)).
+    const second = { ...pre, task_index: 1, task_id: "q1" };
+    const raced = await Promise.all(
+      [0, 1, 2].map(() => dead.postOutputs(ref, { outputs: [pre, second] })),
+    );
+    expect(raced.map((r) => r.accepted).sort()).toEqual([0, 0, 1]);
+    expect(raced.map((r) => r.generated).sort()).toEqual([2, 2, 2]);
 
     expect(await h.worker.drain()).toBe(0);
     t.clock.advanceSeconds(60);
@@ -507,7 +510,7 @@ describe("eval service", () => {
     expect(done.progress.generated).toBe(4);
     expect(
       fake.requests.filter((r) => r.model === "qwen/qwen3-8b"),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     // The dead attempt's late writes are refused: its lease is gone.
     await expect(dead.postOutputs(ref, { outputs: [pre] })).rejects.toThrow(
       /HTTP 409/,

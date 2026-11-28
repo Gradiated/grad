@@ -693,15 +693,20 @@ export const createEvalService = (
     }));
 
     // The outputs, the progress and the bill commit together, fenced on
-    // the lease: a worker that lost it stores nothing.
+    // the lease: a worker that lost it stores nothing. The fence comes first
+    // and locks the eval, so a retried batch racing its original waits and
+    // then counts its new outputs on top of what that one committed (no
+    // count(*) per batch: 220 ms at 1M outputs, p2-data).
+    const fence = fenceOf(job, ["running", "cancelled"]);
     const result = await store.transaction(async () => {
+      const held = await store.evals.update(id, {}, fence);
+      if (!held) throw leaseLost(id);
       const accepted = await store.evals.insertOutputs(rows);
-      const generated = await store.evals.countOutputs(id);
-      const progressed = await store.evals.update(
-        id,
-        { generated },
-        fenceOf(job, ["running", "cancelled"]),
-      );
+      const generated = held.generated + accepted;
+      const progressed =
+        accepted > 0
+          ? await store.evals.update(id, { generated }, fence)
+          : held;
       if (!progressed) throw leaseLost(id);
       // A cancelled eval's last outputs bill now: its close may never come.
       await billAttempt(progressed, progressed.status === "cancelled");
