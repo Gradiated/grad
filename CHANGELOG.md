@@ -7,6 +7,12 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **Breaking: `GET /v1/runs/{id}/metrics` is JSON pages only.** Its Server-Sent Events mode is gone (every SDK and
+  the CLI already follow metric points on `GET /v1/runs/{id}/events`); the generated
+  `listRunMetricsStream` / `ListRunMetricsStream` / `list_run_metrics_stream` are removed.
+- **Evals:** a transient failure (storage, the database) while handing a claimed eval to its worker requeues the eval at
+  once, spending the attempt, as runs and imports already did; before, the eval stayed leased until its lease expired.
+
 - Docs: `spec/openapi.yaml` describes the fields of `Run`, `PlanRunRequest`, `Checkpoint`, `Artifact` and `Dataset`
   (descriptions only, no wire change), so the generated
   [API reference](https://gradiated.com/docs/reference/training-api/) and the SDKs' doc comments explain them. A
