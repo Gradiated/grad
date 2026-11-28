@@ -19,6 +19,8 @@ const ORPHAN_PAGE = 1000;
 /** Job events deleted per statement, and statements per tick. */
 const EVENT_GC_BATCH = 5000;
 const EVENT_GC_BATCHES = 10;
+/** A slow database ends the sweep early: the tick's other steps go on. */
+const EVENT_GC_BUDGET_MS = 2000;
 /** A finished pass waits this long before the next one starts. */
 const ORPHAN_PASS_INTERVAL_MS = 3_600_000;
 /** Swept for orphans: job blobs under `ws/`, released bundles under `artifacts/`. */
@@ -126,12 +128,18 @@ export const createMaintenance = (
 
   /**
    * Job events past retention, EVENT_GC_BATCH at a time and at most
-   * EVENT_GC_BATCHES batches a tick: 50k a tick keeps up with ~3k events/s
-   * at the default 15 s interval (one batch of 1000 kept up with 66/s).
+   * EVENT_GC_BATCHES batches (or EVENT_GC_BUDGET_MS) a tick: 50k a tick
+   * keeps up with ~3k events/s at the default 15 s interval (one batch of
+   * 1000 kept up with 66/s).
    */
   const deleteOldEvents = async (before: Date): Promise<number> => {
+    const started = performance.now();
     let deleted = 0;
-    for (let i = 0; i < EVENT_GC_BATCHES; i += 1) {
+    for (
+      let i = 0;
+      i < EVENT_GC_BATCHES && performance.now() - started < EVENT_GC_BUDGET_MS;
+      i += 1
+    ) {
       const n = await deps.store.jobs.deleteEventsBefore(
         before,
         EVENT_GC_BATCH,

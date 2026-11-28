@@ -702,9 +702,12 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
   deleteEventsBefore: async (before, limit) =>
     (
       await db.query(
+        // Oldest first by created_at, not seq: with stale statistics an
+        // ORDER BY seq walked the primary key past millions of live rows to
+        // find the last few expired ones (6 s a batch, p1-scale).
         `DELETE FROM grad_job_events WHERE seq IN (
            SELECT seq FROM grad_job_events WHERE created_at < $1::timestamptz
-           ORDER BY seq LIMIT $2)
+           ORDER BY created_at LIMIT $2)
          RETURNING seq`,
         [before.toISOString(), limit],
       )
