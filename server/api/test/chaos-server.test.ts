@@ -173,7 +173,7 @@ describe("migrations under the pool's statement_timeout (MIGRATE_ON_BOOT)", () =
   });
 });
 
-describe("an alpha.4 upgrade (0006-0009) started by two pods at once", () => {
+describe("an upgrade from alpha.3 (0006 onwards) started by two pods at once", () => {
   it("one applies the new migrations and the other waits, then finds none", async () => {
     const schema = freshSchemaName();
     const old = await mkdtemp(path.join(tmpdir(), "grad-chaos-0005-"));
@@ -181,7 +181,8 @@ describe("an alpha.4 upgrade (0006-0009) started by two pods at once", () => {
       () => new pg.Pool({ connectionString: postgresUrl(), max: 1 }),
     );
     try {
-      for (const name of (await loadMigrations()).map((m) => m.name)) {
+      const names = (await loadMigrations()).map((m) => m.name);
+      for (const name of names) {
         if (name < "0006") {
           await copyFile(
             path.join(defaultMigrationsDir(), name),
@@ -193,7 +194,10 @@ describe("an alpha.4 upgrade (0006-0009) started by two pods at once", () => {
       const ran = await Promise.all(pools.map((p) => migrate(p, { schema })));
       expect(ran.map((r) => r.join(",")).sort()).toEqual([
         "",
-        "0006,0007,0008,0009",
+        names
+          .filter((n) => n >= "0006")
+          .map((n) => n.slice(0, 4))
+          .join(","),
       ]);
     } finally {
       await Promise.all(pools.map((p) => p.end()));
