@@ -302,6 +302,14 @@ describe("runs", () => {
     expect(new URLSearchParams(location.search).get("metric")).toBe("eval.accuracy");
     // The axis is the steps that have the metric: evals at steps 2 and 4.
     expect(charts.created.at(-1)?.data[0]).toEqual([2, 4]);
+    // Same series, another unit: the axis formats the metric now shown, not the first one.
+    await act(async () => {
+      if (!select) return;
+      select.value = "cost_usd";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await waitFor(() => expect(container.querySelector(".chart-card h2")?.textContent).toBe("Cost"));
+    expect(charts.created.at(-1)?.opts.axes[1]?.values(null, [1.5])).toEqual(["$1.50"]);
 
     await click(container.querySelector('button[aria-label="Remove broken-dpo from the comparison"]'));
     await waitFor(() => expect(new URLSearchParams(location.search).get("ids")).toBe(`${RUN_ID},run_gone`));

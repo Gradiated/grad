@@ -83,7 +83,8 @@ const readout = (el: HTMLElement | null, u: uPlot, props: LineChartProps) => {
   el.replaceChildren(...parts);
 };
 
-const buildOptions = (width: number, height: number, props: LineChartProps, readoutEl: () => HTMLElement | null): Options => {
+/** `latest` reads the current props: format and readout follow a metric switch that keeps the series' shape. */
+const buildOptions = (width: number, height: number, props: LineChartProps, latest: () => LineChartProps, readoutEl: () => HTMLElement | null): Options => {
   const grid = cssVar("--grid");
   const axis = cssVar("--faint");
   const font = `11px ${cssVar("--font")}`;
@@ -96,10 +97,10 @@ const buildOptions = (width: number, height: number, props: LineChartProps, read
     legend: { show: false },
     cursor: { y: false, points: { size: 7, width: 2 }, drag: { x: true, y: false } },
     scales: { x: { time: false } },
-    hooks: { setCursor: [(u) => readout(readoutEl(), u, props)] },
+    hooks: { setCursor: [(u) => readout(readoutEl(), u, latest())] },
     axes: [
       { ...axisCommon, size: 28, values: (_u, ticks) => ticks.map((t) => (Number.isInteger(t) ? t.toLocaleString("en-US") : "")) },
-      { ...axisCommon, size: 60, values: (_u, ticks) => ticks.map((t) => props.format(t)) },
+      { ...axisCommon, size: 60, values: (_u, ticks) => ticks.map((t) => latest().format(t)) },
     ],
     series: [
       { label: props.xLabel ?? "step" },
@@ -127,7 +128,9 @@ export const LineChart = (props: LineChartProps) => {
   const height = props.height ?? 200;
   const data: AlignedData = [props.x, ...props.series.map((s) => s.values)] as AlignedData;
   const hasData = props.x.length > 0 && props.series.some((s) => s.values.some((v) => v !== null));
-  const shape = props.series.map((s) => `${s.label}:${s.color}:${s.dashed ? 1 : 0}`).join("|");
+  const shape = props.series.map((s) => `${s.label}:${s.color}:${s.dashed ? 1 : 0}${s.sparse ? 1 : 0}${s.faint ? 1 : 0}`).join("|");
+  const latest = useRef(props);
+  latest.current = props;
 
   // (Re)create on theme or series-shape change; data updates go through setData.
   useEffect(() => {
@@ -136,7 +139,7 @@ export const LineChart = (props: LineChartProps) => {
     let chart: uPlot;
     try {
       chart = new uPlot(
-        buildOptions(Math.max(200, el.clientWidth), height, props, () => out.current),
+        buildOptions(Math.max(200, el.clientWidth), height, props, () => latest.current, () => out.current),
         data,
         el,
       );
