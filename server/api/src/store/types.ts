@@ -360,6 +360,16 @@ export interface JobEvent {
 
 export interface JobRepository {
   getById(id: string): Promise<JobRow | null>;
+  /**
+   * 429 queue_limit when `workspaceId` already has `limit` queued jobs. Call
+   * it in the transaction that queues one: it holds the workspace's queue
+   * lock until that commits.
+   */
+  assertQueueRoom(
+    workspaceId: string,
+    kind: JobKind,
+    limit: number,
+  ): Promise<void>;
   /** Conditional update; null when the expectation does not hold. */
   update(
     id: string,

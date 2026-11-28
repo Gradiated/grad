@@ -378,7 +378,7 @@ export const registerRunRoutes = (
       summary:
         "Resume a stopped, failed or cancelled run from its latest checkpoint",
       description:
-        "A run that is already queued or running is returned as it is, so a retried resume is a no-op.",
+        "A run that is already queued or running is returned as it is, so a retried resume is a no-op. A resume queues the run again, so it counts toward the workspace's queued cap (429 `queue_limit`) like a new run.",
       tags,
       request: {
         params: IdParamSchema,

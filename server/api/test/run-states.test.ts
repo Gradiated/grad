@@ -129,4 +129,19 @@ describe("run state transitions", () => {
     const resumed = await post(id, "resume");
     expect(resumed.body).toMatchObject({ status: "queued" });
   });
+
+  it("resumes within the workspace's queued cap, like a new run", async () => {
+    await t.close();
+    t = await makeTestApp({
+      settings: { maxAttempts: 3, queue: { maxQueued: 1 } },
+    });
+    const stopped = await runIn("failed");
+    await createSftRun(t, { name: "queued" });
+
+    const refused = await post(stopped, "resume");
+    expect([refused.status, refused.body.code]).toEqual([429, "queue_limit"]);
+    expect((await t.json(`/v1/runs/${stopped}`)).body).toMatchObject({
+      status: "failed",
+    });
+  });
 });

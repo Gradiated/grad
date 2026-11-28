@@ -1121,19 +1121,27 @@ export const createRunLifecycle = (
         );
       }
 
-      const updated = await store.runs.update(
-        id,
-        {
-          status: "queued",
-          max_cost_usd: cap,
-          error: null,
-          failed_attempts: 0,
-          preemptions: 0,
-          finished_at: null,
-          updated_at: clock.now().toISOString(),
-        },
-        { status: [run.status], workerId: null },
-      );
+      // Queued again: within the workspace's queued cap, like a new run.
+      const updated = await store.transaction(async () => {
+        await store.jobs.assertQueueRoom(
+          workspaceId,
+          "train",
+          limits.maxQueued,
+        );
+        return store.runs.update(
+          id,
+          {
+            status: "queued",
+            max_cost_usd: cap,
+            error: null,
+            failed_attempts: 0,
+            preemptions: 0,
+            finished_at: null,
+            updated_at: clock.now().toISOString(),
+          },
+          { status: [run.status], workerId: null },
+        );
+      });
       if (!updated)
         throw conflict(
           "run_state_changed",

@@ -371,6 +371,9 @@ const inTurn = <T>(key: string, fn: () => Promise<T>): Promise<T> => {
 };
 
 export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
+  assertQueueRoom: (workspaceId, kind, limit) =>
+    assertQueueRoom(db, workspaceId, kind, limit),
+
   getById: async (id) => {
     const row = first(
       await db.query("SELECT * FROM grad_jobs WHERE id = $1", [id]),
