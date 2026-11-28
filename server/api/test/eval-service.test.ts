@@ -419,7 +419,7 @@ describe("eval service", () => {
     await h.worker.drain();
     const failed = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(failed.status).toBe("failed");
-    expect(failed.error).toMatch(/inference unavailable.*HTTP 500/);
+    expect(failed.error).toMatch(/inference_unavailable for \d+ s: .*HTTP 500/);
     // Nothing was stored for the outage: a rerun after it starts clean.
     expect(
       (await t.deps.store.evals.listOutputs(created.id, {}, { limit: 10 }))

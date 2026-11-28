@@ -219,7 +219,7 @@ An eval worker claims eval jobs over the same worker protocol as the trainer wor
 | `GRAD_INFERENCE_BASE_URL`, `GRAD_INFERENCE_API_KEY` | none | OpenAI-compatible endpoint for the models under eval (your vLLM/SGLang with LoRA modules named by artifact id). Every call carries `X-Grad-Workspace: <workspace id>`: artifact ids are unique only per workspace, so an endpoint shared by several workspaces must serve and bill by (workspace, model). Without it the worker still runs validators, regexes and code scorers, and says so at startup. |
 | `GRAD_JUDGE_BASE_URL`, `GRAD_JUDGE_API_KEY` | inference endpoint | Endpoint for `Judge` rubric items. `grad local up` passes all four from your shell. |
 | `EVAL_CONCURRENCY` | `8` | Model calls in flight per worker. |
-| `GRAD_EVAL_CAPACITY_WAIT_SECONDS` | `1800` | How long an eval waits in place for capacity (an endpoint answering `503 capacity_unavailable`, honouring its `Retry-After`) before it fails. The wait keeps the lease and spends no attempt; the eval shows `waiting_reason`. |
+| `GRAD_EVAL_CAPACITY_WAIT_SECONDS` | `720` | How long one model call waits in place for capacity (`503 capacity_unavailable`) or a rate limit (429 past the client's retries), honouring `Retry-After`, before the eval fails. The wait keeps the lease and spends no attempt; the eval shows `waiting_reason`. |
 | `GRAD_WORKER_ID` | hostname | Shown in leases and logs; a per-process suffix is appended. |
 | `GRAD_LEASE_SECONDS` / `GRAD_POLL_INTERVAL_S` | `180` / `1` | Lease length (heartbeats every third of it) and the idle poll interval. |
 

@@ -95,6 +95,8 @@ export class InferenceError extends ApiError {
     detail: string,
     readonly reason: InferenceErrorReason,
     transient = false,
+    /** The last response's Retry-After, in ms. */
+    readonly retryAfterMs: number | null = null,
   ) {
     super(
       transient ? 503 : 502,
@@ -121,8 +123,11 @@ export const isInferenceUnavailable = (error: unknown): boolean =>
 export class InferenceOutage extends Error {
   constructor(
     message: string,
-    /** The endpoint answered capacity_unavailable to the end. */
-    readonly capacity = false,
+    /**
+     * Still no capacity or a full lane at the end of the wait: the eval
+     * fails (rather than spending attempts on more waits).
+     */
+    readonly terminal = false,
   ) {
     super(message);
   }
@@ -266,6 +271,7 @@ export const createOpenAICompatibleClient = (
         `Model '${request.model}' at ${baseUrl}: ${errorMessage(lastError)}`,
         lastError instanceof CallError ? lastError.reason : "server_error",
         lastError instanceof CallError && lastError.retryable,
+        lastError instanceof CallError ? lastError.retryAfterMs : null,
       );
     },
   };

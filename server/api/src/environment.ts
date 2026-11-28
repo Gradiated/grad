@@ -125,6 +125,12 @@ const EnvironmentSchema = z.object({
   CLOUD_INTERNAL_API_URL: optionalString,
   /** Cloud: the bearer grad sends to the product's internal listener (billing, prices, traces). */
   CLOUD_SERVICE_TOKEN: optionalString,
+  /**
+   * Cloud: serve the `gradiated` source (the product's traces:pull). Off
+   * until the product ships that endpoint: the source answers 501
+   * source_unavailable ("coming soon") instead of failing at sync time.
+   */
+  GRAD_CLOUD_TRACES_ENABLED: booleanFlag("false"),
   ...EndpointShape,
   /** AUTH_MODE=cloud: read-only connection to the product database's auth_principals_v1 view. */
   GRAD_CLOUD_AUTH_DATABASE_URL: optionalString,
@@ -449,7 +455,7 @@ const WorkerEnvironmentSchema = z.object({
     .int()
     .min(0)
     .max(86_400)
-    .default(1800),
+    .default(720),
   ...EndpointShape,
 });
 

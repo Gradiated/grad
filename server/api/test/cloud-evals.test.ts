@@ -28,6 +28,7 @@ import {
   type TestEvalWorker,
 } from "./fixtures/evals.js";
 import type { FakeCloudApi } from "./fixtures/fake-cloud-api.js";
+import { sftRecords } from "./fixtures/worker.js";
 import {
   judgeResponder,
   startFakeOpenAI,
@@ -229,6 +230,43 @@ describe("evals on Gradiated Cloud: the gateway's eval lane", () => {
     expect(catalog.judgePriceFor("META/llama-judge")).toBe(2);
   });
 
+  it("refuses recipe.evals on Cloud at plan and create: checkpoints can't be served there", async () => {
+    const clock = new ManualClock();
+    t = await makeTestApp({
+      clock,
+      ...(await cloudBillingDeps(cloud, clock, { gatewayBillsEvals: true })),
+      inferenceConfigured: true,
+      evalModels: createEvalModelResolver({
+        internalApiBaseUrl: cloud.url,
+        serviceToken: cloud.serviceToken,
+      }),
+    });
+    await seedDataset(t, "support", sftRecords(20) as never);
+    await seedDataset(t, "holdout", qaRecords(3));
+    const body = {
+      dataset: "support",
+      name: "support-sft",
+      recipe: {
+        kind: "sft",
+        model: "test/tiny-qwen3",
+        evals: [
+          {
+            dataset: "holdout",
+            rubric: [{ name: "a", kind: "regex", pattern: "answer" }],
+          },
+        ],
+      },
+    };
+    for (const path of ["/v1/runs/plan", "/v1/runs"]) {
+      const res = await t.request(path, { method: "POST", body });
+      expect(res.status).toBe(422);
+      expect(((await res.json()) as { code: string }).code).toBe(
+        "checkpoint_evals_unsupported_on_cloud",
+      );
+    }
+    expect(cloud.evalVersions).toEqual([]);
+  });
+
   it("maps the product's refusals to typed errors", async () => {
     const resolver = createEvalModelResolver({
       internalApiBaseUrl: cloud.url,
@@ -240,14 +278,32 @@ describe("evals on Gradiated Cloud: the gateway's eval lane", () => {
     await expect(
       resolver.servingModel(WORKSPACE_A, "a@1"),
     ).rejects.toMatchObject({ status: 422, code: "artifact_not_servable" });
-    cloud.failNext(1, 503, "/api/internal/v1/training/eval-versions");
+    // An unknown artifact is not servable (never retried as an outage).
+    cloud.respondOnce("/api/internal/v1/training/eval-versions", 404, {
+      detail: "unknown artifact",
+    });
     await expect(
       resolver.servingModel(WORKSPACE_A, "a@1"),
-    ).rejects.toMatchObject({ status: 503, code: "inference_unavailable" });
+    ).rejects.toMatchObject({ status: 422, code: "artifact_not_servable" });
+    // A 5xx is retried (the call is idempotent per workspace and artifact):
+    // two failures, then the answer.
+    const quick = createEvalModelResolver({
+      internalApiBaseUrl: cloud.url,
+      serviceToken: cloud.serviceToken,
+      retryDelayMs: 1,
+    });
+    cloud.failNext(2, 503, "/api/internal/v1/training/eval-versions");
+    expect(await quick.servingModel(WORKSPACE_A, "a@1")).toMatch(/\/a\//);
+    cloud.failNext(3, 503, "/api/internal/v1/training/eval-versions");
+    await expect(quick.servingModel(WORKSPACE_A, "a@1")).rejects.toMatchObject({
+      status: 503,
+      code: "inference_unavailable",
+    });
     const dead = createEvalModelResolver({
       internalApiBaseUrl: "http://127.0.0.1:9",
       serviceToken: "t",
       timeoutMs: 500,
+      retryDelayMs: 1,
     });
     await expect(dead.servingModel(WORKSPACE_A, "a@1")).rejects.toBeInstanceOf(
       ApiError,

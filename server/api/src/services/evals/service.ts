@@ -2,6 +2,7 @@ import type { z } from "@hono/zod-openapi";
 
 import type { AuthPrincipal } from "../../adapters.js";
 import { costForTokens } from "../../catalog.js";
+import { checkpointEvalsUnsupported } from "../../cloud/gateway.js";
 import { addSeconds } from "../../clock.js";
 import {
   NON_DEPLOYABLE_FORMATS,
@@ -189,6 +190,15 @@ const toPublicOutput = (row: EvalOutputRow): EvalOutput => ({
   },
 });
 
+/** The heartbeat phases an eval worker reports while its calls wait. */
+const WAITING_REASONS: Readonly<
+  Record<string, NonNullable<EvalRun["waiting_reason"]>>
+> = {
+  waiting_for_capacity: "capacity_unavailable",
+  waiting_for_rate_limit: "rate_limited",
+  waiting_for_inference: "inference_unavailable",
+};
+
 export const createEvalService = (
   deps: AppDependencies,
   collaborators: {
@@ -244,11 +254,7 @@ export const createEvalService = (
     waiting_reason:
       record.status !== "running"
         ? null
-        : record.worker_phase === "waiting_for_capacity"
-          ? "capacity_unavailable"
-          : record.worker_phase === "waiting_for_inference"
-            ? "inference_unavailable"
-            : null,
+        : (WAITING_REASONS[record.worker_phase ?? ""] ?? null),
     created_at: record.created_at,
     updated_at: record.updated_at,
     completed_at: record.finished_at,
@@ -854,6 +860,7 @@ export const createEvalService = (
       targets: EvalRecord["model_targets"];
     },
   ): Promise<EvalRecord> => {
+    if (checkpoint && deps.evalModels) throw checkpointEvalsUnsupported();
     const plan = await planEvalRequest(
       deps,
       datasets,

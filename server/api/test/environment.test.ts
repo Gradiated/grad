@@ -312,6 +312,35 @@ describe("buildDependencies", () => {
         kind: "worker",
       });
       await cloud.store.close();
+
+      // The `gradiated` source waits for the product's traces:pull: off
+      // (501 source_unavailable, "coming soon") unless switched on.
+      const cloudEnv = {
+        DATABASE_URL: postgresUrl(),
+        AUTH_MODE: "cloud",
+        GRAD_CLOUD_AUTH_DATABASE_URL: "postgres://127.0.0.1:9/product",
+        GRAD_CLOUD_JWKS_URL: "http://127.0.0.1:9/jwks.json",
+        GRAD_CLOUD_JWT_ISSUER: "https://api.example.com",
+        CLOUD_INTERNAL_API_URL: "http://127.0.0.1:9",
+        CLOUD_SERVICE_TOKEN: "svc",
+        S3_BUCKET: "b",
+        S3_ENDPOINT: "http://127.0.0.1:9",
+        S3_REGION: "us-east-1",
+        TRAINER_API_KEY_HASH: hashApiKey("w"),
+      };
+      for (const [flag, traced] of [
+        [undefined, false],
+        ["true", true],
+      ] as const) {
+        const deps = await buildDependencies(
+          parseServerEnvironment({
+            ...cloudEnv,
+            ...(flag ? { GRAD_CLOUD_TRACES_ENABLED: flag } : {}),
+          }),
+        );
+        expect(deps.traces !== null && deps.traces !== undefined).toBe(traced);
+        await deps.store.close();
+      }
     } finally {
       process.env = saved;
     }

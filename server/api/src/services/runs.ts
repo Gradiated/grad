@@ -1,5 +1,6 @@
 import type { AuthPrincipal } from "../adapters.js";
 import { costForTokens, nanoUsd, trainSku } from "../catalog.js";
+import { checkpointEvalsUnsupported } from "../cloud/gateway.js";
 import { addDays } from "../clock.js";
 import {
   ArtifactFormatSchema,
@@ -493,6 +494,9 @@ export const createRunLifecycle = (
   ): Promise<void> => {
     const specs = request.recipe.evals;
     if (!specs) return;
+    // Gradiated Cloud serves evals only from published artifacts, never a
+    // checkpoint (ckpt_…): fail at plan and create, not at the first one.
+    if (deps.evalModels) throw checkpointEvalsUnsupported();
 
     const names = specs.map((s) => s.name ?? s.dataset);
     if (new Set(names).size !== names.length) {

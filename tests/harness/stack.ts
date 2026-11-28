@@ -348,6 +348,8 @@ const main = async () => {
         GRAD_CLOUD_GATEWAY_URL: cloud.gatewayUrl,
         CLOUD_INTERNAL_API_URL: cloud.url,
         CLOUD_SERVICE_TOKEN: cloud.serviceToken,
+        // The fake serves traces:pull; the product doesn't yet.
+        GRAD_CLOUD_TRACES_ENABLED: "true",
         GRAD_WORKSPACE_PURGE_DELAY_SECONDS: "0",
       });
     } else {

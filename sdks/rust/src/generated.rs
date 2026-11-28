@@ -845,7 +845,7 @@ pub struct EvalRun {
     /// Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.
     pub scored_dataset_version: Option<i64>,
     pub error: Option<String>,
-    /// While running: the eval's model calls are waiting, either for capacity (a serving pool at zero that has not woken yet) or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.
+    /// While running: the eval's model calls are waiting for capacity (a serving pool at zero that has not woken yet), for a rate limit (a full eval lane), or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.
     pub waiting_reason: Option<EvalRunWaitingReason>,
     pub created_at: String,
     pub updated_at: String,
@@ -881,6 +881,7 @@ string_enum! {
     /// Allowed values of `EvalRunWaitingReason`.
     EvalRunWaitingReason {
         CapacityUnavailable => "capacity_unavailable",
+        RateLimited => "rate_limited",
         InferenceUnavailable => "inference_unavailable",
     }
 }

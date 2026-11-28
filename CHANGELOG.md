@@ -26,10 +26,11 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - Alerts (`metrics.prometheusRule.enabled`): `GradJobFailureRateHigh`, `GradUsagePushLagging`,
   `GradTokenReviewSaturated`, `GradDatabaseErrors`, `GradStorageErrors`,
   `GradMaintenanceStalled`, and `GradNoWorkersForQueuedJobs` for eval workers too.
-- `EvalRun.waiting_reason` (`capacity_unavailable` | `inference_unavailable` | null): a running
-  eval whose model calls are waiting for a cold serving pool or a down endpoint says so.
-  Eval workers wait out `503 capacity_unavailable` in place, honouring `Retry-After`, for up to
-  `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (default 1800) without spending an attempt.
+- `EvalRun.waiting_reason` (`capacity_unavailable` | `rate_limited` | `inference_unavailable` |
+  null): a running eval whose model calls are waiting for a cold serving pool, a full eval lane
+  or a down endpoint says so. Eval workers wait out `503 capacity_unavailable` and 429s in place,
+  honouring `Retry-After`, for up to `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (default 720) per call
+  without spending an attempt.
 - `GRAD_EXTRA_MODELS_JSON` entries take an optional `serving_id`; on Gradiated Cloud evals call
   the gateway with each model's canonical-case id (`Qwen/Qwen3-8B`).
 
@@ -45,6 +46,12 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Fixed
 
+- Gradiated Cloud evals: `recipe.evals` (checkpoint evals during training) is refused with
+  `422 checkpoint_evals_unsupported_on_cloud` at plan and create, since Cloud serves only
+  published artifacts. A 404 from the product's eval-versions call is `422
+  artifact_not_servable` (was a retried 503); the call gets 10 minutes (the product copies the
+  bundle) and retries 5xx. The `gradiated` source answers `501 source_unavailable` ("coming
+  soon") unless `GRAD_CLOUD_TRACES_ENABLED=true`, instead of failing at sync time.
 - Failure modes, chaos round 2 (each with a test in `server/api/test/chaos-*.test.ts`; summary
   in docs/ARCHITECTURE.md "Failure modes"):
   - A Postgres connection black-holed by a failover now fails within 35 s and is never reused;

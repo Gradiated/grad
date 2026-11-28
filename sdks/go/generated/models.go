@@ -951,7 +951,7 @@ type EvalRun struct {
 	// ScoredDatasetVersion Scoring jobs: the dataset version holding the new scores (the source version when every record was already scored); null until completed.
 	ScoredDatasetVersion *int    `json:"scored_dataset_version"`
 	Error                *string `json:"error"`
-	// WaitingReason While running: the eval's model calls are waiting, either for capacity (a serving pool at zero that has not woken yet) or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.
+	// WaitingReason While running: the eval's model calls are waiting for capacity (a serving pool at zero that has not woken yet), for a rate limit (a full eval lane), or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.
 	WaitingReason *EvalRunWaitingReason `json:"waiting_reason"`
 	CreatedAt     string                `json:"created_at"`
 	UpdatedAt     string                `json:"updated_at"`
@@ -986,6 +986,7 @@ type EvalRunWaitingReason string
 // Values of EvalRunWaitingReason.
 const (
 	EvalRunWaitingReasonCapacityUnavailable  EvalRunWaitingReason = "capacity_unavailable"
+	EvalRunWaitingReasonRateLimited          EvalRunWaitingReason = "rate_limited"
 	EvalRunWaitingReasonInferenceUnavailable EvalRunWaitingReason = "inference_unavailable"
 )
 

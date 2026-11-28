@@ -214,6 +214,7 @@ export const WORKER_STAT_PHASES = [
   "completing",
   "importing",
   "waiting_for_capacity",
+  "waiting_for_rate_limit",
   "waiting_for_inference",
 ] as const;
 

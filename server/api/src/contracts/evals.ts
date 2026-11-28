@@ -216,11 +216,11 @@ export const EvalRunSchema = z
     }),
     error: z.string().nullable(),
     waiting_reason: z
-      .enum(["capacity_unavailable", "inference_unavailable"])
+      .enum(["capacity_unavailable", "rate_limited", "inference_unavailable"])
       .nullable()
       .openapi({
         description:
-          "While running: the eval's model calls are waiting, either for capacity (a serving pool at zero that has not woken yet) or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.",
+          "While running: the eval's model calls are waiting for capacity (a serving pool at zero that has not woken yet), for a rate limit (a full eval lane), or for an inference endpoint that is down. The worker keeps its lease and retries; this is not counted as a failed attempt. null otherwise.",
       }),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,

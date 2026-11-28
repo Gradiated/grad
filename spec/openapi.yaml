@@ -591,11 +591,12 @@ components:
             - "null"
           enum:
             - capacity_unavailable
+            - rate_limited
             - inference_unavailable
             - null
-          description: "While running: the eval's model calls are waiting, either for capacity (a serving pool at zero that has
-            not woken yet) or for an inference endpoint that is down. The worker keeps its lease and retries; this is
-            not counted as a failed attempt. null otherwise."
+          description: "While running: the eval's model calls are waiting for capacity (a serving pool at zero that has not woken
+            yet), for a rate limit (a full eval lane), or for an inference endpoint that is down. The worker keeps its
+            lease and retries; this is not counted as a failed attempt. null otherwise."
         created_at:
           type: string
           format: date-time
@@ -3835,7 +3836,7 @@ components:
           type: string
           maxLength: 64
           description: "What the worker is doing: starting, loading_model, training, evaluating, checkpointing, uploading,
-            completing, importing, waiting_for_capacity, waiting_for_inference."
+            completing, importing, waiting_for_capacity, waiting_for_rate_limit, waiting_for_inference."
         tokens_per_second:
           type: number
           minimum: 0

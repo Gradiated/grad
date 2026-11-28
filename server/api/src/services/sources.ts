@@ -256,7 +256,7 @@ export interface SourceService {
 const sourceUnavailable = () =>
   unavailable(
     "source_unavailable",
-    "The 'gradiated' source reads traces recorded by the Gradiated Cloud gateway, so it is only available on Gradiated Cloud. On a self-hosted server, connect your observability tool instead (langfuse, langsmith, braintrust, posthog or phoenix).",
+    "The 'gradiated' source isn't available on this server: it reads traces recorded by the Gradiated Cloud gateway, and is coming soon on Gradiated Cloud. Meanwhile, connect your observability tool instead (langfuse, langsmith, braintrust, posthog or phoenix).",
   );
 
 export const createSourceService = (

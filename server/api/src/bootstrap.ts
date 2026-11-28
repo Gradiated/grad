@@ -145,9 +145,11 @@ export const buildDependencies = async (
         ? createKmsKeyWrapper({ region: env.S3_REGION })
         : undefined,
     }),
-    // The `gradiated` source reads Cloud gateway traces: Cloud only.
+    // The `gradiated` source reads Cloud gateway traces: Cloud only, and
+    // only once the product serves traces:pull (GRAD_CLOUD_TRACES_ENABLED).
     traces:
       env.AUTH_MODE === "cloud" &&
+      env.GRAD_CLOUD_TRACES_ENABLED &&
       env.CLOUD_INTERNAL_API_URL &&
       env.CLOUD_SERVICE_TOKEN
         ? createCloudTracesAdapter({

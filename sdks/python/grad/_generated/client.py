@@ -541,7 +541,7 @@ EvalRun = TypedDict(
         "total_cost_usd": "float",
         "scored_dataset_version": "int | None",
         "error": "str | None",
-        "waiting_reason": "Literal['capacity_unavailable', 'inference_unavailable'] | None",
+        "waiting_reason": "Literal['capacity_unavailable', 'rate_limited', 'inference_unavailable'] | None",
         "created_at": "str",
         "updated_at": "str",
         "completed_at": "str | None",

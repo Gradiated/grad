@@ -150,7 +150,7 @@ describe("chaos: the inference gateway down during an eval", () => {
 
     const done = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("failed");
-    expect(done.error).toMatch(/inference unavailable/);
+    expect(done.error).toMatch(/inference_unavailable for \d+ s/);
     const outputs = await t.deps.store.evals.listOutputs(
       created.id,
       {},
@@ -250,7 +250,7 @@ describe("chaos: no capacity for an eval's model (503 capacity_unavailable)", ()
 
     const done = await t.services.evals.get(WORKSPACE_A, created.id);
     expect(done.status).toBe("failed");
-    expect(done.error).toMatch(/^capacity_unavailable: no capacity for/);
+    expect(done.error).toMatch(/^capacity_unavailable for \d+ s: /);
     const job = await t.deps.store.jobs.getById(created.id);
     expect(job).toMatchObject({ attempt: 1 });
     const outputs = await t.deps.store.evals.listOutputs(
@@ -259,6 +259,39 @@ describe("chaos: no capacity for an eval's model (503 capacity_unavailable)", ()
       { limit: 100 },
     );
     expect(outputs.data).toHaveLength(0);
+  });
+
+  it("a full eval lane (429 eval_lane_limited) past the client's retries waits in place instead of handing the attempt back", async () => {
+    h = await makeEvalHarness();
+    const { t, fake } = h;
+    await seedDataset(t, "qa", qaRecords(2));
+    fake.setModel("qwen/qwen3-8b", () => ({ content: "answer" }));
+    fake.setModel(TEST_JUDGE, judgeResponder(0.9));
+    const created = await judgedEval(t);
+
+    // Two refusals use up one call's client retries (2 here, 6 on Cloud);
+    // the worker sleeps the Retry-After and tries again. outageMaxMs is 0 in
+    // the fixture, so an outage would have handed the attempt back at once.
+    fake.failNext(2, 429, { code: "eval_lane_limited", retryAfter: "1" });
+    const worker = startEvalWorker(t, fakeInference(fake), {
+      concurrency: 1,
+      capacityMaxMs: 60_000,
+    });
+    const drained = worker.drain();
+    let seen: string | null = null;
+    for (let i = 0; i < 100 && seen === null; i += 1) {
+      seen = (await t.services.evals.get(WORKSPACE_A, created.id))
+        .waiting_reason;
+      if (seen === null) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(seen).toBe("rate_limited");
+    expect(await drained).toBe(1);
+    await worker.close();
+
+    const done = await t.services.evals.get(WORKSPACE_A, created.id);
+    expect([done.status, done.error]).toEqual(["completed", null]);
+    const job = await t.deps.store.jobs.getById(created.id);
+    expect(job).toMatchObject({ attempt: 1, failed_attempts: 0 });
   });
 
   it("the client honours Retry-After on its own retries and never retries capacity_unavailable itself", async () => {
@@ -295,8 +328,8 @@ describe("chaos: no capacity for an eval's model (503 capacity_unavailable)", ()
     }
   });
 
-  it("the Cloud gateway client outwaits the gateway's 600 s cold-start hold", () => {
-    expect(GATEWAY_TIMEOUT_MS).toBeGreaterThan(600_000);
+  it("the Cloud gateway client outwaits the gateway's 90 s cold-start hold", () => {
+    expect(GATEWAY_TIMEOUT_MS).toBeGreaterThan(90_000);
   });
 });
 

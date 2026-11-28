@@ -14,6 +14,7 @@ import {
 } from "../records.js";
 import {
   CapacityUnavailable,
+  InferenceError,
   InferenceOutage,
   isInferenceUnavailable,
 } from "../services/evals/inference.js";
@@ -68,10 +69,11 @@ export interface EvalWorkerOptions {
   /** After this long down, the attempt is handed back (default 10 min). */
   outageMaxMs?: number;
   /**
-   * `503 capacity_unavailable` (a pool at zero that did not wake): the call
-   * waits the response's Retry-After (at most 5 min) and retries in place,
-   * for at most this long in all (default 30 min, GRAD_EVAL_CAPACITY_WAIT_SECONDS);
-   * then the eval fails with the outage as its error. Never counted as an attempt.
+   * `503 capacity_unavailable` (a pool at zero still waking) or a full eval
+   * lane (429 past the client's retries): the call waits the response's
+   * Retry-After (at most 5 min) and retries in place, for at most this long
+   * in all (default 12 min, GRAD_EVAL_CAPACITY_WAIT_SECONDS); then the eval
+   * fails with it as its error. Never counted as an attempt.
    */
   capacityMaxMs?: number;
 }
@@ -91,24 +93,39 @@ const OUTAGE_RETRY_MAX_MS = 30_000;
 const CAPACITY_RETRY_MAX_MS = 300_000;
 
 /** What a waiting call waits for; the heartbeat reports it as the worker's phase. */
-export type EvalWait = "capacity_unavailable" | "inference_unavailable";
+export type EvalWait =
+  | "capacity_unavailable"
+  | "rate_limited"
+  | "inference_unavailable";
 
 /** The eval's `waiting_reason` comes back from these heartbeat phases. */
 export const WAIT_PHASES = {
   capacity_unavailable: "waiting_for_capacity",
+  rate_limited: "waiting_for_rate_limit",
   inference_unavailable: "waiting_for_inference",
 } as const satisfies Record<EvalWait, string>;
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** What a failed call waits for, or null when it is the task's own failure. */
+const waitOf = (error: unknown): EvalWait | null =>
+  error instanceof CapacityUnavailable
+    ? "capacity_unavailable"
+    : error instanceof InferenceError && error.reason === "rate_limited"
+      ? "rate_limited"
+      : isInferenceUnavailable(error)
+        ? "inference_unavailable"
+        : null;
+
 /**
  * Waits out an inference outage: a call that failed only because the
- * endpoint was down, or had no capacity, retries in place, so an outage
- * never becomes a stored error or a zero judge score. Gives up
- * (InferenceOutage) when `halted()`, or after `maxMs` down (`capacityMaxMs`
- * while the answer is capacity_unavailable). `onWait` hears what the call
- * waits for, and null once it is answered.
+ * endpoint was down, had no capacity (a cold pool) or shed it (a full eval
+ * lane, 429) retries in place, so none becomes a stored error or a zero
+ * judge score. It sleeps the response's Retry-After when there is one.
+ * Gives up (InferenceOutage) when `halted()`, after `maxMs` down, or after
+ * `capacityMaxMs` of no capacity or a full lane (then terminally). `onWait`
+ * hears what the call waits for, and null once it is answered.
  */
 const patient = (
   client: ChatCompletionClient,
@@ -124,22 +141,22 @@ const patient = (
         if (i > 0) onWait(null);
         return result;
       } catch (error) {
-        const capacity = error instanceof CapacityUnavailable;
-        if (!capacity && !isInferenceUnavailable(error)) throw error;
+        const wait = waitOf(error);
+        if (wait === null) throw error;
+        const shed = wait !== "inference_unavailable";
         const down = Date.now() - since;
-        if (
-          halted() ||
-          down >= (capacity ? limits.capacityMaxMs : limits.maxMs)
-        ) {
+        if (halted() || down >= (shed ? limits.capacityMaxMs : limits.maxMs)) {
           throw new InferenceOutage(
-            `${capacity ? "no capacity" : "inference unavailable"} for ${Math.round(down / 1000)} s: ${errorMessage(error)}`,
-            capacity,
+            `${wait} for ${Math.round(down / 1000)} s: ${errorMessage(error)}`,
+            shed && !halted(),
           );
         }
-        onWait(capacity ? "capacity_unavailable" : "inference_unavailable");
+        onWait(wait);
+        const retryAfter = (error as { retryAfterMs?: number | null })
+          .retryAfterMs;
         await sleep(
-          capacity
-            ? Math.min(CAPACITY_RETRY_MAX_MS, error.retryAfterMs)
+          retryAfter !== null && retryAfter !== undefined
+            ? Math.min(CAPACITY_RETRY_MAX_MS, retryAfter)
             : Math.min(OUTAGE_RETRY_MAX_MS, limits.retryMs * 2 ** i),
         );
       }
@@ -283,7 +300,7 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
   const limits = {
     retryMs: options.outageRetryMs ?? 2_000,
     maxMs: options.outageMaxMs ?? 600_000,
-    capacityMaxMs: options.capacityMaxMs ?? 1_800_000,
+    capacityMaxMs: options.capacityMaxMs ?? 720_000,
   };
   const wait = (client: ChatCompletionClient) =>
     patient(
@@ -573,18 +590,15 @@ export const createEvalWorker = (options: EvalWorkerOptions): EvalWorker => {
         // resumes after the outputs already stored.
         await client.complete(
           ref,
-          outage.capacity
-            ? {
-                status: "failed",
-                error: `capacity_unavailable: ${outage.message}`.slice(0, 4000),
-              }
+          outage.terminal
+            ? { status: "failed", error: outage.message.slice(0, 4000) }
             : {
                 status: "abandoned",
                 reason: "worker_error",
                 error: outage.message.slice(0, 4000),
               },
         );
-        return outage.capacity ? "failed" : "handed_back";
+        return outage.terminal ? "failed" : "handed_back";
       }
 
       // A graceful stop (deploy, scale-down) hands the eval back: the next

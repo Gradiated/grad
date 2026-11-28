@@ -24,6 +24,7 @@ all of it, used by the server tests and by `tests/harness/stack.ts --cloud`.
 | `GRAD_CLOUD_PRICES_URL` | `BILLING_MODE=cloud` | The price list, e.g. `…/api/internal/v1/billing/prices?product=training`. |
 | `CLOUD_SERVICE_TOKEN` | `BILLING_MODE=cloud`, gateway evals | grad's bearer for the product's internal listener (the product's `TRAINING_INTERNAL_TOKEN`). |
 | `CLOUD_INTERNAL_API_URL` | gateway evals, the `gradiated` source | The product's internal listener, e.g. `http://api-training-internal.gradiated.svc:3005`. |
+| `GRAD_CLOUD_TRACES_ENABLED` | the `gradiated` source | Default `false`: the product's `training/traces:pull` isn't shipped yet, so the `gradiated` source answers `501 source_unavailable` ("coming soon on Gradiated Cloud") at create and sync instead of failing at sync time. Set `true` once the product serves it. |
 | `GRAD_CLOUD_GATEWAY_URL` | evals | The inference gateway's OpenAI-compatible base URL. On the API: evals are allowed (no `GRAD_INFERENCE_BASE_URL`; with `BILLING_MODE=cloud` that one is refused). On eval workers: where they call. |
 | `GRAD_CLOUD_GATEWAY_TOKEN` | eval workers | The gateway service credential. Only eval workers hold it. |
 | `INTERNAL_PORT` | workspace hooks, pins | The internal listener (ClusterIP only), also used by worker lease tokens. |
@@ -184,26 +185,29 @@ X-Gradiated-Eval-Id: ev_…
 ```
 
 - The gateway authorizes and bills the call as that workspace in its
-  low-priority eval lane (its own rate limit, never autoscaling demand, shed
-  first with 429). The worker retries 408, 425, 429 and 5xx six times with
-  backoff from 1 s (at least the response's `Retry-After`, up to 60 s). If
-  the gateway is still down after that (an outage, a full lane), the call
-  waits and retries in place (2 s doubling to 30 s) while the worker keeps its
-  lease: an outage is never stored as an output error or a zero judge score.
-  After 10 minutes down the worker hands the attempt back (`abandoned`,
-  counted against `MAX_ATTEMPTS`); the next attempt resumes after the outputs
-  already stored, and an eval whose gateway stays down through every attempt
-  fails with the outage as its error.
-- Cold pools: a call that finds its model's pool at zero is held by the
-  gateway while the pool wakes (up to 600 s, so the worker's gateway timeout
-  is 660 s), then answered `503 capacity_unavailable` with `Retry-After: 30`.
-  The worker never retries that inside the client: the call sleeps the
-  `Retry-After` (at most 5 min) and tries again, keeping its lease and its
-  attempt, for up to `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (default 1800) in all.
-  Meanwhile `GET /v1/evals/{id}` shows `waiting_reason: "capacity_unavailable"`
-  (`"inference_unavailable"` during an outage) and the worker's heartbeat
-  phase is `waiting_for_capacity`. Past the wait the eval fails once with
-  `capacity_unavailable: …` as its error; no attempt is spent on it.
+  low-priority eval lane (its own limit, 20 calls in flight per workspace by
+  default, never autoscaling demand, shed first with `429
+  eval_lane_limited`). The worker retries 408, 425, 429 and 5xx six times
+  with backoff from 1 s (at least the response's `Retry-After`, up to 60 s).
+  None of what follows is stored as an output error or a zero judge score,
+  and the worker keeps its lease throughout:
+  - Cold pool: a call that finds its model's pool at zero is held by the
+    gateway for up to 90 s while the pool wakes (grad's gateway timeout is
+    120 s), then answered `503 capacity_unavailable` with `Retry-After`. The
+    client never retries that itself: the call sleeps the `Retry-After` (at
+    most 5 min) and tries again.
+  - Full lane: a call still refused with 429 after the client's retries
+    sleeps the `Retry-After` and tries again.
+  - Both wait for up to `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (eval worker,
+    default 720) per call without spending an attempt; `GET /v1/evals/{id}`
+    shows `waiting_reason: "capacity_unavailable"` or `"rate_limited"`
+    meanwhile. Past the wait the eval fails once with that as its error.
+  - Outage (5xx or unreachable past the client's retries): the call retries
+    in place (2 s doubling to 30 s; `waiting_reason: "inference_unavailable"`).
+    After 10 minutes down the worker hands the attempt back (`abandoned`,
+    counted against `MAX_ATTEMPTS`); the next attempt resumes after the
+    outputs already stored, and an eval whose gateway stays down through
+    every attempt fails with the outage as its error.
 - Models: the gateway matches ids exactly, so grad sends each catalog
   model's canonical-case serving id: its `serving_id` in
   `GRAD_EXTRA_MODELS_JSON`, else its Hugging Face repo, else its id as
@@ -214,8 +218,16 @@ X-Gradiated-Eval-Id: ev_…
   published as an eval-only Version when the eval is created:
   `POST {CLOUD_INTERNAL_API_URL}/api/internal/v1/training/eval-versions
   {workspace_id, artifact_id}` → `{model: "<org_slug>/<name>/<version>"}`,
-  and the eval calls that name. 409/422 there → 422 `artifact_not_servable`;
-  unreachable → 503 `inference_unavailable`.
+  and the eval calls that name. The product copies the whole bundle on an
+  artifact's first call, so grad allows it 10 minutes (an eval create of a
+  large artifact can take that long once) and retries a 5xx or unreachable
+  answer (the call is idempotent per workspace and artifact, and so is a
+  retried create with the same Idempotency-Key). 404/409/422 there → 422
+  `artifact_not_servable`; still unreachable → 503 `inference_unavailable`.
+- Checkpoint evals during training (`recipe.evals`) aren't supported on
+  Cloud: a checkpoint has no eval-only Version, so creating or planning
+  such a run answers `422 checkpoint_evals_unsupported_on_cloud`. Evaluate
+  the run's artifact after training instead.
 - The gateway bills these tokens. grad records the eval's usage rows with
   `billed_by: gateway` (shown in `/v1/usage`) and never pushes them.
 
