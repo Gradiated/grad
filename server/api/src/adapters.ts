@@ -123,21 +123,24 @@ const isPlatformScope = (scope: Scope): boolean =>
  * Scope check. `admin` implies every workspace scope and `x:write` implies
  * `x:read`, but platform scopes (`trainer:worker`) are never implied.
  */
-export const hasScope = (
-  principal: AuthPrincipal,
+export const scopesImply = (
+  scopes: readonly Scope[],
   required: Scope,
 ): boolean => {
-  if (principal.scopes.includes(required)) return true;
+  if (scopes.includes(required)) return true;
   if (isPlatformScope(required)) return false;
-  if (principal.scopes.includes("admin")) return true;
+  if (scopes.includes("admin")) return true;
 
   if (required.endsWith(":read")) {
     const write = `${required.slice(0, -":read".length)}:write` as Scope;
-    return principal.scopes.includes(write);
+    return scopes.includes(write);
   }
 
   return false;
 };
+
+export const hasScope = (principal: AuthPrincipal, required: Scope): boolean =>
+  scopesImply(principal.scopes, required);
 
 /** Development only: every request is a platform admin and trainer worker. */
 export const createLocalNoneAuth = (workspaceId = "local"): AuthAdapter => ({

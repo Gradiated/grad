@@ -1,4 +1,4 @@
-import type { AuthPrincipal } from "../adapters.js";
+import { scopesImply, type AuthPrincipal } from "../adapters.js";
 import { WORKSPACE_SCOPES, type ApiKeyScope } from "../contracts.js";
 
 /** The roles Gradiated Cloud members (and their keys) have. */
@@ -8,7 +8,7 @@ type CloudRole = (typeof CLOUD_ROLES)[number];
 /**
  * A role's grad scopes. Admins have every workspace scope. Members train:
  * datasets, runs (evals included) and artifacts, and they can read sources;
- * secrets, source writes and deploys stay with admins.
+ * secrets and source writes stay with admins.
  */
 const ROLE_SCOPES: Record<CloudRole, readonly ApiKeyScope[]> = {
   admin: ["admin"],
@@ -26,12 +26,6 @@ const ROLE_SCOPES: Record<CloudRole, readonly ApiKeyScope[]> = {
 export const isCloudRole = (role: unknown): role is CloudRole =>
   role === "admin" || role === "member";
 
-const implies = (granted: ApiKeyScope, wanted: string): boolean =>
-  granted === wanted ||
-  granted === "admin" ||
-  (wanted.endsWith(":read") &&
-    granted === `${wanted.slice(0, -":read".length)}:write`);
-
 /**
  * The scopes of a key or token with `role` and optional per-key `scopes`:
  * none or empty means the role's full rights; a non-empty list is narrowed
@@ -48,7 +42,7 @@ export const scopesFor = (
     ...new Set(
       scopes.filter(
         (s): s is ApiKeyScope =>
-          KNOWN_SCOPES.has(s) && granted.some((g) => implies(g, s)),
+          KNOWN_SCOPES.has(s) && scopesImply(granted, s as ApiKeyScope),
       ),
     ),
   ];
