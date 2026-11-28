@@ -12,6 +12,8 @@ import {
   pageLimitSchema,
   pageOf,
   PageQuerySchema,
+  SearchQuerySchema,
+  statusFilterSchema,
   PushDatasetRequestSchema,
   RenderDatasetRequestSchema,
   RenderDatasetResponseSchema,
@@ -52,7 +54,7 @@ export const registerDatasetRoutes = (
       operationId: "listDatasets",
       summary: "List datasets (newest first)",
       tags,
-      request: { query: PageQuerySchema },
+      request: { query: PageQuerySchema.extend({ q: SearchQuerySchema }) },
       responses: {
         200: jsonResponse(pageOf(DatasetSchema), "Datasets."),
         ...defaultErrors,
@@ -378,7 +380,19 @@ export const registerDatasetRoutes = (
       operationId: "listImports",
       summary: "List dataset import jobs (newest first)",
       tags,
-      request: { query: PageQuerySchema },
+      request: {
+        query: PageQuerySchema.extend({
+          status: statusFilterSchema([
+            "queued",
+            "running",
+            "completed",
+            "failed",
+          ]),
+          dataset: SlugSchema.optional().openapi({
+            description: "Only imports into this dataset.",
+          }),
+        }),
+      },
       responses: {
         200: jsonResponse(pageOf(ImportJobSchema), "Import jobs."),
         ...defaultErrors,

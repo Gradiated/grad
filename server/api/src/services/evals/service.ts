@@ -44,6 +44,7 @@ import type {
   IdempotencyInput,
   JobExpectation,
   Page,
+  ListFilter,
   PageRequest,
   RunRecord,
 } from "../../store/types.js";
@@ -103,7 +104,10 @@ export interface EvalService {
     checkpoint: Pick<CheckpointRecord, "id" | "step" | "format">,
   ): Promise<void>;
   get(workspaceId: string, id: string): Promise<EvalRun>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<EvalRun>>;
+  list(
+    workspaceId: string,
+    query: PageRequest & ListFilter,
+  ): Promise<Page<EvalRun>>;
   listOutputs(
     workspaceId: string,
     id: string,
@@ -1067,8 +1071,12 @@ export const createEvalService = (
 
     get: async (workspaceId, id) => toPublic(await load(workspaceId, id)),
 
-    list: async (workspaceId, page) => {
-      const rows = await store.evals.list(workspaceId, page);
+    list: async (workspaceId, { limit, cursor, ...filter }) => {
+      const rows = await store.evals.list(
+        workspaceId,
+        { limit, cursor },
+        filter,
+      );
 
       return {
         data: await Promise.all(rows.data.map(toPublic)),

@@ -1223,6 +1223,8 @@ type ListArtifactsParams struct {
 	Limit  *int
 	Cursor *string
 	Name   *string
+	// Q Only items whose name contains this text (any case), or whose id is exactly this.
+	Q *string
 }
 
 // ListArtifactsResponse is generated from the OpenAPI schema.
@@ -1250,6 +1252,8 @@ type ListDatasetsParams struct {
 	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
+	// Q Only items whose name contains this text (any case), or whose id is exactly this.
+	Q *string
 }
 
 // ListDatasetsResponse is generated from the OpenAPI schema.
@@ -1312,6 +1316,8 @@ type ListEvalsParams struct {
 	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
+	// Status Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled.
+	Status *string
 }
 
 // ListEvalsResponse is generated from the OpenAPI schema.
@@ -1326,6 +1332,10 @@ type ListImportsParams struct {
 	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
+	// Status Only these statuses, comma-separated: queued, running, completed, failed.
+	Status *string
+	// Dataset Only imports into this dataset.
+	Dataset *string
 }
 
 // ListImportsResponse is generated from the OpenAPI schema.
@@ -1369,6 +1379,10 @@ type ListRunsParams struct {
 	// Limit Page size (default 50). Values above 200 are clamped to 200.
 	Limit  *int
 	Cursor *string
+	// Status Only these statuses, comma-separated: queued, running, completed, failed, cancelled, stopped_budget, stopped_balance.
+	Status *string
+	// Q Only items whose name contains this text (any case), or whose id is exactly this.
+	Q *string
 }
 
 // ListRunsResponse is generated from the OpenAPI schema.

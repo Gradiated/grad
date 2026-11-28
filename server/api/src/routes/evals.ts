@@ -5,7 +5,9 @@ import {
   EvalRunSchema,
   EvalTaskOutcomeSchema,
   NextCursorSchema,
+  EVAL_STATUSES,
   PageQuerySchema,
+  statusFilterSchema,
   pageOf,
   PlanEvalRequestSchema,
   PlanEvalResponseSchema,
@@ -89,7 +91,11 @@ export const registerEvalRoutes = (
       operationId: "listEvals",
       summary: "List evaluation runs",
       tags: ["Evals"],
-      request: { query: PageQuerySchema },
+      request: {
+        query: PageQuerySchema.extend({
+          status: statusFilterSchema(EVAL_STATUSES),
+        }),
+      },
       responses: {
         200: jsonResponse(pageOf(EvalRunSchema), "Evaluation runs."),
         ...defaultErrors,

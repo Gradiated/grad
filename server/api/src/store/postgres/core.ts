@@ -11,7 +11,7 @@ import type {
 } from "../types.js";
 import { Params, type Db } from "./db.js";
 import { toApiKey, toDataset, toPart } from "./mappers.js";
-import { first, listNewest, nowIso } from "./shared.js";
+import { filterSql, first, listNewest, nowIso } from "./shared.js";
 
 const findHit = async (
   db: Db,
@@ -233,12 +233,12 @@ export const createDatasetRepository = (
 
       return row ? toDataset(row) : null;
     },
-    list: (workspaceId, page) => {
+    list: (workspaceId, page, filter) => {
       const params = new Params();
 
       return listNewest(db, {
         table: "grad_datasets",
-        where: `workspace_id = ${params.add(workspaceId)}`,
+        where: `workspace_id = ${params.add(workspaceId)}${filterSql(params, filter)}`,
         params,
         page,
         map: toDataset,

@@ -494,6 +494,9 @@ func (c *Client) ListArtifacts(ctx context.Context, params *ListArtifactsParams,
 		if params.Name != nil {
 			q.Add("name", FormatScalar(*params.Name))
 		}
+		if params.Q != nil {
+			q.Add("q", FormatScalar(*params.Q))
+		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/artifacts", Query: q}
 	var out ListArtifactsResponse
@@ -554,6 +557,9 @@ func (c *Client) ListDatasets(ctx context.Context, params *ListDatasetsParams, o
 		}
 		if params.Cursor != nil {
 			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Q != nil {
+			q.Add("q", FormatScalar(*params.Q))
 		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/datasets", Query: q}
@@ -666,6 +672,9 @@ func (c *Client) ListEvals(ctx context.Context, params *ListEvalsParams, opts ..
 		if params.Cursor != nil {
 			q.Add("cursor", FormatScalar(*params.Cursor))
 		}
+		if params.Status != nil {
+			q.Add("status", FormatScalar(*params.Status))
+		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/evals", Query: q}
 	var out ListEvalsResponse
@@ -686,6 +695,12 @@ func (c *Client) ListImports(ctx context.Context, params *ListImportsParams, opt
 		}
 		if params.Cursor != nil {
 			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Status != nil {
+			q.Add("status", FormatScalar(*params.Status))
+		}
+		if params.Dataset != nil {
+			q.Add("dataset", FormatScalar(*params.Dataset))
 		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/imports", Query: q}
@@ -826,6 +841,12 @@ func (c *Client) ListRuns(ctx context.Context, params *ListRunsParams, opts ...R
 		}
 		if params.Cursor != nil {
 			q.Add("cursor", FormatScalar(*params.Cursor))
+		}
+		if params.Status != nil {
+			q.Add("status", FormatScalar(*params.Status))
+		}
+		if params.Q != nil {
+			q.Add("q", FormatScalar(*params.Q))
 		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/runs", Query: q}

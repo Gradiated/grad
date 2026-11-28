@@ -14,6 +14,7 @@ import type {
   DatasetVersion,
   IdempotencyInput,
   Page,
+  ListFilter,
   PageRequest,
 } from "../store/types.js";
 import { canonicalJson, compileFilter, viewName } from "./dataset-filter.js";
@@ -38,7 +39,10 @@ export interface DatasetService {
     idempotency?: IdempotencyInput,
   ): Promise<Created<Dataset>>;
   get(workspaceId: string, name: string): Promise<Dataset>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<Dataset>>;
+  list(
+    workspaceId: string,
+    query: PageRequest & ListFilter,
+  ): Promise<Page<Dataset>>;
   /**
    * Creates the dataset if needed and appends records as a new version; a
    * retry with the same Idempotency-Key returns the dataset, appending nothing.
@@ -222,7 +226,8 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
         },
       ),
     get,
-    list: (workspaceId, page) => store.datasets.list(workspaceId, page),
+    list: (workspaceId, { limit, cursor, ...filter }) =>
+      store.datasets.list(workspaceId, { limit, cursor }, filter),
     push: async (workspaceId, name, records, metadata, idempotency) => {
       const dataset = await store.datasets.getOrCreate({
         workspaceId,

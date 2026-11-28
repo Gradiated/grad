@@ -15,6 +15,7 @@ import type {
   JobPatch,
   JobRepository,
   JobStatus,
+  ListFilter,
   Page,
   PageRequest,
   QueueCaps,
@@ -28,7 +29,7 @@ import {
   type Row,
 } from "./db.js";
 import { toEvent, toJob } from "./mappers.js";
-import { first, listNewest, nowIso } from "./shared.js";
+import { filterSql, first, listNewest, nowIso } from "./shared.js";
 
 /** Record fields stored on grad_jobs (`error` is the last_error column). */
 const JOB_FIELDS: Readonly<Record<string, string>> = {
@@ -722,13 +723,14 @@ export const createJobBackedRepository = <R extends JobFields<string>>(
     list: (
       workspaceId: string,
       page: PageRequest,
+      filter?: ListFilter,
       where?: string,
     ): Promise<Page<R>> => {
       const params = new Params();
 
       return listNewest(db, {
         table: from,
-        where: `kind = '${spec.kind}' AND workspace_id = ${params.add(workspaceId)}${where ? ` AND ${where}` : ""}`,
+        where: `kind = '${spec.kind}' AND workspace_id = ${params.add(workspaceId)}${where ? ` AND ${where}` : ""}${filterSql(params, filter)}`,
         params,
         page,
         map: spec.map,

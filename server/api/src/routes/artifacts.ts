@@ -8,6 +8,7 @@ import {
   CreateArtifactImportRequestSchema,
   pageOf,
   PageQuerySchema,
+  SearchQuerySchema,
   PinArtifactRequestSchema,
   PinHolderSchema,
   SlugSchema,
@@ -52,7 +53,10 @@ export const registerArtifactRoutes = (
       summary: "List immutable artifacts (newest first)",
       tags,
       request: {
-        query: PageQuerySchema.extend({ name: SlugSchema.optional() }),
+        query: PageQuerySchema.extend({
+          name: SlugSchema.optional(),
+          q: SearchQuerySchema,
+        }),
       },
       responses: {
         200: jsonResponse(pageOf(ArtifactSchema), "Artifacts."),

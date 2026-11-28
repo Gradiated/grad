@@ -7,6 +7,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- **List filters.** `GET /v1/runs` takes `status` (comma-separated, e.g. `queued,running`) and `q`
+  (a case-insensitive name substring, or an exact id); `GET /v1/evals` takes `status`;
+  `GET /v1/imports` takes `status` and `dataset`; `GET /v1/datasets` and `GET /v1/artifacts` take
+  `q`. Filters keep the same newest-first cursor. Every SDK's generated client has them.
 - **SDKs: one live stream per run.** `metrics(follow=True)` (Python, TypeScript, Go) and
   `grad runs logs --follow` now read the metric events of the run's event stream
   (`GET /v1/runs/{id}/events`), the stream `wait()` already follows, instead of a second SSE

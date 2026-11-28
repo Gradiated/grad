@@ -4,7 +4,7 @@ import { decodeCursor, toPage } from "../cursor.js";
 import type { ArtifactRepository } from "../types.js";
 import { jsonParam, Params, type Db } from "./db.js";
 import { toArtifact, toArtifactPin, toCheckpoint } from "./mappers.js";
-import { first, listNewest, nowIso } from "./shared.js";
+import { filterSql, first, listNewest, nowIso } from "./shared.js";
 
 const UNEXPIRED = "(expires_at IS NULL OR expires_at > $NOW::timestamptz)";
 
@@ -323,6 +323,7 @@ export const createArtifactRepository = (
     const params = new Params();
     let where = `kind = 'release' AND workspace_id = ${params.add(workspaceId)}`;
     if (filter.name) where += ` AND name = ${params.add(filter.name)}`;
+    where += filterSql(params, filter);
 
     return listNewest(db, {
       table: "grad_artifacts",

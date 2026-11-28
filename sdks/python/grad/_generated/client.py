@@ -1925,9 +1925,9 @@ class GeneratedApiClient:
         """List workspace API keys."""
         return cast("ListApiKeysResponse", self._t.request("GET", "/v1/keys", query={"limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_artifacts(self, *, limit: int | None = None, cursor: str | None = None, name: str | None = None, timeout: float | None = None) -> ListArtifactsResponse:
+    def list_artifacts(self, *, limit: int | None = None, cursor: str | None = None, name: str | None = None, q: str | None = None, timeout: float | None = None) -> ListArtifactsResponse:
         """List immutable artifacts (newest first)."""
-        return cast("ListArtifactsResponse", self._t.request("GET", "/v1/artifacts", query={"limit": limit, "cursor": cursor, "name": name}, timeout=timeout))
+        return cast("ListArtifactsResponse", self._t.request("GET", "/v1/artifacts", query={"limit": limit, "cursor": cursor, "name": name, "q": q}, timeout=timeout))
 
     def list_base_models(self, *, timeout: float | None = None) -> ListBaseModelsResponse:
         """List trainable base models (the server catalog and price source)."""
@@ -1937,9 +1937,9 @@ class GeneratedApiClient:
         """Read records of a dataset version."""
         return cast("DatasetRecordsPage", self._t.request("GET", f"/v1/datasets/{quote_path_param(name, 'name')}/records", query={"version": version, "limit": limit, "cursor": cursor}, timeout=timeout))
 
-    def list_datasets(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListDatasetsResponse:
+    def list_datasets(self, *, limit: int | None = None, cursor: str | None = None, q: str | None = None, timeout: float | None = None) -> ListDatasetsResponse:
         """List datasets (newest first)."""
-        return cast("ListDatasetsResponse", self._t.request("GET", "/v1/datasets", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+        return cast("ListDatasetsResponse", self._t.request("GET", "/v1/datasets", query={"limit": limit, "cursor": cursor, "q": q}, timeout=timeout))
 
     def list_eval_failures(self, id: str, *, limit: int | None = None, cursor: str | None = None, model: str | None = None, threshold: float | None = None, timeout: float | None = None) -> ListEvalFailuresResponse:
         """List failing task records from an evaluation run for mining."""
@@ -1953,13 +1953,13 @@ class GeneratedApiClient:
         """Per-task, per-model results of a completed evaluation."""
         return cast("ListEvalResultsResponse", self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/results", query={"limit": limit, "cursor": cursor, "model": model}, timeout=timeout))
 
-    def list_evals(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListEvalsResponse:
+    def list_evals(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, timeout: float | None = None) -> ListEvalsResponse:
         """List evaluation runs."""
-        return cast("ListEvalsResponse", self._t.request("GET", "/v1/evals", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+        return cast("ListEvalsResponse", self._t.request("GET", "/v1/evals", query={"limit": limit, "cursor": cursor, "status": status}, timeout=timeout))
 
-    def list_imports(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListImportsResponse:
+    def list_imports(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, dataset: str | None = None, timeout: float | None = None) -> ListImportsResponse:
         """List dataset import jobs (newest first)."""
-        return cast("ListImportsResponse", self._t.request("GET", "/v1/imports", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+        return cast("ListImportsResponse", self._t.request("GET", "/v1/imports", query={"limit": limit, "cursor": cursor, "status": status, "dataset": dataset}, timeout=timeout))
 
     def list_run_checkpoints(self, id: str, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunCheckpointsResponse:
         """List unexpired checkpoints of a run (best and final never expire)."""
@@ -1981,9 +1981,9 @@ class GeneratedApiClient:
         """Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events stream; read or close the response)."""
         return self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, accept="text/event-stream", timeout=timeout)
 
-    def list_runs(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListRunsResponse:
+    def list_runs(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, q: str | None = None, timeout: float | None = None) -> ListRunsResponse:
         """List training runs (newest first)."""
-        return cast("ListRunsResponse", self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor}, timeout=timeout))
+        return cast("ListRunsResponse", self._t.request("GET", "/v1/runs", query={"limit": limit, "cursor": cursor, "status": status, "q": q}, timeout=timeout))
 
     def list_secrets(self, *, limit: int | None = None, cursor: str | None = None, timeout: float | None = None) -> ListSecretsResponse:
         """List workspace secrets (names and metadata only)."""

@@ -35,6 +35,15 @@ export interface PageRequest {
   cursor?: string | undefined;
 }
 
+/** Narrows a list; every field set must match. */
+export interface ListFilter {
+  status?: readonly string[] | undefined;
+  /** A case-insensitive substring of the name, or an exact id. */
+  q?: string | undefined;
+  /** Imports: the target dataset's name. */
+  dataset?: string | undefined;
+}
+
 export interface Page<T> {
   data: T[];
   next_cursor: string | null;
@@ -121,7 +130,11 @@ export interface DatasetRepository {
   }): Promise<Dataset>;
   get(workspaceId: string, name: string): Promise<Dataset | null>;
   getById(workspaceId: string, id: string): Promise<Dataset | null>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<Dataset>>;
+  list(
+    workspaceId: string,
+    page: PageRequest,
+    filter?: ListFilter,
+  ): Promise<Page<Dataset>>;
   findIdempotent(
     workspaceId: string,
     key: string,
@@ -533,7 +546,11 @@ export interface ImportJobRepository {
     sha256: string,
   ): Promise<ImportJobRecord | null>;
   /** Dataset imports only (artifact imports are left out). */
-  list(workspaceId: string, page: PageRequest): Promise<Page<ImportJobRecord>>;
+  list(
+    workspaceId: string,
+    page: PageRequest,
+    filter?: ListFilter,
+  ): Promise<Page<ImportJobRecord>>;
   update(
     id: string,
     patch: ImportJobPatch,
@@ -608,7 +625,11 @@ export interface RunRepository {
   ): Promise<RunRecord>;
   get(workspaceId: string, id: string): Promise<RunRecord | null>;
   getById(id: string): Promise<RunRecord | null>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<RunRecord>>;
+  list(
+    workspaceId: string,
+    page: PageRequest,
+    filter?: ListFilter,
+  ): Promise<Page<RunRecord>>;
   /** Queued and running runs with this name, newest first (at most `limit`). */
   listActiveByName(
     workspaceId: string,
@@ -739,7 +760,7 @@ export interface ArtifactRepository {
   ): Promise<null | { pins: ArtifactPin[]; orphanKey: string | null }>;
   list(
     workspaceId: string,
-    filter: { name?: string | undefined },
+    filter: ListFilter & { name?: string | undefined },
     page: PageRequest,
   ): Promise<Page<ArtifactRecord>>;
 }
@@ -852,7 +873,11 @@ export interface EvalRepository {
   ): Promise<EvalRecord>;
   get(workspaceId: string, id: string): Promise<EvalRecord | null>;
   getById(id: string): Promise<EvalRecord | null>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<EvalRecord>>;
+  list(
+    workspaceId: string,
+    page: PageRequest,
+    filter?: ListFilter,
+  ): Promise<Page<EvalRecord>>;
   update(
     id: string,
     patch: EvalPatch,

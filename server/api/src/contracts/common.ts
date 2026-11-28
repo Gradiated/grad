@@ -56,6 +56,43 @@ export const PageQuerySchema = z.object({
   cursor: z.string().min(1).max(512).optional(),
 });
 
+/** `?status=queued,running`: a comma-separated subset of `values`. */
+export const statusFilterSchema = <
+  const T extends readonly [string, ...string[]],
+>(
+  values: T,
+) =>
+  z
+    .string()
+    .max(200)
+    .transform((s) => [
+      ...new Set(
+        s
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean),
+      ),
+    ])
+    .pipe(z.array(z.enum(values)).min(1))
+    .optional()
+    .openapi({
+      type: "string",
+      example: values.slice(0, 2).join(","),
+      description: `Only these statuses, comma-separated: ${values.join(", ")}.`,
+    });
+
+/** `?q=`: a case-insensitive substring of the name, or an exact id. */
+export const SearchQuerySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .optional()
+  .openapi({
+    description:
+      "Only items whose name contains this text (any case), or whose id is exactly this.",
+  });
+
 export const NextCursorSchema = z.string().nullable().openapi({
   description:
     "Pass back as `cursor` for the next page; null on the last page (every list endpoint).",

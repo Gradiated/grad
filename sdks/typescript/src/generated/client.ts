@@ -162,6 +162,8 @@ export interface ListArtifactsParams {
   limit?: number | undefined;
   cursor?: string | undefined;
   name?: string | undefined;
+  /** Only items whose name contains this text (any case), or whose id is exactly this. */
+  q?: string | undefined;
 }
 
 export type ListArtifactsResponse = {
@@ -185,6 +187,8 @@ export interface ListDatasetsParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
+  /** Only items whose name contains this text (any case), or whose id is exactly this. */
+  q?: string | undefined;
 }
 
 export type ListDatasetsResponse = {
@@ -239,6 +243,8 @@ export interface ListEvalsParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
+  /** Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled. */
+  status?: string | undefined;
 }
 
 export type ListEvalsResponse = {
@@ -251,6 +257,10 @@ export interface ListImportsParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
+  /** Only these statuses, comma-separated: queued, running, completed, failed. */
+  status?: string | undefined;
+  /** Only imports into this dataset. */
+  dataset?: string | undefined;
 }
 
 export type ListImportsResponse = {
@@ -288,6 +298,10 @@ export interface ListRunsParams {
   /** Page size (default 50). Values above 200 are clamped to 200. */
   limit?: number | undefined;
   cursor?: string | undefined;
+  /** Only these statuses, comma-separated: queued, running, completed, failed, cancelled, stopped_budget, stopped_balance. */
+  status?: string | undefined;
+  /** Only items whose name contains this text (any case), or whose id is exactly this. */
+  q?: string | undefined;
 }
 
 export type ListRunsResponse = {
@@ -640,7 +654,7 @@ export class ApiClient {
    * `GET /v1/artifacts`
    */
   async listArtifacts(params?: ListArtifactsParams, options?: RequestOptions): Promise<ListArtifactsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/artifacts`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["name", params?.name]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/artifacts`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["name", params?.name], ["q", params?.q]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "Artifact" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListArtifactsResponse;
   }
 
@@ -670,7 +684,7 @@ export class ApiClient {
    * `GET /v1/datasets`
    */
   async listDatasets(params?: ListDatasetsParams, options?: RequestOptions): Promise<ListDatasetsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/datasets`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/datasets`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["q", params?.q]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "Dataset" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListDatasetsResponse;
   }
 
@@ -710,7 +724,7 @@ export class ApiClient {
    * `GET /v1/evals`
    */
   async listEvals(params?: ListEvalsParams, options?: RequestOptions): Promise<ListEvalsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/evals`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/evals`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["status", params?.status]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "EvalRun" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListEvalsResponse;
   }
 
@@ -720,7 +734,7 @@ export class ApiClient {
    * `GET /v1/imports`
    */
   async listImports(params?: ListImportsParams, options?: RequestOptions): Promise<ListImportsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/imports`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/imports`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["status", params?.status], ["dataset", params?.dataset]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "ImportJob" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListImportsResponse;
   }
 
@@ -774,7 +788,7 @@ export class ApiClient {
    * `GET /v1/runs`
    */
   async listRuns(params?: ListRunsParams, options?: RequestOptions): Promise<ListRunsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/runs`, query: [["limit", params?.limit], ["cursor", params?.cursor]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/runs`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["status", params?.status], ["q", params?.q]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "Run" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListRunsResponse;
   }
 

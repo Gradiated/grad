@@ -5913,6 +5913,15 @@ paths:
           required: false
           name: cursor
           in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+            description: Only items whose name contains this text (any case), or whose id is exactly this.
+          required: false
+          description: Only items whose name contains this text (any case), or whose id is exactly this.
+          name: q
+          in: query
       responses:
         "200":
           description: Datasets.
@@ -6695,6 +6704,24 @@ paths:
           required: false
           name: cursor
           in: query
+        - schema:
+            type: string
+            example: queued,running
+            description: "Only these statuses, comma-separated: queued, running, completed, failed."
+          required: false
+          description: "Only these statuses, comma-separated: queued, running, completed, failed."
+          name: status
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+            description: Only imports into this dataset.
+          required: false
+          description: Only imports into this dataset.
+          name: dataset
+          in: query
       responses:
         "200":
           description: Import jobs.
@@ -6989,6 +7016,25 @@ paths:
             maxLength: 512
           required: false
           name: cursor
+          in: query
+        - schema:
+            type: string
+            example: queued,running
+            description: "Only these statuses, comma-separated: queued, running, completed, failed, cancelled, stopped_budget,
+              stopped_balance."
+          required: false
+          description: "Only these statuses, comma-separated: queued, running, completed, failed, cancelled, stopped_budget,
+            stopped_balance."
+          name: status
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+            description: Only items whose name contains this text (any case), or whose id is exactly this.
+          required: false
+          description: Only items whose name contains this text (any case), or whose id is exactly this.
+          name: q
           in: query
       responses:
         "200":
@@ -8416,6 +8462,15 @@ paths:
           required: false
           name: name
           in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+            description: Only items whose name contains this text (any case), or whose id is exactly this.
+          required: false
+          description: Only items whose name contains this text (any case), or whose id is exactly this.
+          name: q
+          in: query
       responses:
         "200":
           description: Artifacts.
@@ -9450,6 +9505,14 @@ paths:
             maxLength: 512
           required: false
           name: cursor
+          in: query
+        - schema:
+            type: string
+            example: queued,running
+            description: "Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled."
+          required: false
+          description: "Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled."
+          name: status
           in: query
       responses:
         "200":

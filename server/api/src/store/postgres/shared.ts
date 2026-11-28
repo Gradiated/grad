@@ -1,5 +1,5 @@
 import { decodeCursor, toPage } from "../cursor.js";
-import type { Page, PageRequest } from "../types.js";
+import type { ListFilter, Page, PageRequest } from "../types.js";
 import { Params, type Db, type Row } from "./db.js";
 
 /**
@@ -38,3 +38,27 @@ export const nowIso = (clock: { now(): Date }): string =>
   clock.now().toISOString();
 
 export const first = <T>(rows: readonly T[]): T | null => rows[0] ?? null;
+
+const likeEscape = (s: string): string => s.replace(/[\\%_]/g, "\\$&");
+
+/**
+ * `ListFilter` as SQL conditions (each prefixed with " AND "): `status` on a
+ * job's status, `q` on `nameColumn` (substring, any case) or the id, and
+ * `dataset` on an import's target dataset.
+ */
+export const filterSql = (
+  params: Params,
+  filter: ListFilter | undefined,
+  nameColumn = "name",
+): string => {
+  let sql = "";
+  if (filter?.status?.length)
+    sql += ` AND status = ANY(${params.add(filter.status)}::text[])`;
+  if (filter?.q) {
+    sql += ` AND (${nameColumn} ILIKE ${params.add(`%${likeEscape(filter.q)}%`)} OR id = ${params.add(filter.q)})`;
+  }
+  if (filter?.dataset)
+    sql += ` AND payload->>'dataset' = ${params.add(filter.dataset)}`;
+
+  return sql;
+};

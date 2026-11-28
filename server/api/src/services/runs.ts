@@ -57,6 +57,7 @@ import type {
   JobExpectation,
   JobRow,
   Page,
+  ListFilter,
   PageRequest,
   RunPatch,
   RunRecord,
@@ -317,7 +318,10 @@ export interface RunLifecycle {
     idempotency?: IdempotencyInput,
   ): Promise<Created<Run>>;
   get(workspaceId: string, id: string): Promise<Run>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<Run>>;
+  list(
+    workspaceId: string,
+    query: PageRequest & ListFilter,
+  ): Promise<Page<Run>>;
   metrics(
     workspaceId: string,
     id: string,
@@ -1160,8 +1164,12 @@ export const createRunLifecycle = (
 
     get: async (workspaceId, id) => publicRun(await loadRun(workspaceId, id)),
 
-    list: async (workspaceId, page) => {
-      const result = await store.runs.list(workspaceId, page);
+    list: async (workspaceId, { limit, cursor, ...filter }) => {
+      const result = await store.runs.list(
+        workspaceId,
+        { limit, cursor },
+        filter,
+      );
       const compute = await computeOf(result.data);
 
       return {

@@ -27,6 +27,7 @@ import type {
   ImportJobRecord,
   JobRow,
   Page,
+  ListFilter,
   PageRequest,
 } from "../store/types.js";
 import {
@@ -107,7 +108,10 @@ export interface ImportService {
     idempotency?: IdempotencyInput,
   ): Promise<Created<ImportJob>>;
   get(workspaceId: string, id: string): Promise<ImportJob>;
-  list(workspaceId: string, page: PageRequest): Promise<Page<ImportJob>>;
+  list(
+    workspaceId: string,
+    query: PageRequest & ListFilter,
+  ): Promise<Page<ImportJob>>;
   /** A presigned PUT for one gzip JSONL part of the import attempt the worker holds. */
   createUpload(
     principal: AuthPrincipal,
@@ -387,8 +391,12 @@ export const createImportService = (
       return toPublicImport(job);
     },
 
-    list: async (workspaceId, page) => {
-      const result = await store.imports.list(workspaceId, page);
+    list: async (workspaceId, { limit, cursor, ...filter }) => {
+      const result = await store.imports.list(
+        workspaceId,
+        { limit, cursor },
+        filter,
+      );
 
       return {
         data: result.data.map(toPublicImport),

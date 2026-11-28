@@ -6,10 +6,13 @@ import {
   pageLimitSchema,
   pageOf,
   PageQuerySchema,
+  SearchQuerySchema,
+  statusFilterSchema,
   PlanRunRequestSchema,
   PlanRunResponseSchema,
   ResumeRunRequestSchema,
   RunEventsPageSchema,
+  RUN_STATUSES,
   RunSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
@@ -157,7 +160,12 @@ export const registerRunRoutes = (
       operationId: "listRuns",
       summary: "List training runs (newest first)",
       tags,
-      request: { query: PageQuerySchema },
+      request: {
+        query: PageQuerySchema.extend({
+          status: statusFilterSchema(RUN_STATUSES),
+          q: SearchQuerySchema,
+        }),
+      },
       responses: {
         200: jsonResponse(pageOf(RunSchema), "Training runs."),
         ...defaultErrors,
