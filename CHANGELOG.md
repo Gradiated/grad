@@ -26,6 +26,12 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 - Alerts (`metrics.prometheusRule.enabled`): `GradJobFailureRateHigh`, `GradUsagePushLagging`,
   `GradTokenReviewSaturated`, `GradDatabaseErrors`, `GradStorageErrors`,
   `GradMaintenanceStalled`, and `GradNoWorkersForQueuedJobs` for eval workers too.
+- `EvalRun.waiting_reason` (`capacity_unavailable` | `inference_unavailable` | null): a running
+  eval whose model calls are waiting for a cold serving pool or a down endpoint says so.
+  Eval workers wait out `503 capacity_unavailable` in place, honouring `Retry-After`, for up to
+  `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (default 1800) without spending an attempt.
+- `GRAD_EXTRA_MODELS_JSON` entries take an optional `serving_id`; on Gradiated Cloud evals call
+  the gateway with each model's canonical-case id (`Qwen/Qwen3-8B`).
 
 ### Changed
 
@@ -36,6 +42,32 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   `worker_id`, `workspace_id`); errors carry `error_type` and `stack`, and credentials are
   masked. The trainer's logs are JSON now (they were `[grad-trainer]` text on stderr) and
   cover each phase, checkpoint and attempt outcome.
+
+### Fixed
+
+- Failure modes, chaos round 2 (each with a test in `server/api/test/chaos-*.test.ts`; summary
+  in docs/ARCHITECTURE.md "Failure modes"):
+  - A Postgres connection black-holed by a failover now fails within 35 s and is never reused;
+    the SSE hub pings its LISTEN connection. Boot-time migrations no longer hit the 30 s
+    statement timeout.
+  - Object storage outages answer `503 storage_unavailable` (was 500); long downloads are no
+    longer aborted at 120 s.
+  - One failing scheduled source no longer stops every schedule; up to 1,000 sources start per
+    tick.
+  - An inference outage during an eval waits and resumes instead of storing error outputs and
+    zero judge scores; a rotated worker token never fails an eval.
+  - Cloud: a product-DB failover keeps recently answered API keys working for up to 5 min; the
+    JWKS refresh never blocks a request and a rotated key verifies at once; a replica booted
+    during a price-list outage answers `503 billing_unavailable`, not `422 unknown_model`; one
+    balance check per workspace at a time.
+  - A TokenReview outage no longer expires every Kubernetes worker's lease (reviews are good
+    for 15 min while the API server is down, never past the token's `exp`).
+  - A GPU worker takes the runs no smaller GPU fits first, so big runs are not starved;
+    `MAX_PREEMPTIONS` counts only reclaims in a row that saved no checkpoint; a reclaimed
+    worker hands back when its grace ends mid-save.
+  - An artifact delete or the orphan sweep never removes a bundle a new release of the same
+    bytes references; a pin racing a delete answers 404 (was 500); promoting a checkpoint whose
+    blob just expired answers 404. A restarted trainer removes job directories a killed one left.
 
 ## [0.2.0-alpha.4] - 2026-11-27
 
