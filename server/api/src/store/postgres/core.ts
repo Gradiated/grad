@@ -180,7 +180,7 @@ export const createDatasetRepository = (
   };
 
   const repo: DatasetRepository = {
-    create: async ({ workspaceId, name, metadata, idempotency }) => {
+    create: async ({ id, workspaceId, name, metadata, idempotency }) => {
       const ts = nowIso(clock);
       const row = first(
         await db.query(
@@ -190,7 +190,7 @@ export const createDatasetRepository = (
            VALUES ($1, $2, $3, 0, 0, $4::jsonb, $5, $6, $7::timestamptz, $7::timestamptz)
            ON CONFLICT (workspace_id, name) DO NOTHING RETURNING *`,
           [
-            newId("ds"),
+            id ?? newId("ds"),
             workspaceId,
             name,
             JSON.stringify(metadata),

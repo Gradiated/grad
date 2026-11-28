@@ -2,7 +2,12 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { makeTestApp, TRAINER_KEY, type TestApp } from "./fixtures/app.js";
+import {
+  makeTestApp,
+  TRAINER_KEY,
+  WORKSPACE_A,
+  type TestApp,
+} from "./fixtures/app.js";
 import {
   createSftRun,
   FakeWorker,
@@ -290,6 +295,42 @@ describe("datasets, uploads and imports", () => {
     expect(seen).toHaveLength(10);
     const bad = await t.json("/v1/datasets/pages/records?cursor=WyJ4Il0");
     expect(bad.status).toBe(422);
+  });
+
+  it("reads a version a page at a time (score updates merged) and samples a big one", async () => {
+    const records = Array.from({ length: 12_000 }, (_, i) => ({
+      id: `r${i}`,
+      messages: [
+        { role: "user", content: `q${i}` },
+        { role: "assistant", content: `a${i}` },
+      ],
+    }));
+    await t.json("/v1/datasets/big/records", { body: { records } });
+    // A later score for a record on the second page.
+    await t.json("/v1/datasets/big/records", {
+      body: { records: [{ id: "r7001", scores: { ok: 1 } }] },
+    });
+    const { version } = await t.services.datasets.resolve(WORKSPACE_A, "big");
+
+    let n = 0;
+    let scored: unknown = null;
+    for await (const record of t.services.datasets.records(version)) {
+      expect(record.id).toBe(`r${n}`);
+      if (record.id === "r7001") scored = record.scores;
+      n += 1;
+    }
+    expect(n).toBe(12_000);
+    expect(scored).toEqual({ ok: 1 });
+
+    const all = await t.services.datasets.sample(version, 20_000);
+    expect(all).toMatchObject({ total: 12_000 });
+    expect(all.records).toHaveLength(12_000);
+    const some = await t.services.datasets.sample(version, 7_000);
+    expect(some.total).toBe(12_000);
+    expect(some.records).toHaveLength(7_000);
+    // Two pages, one from each half of the version.
+    expect(some.records[0]?.id).toBe("r0");
+    expect(some.records.at(-1)?.id).toBe("r7999");
   });
 
   it("preserves grad.trajectory/1 fields and rejects unknown keys instead of dropping them", async () => {

@@ -142,6 +142,8 @@ export const planDistill = (
   catalog: ModelCatalog,
   split: { train: readonly DatasetRecord[]; eval: readonly DatasetRecord[] },
   options: RenderOptions,
+  /** The split is a sample: token sums scale by this (PlanContext.totalRecords). */
+  scale = 1,
 ): DistillPlan => {
   const { recipe } = request;
   const rollout: RolloutSpec = recipe.rollout ?? { kind: "on_policy" };
@@ -167,8 +169,9 @@ export const planDistill = (
     return {
       rollout: { kind: "off_policy", max_new_tokens: cap },
       teacherTokenWeight: null,
-      estimatedTokens:
-        trainPrompts.reduce((sum, p) => sum + p + expected, 0) * epochs,
+      estimatedTokens: Math.round(
+        trainPrompts.reduce((sum, p) => sum + p + expected, 0) * epochs * scale,
+      ),
       teacher: null,
       warnings: smallerTeacherWarning(teacher, student),
     };
@@ -184,14 +187,17 @@ export const planDistill = (
   );
   const teacherTrain =
     trainPrompts.reduce((sum, p) => sum + p + contextTokens + maxNew, 0) *
-    epochs;
-  const teacherEval = prompts(split.eval).reduce(
-    (sum, p) => sum + 2 * (p + contextTokens + maxNew),
-    0,
+    epochs *
+    scale;
+  const teacherEval =
+    prompts(split.eval).reduce(
+      (sum, p) => sum + 2 * (p + contextTokens + maxNew),
+      0,
+    ) * scale;
+  const studentTokens = Math.round(
+    trainPrompts.reduce((sum, p) => sum + 2 * (p + maxNew), 0) * epochs * scale,
   );
-  const studentTokens =
-    trainPrompts.reduce((sum, p) => sum + 2 * (p + maxNew), 0) * epochs;
-  const teacherTokens = teacherTrain + teacherEval;
+  const teacherTokens = Math.round(teacherTrain + teacherEval);
   const teacherCost =
     (teacherTokens / 1_000_000) * teacher.price_per_million_tokens_usd;
 

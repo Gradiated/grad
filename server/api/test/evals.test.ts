@@ -19,7 +19,7 @@ import {
   computePassAtK,
 } from "../src/services/evals/stats.js";
 import type { RegexEvaluator } from "../src/services/evals/types.js";
-import type { EvalOutputRow } from "../src/store/types.js";
+import type { EvalScoreRow } from "../src/store/types.js";
 import {
   judgeResponder,
   startFakeOpenAI,
@@ -514,24 +514,18 @@ describe("aggregation", () => {
     task: number,
     sample: number,
     score: number | null,
-  ): EvalOutputRow => ({
+  ): EvalScoreRow => ({
     id: `o_${model}_${task}_${sample}`,
-    eval_id: "eval_1",
-    attempt: 1,
-    record: { messages: [] },
     task_index: task,
     task_id: `t${task}`,
     model,
     sample_index: sample,
-    input: [],
-    output: score === null ? null : "x",
-    expected_output: null,
+    answered: score !== null,
     scores: score === null ? {} : { v: score },
     error: score === null ? "boom" : null,
     prompt_tokens: 10,
     completion_tokens: 10,
     cost_usd: 0.001,
-    created_at: "2026-11-27T00:00:00.000Z",
   });
 
   it("computes per-model summaries, pass@k and a paired baseline diff", () => {

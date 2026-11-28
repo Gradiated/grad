@@ -408,6 +408,11 @@ interface PlanContext {
   datasetVersion: number;
   /** The artifact `recipe.model` names (continued training). */
   baseArtifact?: Artifact | null;
+  /**
+   * The version's record count when `records` is a sample of it: counts,
+   * tokens and cost scale up by totalRecords / records.length.
+   */
+  totalRecords?: number;
 }
 
 type Start = {
@@ -595,18 +600,34 @@ export const planRun = (
     );
   }
 
+  // A big version is planned from a spread sample; counts scale up.
+  const total = Math.max(context.totalRecords ?? 0, records.length);
+  const scale = total / records.length;
+  const scaled = (n: number): number => Math.round(n * scale);
+  if (scale > 1) {
+    warnings.push(
+      `Estimated from ${records.length} of the ${total} records (pages spread over the dataset); the run trains on all of them.`,
+    );
+  }
+
   const labelled = Array.isArray(recipe.rubric);
   const offPolicy =
     recipe.kind === "distill" && recipe.rollout?.kind === "off_policy";
-  const usability = assessRecipeUsability(recipe.kind, records, {
+  const sampled = assessRecipeUsability(recipe.kind, records, {
     rubric: typeof recipe.rubric === "string" ? recipe.rubric : undefined,
     labelled,
     candidates: recipe.models,
   });
+  const usability = {
+    ...sampled,
+    usable: scaled(sampled.usable),
+    unusable: total - scaled(sampled.usable),
+    total,
+  };
   if (usability.usable === 0) {
     throw invalid(
       "no_usable_records",
-      `None of the ${records.length} records in '${request.dataset}' can train recipe '${recipe.kind}' (${usability.reasons.join("; ")}). ${recordShapeHelp(recipe.kind)}`,
+      `None of the ${usability.total} records in '${request.dataset}' can train recipe '${recipe.kind}' (${usability.reasons.join("; ")}). ${recordShapeHelp(recipe.kind)}`,
     );
   }
   const paired = recipe.kind === "dpo" || recipe.kind === "reward";
@@ -658,8 +679,17 @@ export const planRun = (
   };
 
   const maxSeqLen = Math.min(model.max_context_tokens, TRAINER_MAX_SEQ_LEN);
-  const { trainItems, totalTokens, trainedTokens, truncated, evalTokens } =
-    countTokens(recipe, { train, eval: evalSet }, renderOptions, maxSeqLen);
+  const counted = countTokens(
+    recipe,
+    { train, eval: evalSet },
+    renderOptions,
+    maxSeqLen,
+  );
+  const trainItems = scaled(counted.trainItems);
+  const totalTokens = scaled(counted.totalTokens);
+  const trainedTokens = scaled(counted.trainedTokens);
+  const evalTokens = scaled(counted.evalTokens);
+  const truncated = scaled(counted.truncated);
 
   let distill: DistillPlan | null = null;
   if (recipe.kind === "distill") {
@@ -669,6 +699,7 @@ export const planRun = (
       context.catalog,
       { train, eval: evalSet },
       renderOptions,
+      scale,
     );
     warnings.push(...distill.warnings);
     recipeParams.rollout = distill.rollout;
@@ -782,8 +813,8 @@ export const planRun = (
       strategy: splitStrategy,
       eval_fraction: evalFraction,
       seed: splitSeed,
-      train_records: train.length,
-      eval_records: evalSet.length,
+      train_records: scaled(train.length),
+      eval_records: scaled(evalSet.length),
     },
     label_eval_id: null,
     base_artifact: base,

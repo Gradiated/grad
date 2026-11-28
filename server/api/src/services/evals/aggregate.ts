@@ -1,5 +1,5 @@
 import type { EvalModelSummary } from "../../contracts.js";
-import type { EvalOutputRow, EvalRecord } from "../../store/types.js";
+import type { EvalRecord, EvalScoreRow } from "../../store/types.js";
 import { combineScores } from "./scoring.js";
 import { bootstrapMeanCI, computePassAtK } from "./stats.js";
 
@@ -37,7 +37,7 @@ export const aggregateEval = (
     | "judge_models"
     | "model_targets"
   >,
-  outputs: readonly EvalOutputRow[],
+  outputs: readonly EvalScoreRow[],
 ): Aggregation => {
   const cells = new Map<string, Map<number, TaskCell>>();
   const outputScores: Aggregation["outputScores"] = [];
@@ -56,8 +56,9 @@ export const aggregateEval = (
     };
     byTask.set(output.task_index, cell);
 
-    const score =
-      output.output === null ? 0 : combineScores(evalRun.rubric, output.scores);
+    const score = output.answered
+      ? combineScores(evalRun.rubric, output.scores)
+      : 0;
     cell.samples.push(score);
     outputScores.push({ id: output.id, score });
     cell.tokens += output.prompt_tokens + output.completion_tokens;

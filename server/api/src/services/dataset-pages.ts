@@ -33,7 +33,7 @@ import {
  * filter are dropped at the end and the rest renumbered, so `total` and pages
  * count only admitted records.
  */
-interface VersionIndex {
+export interface VersionIndex {
   /** Merged records in the version. */
   total: number;
   /** Line → slot, or -1. Lines are numbered across parts in order. */

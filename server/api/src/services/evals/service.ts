@@ -41,6 +41,7 @@ import { newId } from "../../ids.js";
 import type {
   CheckpointRecord,
   EvalOutputRow,
+  EvalScoreRow,
   EvalRecord,
   IdempotencyInput,
   JobExpectation,
@@ -174,7 +175,6 @@ export const AWAITING_SCORES_TIMEOUT_SECONDS = 24 * 3600;
 
 /** Thrown inside finalize's transaction when another caller finalized first. */
 class LostRace extends Error {}
-const OUTPUT_PAGE = 1000;
 const ACTIVE: readonly EvalStatus[] = ["queued", "running", "awaiting_scores"];
 
 const toPublicOutput = (row: EvalOutputRow): EvalOutput => ({
@@ -264,22 +264,6 @@ export const createEvalService = (
     completed_at: record.finished_at,
   });
 
-  const allOutputs = async (evalId: string): Promise<EvalOutputRow[]> => {
-    const rows: EvalOutputRow[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await store.evals.listOutputs(
-        evalId,
-        {},
-        { limit: OUTPUT_PAGE, cursor },
-      );
-      rows.push(...page.data);
-      cursor = page.next_cursor ?? undefined;
-    } while (cursor);
-
-    return rows;
-  };
-
   /**
    * Bills what `record`'s attempt generated beyond what it already billed:
    * at its close (`final`), and in increments while it runs.
@@ -321,10 +305,10 @@ export const createEvalService = (
    */
   const writeScorePart = async (
     record: EvalRecord,
-    outputs: readonly EvalOutputRow[],
+    outputs: readonly EvalScoreRow[],
   ) => {
     const updates = outputs
-      .filter((o) => o.output !== null && Object.keys(o.scores).length > 0)
+      .filter((o) => o.answered && Object.keys(o.scores).length > 0)
       .map((o) => scoreUpdate(o.task_id, o.scores));
     if (updates.length === 0) return null;
 
@@ -340,7 +324,8 @@ export const createEvalService = (
     record: EvalRecord,
     expect: JobExpectation,
   ): Promise<EvalRecord | null> => {
-    const outputs = await allOutputs(record.id);
+    // Score fields only: an eval's records and answers never load at once.
+    const outputs = await store.evals.listScoreRows(record.id);
     const aggregation = aggregateEval(record, outputs);
     const scorePart =
       record.mode === "score" ? await writeScorePart(record, outputs) : null;
@@ -589,13 +574,13 @@ export const createEvalService = (
     job: EvalRecord,
     expect: JobExpectation,
   ): Promise<void> => {
-    const outputs = await allOutputs(job.id);
+    const outputs = await store.evals.listScoreRows(job.id);
     if (
       job.mode === "eval" &&
       outputs.length > 0 &&
-      outputs.every((o) => o.output === null)
+      outputs.every((o) => !o.answered)
     ) {
-      const first = outputs.find((o) => o.output === null)?.error;
+      const first = outputs[0]?.error;
       await failAttempt(
         job,
         expect,
@@ -912,7 +897,7 @@ export const createEvalService = (
       local_scorers: plan.localScorers,
       run_id: checkpoint?.runId ?? null,
       run_step: checkpoint?.step ?? null,
-      totalOutputs: plan.tasks.length * request.models.length * request.samples,
+      totalOutputs: plan.taskCount * request.models.length * request.samples,
     });
   };
 

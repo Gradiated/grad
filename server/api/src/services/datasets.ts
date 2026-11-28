@@ -10,6 +10,7 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
+import { newId } from "../ids.js";
 import { renderMessages } from "../render.js";
 import { recordConversation } from "../records.js";
 import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
@@ -26,9 +27,9 @@ import {
   createPartLinesCache,
   createVersionIndexCache,
   readVersionPage,
+  type VersionIndex,
 } from "./dataset-pages.js";
-import { readVersionRecords, writeRecordsPart } from "./dataset-records.js";
-import { mergeRecords } from "./record-merge.js";
+import { writeRecordsPart } from "./dataset-records.js";
 
 export interface ResolvedDatasetVersion {
   dataset: Dataset;
@@ -70,8 +71,20 @@ export interface DatasetService {
    * may already be in the dataset.
    */
   settleCount(dataset: Dataset): Promise<Dataset>;
-  /** A version's records with later parts (score updates) merged in by id. */
-  readRecords(version: DatasetVersion): Promise<DatasetRecord[]>;
+  /**
+   * A version's records with later parts (score updates) merged in by id,
+   * a page at a time: memory is a page plus the parts it reads, never the
+   * version (a 1M-record version read whole took 1.9 GB of a 1 GiB pod).
+   */
+  records(version: DatasetVersion): AsyncGenerator<DatasetRecord>;
+  /**
+   * Up to `max` of a version's merged records, every one when it has no more,
+   * else pages spread evenly over it; `total` counts them all.
+   */
+  sample(
+    version: DatasetVersion,
+    max: number,
+  ): Promise<{ records: DatasetRecord[]; total: number }>;
   /**
    * A filtered view: a dataset holding the source version's matching records.
    * Its default name hashes the filter, so the same filter returns the same
@@ -149,6 +162,11 @@ const pushRecordIds = (records: readonly DatasetRecord[]): DatasetRecord[] => {
   );
 };
 
+/** Records per page when a version is read through (`records`, `sample`). */
+const RECORDS_PAGE = 5000;
+/** Records per part a filtered view writes. */
+const FILTER_PART_RECORDS = 20_000;
+
 export const createDatasetService = (deps: AppDependencies): DatasetService => {
   const { store, storage } = deps;
   const indexes = createVersionIndexCache(storage);
@@ -172,10 +190,39 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
       records,
     );
 
-  const readRecords = async (
+  const page = async (
     version: DatasetVersion,
-  ): Promise<DatasetRecord[]> =>
-    mergeRecords(await readVersionRecords(storage, version));
+    index: VersionIndex,
+    from: number,
+    limit: number,
+  ) => readVersionPage(storage, version.parts, index, from, limit, partLines);
+
+  async function* records(
+    version: DatasetVersion,
+  ): AsyncGenerator<DatasetRecord> {
+    const index = await indexes.get(version);
+    for (let from = 0; from < index.total; from += RECORDS_PAGE) {
+      yield* await page(version, index, from, RECORDS_PAGE);
+    }
+  }
+
+  const sample = async (version: DatasetVersion, max: number) => {
+    const index = await indexes.get(version);
+    if (index.total <= max) {
+      return {
+        records: await page(version, index, 0, index.total),
+        total: index.total,
+      };
+    }
+    const pages = Math.ceil(max / RECORDS_PAGE);
+    const stride = Math.floor(index.total / pages);
+    const out: DatasetRecord[] = [];
+    for (let i = 0; i < pages; i += 1) {
+      out.push(...(await page(version, index, i * stride, RECORDS_PAGE)));
+    }
+
+    return { records: out.slice(0, max), total: index.total };
+  };
 
   const resolve = async (
     workspaceId: string,
@@ -354,7 +401,8 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
     },
     resolve,
     settleCount,
-    readRecords,
+    records,
+    sample,
     filter: async (workspaceId, name, request) => {
       const { version: wanted, name: given, ...filter } = request;
       const source = await resolve(workspaceId, name, wanted);
@@ -376,24 +424,39 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
         );
       }
 
+      // The matches stream into parts of FILTER_PART_RECORDS (never the
+      // whole view in memory), written before the view exists: a read that
+      // fails leaves no empty view for the next identical filter to return.
       const matches = compileFilter(filter);
-      const records = (await readRecords(source.version)).filter(matches);
-      const created = await store.datasets.create({
-        workspaceId,
-        name: target,
-        metadata: { view },
-      });
-      if (!created) {
-        // A concurrent identical filter won the race.
-        return { dataset: await get(workspaceId, target), created: false };
+      const id = newId("ds");
+      const parts: DatasetPart[] = [];
+      let chunk: DatasetRecord[] = [];
+      const flush = async () => {
+        if (chunk.length > 0)
+          parts.push(await writePart(workspaceId, id, chunk));
+        chunk = [];
+      };
+      for await (const record of records(source.version)) {
+        if (!matches(record)) continue;
+        chunk.push(record);
+        if (chunk.length === FILTER_PART_RECORDS) await flush();
       }
-      if (records.length === 0) return { dataset: created, created: true };
+      await flush();
 
-      const part = await writePart(workspaceId, created.id, records);
-      const dataset = await store.datasets.appendVersion({
-        datasetId: created.id,
-        parts: [part],
+      const dataset = await store.transaction(async () => {
+        const created = await store.datasets.create({
+          id,
+          workspaceId,
+          name: target,
+          metadata: { view },
+        });
+        if (!created || parts.length === 0) return created;
+
+        return store.datasets.appendVersion({ datasetId: id, parts });
       });
+      // A concurrent identical filter won the race.
+      if (!dataset)
+        return { dataset: await get(workspaceId, target), created: false };
 
       return { dataset, created: true };
     },

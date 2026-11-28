@@ -109,6 +109,28 @@ export const createEvalRepository = (db: Db, clock: Clock): EvalRepository => {
           ),
         )?.n ?? 0,
       ),
+    listScoreRows: async (evalId) =>
+      (
+        await db.query(
+          `SELECT id, task_index, task_id, model, sample_index, scores, error,
+                  prompt_tokens, completion_tokens, cost_usd, output IS NOT NULL AS answered
+           FROM grad_eval_outputs WHERE eval_id = $1
+           ORDER BY task_index, model COLLATE "C", sample_index`,
+          [evalId],
+        )
+      ).map((r) => ({
+        id: String(r.id),
+        task_index: Number(r.task_index),
+        task_id: String(r.task_id),
+        model: String(r.model),
+        sample_index: Number(r.sample_index),
+        scores: (r.scores ?? {}) as Record<string, number>,
+        error: r.error === null ? null : String(r.error),
+        prompt_tokens: Number(r.prompt_tokens),
+        completion_tokens: Number(r.completion_tokens),
+        cost_usd: Number(r.cost_usd),
+        answered: r.answered === true,
+      })),
     listOutputKeys: async (evalId) =>
       new Set(
         (

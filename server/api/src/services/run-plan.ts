@@ -42,6 +42,12 @@ const sameNameWarning = (
 /** Base models up to this much GPU memory (an encoder) train fine on a CPU worker. */
 const CPU_TRAINABLE_GB = 4;
 
+/**
+ * A plan reads at most this many records (spread over the version) and
+ * scales its counts: 1M records read whole took 1.9 GB of a 1 GiB API pod.
+ */
+const PLAN_SAMPLE_RECORDS = 100_000;
+
 export const createRunPlanner = (
   deps: AppDependencies,
   collaborators: { datasets: DatasetService; evals: EvalService },
@@ -51,7 +57,11 @@ export const createRunPlanner = (
 
   const planFor = async (workspaceId: string, request: PlanRunRequest) => {
     const resolved = await datasets.resolve(workspaceId, request.dataset);
-    const records = await datasets.readRecords(resolved.version);
+    // A bounded sample of a big version: the plan never holds it all.
+    const { records, total } = await datasets.sample(
+      resolved.version,
+      PLAN_SAMPLE_RECORDS,
+    );
     const baseArtifact = isArtifactRef(request.recipe.model)
       ? await store.artifacts.get(workspaceId, request.recipe.model)
       : null;
@@ -70,6 +80,7 @@ export const createRunPlanner = (
     const plan = planRun(request, records, {
       catalog,
       datasetVersion: resolved.version.version,
+      totalRecords: total,
       baseArtifact: baseArtifact && toPublicArtifact(baseArtifact),
       labeling,
     });

@@ -947,3 +947,28 @@ describe("record helpers", () => {
     ).toEqual(["a/b"]);
   });
 });
+
+describe("planRun on a sample of a bigger version", () => {
+  it("scales counts, tokens and cost to the version's total and says so", () => {
+    const records = Array.from({ length: 200 }, (_, i) => chat(i));
+    const recipe = { kind: "sft", model: "test/tiny-qwen3" };
+    const whole = plan(recipe, records);
+    const sampled = planRun(request(recipe), records, {
+      catalog,
+      datasetVersion: 3,
+      totalRecords: 2000,
+    });
+
+    expect(sampled.total_records).toBe(2000);
+    expect(sampled.usable_records).toBe(whole.usable_records * 10);
+    expect(sampled.resolved_config.split.train_records).toBe(
+      whole.resolved_config.split.train_records * 10,
+    );
+    expect(sampled.estimated_tokens).toBe(whole.estimated_tokens * 10);
+    expect(sampled.estimated_steps).toBeGreaterThan(whole.estimated_steps);
+    expect(sampled.warnings).toContain(
+      "Estimated from 200 of the 2000 records (pages spread over the dataset); the run trains on all of them.",
+    );
+    expect(whole.warnings.join(" ")).not.toMatch(/Estimated from/);
+  });
+});

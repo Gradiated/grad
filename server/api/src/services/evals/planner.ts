@@ -29,7 +29,8 @@ interface ResolvedEvalPlan {
   response: PlanEvalResponse;
   dataset: ResolvedDatasetVersion;
   targets: ModelTargets;
-  tasks: EvalTask[];
+  /** Usable records (at most the request's limit): one task each. */
+  taskCount: number;
   /** The request's rubric, or the dataset's own (benchmarks), or non_empty. */
   rubric: EvalRubricItem[];
   judgeModels: string[];
@@ -150,6 +151,7 @@ const resolveJudgeTargets = async (
 
 interface BuiltTasks {
   tasks: EvalTask[];
+  count: number;
   skipped: number;
   alreadyScored: number;
   promptTokens: number;
@@ -176,54 +178,77 @@ const scoreTask = (
   };
 };
 
+/** Counts `record` into `built` and returns the task it makes, or null (skipped). */
+const addTask = (
+  built: BuiltTasks,
+  record: DatasetRecord,
+  score: readonly string[] | null,
+): EvalTask | null => {
+  const index = built.count;
+  if (score) {
+    const task = scoreTask(record, score);
+    if (task === "skip") built.skipped += 1;
+    if (task === "scored") built.alreadyScored += 1;
+    if (typeof task === "string") return null;
+
+    built.count += 1;
+    built.promptTokens += estimateTokens(task.prompt);
+    built.referenceTokens += estimateTokens(task.reference);
+    return { task_index: index, task_id: record.id as string, record };
+  }
+
+  const pr = recordPromptAndReference(record);
+  if (!pr || pr.prompt.length === 0) {
+    built.skipped += 1;
+    return null;
+  }
+
+  built.count += 1;
+  built.promptTokens += estimateTokens(pr.prompt.map(messageText).join("\n"));
+  built.referenceTokens +=
+    pr.reference === null ? 256 : estimateTokens(pr.reference);
+  return {
+    task_index: index,
+    task_id: record.id ?? `task_${index + 1}`,
+    record,
+  };
+};
+
+const noTasks = (): BuiltTasks => ({
+  tasks: [],
+  count: 0,
+  skipped: 0,
+  alreadyScored: 0,
+  promptTokens: 0,
+  referenceTokens: 0,
+});
+
 /** An eval's tasks: the usable records of its pinned dataset version, in order. */
 export const buildTasks = (
   records: readonly DatasetRecord[],
   limit: number | undefined,
   score: readonly string[] | null,
 ): BuiltTasks => {
-  const built: BuiltTasks = {
-    tasks: [],
-    skipped: 0,
-    alreadyScored: 0,
-    promptTokens: 0,
-    referenceTokens: 0,
-  };
-
+  const built = noTasks();
   for (const record of records) {
-    if (limit !== undefined && built.tasks.length >= limit) break;
-    if (score) {
-      const task = scoreTask(record, score);
-      if (task === "skip") built.skipped += 1;
-      if (task === "scored") built.alreadyScored += 1;
-      if (typeof task === "string") continue;
+    if (limit !== undefined && built.count >= limit) break;
+    const task = addTask(built, record, score);
+    if (task) built.tasks.push(task);
+  }
 
-      const index = built.tasks.length;
-      built.promptTokens += estimateTokens(task.prompt);
-      built.referenceTokens += estimateTokens(task.reference);
-      built.tasks.push({
-        task_index: index,
-        task_id: record.id as string,
-        record,
-      });
-      continue;
-    }
+  return built;
+};
 
-    const pr = recordPromptAndReference(record);
-    if (!pr || pr.prompt.length === 0) {
-      built.skipped += 1;
-      continue;
-    }
-
-    const index = built.tasks.length;
-    built.promptTokens += estimateTokens(pr.prompt.map(messageText).join("\n"));
-    built.referenceTokens +=
-      pr.reference === null ? 256 : estimateTokens(pr.reference);
-    built.tasks.push({
-      task_index: index,
-      task_id: record.id ?? `task_${index + 1}`,
-      record,
-    });
+/** `buildTasks` without the tasks: counts and token sums, streamed (a plan keeps no records). */
+const countTasks = async (
+  records: AsyncIterable<DatasetRecord>,
+  limit: number | undefined,
+  score: readonly string[] | null,
+): Promise<BuiltTasks> => {
+  const built = noTasks();
+  for await (const record of records) {
+    if (limit !== undefined && built.count >= limit) break;
+    addTask(built, record, score);
   }
 
   return built;
@@ -309,28 +334,30 @@ export const planEvalRequest = async (
       }
     : (fixedTargets ??
       (await resolveModelTargets(deps, workspaceId, request.models)));
-  const records = await datasets.readRecords(dataset.version);
-  const built = buildTasks(records, request.limit, scoring ? names : null);
-  const { tasks } = built;
+  const built = await countTasks(
+    datasets.records(dataset.version),
+    request.limit,
+    scoring ? names : null,
+  );
+  const taskCount = built.count;
 
   const localScorers = rubric
     .filter((r) => r.kind === "code")
     .map((r) => r.name);
   const passThreshold = resolvePassThreshold(rubric, request.pass_threshold);
 
-  const outputs = tasks.length * request.models.length * request.samples;
+  const outputs = taskCount * request.models.length * request.samples;
   const modelCalls = scoring ? 0 : outputs;
   const judgeCalls = outputs * judgeItems.length;
   const perCallTokens =
-    tasks.length > 0
-      ? (built.promptTokens + built.referenceTokens) / tasks.length
+    taskCount > 0
+      ? (built.promptTokens + built.referenceTokens) / taskCount
       : 0;
 
   let cost = 0;
   for (const model of request.models) {
     const price = targets[model]?.price_per_million_tokens ?? 0;
-    cost +=
-      ((tasks.length * request.samples * perCallTokens) / 1_000_000) * price;
+    cost += ((taskCount * request.samples * perCallTokens) / 1_000_000) * price;
   }
   for (const item of judgeItems) {
     const price = judgeTargets[item.model ?? ""]?.price_per_million_tokens ?? 0;
@@ -351,7 +378,7 @@ export const planEvalRequest = async (
       `${built.alreadyScored} record(s) already have every score (${names.join(", ")}) and are skipped.`,
     );
   }
-  if (tasks.length === 0 && !scoring) {
+  if (taskCount === 0 && !scoring) {
     warnings.push(
       "The dataset has no records with a usable prompt; nothing would be evaluated.",
     );
@@ -387,7 +414,7 @@ export const planEvalRequest = async (
     response: {
       task_source_kind: "dataset",
       dataset_version: dataset.version.version,
-      estimated_tasks: tasks.length,
+      estimated_tasks: taskCount,
       estimated_model_calls: modelCalls,
       estimated_judge_calls: judgeCalls,
       estimated_cost_usd: estimatedCost,
@@ -398,7 +425,7 @@ export const planEvalRequest = async (
     },
     dataset,
     targets,
-    tasks,
+    taskCount,
     rubric,
     judgeModels,
     judgeTargets,
@@ -408,7 +435,7 @@ export const planEvalRequest = async (
 };
 
 export const assertNonEmptyPlan = (plan: ResolvedEvalPlan): void => {
-  if (plan.tasks.length === 0) {
+  if (plan.taskCount === 0) {
     throw new ApiError(
       422,
       "empty_eval",

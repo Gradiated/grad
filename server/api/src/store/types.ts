@@ -118,6 +118,8 @@ export interface DatasetVersion {
 export interface DatasetRepository {
   /** Returns null when a dataset with that name already exists. */
   create(input: {
+    /** Chosen by the caller when it writes the dataset's parts first. */
+    id?: string;
     workspaceId: string;
     name: string;
     metadata: Record<string, unknown>;
@@ -844,6 +846,24 @@ export interface EvalOutputRow {
   created_at: string;
 }
 
+/** What aggregating an output reads: no record, prompt or answer text. */
+export type EvalScoreRow = Pick<
+  EvalOutputRow,
+  | "id"
+  | "task_index"
+  | "task_id"
+  | "model"
+  | "sample_index"
+  | "scores"
+  | "error"
+  | "prompt_tokens"
+  | "completion_tokens"
+  | "cost_usd"
+> & {
+  /** The model answered (output is not null). */
+  answered: boolean;
+};
+
 /** Per-(task, model) result, aggregated from the outputs' combined scores. */
 export interface EvalResultRow {
   task_index: number;
@@ -890,6 +910,8 @@ export interface EvalRepository {
    */
   insertOutputs(outputs: readonly EvalOutputRow[]): Promise<number>;
   countOutputs(evalId: string): Promise<number>;
+  /** Every output's score fields, in task, model, sample order. */
+  listScoreRows(evalId: string): Promise<EvalScoreRow[]>;
   /** Keys `${model}\u0000${task_index}\u0000${sample_index}` already generated. */
   listOutputKeys(evalId: string): Promise<Set<string>>;
   /** Ordered by (task_index, model, sample_index). */
