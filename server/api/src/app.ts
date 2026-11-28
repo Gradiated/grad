@@ -338,10 +338,10 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
   documentIdempotencyHeader(app);
 
   registerModelsAndKeysRoutes(app, deps);
-  registerDatasetRoutes(app, deps, services);
+  registerDatasetRoutes(app, services);
   registerRunRoutes(app, deps, services);
   registerCheckpointRoutes(app, deps, services);
-  registerTrainerJobRoutes(app, deps, services);
+  registerTrainerJobRoutes(app, services);
   registerArtifactRoutes(app, deps, services);
   registerUsageRoutes(app, services);
   registerEvalRoutes(app, deps, services);

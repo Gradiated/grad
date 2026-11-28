@@ -4,10 +4,14 @@ import type {
   Dataset,
   DatasetRecord,
   FilterDatasetRequest,
+  RenderDatasetRequest,
+  RenderDatasetResponse,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
+import { renderMessages } from "../planner.js";
+import { recordConversation } from "../records.js";
 import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
 import type {
   DatasetPart,
@@ -93,6 +97,15 @@ export interface DatasetService {
     data: DatasetRecord[];
     next_cursor: string | null;
   }>;
+  /**
+   * The first `limit` conversational records of the head version rendered
+   * with `model`'s chat template and loss masks (estimated token counts).
+   */
+  render(
+    workspaceId: string,
+    name: string,
+    input: RenderDatasetRequest,
+  ): Promise<RenderDatasetResponse>;
   /** Writes records as a content-addressed part of `datasetId`. */
   writePart(
     workspaceId: string,
@@ -105,6 +118,9 @@ export interface DatasetService {
  * Parts are gzip-compressed and content-addressed by their uncompressed
  * JSONL: `ws/<ws>/datasets/<dataset>/<sha256>.jsonl.gz`.
  */
+/** Records read per page while rendering a preview. */
+const RENDER_PAGE = 100;
+
 export const datasetPartKey = (
   workspaceId: string,
   datasetId: string,
@@ -197,6 +213,83 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
         total,
       )) ?? dataset
     );
+  };
+
+  const listRecords: DatasetService["listRecords"] = async (
+    workspaceId,
+    name,
+    input,
+  ) => {
+    const { dataset, version } = await resolve(
+      workspaceId,
+      name,
+      input.version,
+    );
+    const offset = decodeIntCursor(input.cursor);
+
+    // One page without loading the version (dataset-pages.ts).
+    const index = await indexes.get(version);
+    const data = await readVersionPage(
+      storage,
+      version.parts,
+      index,
+      offset,
+      input.limit,
+      partLines,
+    );
+    const nextOffset = offset + data.length;
+
+    return {
+      dataset: dataset.name,
+      version: version.version,
+      total: index.total,
+      data,
+      next_cursor: nextOffset < index.total ? encodeCursor([nextOffset]) : null,
+    };
+  };
+
+  const render: DatasetService["render"] = async (workspaceId, name, input) => {
+    const model = deps.catalog.find(input.model);
+    if (!model || model.family !== "llm") {
+      throw invalid(
+        "render_unsupported_model",
+        `Model '${input.model}' is not a chat model in the catalog; run \`grad models list\` (GET /v1/base-models).`,
+      );
+    }
+
+    // Page through the merged records only until `limit` conversations.
+    const examples: RenderDatasetResponse["examples"] = [];
+    let position = 0;
+    let cursor: string | undefined;
+    do {
+      const page = await listRecords(workspaceId, name, {
+        limit: RENDER_PAGE,
+        cursor,
+      });
+      for (const record of page.data) {
+        position += 1;
+        const messages = recordConversation(record);
+        if (messages.length === 0) continue;
+        examples.push(
+          renderMessages(record.id ?? `rec_${position}`, messages, {
+            templateRevision: model.template_revision,
+            train_on: input.train_on,
+            thinking: input.thinking,
+            preserve_thinking: input.preserve_thinking,
+          }),
+        );
+        if (examples.length === input.limit) break;
+      }
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor !== undefined && examples.length < input.limit);
+
+    return {
+      dataset: name,
+      model: model.id,
+      template_revision: model.template_revision,
+      token_counts: "estimated",
+      examples,
+    };
   };
 
   return {
@@ -306,35 +399,8 @@ export const createDatasetService = (deps: AppDependencies): DatasetService => {
 
       return { dataset, created: true };
     },
-    listRecords: async (workspaceId, name, input) => {
-      const { dataset, version } = await resolve(
-        workspaceId,
-        name,
-        input.version,
-      );
-      const offset = decodeIntCursor(input.cursor);
-
-      // One page without loading the version (dataset-pages.ts).
-      const index = await indexes.get(version);
-      const data = await readVersionPage(
-        storage,
-        version.parts,
-        index,
-        offset,
-        input.limit,
-        partLines,
-      );
-      const nextOffset = offset + data.length;
-
-      return {
-        dataset: dataset.name,
-        version: version.version,
-        total: index.total,
-        data,
-        next_cursor:
-          nextOffset < index.total ? encodeCursor([nextOffset]) : null,
-      };
-    },
+    listRecords,
+    render,
     writePart,
   };
 };

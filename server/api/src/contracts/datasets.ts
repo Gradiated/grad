@@ -147,6 +147,8 @@ export const RenderDatasetRequestSchema = z
   })
   .openapi("RenderDatasetRequest");
 
+export type RenderDatasetRequest = z.infer<typeof RenderDatasetRequestSchema>;
+
 export const RenderedSpanSchema = z.object({
   text: z.string(),
   trained: z.boolean(),
@@ -174,6 +176,8 @@ export const RenderDatasetResponseSchema = z
     examples: z.array(RenderedExampleSchema),
   })
   .openapi("RenderDatasetResponse");
+
+export type RenderDatasetResponse = z.infer<typeof RenderDatasetResponseSchema>;
 
 // --- Uploads ---------------------------------------------------------------
 

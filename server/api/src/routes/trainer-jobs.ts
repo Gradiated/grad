@@ -21,7 +21,6 @@ import {
   WorkerUploadRequestSchema,
 } from "../contracts.js";
 import { claimableKinds } from "../adapters.js";
-import type { AppDependencies } from "../deps.js";
 import { conflict, forbidden, notFound } from "../errors.js";
 import type { Services } from "../services/index.js";
 import {
@@ -67,7 +66,6 @@ const UPLOADERS: Readonly<
 
 export const registerTrainerJobRoutes = (
   app: OpenAPIHono<AppEnv>,
-  _deps: AppDependencies,
   services: Services,
 ): void => {
   const tags = ["TrainerJobs"];

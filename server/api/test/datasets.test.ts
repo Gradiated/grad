@@ -380,6 +380,26 @@ describe("datasets, uploads and imports", () => {
     expect(conflict.body).toMatchObject({ code: "render_conflict" });
   });
 
+  it("renders the first conversations even when they sit past the first page of records", async () => {
+    // 150 records with no prompt to render (more than one read page), then chats.
+    const answersOnly = Array.from({ length: 150 }, (_, i) => ({
+      id: `bare-${i}`,
+      messages: [{ role: "assistant", content: `answer ${i}` }],
+    }));
+    await t.json("/v1/datasets/mixed/records", {
+      body: { records: [...answersOnly, ...sftRecords(3)] },
+    });
+    const res = await t.json<{ examples: Array<{ record_id: string }> }>(
+      "/v1/datasets/mixed/render",
+      { body: { model: "qwen/qwen3-8b", limit: 2 } },
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.examples).toHaveLength(2);
+    expect(
+      res.body.examples.every((e) => !e.record_id.startsWith("bare-")),
+    ).toBe(true);
+  });
+
   it("a transient error while building a claimed import requeues it (spending the attempt) and fails the claim", async () => {
     const file = Buffer.from('{"messages":[]}\n');
     const ticket = await t.json<{

@@ -21,11 +21,7 @@ import {
   SlugSchema,
   UploadTicketSchema,
 } from "../contracts.js";
-import type { AppDependencies } from "../deps.js";
-import { invalid } from "../errors.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
-import { renderMessages } from "../planner.js";
-import { recordConversation } from "../records.js";
 import type { Services } from "../services/index.js";
 import { stagingKey } from "../services/uploads.js";
 import {
@@ -42,7 +38,6 @@ const NameParamSchema = z.object({ name: SlugSchema });
 
 export const registerDatasetRoutes = (
   app: OpenAPIHono<AppEnv>,
-  deps: AppDependencies,
   services: Services,
 ): void => {
   const tags = ["Datasets"];
@@ -263,44 +258,12 @@ export const registerDatasetRoutes = (
       },
     }),
     async (c) => {
-      const workspaceId = workspaceOf(c, "datasets:read");
-      const { name } = c.req.valid("param");
-      const input = c.req.valid("json");
-      const model = deps.catalog.find(input.model);
-      if (!model || model.family !== "llm") {
-        throw invalid(
-          "render_unsupported_model",
-          `Model '${input.model}' is not a chat model in the catalog; run \`grad models list\` (GET /v1/base-models).`,
-        );
-      }
-
-      const { version } = await services.datasets.resolve(workspaceId, name);
-      const records = await services.datasets.readRecords(version);
-      const examples = records
-        .map((record, index) => ({
-          record,
-          index,
-          messages: recordConversation(record),
-        }))
-        .filter((entry) => entry.messages.length > 0)
-        .slice(0, input.limit)
-        .map(({ record, index, messages }) =>
-          renderMessages(record.id ?? `rec_${index + 1}`, messages, {
-            templateRevision: model.template_revision,
-            train_on: input.train_on,
-            thinking: input.thinking,
-            preserve_thinking: input.preserve_thinking,
-          }),
-        );
-
       return c.json(
-        {
-          dataset: name,
-          model: model.id,
-          template_revision: model.template_revision,
-          token_counts: "estimated" as const,
-          examples,
-        },
+        await services.datasets.render(
+          workspaceOf(c, "datasets:read"),
+          c.req.valid("param").name,
+          c.req.valid("json"),
+        ),
         200,
       );
     },
