@@ -7,6 +7,9 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- An artifact upload whose archive is cut off (`EOFError` or `zlib.error` mid-stream) fails at once
+  with `invalid_artifact` ("upload: the archive is truncated or corrupt"); it used to crash the
+  import worker, retry until `max_attempts` and fail as "abandoned by its worker".
 - A checkpoint eval that finishes while its run is still training no longer deadlocks the run's
   progress writes (alpha.5's event-ordering lock took the run's rows in the opposite order from
   every other run write; Postgres aborted one side with `deadlock detected`, a 500 the worker

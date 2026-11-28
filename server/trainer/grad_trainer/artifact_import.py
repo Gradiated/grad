@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import IO, Any, Callable
 
@@ -134,32 +135,39 @@ def extract_upload(archive: Path, dest: Path) -> None:
         tar = tarfile.open(archive, "r:*")
     except tarfile.TarError as exc:
         raise InvalidArtifact("upload", f"not a tar or tar.gz archive ({exc}); upload a directory or a .tar.gz of it") from exc
+    except (EOFError, zlib.error) as exc:
+        raise InvalidArtifact("upload", f"the archive is truncated or corrupt ({exc}); upload it again") from exc
     names: list[str] = []
     total = 0
-    with tar:
-        for count, member in enumerate(iter(tar.next, None), start=1):
-            if count > MAX_BUNDLE_MEMBERS:
-                raise InvalidArtifact("upload", f"more than {MAX_BUNDLE_MEMBERS} entries")
-            name = member.name[2:] if member.name.startswith("./") else member.name
-            if member.isdir() or name in ("", "."):
-                continue
-            if not member.isfile() or member.issparse():
-                raise InvalidArtifact(name, "links, sparse and special files are not allowed in an upload")
-            if name.startswith("/") or "\\" in name or "\x00" in name or any(p in ("", ".", "..") for p in name.split("/")):
-                raise InvalidArtifact(name, "unsafe path in the upload")
-            total += member.size
-            if total > min(MAX_EXTRACT_BYTES, MAX_UPLOAD_EXTRACT_BYTES):
-                raise InvalidArtifact("upload", f"more than {MAX_UPLOAD_EXTRACT_BYTES} bytes uncompressed")
-            target = dest / name
-            source = tar.extractfile(member)
-            assert source is not None
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with open(target, "xb") as out:
-                    shutil.copyfileobj(source, out, _CHUNK)
-            except (FileExistsError, NotADirectoryError) as exc:
-                raise InvalidArtifact(name, "appears twice in the upload, or as both a file and a directory") from exc
-            names.append(name)
+    try:
+        with tar:
+            for count, member in enumerate(iter(tar.next, None), start=1):
+                if count > MAX_BUNDLE_MEMBERS:
+                    raise InvalidArtifact("upload", f"more than {MAX_BUNDLE_MEMBERS} entries")
+                name = member.name[2:] if member.name.startswith("./") else member.name
+                if member.isdir() or name in ("", "."):
+                    continue
+                if not member.isfile() or member.issparse():
+                    raise InvalidArtifact(name, "links, sparse and special files are not allowed in an upload")
+                if name.startswith("/") or "\\" in name or "\x00" in name or any(p in ("", ".", "..") for p in name.split("/")):
+                    raise InvalidArtifact(name, "unsafe path in the upload")
+                total += member.size
+                if total > min(MAX_EXTRACT_BYTES, MAX_UPLOAD_EXTRACT_BYTES):
+                    raise InvalidArtifact("upload", f"more than {MAX_UPLOAD_EXTRACT_BYTES} bytes uncompressed")
+                target = dest / name
+                source = tar.extractfile(member)
+                assert source is not None
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with open(target, "xb") as out:
+                        shutil.copyfileobj(source, out, _CHUNK)
+                except (FileExistsError, NotADirectoryError) as exc:
+                    raise InvalidArtifact(name, "appears twice in the upload, or as both a file and a directory") from exc
+                names.append(name)
+    except (tarfile.TarError, EOFError, zlib.error) as exc:
+        # Raised mid-stream (tarfile.open only reads the first header): a cut-off upload is the
+        # tenant's 422, not a worker crash that is retried until the attempts run out.
+        raise InvalidArtifact("upload", f"the archive is truncated or corrupt ({exc}); upload it again") from exc
     if not names:
         raise InvalidArtifact("upload", "the archive holds no files")
     tops = {n.split("/", 1)[0] for n in names}

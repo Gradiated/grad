@@ -447,6 +447,20 @@ class HostileUploadTests(TempDirCase):
             artifact_import.extract_upload(archive, self.tmpdir() / "out")
         self.assertIn("bytes uncompressed", str(ctx.exception))
 
+    def test_a_truncated_archive_is_invalid_not_a_worker_crash(self) -> None:
+        # A crash would abandon the attempt: three retries, then "abandoned by its worker"
+        # with no error_code, instead of the tenant's 422 naming the upload.
+        payload = b"".join(b"line %d of the adapter\n" % i for i in range(40_000))
+        data = _tar_bytes({"adapter_config.json": b"{}", "adapter_model.safetensors": payload}, self.tmpdir() / "ok.tar.gz").read_bytes()
+        for cut in (30, len(data) // 2):
+            with self.subTest(cut=cut):
+                archive = self.tmpdir() / "truncated.tar.gz"
+                archive.write_bytes(data[:cut])
+                with self.assertRaises(InvalidArtifact) as ctx:
+                    artifact_import.extract_upload(archive, self.tmpdir() / "out")
+                self.assertIn("truncated or corrupt", str(ctx.exception))
+                self.assertTrue(str(ctx.exception).startswith("upload: "), str(ctx.exception))
+
     def test_a_file_and_a_directory_of_one_name_is_invalid(self) -> None:
         archive = _tar_bytes({"a": b"x", "a/b": b"y"}, self.tmpdir() / "clash.tar.gz")
         with self.assertRaises(InvalidArtifact) as ctx:
