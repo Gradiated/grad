@@ -33,6 +33,7 @@ import {
   errorMessage,
   forbidden,
   invalid,
+  isTransient,
   notFound,
 } from "../../errors.js";
 import { createOnce, type Created } from "../../idempotency.js";
@@ -533,21 +534,23 @@ export const createEvalService = (
       try {
         return await claimJob(record);
       } catch (error) {
-        if (!(error instanceof ApiError)) throw error;
-        // Unbuildable (its dataset was deleted): fail it, claim the next.
-        await store.transaction(async () => {
-          const failed = await store.evals.update(
-            record.id,
-            {
-              ...RELEASE,
-              status: "failed",
-              error: error.detail,
-              finished_at: clock.now().toISOString(),
-            },
-            fenceOf(record, ["running"]),
+        // As for runs and imports: a transient failure (storage, the
+        // database) requeues it, spending the attempt, and answers the claim
+        // with the error so the worker backs off. Unbuildable (its dataset
+        // was deleted): fail it, claim the next.
+        const now = clock.now().toISOString();
+        const fence = fenceOf(record, ["running"]);
+        if (isTransient(error)) {
+          const closed = await requeueAttempt(
+            record,
+            `Eval attempt ${record.attempt} couldn't start (${errorMessage(error)})`,
+            fence,
+            now,
           );
-          if (failed) await onFinished(failed);
-        });
+          if (closed?.status === "queued") throw error;
+          return null;
+        }
+        await failAttempt(record, fence, errorMessage(error));
         return null;
       }
     },

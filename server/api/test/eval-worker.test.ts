@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLocalApiKeyAuth, hashApiKey } from "../src/adapters.js";
 import { createGradApp } from "../src/app.js";
 import { PlanEvalRequestSchema } from "../src/contracts.js";
+import { notFound } from "../src/errors.js";
 import { metrics } from "../src/telemetry/metrics.js";
 import { createWorkerClient } from "../src/worker/client.js";
 import { parseWorkerArgs } from "../src/worker/eval-worker.js";
@@ -256,6 +257,47 @@ describe("eval worker (grad-server worker --kinds eval)", () => {
     await worker.drain();
     await worker.close();
     expect((await rateLimited()) - before).toBe(2);
+  });
+
+  it("a transient error while building a claimed eval requeues it and fails the claim; an unbuildable eval fails", async () => {
+    h = await makeEvalHarness();
+    const { t } = h;
+    await seedDataset(t, "qa", qaRecords(2));
+    const claim = (workerId = "w1") =>
+      t.json<{ job: Record<string, any> | null }>("/v1/trainer-jobs/claim", {
+        body: { worker_id: workerId, kinds: ["eval"] },
+        token: TRAINER_KEY,
+      });
+    const resolve = vi.spyOn(t.services.datasets, "resolve");
+
+    const first = await createEval(t.services.evals, WORKSPACE_A, request({}));
+    resolve.mockRejectedValueOnce(
+      new Error("Connection terminated due to connection timeout"),
+    );
+    // The worker gets the error (and backs off); the eval is queued again
+    // at once instead of waiting out its lease.
+    expect((await claim()).status).toBe(503);
+    expect(await t.services.evals.get(WORKSPACE_A, first.id)).toMatchObject({
+      status: "queued",
+      error:
+        "Eval attempt 1 couldn't start (Connection terminated due to connection timeout); requeued.",
+    });
+    const again = await claim();
+    expect(again.body.job).toMatchObject({ id: first.id, attempt: 2 });
+
+    // An error about the eval itself fails it, and the claim moves on.
+    const gone = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      request({ name: "gone" }),
+    );
+    resolve.mockRejectedValueOnce(notFound("dataset", "qa"));
+    expect((await claim("w2")).body.job).toBeNull();
+    expect(await t.services.evals.get(WORKSPACE_A, gone.id)).toMatchObject({
+      status: "failed",
+      error: "dataset 'qa' was not found.",
+    });
+    resolve.mockRestore();
   });
 
   it("guards the worker endpoints", async () => {
