@@ -310,7 +310,7 @@ class RecipeBundleTests(TorchCase):
         for rec in records:
             messages = prompt_messages(rec)
             ids = task.encode_prompt(messages, prompt_key(rec), task.max_len)
-            self.assertEqual(ns["prompt_ids"](router.tokenizer, router.config, messages), ids)
+            self.assertEqual(ns["prompt_ids"](router.tokenizer, router.config, messages), ids.tolist())
             logits = task._logits([{"ids": ids}])[0]
             expected = {m: sigmoid(z / temperature) for m, z in zip(task.candidates, logits)}
             probs = router.probabilities(messages)

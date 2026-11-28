@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 
 from ..backends import torch_common as tc
@@ -24,6 +25,11 @@ from ..runner_types import BaseArtifact
 from ..trainer import EvalResult
 from .base import RecipeRunner
 from .data import record_id, record_messages
+
+
+# Chats per tokenizer call: large enough to keep every core busy, small enough that the
+# batch's Python token lists stay a few MB.
+ENCODE_BATCH = 256
 
 
 class SFTTask(TorchTask):
@@ -60,20 +66,23 @@ class SFTTask(TorchTask):
         self.artifact_format = "peft_lora"
         self.pad_id = int(self.tokenizer.pad_token_id)
 
-    def _encode(self, records: list[dict[str, Any]]) -> list[tuple[tuple[int, ...], tuple[bool, ...]]]:
-        out = []
+    def _encode(self, records: list[dict[str, Any]]) -> list[tuple[np.ndarray, np.ndarray]]:
+        out: list[tuple[np.ndarray, np.ndarray]] = []
+        rendered = []
         for index, rec in enumerate(records):
             messages = record_messages(rec)
             if not messages:
                 self.stats["skipped_no_messages"] += 1
-                continue
-            rendered = self.render(messages, record_id(rec, index), tools=rec.get("tools"))
-            tok = self.tokenize(rendered, self.max_len)
-            self.stats["truncated"] += int(tok.truncated)
-            if sum(tok.trained[1:]) == 0:
-                self.stats["skipped_no_trained_tokens"] += 1
-                continue
-            out.append((tok.input_ids, tok.trained))
+            else:
+                rendered.append(self.render(messages, record_id(rec, index), tools=rec.get("tools")))
+            if len(rendered) == ENCODE_BATCH or (rendered and index == len(records) - 1):
+                for tok in self.tokenize_batch(rendered, self.max_len):
+                    self.stats["truncated"] += int(tok.truncated)
+                    if not tok.trained[1:].any():
+                        self.stats["skipped_no_trained_tokens"] += 1
+                        continue
+                    out.append((tok.input_ids, tok.trained))
+                rendered = []
         return out
 
     def num_train_items(self) -> int:
@@ -82,10 +91,10 @@ class SFTTask(TorchTask):
     def item_tokens(self, index: int) -> int:
         return len(self.train_examples[index][0])
 
-    def _losses(self, examples: list[tuple[tuple[int, ...], tuple[bool, ...]]], *, grad: bool) -> tuple[float, float, int]:
+    def _losses(self, examples: list[tuple[np.ndarray, np.ndarray]], *, grad: bool) -> tuple[float, float, int]:
         """Batch loss under the configured reduction (backward when ``grad``)."""
         lengths = [len(e[0]) for e in examples]
-        counts = torch.tensor([sum(e[1][1:]) for e in examples], dtype=torch.float32, device=self.device)
+        counts = torch.tensor([int(e[1][1:].sum()) for e in examples], dtype=torch.float32, device=self.device)
         total_trained = float(counts.sum())
         n = len(examples)
         loss_sum = 0.0
@@ -153,7 +162,7 @@ class SFTTask(TorchTask):
     def final_report(self) -> dict[str, Any]:
         result = self.evaluate()
         total = sum(len(e[0]) for e in self.train_examples)
-        trained = sum(sum(e[1][1:]) for e in self.train_examples)
+        trained = sum(int(e[1][1:].sum()) for e in self.train_examples)
         report: dict[str, Any] = {
             "eval_loss": None if result is None else result.score,
             "eval_token_accuracy": None if result is None else result.metrics["eval_token_accuracy"],

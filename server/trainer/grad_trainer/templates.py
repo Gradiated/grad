@@ -16,6 +16,8 @@ the text into segments marked trained / not trained:
 
 Tokenization runs once over the whole rendered string (with offsets), so token boundaries are
 exactly those of the full prompt; a token is trained when it starts inside a trained segment.
+A tokenized example is two numpy arrays (int32 ids, bool mask): 5 bytes a token, where tuples
+of Python ints took about 48 (a 1M-example SFT dataset is held in memory for the whole run).
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any, Sequence
+
+import numpy as np
 
 from .errors import RecipeConfigError, RecipeDataError
 
@@ -53,13 +57,13 @@ class RenderedChat:
 
 @dataclass(frozen=True)
 class TokenizedExample:
-    input_ids: tuple[int, ...]
-    trained: tuple[bool, ...]
+    input_ids: np.ndarray  # int32 [T]
+    trained: np.ndarray  # bool [T]
     truncated: bool
 
     @property
     def num_trained(self) -> int:
-        return sum(self.trained)
+        return int(np.count_nonzero(self.trained))
 
 
 def message_text(content: Any) -> str:
@@ -237,26 +241,47 @@ def tokenize_rendered(
     max_len: int | None = None,
 ) -> TokenizedExample:
     """Tokenize the full rendered text once and map trained segments onto tokens."""
-    text = rendered.text
-    enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
-    ids: list[int] = list(enc["input_ids"])
-    offsets: list[tuple[int, int]] = [tuple(o) for o in enc["offset_mapping"]]
+    return tokenize_rendered_batch([rendered], tokenizer, max_len=max_len)[0]
 
-    spans: list[tuple[int, int]] = []
+
+def tokenize_rendered_batch(
+    rendered: Sequence[RenderedChat],
+    tokenizer: Any,
+    *,
+    max_len: int | None = None,
+) -> list[TokenizedExample]:
+    """``tokenize_rendered`` for many chats in one tokenizer call (the Rust tokenizer encodes a
+    batch on every core; one text at a time it uses one)."""
+    if not rendered:
+        return []
+    enc = tokenizer([r.text for r in rendered], add_special_tokens=False, return_offsets_mapping=True)
+    return [
+        _tokenized(chat, ids, offsets, max_len)
+        for chat, ids, offsets in zip(rendered, enc["input_ids"], enc["offset_mapping"])
+    ]
+
+
+def _tokenized(rendered: RenderedChat, token_ids: Sequence[int], offsets: Sequence[Any], max_len: int | None) -> TokenizedExample:
+    ids = np.asarray(token_ids, dtype=np.int32)
+    starts = np.fromiter((o[0] for o in offsets), dtype=np.int64, count=len(ids))
+
+    span_starts: list[int] = []
+    span_ends: list[int] = []
     pos = 0
     for seg in rendered.segments:
         if seg.trained:
-            spans.append((pos, pos + len(seg.text)))
+            span_starts.append(pos)
+            span_ends.append(pos + len(seg.text))
         pos += len(seg.text)
 
-    trained: list[bool] = []
-    span_idx = 0
-    for start, _end in offsets:
-        while span_idx < len(spans) and spans[span_idx][1] <= start:
-            span_idx += 1
-        trained.append(span_idx < len(spans) and spans[span_idx][0] <= start < spans[span_idx][1])
+    # Segments are disjoint and in order: a token is trained when the last span starting at or
+    # before it has not ended yet.
+    trained = np.zeros(len(ids), dtype=bool)
+    if span_starts:
+        last = np.searchsorted(np.asarray(span_starts), starts, side="right") - 1
+        trained = (last >= 0) & (starts < np.asarray(span_ends)[np.maximum(last, 0)])
 
     truncated = max_len is not None and len(ids) > max_len
     if truncated:
-        ids, trained = ids[:max_len], trained[:max_len]
-    return TokenizedExample(input_ids=tuple(ids), trained=tuple(trained), truncated=truncated)
+        ids, trained = ids[:max_len].copy(), trained[:max_len].copy()
+    return TokenizedExample(input_ids=ids, trained=trained, truncated=truncated)

@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Sequence
 
+import numpy as np
 import torch
 
 from ..config import TrainSpec
 from ..errors import RecipeConfigError, RecipeDataError
 from ..models import ResolvedModel, describe_model, resolve_model
 from ..runner_types import BaseArtifact
-from ..templates import RenderedChat, TokenizedExample, render_chat, tokenize_rendered
+from ..templates import RenderedChat, TokenizedExample, render_chat, tokenize_rendered, tokenize_rendered_batch
 from . import torch_common as tc
 
 
@@ -82,14 +83,17 @@ class TorchTask:
     def tokenize(self, rendered: RenderedChat, max_len: int | None) -> TokenizedExample:
         return tokenize_rendered(rendered, self.tokenizer, max_len=max_len)
 
-    def encode_prompt(self, messages: Sequence[dict[str, Any]], record_id: str, max_len: int) -> list[int]:
-        """Prompt tokens ending with the assistant generation header (for classifiers)."""
+    def tokenize_batch(self, rendered: Sequence[RenderedChat], max_len: int | None) -> list[TokenizedExample]:
+        return tokenize_rendered_batch(rendered, self.tokenizer, max_len=max_len)
+
+    def encode_prompt(self, messages: Sequence[dict[str, Any]], record_id: str, max_len: int) -> np.ndarray:
+        """Prompt tokens (int32) ending with the assistant generation header (for classifiers)."""
         if not messages:
             raise RecipeDataError(f"Record '{record_id}' has no prompt messages.")
         rendered = self.render(messages, record_id, add_generation_prompt=True, train_on="last")
-        ids = list(self.tokenize(rendered, None).input_ids)
+        ids = self.tokenize(rendered, None).input_ids
         # Keep the end of long prompts: the generation header carries the pooled state.
-        return ids[-max_len:]
+        return ids[-max_len:].copy() if len(ids) > max_len else ids
 
     # -- loop protocol ----------------------------------------------------------------------
     def accumulate(self, indices: list[int]) -> dict[str, float]:  # pragma: no cover - abstract

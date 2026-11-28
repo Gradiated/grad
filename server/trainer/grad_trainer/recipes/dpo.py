@@ -26,6 +26,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -115,12 +116,12 @@ class DPOTask(TorchTask):
             self._score_reference("train", self.train_pairs)
             self._score_reference("eval", self.eval_pairs)
 
-    def _encode_side(self, prompt: list[dict[str, Any]], completion: list[dict[str, Any]], rid: str) -> tuple[tuple[int, ...], tuple[bool, ...]] | None:
+    def _encode_side(self, prompt: list[dict[str, Any]], completion: list[dict[str, Any]], rid: str) -> tuple[np.ndarray, np.ndarray] | None:
         messages = [{**m, "train": False} if m.get("role") == "assistant" else dict(m) for m in prompt]
         messages += [{**m, "train": True} for m in completion]
         tok = self.tokenize(self.render(messages, rid), self.max_len)
         self.truncated += int(tok.truncated)
-        if sum(tok.trained[1:]) == 0:
+        if not tok.trained[1:].any():
             return None
         return tok.input_ids, tok.trained
 
@@ -140,7 +141,7 @@ class DPOTask(TorchTask):
         c, r = self.train_pairs[index]
         return len(c[0]) + len(r[0])
 
-    def _sequence_logps(self, sequences: list[tuple[tuple[int, ...], tuple[bool, ...]]]) -> torch.Tensor:
+    def _sequence_logps(self, sequences: list[tuple[np.ndarray, np.ndarray]]) -> torch.Tensor:
         ids, mask = tc.padded_batch([s[0] for s in sequences], self.pad_id, self.device)
         trained = torch.zeros_like(ids, dtype=torch.bool)
         for i, (_, t) in enumerate(sequences):

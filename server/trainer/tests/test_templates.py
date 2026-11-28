@@ -7,7 +7,7 @@ import unittest
 from helpers import TorchCase
 
 from grad_trainer.errors import RecipeConfigError, RecipeDataError
-from grad_trainer.templates import message_text, render_chat, tokenize_rendered
+from grad_trainer.templates import message_text, render_chat, tokenize_rendered, tokenize_rendered_batch
 
 MULTI_TURN = [
     {"role": "system", "content": "Be brief."},
@@ -150,6 +150,15 @@ class TemplateParityTests(TorchCase):
         self.assertTrue(short.truncated)
         self.assertEqual(len(short.input_ids), 5)
         self.assertEqual(short.num_trained, 0)
+        # Compact storage: int32 ids and a bool mask (5 bytes a token).
+        self.assertEqual((tok.input_ids.dtype.name, tok.trained.dtype.name), ("int32", "bool"))
+
+    def test_a_batch_tokenizes_like_one_chat_at_a_time(self) -> None:
+        chats = [render_chat(MULTI_TURN, train_on=t) for t in ("all_assistant", "last")]
+        chats.append(render_chat([{"role": "user", "content": "q"}], add_generation_prompt=True))
+        for one, batched in zip([tokenize_rendered(c, self.tok, max_len=40) for c in chats], tokenize_rendered_batch(chats, self.tok, max_len=40)):
+            self.assertEqual((one.input_ids.tolist(), one.trained.tolist(), one.truncated), (batched.input_ids.tolist(), batched.trained.tolist(), batched.truncated))
+        self.assertEqual(tokenize_rendered_batch([], self.tok), [])
 
 
 if __name__ == "__main__":
