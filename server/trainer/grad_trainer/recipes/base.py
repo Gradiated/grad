@@ -126,6 +126,10 @@ class RecipeRunner:
         ).run()
 
         # Report on the selected weights before export: a merged export consumes the adapter.
+        # Never as "training" (a run resumed at its last step takes no step first): the
+        # worker's hung-step watchdog times that phase.
+        if callbacks is not None and callbacks.on_phase is not None:
+            callbacks.on_phase("evaluating", loop.step)
         report = task.final_report()
         artifact_dir = workdir / "artifact"
         shutil.rmtree(artifact_dir, ignore_errors=True)

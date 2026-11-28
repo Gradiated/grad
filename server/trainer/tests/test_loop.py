@@ -338,6 +338,19 @@ class ReferenceBackendTests(TempDirCase):
         self.assertEqual(second.manifest["tokens_total"], full.manifest["tokens_total"])
         self.assertEqual(second.eval_report, {**full.eval_report})
 
+    def test_the_final_report_and_export_never_run_as_training(self) -> None:
+        # The worker's hung-step watchdog times the training phase. A run resumed at its last
+        # step (its upload failed) ran its final eval and export as "training", with no step to
+        # reset the clock: a long final eval was taken for a hung step and the run restarted.
+        rec = Recorder(self.tmpdir())
+        run_recipe("sft", CONFIG, RECORDS, self.tmpdir(), recorder=rec)
+        step, _, ckpt, _ = rec.checkpoints[-1]
+        resumed = Recorder(self.tmpdir())
+        out = run_recipe("sft", CONFIG, RECORDS, self.tmpdir(), recorder=resumed, resume=ResumeState(step, ckpt))
+        self.assertEqual((out.status, resumed.metrics), ("completed", []))
+        for phases in (rec.phases, resumed.phases):
+            self.assertEqual(phases[-1], ("evaluating", step))
+
     def test_runner_registry(self) -> None:
         self.assertEqual(backend_name(), "reference")
         with self.assertRaisesRegex(ValueError, "Unsupported recipe kind 'grpo'"):
