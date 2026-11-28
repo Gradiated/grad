@@ -431,7 +431,7 @@ export const metrics = {
   ),
   sseStreams: gauge(
     "grad_sse_streams",
-    "Open SSE event streams (run events and metrics) on this replica.",
+    "Open SSE run event streams on this replica.",
   ),
   sseHubFetches: counter(
     "grad_sse_hub_fetches_total",

@@ -248,7 +248,7 @@ describe("SSE event hub (one reader per replica)", () => {
   it("loses and repeats nothing across reconnects with Last-Event-ID", async () => {
     const { run, job, worker } = (await startRuns(1))[0]!;
     await worker.progress(job, 1, 10);
-    const first = await openSse(t, `/v1/runs/${run}/metrics`);
+    const first = await openSse(t, `/v1/runs/${run}/events`);
     await until("step 1", () => metricSteps(first.frames).length === 1);
     await worker.progress(job, 2, 20);
     await until("step 2", () => metricSteps(first.frames).length === 2);
@@ -258,13 +258,13 @@ describe("SSE event hub (one reader per replica)", () => {
     await worker.progress(job, 3, 30);
     await worker.progress(job, 4, 40);
     const lastId = first.frames.at(-1)!.id!;
-    const second = await openSse(t, `/v1/runs/${run}/metrics`, lastId);
+    const second = await openSse(t, `/v1/runs/${run}/events`, lastId);
     await until("steps 3-4", () => metricSteps(second.frames).length === 2);
     await second.close();
     await worker.progress(job, 5, 50);
     const third = await openSse(
       t,
-      `/v1/runs/${run}/metrics`,
+      `/v1/runs/${run}/events`,
       second.frames.at(-1)!.id!,
     );
     await worker.complete(
@@ -278,7 +278,7 @@ describe("SSE event hub (one reader per replica)", () => {
     expect(metricSteps(all)).toEqual([1, 2, 3, 4, 5]);
     const ids = all.flatMap((f) => (f.id === null ? [] : [f.id]));
     expect(new Set(ids).size).toBe(ids.length);
-    expect(third.frames.at(-1)!.event).toBe("status");
+    expect(third.frames.at(-1)!.event).toBe("completed");
     await until(
       "hub cleanup",
       () => t.services.events.size().subscriptions === 0,

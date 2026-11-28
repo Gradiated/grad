@@ -54,7 +54,7 @@ grad-server serves these at `/metrics` in the Prometheus text format, plus the d
 | `grad_sse_hub_fetches_total` | counter | `reason` | Event hub fetches (one state and one events query per 100 jobs), by reason: notify (a LISTEN notification or a new stream) or poll (the safety poll). |
 | `grad_sse_hub_listening` | gauge |  | 1 while the event hub's LISTEN connection is up (0: streams rely on the safety poll). |
 | `grad_sse_hub_notifications_total` | counter |  | grad_job_events notifications the event hub received. |
-| `grad_sse_streams` | gauge |  | Open SSE event streams (run events and metrics) on this replica. |
+| `grad_sse_streams` | gauge |  | Open SSE run event streams on this replica. |
 | `grad_storage_operation_duration_seconds` | histogram | `op` | Object storage operation duration, by operation. |
 | `grad_storage_operation_errors_total` | counter | `op` | Object storage operations that failed, by operation. |
 | `grad_token_review_duration_seconds` | histogram |  | Kubernetes TokenReview call duration. |

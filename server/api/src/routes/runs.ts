@@ -16,11 +16,9 @@ import {
   RunSchema,
 } from "../contracts.js";
 import type { AppDependencies } from "../deps.js";
-import type { CompletedEvent } from "../contracts.js";
-import type { JobEvent } from "../store/types.js";
 import { idempotencyOf, replayAware } from "../idempotency.js";
 import type { Services } from "../services/index.js";
-import { toMetricPoint, toRunEvent } from "../services/run-events.js";
+import { toRunEvent } from "../services/run-events.js";
 import { createSseLimits } from "./sse-limits.js";
 import {
   defaultErrors,
@@ -54,8 +52,8 @@ export const registerRunRoutes = (
   /**
    * Streams a run's events from the replica's event hub: its history after
    * `afterSeq` first, then live events. Once the hub reports the run settled,
-   * `close` writes the closing event and the stream ends (it keeps following
-   * a run resumed meanwhile). An idle stream gets a comment ping every
+   * the closing `completed` event ends the stream (it keeps following a run
+   * resumed meanwhile). An idle stream gets a comment ping every
    * SSE_PING_MS; the hub closing (SIGTERM) ends it, and the client resumes on
    * another replica with Last-Event-ID.
    */
@@ -64,10 +62,6 @@ export const registerRunRoutes = (
     workspaceId: string,
     runId: string,
     afterSeq: number,
-    on: {
-      write: (row: JobEvent) => Promise<void>;
-      close: (event: CompletedEvent) => Promise<void>;
-    },
   ): Promise<void> => {
     const sub = services.events.subscribe(runId, afterSeq);
     stream.onAbort(() => sub.close());
@@ -78,7 +72,13 @@ export const registerRunRoutes = (
         if (!batch) break;
         for (const row of batch.events) {
           lastSeq = row.seq;
-          await on.write(row);
+          const event = toRunEvent(runId, row);
+          if (!event) continue;
+          await stream.writeSSE({
+            event: event.type,
+            id: String(event.seq),
+            data: JSON.stringify(event),
+          });
         }
         if (batch.settled) {
           const end = await services.runs.streamEnd(
@@ -86,7 +86,12 @@ export const registerRunRoutes = (
             runId,
             lastSeq,
           );
-          if (end.event) await on.close(end.event);
+          if (end.event) {
+            await stream.writeSSE({
+              event: end.event.type,
+              data: JSON.stringify(end.event),
+            });
+          }
           if (end.done) break;
         } else if (batch.events.length === 0) {
           await stream.write(": ping\n\n");
@@ -209,9 +214,9 @@ export const registerRunRoutes = (
       method: "get",
       path: "/v1/runs/{id}/metrics",
       operationId: "listRunMetrics",
-      summary: "Training step metrics as JSON pages, or a live SSE stream",
+      summary: "Training step metrics as JSON pages",
       description:
-        "With `Accept: text/event-stream` the response is a Server-Sent Events stream of `metric` events (event id = `seq`) followed by one `status` event carrying the final Run; reconnect with `Last-Event-ID` to resume. Otherwise returns a JSON page: `next_cursor` pages through the points written so far (null on the last page, like every list), and `tail_cursor` polls for points written later.",
+        "`next_cursor` pages through the points written so far (null on the last page, like every list), and `tail_cursor` polls for points written later. To follow a run live, stream its events (`GET /v1/runs/{id}/events`, `metric` events).",
       tags,
       request: {
         params: IdParamSchema,
@@ -222,51 +227,19 @@ export const registerRunRoutes = (
         }),
       },
       responses: {
-        200: {
-          description: "Metric points.",
-          content: {
-            "application/json": { schema: MetricsPageSchema },
-            "text/event-stream": { schema: z.string() },
-          },
-        },
+        200: jsonResponse(MetricsPageSchema, "Metric points."),
         ...defaultErrors,
       },
     }),
-    async (c) => {
-      const workspaceId = workspaceOf(c, "runs:read");
-      const { id } = c.req.valid("param");
-      const query = c.req.valid("query");
-
-      if (!(c.req.header("accept") ?? "").includes("text/event-stream")) {
-        return c.json(await services.runs.metrics(workspaceId, id, query), 200);
-      }
-
-      await services.runs.get(workspaceId, id);
-      // nginx (ingress-nginx) buffers responses by default, holding events back.
-      c.header("X-Accel-Buffering", "no");
-
-      return streamSSE(
-        c,
-        reserveStream(c, (stream) =>
-          follow(stream, workspaceId, id, lastEventIdOf(c), {
-            write: async (row) => {
-              if (row.type !== "metric") return;
-              const point = toMetricPoint(row);
-              await stream.writeSSE({
-                event: "metric",
-                id: String(point.seq),
-                data: JSON.stringify(point),
-              });
-            },
-            close: (done) =>
-              stream.writeSSE({
-                event: "status",
-                data: JSON.stringify(done.run),
-              }),
-          }),
+    async (c) =>
+      c.json(
+        await services.runs.metrics(
+          workspaceOf(c, "runs:read"),
+          c.req.valid("param").id,
+          c.req.valid("query"),
         ),
-      ) as never;
-    },
+        200,
+      ),
   );
 
   app.openapi(
@@ -313,19 +286,7 @@ export const registerRunRoutes = (
       return streamSSE(
         c,
         reserveStream(c, (stream) =>
-          follow(stream, workspaceId, id, lastEventIdOf(c), {
-            write: async (row) => {
-              const event = toRunEvent(id, row);
-              if (!event) return;
-              await stream.writeSSE({
-                event: event.type,
-                id: String(event.seq),
-                data: JSON.stringify(event),
-              });
-            },
-            close: (done) =>
-              stream.writeSSE({ event: done.type, data: JSON.stringify(done) }),
-          }),
+          follow(stream, workspaceId, id, lastEventIdOf(c)),
         ),
       ) as never;
     },

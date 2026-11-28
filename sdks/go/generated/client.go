@@ -782,7 +782,7 @@ func (c *Client) ListRunEventsStream(ctx context.Context, id string, params *Lis
 
 // ListRunMetrics calls GET /v1/runs/{id}/metrics.
 //
-// Training step metrics as JSON pages, or a live SSE stream.
+// Training step metrics as JSON pages.
 func (c *Client) ListRunMetrics(ctx context.Context, id string, params *ListRunMetricsParams, opts ...RequestOption) (*MetricsPage, error) {
 	p0, err := EscapePathParam("id", id)
 	if err != nil {
@@ -806,28 +806,6 @@ func (c *Client) ListRunMetrics(ctx context.Context, id string, params *ListRunM
 		return nil, err
 	}
 	return &out, nil
-}
-
-// ListRunMetricsStream opens GET /v1/runs/{id}/metrics as a Server-Sent Events stream (resume with WithLastEventID).
-func (c *Client) ListRunMetricsStream(ctx context.Context, id string, params *ListRunMetricsParams, opts ...RequestOption) (*SSEStream, error) {
-	p0, err := EscapePathParam("id", id)
-	if err != nil {
-		return nil, err
-	}
-	q := url.Values{}
-	if params != nil {
-		if params.Cursor != nil {
-			q.Add("cursor", FormatScalar(*params.Cursor))
-		}
-		if params.AfterStep != nil {
-			q.Add("after_step", FormatScalar(*params.AfterStep))
-		}
-		if params.Limit != nil {
-			q.Add("limit", FormatScalar(*params.Limit))
-		}
-	}
-	spec := RequestSpec{Method: "GET", Path: "/v1/runs/" + p0 + "/metrics", Query: q}
-	return c.T.DoSSE(ctx, spec, opts...)
 }
 
 // ListRuns calls GET /v1/runs.

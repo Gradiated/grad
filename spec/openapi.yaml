@@ -7244,11 +7244,10 @@ paths:
   /v1/runs/{id}/metrics:
     get:
       operationId: listRunMetrics
-      summary: Training step metrics as JSON pages, or a live SSE stream
-      description: "With `Accept: text/event-stream` the response is a Server-Sent Events stream of `metric` events (event id
-        = `seq`) followed by one `status` event carrying the final Run; reconnect with `Last-Event-ID` to resume.
-        Otherwise returns a JSON page: `next_cursor` pages through the points written so far (null on the last page,
-        like every list), and `tail_cursor` polls for points written later."
+      summary: Training step metrics as JSON pages
+      description: "`next_cursor` pages through the points written so far (null on the last page, like every list), and
+        `tail_cursor` polls for points written later. To follow a run live, stream its events (`GET
+        /v1/runs/{id}/events`, `metric` events)."
       tags: *a2
       parameters:
         - schema:
@@ -7290,9 +7289,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MetricsPage"
-            text/event-stream:
-              schema:
-                type: string
         "400":
           description: Malformed request.
           content:

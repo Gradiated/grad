@@ -80,9 +80,9 @@ test("every public operation in spec/openapi.yaml is generated for TypeScript an
   assert.ok(go.includes("func (c *Client) CreateRun(ctx context.Context, body *PlanRunRequest, opts ...RequestOption) (*Run, error)"));
   // Streams: binary downloads and SSE are never buffered as JSON.
   assert.ok(ts.includes("downloadArtifact(id: string, options?: StreamOptions): Promise<RawResponse>"));
-  assert.ok(ts.includes("listRunMetricsStream("));
+  assert.ok(ts.includes("listRunEventsStream("));
   assert.ok(go.includes("func (c *Client) DownloadArtifact(ctx context.Context, id string, opts ...RequestOption) (*StreamResponse, error)"));
-  assert.ok(go.includes("func (c *Client) ListRunMetricsStream("));
+  assert.ok(go.includes("func (c *Client) ListRunEventsStream("));
 });
 
 test("every public operation is generated for Python, typed; x-internal ops are left out", async () => {

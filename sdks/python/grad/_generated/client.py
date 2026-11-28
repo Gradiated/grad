@@ -1975,13 +1975,8 @@ class GeneratedApiClient:
         return self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/events", query={"cursor": cursor, "limit": limit}, accept="text/event-stream", headers=headers, timeout=timeout)
 
     def list_run_metrics(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None) -> MetricsPage:
-        """Training step metrics as JSON pages, or a live SSE stream."""
+        """Training step metrics as JSON pages."""
         return cast("MetricsPage", self._t.request("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, timeout=timeout))
-
-    def list_run_metrics_stream(self, id: str, *, cursor: str | None = None, after_step: int | None = None, limit: int | None = None, timeout: float | None = None, last_event_id: str | None = None) -> Response:
-        """Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events stream, resumed after `last_event_id`; read or close the response)."""
-        headers = {"Last-Event-ID": last_event_id} if last_event_id is not None else None
-        return self._t.stream("GET", f"/v1/runs/{quote_path_param(id, 'id')}/metrics", query={"cursor": cursor, "after_step": after_step, "limit": limit}, accept="text/event-stream", headers=headers, timeout=timeout)
 
     def list_runs(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, q: str | None = None, timeout: float | None = None) -> ListRunsResponse:
         """List training runs (newest first)."""

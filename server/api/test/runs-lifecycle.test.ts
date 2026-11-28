@@ -999,7 +999,7 @@ describe("run lifecycle and worker protocol", () => {
     expect(done.status).toBe(200);
   });
 
-  it("streams metrics over SSE with Last-Event-ID resume and paginates JSON metrics", async () => {
+  it("pages metrics as JSON, tails them with tail_cursor and filters by step", async () => {
     const run = await createSftRun(t);
     const job = await worker.claim();
     for (let step = 1; step <= 3; step += 1)
@@ -1040,39 +1040,7 @@ describe("run lifecycle and worker protocol", () => {
     const badCursor = await t.json(`/v1/runs/${run.id}/metrics?cursor=nope`);
     expect(badCursor.status).toBe(422);
 
-    const firstSeq = page1.body.data[0]!.seq;
-    const finish = (async () => {
-      await new Promise((r) => setTimeout(r, 30));
-      await worker.progress(job!, 4, 40);
-      await worker.complete(
-        job!,
-        { status: "completed", tokens_processed: 40 },
-        "sse-art",
-      );
-    })();
-    const res = await t.request(`/v1/runs/${run.id}/metrics`, {
-      headers: {
-        Accept: "text/event-stream",
-        "Last-Event-ID": String(firstSeq),
-      },
-    });
-    expect(res.headers.get("content-type")).toContain("text/event-stream");
-    expect(res.headers.get("x-accel-buffering")).toBe("no");
-    const text = await res.text();
-    await finish;
-    const events = text.split("\n\n").filter((e) => e.includes("event:"));
-    const metricSteps = events
-      .filter((e) => e.includes("event: metric"))
-      .map(
-        (e) =>
-          JSON.parse(
-            e
-              .split("\n")
-              .find((l) => l.startsWith("data: "))!
-              .slice(6),
-          ).step,
-      );
-    expect(metricSteps).toEqual([2, 3, 4]);
+    await worker.progress(job!, 4, 40);
     const tailed = await t.json<MetricsPage>(
       `/v1/runs/${run.id}/metrics?cursor=${page3.body.tail_cursor}`,
     );
@@ -1082,13 +1050,13 @@ describe("run lifecycle and worker protocol", () => {
     );
     expect(clamped.status).toBe(200);
     expect(clamped.body.data).toHaveLength(4);
-    expect(events.at(-1)).toContain("event: status");
-    expect(events.at(-1)).toContain('"status":"completed"');
 
-    const missing = await t.request("/v1/runs/run_nope/metrics", {
+    // Metrics are JSON pages only: live points come from /events.
+    const asked = await t.request(`/v1/runs/${run.id}/metrics`, {
       headers: { Accept: "text/event-stream" },
     });
-    expect(missing.status).toBe(404);
+    expect(asked.headers.get("content-type")).toContain("application/json");
+    expect((await t.json("/v1/runs/run_nope/metrics")).status).toBe(404);
   });
 
   it("only claims recipes the worker supports and respects job kinds", async () => {

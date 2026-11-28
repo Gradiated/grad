@@ -766,20 +766,13 @@ export class ApiClient {
   }
 
   /**
-   * Training step metrics as JSON pages, or a live SSE stream
+   * Training step metrics as JSON pages
    *
    * `GET /v1/runs/{id}/metrics`
    */
   async listRunMetrics(id: string, params?: ListRunMetricsParams, options?: RequestOptions): Promise<MetricsPage> {
     const data = await this.transport.json({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/metrics`, query: [["cursor", params?.cursor], ["after_step", params?.afterStep], ["limit", params?.limit]] }, options);
     return convertKeys(CODEC, "MetricsPage", data, "decode") as MetricsPage;
-  }
-
-  /**
-   * Training step metrics as JSON pages, or a live SSE stream (Server-Sent Events; one connection, resume with `lastEventId`)
-   */
-  listRunMetricsStream(id: string, params?: ListRunMetricsParams, options?: SSEOptions): AsyncGenerator<ServerSentEvent, void, undefined> {
-    return this.transport.sse({ method: "GET", path: `/v1/runs/${encodePathParam(id, "id")}/metrics`, query: [["cursor", params?.cursor], ["after_step", params?.afterStep], ["limit", params?.limit]] }, options);
   }
 
   /**
