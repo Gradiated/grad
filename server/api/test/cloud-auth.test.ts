@@ -109,7 +109,6 @@ describe("Cloud auth: the auth_principals_v1 view, console JWTs, worker keys", (
       kind: "workspace",
       workspaceId: WS,
       scopes: ["admin"],
-      isPlatformAdmin: false,
       actor: expect.stringMatching(/^key:[0-9a-f-]{36}$/),
     });
     expect(await a.authenticate("grad_member_1")).toMatchObject({

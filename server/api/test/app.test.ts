@@ -24,7 +24,6 @@ const principal = (scopes: AuthPrincipal["scopes"]): AuthPrincipal => ({
   workspaceId: "ws",
   actor: "t",
   scopes,
-  isPlatformAdmin: false,
   workerWorkspaceId: null,
 });
 
@@ -68,7 +67,6 @@ describe("scopes", () => {
     expect(await auth.authenticate("  ")).toBeNull();
     expect(await auth.authenticate("nope")).toBeNull();
     expect(await auth.authenticate("a")).toMatchObject({
-      isPlatformAdmin: true,
       scopes: ["admin"],
       workspaceId: "default",
     });
@@ -79,7 +77,6 @@ describe("scopes", () => {
     });
     expect(await auth.authenticate("k")).toMatchObject({
       workspaceId: "ws_k",
-      isPlatformAdmin: false,
     });
     expect(await createLocalNoneAuth().authenticate(undefined)).toMatchObject({
       kind: "dev",
@@ -492,7 +489,6 @@ describe("grad-server HTTP API", () => {
               workspaceId: "ws_b",
               actor: "w",
               scopes: ["trainer:worker"],
-              isPlatformAdmin: false,
               workerWorkspaceId: "ws_b",
             }
           : token === ADMIN_KEY
@@ -501,7 +497,6 @@ describe("grad-server HTTP API", () => {
                 workspaceId: "ws_a",
                 actor: "a",
                 scopes: ["admin"],
-                isPlatformAdmin: true,
                 workerWorkspaceId: null,
               }
             : token === TRAINER_KEY
@@ -510,7 +505,6 @@ describe("grad-server HTTP API", () => {
                   workspaceId: "_platform",
                   actor: "p",
                   scopes: ["trainer:worker"],
-                  isPlatformAdmin: false,
                   workerWorkspaceId: null,
                 }
               : null,
@@ -539,7 +533,6 @@ describe("grad-server HTTP API", () => {
       workspaceId: workerWorkspaceId ?? "_platform",
       actor,
       scopes: ["trainer:worker"],
-      isPlatformAdmin: false,
       workerWorkspaceId,
     });
     const auth: AuthAdapter = {
@@ -556,7 +549,6 @@ describe("grad-server HTTP API", () => {
                     workspaceId: "ws_a",
                     actor: "a",
                     scopes: ["admin"],
-                    isPlatformAdmin: true,
                     workerWorkspaceId: null,
                   }
                 : null,

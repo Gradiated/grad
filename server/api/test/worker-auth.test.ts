@@ -627,7 +627,6 @@ describe("the authenticator chain", () => {
       workspaceId: "w",
       actor: "key:x",
       scopes: ["admin"],
-      isPlatformAdmin: false,
       workerWorkspaceId: null,
     };
     await expectApiError(

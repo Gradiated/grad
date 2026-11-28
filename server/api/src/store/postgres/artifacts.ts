@@ -281,7 +281,6 @@ export const createArtifactRepository = (
       )
     ).length > 0,
   lockBlob: (key, mode) => lockBlob(db, key, mode),
-  pins: (workspaceId, artifactId) => pinsOf(db, workspaceId, artifactId),
   deleteRelease: (workspaceId, id) =>
     db.atomic(async () => {
       // The row lock serializes with a concurrent pin (its FK check takes a

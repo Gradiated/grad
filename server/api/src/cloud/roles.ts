@@ -67,6 +67,5 @@ export const cloudPrincipal = (input: {
   workspaceId: input.workspaceId,
   actor: input.actor,
   scopes: scopesFor(input.role, input.scopes),
-  isPlatformAdmin: false,
   workerWorkspaceId: null,
 });

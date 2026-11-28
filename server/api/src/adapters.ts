@@ -14,8 +14,6 @@ export interface AuthPrincipal {
   workspaceId: string;
   actor: string;
   scopes: readonly Scope[];
-  /** Bootstrap/platform administrator (may mint keys in any configured way). */
-  isPlatformAdmin: boolean;
   /**
    * Trainer workers only: the single workspace this worker may serve, or null
    * for a platform worker that serves every workspace.
@@ -148,7 +146,6 @@ export const createLocalNoneAuth = (workspaceId = "local"): AuthAdapter => ({
     workspaceId,
     actor: "local-dev",
     scopes: ["admin", "trainer:worker"],
-    isPlatformAdmin: true,
     workerWorkspaceId: null,
   }),
 });
@@ -242,7 +239,6 @@ export const createLocalApiKeyAuth = (options: {
         workspaceId: defaultWorkspaceId,
         actor: "bootstrap-admin",
         scopes: ["admin"],
-        isPlatformAdmin: true,
         workerWorkspaceId: null,
       };
     }
@@ -255,7 +251,6 @@ export const createLocalApiKeyAuth = (options: {
       workspaceId: key.workspace_id,
       actor: `key:${key.name}`,
       scopes: key.scopes as ApiKeyScope[],
-      isPlatformAdmin: false,
       workerWorkspaceId: null,
     };
   };

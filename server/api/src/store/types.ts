@@ -745,8 +745,6 @@ export interface ArtifactRepository {
    * a row committed alongside it references.
    */
   lockBlob(key: string, mode: "shared" | "exclusive"): Promise<void>;
-  /** A release's pins, oldest first. */
-  pins(workspaceId: string, artifactId: string): Promise<ArtifactPin[]>;
   /**
    * Deletes an unpinned release (and clears its run's artifact_id). Returns
    * null when it doesn't exist, its pins when it is pinned (nothing is
