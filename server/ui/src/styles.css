@@ -342,10 +342,12 @@ textarea {
 
 .card-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 0 16px;
+  gap: 8px 12px;
+  /* A narrow card wraps its actions (Usage's group-by tabs) under the title instead of clipping it. */
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   min-height: 48px;
 }
