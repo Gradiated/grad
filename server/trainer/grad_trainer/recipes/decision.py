@@ -119,7 +119,7 @@ class DecisionTask(PooledLMTask):
     head_file = "decision_head.safetensors"
 
     def __init__(self, spec: TrainSpec, train: list[dict[str, Any]], held_out: list[dict[str, Any]], workdir: Path) -> None:
-        self.questions = parse_questions(train + held_out)
+        self.questions = parse_questions([*train, *held_out])
         super().__init__(spec, workdir)
         self.skipped = 0
         self.train = self._encode_all(train)

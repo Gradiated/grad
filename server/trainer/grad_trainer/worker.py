@@ -14,7 +14,6 @@ timeout, 5xx): the replay is stored once.
 from __future__ import annotations
 
 import fcntl
-import gzip
 import hashlib
 import http.client
 import json
@@ -47,7 +46,7 @@ from .gpu import ALLOC_CONF, release_gpu_memory
 from .loggers import Loggers
 from .recipes import V0_RECIPES, RecipeRunner, get_recipe_runner
 from .parts import Part, PartWriter
-from .records import merge_records
+from .records import MergedDataset
 from .sources import redact
 from .runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks
 from .telemetry import WorkerTelemetry
@@ -338,8 +337,10 @@ class ProtocolClient:
                 self.sleep(next(delays))
 
     def put_file(
-        self, url: str, path: Path, headers: dict[str, str], *, attempts: int = 3
+        self, url: str, path: Path, headers: dict[str, str], *, attempts: int = 6
     ) -> None:
+        """PUT a bundle; storage throttling (S3 503 SlowDown) and resets back off about 15 s
+        in all before the attempt is handed back (a final artifact is then exported again)."""
         delays = backoff_delays(self.retry_base_s, self.retry_cap_s)
         size = path.stat().st_size
         for attempt in range(1, attempts + 1):
@@ -458,16 +459,6 @@ class _Heartbeat(threading.Thread):
             wait = self.interval_s
             if resp.get("should_stop"):
                 self.state.request_stop(str(resp.get("stop_reason") or "cancelled"))
-
-
-def _parse_jsonl_gz(path: Path) -> list[dict[str, Any]]:
-    """The job dataset download: gzip-compressed JSONL (the dataset's parts, concatenated)."""
-    records: list[dict[str, Any]] = []
-    with gzip.open(path, "rt", encoding="utf-8") as fh:
-        for line in fh:
-            if line.strip():
-                records.append(json.loads(line))
-    return records
 
 
 class TrainerWorker:
@@ -631,7 +622,9 @@ class TrainerWorker:
         self._report(state, {"type": "phase", "phase": phase, "step": state.step if step is None else step})
 
     def _note(self, state: _JobState, kind: str, message: str) -> None:
-        seq, state.notes = state.notes, state.notes + 1
+        # The training and checkpoint threads both post notes; the server keeps one per seq.
+        with self._lock:
+            seq, state.notes = state.notes, state.notes + 1
         try:
             self._report(state, {"type": kind, "seq": seq, "message": message[:2000], "step": state.step})
         except LeaseLost:
@@ -972,7 +965,7 @@ class TrainerWorker:
         run: dict[str, Any],
         state: _JobState,
         job_dir: Path,
-        records: list[dict[str, Any]],
+        records: Sequence[dict[str, Any]],
         resume: ResumeState | None,
         base: BaseArtifact | None,
         runner: RecipeRunner,
@@ -1225,14 +1218,16 @@ class TrainerWorker:
         self._phase(state, "completing")
         return self._complete(state, payload)
 
-    def _load_dataset(self, job: dict[str, Any], job_dir: Path) -> list[dict[str, Any]]:
+    def _load_dataset(self, job: dict[str, Any], job_dir: Path) -> Sequence[dict[str, Any]]:
+        """The job's merged records, kept on disk (``MergedDataset``): only a small head per
+        record stays in memory."""
         dataset = job.get("dataset")
         if not dataset:
             return []
         path = job_dir / "dataset.jsonl.gz"
         self.client.download(str(dataset["download_url"]), path)
         try:
-            return merge_records(_parse_jsonl_gz(path))
+            return MergedDataset.from_parts(path, job_dir / "dataset.jsonl")
         except (EOFError, zlib.error) as exc:  # a stream cut short that still looked complete
             raise ServerUnreachable(f"the dataset download is truncated or corrupt ({exc})") from exc
         finally:

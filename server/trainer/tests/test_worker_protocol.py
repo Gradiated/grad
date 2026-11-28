@@ -825,6 +825,19 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn("checkpoint at step 1 was not saved", warnings[0])
 
+    def test_notes_from_two_threads_never_share_a_seq(self) -> None:
+        # The server keeps one note per seq: a shared seq silently drops a warning.
+        srv = self.server()
+        worker = self.worker(srv)
+        state = worker_module._JobState(job_id="run_1", attempt=1)
+        threads = [threading.Thread(target=lambda: [worker._note(state, "log", "m") for _ in range(25)]) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        seqs = [e["seq"] for e in srv.bodies("events")]
+        self.assertEqual(sorted(seqs), list(range(100)))
+
     def test_kinds_from_the_environment(self) -> None:
         srv = self.server()
         worker = worker_from_env(

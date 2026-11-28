@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -398,7 +398,7 @@ class RouterRunner(RecipeRunner):
     def split_strategy(self, spec: TrainSpec) -> str:
         return "by_group" if spec.split.strategy == "by_session" else spec.split.strategy
 
-    def prepare_records(self, spec: TrainSpec, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def prepare_records(self, spec: TrainSpec, records: Sequence[dict[str, Any]]) -> Sequence[dict[str, Any]]:
         # Responses to the same prompt from different models must land on the same side.
         return with_prompt_groups(records)
 

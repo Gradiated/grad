@@ -10,7 +10,8 @@ from ..config import TrainSpec, parse_train_spec
 from ..errors import GPUOutOfMemoryError, RecipeConfigError
 from ..gpu import describe_gpu, is_out_of_memory
 from ..runner_types import BaseArtifact, Budget, ResumeState, RunCallbacks, RunOutput
-from ..splits import split_records
+from ..records import MergedDataset
+from ..splits import split_indices
 from ..trainer import TrainingLoop, TrainingTask
 
 
@@ -35,7 +36,7 @@ class RecipeRunner:
     def split_strategy(self, spec: TrainSpec) -> str:
         return spec.split.strategy
 
-    def prepare_records(self, spec: TrainSpec, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def prepare_records(self, spec: TrainSpec, records: Sequence[dict[str, Any]]) -> Sequence[dict[str, Any]]:
         """Hook to annotate records before the split (e.g. grouping keys)."""
         return records
 
@@ -83,13 +84,22 @@ class RecipeRunner:
                 f"Worker loaded artifact '{base.artifact_id}', but the run starts from '{spec.base_artifact_id}'."
             )
         workdir.mkdir(parents=True, exist_ok=True)
-        train, held_out = split_records(
-            self.prepare_records(spec, list(records)),
+        prepared = self.prepare_records(spec, records)
+        # A MergedDataset splits on its in-memory heads and stays on disk.
+        train_idx, eval_idx = split_indices(
+            prepared.heads if isinstance(prepared, MergedDataset) else prepared,
             strategy=self.split_strategy(spec),
             eval_fraction=spec.split.eval_fraction,
             seed=spec.split.seed,
         )
+        if isinstance(prepared, MergedDataset):
+            train, held_out = prepared.select(train_idx), prepared.select(eval_idx)
+        else:
+            train, held_out = [prepared[i] for i in train_idx], [prepared[i] for i in eval_idx]
+        del prepared
         task = self.build_task(spec, train, held_out, workdir, base)
+        train_records, eval_records = len(train), len(held_out)
+        del train, held_out
         self._micro_batch_tokens = getattr(task, "micro_batch_tokens", spec.micro_batch_tokens)
 
         common = {
@@ -129,8 +139,8 @@ class RecipeRunner:
             "selected_step": loop.selected_step,
             "best_step": loop.best_step,
             "final_step": loop.step,
-            "train_records": len(train),
-            "eval_records": len(held_out),
+            "train_records": train_records,
+            "eval_records": eval_records,
             "warnings": warnings,
         }
         manifest = {

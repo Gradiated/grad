@@ -14,8 +14,11 @@ and the merge keeps the record only once its merged scores pass (``passes_score_
 
 from __future__ import annotations
 
+import gzip
 import json
-from typing import Any, Iterable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import IO, Any, Iterable, Iterator, Sequence, overload
 
 MAX_DEPTH = 8
 SCORE_UPDATE = "score_update"
@@ -253,3 +256,111 @@ def _admitted(record: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(meta, dict) or SCORE_FILTER not in meta:
         return record
     return {**record, "metadata": {k: v for k, v in meta.items() if k != SCORE_FILTER}}
+
+
+# -- on-disk merged dataset -------------------------------------------------------------------
+
+_LINE = "_grad_line"  # a head's (offset, length) in the plain JSONL file: its latest content
+_SPLIT_KEYS = ("id", "session_id", "group_id")
+_FLAGS = (SCORE_UPDATE, DATASET_RESET, SCORE_FILTER)
+
+
+@dataclass(frozen=True)
+class _ExpectedAt:
+    """A head's ``expected_output`` that lives in the content line at this offset."""
+
+    offset: int
+    length: int
+
+
+def _head(rec: dict[str, Any], offset: int, length: int) -> dict[str, Any]:
+    """What ``merge_records`` and the split read of a record, without its content."""
+    head: dict[str, Any] = {k: rec[k] for k in _SPLIT_KEYS if k in rec}
+    if "scores" in rec:
+        head["scores"] = rec["scores"]
+    expected = rec.get("expected_output")
+    if is_score_update(rec):
+        head["expected_output"] = expected  # a correction: small, kept inline
+    elif expected is not None:
+        head["expected_output"] = _ExpectedAt(offset, length)
+    meta = rec.get("metadata")
+    if isinstance(meta, dict) and any(k in meta for k in _FLAGS):
+        head["metadata"] = {k: meta[k] for k in _FLAGS if k in meta}
+    head[_LINE] = (offset, length)
+    return head
+
+
+class MergedDataset(Sequence[dict[str, Any]]):
+    """A downloaded dataset version's merged records (``merge_records``), read from disk.
+
+    One pass writes the gzip JSONL parts out as plain JSONL and keeps a small head per record
+    (its id and split keys, scores, score-filter flags and line offset), about a tenth of the
+    record. ``merge_records`` folds the heads, so the merge is exactly the in-memory one, and a
+    record is parsed from its line only when a recipe reads it: a recipe that encodes records as
+    it iterates (SFT) never holds the raw dataset in memory.
+    """
+
+    def __init__(self, path: Path, heads: list[dict[str, Any]]) -> None:
+        self.path = path
+        self.heads = heads
+
+    @classmethod
+    def from_parts(cls, gz_path: Path, plain_path: Path) -> "MergedDataset":
+        """Index ``gz_path`` (concatenated gzip JSONL parts) into ``plain_path``. Raises
+        ``EOFError``/``zlib.error`` for a stream cut short and ``ValueError`` for a bad line."""
+        heads: list[dict[str, Any]] = []
+        offset = 0
+        with gzip.open(gz_path, "rb") as src, open(plain_path, "wb") as out:
+            for line in src:
+                out.write(line)
+                if line.strip():
+                    heads.append(_head(json.loads(line), offset, len(line)))
+                offset += len(line)
+        return cls(plain_path, merge_records(heads))
+
+    def select(self, indices: Iterable[int]) -> "MergedDataset":
+        return MergedDataset(self.path, [self.heads[i] for i in indices])
+
+    def __len__(self) -> int:
+        return len(self.heads)
+
+    @overload
+    def __getitem__(self, index: int) -> dict[str, Any]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[dict[str, Any]]: ...
+
+    def __getitem__(self, index: int | slice) -> dict[str, Any] | list[dict[str, Any]]:
+        heads = self.heads[index] if isinstance(index, slice) else [self.heads[index]]
+        with open(self.path, "rb") as fh:
+            records = [self._record(fh, h) for h in heads]
+        return records if isinstance(index, slice) else records[0]
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        with open(self.path, "rb") as fh:
+            for head in self.heads:
+                yield self._record(fh, head)
+
+    @staticmethod
+    def _line(fh: IO[bytes], offset: int, length: int) -> dict[str, Any]:
+        fh.seek(offset)
+        return json.loads(fh.read(length))
+
+    def _record(self, fh: IO[bytes], head: dict[str, Any]) -> dict[str, Any]:
+        rec = self._line(fh, *head[_LINE])
+        if "scores" in head:
+            scores = head["scores"]
+            rec["scores"] = dict(scores) if isinstance(scores, dict) else scores
+        else:
+            rec.pop("scores", None)
+        if "expected_output" in head:
+            expected = head["expected_output"]
+            rec["expected_output"] = (
+                self._line(fh, expected.offset, expected.length)["expected_output"]
+                if isinstance(expected, _ExpectedAt)
+                else expected
+            )
+        meta = rec.get("metadata")
+        if isinstance(meta, dict) and SCORE_FILTER in meta:  # every merged record passed it
+            rec["metadata"] = {k: v for k, v in meta.items() if k != SCORE_FILTER}
+        return rec

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 
 def hash_fraction(key: str, seed: int) -> float:
@@ -11,7 +11,7 @@ def hash_fraction(key: str, seed: int) -> float:
     return int.from_bytes(digest[:4], "big") / 0x1_0000_0000
 
 
-def _first_present(rec: dict[str, Any], *fields: str) -> Any:
+def _first_present(rec: Mapping[str, Any], *fields: str) -> Any:
     # Mirrors planner.ts splitKey: missing, null and empty-string ids all fall through.
     for name in fields:
         value = rec.get(name)
@@ -20,7 +20,7 @@ def _first_present(rec: dict[str, Any], *fields: str) -> Any:
     return None
 
 
-def split_key(rec: dict[str, Any], index: int, strategy: str) -> str:
+def split_key(rec: Mapping[str, Any], index: int, strategy: str) -> str:
     if strategy == "by_session":
         value = _first_present(rec, "session_id", "id")
     elif strategy == "by_group":
@@ -37,6 +37,18 @@ def split_records(
     eval_fraction: float = 0.1,
     seed: int = 42,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    train, held_out = split_indices(records, strategy=strategy, eval_fraction=eval_fraction, seed=seed)
+    return [records[i] for i in train], [records[i] for i in held_out]
+
+
+def split_indices(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    strategy: str = "by_session",
+    eval_fraction: float = 0.1,
+    seed: int = 42,
+) -> tuple[list[int], list[int]]:
+    """``split_records`` as positions: it reads only each record's id, session_id and group_id."""
     keys = [split_key(rec, index, strategy) for index, rec in enumerate(records)]
     fractions = [hash_fraction(key, seed) for key in keys]
     in_eval = [f < eval_fraction for f in fractions]
@@ -48,9 +60,7 @@ def split_records(
         held = keys[min(range(len(keys)), key=fractions.__getitem__)] if keys else None
         if any(key != held for key in keys):
             in_eval = [key == held for key in keys]
-    train = [rec for rec, e in zip(records, in_eval) if not e]
-    eval_set = [rec for rec, e in zip(records, in_eval) if e]
-    return train, eval_set
+    return [i for i, e in enumerate(in_eval) if not e], [i for i, e in enumerate(in_eval) if e]
 
 
 def two_folds(items: Sequence[Any], keys: Sequence[str], seed: int) -> tuple[list[Any], list[Any]]:

@@ -37,7 +37,14 @@ summary = import_runner.run(source, connector, emit_batch=post_records, workdir=
 
 - Import `source` kinds: `file`, `hf` and `provider` (a source sync; `summary.watermark` is the
   watermark to store when the job completes). Records are dataset parts; the worker folds them
-  with `records.merge_records` (one record per id, score updates applied) before training.
+  into a `records.MergedDataset` (one record per id, score updates applied, exactly as
+  `records.merge_records`) before training. It keeps the records in a JSONL file in the job
+  directory and only a small head per record (id, split keys, scores, offset) in memory.
+  SFT encodes records as it reads them, so it holds tokens (int32 ids and a bool mask), not
+  raw records: measured on 100k SFT rows (50.7M tokens), 403 MiB for the data path where a
+  fully loaded dataset with tuple tokens took 2.4 GiB. Budget about 1 KB of RAM per record
+  plus 5 bytes per token, and the uncompressed dataset on disk. The other recipes build their
+  examples (pairs, prompt groups) from the records first, so they peak near the raw size.
 
 - `RunOutput.tokens_processed` counts tokens metered during this call; metrics carry the
   run's cumulative `tokens` and `cost_usd` (a resume continues the checkpoint's meter).
