@@ -1278,6 +1278,19 @@ export const createRunLifecycle = (
         throw invalid("invalid_format", `Unknown artifact format '${format}'.`);
       }
 
+      /** Why the run stopped, in words (null when it completed). */
+      const closingError = (): string | null => {
+        if (body.status === "failed") {
+          return body.error ?? "The trainer reported a failure.";
+        }
+        if (balanceStop) return suspended ? SUSPENDED_STOPPED : BALANCE_STOPPED;
+        if (body.status === "stopped_budget") {
+          return budgetStopped(runCost(run, tokens), run.max_cost_usd);
+        }
+
+        return null;
+      };
+
       const result = await store.transaction(async () => {
         if (blob && !(await holdBlob(deps, blob.key))) {
           throw uploadIncomplete(blob.sha256);
@@ -1315,16 +1328,7 @@ export const createRunLifecycle = (
             : {
                 status: balanceStop ? "stopped_balance" : status,
                 finished_at: now,
-                error:
-                  body.status === "failed"
-                    ? (body.error ?? "The trainer reported a failure.")
-                    : balanceStop
-                      ? suspended
-                        ? SUSPENDED_STOPPED
-                        : BALANCE_STOPPED
-                      : body.status === "stopped_budget"
-                        ? budgetStopped(runCost(run, tokens), run.max_cost_usd)
-                        : null,
+                error: closingError(),
                 ...(artifact ? { artifact_id: artifact.id } : {}),
                 ...(body.eval_report !== undefined
                   ? { eval_report: body.eval_report }
