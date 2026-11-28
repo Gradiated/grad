@@ -560,6 +560,17 @@ class WorkerProtocolTests(unittest.TestCase):
         self.assertEqual([b["status"] for b in srv.bodies("complete")], ["completed"])
         self.assertEqual(srv.bodies("parts")[0]["count"], 6)
 
+    def test_an_import_that_loses_grad_server_mid_run_is_handed_back_not_failed(self) -> None:
+        # An API restart while a part registers: another attempt restages from scratch (the
+        # server drops this attempt's parts); failing it lost the user's import.
+        srv = self.server(jobs=[import_job({"kind": "upload", "upload_id": "upl_x", "format": "jsonl", "download_url": "/blobs/objects?key=raw"})])
+        srv.blobs["/blobs/objects"] = b'{"a": 1}\n'
+        srv.fail_next["parts"] = [503] * 5
+        result = self.worker(srv, importer=StubImporter(batches=2, batch_size=3)).run_once()
+        self.assertEqual(result["status"], "abandoned")
+        complete = srv.bodies("complete")[0]
+        self.assertEqual((complete["status"], complete["reason"]), ("abandoned", "worker_error"))
+
     def test_complete_stops_retrying_when_the_lease_is_lost(self) -> None:
         srv = self.server(jobs=[train_job()], fail_next={"complete": [503, 409]})
         result = self.worker(srv, StubRunner(checkpoint_at=None), complete_attempts=1).run_once()

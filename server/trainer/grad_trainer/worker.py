@@ -1475,6 +1475,8 @@ class TrainerWorker:
                 raise LeaseLost() from None
             return self._complete(state, {"status": "abandoned"})
         except Exception as exc:
+            if _transient(exc):  # another attempt restages from scratch (this one's parts are dropped)
+                return self._retry_later(state, redact(str(exc), *secrets))
             return self._complete(
                 state,
                 {"status": "failed", "error": redact(str(exc), *secrets)[:4000] or type(exc).__name__},
