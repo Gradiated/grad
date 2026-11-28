@@ -105,7 +105,7 @@ jobs:
       # read-only key's refusal, and axe (WCAG 2.1 AA) on every page it opens.
       - name: Web UI journeys (Playwright)
         run: |
-          python3 -m pip install "jsonschema==4.26.0"
+          scripts/install-jsonschema.sh
           pnpm -C server/ui exec playwright install --with-deps --only-shell chromium
           pnpm -C server/ui e2e
 
@@ -219,9 +219,9 @@ jobs:
         run: pnpm -C server/api install --frozen-lockfile
 
       # The live stacks run the reference worker on `python3`; it validates bundles
-      # with jsonschema (pinned as in server/trainer/requirements.txt).
+      # with jsonschema (hash-pinned from server/trainer/requirements-cpu.lock).
       - name: Install the reference worker's one dependency
-        run: python3 -m pip install "jsonschema==4.26.0"
+        run: scripts/install-jsonschema.sh
 
       - name: Test Python SDK (unit + live self-hosted/Cloud stack, coverage >= 90%, mypy --strict)
         run: |
@@ -298,7 +298,7 @@ jobs:
         run: pnpm -C server/api install --frozen-lockfile
 
       - name: Install the reference worker's one dependency
-        run: python3 -m pip install "jsonschema==4.26.0"
+        run: scripts/install-jsonschema.sh
 
       - name: Lint Rust workspace (grad-sdk + grad CLI)
         run: |
