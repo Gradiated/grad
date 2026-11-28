@@ -20,6 +20,8 @@ export interface ChartSeries {
 
 export interface LineChartProps {
   x: number[];
+  /** Changes whenever `x` or a series grew in place (Series.rev); without it, array identity decides. */
+  rev?: number;
   series: ChartSeries[];
   format: (v: number) => string;
   xLabel?: string;
@@ -139,11 +141,11 @@ export const LineChart = (props: LineChartProps) => {
   }, [theme, shape, height, hasData]);
 
   // Redraw only when a series array changed, not on every parent render (a clock tick).
-  const drawn = useRef<AlignedData | null>(null);
+  const drawn = useRef<{ data: AlignedData; rev: number | undefined } | null>(null);
   useEffect(() => {
     const prev = drawn.current;
-    if (prev && plot.current && prev.length === data.length && prev.every((a, i) => a === data[i])) return;
-    drawn.current = data;
+    if (prev && plot.current && prev.rev === props.rev && prev.data.length === data.length && prev.data.every((a, i) => a === data[i])) return;
+    drawn.current = { data, rev: props.rev };
     plot.current?.setData(data);
   });
 

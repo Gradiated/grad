@@ -289,17 +289,19 @@ const showCap = (spent: number, cap: number | null): cap is number => cap !== nu
 
 const Charts = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
   const s = stream.series;
-  const hasEval = s.evalLoss.some((v) => v !== null);
+  const hasEval = useMemo(() => s.evalLoss.some((v) => v !== null), [s.rev]);
   const drawCap = showCap(run.costUsd, run.maxCostUsd);
-  const cap = useMemo(() => (drawCap ? s.step.map(() => run.maxCostUsd) : null), [drawCap, run.maxCostUsd, s.step]);
-  const loss = useMemo(() => smooth(s.loss), [s.loss]);
-  const tps = useMemo(() => smooth(s.tokensPerSec), [s.tokensPerSec]);
+  // The columns grow in place: memos key on s.rev.
+  const cap = useMemo(() => (drawCap ? s.step.map(() => run.maxCostUsd) : null), [drawCap, run.maxCostUsd, s.rev]);
+  const loss = useMemo(() => smooth(s.loss), [s.rev]);
+  const tps = useMemo(() => smooth(s.tokensPerSec), [s.rev]);
   const waiting = "No data yet";
   return (
     <div className="chart-grid">
       <ChartCard title="Loss" value={num(last(s.loss))} legend={[{ label: "train", color: "--chart-1" }, ...(hasEval ? [{ label: "eval", color: "--chart-2" as const, dashed: true }] : [])]}>
         <LineChart
           x={s.step}
+          rev={s.rev}
           format={(v) => num(v, 3)}
           empty={waiting}
           series={[
@@ -310,11 +312,12 @@ const Charts = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
         />
       </ChartCard>
       <ChartCard title="Learning rate" value={num(last(s.lr), 3)} legend={[{ label: run.resolvedConfig.schedule, color: "--chart-4" }]}>
-        <LineChart x={s.step} format={(v) => num(v, 3)} empty={waiting} series={[{ label: "lr", values: s.lr, color: "--chart-4" }]} />
+        <LineChart x={s.step} rev={s.rev} format={(v) => num(v, 3)} empty={waiting} series={[{ label: "lr", values: s.lr, color: "--chart-4" }]} />
       </ChartCard>
       <ChartCard title="Throughput" value={`${compact(last(s.tokensPerSec))} tok/s`}>
         <LineChart
           x={s.step}
+          rev={s.rev}
           format={compact}
           empty={waiting}
           series={[
@@ -328,7 +331,7 @@ const Charts = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
         value={`${usd(run.costUsd)}${run.maxCostUsd !== null ? ` / ${usd(run.maxCostUsd)}` : ""}`}
         legend={cap ? [{ label: "spent", color: "--chart-1" }, { label: "cap", color: "--red", dashed: true }] : run.maxCostUsd !== null ? [{ label: `${Math.round((run.costUsd / run.maxCostUsd) * 100)}% of cap`, color: "--chart-1" }] : undefined}
       >
-        <LineChart x={s.step} format={usd} empty={waiting} series={[{ label: "spent", values: s.costUsd, color: "--chart-1" }, ...(cap ? [{ label: "cap", values: cap, color: "--red" as const, dashed: true }] : [])]} />
+        <LineChart x={s.step} rev={s.rev} format={usd} empty={waiting} series={[{ label: "spent", values: s.costUsd, color: "--chart-1" }, ...(cap ? [{ label: "cap", values: cap, color: "--red" as const, dashed: true }] : [])]} />
       </ChartCard>
     </div>
   );

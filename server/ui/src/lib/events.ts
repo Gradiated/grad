@@ -93,7 +93,13 @@ export const evalLossOf = (m: MetricPoint): number | null => m.evalLoss ?? m.eva
 
 // ------------------------------------------------------------ derived state
 
+/**
+ * A run's metric columns. They grow in place (a 1M-step run would otherwise copy
+ * every column on each 200 ms batch: 17 s of CPU, measured); `rev` changes
+ * whenever they do, so charts and memos key on it rather than array identity.
+ */
 export interface Series {
+  rev: number;
   step: number[];
   loss: number[];
   /** Eval loss at eval steps; null elsewhere so the line connects only real points. */
@@ -122,7 +128,7 @@ export interface RunStreamState {
 }
 
 export const emptyStream = (): RunStreamState => ({
-  series: { step: [], loss: [], evalLoss: [], lr: [], tokensPerSec: [], costUsd: [] },
+  series: { rev: 0, step: [], loss: [], evalLoss: [], lr: [], tokensPerSec: [], costUsd: [] },
   timeline: [],
   phase: null,
   gpu: null,
@@ -160,17 +166,15 @@ const FAMILY: Partial<Record<RunPhase, string>> = {
   checkpointing: "train",
 };
 
-/** Applies a batch of events to the state immutably (one React update per batch). */
+const COLUMNS = ["step", "loss", "evalLoss", "lr", "tokensPerSec", "costUsd"] as const;
+
+/** Applies a batch of events (one React update per batch): a new state object, metric columns grown in place. */
 export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStreamState => {
   if (events.length === 0) return state;
-  const series: Series = {
-    step: [...state.series.step],
-    loss: [...state.series.loss],
-    evalLoss: [...state.series.evalLoss],
-    lr: [...state.series.lr],
-    tokensPerSec: [...state.series.tokensPerSec],
-    costUsd: [...state.series.costUsd],
-  };
+  // Appends are idempotent (a replayed step first drops what it replaces), so a
+  // React updater that runs twice (StrictMode) leaves the columns unchanged.
+  const series = state.series;
+  let metrics = false;
   const timeline = [...state.timeline];
   let { phase, gpu, final, lastSeq } = state;
   const seenTraining = new Set(timeline.filter((t) => t.kind === "phase" && t.title === PHASE_LABEL.training).map((t) => t.key.split(":")[1]));
@@ -181,8 +185,9 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
       case "metric": {
         const m = ev.metric;
         // A resumed attempt replays steps from its checkpoint: keep x monotonic.
+        metrics = true;
         while (series.step.length > 0 && (series.step[series.step.length - 1] ?? 0) >= ev.step) {
-          for (const k of Object.keys(series) as (keyof Series)[]) series[k].pop();
+          for (const k of COLUMNS) series[k].pop();
         }
         series.step.push(ev.step);
         series.loss.push(m.loss);
@@ -259,7 +264,7 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
       }
     }
   }
-  return { series, timeline, phase, gpu, final, lastSeq };
+  return { series: metrics ? { ...series, rev: series.rev + 1 } : series, timeline, phase, gpu, final, lastSeq };
 };
 
 /** Folds runs of three or more consecutive checkpoints into one row, so frequent checkpoints don't bury the other events. */

@@ -302,6 +302,34 @@ describe("presentation helpers", () => {
     expect(ended("cancelled")).toMatchObject({ kind: "log", title: "Cancelled" });
   });
 
+  it("grows metric columns in place, bumps rev, and is idempotent when React applies a batch twice", () => {
+    const metric = (step: number): RunEvent => ({ type: "metric", seq: step, attempt: 1, timestamp: "", step, metric: { step, loss: step / 10, lr: 1e-4, costUsd: step, tokensPerSec: 1 } as never });
+    const start = applyEvents(emptyStream(), [metric(1), metric(2)]);
+    const batch = [metric(3), metric(4)];
+    const once = applyEvents(start, batch);
+    const twice = applyEvents(start, batch); // StrictMode runs the updater again on the same state
+    expect(twice.series.step).toEqual([1, 2, 3, 4]);
+    expect(twice.series.loss).toEqual([0.1, 0.2, 0.3, 0.4]);
+    expect(once.series.step).toBe(start.series.step);
+    expect(once.series.rev).toBe(start.series.rev + 1);
+    // A batch without metrics keeps the same columns object.
+    expect(applyEvents(once, [{ type: "log", seq: 9, attempt: 1, timestamp: "", step: null, message: "m" }]).series).toBe(once.series);
+  });
+
+  it("replays a million metric points in linear time", () => {
+    let s = emptyStream();
+    const t0 = performance.now();
+    for (let i = 0; i < 1_000_000; i += 4000) {
+      s = applyEvents(
+        s,
+        Array.from({ length: 4000 }, (_, j): RunEvent => ({ type: "metric", seq: i + j + 1, attempt: 1, timestamp: "", step: i + j + 1, metric: { step: i + j + 1, loss: 1, costUsd: 0 } as never })),
+      );
+    }
+    expect(s.series.step.length).toBe(1_000_000);
+    // Copying every column per batch took ~17 s here; in place it is well under 5.
+    expect(performance.now() - t0).toBeLessThan(5_000);
+  });
+
   it("smooths a series with a debiased moving average", () => {
     const out = smooth([1, null, 1, 3], 0.5);
     expect(out[0]).toBeCloseTo(1);
