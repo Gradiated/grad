@@ -30,11 +30,6 @@ const EndpointShape = {
   GRAD_INFERENCE_API_KEY: optionalString,
   GRAD_JUDGE_BASE_URL: optionalString,
   GRAD_JUDGE_API_KEY: optionalString,
-  /** Deprecated names of the four above (accepted with a warning). */
-  INFERENCE_BASE_URL: optionalString,
-  INFERENCE_API_KEY: optionalString,
-  JUDGE_BASE_URL: optionalString,
-  JUDGE_API_KEY: optionalString,
 };
 
 type EndpointEnv = {
@@ -50,44 +45,17 @@ export interface EvalEndpoints {
   judgeApiKey: string | undefined;
 }
 
-/**
- * One name per setting (GRAD_*), the same in compose, Helm and the docs;
- * the unprefixed names shipped first and still work, with a warning.
- */
-const resolveEndpoints = (
-  env: EndpointEnv,
-  warnings: string[],
-): EvalEndpoints => {
-  const named = (current: keyof EndpointEnv, legacy: keyof EndpointEnv) => {
-    const value = env[current];
-    const old = env[legacy];
-    if (old !== undefined) {
-      warnings.push(
-        value === undefined
-          ? `${legacy} is deprecated; rename it to ${current}.`
-          : `${legacy} is ignored because ${current} is set; remove it.`,
-      );
-    }
+/** The judge endpoint defaults to the inference one (and its key). */
+const resolveEndpoints = (env: EndpointEnv): EvalEndpoints => ({
+  inferenceBaseUrl: env.GRAD_INFERENCE_BASE_URL,
+  inferenceApiKey: env.GRAD_INFERENCE_API_KEY,
+  judgeBaseUrl: env.GRAD_JUDGE_BASE_URL ?? env.GRAD_INFERENCE_BASE_URL,
+  judgeApiKey:
+    env.GRAD_JUDGE_API_KEY ??
+    (env.GRAD_JUDGE_BASE_URL ? undefined : env.GRAD_INFERENCE_API_KEY),
+});
 
-    return value ?? old;
-  };
-  const inferenceBaseUrl = named(
-    "GRAD_INFERENCE_BASE_URL",
-    "INFERENCE_BASE_URL",
-  );
-  const inferenceApiKey = named("GRAD_INFERENCE_API_KEY", "INFERENCE_API_KEY");
-  const judgeUrl = named("GRAD_JUDGE_BASE_URL", "JUDGE_BASE_URL");
-  const judgeKey = named("GRAD_JUDGE_API_KEY", "JUDGE_API_KEY");
-
-  return {
-    inferenceBaseUrl,
-    inferenceApiKey,
-    judgeBaseUrl: judgeUrl ?? inferenceBaseUrl,
-    judgeApiKey: judgeKey ?? (judgeUrl ? undefined : inferenceApiKey),
-  };
-};
-
-const EnvironmentSchema = z.object({
+export const EnvironmentSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   DATABASE_URL: z
@@ -138,7 +106,6 @@ const EnvironmentSchema = z.object({
   /** AUTH_MODE=cloud: the control plane's JWKS (console and service JWTs). */
   GRAD_CLOUD_JWKS_URL: optionalString,
   GRAD_CLOUD_JWT_ISSUER: optionalString,
-  GRAD_CLOUD_JWT_AUDIENCE: z.string().trim().min(1).default("training"),
   /** BILLING_MODE=cloud: billing's base URL (`/check`, `/usage-events`). */
   GRAD_CLOUD_BILLING_URL: optionalString,
   /** BILLING_MODE=cloud: the versioned price list. */
@@ -158,8 +125,6 @@ const EnvironmentSchema = z.object({
   MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(10),
   /** Preempted attempts in a row (SIGTERM, a cloud termination notice) a job survives; separate from MAX_ATTEMPTS. A run's preemption after a checkpoint starts the count again. */
   MAX_PREEMPTIONS: z.coerce.number().int().min(1).max(1000).default(20),
-  /** Seconds a queued run waits for a claim before it is waiting_for_compute. */
-  WAITING_FOR_COMPUTE_SECONDS: z.coerce.number().int().min(1).default(30),
   /** Workers scale from zero (KEDA): say "a GPU worker is starting". */
   GRAD_WORKER_AUTOSCALING: booleanFlag("false"),
   /** Running jobs per workspace and kind; past it the workspace's jobs wait (fair share). */
@@ -182,10 +147,6 @@ const EnvironmentSchema = z.object({
   GRAD_MAX_QUEUED_PER_WORKSPACE: z.coerce.number().int().min(1).default(500),
   MIGRATE_ON_BOOT: booleanFlag("true"),
   AUTH_MODE_NONE_ALLOW_REMOTE: booleanFlag("false"),
-  /** Bill a running attempt every this many tokens... */
-  USAGE_FLUSH_TOKENS: z.coerce.number().int().min(1).default(1_000_000),
-  /** ...or every this many seconds, whichever comes first. */
-  USAGE_FLUSH_SECONDS: z.coerce.number().int().min(1).default(300),
   /** A source starts at most one sync per this many seconds (live tests: 0). */
   SOURCE_SYNC_INTERVAL_SECONDS: z.coerce
     .number()
@@ -193,15 +154,6 @@ const EnvironmentSchema = z.object({
     .min(0)
     .max(3600)
     .default(60),
-  /** A new source's version_interval: seconds between scheduled syncs' versions. */
-  SOURCE_VERSION_INTERVAL_SECONDS: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(7 * 86_400)
-    .default(900),
-  /** Waiting records that commit a scheduled sync's version at once. */
-  SOURCE_VERSION_MAX_RECORDS: z.coerce.number().int().min(1).default(100_000),
   /** Days job events (metrics) are kept. */
   JOB_EVENT_RETENTION_DAYS: z.coerce
     .number()
@@ -394,7 +346,7 @@ export const parseServerEnvironment = (
     );
   }
 
-  const endpoints = resolveEndpoints(env, warnings);
+  const endpoints = resolveEndpoints(env);
   // Eval workers (`grad-server worker --kinds eval`) call the endpoints now.
   for (const name of [
     "GRAD_INFERENCE_API_KEY",
@@ -439,7 +391,7 @@ export const parseServerEnvironment = (
   };
 };
 
-const WorkerEnvironmentSchema = z.object({
+export const WorkerEnvironmentSchema = z.object({
   GRAD_SERVER_URL: z.string().trim().min(1).default("http://127.0.0.1:8787"),
   TRAINER_API_KEY: optionalString,
   GRAD_WORKER_ID: optionalString,
@@ -471,7 +423,7 @@ export const parseEvalWorkerEnvironment = (
     );
   }
   const warnings: string[] = [];
-  const endpoints = resolveEndpoints(parsed.data, warnings);
+  const endpoints = resolveEndpoints(parsed.data);
   if (parsed.data.GRAD_CLOUD_GATEWAY_URL) {
     if (!parsed.data.GRAD_CLOUD_GATEWAY_TOKEN) {
       throw new Error(

@@ -142,8 +142,8 @@ describe("parseServerEnvironment", () => {
 
   it("resolves the eval worker's endpoints with fallbacks", () => {
     const shared = parseEvalWorkerEnvironment({
-      INFERENCE_BASE_URL: "http://vllm/v1",
-      INFERENCE_API_KEY: "k",
+      GRAD_INFERENCE_BASE_URL: "http://vllm/v1",
+      GRAD_INFERENCE_API_KEY: "k",
     });
     expect(shared).toMatchObject({
       judgeBaseUrl: "http://vllm/v1",
@@ -152,9 +152,6 @@ describe("parseServerEnvironment", () => {
       EVAL_CONCURRENCY: 8,
       GRAD_LEASE_SECONDS: 180,
     });
-    expect(shared.warnings.join(" ")).toMatch(
-      /INFERENCE_BASE_URL is deprecated; rename it to GRAD_INFERENCE_BASE_URL/,
-    );
     const helm = parseEvalWorkerEnvironment({
       GRAD_INFERENCE_BASE_URL: "http://vllm/v1",
       GRAD_INFERENCE_API_KEY: "k",
@@ -169,20 +166,6 @@ describe("parseServerEnvironment", () => {
       EVAL_CONCURRENCY: 16,
     });
     expect(helm.warnings).toEqual([]);
-    const both = parseEvalWorkerEnvironment({
-      GRAD_INFERENCE_BASE_URL: "http://new/v1",
-      INFERENCE_BASE_URL: "http://old/v1",
-      JUDGE_BASE_URL: "http://old-judge/v1",
-      JUDGE_API_KEY: "jk",
-    });
-    expect(both).toMatchObject({
-      inferenceBaseUrl: "http://new/v1",
-      judgeBaseUrl: "http://old-judge/v1",
-      judgeApiKey: "jk",
-    });
-    expect(both.warnings.join(" ")).toMatch(
-      /INFERENCE_BASE_URL is ignored because GRAD_INFERENCE_BASE_URL is set/,
-    );
     // Without an endpoint it still scores with validators, and says so.
     expect(parseEvalWorkerEnvironment({}).warnings.join(" ")).toMatch(
       /GRAD_INFERENCE_BASE_URL is not set: this eval worker runs only validators/,
@@ -273,7 +256,7 @@ describe("buildDependencies", () => {
           DATABASE_URL: postgresUrl(),
           AUTH_MODE: "none",
           ...storage,
-          INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
+          GRAD_INFERENCE_BASE_URL: "http://127.0.0.1:9/v1",
         }),
       );
       expect(none.inferenceConfigured).toBe(true);

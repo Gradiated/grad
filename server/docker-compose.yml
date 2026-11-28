@@ -97,7 +97,6 @@ services:
       GRAD_SECRETS_KEY: "${GRAD_SECRETS_KEY:-}"
       # Evals run on grad-eval-worker; the API only checks an endpoint is set.
       GRAD_INFERENCE_BASE_URL: "${GRAD_INFERENCE_BASE_URL:-}"
-      GRAD_JUDGE_BASE_URL: "${GRAD_JUDGE_BASE_URL:-}"
       # Priced judge models beyond the catalog, e.g. [{"id":"...","price_per_million_tokens_usd":3}].
       GRAD_JUDGE_MODELS_JSON: "${GRAD_JUDGE_MODELS_JSON:-}"
       # S3 storage (the seaweedfs service): the same variables Helm sets.

@@ -83,9 +83,7 @@ spec:
             {{- with .Values.evals.inferenceBaseUrl }}
             - {name: GRAD_INFERENCE_BASE_URL, value: {{ . | quote }}}
             {{- end }}
-            {{- with .Values.evals.judgeBaseUrl }}
-            - {name: GRAD_JUDGE_BASE_URL, value: {{ . | quote }}}
-            {{- end }}
+            - {name: GRAD_WORKER_AUTOSCALING, value: {{ .Values.keda.enabled | quote }}}
             - {name: METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
             {{- if .Values.metrics.enabled }}
             - {name: METRICS_PORT, value: {{ .Values.metrics.port | quote }}}

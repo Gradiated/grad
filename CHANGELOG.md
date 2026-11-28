@@ -50,6 +50,14 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Changed
 
+- Fewer settings: `USAGE_FLUSH_TOKENS`/`USAGE_FLUSH_SECONDS` (1M tokens / 5 minutes),
+  `WAITING_FOR_COMPUTE_SECONDS` (30), `SOURCE_VERSION_INTERVAL_SECONDS` (900),
+  `SOURCE_VERSION_MAX_RECORDS` (100k) and `GRAD_CLOUD_JWT_AUDIENCE` (`training`) are now fixed,
+  and the deprecated unprefixed `INFERENCE_*`/`JUDGE_*` names are no longer read (use
+  `GRAD_INFERENCE_*`/`GRAD_JUDGE_*`). The API container no longer gets `GRAD_JUDGE_BASE_URL`
+  (only eval workers use it), and the Helm chart sets `GRAD_WORKER_AUTOSCALING` from
+  `keda.enabled`. A test checks that SELF_HOSTING.md and CLOUD_MODE.md list every variable the
+  server and eval workers read, with the code's defaults.
 - Every alert in the chart's PrometheusRule is `severity: warning` (`GradApiErrorRateHigh` was
   `critical`, and now needs more than 0.1 requests/s).
 - Logs: every component writes JSON lines to stdout (warnings and errors too) with `time`,

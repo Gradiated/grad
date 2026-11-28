@@ -248,7 +248,7 @@ export const datasetRubric = (dataset: {
 };
 
 export const JUDGE_UNAVAILABLE_DETAIL =
-  "Judges need a model endpoint: set GRAD_JUDGE_BASE_URL (or GRAD_INFERENCE_BASE_URL) on the server to an OpenAI-compatible endpoint serving the judge models. Regex, validator and code scorers need no endpoint.";
+  "Judges need a model endpoint: set GRAD_INFERENCE_BASE_URL on the server and the eval workers (and GRAD_JUDGE_BASE_URL on the eval workers when judges are served elsewhere). Regex, validator and code scorers need no endpoint.";
 
 /**
  * Plans an eval. `mode: "score"` (`dataset.score()`) grades the records' own

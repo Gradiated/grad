@@ -66,7 +66,7 @@ export const buildDependencies = async (
       ? createJwtVerifier({
           jwksUrl: env.GRAD_CLOUD_JWKS_URL,
           issuer: env.GRAD_CLOUD_JWT_ISSUER as string,
-          audience: env.GRAD_CLOUD_JWT_AUDIENCE,
+          audience: "training",
           clock,
         })
       : null;
@@ -161,7 +161,6 @@ export const buildDependencies = async (
     settings: {
       maxAttempts: env.MAX_ATTEMPTS,
       maxPreemptions: env.MAX_PREEMPTIONS,
-      waitingForComputeSeconds: env.WAITING_FOR_COMPUTE_SECONDS,
       workerAutoscaling: env.GRAD_WORKER_AUTOSCALING,
       queue: {
         maxRunning: {
@@ -174,15 +173,11 @@ export const buildDependencies = async (
       ssePollMs: env.SSE_POLL_MS,
       jobEventRetentionDays: env.JOB_EVENT_RETENTION_DAYS,
       orphanBlobDays: env.ORPHAN_BLOB_DAYS,
-      usageFlushTokens: env.USAGE_FLUSH_TOKENS,
-      usageFlushSeconds: env.USAGE_FLUSH_SECONDS,
       workspacePurgeDelaySeconds: env.GRAD_WORKSPACE_PURGE_DELAY_SECONDS,
       corsOrigins: env.corsOrigins,
       unauthenticated: env.AUTH_MODE === "none",
       keysManagedByCloud: env.AUTH_MODE === "cloud",
       sourceSyncIntervalSeconds: env.SOURCE_SYNC_INTERVAL_SECONDS,
-      sourceVersionIntervalSeconds: env.SOURCE_VERSION_INTERVAL_SECONDS,
-      sourceVersionMaxRecords: env.SOURCE_VERSION_MAX_RECORDS,
       metrics: {
         enabled: env.METRICS_ENABLED,
         token: env.METRICS_TOKEN,

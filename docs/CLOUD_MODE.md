@@ -18,7 +18,6 @@ all of it, used by the server tests and by `tests/harness/stack.ts --cloud`.
 | `GRAD_CLOUD_AUTH_DATABASE_URL` | `AUTH_MODE=cloud` | Read-only Postgres URL of the product database (role `grad_auth_reader`, `SELECT` on `auth_principals_v1` only). |
 | `GRAD_CLOUD_JWKS_URL` | `AUTH_MODE=cloud` | The control plane's JWKS, e.g. `https://api.gradiated.com/api/auth/jwks`. |
 | `GRAD_CLOUD_JWT_ISSUER` | `AUTH_MODE=cloud` | The tokens' `iss`, e.g. `https://api.gradiated.com`. |
-| `GRAD_CLOUD_JWT_AUDIENCE` | | Default `training`. |
 | `BILLING_MODE=cloud` | billing | Balance checks, usage push, the price list. |
 | `GRAD_CLOUD_BILLING_URL` | `BILLING_MODE=cloud` | Billing's base URL on the product's internal listener, e.g. `http://api-training-internal.gradiated.svc:3005/api/internal/v1/billing` (`/check`, `/usage-events`). |
 | `GRAD_CLOUD_PRICES_URL` | `BILLING_MODE=cloud` | The price list, e.g. `…/api/internal/v1/billing/prices?product=training`. |
