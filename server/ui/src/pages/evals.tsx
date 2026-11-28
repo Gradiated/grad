@@ -1,11 +1,11 @@
 import type { EvalModelSummary, EvalRun } from "@sdk/generated/models.js";
 
-import { IconChevron, IconEvals } from "../components/icons.js";
-import { Badge, Banner, Card, Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
+import { IconChevron, IconEvals, IconSearch } from "../components/icons.js";
+import { Badge, Banner, Card, Empty, ErrorBanner, LoadMore, RowTitle, rowLink, SearchBox, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
 import { useApi } from "../lib/api.js";
 import { ago, compact, dateTime, int, num, usd } from "../lib/format.js";
-import { useNow, usePagedList, useResource, useTitle } from "../lib/hooks.js";
-import { Link } from "../lib/router.js";
+import { useDebounced, useNow, usePagedList, useResource, useTitle } from "../lib/hooks.js";
+import { Link, setQuery, useLocation } from "../lib/router.js";
 import { Message, recordTurns } from "../components/record.js";
 
 const TERMINAL_EVAL = new Set(["completed", "failed", "cancelled"]);
@@ -13,7 +13,10 @@ const TERMINAL_EVAL = new Set(["completed", "failed", "cancelled"]);
 export const EvalsPage = () => {
   const { client } = useApi();
   const now = useNow();
-  const list = usePagedList((cursor, signal) => client.listEvals({ limit: 50, cursor }, { signal }), [], {
+  const { query } = useLocation();
+  const q = query.get("q") ?? "";
+  const search = useDebounced(q.trim());
+  const list = usePagedList((cursor, signal) => client.listEvals({ limit: 50, cursor, q: search || undefined }, { signal }), [search], {
     pollMs: (page) => (page?.data.some((e) => !TERMINAL_EVAL.has(e.status)) ? 4000 : 15_000),
   });
   return (
@@ -23,6 +26,10 @@ export const EvalsPage = () => {
           <h1 className="page-title">Evals</h1>
           <div className="page-sub">Model comparisons and dataset scoring jobs.</div>
         </div>
+      </div>
+      <div className="toolbar">
+        <div className="grow" />
+        <SearchBox value={q} onChange={(v) => setQuery({ q: v }, { replace: true })} placeholder="Filter by name" label="Filter evals" />
       </div>
       <ErrorBanner error={list.error} onRetry={list.reload} stale={list.items.length > 0} />
       <div className="card">
@@ -83,11 +90,16 @@ export const EvalsPage = () => {
             </tbody>
           </table>
         </div>
-        {!list.loading && !list.error && list.items.length === 0 && (
-          <Empty title="No evals yet" icon={<IconEvals />}>
-            Compare models with <code>grad eval</code> or <code>client.evals.create(...)</code>.
-          </Empty>
-        )}
+        {!list.loading &&
+          !list.error &&
+          list.items.length === 0 &&
+          (search ? (
+            <Empty title="No evals match" icon={<IconSearch />} />
+          ) : (
+            <Empty title="No evals yet" icon={<IconEvals />}>
+              Compare models with <code>grad eval</code> or <code>client.evals.create(...)</code>.
+            </Empty>
+          ))}
         <LoadMore list={list} />
       </div>
     </div>

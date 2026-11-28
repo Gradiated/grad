@@ -760,6 +760,17 @@ describe("datasets, evals, usage, health", () => {
     expect(container.textContent).toContain("Queued behind 2 runs");
   });
 
+  it("filters the evals list by name on the server", async () => {
+    const server = fakeServer(routes({ "GET /v1/evals": listed([EVAL, { ...EVAL, id: "eval_2", name: "nightly-score" }]) }));
+    const { container } = await boot(server, "/evals");
+    await waitFor(() => expect(container.querySelectorAll("tbody tr.clickable").length).toBe(2));
+    await type(container.querySelector('input[aria-label="Filter evals"]'), "nightly");
+    await waitFor(() => expect(container.querySelectorAll("tbody tr.clickable").length).toBe(1));
+    expect(server.calls.some((c) => c.path.startsWith("/v1/evals?") && c.path.includes("q=nightly"))).toBe(true);
+    await type(container.querySelector('input[aria-label="Filter evals"]'), "nothing-matches");
+    await waitFor(() => expect(container.textContent).toContain("No evals match"));
+  });
+
   it("shows the health sections a key may read when it lacks one scope", async () => {
     const server = fakeServer(routes({ "GET /v1/imports": () => problem(403, "forbidden", "This endpoint requires the 'datasets:read' scope.") }));
     const { container } = await boot(server, "/health");
