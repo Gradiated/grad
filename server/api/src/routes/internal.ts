@@ -33,7 +33,7 @@ import {
   MAX_LEASE_TOKEN_SECONDS,
   newLeaseToken,
 } from "../worker-auth/lease.js";
-import { problemResponse, readJson } from "./helpers.js";
+import { errorResponse, problemResponse, readJson } from "./helpers.js";
 import {
   createCloudInternalRoutes,
   type CloudInternalDeps,
@@ -79,20 +79,9 @@ export const createInternalApp = (deps: {
 }): Hono<InternalEnv> => {
   const app = new Hono<InternalEnv>();
 
-  app.onError((error, c) => {
-    if (error instanceof ApiError) return problem(c, error);
-    log("error", "internal route failed", {
-      path: c.req.path,
-      error,
-    });
-
-    return problem(c, {
-      status: 500,
-      code: "internal_error",
-      title: "Internal server error",
-      detail: "An unexpected error occurred.",
-    });
-  });
+  app.onError((error, c) =>
+    errorResponse(error, c.get("requestId") ?? "req_unknown", c.req.path),
+  );
   app.notFound((c) =>
     problem(c, {
       status: 404,

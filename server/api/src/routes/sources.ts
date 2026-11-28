@@ -137,8 +137,6 @@ export const registerSourceRoutes = (
     }),
     async (c) => {
       const workspaceId = workspaceOf(c, "sources:write");
-      // A replace of the given fields: a retry changes nothing more.
-      await idempotencyOf(c);
 
       return c.json(
         await services.sources.update(
@@ -207,8 +205,6 @@ export const registerSourceRoutes = (
     }),
     async (c) => {
       const workspaceId = workspaceOf(c, "sources:write");
-      // At most one sync per source is queued or running, so a retry is safe.
-      await idempotencyOf(c);
       const text = await c.req.text();
       const input = SyncSourceRequestSchema.parse(
         text.trim() ? JSON.parse(text) : {},

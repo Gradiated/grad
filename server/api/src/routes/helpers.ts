@@ -1,9 +1,16 @@
 import type { Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { z } from "@hono/zod-openapi";
 
 import { hasScope, type AuthPrincipal } from "../adapters.js";
 import { ProblemSchema, type Scope } from "../contracts.js";
 import { ApiError, insufficientScope } from "../errors.js";
+import {
+  ObjectNotFoundError,
+  StorageUnavailableError,
+} from "../storage/types.js";
+import { isDatabaseUnavailable } from "../store/postgres/db.js";
+import { log } from "../telemetry/log.js";
 import { metrics } from "../telemetry/metrics.js";
 
 export type AppEnv = {
@@ -94,6 +101,104 @@ export const problemResponse = (
       },
     },
   );
+
+/**
+ * The problem response for an error a handler threw, on the public and the
+ * internal listener alike: an ApiError as itself, a malformed request as
+ * 400, outages (storage, the database) as 503 with Retry-After, anything
+ * else as a logged 500.
+ */
+export const errorResponse = (
+  error: unknown,
+  requestId: string,
+  path: string,
+): Response => {
+  if (error instanceof ApiError) {
+    return problemResponse(
+      requestId,
+      error.status,
+      error.code,
+      error.title,
+      error.detail,
+    );
+  }
+
+  if (error instanceof HTTPException) {
+    const status = error.status;
+    const malformed = status === 400;
+
+    return problemResponse(
+      requestId,
+      status,
+      malformed ? "malformed_request" : `http_${status}`,
+      malformed ? "Malformed request" : "Request failed",
+      error.message || "The request could not be processed.",
+    );
+  }
+
+  if (error instanceof StorageUnavailableError) {
+    const res = problemResponse(
+      requestId,
+      503,
+      "storage_unavailable",
+      "Storage unavailable",
+      "Object storage is unreachable or overloaded; retry shortly.",
+    );
+    res.headers.set("Retry-After", "1");
+    log("warn", "object storage unavailable", {
+      request_id: requestId,
+      path: path,
+      error: error.message,
+    });
+
+    return res;
+  }
+
+  // A row names an object the bucket doesn't have: the bucket lost data or
+  // was restored from a copy older than the database.
+  if (error instanceof ObjectNotFoundError) {
+    log("error", "object missing from storage", {
+      request_id: requestId,
+      path: path,
+      error: error.message,
+    });
+
+    return problemResponse(
+      requestId,
+      500,
+      "storage_object_missing",
+      "Stored data missing",
+      "Data this request needs is missing from object storage (lost, or restored from a backup older than the database). Quote the request_id when reporting it.",
+    );
+  }
+
+  if (isDatabaseUnavailable(error)) {
+    const res = problemResponse(
+      requestId,
+      503,
+      "database_unavailable",
+      "Database unavailable",
+      "The database is unreachable or overloaded; retry shortly.",
+    );
+    res.headers.set("Retry-After", "1");
+
+    return res;
+  }
+
+  log("error", "unhandled error", {
+    request_id: requestId,
+    path: path,
+    error,
+  });
+
+  return problemResponse(
+    requestId,
+    500,
+    "internal_error",
+    "Internal server error",
+    "An unexpected error occurred. Quote the request_id when reporting it.",
+  );
+};
 
 /** The request's JSON body; 400 malformed_request when it isn't JSON. */
 export const readJson = async (c: Context): Promise<unknown> => {

@@ -3,7 +3,6 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import { HTTPException } from "hono/http-exception";
 
 import type { AppDependencies } from "./deps.js";
 import { ApiError, issuesOf, parseBearer, validationFailed } from "./errors.js";
@@ -14,6 +13,7 @@ import { registerCheckpointRoutes } from "./routes/checkpoints.js";
 import { registerDatasetRoutes } from "./routes/datasets.js";
 import { registerEvalRoutes } from "./routes/evals.js";
 import {
+  errorResponse,
   problemResponse as problemJson,
   requireScope,
   type AppEnv,
@@ -25,14 +25,9 @@ import { registerSourceRoutes } from "./routes/sources.js";
 import { registerTrainerJobRoutes } from "./routes/trainer-jobs.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 import { createServices, type Services } from "./services/index.js";
-import {
-  ObjectNotFoundError,
-  StorageUnavailableError,
-} from "./storage/types.js";
-import { isDatabaseUnavailable } from "./store/postgres/db.js";
 import { registerMetricsEndpoints } from "./telemetry/endpoint.js";
 import { httpTelemetry } from "./telemetry/http.js";
-import { log, withLogContext } from "./telemetry/log.js";
+import { withLogContext } from "./telemetry/log.js";
 import { metrics } from "./telemetry/metrics.js";
 import { serveUiFallback, serveUiFile } from "./ui.js";
 
@@ -93,93 +88,9 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
     },
   });
 
-  app.onError((error, c) => {
-    if (error instanceof ApiError) {
-      return problemResponse(
-        c,
-        error.status,
-        error.code,
-        error.title,
-        error.detail,
-      );
-    }
-
-    if (error instanceof HTTPException) {
-      const status = error.status;
-      const malformed = status === 400;
-
-      return problemResponse(
-        c,
-        status,
-        malformed ? "malformed_request" : `http_${status}`,
-        malformed ? "Malformed request" : "Request failed",
-        error.message || "The request could not be processed.",
-      );
-    }
-
-    if (error instanceof StorageUnavailableError) {
-      const res = problemResponse(
-        c,
-        503,
-        "storage_unavailable",
-        "Storage unavailable",
-        "Object storage is unreachable or overloaded; retry shortly.",
-      );
-      res.headers.set("Retry-After", "1");
-      log("warn", "object storage unavailable", {
-        request_id: c.get("requestId"),
-        path: c.req.path,
-        error: error.message,
-      });
-
-      return res;
-    }
-
-    // A row names an object the bucket doesn't have: the bucket lost data or
-    // was restored from a copy older than the database.
-    if (error instanceof ObjectNotFoundError) {
-      log("error", "object missing from storage", {
-        request_id: c.get("requestId"),
-        path: c.req.path,
-        error: error.message,
-      });
-
-      return problemResponse(
-        c,
-        500,
-        "storage_object_missing",
-        "Stored data missing",
-        "Data this request needs is missing from object storage (lost, or restored from a backup older than the database). Quote the request_id when reporting it.",
-      );
-    }
-
-    if (isDatabaseUnavailable(error)) {
-      const res = problemResponse(
-        c,
-        503,
-        "database_unavailable",
-        "Database unavailable",
-        "The database is unreachable or overloaded; retry shortly.",
-      );
-      res.headers.set("Retry-After", "1");
-
-      return res;
-    }
-
-    log("error", "unhandled error", {
-      request_id: c.get("requestId"),
-      path: c.req.path,
-      error,
-    });
-
-    return problemResponse(
-      c,
-      500,
-      "internal_error",
-      "Internal server error",
-      "An unexpected error occurred. Quote the request_id when reporting it.",
-    );
-  });
+  app.onError((error, c) =>
+    errorResponse(error, c.get("requestId") ?? "req_unknown", c.req.path),
+  );
 
   app.notFound(
     (c) =>

@@ -7,7 +7,6 @@ import {
   SecretSchema,
   SetSecretRequestSchema,
 } from "../contracts.js";
-import { idempotencyOf } from "../idempotency.js";
 import type { Services } from "../services/index.js";
 import {
   defaultErrors,
@@ -44,8 +43,6 @@ export const registerSecretRoutes = (
     }),
     async (c) => {
       const input = c.req.valid("json");
-      // A replace is idempotent by name, so a retried key needs no record.
-      await idempotencyOf(c);
 
       return c.json(
         await services.secrets.set(

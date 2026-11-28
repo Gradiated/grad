@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createLocalApiKeyAuth,
@@ -115,6 +115,20 @@ describe("lease tokens over HTTP: mint, claim, revoke", () => {
       },
       token,
     );
+
+  it("answers a database outage with 503 and Retry-After, like the public listener", async () => {
+    const create = vi
+      .spyOn(t.deps.store.workerTokens, "create")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+        }),
+      );
+    const res = await mint();
+    expect([res.status, res.body.code]).toEqual([503, "database_unavailable"]);
+    expect(res.headers.get("retry-after")).toBe("1");
+    create.mockRestore();
+  });
 
   it("mint -> claim -> revoke -> rejected", async () => {
     const minted = await mint();
