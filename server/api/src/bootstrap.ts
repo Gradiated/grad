@@ -41,7 +41,10 @@ export const buildDependencies = async (
   // Lease times follow the database clock: sync now and every minute.
   await clock.sync(store.dbNow);
   setInterval(() => {
-    clock.sync(store.dbNow).catch(() => undefined);
+    clock.sync(store.dbNow).catch((error: unknown) => {
+      // The clock runs on from its last sync meanwhile.
+      log("warn", "database clock sync failed", { error });
+    });
   }, 60_000).unref();
 
   const storage = instrumentObjectStore(

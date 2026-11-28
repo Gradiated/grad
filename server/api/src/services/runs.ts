@@ -32,6 +32,7 @@ import type {
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
 import {
+  ApiError,
   conflict,
   errorMessage,
   forbidden,
@@ -45,6 +46,7 @@ import { createOnce, type Created } from "../idempotency.js";
 import { isArtifactRef } from "../continued-training.js";
 import { planRun } from "../planner.js";
 import { assertSecretHost, loggerUrl } from "../secret-hosts.js";
+import { log } from "../telemetry/log.js";
 import { assertNonEmptyPlan, planEvalRequest } from "./evals/planner.js";
 import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
 import { ObjectNotFoundError } from "../storage/types.js";
@@ -1277,7 +1279,15 @@ export const createRunLifecycle = (
         );
       const labelEval = run.resolved_config.label_eval_id;
       if (labelEval !== null && run.waiting_on === labelEval) {
-        await evals.cancel(workspaceId, labelEval).catch(() => undefined);
+        await evals.cancel(workspaceId, labelEval).catch((error: unknown) => {
+          // 409: it finished meanwhile, so there is nothing to stop.
+          if (error instanceof ApiError && error.status === 409) return;
+          log("warn", "labeling eval not cancelled", {
+            run_id: id,
+            eval_id: labelEval,
+            error,
+          });
+        });
       }
 
       return toPublicRun(updated);

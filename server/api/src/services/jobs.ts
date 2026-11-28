@@ -13,6 +13,7 @@ import {
   metrics,
   PREEMPTION_LIMIT_MARK,
 } from "../telemetry/metrics.js";
+import { log } from "../telemetry/log.js";
 import { contextFromTraceparent, withSpan } from "../telemetry/tracing.js";
 import { claimGpuMemoryGb } from "../worker-auth/principal.js";
 import type { z } from "@hono/zod-openapi";
@@ -389,6 +390,14 @@ export const createJobQueue = (
         closed += 1;
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
+        // lease_lost: a heartbeat renewed the lease after the read.
+        if (error.code !== "lease_lost") {
+          log("warn", "expired lease not closed", {
+            job_id: job.id,
+            kind: job.kind,
+            error,
+          });
+        }
       }
     }
 

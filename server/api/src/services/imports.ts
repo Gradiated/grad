@@ -17,6 +17,7 @@ import type {
 } from "../contracts/trainer-jobs.js";
 import type { AppDependencies } from "../deps.js";
 import { conflict, errorMessage, isTransient, notFound } from "../errors.js";
+import { log } from "../telemetry/log.js";
 import { addSeconds } from "../clock.js";
 import { createOnce, type Created } from "../idempotency.js";
 import { HF_HOST } from "../secret-hosts.js";
@@ -160,7 +161,12 @@ export const createImportService = (
   };
 
   const deleteObjects = async (keys: readonly string[]): Promise<void> => {
-    for (const key of keys) await storage.delete(key).catch(() => undefined);
+    // Best effort: the orphaned-blob sweep deletes what this misses.
+    for (const key of keys) {
+      await storage.delete(key).catch((error: unknown) => {
+        log("warn", "staged import part not deleted", { key, error });
+      });
+    }
   };
 
   /** Closes the attempt; a terminal failure drops the staged parts. */
@@ -634,7 +640,12 @@ export const createImportService = (
       ) {
         await collaborators.datasets
           .settleCount(dataset)
-          .catch(() => undefined);
+          .catch((error: unknown) => {
+            log("warn", "dataset record count not settled", {
+              dataset_id: dataset.id,
+              error,
+            });
+          });
       }
 
       return done(completed);
