@@ -63,6 +63,16 @@ describe("an eval worker's dataset version on disk", () => {
     expect(await leftovers()).toEqual(before);
   });
 
+  it("keeps no named file on disk while open, so a killed worker leaves nothing behind", async () => {
+    const before = await leftovers();
+    const version = await openDownloadedVersion(lines(10));
+    expect(await leftovers()).toEqual(before);
+    let n = 0;
+    for await (const _ of version.records()) n += 1;
+    expect(n).toBe(10);
+    await version.close();
+  });
+
   it("reads a version under the limit", async () => {
     const version = await openDownloadedVersion(lines(10), {
       maxBytes: 1e6,

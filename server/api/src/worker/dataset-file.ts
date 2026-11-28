@@ -39,7 +39,9 @@ export class DatasetTooLarge extends Error {}
  * chunks, the merge index is built over them, and merged records come a page
  * at a time. Memory is the index (4 bytes a line and about 100 bytes a record
  * id) plus a page and a few chunks, not the dataset; the eval worker's pod
- * has 1 GiB.
+ * has 1 GiB. The file is unlinked as soon as it is open, so however the
+ * worker ends (an OOM kill, SIGKILL) its disk is freed, never left in the
+ * pod's /tmp for the restarted container to fill up on.
  */
 export const openDownloadedVersion = async (
   lines: AsyncIterable<string>,
@@ -50,16 +52,22 @@ export const openDownloadedVersion = async (
 }> => {
   const dir = await mkdtemp(join(tmpdir(), "grad-eval-"));
   const path = join(dir, "version.jsonl");
-  const close = () => rm(dir, { recursive: true, force: true });
+  const file = await open(path, "w+").catch(async (error: unknown) => {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  });
 
   const chunkLines = options.chunkLines ?? CHUNK_LINES;
   const maxBytes = options.maxBytes ?? Infinity;
   try {
     const chunks: Chunk[] = [];
-    const out = createWriteStream(path);
+    const out = createWriteStream(path, { flags: "r+" });
     // A write error (ENOSPC) surfaces here, never as an unhandled 'error' event.
     let failed: NodeJS.ErrnoException | null = null;
     out.on("error", (error) => (failed ??= error));
+    // Both descriptors are open: drop the name (the disk is freed with them).
+    await once(out, "open").catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
     const tooLarge = (written: number) =>
       new DatasetTooLarge(
         failed?.code === "ENOSPC"
@@ -96,7 +104,6 @@ export const openDownloadedVersion = async (
         : failed;
     }
 
-    const file = await open(path);
     const read: PartLines<Chunk> = async (chunk) => {
       const bytes = Buffer.alloc(chunk.end - chunk.start);
       await file.read(bytes, 0, bytes.length, chunk.start);
@@ -104,12 +111,7 @@ export const openDownloadedVersion = async (
       return bytes.toString("utf8").split("\n").slice(0, -1);
     };
     const cached = createPartLinesCache(read, 64 * 1024 * 1024);
-    const index = await buildVersionIndex(cached, chunks).catch(
-      async (error: unknown) => {
-        await file.close();
-        throw error;
-      },
-    );
+    const index = await buildVersionIndex(cached, chunks);
 
     return {
       records: async function* () {
@@ -117,13 +119,11 @@ export const openDownloadedVersion = async (
           yield* await readVersionPage(cached, chunks, index, from, PAGE);
         }
       },
-      close: async () => {
-        await file.close();
-        await close();
-      },
+      close: () => file.close(),
     };
   } catch (error) {
-    await close();
+    await file.close();
+    await rm(dir, { recursive: true, force: true });
     throw error;
   }
 };
