@@ -58,23 +58,33 @@ const (
 
 // Artifact is generated from the OpenAPI schema.
 type Artifact struct {
-	ID           string             `json:"id"`
-	WorkspaceID  string             `json:"workspace_id"`
-	Name         string             `json:"name"`
-	Version      string             `json:"version"`
-	RunID        *string            `json:"run_id"`
-	CheckpointID *string            `json:"checkpoint_id"`
-	BaseModel    string             `json:"base_model"`
-	RecipeKind   RecipeKind         `json:"recipe_kind"`
-	Format       *ArtifactFormat    `json:"format"`
-	SHA256       string             `json:"sha256"`
-	SizeBytes    int                `json:"size_bytes"`
-	Manifest     map[string]any     `json:"manifest"`
-	Provenance   ArtifactProvenance `json:"provenance"`
-	EvalReport   *EvalReport        `json:"eval_report"`
+	// ID Artifact id: `name@version`.
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	// Name Artifact name, usually the run name.
+	Name string `json:"name"`
+	// Version Version, `YYYY-MM-DD-N`: the release date and its sequence that day.
+	Version string `json:"version"`
+	// RunID The run that trained it; null for uploads and imports.
+	RunID *string `json:"run_id"`
+	// CheckpointID The checkpoint it was promoted from; null when it is a run's final artifact or was uploaded or imported.
+	CheckpointID *string `json:"checkpoint_id"`
+	// BaseModel The base model the weights apply to.
+	BaseModel  string          `json:"base_model"`
+	RecipeKind RecipeKind      `json:"recipe_kind"`
+	Format     *ArtifactFormat `json:"format"`
+	// SHA256 SHA-256 of the bundle; downloads verify it.
+	SHA256 string `json:"sha256"`
+	// SizeBytes Bundle size in bytes.
+	SizeBytes int `json:"size_bytes"`
+	// Manifest The bundle's manifest.json: format, base model, adapter and training settings.
+	Manifest   map[string]any     `json:"manifest"`
+	Provenance ArtifactProvenance `json:"provenance"`
+	EvalReport *EvalReport        `json:"eval_report"`
 	// Pins Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.
-	Pins      []ArtifactPin `json:"pins"`
-	CreatedAt string        `json:"created_at"`
+	Pins []ArtifactPin `json:"pins"`
+	// CreatedAt When it was released.
+	CreatedAt string `json:"created_at"`
 }
 
 // ArtifactDownloadURL is generated from the OpenAPI schema.
@@ -311,20 +321,30 @@ const (
 
 // Checkpoint is generated from the OpenAPI schema.
 type Checkpoint struct {
-	ID          string          `json:"id"`
-	WorkspaceID string          `json:"workspace_id"`
-	RunID       string          `json:"run_id"`
-	Attempt     int             `json:"attempt"`
-	Step        int             `json:"step"`
-	EvalScore   *float64        `json:"eval_score"`
-	Format      *ArtifactFormat `json:"format"`
-	SHA256      string          `json:"sha256"`
-	SizeBytes   int             `json:"size_bytes"`
-	Metadata    map[string]any  `json:"metadata"`
-	Best        bool            `json:"best"`
-	Final       bool            `json:"final"`
-	ExpiresAt   *string         `json:"expires_at"`
-	CreatedAt   string          `json:"created_at"`
+	// ID Checkpoint id (`ckpt_` and 24 hex characters).
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	// RunID The run that saved it.
+	RunID string `json:"run_id"`
+	// Attempt The attempt that saved it.
+	Attempt int `json:"attempt"`
+	// Step Optimizer step it was saved at.
+	Step int `json:"step"`
+	// EvalScore Held-out score at this step; null when it wasn't evaluated.
+	EvalScore *float64        `json:"eval_score"`
+	Format    *ArtifactFormat `json:"format"`
+	// SHA256 SHA-256 of the checkpoint bundle.
+	SHA256 string `json:"sha256"`
+	// SizeBytes Bundle size in bytes.
+	SizeBytes int            `json:"size_bytes"`
+	Metadata  map[string]any `json:"metadata"`
+	// Best True for the checkpoint `select="best"` picks; it never expires.
+	Best bool `json:"best"`
+	// Final True for the run's last checkpoint; it never expires.
+	Final bool `json:"final"`
+	// ExpiresAt When it expires (after `checkpoint_ttl_days`, 30 by default); null for checkpoints that never expire, such as the best and final.
+	ExpiresAt *string `json:"expires_at"`
+	CreatedAt string  `json:"created_at"`
 }
 
 // CheckpointEvalResult is generated from the OpenAPI schema.
@@ -479,15 +499,19 @@ type CreatedAPIKey struct {
 
 // Dataset is generated from the OpenAPI schema.
 type Dataset struct {
+	// ID Dataset id (`ds_` and 24 hex characters).
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspace_id"`
-	Name        string `json:"name"`
-	Version     int    `json:"version"`
+	// Name Dataset name, unique in the workspace.
+	Name string `json:"name"`
+	// Version Current version. Every push, import, score or sync that changes records adds one; runs and evals pin a version.
+	Version int `json:"version"`
 	// RecordCount Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again.
-	RecordCount int            `json:"record_count"`
-	Metadata    map[string]any `json:"metadata"`
-	CreatedAt   string         `json:"created_at"`
-	UpdatedAt   string         `json:"updated_at"`
+	RecordCount int `json:"record_count"`
+	// Metadata Free-form metadata you set at creation.
+	Metadata  map[string]any `json:"metadata"`
+	CreatedAt string         `json:"created_at"`
+	UpdatedAt string         `json:"updated_at"`
 }
 
 // DatasetRecord is generated from the OpenAPI schema.
@@ -1713,11 +1737,14 @@ const (
 
 // PlanRunRequest is generated from the OpenAPI schema.
 type PlanRunRequest struct {
-	Dataset    string     `json:"dataset"`
-	Name       string     `json:"name"`
-	Recipe     RecipeSpec `json:"recipe"`
-	Split      *SplitSpec `json:"split,omitempty"`
-	MaxCostUSD *float64   `json:"max_cost_usd,omitempty"`
+	// Dataset Dataset to train on. The run pins its current version.
+	Dataset string `json:"dataset"`
+	// Name Run name; the artifact it produces is released as `name@version`.
+	Name   string     `json:"name"`
+	Recipe RecipeSpec `json:"recipe"`
+	Split  *SplitSpec `json:"split,omitempty"`
+	// MaxCostUSD Hard spend cap in USD. The run stops with `stopped_budget` and keeps its checkpoint when it reaches the cap, and is never billed past it. Default: no cap.
+	MaxCostUSD *float64 `json:"max_cost_usd,omitempty"`
 }
 
 // PlanRunResponse is generated from the OpenAPI schema.
@@ -2193,26 +2220,39 @@ func (m *RouterParetoSummary) UnmarshalJSON(data []byte) error {
 
 // Run is generated from the OpenAPI schema.
 type Run struct {
-	ID                    string            `json:"id"`
-	WorkspaceID           string            `json:"workspace_id"`
-	Name                  string            `json:"name"`
-	DatasetID             string            `json:"dataset_id"`
-	DatasetName           string            `json:"dataset_name"`
-	DatasetVersion        int               `json:"dataset_version"`
-	RecipeKind            RecipeKind        `json:"recipe_kind"`
-	Status                RunStatus         `json:"status"`
-	ResolvedConfig        ResolvedRunConfig `json:"resolved_config"`
-	MaxCostUSD            *float64          `json:"max_cost_usd"`
-	PricePerMillionTokens float64           `json:"price_per_million_tokens"`
-	TokensProcessed       int               `json:"tokens_processed"`
-	CostUSD               float64           `json:"cost_usd"`
-	CurrentStep           int               `json:"current_step"`
-	TotalSteps            int               `json:"total_steps"`
+	// ID Run id (`run_` and 24 hex characters).
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	// Name Run name; its artifact is released as `name@version`.
+	Name string `json:"name"`
+	// DatasetID Id of the dataset trained on.
+	DatasetID string `json:"dataset_id"`
+	// DatasetName Name of the dataset trained on.
+	DatasetName string `json:"dataset_name"`
+	// DatasetVersion The dataset version the run pinned when it was created.
+	DatasetVersion int               `json:"dataset_version"`
+	RecipeKind     RecipeKind        `json:"recipe_kind"`
+	Status         RunStatus         `json:"status"`
+	ResolvedConfig ResolvedRunConfig `json:"resolved_config"`
+	// MaxCostUSD Hard spend cap in USD (null: none). The run is never billed past it.
+	MaxCostUSD *float64 `json:"max_cost_usd"`
+	// PricePerMillionTokens USD per million tokens processed, fixed when the run was created.
+	PricePerMillionTokens float64 `json:"price_per_million_tokens"`
+	// TokensProcessed Training tokens processed so far, over every attempt.
+	TokensProcessed int `json:"tokens_processed"`
+	// CostUSD Cost of the tokens processed so far, in USD. It counts the whole step that crossed max_cost_usd; billing stops at the cap.
+	CostUSD float64 `json:"cost_usd"`
+	// CurrentStep Last optimizer step reported.
+	CurrentStep int `json:"current_step"`
+	// TotalSteps Planned optimizer steps.
+	TotalSteps int `json:"total_steps"`
 	// Attempt Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed).
 	Attempt int `json:"attempt"`
 	// MaxAttempts The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.
-	MaxAttempts      int              `json:"max_attempts"`
-	Phase            *RunPhaseType    `json:"phase"`
+	MaxAttempts int `json:"max_attempts"`
+	// Phase What the run is doing now while it is queued or running.
+	Phase *RunPhaseType `json:"phase"`
+	// PhaseSince When the run entered its phase.
 	PhaseSince       *string          `json:"phase_since"`
 	LastInterruption *RunInterruption `json:"last_interruption"`
 	// WorkersOnline While queued: workers of this kind holding a lease (all busy). Null otherwise.
@@ -2229,11 +2269,16 @@ type Run struct {
 	EvalReport     *EvalReport  `json:"eval_report"`
 	// CheckpointEvals recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.
 	CheckpointEvals []CheckpointEvalResult `json:"checkpoint_evals"`
-	ArtifactID      *string                `json:"artifact_id"`
-	Error           *string                `json:"error"`
-	CreatedAt       string                 `json:"created_at"`
-	UpdatedAt       string                 `json:"updated_at"`
-	FinishedAt      *string                `json:"finished_at"`
+	// ArtifactID The released artifact (`name@version`) once the run completes; null before.
+	ArtifactID *string `json:"artifact_id"`
+	// Error Why the run failed or stopped; null otherwise.
+	Error *string `json:"error"`
+	// CreatedAt When the run was created.
+	CreatedAt string `json:"created_at"`
+	// UpdatedAt When the run last changed.
+	UpdatedAt string `json:"updated_at"`
+	// FinishedAt When the run reached a final status; null while it is queued or running.
+	FinishedAt *string `json:"finished_at"`
 	// Warnings Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events.
 	Warnings []string `json:"warnings,omitempty"`
 }

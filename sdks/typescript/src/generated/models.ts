@@ -29,22 +29,32 @@ export type ApiKeyScope = "admin" | "datasets:read" | "datasets:write" | "runs:r
 export const ApiKeyScopeValues = ["admin", "datasets:read", "datasets:write", "runs:read", "runs:write", "artifacts:read", "artifacts:write", "artifacts:pin", "secrets:read", "secrets:write", "sources:read", "sources:write", "deployments:write", "feedback:write", "env:serve"] as const;
 
 export interface Artifact {
+  /** Artifact id: `name@version`. */
   id: string;
   workspaceId: string;
+  /** Artifact name, usually the run name. */
   name: string;
+  /** Version, `YYYY-MM-DD-N`: the release date and its sequence that day. */
   version: string;
+  /** The run that trained it; null for uploads and imports. */
   runId: string | null;
+  /** The checkpoint it was promoted from; null when it is a run's final artifact or was uploaded or imported. */
   checkpointId: string | null;
+  /** The base model the weights apply to. */
   baseModel: string;
   recipeKind: RecipeKind;
   format: ArtifactFormat | null;
+  /** SHA-256 of the bundle; downloads verify it. */
   sha256: string;
+  /** Bundle size in bytes. */
   sizeBytes: number;
+  /** The bundle's manifest.json: format, base model, adapter and training settings. */
   manifest: Record<string, unknown>;
   provenance: ArtifactProvenance;
   evalReport: EvalReport | null;
   /** Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted. */
   pins: Array<ArtifactPin>;
+  /** When it was released. */
   createdAt: string;
 }
 
@@ -158,18 +168,28 @@ export interface ChatMessage {
 }
 
 export interface Checkpoint {
+  /** Checkpoint id (`ckpt_` and 24 hex characters). */
   id: string;
   workspaceId: string;
+  /** The run that saved it. */
   runId: string;
+  /** The attempt that saved it. */
   attempt: number;
+  /** Optimizer step it was saved at. */
   step: number;
+  /** Held-out score at this step; null when it wasn't evaluated. */
   evalScore: number | null;
   format: ArtifactFormat | null;
+  /** SHA-256 of the checkpoint bundle. */
   sha256: string;
+  /** Bundle size in bytes. */
   sizeBytes: number;
   metadata: Record<string, unknown>;
+  /** True for the checkpoint `select="best"` picks; it never expires. */
   best: boolean;
+  /** True for the run's last checkpoint; it never expires. */
   final: boolean;
+  /** When it expires (after `checkpoint_ttl_days`, 30 by default); null for checkpoints that never expire, such as the best and final. */
   expiresAt: string | null;
   createdAt: string;
 }
@@ -264,12 +284,16 @@ export interface CreatedApiKey {
 }
 
 export interface Dataset {
+  /** Dataset id (`ds_` and 24 hex characters). */
   id: string;
   workspaceId: string;
+  /** Dataset name, unique in the workspace. */
   name: string;
+  /** Current version. Every push, import, score or sync that changes records adds one; runs and evals pin a version. */
   version: number;
   /** Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again. */
   recordCount: number;
+  /** Free-form metadata you set at creation. */
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -771,10 +795,13 @@ export interface PlanEvalResponse {
 }
 
 export interface PlanRunRequest {
+  /** Dataset to train on. The run pins its current version. */
   dataset: string;
+  /** Run name; the artifact it produces is released as `name@version`. */
   name: string;
   recipe: RecipeSpec;
   split?: SplitSpec | undefined;
+  /** Hard spend cap in USD. The run stops with `stopped_budget` and keeps its checkpoint when it reaches the cap, and is never billed past it. Default: no cap. */
   maxCostUsd?: number | undefined;
 }
 
@@ -1016,26 +1043,39 @@ export interface RouterParetoSummary {
 }
 
 export interface Run {
+  /** Run id (`run_` and 24 hex characters). */
   id: string;
   workspaceId: string;
+  /** Run name; its artifact is released as `name@version`. */
   name: string;
+  /** Id of the dataset trained on. */
   datasetId: string;
+  /** Name of the dataset trained on. */
   datasetName: string;
+  /** The dataset version the run pinned when it was created. */
   datasetVersion: number;
   recipeKind: RecipeKind;
   status: RunStatus;
   resolvedConfig: ResolvedRunConfig;
+  /** Hard spend cap in USD (null: none). The run is never billed past it. */
   maxCostUsd: number | null;
+  /** USD per million tokens processed, fixed when the run was created. */
   pricePerMillionTokens: number;
+  /** Training tokens processed so far, over every attempt. */
   tokensProcessed: number;
+  /** Cost of the tokens processed so far, in USD. It counts the whole step that crossed max_cost_usd; billing stops at the cap. */
   costUsd: number;
+  /** Last optimizer step reported. */
   currentStep: number;
+  /** Planned optimizer steps. */
   totalSteps: number;
   /** Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed). */
   attempt: number;
   /** The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it. */
   maxAttempts: number;
+  /** What the run is doing now while it is queued or running. */
   phase: ("queued" | "waiting_for_compute" | "starting" | "loading_model" | "training" | "evaluating" | "checkpointing" | "uploading" | "completing") | null;
+  /** When the run entered its phase. */
   phaseSince: string | null;
   lastInterruption: RunInterruption | null;
   /** While queued: workers of this kind holding a lease (all busy). Null otherwise. */
@@ -1052,10 +1092,15 @@ export interface Run {
   evalReport: EvalReport | null;
   /** recipe.evals results, one per finished eval: a checkpoint (step) on a dataset. */
   checkpointEvals: Array<CheckpointEvalResult>;
+  /** The released artifact (`name@version`) once the run completes; null before. */
   artifactId: string | null;
+  /** Why the run failed or stopped; null otherwise. */
   error: string | null;
+  /** When the run was created. */
   createdAt: string;
+  /** When the run last changed. */
   updatedAt: string;
+  /** When the run reached a final status; null while it is queued or running. */
   finishedAt: string | null;
   /** Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events. */
   warnings?: Array<string> | undefined;

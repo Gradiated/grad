@@ -123,22 +123,32 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Artifact {
+    /// Artifact id: `name@version`.
     pub id: String,
     pub workspace_id: String,
+    /// Artifact name, usually the run name.
     pub name: String,
+    /// Version, `YYYY-MM-DD-N`: the release date and its sequence that day.
     pub version: String,
+    /// The run that trained it; null for uploads and imports.
     pub run_id: Option<String>,
+    /// The checkpoint it was promoted from; null when it is a run's final artifact or was uploaded or imported.
     pub checkpoint_id: Option<String>,
+    /// The base model the weights apply to.
     pub base_model: String,
     pub recipe_kind: RecipeKind,
     pub format: Option<ArtifactFormat>,
+    /// SHA-256 of the bundle; downloads verify it.
     pub sha256: String,
+    /// Bundle size in bytes.
     pub size_bytes: i64,
+    /// The bundle's manifest.json: format, base model, adapter and training settings.
     pub manifest: BTreeMap<String, Value>,
     pub provenance: ArtifactProvenance,
     pub eval_report: Option<EvalReport>,
     /// Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.
     pub pins: Vec<ArtifactPin>,
+    /// When it was released.
     pub created_at: String,
 }
 
@@ -330,18 +340,28 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Checkpoint {
+    /// Checkpoint id (`ckpt_` and 24 hex characters).
     pub id: String,
     pub workspace_id: String,
+    /// The run that saved it.
     pub run_id: String,
+    /// The attempt that saved it.
     pub attempt: i64,
+    /// Optimizer step it was saved at.
     pub step: i64,
+    /// Held-out score at this step; null when it wasn't evaluated.
     pub eval_score: Option<f64>,
     pub format: Option<ArtifactFormat>,
+    /// SHA-256 of the checkpoint bundle.
     pub sha256: String,
+    /// Bundle size in bytes.
     pub size_bytes: i64,
     pub metadata: BTreeMap<String, Value>,
+    /// True for the checkpoint `select="best"` picks; it never expires.
     pub best: bool,
+    /// True for the run's last checkpoint; it never expires.
     pub r#final: bool,
+    /// When it expires (after `checkpoint_ttl_days`, 30 by default); null for checkpoints that never expire, such as the best and final.
     pub expires_at: Option<String>,
     pub created_at: String,
 }
@@ -414,12 +434,16 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Dataset {
+    /// Dataset id (`ds_` and 24 hex characters).
     pub id: String,
     pub workspace_id: String,
+    /// Dataset name, unique in the workspace.
     pub name: String,
+    /// Current version. Every push, import, score or sync that changes records adds one; runs and evals pin a version.
     pub version: i64,
     /// Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again.
     pub record_count: i64,
+    /// Free-form metadata you set at creation.
     pub metadata: BTreeMap<String, Value>,
     pub created_at: String,
     pub updated_at: String,
@@ -1294,11 +1318,14 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlanRunRequest {
+    /// Dataset to train on. The run pins its current version.
     pub dataset: String,
+    /// Run name; the artifact it produces is released as `name@version`.
     pub name: String,
     pub recipe: RecipeSpec,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub split: Option<SplitSpec>,
+    /// Hard spend cap in USD. The run stops with `stopped_budget` and keeps its checkpoint when it reaches the cap, and is never billed past it. Default: no cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_cost_usd: Option<f64>,
 }
@@ -1803,26 +1830,39 @@ pub struct RouterParetoSummary {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Run {
+    /// Run id (`run_` and 24 hex characters).
     pub id: String,
     pub workspace_id: String,
+    /// Run name; its artifact is released as `name@version`.
     pub name: String,
+    /// Id of the dataset trained on.
     pub dataset_id: String,
+    /// Name of the dataset trained on.
     pub dataset_name: String,
+    /// The dataset version the run pinned when it was created.
     pub dataset_version: i64,
     pub recipe_kind: RecipeKind,
     pub status: RunStatus,
     pub resolved_config: ResolvedRunConfig,
+    /// Hard spend cap in USD (null: none). The run is never billed past it.
     pub max_cost_usd: Option<f64>,
+    /// USD per million tokens processed, fixed when the run was created.
     pub price_per_million_tokens: f64,
+    /// Training tokens processed so far, over every attempt.
     pub tokens_processed: i64,
+    /// Cost of the tokens processed so far, in USD. It counts the whole step that crossed max_cost_usd; billing stops at the cap.
     pub cost_usd: f64,
+    /// Last optimizer step reported.
     pub current_step: i64,
+    /// Planned optimizer steps.
     pub total_steps: i64,
     /// Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed).
     pub attempt: i64,
     /// The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.
     pub max_attempts: i64,
+    /// What the run is doing now while it is queued or running.
     pub phase: Option<RunPhase>,
+    /// When the run entered its phase.
     pub phase_since: Option<String>,
     pub last_interruption: Option<RunInterruption>,
     /// While queued: workers of this kind holding a lease (all busy). Null otherwise.
@@ -1839,10 +1879,15 @@ pub struct Run {
     pub eval_report: Option<EvalReport>,
     /// recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.
     pub checkpoint_evals: Vec<CheckpointEvalResult>,
+    /// The released artifact (`name@version`) once the run completes; null before.
     pub artifact_id: Option<String>,
+    /// Why the run failed or stopped; null otherwise.
     pub error: Option<String>,
+    /// When the run was created.
     pub created_at: String,
+    /// When the run last changed.
     pub updated_at: String,
+    /// When the run reached a final status; null while it is queued or running.
     pub finished_at: Option<String>,
     /// Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events.
     #[serde(skip_serializing_if = "Option::is_none")]

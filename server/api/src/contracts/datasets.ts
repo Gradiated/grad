@@ -81,15 +81,29 @@ export type DatasetRecord = z.infer<typeof DatasetRecordSchema>;
 
 export const DatasetSchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .openapi({ description: "Dataset id (`ds_` and 24 hex characters)." }),
     workspace_id: z.string().min(1),
-    name: SlugSchema,
-    version: z.number().int().min(0),
+    name: SlugSchema.openapi({
+      description: "Dataset name, unique in the workspace.",
+    }),
+    version: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({
+        description:
+          "Current version. Every push, import, score or sync that changes records adds one; runs and evals pin a version.",
+      }),
     record_count: z.number().int().min(0).openapi({
       description:
         "Records in the current version after merging: score updates fold into their records, and a full source sync restarts the count. A record pushed again with an id it already has counts again.",
     }),
-    metadata: z.record(z.string(), z.unknown()),
+    metadata: z
+      .record(z.string(), z.unknown())
+      .openapi({ description: "Free-form metadata you set at creation." }),
     created_at: IsoTimestampSchema,
     updated_at: IsoTimestampSchema,
   })

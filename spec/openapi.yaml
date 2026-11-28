@@ -216,6 +216,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: Dataset id (`ds_` and 24 hex characters).
         workspace_id:
           type: string
           minLength: 1
@@ -224,9 +225,12 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Dataset name, unique in the workspace.
         version:
           type: integer
           minimum: 0
+          description: Current version. Every push, import, score or sync that changes records adds one; runs and evals pin a
+            version.
         record_count:
           type: integer
           minimum: 0
@@ -235,6 +239,7 @@ components:
         metadata:
           type: object
           additionalProperties: {}
+          description: Free-form metadata you set at creation.
         created_at:
           type: string
           format: date-time
@@ -1708,11 +1713,13 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Dataset to train on. The run pins its current version.
         name:
           type: string
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Run name; the artifact it produces is released as `name@version`.
         recipe:
           $ref: "#/components/schemas/RecipeSpec"
         split:
@@ -1720,6 +1727,8 @@ components:
         max_cost_usd:
           type: number
           exclusiveMinimum: 0
+          description: "Hard spend cap in USD. The run stops with `stopped_budget` and keeps its checkpoint when it reaches the
+            cap, and is never billed past it. Default: no cap."
       required:
         - dataset
         - name
@@ -2108,6 +2117,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: Run id (`run_` and 24 hex characters).
         workspace_id:
           type: string
           minLength: 1
@@ -2116,17 +2126,21 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Run name; its artifact is released as `name@version`.
         dataset_id:
           type: string
           minLength: 1
+          description: Id of the dataset trained on.
         dataset_name:
           type: string
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Name of the dataset trained on.
         dataset_version:
           type: integer
           minimum: 0
+          description: The dataset version the run pinned when it was created.
         recipe_kind:
           $ref: "#/components/schemas/RecipeKind"
         status:
@@ -2138,21 +2152,28 @@ components:
             - number
             - "null"
           exclusiveMinimum: 0
+          description: "Hard spend cap in USD (null: none). The run is never billed past it."
         price_per_million_tokens:
           type: number
           exclusiveMinimum: 0
+          description: USD per million tokens processed, fixed when the run was created.
         tokens_processed:
           type: integer
           minimum: 0
+          description: Training tokens processed so far, over every attempt.
         cost_usd:
           type: number
           minimum: 0
+          description: Cost of the tokens processed so far, in USD. It counts the whole step that crossed max_cost_usd; billing
+            stops at the cap.
         current_step:
           type: integer
           minimum: 0
+          description: Last optimizer step reported.
         total_steps:
           type: integer
           minimum: 0
+          description: Planned optimizer steps.
         attempt:
           type: integer
           minimum: 0
@@ -2177,11 +2198,13 @@ components:
             - uploading
             - completing
             - null
+          description: What the run is doing now while it is queued or running.
         phase_since:
           type:
             - string
             - "null"
           format: date-time
+          description: When the run entered its phase.
         last_interruption:
           $ref: "#/components/schemas/RunInterruption"
         workers_online:
@@ -2230,21 +2253,26 @@ components:
           type:
             - string
             - "null"
+          description: The released artifact (`name@version`) once the run completes; null before.
         error:
           type:
             - string
             - "null"
+          description: Why the run failed or stopped; null otherwise.
         created_at:
           type: string
           format: date-time
+          description: When the run was created.
         updated_at:
           type: string
           format: date-time
+          description: When the run last changed.
         finished_at:
           type:
             - string
             - "null"
           format: date-time
+          description: When the run reached a final status; null while it is queued or running.
         warnings:
           type: array
           items:
@@ -3257,42 +3285,53 @@ components:
         id:
           type: string
           minLength: 1
+          description: Checkpoint id (`ckpt_` and 24 hex characters).
         workspace_id:
           type: string
           minLength: 1
         run_id:
           type: string
           minLength: 1
+          description: The run that saved it.
         attempt:
           type: integer
           minimum: 1
+          description: The attempt that saved it.
         step:
           type: integer
           minimum: 0
+          description: Optimizer step it was saved at.
         eval_score:
           type:
             - number
             - "null"
+          description: Held-out score at this step; null when it wasn't evaluated.
         format:
           $ref: "#/components/schemas/ArtifactFormat"
         sha256:
           type: string
           pattern: ^[0-9a-f]{64}$
+          description: SHA-256 of the checkpoint bundle.
         size_bytes:
           type: integer
           minimum: 0
+          description: Bundle size in bytes.
         metadata:
           type: object
           additionalProperties: {}
         best:
           type: boolean
+          description: True for the checkpoint `select="best"` picks; it never expires.
         final:
           type: boolean
+          description: True for the run's last checkpoint; it never expires.
         expires_at:
           type:
             - string
             - "null"
           format: date-time
+          description: When it expires (after `checkpoint_ttl_days`, 30 by default); null for checkpoints that never expire, such
+            as the best and final.
         created_at:
           type: string
           format: date-time
@@ -3317,6 +3356,7 @@ components:
         id:
           type: string
           minLength: 1
+          description: "Artifact id: `name@version`."
         workspace_id:
           type: string
           minLength: 1
@@ -3325,20 +3365,25 @@ components:
           minLength: 1
           maxLength: 64
           pattern: ^[a-z0-9][a-z0-9._-]{0,63}$
+          description: Artifact name, usually the run name.
         version:
           type: string
           minLength: 1
+          description: "Version, `YYYY-MM-DD-N`: the release date and its sequence that day."
         run_id:
           type:
             - string
             - "null"
+          description: The run that trained it; null for uploads and imports.
         checkpoint_id:
           type:
             - string
             - "null"
+          description: The checkpoint it was promoted from; null when it is a run's final artifact or was uploaded or imported.
         base_model:
           type: string
           minLength: 1
+          description: The base model the weights apply to.
         recipe_kind:
           $ref: "#/components/schemas/RecipeKind"
         format:
@@ -3346,12 +3391,15 @@ components:
         sha256:
           type: string
           pattern: ^[0-9a-f]{64}$
+          description: SHA-256 of the bundle; downloads verify it.
         size_bytes:
           type: integer
           minimum: 0
+          description: Bundle size in bytes.
         manifest:
           type: object
           additionalProperties: {}
+          description: "The bundle's manifest.json: format, base model, adapter and training settings."
         provenance:
           $ref: "#/components/schemas/ArtifactProvenance"
         eval_report:
@@ -3364,6 +3412,7 @@ components:
         created_at:
           type: string
           format: date-time
+          description: When it was released.
       required:
         - id
         - workspace_id

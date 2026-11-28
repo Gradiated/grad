@@ -286,11 +286,19 @@ export type RecipeSpec = z.infer<typeof RecipeSpecSchema>;
 
 export const PlanRunRequestSchema = z
   .object({
-    dataset: SlugSchema,
-    name: SlugSchema,
+    dataset: SlugSchema.openapi({
+      description: "Dataset to train on. The run pins its current version.",
+    }),
+    name: SlugSchema.openapi({
+      description:
+        "Run name; the artifact it produces is released as `name@version`.",
+    }),
     recipe: RecipeSpecSchema,
     split: SplitSpecSchema.optional(),
-    max_cost_usd: z.number().positive().optional(),
+    max_cost_usd: z.number().positive().optional().openapi({
+      description:
+        "Hard spend cap in USD. The run stops with `stopped_budget` and keeps its checkpoint when it reaches the cap, and is never billed past it. Default: no cap.",
+    }),
   })
   .strict()
   .openapi("PlanRunRequest");
@@ -594,21 +602,50 @@ export type RunInterruption = z.infer<typeof RunInterruptionSchema>;
 
 export const RunSchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .openapi({ description: "Run id (`run_` and 24 hex characters)." }),
     workspace_id: z.string().min(1),
-    name: SlugSchema,
-    dataset_id: z.string().min(1),
-    dataset_name: SlugSchema,
-    dataset_version: z.number().int().min(0),
+    name: SlugSchema.openapi({
+      description: "Run name; its artifact is released as `name@version`.",
+    }),
+    dataset_id: z
+      .string()
+      .min(1)
+      .openapi({ description: "Id of the dataset trained on." }),
+    dataset_name: SlugSchema.openapi({
+      description: "Name of the dataset trained on.",
+    }),
+    dataset_version: z.number().int().min(0).openapi({
+      description: "The dataset version the run pinned when it was created.",
+    }),
     recipe_kind: RecipeKindSchema,
     status: RunStatusSchema,
     resolved_config: ResolvedRunConfigSchema,
-    max_cost_usd: z.number().positive().nullable(),
-    price_per_million_tokens: z.number().positive(),
-    tokens_processed: z.number().int().min(0),
-    cost_usd: z.number().min(0),
-    current_step: z.number().int().min(0),
-    total_steps: z.number().int().min(0),
+    max_cost_usd: z.number().positive().nullable().openapi({
+      description:
+        "Hard spend cap in USD (null: none). The run is never billed past it.",
+    }),
+    price_per_million_tokens: z.number().positive().openapi({
+      description:
+        "USD per million tokens processed, fixed when the run was created.",
+    }),
+    tokens_processed: z.number().int().min(0).openapi({
+      description: "Training tokens processed so far, over every attempt.",
+    }),
+    cost_usd: z.number().min(0).openapi({
+      description:
+        "Cost of the tokens processed so far, in USD. It counts the whole step that crossed max_cost_usd; billing stops at the cap.",
+    }),
+    current_step: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Last optimizer step reported." }),
+    total_steps: z.number().int().min(0).openapi({
+      description: "Planned optimizer steps.",
+    }),
     attempt: z.number().int().min(0).openapi({
       description:
         "Attempts started so far (every start on a worker counts, including ones whose GPU was reclaimed).",
@@ -617,8 +654,12 @@ export const RunSchema = z
       description:
         "The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.",
     }),
-    phase: z.enum(RUN_PHASES).nullable(),
-    phase_since: IsoTimestampSchema.nullable(),
+    phase: z.enum(RUN_PHASES).nullable().openapi({
+      description: "What the run is doing now while it is queued or running.",
+    }),
+    phase_since: IsoTimestampSchema.nullable().openapi({
+      description: "When the run entered its phase.",
+    }),
     last_interruption: RunInterruptionSchema.nullable(),
     workers_online: z.number().int().min(0).nullable().openapi({
       description:
@@ -646,11 +687,23 @@ export const RunSchema = z
       description:
         "recipe.evals results, one per finished eval: a checkpoint (step) on a dataset.",
     }),
-    artifact_id: z.string().nullable(),
-    error: z.string().nullable(),
-    created_at: IsoTimestampSchema,
-    updated_at: IsoTimestampSchema,
-    finished_at: IsoTimestampSchema.nullable(),
+    artifact_id: z.string().nullable().openapi({
+      description:
+        "The released artifact (`name@version`) once the run completes; null before.",
+    }),
+    error: z.string().nullable().openapi({
+      description: "Why the run failed or stopped; null otherwise.",
+    }),
+    created_at: IsoTimestampSchema.openapi({
+      description: "When the run was created.",
+    }),
+    updated_at: IsoTimestampSchema.openapi({
+      description: "When the run last changed.",
+    }),
+    finished_at: IsoTimestampSchema.nullable().openapi({
+      description:
+        "When the run reached a final status; null while it is queued or running.",
+    }),
     warnings: z.array(z.string()).optional().openapi({
       description:
         "Only on the response that created the run (POST /v1/runs): the plan's warnings, such as another queued or running run with the same name. They're also the run's first warning events.",
@@ -701,22 +754,52 @@ export const NON_DEPLOYABLE_FORMATS: readonly ArtifactFormat[] = ["reference"];
 
 export const CheckpointSchema = z
   .object({
-    id: z.string().min(1),
+    id: z.string().min(1).openapi({
+      description: "Checkpoint id (`ckpt_` and 24 hex characters).",
+    }),
     workspace_id: z.string().min(1),
-    run_id: z.string().min(1),
-    attempt: z.number().int().min(1),
-    step: z.number().int().min(0),
-    eval_score: z.number().nullable(),
+    run_id: z
+      .string()
+      .min(1)
+      .openapi({ description: "The run that saved it." }),
+    attempt: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "The attempt that saved it." }),
+    step: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Optimizer step it was saved at." }),
+    eval_score: z.number().nullable().openapi({
+      description:
+        "Held-out score at this step; null when it wasn't evaluated.",
+    }),
     format: ArtifactFormatSchema.nullable().openapi({
       description:
         "Artifact format when this checkpoint is exportable (promotable); null for training state only.",
     }),
-    sha256: Sha256HexSchema,
-    size_bytes: z.number().int().min(0),
+    sha256: Sha256HexSchema.openapi({
+      description: "SHA-256 of the checkpoint bundle.",
+    }),
+    size_bytes: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Bundle size in bytes." }),
     metadata: z.record(z.string(), z.unknown()),
-    best: z.boolean(),
-    final: z.boolean(),
-    expires_at: IsoTimestampSchema.nullable(),
+    best: z.boolean().openapi({
+      description:
+        'True for the checkpoint `select="best"` picks; it never expires.',
+    }),
+    final: z.boolean().openapi({
+      description: "True for the run's last checkpoint; it never expires.",
+    }),
+    expires_at: IsoTimestampSchema.nullable().openapi({
+      description:
+        "When it expires (after `checkpoint_ttl_days`, 30 by default); null for checkpoints that never expire, such as the best and final.",
+    }),
     created_at: IsoTimestampSchema,
   })
   .openapi("Checkpoint");
@@ -763,25 +846,52 @@ export type ArtifactPin = z.infer<typeof ArtifactPinSchema>;
 
 export const ArtifactSchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .openapi({ description: "Artifact id: `name@version`." }),
     workspace_id: z.string().min(1),
-    name: SlugSchema,
-    version: z.string().min(1),
-    run_id: z.string().nullable(),
-    checkpoint_id: z.string().nullable(),
-    base_model: z.string().min(1),
+    name: SlugSchema.openapi({
+      description: "Artifact name, usually the run name.",
+    }),
+    version: z.string().min(1).openapi({
+      description:
+        "Version, `YYYY-MM-DD-N`: the release date and its sequence that day.",
+    }),
+    run_id: z.string().nullable().openapi({
+      description: "The run that trained it; null for uploads and imports.",
+    }),
+    checkpoint_id: z.string().nullable().openapi({
+      description:
+        "The checkpoint it was promoted from; null when it is a run's final artifact or was uploaded or imported.",
+    }),
+    base_model: z
+      .string()
+      .min(1)
+      .openapi({ description: "The base model the weights apply to." }),
     recipe_kind: RecipeKindSchema,
     format: ArtifactFormatSchema,
-    sha256: Sha256HexSchema,
-    size_bytes: z.number().int().min(0),
-    manifest: z.record(z.string(), z.unknown()),
+    sha256: Sha256HexSchema.openapi({
+      description: "SHA-256 of the bundle; downloads verify it.",
+    }),
+    size_bytes: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "Bundle size in bytes." }),
+    manifest: z.record(z.string(), z.unknown()).openapi({
+      description:
+        "The bundle's manifest.json: format, base model, adapter and training settings.",
+    }),
     provenance: ArtifactProvenanceSchema,
     eval_report: EvalReportSchema.nullable(),
     pins: z.array(ArtifactPinSchema).openapi({
       description:
         "Holders keeping it (a published model version, say), oldest first. A pinned artifact can't be deleted.",
     }),
-    created_at: IsoTimestampSchema,
+    created_at: IsoTimestampSchema.openapi({
+      description: "When it was released.",
+    }),
   })
   .openapi("Artifact");
 
