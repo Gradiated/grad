@@ -5,8 +5,8 @@ models swapped for the harness and its tiny test models. They skip cleanly when
 ``server/api/node_modules`` is missing or ``GRAD_SKIP_LIVE=1``; the Cloud torch-worker tests
 also needs ``GRAD_TRAINER_PYTHON`` (a Python with torch, transformers and peft).
 
-Run them memory-capped, e.g. ``/root/grad-work/capped.sh env PYTHONPATH=sdks/python
-python3 -m unittest discover -s sdks/python/tests -p test_live.py``.
+Run them with ``PYTHONPATH=sdks/python python3 -m unittest discover -s sdks/python/tests
+-p test_live.py``.
 """
 
 from __future__ import annotations

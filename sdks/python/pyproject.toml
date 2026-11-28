@@ -13,7 +13,7 @@ requires-python = ">=3.11"
 dependencies = ["httpx>=0.27,<1"]
 keywords = ["llm", "fine-tuning", "lora", "peft", "evals", "routing", "gradiated"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",

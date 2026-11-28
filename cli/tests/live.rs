@@ -5,7 +5,7 @@
 //! The torch test also uploads the harness's tiny LoRAs (`grad artifacts
 //! upload`), valid and invalid, and plans continued training from one. It
 //! needs `GRAD_TRAINER_PYTHON` pointing at a Python with the pinned torch stack
-//! (for example /root/grad-work/venv-trainer/bin/python); it skips otherwise.
+//! (for example `.venv-trainer/bin/python` from CONTRIBUTING.md); it skips otherwise.
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};

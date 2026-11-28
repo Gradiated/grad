@@ -34,6 +34,10 @@ python3 -m venv .venv-trainer
 .venv-trainer/bin/pip install -r server/trainer/requirements-dev.txt
 (cd server/trainer && PYTHONPATH=. ../../.venv-trainer/bin/python -m unittest discover -s tests)
 
+# Web UI
+pnpm -C server/ui install --frozen-lockfile
+pnpm -C server/ui check
+
 # Python SDK
 pip install -e "sdks/python[dev]"
 python3 -m unittest discover -s sdks/python/tests
