@@ -576,7 +576,9 @@ describe("S3 down", () => {
 });
 
 describe("S3 lost an object a row names", () => {
-  it("answers 500 storage_object_missing, not a bare internal_error", async () => {
+  // A lost dataset part has its own answer (410 dataset_part_missing); any
+  // other missing object falls back to 500 storage_object_missing (app.ts).
+  it("a lost dataset part answers 410 dataset_part_missing, not a bare internal_error", async () => {
     const { ObjectNotFoundError } = await import("../src/storage/types.js");
     const t = await makeTestApp();
     try {
@@ -605,8 +607,8 @@ describe("S3 lost an object a row names", () => {
         },
       });
       expect([res.status, res.body.code]).toEqual([
-        500,
-        "storage_object_missing",
+        410,
+        "dataset_part_missing",
       ]);
       await lost.close();
     } finally {
