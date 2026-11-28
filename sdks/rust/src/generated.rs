@@ -1932,9 +1932,9 @@ pub struct Run {
     pub attempt: i64,
     /// The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.
     pub max_attempts: i64,
-    /// What the run is doing now while it is queued or running.
+    /// What the run is doing now; null once it has finished (finished_at is set). A cancelled run whose worker hasn't stopped yet reads stopping. The run's events keep every phase it went through.
     pub phase: Option<RunPhase>,
-    /// When the run entered its phase.
+    /// When the run entered its phase; null with phase.
     pub phase_since: Option<String>,
     pub last_interruption: Option<RunInterruption>,
     /// While queued: workers of this kind holding a lease (all busy). Null otherwise.
@@ -2012,6 +2012,7 @@ string_enum! {
         Checkpointing => "checkpointing",
         Uploading => "uploading",
         Completing => "completing",
+        Stopping => "stopping",
     }
 }
 

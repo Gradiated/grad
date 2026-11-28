@@ -198,7 +198,12 @@ describe("run lifecycle events", () => {
     expect(byType("completed")[0]).toMatchObject({
       status: "completed",
       seq: seqs.at(-2),
-      run: { status: "completed", phase: "completing" },
+      run: { status: "completed", phase: null, phase_since: null },
+    });
+    // A finished run has no phase; its events keep the last one.
+    expect(await getRun(run.id)).toMatchObject({
+      phase: null,
+      phase_since: null,
     });
 
     // SSE: event name = type, id = seq; Last-Event-ID resumes after it.
@@ -227,6 +232,48 @@ describe("run lifecycle events", () => {
     expect((await t.json(`/v1/runs/${run.id}/events?cursor=bad`)).status).toBe(
       422,
     );
+  });
+
+  it("says stopping while a cancelled run's dead worker still holds its lease, then settles at expiry", async () => {
+    const run = await createSftRun(t);
+    const job = (await worker.claim())!;
+    await reportPhase(job, "loading_model");
+
+    const cancelled = await t.json<RunView & { finished_at: string | null }>(
+      `/v1/runs/${run.id}/cancel`,
+      { method: "POST" },
+    );
+    expect(cancelled.body).toMatchObject({
+      status: "cancelled",
+      finished_at: null,
+      phase: "stopping",
+    });
+    const stopping = (await events(run.id)).data.at(-1);
+    expect(stopping).toMatchObject({
+      type: "phase",
+      phase: "stopping",
+      message: expect.stringContaining("lease expires"),
+    });
+    // A late phase report doesn't hide why the run waits.
+    expect((await reportPhase(job, "training")).status).toBe(204);
+    expect((await getRun(run.id)).phase).toBe("stopping");
+
+    // The worker never comes back: its lease expires and the run settles.
+    t.clock.advanceSeconds(81);
+    await t.services.maintenance.tick();
+    const settled = await t.json<RunView & { finished_at: string | null }>(
+      `/v1/runs/${run.id}`,
+    );
+    expect(settled.body).toMatchObject({
+      status: "cancelled",
+      phase: null,
+      phase_since: null,
+    });
+    expect(settled.body.finished_at).not.toBeNull();
+    expect((await events(run.id)).data.at(-1)).toMatchObject({
+      type: "completed",
+      status: "cancelled",
+    });
   });
 
   it("survives 12 reclaimed GPUs in a row, resuming from each emergency checkpoint, and bills each step once", async () => {

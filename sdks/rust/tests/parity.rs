@@ -621,7 +621,7 @@ fn typed_responses() {
         "artifact.provenance.uploader": artifact.provenance.uploader,
         "artifact_import.status": artifact_import.status.as_str(),
         "artifact_import.error_code": artifact_import.error_code,
-        "run.phase": run.phase.as_ref().unwrap().as_str(),
+        "run.phase": run.phase.as_ref().map(|p| p.as_str()),
         "run.last_interruption.reason": interruption.reason.as_str(),
         "run.last_interruption.resume_step": interruption.resume_step,
         "run_events.data[2].phase": phase(2).phase.as_str(),

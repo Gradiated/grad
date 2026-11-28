@@ -2270,14 +2270,16 @@ components:
             - checkpointing
             - uploading
             - completing
+            - stopping
             - null
-          description: What the run is doing now while it is queued or running.
+          description: What the run is doing now; null once it has finished (finished_at is set). A cancelled run whose worker
+            hasn't stopped yet reads stopping. The run's events keep every phase it went through.
         phase_since:
           type:
             - string
             - "null"
           format: date-time
-          description: When the run entered its phase.
+          description: When the run entered its phase; null with phase.
         last_interruption:
           anyOf:
             - $ref: "#/components/schemas/RunInterruption"
@@ -3077,8 +3079,8 @@ components:
             - string
             - "null"
           description: 'queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued:
-            workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null
-            when it is next in line.'
+            workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"); null
+            when it is next in line. stopping: what the run waits for. Null for other phases.'
         gpu:
           anyOf:
             - $ref: "#/components/schemas/GpuInfo"
@@ -3110,10 +3112,11 @@ components:
         - checkpointing
         - uploading
         - completing
-      description: "Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is
-        authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the
-        server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the
-        worker reports the rest. training, evaluating and checkpointing repeat."
+        - stopping
+      description: "Where a run is in its lifecycle. queued, waiting_for_compute (queued for longer than the server's
+        threshold with no worker claiming it), starting (a worker claimed it) and stopping (cancelled while a worker
+        holds it: the run ends once the worker stops, or once its lease expires if the worker is gone) come from the
+        server; the worker reports the rest. training, evaluating and checkpointing repeat."
     GpuInfo:
       type: object
       properties:

@@ -810,6 +810,15 @@ fn terminal_statuses() {
     m.apply_run(r);
     assert!(text(&render(&m, 100, 30)).contains("Run failed: CUDA out of memory"));
 
+    // Cancelled while the worker still holds the run: the server says stopping.
+    let mut m = replay(&fx, 300);
+    let stopping = json!({"type": "phase", "seq": 900, "phase": "stopping", "step": 300});
+    feed(&mut m, &fx, event(&fx, 400, 1, stopping));
+    let mut r = m.run.clone();
+    r.status = RunStatus::Cancelled;
+    m.apply_run(r);
+    assert_eq!(label(&m), "Cancelled: waiting for the worker to stop");
+
     // Without a cap the cost line says so; near the cap it turns yellow.
     let mut m = replay(&fx, 300);
     m.run.max_cost_usd = None;

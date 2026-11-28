@@ -690,8 +690,9 @@ class Run(APIObject):
     attempt: int = 0
     max_attempts: int | None = None
     phase: str | None = None
-    """The latest lifecycle phase (``queued``, ``waiting_for_compute``, ``starting``, ``loading_model``,
-    ``training``, ``evaluating``, ``checkpointing``, ``uploading``, ``completing``)."""
+    """What the run is doing now (``queued``, ``waiting_for_compute``, ``starting``, ``loading_model``,
+    ``training``, ``evaluating``, ``checkpointing``, ``uploading``, ``completing``; ``stopping`` once
+    cancelled while its worker still holds it); ``None`` once the run has finished."""
     phase_since: str | None = None
     last_interruption: RunInterruption | None = None
     workers_online: int | None = None
@@ -1333,7 +1334,7 @@ class _RunEventBase(APIObject):
 
 @dataclass(kw_only=True, repr=False, eq=False)
 class PhaseEvent(_RunEventBase):
-    """The run entered ``phase`` (``queued`` ... ``completing``)."""
+    """The run entered ``phase`` (``queued`` ... ``completing``, or ``stopping`` after a cancel)."""
 
     phase: str = ""
     step: int = 0

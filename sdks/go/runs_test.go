@@ -123,6 +123,22 @@ func TestCreateCarriesThePlanWarnings(t *testing.T) {
 	}
 }
 
+func TestRunWaitWaitsForACancelledRunToSettle(t *testing.T) {
+	ctx := context.Background()
+	stopping := runFixture(t, "cancelled")
+	stopping["finished_at"], stopping["phase"] = nil, "stopping"
+	settled := runFixture(t, "cancelled")
+	settled["phase"] = nil
+	id := stopping["id"].(string)
+	f := newFake(t, map[string]route{"GET /v1/runs/" + id: sequence(jsonValue(200, stopping), jsonValue(200, stopping), jsonValue(200, settled))})
+	c, _ := f.client()
+	_, err := c.Runs.Wait(ctx, id)
+	var rf *grad.RunFailedError
+	if !errors.As(err, &rf) || rf.Run.FinishedAt == nil || f.count("GET", "/v1/runs/"+id) != 3 {
+		t.Fatalf("err %v, gets %d", err, f.count("GET", "/v1/runs/"+id))
+	}
+}
+
 func TestRunWaitTerminalFailuresTimeoutAndCancel(t *testing.T) {
 	ctx := context.Background()
 	for _, status := range []string{"failed", "cancelled", "stopped_budget"} {

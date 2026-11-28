@@ -188,8 +188,10 @@ const toPublicRun = (
   total_steps: run.total_steps,
   attempt: run.attempt,
   max_attempts: run.max_attempts,
-  phase: (run.phase_event?.payload.phase as Run["phase"] | undefined) ?? null,
-  phase_since: run.phase_event?.created_at ?? null,
+  phase: isSettled(run)
+    ? null
+    : ((run.phase_event?.payload.phase as Run["phase"] | undefined) ?? null),
+  phase_since: isSettled(run) ? null : (run.phase_event?.created_at ?? null),
   last_interruption: toInterruption(run.interruption_event),
   workers_online: compute.workers_online,
   autoscaling: compute.autoscaling,
@@ -1011,19 +1013,38 @@ export const createRunLifecycle = (
       }
 
       const now = clock.now().toISOString();
-      // Without a worker the run is final now; with one, closeAttempt settles it.
-      const updated = await store.runs.update(
-        id,
-        run.worker_id === null
-          ? {
-              status: "cancelled",
-              waiting_on: null,
-              finished_at: now,
-              updated_at: now,
-            }
-          : { status: "cancelled", updated_at: now },
-        { status: [run.status], workerId: run.worker_id },
-      );
+      // Without a worker the run is final now; with one, closeAttempt settles
+      // it once the worker stops (or its lease expires), and followers see
+      // the stopping phase meanwhile.
+      const updated = await store.transaction(async () => {
+        const cancelled = await store.runs.update(
+          id,
+          run.worker_id === null
+            ? {
+                status: "cancelled",
+                waiting_on: null,
+                finished_at: now,
+                updated_at: now,
+              }
+            : { status: "cancelled", updated_at: now },
+          { status: [run.status], workerId: run.worker_id },
+        );
+        if (cancelled && run.worker_id !== null) {
+          observePhaseEnd(run, "stopping");
+          await appendPhase(store.jobs, {
+            jobId: run.id,
+            attempt: run.attempt,
+            phase: "stopping",
+            step: run.current_step,
+            info: {
+              message:
+                "Cancelled: waiting for the worker to stop (if it is gone, until its lease expires).",
+            },
+          });
+        }
+
+        return cancelled;
+      });
       if (!updated)
         throw conflict(
           "run_state_changed",
@@ -1042,7 +1063,10 @@ export const createRunLifecycle = (
         });
       }
 
-      return toPublicRun(updated);
+      // Reloaded: the stopping phase is the run's phase now.
+      return toPublicRun(
+        run.worker_id === null ? updated : await loadRun(workspaceId, id),
+      );
     },
 
     resume: async (workspaceId, id, maxCostUsd) => {
@@ -1413,6 +1437,8 @@ export const createRunLifecycle = (
     reportEvent: async (principal, id, body) => {
       const run = await loadLeasedRun(principal, id, body);
       if (body.type === "phase") {
+        // A cancelled run stays stopping until it settles.
+        if (run.status === "cancelled") return;
         observePhaseEnd(run, body.phase);
         await appendPhase(store.jobs, {
           jobId: run.id,

@@ -139,6 +139,7 @@ export const PHASE_LABEL: Record<RunPhase, string> = {
   checkpointing: "Checkpointing",
   uploading: "Uploading artifact",
   completing: "Completing",
+  stopping: "Stopping",
 };
 
 export const REASON_LABEL: Record<string, string> = {
@@ -195,7 +196,9 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
         // queued run is still unclaimed: one clock per family, so "Training for" counts from
         // when training began, not from the last eval.
         const family = phase && FAMILY[phase.phase] !== undefined && FAMILY[phase.phase] === FAMILY[ev.phase];
-        phase = { phase: ev.phase, since: family && phase ? phase.since : ev.timestamp, step: ev.step, workersOnline: ev.workersOnline, autoscaling: ev.autoscaling };
+        // stopping (a cancel waiting on its worker) is the run's, not the attempt's: the lifecycle
+        // keeps the phase the run reached.
+        if (ev.phase !== "stopping") phase = { phase: ev.phase, since: family && phase ? phase.since : ev.timestamp, step: ev.step, workersOnline: ev.workersOnline, autoscaling: ev.autoscaling };
         if (ev.gpu) gpu = ev.gpu;
         if (REPEATING.has(ev.phase)) break;
         if (ev.phase === "training") {
@@ -203,7 +206,7 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
           seenTraining.add(String(ev.attempt));
         }
         const detail =
-          ev.message !== null && (ev.phase === "queued" || ev.phase === "waiting_for_compute")
+          ev.message !== null && (ev.phase === "queued" || ev.phase === "waiting_for_compute" || ev.phase === "stopping")
             ? ev.message
             : ev.phase === "starting" && ev.gpu
             ? `${ev.gpu.name} · ${ev.gpu.memoryGb} GB`

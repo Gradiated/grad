@@ -631,16 +631,17 @@ export const RUN_PHASES = [
   "checkpointing",
   "uploading",
   "completing",
+  "stopping",
 ] as const;
 
 export const RunPhaseSchema = z.enum(RUN_PHASES).openapi("RunPhase", {
   description:
-    "Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat.",
+    "Where a run is in its lifecycle. queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it), starting (a worker claimed it) and stopping (cancelled while a worker holds it: the run ends once the worker stops, or once its lease expires if the worker is gone) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat.",
 });
 
 export type RunPhase = z.infer<typeof RunPhaseSchema>;
 
-/** Phases a trainer worker reports (the server emits the first three). */
+/** Phases a trainer worker reports (the server emits the others). */
 export const WORKER_PHASES = [
   "loading_model",
   "training",
@@ -734,10 +735,11 @@ export const RunSchema = z
         "The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.",
     }),
     phase: z.enum(RUN_PHASES).nullable().openapi({
-      description: "What the run is doing now while it is queued or running.",
+      description:
+        "What the run is doing now; null once it has finished (finished_at is set). A cancelled run whose worker hasn't stopped yet reads stopping. The run's events keep every phase it went through.",
     }),
     phase_since: IsoTimestampSchema.nullable().openapi({
-      description: "When the run entered its phase.",
+      description: "When the run entered its phase; null with phase.",
     }),
     last_interruption: nullable(RunInterruptionSchema),
     workers_online: z.number().int().min(0).nullable().openapi({
@@ -1024,7 +1026,7 @@ export const PhaseEventSchema = z
     }),
     message: z.string().nullable().openapi({
       description:
-        'queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.',
+        'queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"); null when it is next in line. stopping: what the run waits for. Null for other phases.',
     }),
     gpu: nullable(GpuInfoSchema).openapi({
       description:

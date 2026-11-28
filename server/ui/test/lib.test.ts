@@ -230,6 +230,15 @@ describe("run events", () => {
     const autoscale = decodeEvent("phase", JSON.stringify({ ...base, seq: 1, attempt: 1, phase: "waiting_for_compute", step: 0, workers_online: 0, autoscaling: true }));
     expect(applyEvents(emptyStream(), [autoscale as RunEvent]).timeline[0]?.detail).toMatch(/autoscaling/);
   });
+
+  it("shows a cancel waiting on its worker in the timeline and keeps the phase the run reached", () => {
+    const base = { run_id: "run_1", timestamp: "2026-11-27T12:00:00Z" };
+    const phase = (seq: number, name: string, message: string | null = null) =>
+      decodeEvent("phase", JSON.stringify({ ...base, seq, attempt: 1, phase: name, step: 3, workers_online: null, autoscaling: null, message })) as RunEvent;
+    const state = applyEvents(emptyStream(), [phase(1, "loading_model"), phase(2, "stopping", "Cancelled: waiting for the worker to stop")]);
+    expect(state.phase?.phase).toBe("loading_model");
+    expect(state.timeline.at(-1)).toMatchObject({ title: "Stopping", detail: "Cancelled: waiting for the worker to stop" });
+  });
 });
 
 describe("eval reports", () => {

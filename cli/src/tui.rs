@@ -113,7 +113,8 @@ pub(crate) mod wire {
         pub timestamp: String,
     }
 
-    /// `queued` .. `completing`; training, evaluating and checkpointing repeat.
+    /// `queued` .. `completing` (`stopping` after a cancel); training, evaluating and
+    /// checkpointing repeat.
     #[derive(Debug, Clone, PartialEq, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Phase {
@@ -126,6 +127,7 @@ pub(crate) mod wire {
         Checkpointing,
         Uploading,
         Completing,
+        Stopping,
         #[serde(other)]
         Other,
     }
@@ -902,6 +904,18 @@ impl Model {
         let done = match &r.status {
             RunStatus::Completed => Some(v("completed", "Completed", Tone::Good)),
             RunStatus::Failed => Some(v("failed", "Failed", Tone::Bad)),
+            RunStatus::Cancelled
+                if self
+                    .life
+                    .as_ref()
+                    .is_some_and(|l| l.phase == Phase::Stopping) =>
+            {
+                Some(v(
+                    "stopping",
+                    "Cancelled: waiting for the worker to stop",
+                    Tone::Warn,
+                ))
+            }
             RunStatus::Cancelled => Some(v("cancelled", "Cancelled", Tone::Warn)),
             RunStatus::StoppedBudget => Some(v("stopped", "Stopped at the cost cap", Tone::Warn)),
             RunStatus::StoppedBalance => Some(v("stopped", "Stopped: out of balance", Tone::Warn)),
@@ -922,6 +936,7 @@ impl Model {
                 Phase::Checkpointing => v("checkpointing", "Saving a checkpoint", Tone::Plain),
                 Phase::Uploading => v("uploading", "Uploading the artifact", Tone::Plain),
                 Phase::Completing => v("completing", "Finishing up", Tone::Plain),
+                Phase::Stopping => v("stopping", "Stopping", Tone::Warn),
                 Phase::Other => v("other", "Working", Tone::Plain),
             },
             // Servers without phases: the status and the stream tell enough.

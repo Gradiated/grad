@@ -1685,7 +1685,7 @@ type PhaseEvent struct {
 	Autoscaling *bool `json:"autoscaling"`
 	// QueuePosition queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value.
 	QueuePosition *int `json:"queue_position"`
-	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.
+	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"); null when it is next in line. stopping: what the run waits for. Null for other phases.
 	Message *string `json:"message"`
 	// GPU starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.
 	GPU *GPUInfo `json:"gpu"`
@@ -2339,9 +2339,9 @@ type Run struct {
 	Attempt int `json:"attempt"`
 	// MaxAttempts The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it.
 	MaxAttempts int `json:"max_attempts"`
-	// Phase What the run is doing now while it is queued or running.
+	// Phase What the run is doing now; null once it has finished (finished_at is set). A cancelled run whose worker hasn't stopped yet reads stopping. The run's events keep every phase it went through.
 	Phase *RunPhaseType `json:"phase"`
-	// PhaseSince When the run entered its phase.
+	// PhaseSince When the run entered its phase; null with phase.
 	PhaseSince       *string          `json:"phase_since"`
 	LastInterruption *RunInterruption `json:"last_interruption"`
 	// WorkersOnline While queued: workers of this kind holding a lease (all busy). Null otherwise.
@@ -2407,7 +2407,7 @@ type RunEvent struct {
 	Autoscaling *bool `json:"autoscaling,omitempty"`
 	// QueuePosition queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value.
 	QueuePosition *int `json:"queue_position,omitempty"`
-	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line.
+	// Message queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"); null when it is next in line. stopping: what the run waits for. Null for other phases.
 	Message *string `json:"message,omitempty"`
 	// GPU starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host.
 	GPU          *GPUInfo     `json:"gpu,omitempty"`
@@ -2470,7 +2470,7 @@ type RunInterruption struct {
 	Message    string             `json:"message"`
 }
 
-// RunPhase Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat.
+// RunPhase Where a run is in its lifecycle. queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it), starting (a worker claimed it) and stopping (cancelled while a worker holds it: the run ends once the worker stops, or once its lease expires if the worker is gone) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat.
 type RunPhase string
 
 // Values of RunPhase.
@@ -2484,6 +2484,7 @@ const (
 	RunPhaseCheckpointing     RunPhase = "checkpointing"
 	RunPhaseUploading         RunPhase = "uploading"
 	RunPhaseCompleting        RunPhase = "completing"
+	RunPhaseStopping          RunPhase = "stopping"
 )
 
 // RunPhaseType is an enumeration of allowed values.
@@ -2500,6 +2501,7 @@ const (
 	RunPhaseTypeCheckpointing     RunPhaseType = "checkpointing"
 	RunPhaseTypeUploading         RunPhaseType = "uploading"
 	RunPhaseTypeCompleting        RunPhaseType = "completing"
+	RunPhaseTypeStopping          RunPhaseType = "stopping"
 )
 
 // RunStatus stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints.

@@ -62,7 +62,7 @@ class EventModelTests(unittest.TestCase):
         done = events[-1]
         assert isinstance(done, grad.CompletedEvent) and done.run is not None
         self.assertEqual(done.status, "completed")
-        self.assertEqual(done.run.phase, "completing")
+        self.assertIsNone(done.run.phase)  # finished: no phase
         assert done.run.last_interruption is not None
         self.assertEqual(done.run.last_interruption.message, "attempt 1 interrupted at step 2: the GPU was reclaimed; resuming from step 2 on a new worker")
         self.assertIn("PhaseEvent(", repr(phase))
@@ -144,7 +144,7 @@ class WaitEventsTests(unittest.TestCase):
         self.assertEqual(run.status, "completed")
         self.assertEqual(
             statuses,
-            [("queued", "queued"), ("queued", "waiting_for_compute"), ("running", "starting"), ("running", "training"), ("completed", "completing")],
+            [("queued", "queued"), ("queued", "waiting_for_compute"), ("running", "starting"), ("running", "training"), ("completed", None)],
         )
 
     def test_wait_follows_until_terminal_even_if_the_stream_ends_early(self) -> None:
@@ -243,6 +243,8 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(renderer.line(), "Waiting for a worker (1 online, all busy) — 1h 01m")
         renderer.event(run_event_from_api({**EVENTS[0], "workers_online": None, "message": None}))  # type: ignore[arg-type]
         self.assertEqual(renderer.headline(), "Queued — 1h 02m")
+        renderer.event(run_event_from_api({**EVENTS[0], "phase": "stopping", "message": "Cancelled: waiting"}))  # type: ignore[arg-type]
+        self.assertEqual(renderer.headline(), "Cancelled: waiting for the worker to stop — 1h 02m")
         drawn = renderer.stream.getvalue().split("\r\x1b[K")[1:]  # type: ignore[attr-defined]
         self.assertEqual(max(len(d) for d in drawn), 40, "lines are cut to the terminal width")
 

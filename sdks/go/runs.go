@@ -290,8 +290,10 @@ func (r *Run) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Wait polls until the run reaches a terminal status (backoff 0.5 s to 5 s, transient
-// errors tolerated). On completion Artifact is loaded. failed, cancelled and
+// Wait polls until the run has finished (backoff 0.5 s to 5 s, transient errors
+// tolerated): a terminal status with FinishedAt set, so a run cancelled while its
+// worker still holds it (phase stopping) is waited on until it settles, as the
+// event stream does. On completion Artifact is loaded. failed, cancelled and
 // stopped_budget (and stopped_balance) return *RunFailedError carrying the run.
 func (r *Run) Wait(ctx context.Context, opts ...WaitOption) error {
 	w := newWaitConfig(opts)
@@ -340,12 +342,17 @@ func (r *Run) pollUntilDone(ctx context.Context, w *waitConfig) error {
 			if page.TailCursor != "" {
 				cursor = &page.TailCursor
 			}
-			if len(page.Data) > 0 && IsTerminal(r.Status) {
+			if len(page.Data) > 0 && r.finished() {
 				return string(r.Status), false, nil // drain remaining points first
 			}
 		}
-		return string(r.Status), IsTerminal(r.Status), nil
+		return string(r.Status), r.finished(), nil
 	})
+}
+
+// finished reports a terminal status whose worker has let go (FinishedAt set).
+func (r *Run) finished() bool {
+	return IsTerminal(r.Status) && r.FinishedAt != nil
 }
 
 // finish loads the artifact of a completed run, or reports why it ended.

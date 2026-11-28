@@ -1096,7 +1096,7 @@ Run = TypedDict(
         "total_steps": "int",
         "attempt": "int",
         "max_attempts": "int",
-        "phase": "Literal['queued', 'waiting_for_compute', 'starting', 'loading_model', 'training', 'evaluating', 'checkpointing', 'uploading', 'completing'] | None",
+        "phase": "Literal['queued', 'waiting_for_compute', 'starting', 'loading_model', 'training', 'evaluating', 'checkpointing', 'uploading', 'completing', 'stopping'] | None",
         "phase_since": "str | None",
         "last_interruption": "RunInterruption | None",
         "workers_online": "int | None",
@@ -1149,7 +1149,7 @@ RunInterruption = TypedDict(
     },
 )
 
-RunPhase: TypeAlias = "Literal['queued', 'waiting_for_compute', 'starting', 'loading_model', 'training', 'evaluating', 'checkpointing', 'uploading', 'completing']"
+RunPhase: TypeAlias = "Literal['queued', 'waiting_for_compute', 'starting', 'loading_model', 'training', 'evaluating', 'checkpointing', 'uploading', 'completing', 'stopping']"
 
 RunStatus: TypeAlias = "Literal['queued', 'running', 'completed', 'failed', 'cancelled', 'stopped_budget', 'stopped_balance']"
 
@@ -1751,7 +1751,7 @@ SCHEMA_ENUMS: dict[str, tuple[Any, ...]] = {
     "InterruptionReason": ("lease_lost", "compute_reclaimed", "worker_error", "oom",),
     "JobKind": ("train", "import", "eval",),
     "RecipeKind": ("sft", "dpo", "router", "decision", "cartridge", "embedding", "distill", "reward", "grpo",),
-    "RunPhase": ("queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing",),
+    "RunPhase": ("queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing", "stopping",),
     "RunStatus": ("queued", "running", "completed", "failed", "cancelled", "stopped_budget", "stopped_balance",),
     "UsageGroupBy": ("day", "week", "month", "model", "recipe", "kind",),
     "UsageKind": ("training", "eval", "scoring", "labeling", "teacher",),

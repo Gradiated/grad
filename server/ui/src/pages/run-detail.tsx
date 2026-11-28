@@ -184,9 +184,10 @@ const ENDED: Record<string, string> = { failed: "with an error", cancelled: "by 
 
 const Lifecycle = ({ run, stream, now }: { run: Run; stream: RunStreamState; now: number }) => {
   const active = !isTerminalRun(run);
-  const phase = active ? derivePhase(run, stream.phase?.phase) : null;
-  const groupIdx = run.status === "completed" ? GROUPS.length - 1 : phase ? GROUPS.findIndex((g) => g.phases.includes(phase)) : GROUPS.findIndex((g) => g.phases.includes(run.phase ?? "training"));
-  const since = stream.phase?.since ?? run.phaseSince;
+  const stopping = run.phase === "stopping";
+  const phase = active ? derivePhase(run, stream.phase?.phase) : stopping ? "stopping" : null;
+  const groupIdx = run.status === "completed" ? GROUPS.length - 1 : phase && !stopping ? GROUPS.findIndex((g) => g.phases.includes(phase)) : GROUPS.findIndex((g) => g.phases.includes(stream.phase?.phase ?? "training"));
+  const since = stopping ? run.phaseSince : (stream.phase?.since ?? run.phaseSince);
   const progress = run.totalSteps > 0 ? run.currentStep / run.totalSteps : 0;
   const workersOnline = stream.phase?.workersOnline ?? run.workersOnline;
   const autoscaling = stream.phase?.autoscaling ?? run.autoscaling;

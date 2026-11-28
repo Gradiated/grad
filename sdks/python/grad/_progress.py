@@ -39,6 +39,7 @@ PHASE_LABELS = {
     "checkpointing": "Checkpointing",
     "uploading": "Uploading",
     "completing": "Completing",
+    "stopping": "Stopping",
 }
 
 STATUS_LABELS = {
@@ -208,6 +209,8 @@ class Progress:
                 n = self.workers_online or 0
                 return f"Waiting for a worker ({f'{n} online, all busy' if n else 'none online'}){tail}"
             return f"Queued{tail}"
+        if self.phase == "stopping":
+            return f"Cancelled: waiting for the worker to stop{tail}"
         label = PHASE_LABELS.get(self.phase, self.phase)
         if self.phase == "starting" and self.gpu:
             label = f"Starting on {self.gpu}"

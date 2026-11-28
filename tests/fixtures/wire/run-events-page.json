@@ -407,8 +407,8 @@
         "total_steps": 5,
         "attempt": 2,
         "max_attempts": 3,
-        "phase": "completing",
-        "phase_since": "2026-11-27T12:01:13.000Z",
+        "phase": null,
+        "phase_since": null,
         "last_interruption": {
           "attempt": 1,
           "reason": "compute_reclaimed",

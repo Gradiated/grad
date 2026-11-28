@@ -784,7 +784,7 @@ export interface PhaseEvent {
   autoscaling: boolean | null;
   /** queued and waiting_for_compute: about how many runs start before this one when the phase began (fair share across workspaces). Run.queue_position is the live value. */
   queuePosition: number | null;
-  /** queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"). Null when it is next in line. */
+  /** queued and waiting_for_compute: why the run waits, ready to show ("Queued behind 3 runs", "Queued: workspace concurrency limit (8 running)", "Waiting for a GPU with ≥46 GB; online workers have 24 GB"); null when it is next in line. stopping: what the run waits for. Null for other phases. */
   message: string | null;
   /** starting: the claiming worker's GPU (null without one, e.g. the reference backend). Never the worker id or host. */
   gpu: GpuInfo | null;
@@ -1153,9 +1153,9 @@ export interface Run {
   attempt: number;
   /** The run fails once this many attempts end without a result (lost worker, worker error, OOM). Attempts whose GPU was reclaimed don't count toward it. */
   maxAttempts: number;
-  /** What the run is doing now while it is queued or running. */
-  phase: ("queued" | "waiting_for_compute" | "starting" | "loading_model" | "training" | "evaluating" | "checkpointing" | "uploading" | "completing") | null;
-  /** When the run entered its phase. */
+  /** What the run is doing now; null once it has finished (finished_at is set). A cancelled run whose worker hasn't stopped yet reads stopping. The run's events keep every phase it went through. */
+  phase: ("queued" | "waiting_for_compute" | "starting" | "loading_model" | "training" | "evaluating" | "checkpointing" | "uploading" | "completing" | "stopping") | null;
+  /** When the run entered its phase; null with phase. */
   phaseSince: string | null;
   lastInterruption: RunInterruption | null;
   /** While queued: workers of this kind holding a lease (all busy). Null otherwise. */
@@ -1222,10 +1222,10 @@ export interface RunInterruption {
   message: string;
 }
 
-/** Where a run is in its lifecycle (on a Run: the latest phase; once the run is terminal, status is authoritative and phase is the last one reached). queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it) and starting (a worker claimed it) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat. */
-export type RunPhase = "queued" | "waiting_for_compute" | "starting" | "loading_model" | "training" | "evaluating" | "checkpointing" | "uploading" | "completing";
+/** Where a run is in its lifecycle. queued, waiting_for_compute (queued for longer than the server's threshold with no worker claiming it), starting (a worker claimed it) and stopping (cancelled while a worker holds it: the run ends once the worker stops, or once its lease expires if the worker is gone) come from the server; the worker reports the rest. training, evaluating and checkpointing repeat. */
+export type RunPhase = "queued" | "waiting_for_compute" | "starting" | "loading_model" | "training" | "evaluating" | "checkpointing" | "uploading" | "completing" | "stopping";
 
-export const RunPhaseValues = ["queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing"] as const;
+export const RunPhaseValues = ["queued", "waiting_for_compute", "starting", "loading_model", "training", "evaluating", "checkpointing", "uploading", "completing", "stopping"] as const;
 
 /** stopped_budget: the run reached its max_cost_usd (resume with a higher cap). stopped_balance: the workspace ran out of balance on Cloud (top up, then resume; the cap is unchanged). Both keep their checkpoints. */
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "stopped_budget" | "stopped_balance";

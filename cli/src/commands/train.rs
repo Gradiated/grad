@@ -376,6 +376,7 @@ pub(crate) fn event_line(ev: &RunEvent) -> Option<String> {
             RunPhase::Training => Some("  ▸ Training".into()),
             RunPhase::Uploading => Some("  ▸ Uploading the artifact".into()),
             RunPhase::Completing => Some("  ▸ Completing".into()),
+            RunPhase::Stopping => Some("  ▸ Cancelled: waiting for the worker to stop".into()),
             _ => None,
         },
         RunEvent::Attempt(a) => match a.event {
@@ -1326,6 +1327,10 @@ mod tests {
             (RunPhase::LoadingModel, "  ▸ Loading the model"),
             (RunPhase::Uploading, "  ▸ Uploading the artifact"),
             (RunPhase::Completing, "  ▸ Completing"),
+            (
+                RunPhase::Stopping,
+                "  ▸ Cancelled: waiting for the worker to stop",
+            ),
         ] {
             let ev = RunEvent::Phase(PhaseEvent {
                 phase,

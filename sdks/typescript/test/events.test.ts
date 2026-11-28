@@ -60,7 +60,7 @@ describe("run events", () => {
     expect(statuses[0]).toEqual(["queued", "queued"]);
     expect(statuses).toContainEqual(["queued", "waiting_for_compute"]);
     expect(statuses).toContainEqual(["running", "training"]);
-    expect(statuses.at(-1)).toEqual(["completed", "completing"]);
+    expect(statuses.at(-1)).toEqual(["completed", null]);
   });
 
   it("tracks phase and interruptions on the Run while streaming", async () => {

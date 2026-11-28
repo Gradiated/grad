@@ -175,7 +175,7 @@ export const metrics = {
   ),
   runPhaseDuration: histogram(
     "grad_run_phase_duration_seconds",
-    "How long a run attempt spent in each phase: queued and waiting_for_compute (waiting for a worker), starting (claim to the worker's first report), loading_model (data, weights and tokenization: claim to the first step), training, evaluating, checkpointing, uploading and completing. Observed when the phase ends.",
+    "How long a run attempt spent in each phase: queued and waiting_for_compute (waiting for a worker), starting (claim to the worker's first report), loading_model (data, weights and tokenization: claim to the first step), training, evaluating, checkpointing, uploading, completing and stopping (a cancel waiting on its worker). Observed when the phase ends.",
     ["phase"],
     BUCKETS.phase,
   ),

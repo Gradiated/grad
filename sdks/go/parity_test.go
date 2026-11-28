@@ -358,7 +358,7 @@ func TestParityTypedResponses(t *testing.T) {
 		"artifact.provenance.uploader":                     *artifact.Provenance.Uploader,
 		"artifact_import.status":                           string(artifactImport.Status),
 		"artifact_import.error_code":                       *artifactImport.ErrorCode,
-		"run.phase":                                        string(*run.Phase),
+		"run.phase":                                        optional(run.Phase),
 		"run.last_interruption.reason":                     string(run.LastInterruption.Reason),
 		"run.last_interruption.resume_step":                float64(*run.LastInterruption.ResumeStep),
 		"run_events.data[2].phase":                         string(*ev2.Phase),
@@ -421,6 +421,14 @@ func TestParityTypedResponses(t *testing.T) {
 	if !reflect.DeepEqual(got, p.Expect) {
 		t.Fatalf("typed responses\n got %v\nwant %v", got, p.Expect)
 	}
+}
+
+// optional is a nullable enum as the parity file writes it: nil or its string.
+func optional[T ~string](p *T) any {
+	if p == nil {
+		return nil
+	}
+	return string(*p)
 }
 
 func queryMap(raw string) map[string]string {

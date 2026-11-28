@@ -184,7 +184,13 @@ func TestWaitOnEventsCallsBack(t *testing.T) {
 	err = run.Wait(ctx,
 		grad.WithOnEvent(func(ev grad.RunEvent) { types = append(types, string(ev.Type)) }),
 		grad.WithOnMetric(func(m grad.MetricPoint) { steps = append(steps, m.Step) }),
-		grad.WithOnStatus(func(s string) { statuses = append(statuses, s+"/"+string(*run.Phase)) }),
+		grad.WithOnStatus(func(s string) {
+			phase := ""
+			if run.Phase != nil {
+				phase = string(*run.Phase)
+			}
+			statuses = append(statuses, s+"/"+phase)
+		}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +199,7 @@ func TestWaitOnEventsCallsBack(t *testing.T) {
 		t.Fatalf("types %v steps %v artifact %v", types, steps, run.Artifact)
 	}
 	joined := strings.Join(statuses, ",")
-	if !strings.HasPrefix(joined, "queued/queued,queued/waiting_for_compute,running/starting") || !strings.HasSuffix(joined, "completed/completing") {
+	if !strings.HasPrefix(joined, "queued/queued,queued/waiting_for_compute,running/starting") || !strings.HasSuffix(joined, "completed/") {
 		t.Fatalf("statuses %s", joined)
 	}
 	if run.LastInterruption == nil || run.LastInterruption.Reason != "compute_reclaimed" {
