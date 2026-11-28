@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { gunzipSync, gzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { gunzip as gunzipCb, gzip as gzipCb } from "node:zlib";
 
 import type { DatasetRecord } from "../contracts.js";
 import { ApiError, conflict } from "../errors.js";
@@ -14,6 +15,11 @@ import { metrics } from "../telemetry/metrics.js";
 
 export const encodeRecordsJsonl = (records: readonly DatasetRecord[]): Buffer =>
   Buffer.from(records.map((r) => `${JSON.stringify(r)}\n`).join(""), "utf8");
+
+// (De)compression runs on libuv's thread pool: a sync gunzip of a 64 MB part
+// stalls every request on the replica (p1-scale: /health/live p99 1.2 s).
+const gzip = promisify(gzipCb);
+const gunzip = promisify(gunzipCb);
 
 const sha256Of = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -57,7 +63,7 @@ export const writeRecordsPart = async (
 ): Promise<DatasetPart> => {
   const jsonl = encodeRecordsJsonl(records);
   const sha256 = sha256Of(jsonl);
-  const bytes = gzipSync(jsonl);
+  const bytes = await gzip(jsonl);
   const key = keyFor(sha256);
   try {
     await storage.put(key, bytes);
@@ -66,7 +72,7 @@ export const writeRecordsPart = async (
   } catch (error) {
     // A retried write of the same deterministic key: fine if the records match.
     if (!(error instanceof ObjectExistsError)) throw error;
-    if (sha256Of(gunzipSync(await storage.get(key))) !== sha256) {
+    if (sha256Of(await gunzip(await storage.get(key))) !== sha256) {
       throw conflict(
         "records_batch_conflict",
         `Records part '${key}' already exists with different contents; a batch number was reused for different records.`,
@@ -104,17 +110,14 @@ export const readPart = async (
   }
 };
 
-export const parsePart = (
+/** A stored part's JSONL lines, integrity-checked (not parsed). */
+export const partLines = async (
   stored: Uint8Array,
   part: DatasetPart,
-): DatasetRecord[] =>
-  partLines(stored, part).map((line) => JSON.parse(line) as DatasetRecord);
-
-/** A stored part's JSONL lines, integrity-checked (not parsed). */
-export const partLines = (stored: Uint8Array, part: DatasetPart): string[] => {
+): Promise<string[]> => {
   let jsonl: Buffer;
   try {
-    jsonl = gunzipSync(stored);
+    jsonl = await gunzip(stored);
   } catch {
     throw new Error(`Dataset part '${part.key}' is not valid gzip.`);
   }
@@ -126,29 +129,6 @@ export const partLines = (stored: Uint8Array, part: DatasetPart): string[] => {
     .toString("utf8")
     .split("\n")
     .filter((line) => line.length > 0);
-};
-
-/** Yields every record of a dataset version, part by part. */
-async function* iterateVersionRecords(
-  storage: ObjectStore,
-  version: Pick<DatasetVersion, "parts">,
-): AsyncGenerator<DatasetRecord> {
-  for (const part of version.parts) {
-    const records = parsePart(await readPart(storage, part), part);
-    yield* records;
-  }
-}
-
-export const readVersionRecords = async (
-  storage: ObjectStore,
-  version: Pick<DatasetVersion, "parts">,
-): Promise<DatasetRecord[]> => {
-  const out: DatasetRecord[] = [];
-  for await (const record of iterateVersionRecords(storage, version)) {
-    out.push(record);
-  }
-
-  return out;
 };
 
 /**
@@ -192,11 +172,9 @@ export const streamVersionGzip = (
 export const gzipJsonlStream = (
   records: readonly DatasetRecord[],
 ): ReadableStream<Uint8Array> => {
-  const bytes = gzipSync(encodeRecordsJsonl(records));
-
   return new ReadableStream<Uint8Array>({
-    start: (controller) => {
-      controller.enqueue(bytes);
+    start: async (controller) => {
+      controller.enqueue(await gzip(encodeRecordsJsonl(records)));
       controller.close();
     },
   });

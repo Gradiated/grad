@@ -11,7 +11,7 @@ import {
   readVersionPage,
 } from "../src/services/dataset-pages.js";
 import {
-  parsePart,
+  partLines,
   writeRecordsPart,
 } from "../src/services/dataset-records.js";
 import { mergeRecords, scoreUpdate } from "../src/services/record-merge.js";
@@ -65,7 +65,11 @@ describe("dataset pages (r8 P1-5)", () => {
     const all = async (ps: DatasetPart[]) => {
       const out: DatasetRecord[] = [];
       for (const p of ps) {
-        out.push(...parsePart(await storage.get(p.key), p));
+        out.push(
+          ...(await partLines(await storage.get(p.key), p)).map(
+            (l) => JSON.parse(l) as DatasetRecord,
+          ),
+        );
       }
       return mergeRecords(out);
     };
@@ -141,7 +145,11 @@ describe("dataset pages (r8 P1-5)", () => {
     ];
     const lines: DatasetRecord[] = [];
     for (const p of parts)
-      lines.push(...parsePart(await storage.get(p.key), p));
+      lines.push(
+        ...(await partLines(await storage.get(p.key), p)).map(
+          (l) => JSON.parse(l) as DatasetRecord,
+        ),
+      );
     const expected = mergeRecords(lines);
     // a: a correction; b: re-sent without a rule; c: no rule; d: no score; e: early 0.9.
     expect(expected.map((r) => r.id)).toEqual(["a", "b", "c", "e"]);
@@ -155,6 +163,37 @@ describe("dataset pages (r8 P1-5)", () => {
         ).toEqual(expected.slice(from, from + limit));
       }
     }
+  });
+
+  it("indexes each next version from the last one's builder: only its new parts are read, same index", async () => {
+    const ruled = (id: string, rule: Record<string, unknown>) => ({
+      ...rec(id, id),
+      metadata: { score_filter: rule },
+    });
+    const parts = [
+      await write([rec("a", "1"), ruled("b", { min_score: 0.5 })]),
+      await write([scoreUpdate("c", { q: 1 }), rec(undefined, "anon")]),
+      await write([rec("c", "1"), scoreUpdate("b", { q: 0.2 })]),
+      await write([{ metadata: { dataset_reset: true } }, rec("a", "2")]),
+      await write([rec("d", "1"), scoreUpdate("a", { q: 1 })]),
+    ];
+    const cache = createVersionIndexCache(storage);
+    for (let n = 1; n <= parts.length; n += 1) {
+      fetched = [];
+      const version = { parts: parts.slice(0, n) };
+      expect(await cache.get(version)).toEqual(
+        await buildVersionIndex(s3.storage, version.parts),
+      );
+      // Version n extends version n-1: one part read, not n.
+      expect(fetched).toEqual([parts[n - 1]?.key]);
+    }
+    // A version that extends none of the cached ones still builds whole.
+    fetched = [];
+    const other = { parts: [parts[0] as DatasetPart, parts[2] as DatasetPart] };
+    expect(await cache.get(other)).toEqual(
+      await buildVersionIndex(s3.storage, other.parts),
+    );
+    expect(fetched).toHaveLength(2);
   });
 
   it("keeps memory and latency bounded on a large dataset: a page reads only its own parts", async () => {

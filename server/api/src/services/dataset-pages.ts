@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
+
 import type { DatasetRecord } from "../contracts.js";
 import type { ObjectStore } from "../storage/types.js";
 import type { DatasetPart, DatasetVersion } from "../store/types.js";
-import { parsePart, partLines, readPart } from "./dataset-records.js";
+import { partLines, readPart } from "./dataset-records.js";
 import {
   applyFacts,
   isReset,
@@ -42,26 +44,60 @@ export interface VersionIndex {
   partStarts: Int32Array;
 }
 
+/** Lines parsed between yields to the event loop while an index builds. */
+const YIELD_LINES = 2000;
+const yieldToEventLoop = () =>
+  new Promise<void>((resolve) => setImmediate(resolve));
+
 const indexBytes = (index: VersionIndex): number =>
   index.slots.byteLength + index.partStarts.byteLength;
 
-/** Streams `parts` once and plans their merge. */
-export const buildVersionIndex = async (
-  storage: ObjectStore,
-  parts: readonly DatasetPart[],
-): Promise<VersionIndex> => {
-  const lineSlots: number[] = [];
-  const partStarts = new Int32Array(parts.length + 1);
-  let slotOf = new Map<string, number>();
-  // Lines of updates that arrived before their id's first record.
-  let early = new Map<string, number[]>();
-  // Score-filtered slots: their rule and merged scores, and (once the version
-  // has a rule) the facts of early updates.
-  let ruled = new Map<number, DatasetRecord>();
-  let earlyFacts = new Map<string, DatasetRecord>();
-  let next = 0;
-  let line = 0;
+/**
+ * A merge plan in progress: everything a later part's lines need to know
+ * about the earlier ones. Extending it with a version's new parts gives the
+ * new version's index without re-reading the old parts (a push or a sync
+ * reads only what it added, not the dataset).
+ */
+export interface IndexBuilder {
+  /** Parts folded in so far (a prefix of every version built from it). */
+  parts: number;
+  lineSlots: number[];
+  partStarts: number[];
+  slotOf: Map<string, number>;
+  /** Lines of updates that arrived before their id's first record. */
+  early: Map<string, number[]>;
+  /**
+   * Score-filtered slots: their rule and merged scores, and (once the
+   * version has a rule) the facts of early updates.
+   */
+  ruled: Map<number, DatasetRecord>;
+  earlyFacts: Map<string, DatasetRecord>;
+  next: number;
+}
 
+export const newIndexBuilder = (): IndexBuilder => ({
+  parts: 0,
+  lineSlots: [],
+  partStarts: [],
+  slotOf: new Map(),
+  early: new Map(),
+  ruled: new Map(),
+  earlyFacts: new Map(),
+  next: 0,
+});
+
+/** About what a builder holds (ids dominate: a map entry and its key). */
+const builderBytes = (b: IndexBuilder): number =>
+  b.lineSlots.length * 8 +
+  b.slotOf.size * 96 +
+  (b.early.size + b.ruled.size + b.earlyFacts.size) * 256;
+
+/** Folds `parts` (the version's parts after `b.parts`) into `b`, in place. */
+export const extendIndex = async (
+  storage: ObjectStore,
+  b: IndexBuilder,
+  parts: readonly DatasetPart[],
+): Promise<IndexBuilder> => {
   const rule = (
     record: DatasetRecord,
     slot: number,
@@ -69,10 +105,10 @@ export const buildVersionIndex = async (
   ) => {
     const filter = record.metadata?.[SCORE_FILTER];
     if (filter === undefined) {
-      ruled.delete(slot); // the latest content decides
+      b.ruled.delete(slot); // the latest content decides
       return;
     }
-    ruled.set(
+    b.ruled.set(
       slot,
       applyFacts(
         {
@@ -84,74 +120,93 @@ export const buildVersionIndex = async (
     );
   };
 
-  for (const [p, part] of parts.entries()) {
-    partStarts[p] = line;
-    for (const record of parsePart(await readPart(storage, part), part)) {
-      const at = line;
-      line += 1;
-      lineSlots.push(-1);
+  for (const part of parts) {
+    b.partStarts.push(b.lineSlots.length);
+    for (const text of await partLines(await readPart(storage, part), part)) {
+      const at = b.lineSlots.length;
+      // Parsing a part is ~100 ms of CPU per 25k records: let requests in.
+      if (at % YIELD_LINES === 0) await yieldToEventLoop();
+      const record = JSON.parse(text) as DatasetRecord;
+      b.lineSlots.push(-1);
       if (isReset(record)) {
         // Everything before a reset marker drops out of the merge.
-        lineSlots.fill(-1);
-        slotOf = new Map();
-        early = new Map();
-        ruled = new Map();
-        earlyFacts = new Map();
-        next = 0;
+        b.lineSlots.fill(-1);
+        b.slotOf = new Map();
+        b.early = new Map();
+        b.ruled = new Map();
+        b.earlyFacts = new Map();
+        b.next = 0;
         continue;
       }
       const id = record.id;
       if (!id) {
-        lineSlots[at] = next;
-        next += 1;
+        b.lineSlots[at] = b.next;
+        b.next += 1;
         continue;
       }
-      const known = slotOf.get(id);
+      const known = b.slotOf.get(id);
       if (known !== undefined) {
-        lineSlots[at] = known;
-        const state = ruled.get(known);
+        b.lineSlots[at] = known;
+        const state = b.ruled.get(known);
         if (!isScoreUpdate(record)) rule(record, known, state);
-        else if (state) ruled.set(known, applyFacts(state, record));
+        else if (state) b.ruled.set(known, applyFacts(state, record));
       } else if (isScoreUpdate(record)) {
-        const waiting = early.get(id);
+        const waiting = b.early.get(id);
         if (waiting) waiting.push(at);
-        else early.set(id, [at]);
-        if (ruled.size > 0) {
-          earlyFacts.set(id, applyFacts(earlyFacts.get(id) ?? {}, record));
+        else b.early.set(id, [at]);
+        if (b.ruled.size > 0) {
+          b.earlyFacts.set(id, applyFacts(b.earlyFacts.get(id) ?? {}, record));
         }
       } else {
-        slotOf.set(id, next);
-        lineSlots[at] = next;
-        for (const earlier of early.get(id) ?? []) lineSlots[earlier] = next;
-        early.delete(id);
-        rule(record, next);
-        const facts = earlyFacts.get(id);
-        const state = ruled.get(next);
-        if (facts && state) ruled.set(next, applyFacts(state, facts));
-        earlyFacts.delete(id);
-        next += 1;
+        const slot = b.next;
+        b.slotOf.set(id, slot);
+        b.lineSlots[at] = slot;
+        for (const earlier of b.early.get(id) ?? [])
+          b.lineSlots[earlier] = slot;
+        b.early.delete(id);
+        rule(record, slot);
+        const facts = b.earlyFacts.get(id);
+        const state = b.ruled.get(slot);
+        if (facts && state) b.ruled.set(slot, applyFacts(state, facts));
+        b.earlyFacts.delete(id);
+        b.next += 1;
       }
     }
+    b.parts += 1;
   }
-  partStarts[parts.length] = line;
+
+  return b;
+};
+
+/** The index of the version `b` has folded in (`b` stays extendable). */
+export const finishIndex = (b: IndexBuilder): VersionIndex => {
+  const slots = Int32Array.from(b.lineSlots);
+  const partStarts = Int32Array.from([...b.partStarts, slots.length]);
 
   // Drop the slots whose scores fail their filter, and renumber the rest.
-  let total = next;
-  if ([...ruled.values()].some((facts) => !passesScoreFilter(facts))) {
-    const renumber = new Int32Array(next);
+  let total = b.next;
+  if ([...b.ruled.values()].some((facts) => !passesScoreFilter(facts))) {
+    const renumber = new Int32Array(b.next);
     total = 0;
-    for (let slot = 0; slot < next; slot += 1) {
-      const facts = ruled.get(slot);
+    for (let slot = 0; slot < b.next; slot += 1) {
+      const facts = b.ruled.get(slot);
       renumber[slot] = facts && !passesScoreFilter(facts) ? -1 : total++;
     }
-    for (let i = 0; i < lineSlots.length; i += 1) {
-      const slot = lineSlots[i] as number;
-      if (slot >= 0) lineSlots[i] = renumber[slot] as number;
+    for (let i = 0; i < slots.length; i += 1) {
+      const slot = slots[i] as number;
+      if (slot >= 0) slots[i] = renumber[slot] as number;
     }
   }
 
-  return { total, slots: Int32Array.from(lineSlots), partStarts };
+  return { total, slots, partStarts };
 };
+
+/** Streams `parts` once and plans their merge. */
+export const buildVersionIndex = async (
+  storage: ObjectStore,
+  parts: readonly DatasetPart[],
+): Promise<VersionIndex> =>
+  finishIndex(await extendIndex(storage, newIndexBuilder(), parts));
 
 /** A part's JSONL lines (`createPartLinesCache`, or a fresh read). */
 type PartLines = (part: DatasetPart) => Promise<string[]>;
@@ -176,7 +231,7 @@ export const createPartLinesCache = (
       cached.set(part.key, hit);
       return hit.lines;
     }
-    const lines = partLines(await readPart(storage, part), part);
+    const lines = await partLines(await readPart(storage, part), part);
     const size = lines.reduce((sum, line) => sum + line.length, 0);
     if (size <= maxBytes) {
       cached.set(part.key, { lines, bytes: size });
@@ -200,7 +255,7 @@ export const readVersionPage = async (
   from: number,
   limit: number,
   lines: PartLines = async (part) =>
-    partLines(await readPart(storage, part), part),
+    await partLines(await readPart(storage, part), part),
 ): Promise<DatasetRecord[]> => {
   const to = Math.min(index.total, from + limit);
   if (from >= to) return [];
@@ -227,17 +282,40 @@ export const readVersionPage = async (
   return mergeRecords(picked);
 };
 
-/** A byte-bounded LRU of version indexes, with one build per version at a time. */
+/**
+ * Each prefix of `parts` as one key (a rolling hash of the part hashes): a
+ * version's key, and those of the versions it extends.
+ */
+const prefixKeys = (parts: readonly DatasetPart[]): string[] => {
+  const keys = [""];
+  for (const part of parts) {
+    keys.push(
+      createHash("sha256")
+        .update(`${keys.at(-1) as string},${part.sha256}`)
+        .digest("hex"),
+    );
+  }
+
+  return keys;
+};
+
+/**
+ * A byte-bounded LRU of version indexes, with one build per version at a
+ * time. It also keeps the builders of the versions it built (byte-bounded
+ * too): the next version of a dataset (a push, a sync) extends its
+ * predecessor's builder with the new parts instead of re-reading the whole
+ * dataset (p1-scale: a push to a 300k-record dataset took 7 s, nearly all
+ * of it rebuilding the index).
+ */
 export const createVersionIndexCache = (
   storage: ObjectStore,
   maxBytes = 64 * 1024 * 1024,
+  maxBuilderBytes = 128 * 1024 * 1024,
 ) => {
   const cached = new Map<string, VersionIndex>();
+  const builders = new Map<string, IndexBuilder>();
   const building = new Map<string, Promise<VersionIndex>>();
   let bytes = 0;
-
-  const keyOf = (version: Pick<DatasetVersion, "parts">): string =>
-    version.parts.map((part) => part.sha256).join(",");
 
   const remember = (key: string, index: VersionIndex): void => {
     const size = indexBytes(index);
@@ -251,11 +329,38 @@ export const createVersionIndexCache = (
     }
   };
 
+  const keepBuilder = (key: string, builder: IndexBuilder): void => {
+    if (builderBytes(builder) > maxBuilderBytes) return;
+    builders.set(key, builder);
+    let total = 0;
+    for (const b of builders.values()) total += builderBytes(b);
+    for (const [oldest, old] of builders) {
+      if (total <= maxBuilderBytes) break;
+      builders.delete(oldest);
+      total -= builderBytes(old);
+    }
+  };
+
+  /** The longest cached prefix's builder (taken: it is extended in place), or a new one. */
+  const takeBuilder = (keys: readonly string[]): IndexBuilder => {
+    for (let k = keys.length - 2; k > 0; k -= 1) {
+      const key = keys[k] as string;
+      const builder = builders.get(key);
+      if (builder) {
+        builders.delete(key);
+        return builder;
+      }
+    }
+
+    return newIndexBuilder();
+  };
+
   return {
     get: async (
       version: Pick<DatasetVersion, "parts">,
     ): Promise<VersionIndex> => {
-      const key = keyOf(version);
+      const keys = prefixKeys(version.parts);
+      const key = keys.at(-1) as string;
       const hit = cached.get(key);
       if (hit) {
         // Most recently used last.
@@ -266,12 +371,15 @@ export const createVersionIndexCache = (
       const inFlight = building.get(key);
       if (inFlight) return inFlight;
 
-      const build = buildVersionIndex(storage, version.parts)
-        .then((index) => {
-          remember(key, index);
-          return index;
-        })
-        .finally(() => building.delete(key));
+      const build = (async () => {
+        const builder = takeBuilder(keys);
+        await extendIndex(storage, builder, version.parts.slice(builder.parts));
+        const index = finishIndex(builder);
+        remember(key, index);
+        keepBuilder(key, builder);
+
+        return index;
+      })().finally(() => building.delete(key));
       building.set(key, build);
 
       return build;
