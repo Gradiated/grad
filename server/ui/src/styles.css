@@ -421,6 +421,8 @@ textarea {
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);
+    /* The top bar keeps its height on a short page; the page takes the rest. */
+    grid-template-rows: auto 1fr;
   }
   .sidebar {
     border-right: 0;
@@ -978,6 +980,19 @@ table.table {
   padding-right: 30px;
   width: 280px;
   max-width: 100%;
+}
+
+/* Phones: the filter takes its own line, the toolbar's actions sit after it. */
+@media (max-width: 600px) {
+  .toolbar .grow {
+    display: none;
+  }
+  .toolbar .search {
+    flex: 1 1 100%;
+  }
+  .toolbar .search .input {
+    width: 100%;
+  }
 }
 
 .search-key {
