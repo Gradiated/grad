@@ -583,6 +583,22 @@ fn completion_scripts_for_every_shell() {
     }
     let r = run(sb.grad(None), &["completion", "tcsh"]);
     expect(&r, 2);
+
+    // A reader that goes away (`grad completion zsh | head -1`) is not a panic.
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_grad"))
+        .args(["completion", "zsh"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

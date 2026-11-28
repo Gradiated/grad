@@ -38,7 +38,10 @@ async fn dispatch(cli: Cli, ctx: &Ctx) -> CliResult {
         Command::Local { action } => local::local(ctx, action).await,
         Command::Completion { shell } => {
             use clap::CommandFactory;
-            clap_complete::generate(shell, &mut Cli::command(), "grad", &mut std::io::stdout());
+            // Into a buffer: clap_complete panics on a closed stdout (`grad completion zsh | head`).
+            let mut script = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "grad", &mut script);
+            output::stdout(format_args!("{}", String::from_utf8_lossy(&script)));
             Ok(())
         }
     }

@@ -58,6 +58,7 @@ def formula(version: str, directory: pathlib.Path) -> str:
         "",
         "  def install",
         '    bin.install "grad"',
+        '    generate_completions_from_executable(bin/"grad", "completion")',
         "  end",
         "",
         "  test do",
