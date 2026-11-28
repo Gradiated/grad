@@ -24,6 +24,7 @@
   <a href="#quickstart"><b>Quickstart</b></a> ·
   <a href="#what-you-can-train"><b>Recipes</b></a> ·
   <a href="#self-hosting"><b>Self-hosting</b></a> ·
+  <a href="https://gradiated.com/docs/reference/training-api/"><b>API</b></a> ·
   <a href="#roadmap"><b>Roadmap</b></a>
 </p>
 
@@ -295,6 +296,8 @@ All four SDKs cover the same surface: datasets, sources and secrets, runs, check
 
 The CLI is built for scripts and coding agents: `--json` on any command prints one machine-readable envelope on stdout, and `grad --help` lists every command, the configuration precedence and the exit codes.
 
+Every endpoint, with its fields, an example request and response and the SDK call that sends it, is in the [API reference](https://gradiated.com/docs/reference/training-api/), generated from `spec/openapi.yaml`. Every error `code` is explained in [Errors](https://gradiated.com/docs/training/errors/); each problem's `type` URL (`https://gradiated.com/problems/<code>`) links to its entry. What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
+
 On a terminal, `grad train --wait` and `grad runs watch RUN` follow the run full-screen: phase and attempt, step and cost bars, a loss chart, checkpoints and an event log. `q` detaches and leaves the run going. See [docs/CLI_TUI.md](docs/CLI_TUI.md) for a capture.
 
 <details>
@@ -312,7 +315,7 @@ sdks/typescript/         @gradiated/grad
 sdks/go/                 github.com/Gradiated/grad/sdks/go
 sdks/rust/               grad-sdk crate
 scripts/generate-sdks.mjs  OpenAPI -> SDK transport codegen (`--check` in CI)
-scripts/check-docs-snippets.py  Runs the docs' Python and CLI blocks against a live stack
+scripts/check-docs-snippets.py  Runs the docs' blocks against a live stack and type-checks the TS, Go and Rust ones
 tests/harness/           Live stack (Postgres, SeaweedFS S3, fake Cloud) the SDK and CLI suites run against
 tests/fixtures/wire/     Wire fixtures every SDK replays, including the parity fixture
 ```

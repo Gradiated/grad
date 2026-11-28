@@ -7,6 +7,13 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
+- Docs: `spec/openapi.yaml` describes the fields of `Run`, `PlanRunRequest`, `Checkpoint`, `Artifact` and `Dataset`
+  (descriptions only, no wire change), so the generated
+  [API reference](https://gradiated.com/docs/reference/training-api/) and the SDKs' doc comments explain them. A
+  problem's `type` URL (`https://gradiated.com/problems/<code>`) now opens that code's entry in
+  [Errors](https://gradiated.com/docs/training/errors/). `scripts/check-docs-snippets.py --api-examples` sends every
+  request body the API reference shows to a live stack.
+
 - **List filters.** `GET /v1/runs` takes `status` (comma-separated, e.g. `queued,running`) and `q`
   (a case-insensitive name substring, or an exact id); `GET /v1/evals` takes `status`;
   `GET /v1/imports` takes `status` and `dataset`; `GET /v1/datasets` and `GET /v1/artifacts` take
