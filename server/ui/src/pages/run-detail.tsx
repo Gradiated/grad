@@ -344,9 +344,18 @@ const Charts = ({ run, stream }: { run: Run; stream: RunStreamState }) => {
 const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpointEvents: number; onPromoted: () => void }) => {
   const { client } = useApi();
   const toast = useToast();
-  const list = usePagedList((cursor, signal) => client.listRunCheckpoints(run.id, { limit: 50, cursor }, { signal }), [run.id, checkpointEvents, run.status], {
+  const list = usePagedList((cursor, signal) => client.listRunCheckpoints(run.id, { limit: 50, cursor }, { signal }), [run.id], {
     pollMs: isTerminalRun(run) ? undefined : 15_000,
   });
+  // A new checkpoint (or the run ending) refreshes the list in place: older pages
+  // stay loaded and the rows don't blink to skeletons.
+  const { reload } = list;
+  const seen = useRef({ checkpointEvents, status: run.status });
+  useEffect(() => {
+    if (seen.current.checkpointEvents === checkpointEvents && seen.current.status === run.status) return;
+    seen.current = { checkpointEvents, status: run.status };
+    reload();
+  }, [checkpointEvents, run.status, reload]);
   const [promote, setPromote] = useState<Checkpoint | null>(null);
   const [name, setName] = useState("");
   const rows = [...list.items].sort((a, b) => b.step - a.step);

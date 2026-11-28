@@ -530,6 +530,32 @@ describe("runs", () => {
     await waitFor(() => expect(byText(container, ".card", "Checkpoints")?.querySelectorAll("tbody tr").length).toBe(before + 1));
   });
 
+  it("refreshes checkpoints on a new one without dropping the older pages loaded", async () => {
+    const page1 = fixture<{ data: Record<string, unknown>[] }>("checkpoints.json");
+    const old = { ...page1.data[0], id: "ckpt_old", step: 1, best: false, final: false };
+    let push: (text: string) => void = () => undefined;
+    const live = () =>
+      new Response(new ReadableStream<Uint8Array>({ start: (c) => void (push = (t) => c.enqueue(new TextEncoder().encode(t))) }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    const server = fakeServer(
+      routes({
+        [`GET /v1/runs/${RUN_ID}`]: { ...RUN, status: "running", finished_at: null },
+        [`GET /v1/runs/${RUN_ID}/events`]: live,
+        [`GET /v1/runs/${RUN_ID}/checkpoints`]: ({ url }: { url: URL }) => (url.searchParams.get("cursor") === "k2" ? json({ data: [old], next_cursor: null }) : json({ ...page1, next_cursor: "k2" })),
+      }),
+    );
+    const { container } = await boot(server, `/runs/${RUN_ID}`);
+    const rows = () => byText(container, ".card", "Checkpoints")?.querySelectorAll("tbody tr:not([aria-hidden])").length ?? 0;
+    await waitFor(() => expect(byText(container, "button", "Older checkpoints")).toBeTruthy());
+    const first = rows();
+    await click(byText(container, "button", "Older checkpoints"));
+    await waitFor(() => expect(rows()).toBe(first + 1));
+    const fetches = () => server.calls.filter((c) => c.path.startsWith(`/v1/runs/${RUN_ID}/checkpoints`) && !c.path.includes("cursor=")).length;
+    const before = fetches();
+    await act(async () => push(`id: 50\nevent: checkpoint\ndata: {"seq":50,"attempt":1,"timestamp":"2026-11-27T12:10:00Z","step":9,"checkpoint_id":"ckpt_new"}\n\n`));
+    await waitFor(() => expect(fetches()).toBeGreaterThan(before));
+    expect(rows()).toBe(first + 1);
+  });
+
   it("promotes a checkpoint", async () => {
     const promoted: string[] = [];
     const server = fakeServer(
