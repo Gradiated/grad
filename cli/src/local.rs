@@ -422,10 +422,41 @@ fn compose(args: &ComposeArgs, files: &[PathBuf]) -> tokio::process::Command {
     cmd
 }
 
-async fn run(ctx: &Ctx, mut cmd: tokio::process::Command, what: &str) -> CliResult {
+async fn run(ctx: &Ctx, cmd: tokio::process::Command, what: &str) -> CliResult {
+    run_with(ctx, cmd, what, false).await
+}
+
+/// `quiet`: compose's per-container progress lines are shown only if the command fails.
+async fn run_with(
+    ctx: &Ctx,
+    mut cmd: tokio::process::Command,
+    what: &str,
+    quiet: bool,
+) -> CliResult {
     if ctx.out.json {
         // Keep stdout for the JSON envelope.
         cmd.stdout(Stdio::null());
+    }
+    if quiet {
+        let out = cmd.stdin(Stdio::null()).output().await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                CliError::general("docker_not_found", format!("'{}' not found", docker_bin()))
+                    .hint("Install Docker with the Compose plugin (https://docs.docker.com/compose/install/), or set GRAD_DOCKER")
+            } else {
+                CliError::general("docker_failed", format!("could not run docker: {}", e))
+            }
+        })?;
+        if out.status.success() {
+            return Ok(());
+        }
+        if !ctx.out.json {
+            eprint!("{}", String::from_utf8_lossy(&out.stdout));
+            eprint!("{}", String::from_utf8_lossy(&out.stderr));
+        }
+        return Err(CliError::general(
+            "docker_failed",
+            format!("`docker compose {}` failed ({})", what, out.status),
+        ));
     }
     let status = cmd.status().await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -488,7 +519,10 @@ async fn pull_images(
     use tokio::io::{AsyncBufReadExt, BufReader};
     let mut cmd = compose(args, files);
     profiles(&mut cmd, gpu, observability);
+    // --quiet: compose's per-layer lines (dozens, since stderr isn't its TTY) bury the
+    // summary; errors still come through on stderr.
     cmd.arg("pull")
+        .arg("--quiet")
         .stdin(Stdio::null())
         .stdout(if ctx.out.json {
             Stdio::null()
@@ -496,8 +530,10 @@ async fn pull_images(
             Stdio::inherit()
         })
         .stderr(Stdio::piped());
-    ctx.out
-        .note(format!("Pulling docker.io/gradiated images tagged {}", tag));
+    ctx.out.note(format!(
+        "Pulling docker.io/gradiated images tagged {} (about 600 MB the first time)",
+        tag
+    ));
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             CliError::general("docker_not_found", format!("'{}' not found", docker_bin()))
@@ -764,7 +800,8 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
                 .env("GRAD_S3_ACCESS_KEY", &keys.s3_access)
                 .env("GRAD_S3_SECRET_KEY", &keys.s3_secret);
             port_env(&mut cmd, ports);
-            run(ctx, cmd, "up").await.map_err(|e| {
+            ctx.out.note("Starting the containers");
+            run_with(ctx, cmd, "up", !build).await.map_err(|e| {
                 if e.code == "docker_failed" {
                     e.hint(
                         "See the docker output above, and `grad local logs` for container errors.",
@@ -854,7 +891,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             if volumes {
                 cmd.arg("--volumes");
             }
-            run(ctx, cmd, "down").await?;
+            run_with(ctx, cmd, "down", true).await?;
             out.line(if volumes {
                 "✓ Stopped grad and deleted its data"
             } else {
@@ -949,7 +986,7 @@ pub async fn local(ctx: &Ctx, action: LocalCmd) -> CliResult {
             let files = compose_files(&args, false, DEFAULT_IMAGE_TAG)?;
             let mut cmd = compose_all(&args, &files);
             cmd.arg("down").arg("--volumes").arg("--remove-orphans");
-            run(ctx, cmd, "down").await?;
+            run_with(ctx, cmd, "down", true).await?;
             save_profile(profile, |p| {
                 p.api_key = None;
                 p.extra.remove("trainer_key");
