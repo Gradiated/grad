@@ -85,7 +85,7 @@ type Download struct {
 	SizeBytes int64
 }
 
-type downloadConfig struct{ verify bool }
+type downloadConfig struct{ verify, extract bool }
 
 // DownloadOption configures Download.
 type DownloadOption func(*downloadConfig)
@@ -120,7 +120,8 @@ func downloadFileName(resp *generated.StreamResponse, ref string) string {
 // against X-Artifact-Sha256 while writing a temp file next to it, then renames it into
 // place. dest may be a file path, or a directory (existing, or ending in a separator)
 // that receives <name>-<version>.grad.tar.gz. On mismatch nothing is left behind and
-// the error matches ErrChecksumMismatch.
+// the error matches ErrChecksumMismatch. With Extract, dest is a directory that receives the
+// bundle's verified files instead.
 func (s *ArtifactsService) Download(ctx context.Context, ref, dest string, opts ...DownloadOption) (*Download, error) {
 	cfg := &downloadConfig{verify: true}
 	for _, opt := range opts {
@@ -146,7 +147,9 @@ func (s *ArtifactsService) Download(ctx context.Context, ref, dest string, opts 
 		dest = "."
 	}
 	final := dest
-	if info, statErr := os.Stat(dest); (statErr == nil && info.IsDir()) || strings.HasSuffix(dest, string(filepath.Separator)) || strings.HasSuffix(dest, "/") {
+	if cfg.extract {
+		final = filepath.Join(filepath.Dir(filepath.Clean(dest)), downloadFileName(resp, ref))
+	} else if info, statErr := os.Stat(dest); (statErr == nil && info.IsDir()) || strings.HasSuffix(dest, string(filepath.Separator)) || strings.HasSuffix(dest, "/") {
 		final = filepath.Join(dest, downloadFileName(resp, ref))
 	}
 	dir := filepath.Dir(final)
@@ -179,6 +182,12 @@ func (s *ArtifactsService) Download(ctx context.Context, ref, dest string, opts 
 	if cfg.verify && actual != expected {
 		return nil, &ChecksumMismatchError{GradError: &GradError{Code: "checksum_mismatch", RequestID: resp.RequestID,
 			Message: fmt.Sprintf("grad: artifact %s SHA-256 mismatch: expected %s, got %s; the download was discarded", ref, expected, actual)}, Expected: expected, Actual: actual}
+	}
+	if cfg.extract {
+		if err := extractInto(tmp.Name(), dest); err != nil {
+			return nil, err
+		}
+		return &Download{Path: dest, SHA256: actual, SizeBytes: n}, nil
 	}
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
 		return nil, fmt.Errorf("grad: %w", err)

@@ -413,13 +413,14 @@ func (r *Run) artifactRef() (string, error) {
 	return *r.ArtifactID, nil
 }
 
-// Download streams the run's artifact bundle to dest with SHA-256 verification.
-func (r *Run) Download(ctx context.Context, dest string) (*Download, error) {
+// Download streams the run's artifact bundle to dest with SHA-256 verification
+// (with Extract, its files into the directory dest); see ArtifactsService.Download.
+func (r *Run) Download(ctx context.Context, dest string, opts ...DownloadOption) (*Download, error) {
 	ref, err := r.artifactRef()
 	if err != nil {
 		return nil, err
 	}
-	return r.c.Artifacts.Download(ctx, ref, dest)
+	return r.c.Artifacts.Download(ctx, ref, dest, opts...)
 }
 
 // Checkpoint is a saved training state.

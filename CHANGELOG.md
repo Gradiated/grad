@@ -19,7 +19,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
   SDK replays: a `Retry-After` above 60 s raises the typed error at once in every SDK (Python and
   Rust used to sleep 60 s and retry). Python's `retry_after` is on every API error, not only 429.
   The Rust SDK closes idle connections after 4 s, below grad-server's keep-alive, as Python does.
-- Go: `Evals.Results` and `Evals.Outputs` (and on `*Eval`), as the other SDKs have.
+- Go: `Evals.Results` and `Evals.Outputs` (and on `*Eval`), as the other SDKs have, and
+  `Download(ctx, dir, grad.Extract())` (also on `Run.Download`) writes the bundle's verified files
+  into a new directory, as Python, Rust and the CLI do: regular files with safe paths only, each
+  checked against manifest.json, and nothing left behind on failure.
 - TypeScript: a CRLF split across two SSE chunks no longer splits an event.
 - SDK READMEs: one quickstart per SDK (push two records, plan, train `test/tiny-qwen3`,
   download) that runs on `grad local up --dev-models` in about 10 s; each SDK's test suite runs it

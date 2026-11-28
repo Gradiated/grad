@@ -54,7 +54,8 @@ This runs in about 10 seconds on `grad local up --dev-models`; `live_test.go`
 (`TestLiveSelfHosted/README_quickstart_verbatim`) builds and runs this block verbatim against a real server.
 `test/tiny-qwen3` has random weights, so its adapter is for trying the workflow; the same code on
 a GPU server with a real base model trains a real adapter. The bundle is a `.tar.gz` of the PEFT
-adapter and its manifest: `tar xzf` it and serve the directory with vLLM or SGLang.
+adapter and its manifest; `run.Download(ctx, "./sql-helper", grad.Extract())` writes the verified
+files instead (every file checked against the manifest's SHA-256), a directory vLLM and SGLang load.
 
 Against a self-hosted server:
 `grad.NewClient(grad.WithBaseURL("https://grad.internal.example"), grad.WithAPIKey(key))`.
