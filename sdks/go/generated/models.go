@@ -2077,33 +2077,52 @@ const (
 
 // ResolvedRunConfig is generated from the OpenAPI schema.
 type ResolvedRunConfig struct {
-	RuleVersion          string                     `json:"rule_version"`
-	Dataset              string                     `json:"dataset"`
-	DatasetVersion       int                        `json:"dataset_version"`
-	Name                 string                     `json:"name"`
-	RecipeKind           RecipeKind                 `json:"recipe_kind"`
-	Model                string                     `json:"model"`
-	TemplateRevision     string                     `json:"template_revision"`
-	Adapter              ResolvedRunConfigAdapter   `json:"adapter"`
-	LR                   float64                    `json:"lr"`
-	LRSource             string                     `json:"lr_source"`
-	BatchSize            int                        `json:"batch_size"`
-	Epochs               int                        `json:"epochs"`
-	Schedule             ResolvedRunConfigSchedule  `json:"schedule"`
-	Warmup               float64                    `json:"warmup"`
-	TrainOn              ResolvedRunConfigTrainOn   `json:"train_on"`
-	Thinking             ResolvedRunConfigThinking  `json:"thinking"`
-	PreserveThinking     bool                       `json:"preserve_thinking"`
-	Reduction            ResolvedRunConfigReduction `json:"reduction"`
-	Select               ResolvedRunConfigSelect    `json:"select"`
-	CheckpointEverySteps int                        `json:"checkpoint_every_steps"`
-	EvalEverySteps       int                        `json:"eval_every_steps"`
-	Optimizer            OptimizerSpec              `json:"optimizer"`
-	CheckpointTTLDays    int                        `json:"checkpoint_ttl_days"`
-	Split                ResolvedRunConfigSplit     `json:"split"`
+	// RuleVersion The version of the rules that resolved the `auto` defaults (`auto@2`); a config keeps resolving the same way.
+	RuleVersion string `json:"rule_version"`
+	Dataset     string `json:"dataset"`
+	// DatasetVersion The pinned dataset version.
+	DatasetVersion int        `json:"dataset_version"`
+	Name           string     `json:"name"`
+	RecipeKind     RecipeKind `json:"recipe_kind"`
+	// Model The base model trained.
+	Model string `json:"model"`
+	// TemplateRevision The pinned chat template (`qwen3@3`); evals of the run's checkpoints use it too.
+	TemplateRevision string                   `json:"template_revision"`
+	Adapter          ResolvedRunConfigAdapter `json:"adapter"`
+	// LR The resolved learning rate.
+	LR float64 `json:"lr"`
+	// LRSource Where `lr` came from: the calibrated rule (`auto@2: calibrated for ... at batch 128, sqrt batch scaling`) or the value you passed.
+	LRSource string `json:"lr_source"`
+	// BatchSize Training examples per optimizer step.
+	BatchSize int `json:"batch_size"`
+	// Epochs Passes over the training split.
+	Epochs int `json:"epochs"`
+	// Schedule Learning-rate schedule after warmup.
+	Schedule ResolvedRunConfigSchedule `json:"schedule"`
+	// Warmup The fraction of steps spent warming up the learning rate.
+	Warmup float64 `json:"warmup"`
+	// TrainOn Which assistant turns are trained: the last one, or every one.
+	TrainOn ResolvedRunConfigTrainOn `json:"train_on"`
+	// Thinking Thinking mode the records are rendered with.
+	Thinking ResolvedRunConfigThinking `json:"thinking"`
+	// PreserveThinking Whether earlier assistant turns keep their reasoning in the prompt.
+	PreserveThinking bool `json:"preserve_thinking"`
+	// Reduction How the loss averages: per example, then across the batch, or per token.
+	Reduction ResolvedRunConfigReduction `json:"reduction"`
+	// Select Which checkpoint becomes the artifact: the best by the held-out metric, or the last.
+	Select ResolvedRunConfigSelect `json:"select"`
+	// CheckpointEverySteps Steps between checkpoints.
+	CheckpointEverySteps int `json:"checkpoint_every_steps"`
+	// EvalEverySteps Steps between held-out evaluations.
+	EvalEverySteps int           `json:"eval_every_steps"`
+	Optimizer      OptimizerSpec `json:"optimizer"`
+	// CheckpointTTLDays Days an intermediate checkpoint is kept; the best and final never expire.
+	CheckpointTTLDays int                    `json:"checkpoint_ttl_days"`
+	Split             ResolvedRunConfigSplit `json:"split"`
 	// LabelEvalID The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).
-	LabelEvalID  *string        `json:"label_eval_id"`
-	BaseArtifact *BaseArtifact  `json:"base_artifact"`
+	LabelEvalID  *string       `json:"label_eval_id"`
+	BaseArtifact *BaseArtifact `json:"base_artifact"`
+	// RecipeParams The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...).
 	RecipeParams map[string]any `json:"recipe_params"`
 	// CheckpointEvals recipe.evals, with the dataset version and rubric pinned.
 	CheckpointEvals []ResolvedRunConfigCheckpointEvalsItem `json:"checkpoint_evals,omitempty"`
@@ -2139,7 +2158,7 @@ type ResolvedRunConfigCheckpointEvalsItem struct {
 	Limit          *int             `json:"limit"`
 }
 
-// ResolvedRunConfigReduction is an enumeration of allowed values.
+// ResolvedRunConfigReduction How the loss averages: per example, then across the batch, or per token.
 type ResolvedRunConfigReduction string
 
 // Values of ResolvedRunConfigReduction.
@@ -2148,7 +2167,7 @@ const (
 	ResolvedRunConfigReductionPerToken   ResolvedRunConfigReduction = "per_token"
 )
 
-// ResolvedRunConfigSchedule is an enumeration of allowed values.
+// ResolvedRunConfigSchedule Learning-rate schedule after warmup.
 type ResolvedRunConfigSchedule string
 
 // Values of ResolvedRunConfigSchedule.
@@ -2158,7 +2177,7 @@ const (
 	ResolvedRunConfigScheduleConstant ResolvedRunConfigSchedule = "constant"
 )
 
-// ResolvedRunConfigSelect is an enumeration of allowed values.
+// ResolvedRunConfigSelect Which checkpoint becomes the artifact: the best by the held-out metric, or the last.
 type ResolvedRunConfigSelect string
 
 // Values of ResolvedRunConfigSelect.
@@ -2186,7 +2205,7 @@ const (
 	ResolvedRunConfigSplitStrategyRandom    ResolvedRunConfigSplitStrategy = "random"
 )
 
-// ResolvedRunConfigThinking is an enumeration of allowed values.
+// ResolvedRunConfigThinking Thinking mode the records are rendered with.
 type ResolvedRunConfigThinking string
 
 // Values of ResolvedRunConfigThinking.
@@ -2196,7 +2215,7 @@ const (
 	ResolvedRunConfigThinkingOff  ResolvedRunConfigThinking = "off"
 )
 
-// ResolvedRunConfigTrainOn is an enumeration of allowed values.
+// ResolvedRunConfigTrainOn Which assistant turns are trained: the last one, or every one.
 type ResolvedRunConfigTrainOn string
 
 // Values of ResolvedRunConfigTrainOn.

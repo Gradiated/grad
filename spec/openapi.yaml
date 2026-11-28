@@ -1390,6 +1390,7 @@ components:
       properties:
         rule_version:
           type: string
+          description: The version of the rules that resolved the `auto` defaults (`auto@2`); a config keeps resolving the same way.
         dataset:
           type: string
           minLength: 1
@@ -1398,6 +1399,7 @@ components:
         dataset_version:
           type: integer
           minimum: 0
+          description: The pinned dataset version.
         name:
           type: string
           minLength: 1
@@ -1407,8 +1409,10 @@ components:
           $ref: "#/components/schemas/RecipeKind"
         model:
           type: string
+          description: The base model trained.
         template_revision:
           type: string
+          description: The pinned chat template (`qwen3@3`); evals of the run's checkpoints use it too.
         adapter:
           anyOf:
             - type: object
@@ -1464,56 +1468,71 @@ components:
         lr:
           type: number
           exclusiveMinimum: 0
+          description: The resolved learning rate.
         lr_source:
           type: string
+          description: "Where `lr` came from: the calibrated rule (`auto@2: calibrated for ... at batch 128, sqrt batch scaling`)
+            or the value you passed."
         batch_size:
           type: integer
           minimum: 1
+          description: Training examples per optimizer step.
         epochs:
           type: integer
           minimum: 1
+          description: Passes over the training split.
         schedule:
           type: string
           enum:
             - linear
             - cosine
             - constant
+          description: Learning-rate schedule after warmup.
         warmup:
           type: number
+          description: The fraction of steps spent warming up the learning rate.
         train_on:
           type: string
           enum:
             - last
             - all_assistant
+          description: "Which assistant turns are trained: the last one, or every one."
         thinking:
           type: string
           enum:
             - auto
             - on
             - off
+          description: Thinking mode the records are rendered with.
         preserve_thinking:
           type: boolean
+          description: Whether earlier assistant turns keep their reasoning in the prompt.
         reduction:
           type: string
           enum:
             - per_example
             - per_token
+          description: "How the loss averages: per example, then across the batch, or per token."
         select:
           type: string
           enum:
             - best
             - last
+          description: "Which checkpoint becomes the artifact: the best by the held-out metric, or the last."
         checkpoint_every_steps:
           type: integer
           minimum: 1
+          description: Steps between checkpoints.
         eval_every_steps:
           type: integer
           minimum: 1
+          description: Steps between held-out evaluations.
         optimizer:
           $ref: "#/components/schemas/OptimizerSpec"
         checkpoint_ttl_days:
           type: integer
           minimum: 1
+          description: Days an intermediate checkpoint is kept; the best and final never expire.
         split:
           type: object
           properties:
@@ -1550,6 +1569,7 @@ components:
         recipe_params:
           type: object
           additionalProperties: {}
+          description: The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...).
         checkpoint_evals:
           type: array
           items:

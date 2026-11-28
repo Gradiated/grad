@@ -1707,33 +1707,52 @@ string_enum! {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ResolvedRunConfig {
+    /// The version of the rules that resolved the `auto` defaults (`auto@2`); a config keeps resolving the same way.
     pub rule_version: String,
     pub dataset: String,
+    /// The pinned dataset version.
     pub dataset_version: i64,
     pub name: String,
     pub recipe_kind: RecipeKind,
+    /// The base model trained.
     pub model: String,
+    /// The pinned chat template (`qwen3@3`); evals of the run's checkpoints use it too.
     pub template_revision: String,
     pub adapter: ResolvedRunConfigAdapter,
+    /// The resolved learning rate.
     pub lr: f64,
+    /// Where `lr` came from: the calibrated rule (`auto@2: calibrated for ... at batch 128, sqrt batch scaling`) or the value you passed.
     pub lr_source: String,
+    /// Training examples per optimizer step.
     pub batch_size: i64,
+    /// Passes over the training split.
     pub epochs: i64,
+    /// Learning-rate schedule after warmup.
     pub schedule: ResolvedRunConfigSchedule,
+    /// The fraction of steps spent warming up the learning rate.
     pub warmup: f64,
+    /// Which assistant turns are trained: the last one, or every one.
     pub train_on: ResolvedRunConfigTrainOn,
+    /// Thinking mode the records are rendered with.
     pub thinking: ResolvedRunConfigThinking,
+    /// Whether earlier assistant turns keep their reasoning in the prompt.
     pub preserve_thinking: bool,
+    /// How the loss averages: per example, then across the batch, or per token.
     pub reduction: ResolvedRunConfigReduction,
+    /// Which checkpoint becomes the artifact: the best by the held-out metric, or the last.
     pub select: ResolvedRunConfigSelect,
+    /// Steps between checkpoints.
     pub checkpoint_every_steps: i64,
+    /// Steps between held-out evaluations.
     pub eval_every_steps: i64,
     pub optimizer: OptimizerSpec,
+    /// Days an intermediate checkpoint is kept; the best and final never expire.
     pub checkpoint_ttl_days: i64,
     pub split: ResolvedRunConfigSplit,
     /// The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers).
     pub label_eval_id: Option<String>,
     pub base_artifact: Option<BaseArtifact>,
+    /// The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...).
     pub recipe_params: BTreeMap<String, Value>,
     /// recipe.evals, with the dataset version and rubric pinned.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1779,7 +1798,7 @@ pub struct ResolvedRunConfigCheckpointEvalsItem {
 }
 
 string_enum! {
-    /// Allowed values of `ResolvedRunConfigReduction`.
+    /// How the loss averages: per example, then across the batch, or per token.
     ResolvedRunConfigReduction {
         PerExample => "per_example",
         PerToken => "per_token",
@@ -1787,7 +1806,7 @@ string_enum! {
 }
 
 string_enum! {
-    /// Allowed values of `ResolvedRunConfigSchedule`.
+    /// Learning-rate schedule after warmup.
     ResolvedRunConfigSchedule {
         Linear => "linear",
         Cosine => "cosine",
@@ -1796,7 +1815,7 @@ string_enum! {
 }
 
 string_enum! {
-    /// Allowed values of `ResolvedRunConfigSelect`.
+    /// Which checkpoint becomes the artifact: the best by the held-out metric, or the last.
     ResolvedRunConfigSelect {
         Best => "best",
         Last => "last",
@@ -1824,7 +1843,7 @@ string_enum! {
 }
 
 string_enum! {
-    /// Allowed values of `ResolvedRunConfigThinking`.
+    /// Thinking mode the records are rendered with.
     ResolvedRunConfigThinking {
         Auto => "auto",
         On => "on",
@@ -1833,7 +1852,7 @@ string_enum! {
 }
 
 string_enum! {
-    /// Allowed values of `ResolvedRunConfigTrainOn`.
+    /// Which assistant turns are trained: the last one, or every one.
     ResolvedRunConfigTrainOn {
         Last => "last",
         AllAssistant => "all_assistant",

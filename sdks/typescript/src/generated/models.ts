@@ -1014,12 +1014,16 @@ export interface RenderDatasetResponse {
 }
 
 export interface ResolvedRunConfig {
+  /** The version of the rules that resolved the `auto` defaults (`auto@2`); a config keeps resolving the same way. */
   ruleVersion: string;
   dataset: string;
+  /** The pinned dataset version. */
   datasetVersion: number;
   name: string;
   recipeKind: RecipeKind;
+  /** The base model trained. */
   model: string;
+  /** The pinned chat template (`qwen3@3`); evals of the run's checkpoints use it too. */
   templateRevision: string;
   adapter: {
     kind: "lora";
@@ -1034,20 +1038,34 @@ export interface ResolvedRunConfig {
   } | {
     kind: "encoder_full";
   };
+  /** The resolved learning rate. */
   lr: number;
+  /** Where `lr` came from: the calibrated rule (`auto@2: calibrated for ... at batch 128, sqrt batch scaling`) or the value you passed. */
   lrSource: string;
+  /** Training examples per optimizer step. */
   batchSize: number;
+  /** Passes over the training split. */
   epochs: number;
+  /** Learning-rate schedule after warmup. */
   schedule: "linear" | "cosine" | "constant";
+  /** The fraction of steps spent warming up the learning rate. */
   warmup: number;
+  /** Which assistant turns are trained: the last one, or every one. */
   trainOn: "last" | "all_assistant";
+  /** Thinking mode the records are rendered with. */
   thinking: "auto" | "on" | "off";
+  /** Whether earlier assistant turns keep their reasoning in the prompt. */
   preserveThinking: boolean;
+  /** How the loss averages: per example, then across the batch, or per token. */
   reduction: "per_example" | "per_token";
+  /** Which checkpoint becomes the artifact: the best by the held-out metric, or the last. */
   select: "best" | "last";
+  /** Steps between checkpoints. */
   checkpointEverySteps: number;
+  /** Steps between held-out evaluations. */
   evalEverySteps: number;
   optimizer: OptimizerSpec;
+  /** Days an intermediate checkpoint is kept; the best and final never expire. */
   checkpointTtlDays: number;
   split: {
     strategy: "by_session" | "by_group" | "random";
@@ -1059,6 +1077,7 @@ export interface ResolvedRunConfig {
   /** The labeling eval whose answers the run trains on: router runs with a Judge/validator rubric, and off-policy distill runs (the teacher's answers). */
   labelEvalId: string | null;
   baseArtifact: BaseArtifact | null;
+  /** The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...). */
   recipeParams: Record<string, unknown>;
   /** recipe.evals, with the dataset version and rubric pinned. */
   checkpointEvals?: Array<{

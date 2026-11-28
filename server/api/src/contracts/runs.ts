@@ -323,29 +323,82 @@ export type BaseArtifact = z.infer<typeof BaseArtifactSchema>;
 
 export const ResolvedRunConfigSchema = z
   .object({
-    rule_version: z.string(),
+    rule_version: z.string().openapi({
+      description:
+        "The version of the rules that resolved the `auto` defaults (`auto@2`); a config keeps resolving the same way.",
+    }),
     dataset: SlugSchema,
-    dataset_version: z.number().int().min(0),
+    dataset_version: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: "The pinned dataset version." }),
     name: SlugSchema,
     recipe_kind: RecipeKindSchema,
-    model: z.string(),
-    template_revision: z.string(),
+    model: z.string().openapi({ description: "The base model trained." }),
+    template_revision: z.string().openapi({
+      description:
+        "The pinned chat template (`qwen3@3`); evals of the run's checkpoints use it too.",
+    }),
     adapter: ResolvedAdapterSchema,
-    lr: z.number().positive(),
-    lr_source: z.string(),
-    batch_size: z.number().int().min(1),
-    epochs: z.number().int().min(1),
-    schedule: z.enum(["linear", "cosine", "constant"]),
-    warmup: z.number(),
-    train_on: z.enum(["last", "all_assistant"]),
-    thinking: z.enum(["auto", "on", "off"]),
-    preserve_thinking: z.boolean(),
-    reduction: z.enum(["per_example", "per_token"]),
-    select: z.enum(["best", "last"]),
-    checkpoint_every_steps: z.number().int().min(1),
-    eval_every_steps: z.number().int().min(1),
+    lr: z
+      .number()
+      .positive()
+      .openapi({ description: "The resolved learning rate." }),
+    lr_source: z.string().openapi({
+      description:
+        "Where `lr` came from: the calibrated rule (`auto@2: calibrated for ... at batch 128, sqrt batch scaling`) or the value you passed.",
+    }),
+    batch_size: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "Training examples per optimizer step." }),
+    epochs: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "Passes over the training split." }),
+    schedule: z
+      .enum(["linear", "cosine", "constant"])
+      .openapi({ description: "Learning-rate schedule after warmup." }),
+    warmup: z.number().openapi({
+      description: "The fraction of steps spent warming up the learning rate.",
+    }),
+    train_on: z.enum(["last", "all_assistant"]).openapi({
+      description:
+        "Which assistant turns are trained: the last one, or every one.",
+    }),
+    thinking: z
+      .enum(["auto", "on", "off"])
+      .openapi({ description: "Thinking mode the records are rendered with." }),
+    preserve_thinking: z.boolean().openapi({
+      description:
+        "Whether earlier assistant turns keep their reasoning in the prompt.",
+    }),
+    reduction: z.enum(["per_example", "per_token"]).openapi({
+      description:
+        "How the loss averages: per example, then across the batch, or per token.",
+    }),
+    select: z.enum(["best", "last"]).openapi({
+      description:
+        "Which checkpoint becomes the artifact: the best by the held-out metric, or the last.",
+    }),
+    checkpoint_every_steps: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "Steps between checkpoints." }),
+    eval_every_steps: z
+      .number()
+      .int()
+      .min(1)
+      .openapi({ description: "Steps between held-out evaluations." }),
     optimizer: OptimizerSpecSchema,
-    checkpoint_ttl_days: z.number().int().min(1),
+    checkpoint_ttl_days: z.number().int().min(1).openapi({
+      description:
+        "Days an intermediate checkpoint is kept; the best and final never expire.",
+    }),
     split: z.object({
       strategy: z.enum(["by_session", "by_group", "random"]),
       eval_fraction: z.number(),
@@ -361,7 +414,10 @@ export const ResolvedRunConfigSchema = z
       description:
         "Continued training: the artifact whose adapter the run starts from (recipe.model was an artifact reference).",
     }),
-    recipe_params: z.record(z.string(), z.unknown()),
+    recipe_params: z.record(z.string(), z.unknown()).openapi({
+      description:
+        "The recipe's own settings (router candidates, DPO `beta`, a cartridge's context, ...).",
+    }),
     checkpoint_evals: z
       .array(
         z.object({
