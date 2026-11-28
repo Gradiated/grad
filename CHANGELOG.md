@@ -7,110 +7,159 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ## Unreleased
 
-### Added
+## [0.2.0-alpha.5] - 2026-11-28
 
-- **Evals on `grad local up --dev-models`**: the stack also starts `grad-dev-inference` (the trainer
-  image's `grad-dev-inference` command, compose profile `dev-models`), a CPU OpenAI-compatible
-  `/v1/chat/completions` endpoint, and points the API's and the eval worker's inference and judge
-  URLs at it, so `grad eval` works with no extra flags instead of answering `501
-  inference_unavailable`. It serves `test/tiny-qwen3` and `test/tiny-qwen3-teacher` by catalog id,
-  LoRA and merged artifacts trained on them by artifact id (read from grad-server with the `local`
-  profile's key and checked against `X-Grad-Workspace`), and `test/tiny-judge`, a deterministic
-  judge that scores the word-overlap F1 with the reference answer. Endpoints exported in your shell
-  still win. `grad local up` says so; `tests/compose/smoke.sh` now evals the trained artifact with a
-  validator and the judge and checks the report in the CLI, the Python SDK and the web console
-  (`server/ui/test/live/evals.test.tsx`), and drops its fake OpenAI server.
-- `scripts/check-docs-snippets.py --local` runs the docs' blocks (with and without `--cloud`)
-  against a running `grad local up --dev-models` stack, with catalog models mapped to the dev
-  models and judges to `test/tiny-judge`.
-- **One Grafana dashboard for production, "grad / Training platform"** (`deploy/grafana/grad.json`,
-  also the Helm chart's and `grad local up --observability`'s), with sections for the overview,
-  queue and scheduling, runs and jobs, workers and GPUs, evals, sources, billing (Cloud), auth,
-  API and SSE, dependencies and Loki logs, and variables for the Prometheus and Loki data
-  sources, the namespace and the worker pool. It replaces the Overview, Training and Evals &
-  Sources dashboards.
-- Metrics: `grad_http_errors_total{code}` (every problem+json response), `grad_job_failures_total`
-  by kind, recipe and `error_code`, `grad_worker_auth_total{mode,result}`,
-  `grad_token_reviews_total`, `grad_token_review_duration_seconds`, `grad_token_reviews_in_flight`,
-  `grad_auth_cache_lookups_total`, `grad_billing_checks_total`, `grad_price_list_age_seconds`,
-  `grad_eval_inference_errors_total{target,reason}` (with `capacity_unavailable`),
-  `grad_source_sync_lag_seconds`, `grad_maintenance_last_tick_timestamp_seconds`, and the
-  workers' `grad_trainer_checkpoints_total{reason,result}`. The PodMonitor labels worker series
-  with their `pool`.
-- Alerts (`metrics.prometheusRule.enabled`): `GradJobFailureRateHigh`, `GradUsagePushLagging`,
-  `GradTokenReviewSaturated`, `GradDatabaseErrors`, `GradStorageErrors`,
-  `GradMaintenanceStalled`, and `GradNoWorkersForQueuedJobs` for eval workers too.
-- `EvalRun.waiting_reason` (`capacity_unavailable` | `rate_limited` | `inference_unavailable` |
-  null): a running eval whose model calls are waiting for a cold serving pool, a full eval lane
-  or a down endpoint says so. Eval workers wait out `503 capacity_unavailable` and 429s in place,
-  honouring `Retry-After`, for up to `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (default 720) per call
-  without spending an attempt.
-- `GRAD_EXTRA_MODELS_JSON` entries take an optional `serving_id`; on Gradiated Cloud evals call
-  the gateway with each model's canonical-case id (`Qwen/Qwen3-8B`).
+Upgrading runs migration 0010 (`node dist/main.js migrate`, or the Helm chart's Job); an alpha.4
+database (0001 to 0009) upgrades in place. Breaking and behaviour changes, mostly for operators:
 
-### Changed
-
-- Rust SDK: `datasets().import_hf` and `artifacts().import_hf` are `from_hf`, as in the other
-  SDKs, and `import_hf_with_secret` is gone (set `ImportSource.secret`). TypeScript has
-  `artifacts.waitImport(id)` like the others; Python's `artifacts.download_url` is typed
-  `ArtifactDownloadUrl`.
-- Fewer settings: `USAGE_FLUSH_TOKENS`/`USAGE_FLUSH_SECONDS` (1M tokens / 5 minutes),
-  `WAITING_FOR_COMPUTE_SECONDS` (30), `SOURCE_VERSION_INTERVAL_SECONDS` (900),
-  `SOURCE_VERSION_MAX_RECORDS` (100k) and `GRAD_CLOUD_JWT_AUDIENCE` (`training`) are now fixed,
-  and the deprecated unprefixed `INFERENCE_*`/`JUDGE_*` names are no longer read (use
-  `GRAD_INFERENCE_*`/`GRAD_JUDGE_*`). The API container no longer gets `GRAD_JUDGE_BASE_URL`
-  (only eval workers use it), and the Helm chart sets `GRAD_WORKER_AUTOSCALING` from
-  `keda.enabled`. A test checks that SELF_HOSTING.md and CLOUD_MODE.md list every variable the
-  server and eval workers read, with the code's defaults.
+- **Removed settings.** `USAGE_FLUSH_TOKENS`, `USAGE_FLUSH_SECONDS`,
+  `WAITING_FOR_COMPUTE_SECONDS`, `SOURCE_VERSION_INTERVAL_SECONDS`,
+  `SOURCE_VERSION_MAX_RECORDS` and `GRAD_CLOUD_JWT_AUDIENCE` are no longer read; their values
+  are fixed at the old defaults (1M tokens / 5 minutes, 30 s, 900 s, 100k, `training`). The
+  deprecated unprefixed `INFERENCE_*`/`JUDGE_*` names are gone too: set
+  `GRAD_INFERENCE_*`/`GRAD_JUDGE_*`. The API container no longer gets `GRAD_JUDGE_BASE_URL`
+  (only eval workers use it).
+- **`503 capacity_unavailable` is waited out, not failed.** An eval whose model has no capacity
+  (a cold serving pool) or whose lane is full (429 past the client's retries) waits in place,
+  honouring `Retry-After`, for up to `GRAD_EVAL_CAPACITY_WAIT_SECONDS` (default 720) per call,
+  keeping its lease and spending no attempt. `EvalRun.waiting_reason` says why
+  (`capacity_unavailable` | `rate_limited` | `inference_unavailable`). An inference outage no
+  longer stores error outputs and zero judge scores.
+- **Cloud refuses checkpoint evals.** A run with `recipe.evals` answers `422
+  checkpoint_evals_unsupported_on_cloud` at plan and create, since Cloud serves only published
+  artifacts: evaluate `run.artifact` after training.
+- **Parked usage rows (Cloud).** A usage row billing refuses for good (422/409) is parked
+  (`grad_usage.parked_code`, `parked_at`) instead of holding back every later row. Parked rows
+  are never deleted and never retried by themselves; docs/CLOUD_MODE.md says how to retry
+  them. Transient failures still retry forever.
+- **Rust SDK:** `datasets().import_hf` and `artifacts().import_hf` are `from_hf`, as in the
+  other SDKs, and `import_hf_with_secret` is gone (set `ImportSource.secret`).
+- **JSON request bodies are capped at 32 MiB** (was 64), `413 payload_too_large`, and a replica
+  handles at most two bodies over 1 MiB at once (the rest wait). The SDKs push 8-16 MiB batches.
+- **`AUTH_MODE=none` checks Host and Origin.** A public DNS name in `Host` is `403
+  host_not_allowed` (DNS rebinding), and a cross-site browser request from an origin outside
+  `GRAD_CORS_ORIGINS` is `403 cross_site_request`. Loopback, IP literals, single-label names
+  (compose services), `.local`/`.internal`/`.svc` names and link navigations still work.
 - Every alert in the chart's PrometheusRule is `severity: warning` (`GradApiErrorRateHigh` was
-  `critical`, and now needs more than 0.1 requests/s).
-- Logs: every component writes JSON lines to stdout (warnings and errors too) with `time`,
-  `level`, `component` and the ids that apply (`request_id`, `job_id`, `run_id`, `attempt`,
-  `worker_id`, `workspace_id`); errors carry `error_type` and `stack`, and credentials are
-  masked. The trainer's logs are JSON now (they were `[grad-trainer]` text on stderr) and
-  cover each phase, checkpoint and attempt outcome.
+  `critical`), and the trainer logs JSON lines on stdout instead of `[grad-trainer]` text on
+  stderr.
 
-### Fixed
+### Security
+
+- Artifact uploads: sparse tar members are refused and a tar holds at most 1,024 entries and
+  10 GiB uncompressed (a 242-byte upload could write 93 GB). A router, decision or reward
+  bundle's `head_file` must be the format's own head file, JSON configs are at most 16 MiB, and
+  `*` in a format pattern no longer crosses `/`, so `sub/model.safetensors` is dropped, not kept
+  unchecked. A malformed upload is the tenant's `422 invalid_artifact`, not a retried job.
+- Hugging Face imports: at most 1,024 files of the format and one hour; a redirect that leaves
+  http(s) or downgrades https is refused, the token is dropped on any scheme or host change,
+  and proxy variables are ignored. `revision` must be a branch, tag or commit name.
+- Cloud console and service JWTs whose `exp` is more than an hour ahead are refused.
+- Web UI: a `#key=` link never replaces the key of a tab that is already signed in.
+- The TypeScript SDK's errors redact a presigned URL's query, as Rust and Go do.
+- hono 4.13.17 and @hono/node-server 2.1.6 (moderate advisories; none reproduced against
+  grad's routes). The trainer image's build context has a `.dockerignore`.
+
+### Reliability
+
+Chaos round 2; each has a test in `server/api/test/chaos-*.test.ts`, and docs/ARCHITECTURE.md
+"Failure modes" has the table.
+
+- A Postgres connection black-holed by a failover fails within 35 s and is never reused; the
+  SSE hub pings its LISTEN connection. Boot-time migrations no longer hit the 30 s statement
+  timeout.
+- Object storage outages answer `503 storage_unavailable` (was 500); long downloads are no
+  longer aborted at 120 s.
+- One failing scheduled source no longer stops every schedule; up to 1,000 sources start per
+  tick.
+- A TokenReview outage no longer expires every Kubernetes worker's lease: a review is good for
+  15 min while the API server is down, never past the token's `exp`. A rotated worker token
+  never fails an eval.
+- A GPU worker takes the runs no smaller GPU fits first, so big runs aren't starved.
+  `MAX_PREEMPTIONS` counts only reclaims in a row that saved no checkpoint, and a reclaimed
+  worker hands back when its grace ends mid-save.
+- An artifact delete or the orphan sweep never removes a bundle a new release of the same bytes
+  references; a pin racing a delete answers 404 (was 500), as does promoting a checkpoint whose
+  blob just expired. A workspace purge no longer stops at its first 500 pinned objects. A
+  restarted trainer removes the job directories a killed one left.
+- A resumed run that ends again has one best and one final checkpoint (it listed two of each).
+- A live event stream (SSE, so `wait(onMetric=...)` and `grad runs watch`) no longer skips an
+  event that drew its seq before another of the run's events but committed after it (a run's
+  last metric, typically): a job's events now commit in seq order.
+
+### Developer experience
+
+- **Evals on `grad local up --dev-models`**: the stack also starts `grad-dev-inference`, a CPU
+  OpenAI-compatible endpoint, and points the API's and eval worker's inference and judge URLs
+  at it, so `grad eval` works with no flags (was `501 inference_unavailable`). It serves
+  `test/tiny-qwen3`, `test/tiny-qwen3-teacher`, LoRA and merged artifacts trained on them, and
+  `test/tiny-judge`, a deterministic word-overlap judge. URLs exported in your shell still win.
+  `tests/compose/smoke.sh` evals the trained artifact with a judge and checks the report in the
+  CLI, the Python SDK and the web UI.
+- `scripts/check-docs-snippets.py --local` runs the docs' blocks against that stack, and
+  `--compile` type-checks their TypeScript, Go and Rust blocks (56 were never checked; the
+  README's Rust quickstart didn't compile).
+- TypeScript and Go raise `FeatureUnavailableError` for any 501, like Python and Rust (it was
+  a `ServerError`, which reads as "try again later"). TypeScript has `artifacts.waitImport(id)`
+  and prints a readable plan from `console.log(plan)`; Python's `artifacts.download_url` is
+  typed `ArtifactDownloadUrl`.
+- CLI: a run says "Queued", then "Waiting for a worker (none online | N online, all busy)",
+  instead of "Waiting for a GPU (0 workers online)" while a worker is about to claim it. Errors
+  lead with the server's words, `grad train` sums up the selected checkpoint in one line, and
+  `grad artifacts list` prints readable sizes. `grad local up` and `down` print a few lines, not
+  compose's progress.
+- `runs.plan` and `runs.create` warn when only CPU workers are online for a GPU-sized model. A
+  router whose report fold misses `max_quality_drop` says so.
+- `grad local up` can sync from a provider on the same machine (`GRAD_SOURCES_EGRESS_ALLOW`,
+  `host.docker.internal`).
+- A presigned artifact download is saved as `<name>-<version>.grad.tar.gz`, not its sha256.
+- Resuming a run you just cancelled says to retry in a few seconds.
+- A test checks that SELF_HOSTING.md and CLOUD_MODE.md list every setting the server and eval
+  workers read, with the code's defaults. The Helm chart sets `GRAD_WORKER_AUTOSCALING` from
+  `keda.enabled`.
+- Releases: a registry that rejects an upload no longer holds back the GitHub Release and
+  Homebrew, and a pushed `v*` tag publishes with no approval step.
+
+### Observability
+
+- **One Grafana dashboard, "grad / Training platform"** (`deploy/grafana/grad.json`, also the
+  Helm chart's and `grad local up --observability`'s): overview, queue and scheduling, runs and
+  jobs, workers and GPUs, evals, sources, billing, auth, API and SSE, dependencies and Loki
+  logs. It replaces the Overview, Training and Evals & Sources dashboards.
+- Metrics: `grad_http_errors_total{code}`, `grad_job_failures_total` by kind, recipe and
+  `error_code`, `grad_worker_auth_total`, `grad_token_reviews_total`,
+  `grad_token_review_duration_seconds`, `grad_token_reviews_in_flight`,
+  `grad_auth_cache_lookups_total`, `grad_billing_checks_total`, `grad_price_list_age_seconds`,
+  `grad_eval_inference_errors_total{target,reason}` (refused calls count even when an eval
+  stores no output), `grad_source_sync_lag_seconds`,
+  `grad_maintenance_last_tick_timestamp_seconds`, `grad_usage_parked_rows` and the workers'
+  `grad_trainer_checkpoints_total`. Worker series carry their `pool`. docs/METRICS.md lists
+  them all.
+- Alerts (`metrics.prometheusRule.enabled`, all warnings): `GradJobFailureRateHigh`,
+  `GradUsagePushLagging`, `GradUsageRowsParked`, `GradTokenReviewSaturated`,
+  `GradDatabaseErrors`, `GradStorageErrors`, `GradMaintenanceStalled`, and
+  `GradNoWorkersForQueuedJobs` for eval workers too. `GradApiErrorRateHigh` needs more than 0.1
+  requests/s.
+- Logs: every component writes JSON lines to stdout with `time`, `level`, `component` and the
+  ids that apply (`request_id`, `job_id`, `run_id`, `attempt`, `worker_id`, `workspace_id`);
+  errors carry `error_type` and `stack`, and credentials are masked.
+
+### Cloud
 
 - The internal listener (`INTERNAL_PORT`) starts when either of its route groups is configured:
-  Gradiated Cloud's routes (`AUTH_MODE=cloud`) no longer need lease worker auth and an
-  orchestrator key. Each group is mounted only when configured (otherwise 404), and startup fails
-  only when neither is. Helm: `api.internalPort` serves it on the ClusterIP Service
-  `<fullname>-internal` (never the Ingress), with `networkPolicy.internalIngressFrom`.
-- Cloud usage export: a row billing ingest refuses for good (422/409) is parked
-  (`grad_usage.parked_code`, `parked_at`) instead of holding back every later row; the rest export
-  at once. `grad_usage_parked_rows` and the `GradUsageRowsParked` warning alert flag parked rows,
-  which are never deleted and are retried by hand (docs/CLOUD_MODE.md). Transient failures still
-  retry forever.
-- Gradiated Cloud evals: `recipe.evals` (checkpoint evals during training) is refused with
-  `422 checkpoint_evals_unsupported_on_cloud` at plan and create, since Cloud serves only
-  published artifacts. A 404 from the product's eval-versions call is `422
-  artifact_not_servable` (was a retried 503); the call gets 10 minutes (the product copies the
-  bundle) and retries 5xx. The `gradiated` source answers `501 source_unavailable` ("coming
-  soon") unless `GRAD_CLOUD_TRACES_ENABLED=true`, instead of failing at sync time.
-- Failure modes, chaos round 2 (each with a test in `server/api/test/chaos-*.test.ts`; summary
-  in docs/ARCHITECTURE.md "Failure modes"):
-  - A Postgres connection black-holed by a failover now fails within 35 s and is never reused;
-    the SSE hub pings its LISTEN connection. Boot-time migrations no longer hit the 30 s
-    statement timeout.
-  - Object storage outages answer `503 storage_unavailable` (was 500); long downloads are no
-    longer aborted at 120 s.
-  - One failing scheduled source no longer stops every schedule; up to 1,000 sources start per
-    tick.
-  - An inference outage during an eval waits and resumes instead of storing error outputs and
-    zero judge scores; a rotated worker token never fails an eval.
-  - Cloud: a product-DB failover keeps recently answered API keys working for up to 5 min; the
-    JWKS refresh never blocks a request and a rotated key verifies at once; a replica booted
-    during a price-list outage answers `503 billing_unavailable`, not `422 unknown_model`; one
-    balance check per workspace at a time.
-  - A TokenReview outage no longer expires every Kubernetes worker's lease (reviews are good
-    for 15 min while the API server is down, never past the token's `exp`).
-  - A GPU worker takes the runs no smaller GPU fits first, so big runs are not starved;
-    `MAX_PREEMPTIONS` counts only reclaims in a row that saved no checkpoint; a reclaimed
-    worker hands back when its grace ends mid-save.
-  - An artifact delete or the orphan sweep never removes a bundle a new release of the same
-    bytes references; a pin racing a delete answers 404 (was 500); promoting a checkpoint whose
-    blob just expired answers 404. A restarted trainer removes job directories a killed one left.
+  Cloud's routes (`AUTH_MODE=cloud`) no longer need lease worker auth and an orchestrator key.
+  A group that isn't configured is 404. Helm's `api.internalPort` serves it on the ClusterIP
+  Service `<fullname>-internal` (never the Ingress), with `networkPolicy.internalIngressFrom`.
+- Evals: a 404 from the product's eval-versions call is `422 artifact_not_servable` (was a
+  retried 503); the call gets 10 minutes (the product copies the bundle) and retries 5xx. Evals
+  call the gateway with each model's canonical-case id (`Qwen/Qwen3-8B`);
+  `GRAD_EXTRA_MODELS_JSON` entries take an optional `serving_id`.
+- The `gradiated` source answers `501 source_unavailable` ("coming soon") unless
+  `GRAD_CLOUD_TRACES_ENABLED=true`, instead of failing at sync time.
+- A product-DB failover keeps recently answered API keys working for up to 5 min; the JWKS
+  refresh never blocks a request and a rotated key verifies at once. A replica booted during a
+  price-list outage answers `503 billing_unavailable`, not `422 unknown_model`, and a heartbeat
+  checks one balance per workspace at a time.
 
 ## [0.2.0-alpha.4] - 2026-11-27
 

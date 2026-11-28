@@ -4,7 +4,7 @@
  * that stop at the response headers for streams, SSE parsing, request ids,
  * and the camelCase <-> wire key codec. Browser-safe: no Node imports. */
 
-export const SDK_VERSION = "0.2.0-alpha.4";
+export const SDK_VERSION = "0.2.0-alpha.5";
 
 type Env = Record<string, string | undefined>;
 type ProcessLike = { version?: string; env?: Env; platform?: string };
