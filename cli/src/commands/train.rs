@@ -864,6 +864,20 @@ pub(crate) fn fmt_duration(s: i64) -> String {
 
 const EVENT_HEADERS: [&str; 4] = ["seq", "attempt", "type", "detail"];
 
+/// A `grad runs events` line. Rows stream (with `--follow`), so the columns have fixed widths:
+/// a seq up to five digits, the ATTEMPT header, and the longest type (`checkpoint`).
+fn event_columns(cells: &[String]) -> String {
+    const WIDTHS: [usize; 3] = [5, 7, 10];
+    let mut line = String::new();
+    for (i, cell) in cells.iter().enumerate() {
+        match WIDTHS.get(i) {
+            Some(w) => line.push_str(&format!("{:<w$}  ", cell, w = *w)),
+            None => line.push_str(cell),
+        }
+    }
+    line.trim_end().to_string()
+}
+
 /// One `grad runs events` row: seq, attempt, type and a one-line summary.
 fn event_row(ev: &RunEvent) -> Vec<String> {
     let detail = match ev {
@@ -1142,12 +1156,12 @@ pub async fn runs(ctx: &Ctx, action: RunsCmd) -> CliResult {
             }
             let mut collected = Vec::new();
             if !out.json {
-                out.line(EVENT_HEADERS.map(|h| h.to_uppercase()).join("  "));
+                out.line(event_columns(&EVENT_HEADERS.map(|h| h.to_uppercase())));
             }
             while let Some(ev) = stream.next().await {
                 let ev = ev?;
                 if !out.json {
-                    out.line(event_row(&ev).join("  "));
+                    out.line(event_columns(&event_row(&ev)));
                 }
                 collected.push(ev);
             }

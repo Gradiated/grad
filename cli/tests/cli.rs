@@ -1367,14 +1367,14 @@ fn runs_commands() {
     let r = run(sb.grad(u), &["runs", "events", "run_1", "--limit", "50"]);
     expect(&r, 0);
     for needle in [
-        "SEQ  ATTEMPT  TYPE  DETAIL",
-        "1  1  phase  queued",
+        "SEQ    ATTEMPT  TYPE        DETAIL",
+        "1      1        phase       queued",
         "starting on NVIDIA L4 (22 GB)",
         "training at step 0",
         "step 2 loss 0.5 eval 0.4",
         "step 2 ckpt_2 score 0.4",
-        "6  1  log  uploaded",
-        "completed  completed",
+        "6      1        log         uploaded",
+        "completed   completed",
     ] {
         assert!(
             r.stdout.contains(needle),
