@@ -114,15 +114,10 @@ export const createCheckpointService = (
     const all = await store.artifacts.allCheckpoints(run.id, now);
     if (all.length === 0) return;
 
-    const best = bestCheckpoint(all);
-    const final = all.reduce((acc, c) =>
-      c.step > acc.step || (c.step === acc.step && c.attempt >= acc.attempt)
-        ? c
-        : acc,
-    );
-
+    // Ordered by (step, attempt): the final one is last.
+    const final = all.at(-1) as CheckpointRecord;
     await store.artifacts.pinCheckpoints(run.id, {
-      bestId: best?.id ?? null,
+      bestId: bestCheckpoint(all)?.id ?? null,
       finalId: final.id,
     });
   };

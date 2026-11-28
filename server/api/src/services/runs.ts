@@ -442,13 +442,9 @@ export const createRunLifecycle = (
     toPublicRun(run, await computeFor(run));
 
   /** The step the next attempt resumes from (its newest checkpoint), or null. */
-  const resumeStepOf = async (runId: string) => {
-    const steps = (
-      await store.artifacts.allCheckpoints(runId, clock.now())
-    ).map((c) => c.step);
-
-    return steps.length > 0 ? Math.max(...steps) : null;
-  };
+  const resumeStepOf = async (runId: string) =>
+    (await store.artifacts.allCheckpoints(runId, clock.now())).at(-1)?.step ??
+    null;
 
   /** The `queued` phase of the run's next attempt. */
   const markQueued = async (run: RunRecord) => {
@@ -552,9 +548,10 @@ export const createRunLifecycle = (
   const buildJob = async (run: RunRecord): Promise<TrainerJob> => {
     const training = await trainingRecords(run);
 
-    const resume = (await store.artifacts.allCheckpoints(run.id, clock.now()))
-      .sort((a, b) => b.step - a.step || b.attempt - a.attempt)
-      .at(0);
+    // Ordered by (step, attempt): the newest is last.
+    const resume = (
+      await store.artifacts.allCheckpoints(run.id, clock.now())
+    ).at(-1);
     const baseRef = run.resolved_config.base_artifact;
     const base = baseRef
       ? await store.artifacts.get(run.workspace_id, baseRef.id)
