@@ -131,6 +131,7 @@ export const createImportJobRepository = (
           kind: "import",
           workspaceId: input.workspaceId,
           maxAttempts: input.maxAttempts,
+          maxQueued: input.maxQueued,
           idempotency: input.idempotency,
           payload: {
             artifact: input.artifact,

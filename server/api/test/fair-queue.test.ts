@@ -542,6 +542,14 @@ describe("fair queue over HTTP", () => {
     });
     expect(imp.status).toBe(429);
     expect(imp.body.code).toBe("queue_limit");
+    // So do artifact imports.
+    const art = await t.json<{ code: string }>("/v1/artifact-imports", {
+      body: {
+        source: { kind: "hf", repo: "acme/lora", revision: "main" },
+        base_model: "test/tiny-qwen3",
+      },
+    });
+    expect([art.status, art.body.code]).toEqual([429, "queue_limit"]);
   });
 
   it("warns when only CPU workers are online for a GPU-sized base model", async () => {

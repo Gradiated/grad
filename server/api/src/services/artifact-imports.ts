@@ -150,6 +150,7 @@ export const createArtifactImportService = (
           const common = {
             workspaceId,
             maxAttempts: settings.maxAttempts,
+            maxQueued: settings.queue.maxQueued,
             idempotency,
           };
           if (body.source.kind === "hf") {
