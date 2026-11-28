@@ -196,6 +196,7 @@ export const pricedCatalog = (
         .map((s) => s.slice("inference:".length))
         .sort(),
     charsPerToken: (id) => catalog.charsPerToken(id),
+    servingId: (id) => catalog.servingId(id),
     get priceVersion() {
       return prices.current()?.version ?? "unpriced";
     },

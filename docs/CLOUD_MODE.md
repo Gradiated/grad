@@ -204,8 +204,13 @@ X-Gradiated-Eval-Id: ev_…
   (`"inference_unavailable"` during an outage) and the worker's heartbeat
   phase is `waiting_for_capacity`. Past the wait the eval fails once with
   `capacity_unavailable: …` as its error; no attempt is spent on it.
-- Models: catalog ids as they are (`qwen/qwen3-8b`, judges such as
-  `anthropic/claude-sonnet-5-5`). An artifact target (`name@version`) is
+- Models: the gateway matches ids exactly, so grad sends each catalog
+  model's canonical-case serving id: its `serving_id` in
+  `GRAD_EXTRA_MODELS_JSON`, else its Hugging Face repo, else its id as
+  configured (`qwen/qwen3-8b` is called as `Qwen/Qwen3-8B`; judges such as
+  `anthropic/claude-sonnet-5-5` as `GRAD_JUDGE_MODELS_JSON` spells them, or
+  lowercase when only the price list knows them). grad's own ids, price
+  lookups and SKUs (`inference:qwen/qwen3-8b`) stay lowercase. An artifact target (`name@version`) is
   published as an eval-only Version when the eval is created:
   `POST {CLOUD_INTERNAL_API_URL}/api/internal/v1/training/eval-versions
   {workspace_id, artifact_id}` → `{model: "<org_slug>/<name>/<version>"}`,

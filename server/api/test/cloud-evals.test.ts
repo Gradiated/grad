@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createModelCatalog } from "../src/catalog.js";
 import { PlanEvalRequestSchema } from "../src/contracts.js";
 import {
   createEvalModelResolver,
@@ -13,7 +14,11 @@ import {
   type TestApp,
 } from "./fixtures/app.js";
 import { ManualClock } from "./fixtures/clock.js";
-import { cloudBillingDeps, startTestCloud } from "./fixtures/cloud.js";
+import {
+  cloudBillingDeps,
+  startTestCloud,
+  TEST_PRICES,
+} from "./fixtures/cloud.js";
 import {
   createEval,
   qaRecords,
@@ -141,6 +146,87 @@ describe("evals on Gradiated Cloud: the gateway's eval lane", () => {
     expect(usage.length).toBeGreaterThan(0);
     expect(usage.every((u) => u.billed_by === "gateway")).toBe(true);
     expect(await t.services.usage.exportPending()).toBe(0);
+  });
+
+  it("calls the gateway with a catalog model's canonical-case id; grad's ids, prices and SKUs stay lowercase", async () => {
+    // The gateway matches model ids exactly (`Qwen/Qwen3-8B`); grad's catalog
+    // and the price list use `qwen/qwen3-8b`.
+    cloud.setPrices("pv_case", {
+      ...TEST_PRICES,
+      "train:qwen/qwen3-8b": 400_000_000,
+      "inference:qwen/qwen3-8b": 400_000_000,
+    });
+    const clock = new ManualClock();
+    t = await makeTestApp({
+      clock,
+      ...(await cloudBillingDeps(cloud, clock, { gatewayBillsEvals: true })),
+      inferenceConfigured: true,
+      evalModels: createEvalModelResolver({
+        internalApiBaseUrl: cloud.url,
+        serviceToken: cloud.serviceToken,
+      }),
+    });
+    upstream.setModel(TEST_JUDGE, judgeResponder(0.9));
+    await seedDataset(t, "qa", qaRecords(2));
+    const created = await createEval(
+      t.services.evals,
+      WORKSPACE_A,
+      PlanEvalRequestSchema.parse({
+        dataset: "qa",
+        // The id `grad models list` shows.
+        models: ["qwen/qwen3-8b"],
+        rubric: [{ name: "quality", kind: "judge", model: TEST_JUDGE }],
+      }),
+    );
+
+    worker = startEvalWorker(
+      t,
+      createGatewayInference({
+        baseUrl: cloud.gatewayUrl,
+        token: cloud.gatewayToken,
+      }),
+    );
+    await worker.drain();
+    const done = await t.services.evals.get(WORKSPACE_A, created.id);
+    expect(done.status).toBe("completed");
+    expect(done.summary.map((m) => m.model)).toEqual(["qwen/qwen3-8b"]);
+    expect(new Set(cloud.gatewayCalls.map((c) => c.model))).toEqual(
+      new Set(["Qwen/Qwen3-8B", TEST_JUDGE]),
+    );
+  });
+
+  it("serving ids: a model's Hugging Face repo, a configured serving_id, else the id as configured", () => {
+    const catalog = createModelCatalog(
+      JSON.stringify([
+        {
+          id: "Acme/Big-Model",
+          family: "llm",
+          adapters: ["lora"],
+          price_per_million_tokens_usd: 1,
+          calibrated_lrs: { sft: 1e-3 },
+        },
+        {
+          id: "acme/other",
+          serving_id: "ACME/Other-v2",
+          family: "llm",
+          adapters: ["lora"],
+          price_per_million_tokens_usd: 1,
+          calibrated_lrs: { sft: 1e-3 },
+        },
+      ]),
+      JSON.stringify([
+        { id: "Meta/Llama-Judge", price_per_million_tokens_usd: 2 },
+      ]),
+    );
+    expect(catalog.servingId("qwen/qwen3-0.6b")).toBe("Qwen/Qwen3-0.6B");
+    expect(catalog.servingId(" QWEN/qwen3-0.6B ")).toBe("Qwen/Qwen3-0.6B");
+    expect(catalog.servingId("acme/big-model")).toBe("Acme/Big-Model");
+    expect(catalog.servingId("acme/other")).toBe("ACME/Other-v2");
+    expect(catalog.servingId("meta/llama-judge")).toBe("Meta/Llama-Judge");
+    expect(catalog.servingId("nobody/knows")).toBeUndefined();
+    // Lookups and prices stay on the lowercase id.
+    expect(catalog.find("Acme/Big-Model")?.id).toBe("acme/big-model");
+    expect(catalog.judgePriceFor("META/llama-judge")).toBe(2);
   });
 
   it("maps the product's refusals to typed errors", async () => {

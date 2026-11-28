@@ -812,7 +812,9 @@ export const createEvalService = (
 
   /**
    * Cloud: artifact targets (`name@version`) are served by the gateway under
-   * the eval-only Version the product publishes for them.
+   * the eval-only Version the product publishes for them; catalog models and
+   * judges under their canonical-case serving id (the gateway matches ids
+   * exactly; grad's own ids are lowercase).
    */
   const servedTargets = async <T extends { inference_model: string }>(
     workspaceId: string,
@@ -830,7 +832,12 @@ export const createEvalService = (
               target.inference_model,
             ),
           }
-        : target;
+        : {
+            ...target,
+            inference_model:
+              deps.catalog.servingId(target.inference_model) ??
+              target.inference_model,
+          };
     }
 
     return served;

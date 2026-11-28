@@ -16,6 +16,8 @@ import {
  */
 type CatalogEntry = Omit<TrainableModel, "recipes"> & {
   chars_per_token?: number | undefined;
+  /** The id a gateway serves it under (see ModelCatalog.servingId). */
+  serving_id?: string | undefined;
 };
 
 export const DEFAULT_CHARS_PER_TOKEN = 4;
@@ -131,12 +133,15 @@ export const BUILTIN_MODELS: readonly CatalogEntry[] = [
   },
 ];
 
+// Ids are lowercased for lookups and prices; the casing as configured is the
+// serving id unless `serving_id` (or `hf_repo`) names one.
 const ExtraModelSchema = TrainableModelSchema.omit({ recipes: true }).extend({
   id: z
     .string()
     .min(1)
     .max(160)
-    .transform((v) => v.trim().toLowerCase()),
+    .transform((v) => v.trim()),
+  serving_id: z.string().min(1).max(200).optional(),
   hf_repo: z.string().min(1).max(200).nullable().default(null),
   default_for: TrainableModelSchema.shape.default_for.default([]),
   template_revision: z.string().min(1).default("qwen3@3"),
@@ -160,12 +165,21 @@ export interface ModelCatalog {
   judgeModels(): readonly string[];
   /** The tokenizer's characters per token that plan estimates use (default 4). */
   charsPerToken(modelId: string): number;
+  /**
+   * The id an exact-match gateway (Gradiated Cloud's) serves a catalog model
+   * or configured judge under, in its canonical casing: a judge's id as
+   * configured; a model's `serving_id`, else its Hugging Face repo, else its
+   * id as configured (`qwen/qwen3-0.6b` → `Qwen/Qwen3-0.6B`). Grad's own ids
+   * (lookups, prices, SKUs) stay lowercase. Undefined for unknown models.
+   */
+  servingId(modelId: string): string | undefined;
   /** Short hash of every model's price: recorded on each usage row. */
   readonly priceVersion: string;
 }
 
 const withRecipes = ({
   chars_per_token: _density,
+  serving_id: _serving,
   ...entry
 }: CatalogEntry): TrainableModel => ({
   ...entry,
@@ -178,7 +192,7 @@ const JudgeModelSchema = z
       .string()
       .min(1)
       .max(160)
-      .transform((v) => v.trim().toLowerCase()),
+      .transform((v) => v.trim()),
     price_per_million_tokens_usd: z.number().positive(),
   })
   .strict();
@@ -221,20 +235,25 @@ export const createModelCatalog = (
     extraModelsJson,
     ExtraModelSchema,
   );
+  const judgeList = parseJsonEnv(
+    "GRAD_JUDGE_MODELS_JSON",
+    judgeModelsJson,
+    JudgeModelSchema,
+  );
   const judges = new Map(
-    parseJsonEnv(
-      "GRAD_JUDGE_MODELS_JSON",
-      judgeModelsJson,
-      JudgeModelSchema,
-    ).map((j) => [j.id, j.price_per_million_tokens_usd]),
+    judgeList.map((j) => [j.id.toLowerCase(), j.price_per_million_tokens_usd]),
   );
 
   const byId = new Map<string, TrainableModel>();
   const density = new Map<string, number>();
-  for (const entry of [...BUILTIN_MODELS, ...extras]) {
+  const serving = new Map<string, string>();
+  for (const raw of [...BUILTIN_MODELS, ...extras]) {
+    const entry = { ...raw, id: raw.id.toLowerCase() };
     byId.set(entry.id, withRecipes(entry));
     density.set(entry.id, entry.chars_per_token ?? DEFAULT_CHARS_PER_TOKEN);
+    serving.set(entry.id, raw.serving_id ?? raw.hf_repo ?? raw.id);
   }
+  for (const judge of judgeList) serving.set(judge.id.toLowerCase(), judge.id);
 
   const models = Array.from(byId.values());
   const priceVersion = `p_${createHash("sha256")
@@ -264,6 +283,7 @@ export const createModelCatalog = (
     judgeModels: () => [...new Set([...judges.keys(), ...byId.keys()])].sort(),
     charsPerToken: (modelId) =>
       density.get(modelId.trim().toLowerCase()) ?? DEFAULT_CHARS_PER_TOKEN,
+    servingId: (modelId) => serving.get(modelId.trim().toLowerCase()),
   };
 };
 
