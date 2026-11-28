@@ -163,7 +163,7 @@ grad eval --name sft-vs-base --models support-sft@latest,test/tiny-qwen3 --datas
   --rubric rubric.yaml --limit 20 --baseline test/tiny-qwen3 --wait
 ```
 
-`grad eval` prints the report when the eval finishes (`grad eval status EVAL_ID` shows it again); the SDKs have `ev.summary_table()` and the web UI an Evals page (`grad ui`). New to it? The [training overview](https://gradiated.com/docs/training/) walks the full loop, and the [router guide](https://gradiated.com/docs/training/recipes/router/) covers the data a router needs.
+Don't expect the adapter to beat its base here: four steps on a tiny random model change nothing, and the example only shows the loop working. `grad eval` prints the report when the eval finishes (`grad eval status EVAL_ID` shows it again); the SDKs have `ev.summary_table()` and the web UI an Evals page (`grad ui`). New to it? The [training overview](https://gradiated.com/docs/training/) walks the full loop, and the [router guide](https://gradiated.com/docs/training/recipes/router/) covers the data a router needs.
 
 ## What you can train
 
