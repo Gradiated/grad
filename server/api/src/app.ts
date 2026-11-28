@@ -192,6 +192,13 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
 
   app.use("*", httpTelemetry());
 
+  // While draining, keep-alive clients reconnect (to another replica) after
+  // each response instead of racing the listener's close on an idle socket.
+  app.use("*", async (c, next) => {
+    await next();
+    if (draining) c.header("Connection", "close");
+  });
+
   if (deps.settings.unauthenticated) {
     app.use(
       "*",

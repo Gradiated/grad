@@ -173,7 +173,9 @@ describe("grad-server HTTP API", () => {
     expect(
       (await draining.request("/health/live", { token: null })).status,
     ).toBe(200);
-    expect((await draining.request("/v1/runs")).status).toBe(200);
+    const res = await draining.request("/v1/runs");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("connection")).toBe("close");
     await draining.close();
   });
 
