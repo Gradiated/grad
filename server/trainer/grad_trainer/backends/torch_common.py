@@ -377,6 +377,22 @@ def export_peft_adapter(
     }
 
 
+def check_merged_export_fits(base_lm: Any) -> None:
+    """``merge_on_export`` saves the whole base model; fail before training when that can't be
+    uploaded (one bundle is at most ``MAX_UPLOAD_BYTES``), instead of after the run."""
+    from ..bundles import MAX_UPLOAD_BYTES
+
+    declared = getattr(base_lm.config, "dtype", None) or getattr(base_lm.config, "torch_dtype", None)
+    half = declared in (torch.bfloat16, torch.float16, "bfloat16", "float16")
+    size = sum(p.numel() * (2 if half else p.element_size()) for p in base_lm.parameters())
+    if size > MAX_UPLOAD_BYTES:
+        raise RecipeConfigError(
+            f"merge_on_export=true would export a {size / 1e9:.1f} GB merged model, and an artifact "
+            f"is at most {MAX_UPLOAD_BYTES / 1024**3:.0f} GiB. Train with merge_on_export=false and merge "
+            "the downloaded adapter locally (peft: PeftModel.from_pretrained(base, dir).merge_and_unload())."
+        )
+
+
 def export_merged(model: Any, tokenizer: Any, directory: Path, resolved: ResolvedModel) -> None:
     """Merge LoRA into the base weights and save standalone safetensors (destroys the adapter)."""
     directory.mkdir(parents=True, exist_ok=True)

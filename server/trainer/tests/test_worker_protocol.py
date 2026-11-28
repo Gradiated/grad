@@ -811,6 +811,20 @@ class WorkerProtocolTests(unittest.TestCase):
 
         self.assertEqual(self.worker(srv, Gone()).run_once()["status"], "failed")
 
+    def test_a_bundle_over_the_upload_cap_fails_the_run_and_warns_on_checkpoints(self) -> None:
+        # grad-server refuses tickets over 5 GiB: no attempt could upload it, so don't retry.
+        srv = self.server(jobs=[train_job()])
+        runner = StubRunner(steps=4, checkpoint_at=(1, 2))
+        with mock.patch.object(worker_module, "MAX_UPLOAD_BYTES", 64):
+            result = self.worker(srv, runner).run_once()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("an upload may be", srv.bodies("complete")[0]["error"])
+        self.assertEqual(srv.bodies("uploads"), [])
+        warnings = [e["message"] for e in srv.bodies("events") if e.get("type") == "warning"]
+        # Two failed checkpoints in a row: one warning.
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("checkpoint at step 1 was not saved", warnings[0])
+
     def test_kinds_from_the_environment(self) -> None:
         srv = self.server()
         worker = worker_from_env(

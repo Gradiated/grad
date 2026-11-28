@@ -42,7 +42,7 @@ from typing import Any, BinaryIO, Callable, Mapping, Sequence
 from . import artifact_import
 from . import logs
 from . import import_runner as connector_import_runner
-from .bundles import bundle_directory, extract_bundle
+from .bundles import MAX_UPLOAD_BYTES, bundle_directory, extract_bundle
 from .errors import GPUOutOfMemoryError, SourceUnavailableError
 from .gpu import ALLOC_CONF, release_gpu_memory
 from .loggers import Loggers
@@ -375,6 +375,10 @@ class _StopImport(Exception):
     pass
 
 
+class BundleTooLarge(ValueError):
+    """A bundle over grad-server's per-upload cap; retrying can't help."""
+
+
 @dataclass
 class _JobState:
     job_id: str
@@ -393,6 +397,7 @@ class _JobState:
     step_seconds: float | None = None
     checkpoint_started: float | None = None
     checkpoint_seconds: float | None = None
+    checkpoint_failures: int = 0  # in a row
     # Compute reclaimed: save by this monotonic deadline, then hand the job back.
     reclaim_deadline: float | None = None
     emergency: bool = False
@@ -877,6 +882,12 @@ class TrainerWorker:
     def _upload(
         self, state: _JobState, kind: str, path: Path, sha256: str, size: int
     ) -> str:
+        if size > MAX_UPLOAD_BYTES:
+            # grad-server refuses the ticket (400): no attempt could ever upload this bundle.
+            raise BundleTooLarge(
+                f"The {kind} bundle is {size / 1e9:.1f} GB, over the {MAX_UPLOAD_BYTES // 1024**3} GiB "
+                "an upload may be."
+            )
         ticket = self._post(
             state, "uploads", {"kind": kind, "sha256": sha256, "size_bytes": size}
         )
@@ -999,6 +1010,20 @@ class TrainerWorker:
                 return "checkpoint"
             raise _HandBack()
 
+        def checkpoint_failed(step: int, reason: str, exc: Exception) -> None:
+            # Training goes on without it, but the run can't resume from or promote this
+            # step: tell the user once per streak of failures (a full disk fails them all).
+            self.telemetry.observe_checkpoint(None, reason=reason, ok=False)
+            _log_traceback(f"checkpoint step {step} failed", step=step, reason=reason)
+            state.checkpoint_failures += 1
+            if state.checkpoint_failures == 1:
+                self._note(
+                    state,
+                    "warning",
+                    f"The checkpoint at step {step} was not saved ({exc}). Training continues; "
+                    "until a checkpoint saves, an interruption restarts from the last saved one.",
+                )
+
         def on_checkpoint(
             step: int,
             eval_score: float | None,
@@ -1053,11 +1078,11 @@ class TrainerWorker:
                 if exc.status == 409:
                     _log(f"checkpoint step {step} ignored: {exc}", "warn", step=step, reason=reason)
                 else:
-                    self.telemetry.observe_checkpoint(None, reason=reason, ok=False)
-                    _log_traceback(f"checkpoint step {step} failed", step=step, reason=reason)
-            except Exception:
-                self.telemetry.observe_checkpoint(None, reason=reason, ok=False)
-                _log_traceback(f"checkpoint step {step} failed", step=step, reason=reason)
+                    checkpoint_failed(step, reason, exc)
+            except Exception as exc:
+                checkpoint_failed(step, reason, exc)
+            else:
+                state.checkpoint_failures = 0
             finally:
                 bundle.unlink(missing_ok=True)
                 if state.checkpoint_started is not None:
@@ -1192,9 +1217,10 @@ class TrainerWorker:
                     {"status": "failed", "error": f"invalid artifact bundle: {exc}"[:4000], "tokens_processed": tokens},
                 )
             self.telemetry.set_phase("uploading")
-            payload["upload_id"] = self._upload(
-                state, "artifact", bundle, info.sha256, info.size_bytes
-            )
+            try:
+                payload["upload_id"] = self._upload(state, "artifact", bundle, info.sha256, info.size_bytes)
+            except BundleTooLarge as exc:
+                return self._complete(state, {"status": "failed", "error": str(exc), "tokens_processed": tokens})
             # The server stores the bundle's own manifest: files, format_version, created_by.
             payload["manifest"] = info.manifest
         self._phase(state, "completing")
@@ -1264,7 +1290,10 @@ class TrainerWorker:
                 {"status": "failed", "error_code": "source_unavailable", "error": redact(str(exc), token)[:4000]},
             )
         self.telemetry.set_phase("uploading")
-        upload_id = self._upload(state, "artifact", info.path, info.sha256, info.size_bytes)
+        try:
+            upload_id = self._upload(state, "artifact", info.path, info.sha256, info.size_bytes)
+        except BundleTooLarge as exc:
+            return self._complete(state, {"status": "failed", "error_code": "invalid_artifact", "error": str(exc)})
         return self._complete(
             state,
             {"status": "completed", "upload_id": upload_id, "format": spec["format"], "manifest": info.manifest},

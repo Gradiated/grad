@@ -93,6 +93,18 @@ class SFTTests(TorchCase):
         self.assertTrue((promoted / "adapter_config.json").is_file())
         self.assertTrue((promoted / "trainer_state" / "task" / "state.pt").is_file())
 
+    def test_merge_on_export_too_large_to_upload_fails_before_training(self) -> None:
+        from unittest import mock
+
+        from grad_trainer.errors import RecipeConfigError
+
+        config = {**CONFIG, "adapter": {**CONFIG["adapter"], "merge_on_export": True}}
+        rec = Recorder(self.tmpdir())
+        with mock.patch("grad_trainer.bundles.MAX_UPLOAD_BYTES", 1000):
+            with self.assertRaisesRegex(RecipeConfigError, "merge_on_export=false"):
+                run_recipe("sft", config, RECORDS, self.tmpdir(), recorder=rec)
+        self.assertEqual(rec.metrics, [])
+
     def test_merge_on_export_matches_the_adapter(self) -> None:
         import torch
         from transformers import AutoModelForCausalLM

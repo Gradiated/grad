@@ -44,6 +44,9 @@ class SFTTask(TorchTask):
         self._template = self.template_revision(self.resolved)
         self.tokenizer = tc.load_tokenizer(self.resolved)
         base_lm = self.load_lm(self.resolved, packed=True)
+        self.merge = bool(spec.adapter.get("merge_on_export", False))
+        if self.merge:
+            tc.check_merged_export_fits(base_lm)
         self.max_len = tc.model_max_len(base_lm, spec)
         self.varlen = base_lm.config._attn_implementation == tc.VARLEN_ATTENTION
         self.stats = {"skipped_no_messages": 0, "skipped_no_trained_tokens": 0, "truncated": 0}
@@ -51,7 +54,6 @@ class SFTTask(TorchTask):
         self.eval_examples = self._encode(held_out)
         if not self.train_examples:
             raise RecipeDataError("SFT needs at least one training record with a trained assistant turn.")
-        self.merge = bool(spec.adapter.get("merge_on_export", False))
         self.model, self.lora = self.lora_model(base_lm, self.resolved, base)
         self.lm = tc.base_causal_lm(self.model)
         self.init_optimizer(self.model)

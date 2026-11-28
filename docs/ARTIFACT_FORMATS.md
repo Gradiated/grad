@@ -34,7 +34,7 @@ Read bundles with a hardened reader. grad's own reader (`server/trainer/grad_tra
 
 - Accept regular files only. Reject symlinks, hard links, devices and directories as entries.
 - Accept only relative POSIX paths: no leading `/`, no `.` or `..` segments, no empty segments, no `\` and no NUL.
-- Reject duplicate entries. Cap the member count (1024) and the declared and actually-read bytes. The largest bundles are merged 32B checkpoints of about 64 GB.
+- Reject duplicate entries. Cap the member count (1024) and the declared and actually-read bytes. A bundle grad-server stores is at most 5 GiB (one upload).
 - Check every payload file against `manifest.files`. A missing file, an undeclared file or a checksum mismatch fails the whole bundle.
 - When `eval_report.json` is present, its SHA-256 must equal `eval_report_sha256`. When `eval_report_sha256` is set, the file must be present.
 
@@ -202,6 +202,8 @@ A distillation run (`recipe_kind: "distill"`) exports the same adapter for the s
 ## `merged_safetensors`
 
 The LoRA merged into the base weights: a standalone Hugging Face causal LM for download. Cloud does not serve it. Use `peft_lora` for that.
+
+A bundle is at most 5 GiB, so only bases up to about 2B parameters (in the catalog, `qwen/qwen3-0.6b` and `qwen/qwen3-1.7b`) can export merged. For a larger base, a run with `merge_on_export=true` fails before its first step: train the adapter and merge it locally with `PeftModel.from_pretrained(base, adapter_dir).merge_and_unload()`.
 
 | File | Contents |
 | --- | --- |

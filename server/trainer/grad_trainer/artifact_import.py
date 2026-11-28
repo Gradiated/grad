@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import IO, Any, Callable
 
 from . import artifact_formats
-from .bundles import MAX_BUNDLE_MEMBERS, MAX_EXTRACT_BYTES, RESERVED, BundleInfo, bundle_directory
+from .bundles import MAX_BUNDLE_MEMBERS, MAX_EXTRACT_BYTES, MAX_UPLOAD_BYTES, RESERVED, BundleInfo, bundle_directory
 from .errors import ModelUnavailableError, SourceUnavailableError
 from .models import ResolvedModel, is_offline, resolve_config
 from .sources import redact
@@ -46,7 +46,7 @@ _CHUNK = 1024 * 1024
 _HF_REPO = re.compile(r"[A-Za-z0-9][\w.-]*(/[A-Za-z0-9][\w.-]*)?")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 #: Upload and Hub size cap (the server's single-PUT upload cap).
-MAX_IMPORT_BYTES = 5 * 1024**3
+MAX_IMPORT_BYTES = MAX_UPLOAD_BYTES
 #: An upload's uncompressed cap: a tar of safetensors barely compresses, so twice the upload cap
 #: leaves room for gzip and tar padding while refusing a small archive that inflates to fill the disk.
 MAX_UPLOAD_EXTRACT_BYTES = 2 * MAX_IMPORT_BYTES

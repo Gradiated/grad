@@ -32,8 +32,11 @@ from . import artifact_formats
 SCHEMA = "grad.artifact/1"
 RESERVED = ("manifest.json", "eval_report.json")
 MAX_BUNDLE_UNCOMPRESSED_BYTES = 64 * 1024 * 1024  # in-memory reads
-MAX_EXTRACT_BYTES = 512 * 1024**3  # on-disk extraction (merged 32B checkpoints are ~64 GB)
+MAX_EXTRACT_BYTES = 512 * 1024**3  # on-disk extraction (imports of large local models)
 MAX_BUNDLE_MEMBERS = 1024
+# grad-server's cap on one upload (MAX_UPLOAD_BYTES in server/api/src/contracts/datasets.ts):
+# a bundle goes to storage as a single PutObject, which S3 limits to 5 GiB.
+MAX_UPLOAD_BYTES = 5 * 1024**3
 _CHUNK = 1024 * 1024
 
 

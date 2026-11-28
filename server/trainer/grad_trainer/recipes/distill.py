@@ -104,6 +104,9 @@ class OnPolicyDistillTask(TorchTask):
             )
         self.teacher_repo = teacher_resolved.repo
         base_lm = self.load_lm(self.resolved)
+        self.merge = bool(spec.adapter.get("merge_on_export", False))
+        if self.merge:
+            tc.check_merged_export_fits(base_lm)
         self.max_len = tc.model_max_len(base_lm, spec)
         if teacher_resolved.model_id == self.resolved.model_id:
             self.teacher = tc.load_causal_lm(self.resolved, self.device)
@@ -118,7 +121,6 @@ class OnPolicyDistillTask(TorchTask):
         self.held_out = self._prompts(held_out)
         if not self.train:
             raise RecipeDataError("DistillRecipe needs prompts: chat records with a user turn.")
-        self.merge = bool(spec.adapter.get("merge_on_export", False))
         self.model, self.lora = self.lora_model(base_lm, self.resolved, None)
         self.lm = tc.base_causal_lm(self.model)
         self.init_optimizer(self.model)
