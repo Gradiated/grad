@@ -247,7 +247,7 @@ async fn call(c: &Client, case: &str) -> Result<()> {
         }
         "import_artifact_hf" => c
             .artifacts()
-            .import_hf(
+            .from_hf(
                 "hf://acme/support-lora@v2",
                 &ArtifactHfOptions {
                     base: "test/tiny-qwen3".into(),

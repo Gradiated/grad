@@ -472,6 +472,7 @@ describe("artifacts", () => {
     expect((e as ArtifactImportFailedError).code).toBe("invalid_artifact");
     expect((e as Error).message).toContain("adapter_model.safetensors");
     expect(JSON.parse(JSON.stringify(job)).errorCode).toBe("invalid_artifact");
+    await expect(grad.artifacts.waitImport("imp_1")).rejects.toBeInstanceOf(ArtifactImportFailedError);
   });
 
   it("imports from the Hub, parses hf:// URIs and deletes artifacts", async () => {

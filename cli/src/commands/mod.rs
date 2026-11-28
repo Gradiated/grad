@@ -1,9 +1,9 @@
 //! Command implementations.
 
+pub mod artifacts;
 pub mod auth;
 pub mod data;
 pub mod eval;
-pub mod serve;
 pub mod sources;
 pub mod train;
 pub mod ui;

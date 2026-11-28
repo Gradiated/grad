@@ -196,7 +196,7 @@ impl ChatMessage {
 }
 
 /// A workspace secret: its name and metadata, never its value. Pass it (or a
-/// plain name) as a provider's or `import_hf`'s secret.
+/// plain name) as a provider's or `from_hf`'s secret.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecretRef {

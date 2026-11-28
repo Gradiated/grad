@@ -65,7 +65,7 @@ from ._models import (
     TERMINAL_IMPORT_STATUSES,
     TERMINAL_RUN_STATUSES,
 )
-from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX
+from ._generated.client import LIST_EVAL_OUTPUTS_LIMIT_MAX, ArtifactDownloadUrl
 from ._transport import SSEDecoder, iter_sse, quote_path_param
 from .recipes import _thinking
 from .records import Trajectory
@@ -1172,12 +1172,12 @@ class Artifacts(_Resource):
         """Delete an artifact and its bundle. A pinned one (a published Cloud model version) raises ``ConflictError`` ``artifact_pinned``."""
         self._wire.delete_artifact(model_ref(ref))
 
-    def download_url(self, ref: Any, *, timeout: float | None = None) -> dict[str, Any]:
+    def download_url(self, ref: Any, *, timeout: float | None = None) -> ArtifactDownloadUrl:
         """A presigned URL of the artifact's bundle, valid 15 minutes: ``{url, expires_at, sha256, size_bytes, filename}``.
 
         Fetch it straight from storage (no API key); verify ``sha256``.
         """
-        return dict(self._wire.get_artifact_download_url(model_ref(ref), timeout=timeout))
+        return self._wire.get_artifact_download_url(model_ref(ref), timeout=timeout)
 
     def download(
         self,

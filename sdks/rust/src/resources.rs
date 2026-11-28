@@ -588,8 +588,10 @@ impl Datasets<'_> {
         .await
     }
 
-    /// Import a Hugging Face dataset (pulled by the trainer worker).
-    pub async fn import_hf(
+    /// Import a Hugging Face dataset (pulled by the trainer worker). For a
+    /// gated or private dataset set `source.secret` to a workspace secret's
+    /// name: the worker gets the token, never this process.
+    pub async fn from_hf(
         &self,
         name: &str,
         source: ImportSource,
@@ -598,26 +600,6 @@ impl Datasets<'_> {
         let connector = connector.as_deref().map(CreateImportRequestConnector::from);
         self.create_import(name, &CreateImportRequest { source, connector })
             .await
-    }
-
-    /// [`import_hf`](Self::import_hf) for a gated or private dataset: the worker
-    /// gets the token from the workspace secret `secret`, never from this process.
-    pub async fn import_hf_with_secret(
-        &self,
-        name: &str,
-        source: ImportSource,
-        connector: Option<String>,
-        secret: impl SecretName,
-    ) -> Result<ImportJob> {
-        check_path_param("dataset name", name)?;
-        let connector = connector.as_deref().map(CreateImportRequestConnector::from);
-        let mut req = body(&CreateImportRequest { source, connector })?;
-        req["source"]["secret"] = Value::String(secret.secret_name());
-        get(
-            self.c,
-            Req::post(format!("/v1/datasets/{}/imports", seg(name))).json(req),
-        )
-        .await
     }
 
     /// Connect an observability provider to dataset `name` (see [`Sources::create`]).
@@ -932,7 +914,7 @@ pub struct ArtifactUploadOptions {
     pub idempotency_key: Option<String>,
 }
 
-/// Options for [`Artifacts::import_hf`].
+/// Options for [`Artifacts::from_hf`].
 #[derive(Debug, Clone, Default)]
 pub struct ArtifactHfOptions {
     /// The catalog base model the weights were trained on (required).
@@ -1546,7 +1528,7 @@ impl Artifacts<'_> {
     /// Import weights from the Hugging Face Hub (`hf://owner/name[@revision]`),
     /// pinned to the commit the revision resolves to; the same checks as
     /// [`Artifacts::upload`].
-    pub async fn import_hf(&self, uri: &str, opts: &ArtifactHfOptions) -> Result<ArtifactImport> {
+    pub async fn from_hf(&self, uri: &str, opts: &ArtifactHfOptions) -> Result<ArtifactImport> {
         let (repo, revision) = parse_hf_uri(uri, opts.revision.as_deref())?;
         self.create_import(
             &CreateArtifactImportRequest {

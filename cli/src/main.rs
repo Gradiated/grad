@@ -29,7 +29,7 @@ async fn dispatch(cli: Cli, ctx: &Ctx) -> CliResult {
         Command::Train(a) => train::train(ctx, a).await,
         Command::Runs { action } => train::runs(ctx, action).await,
         Command::Eval(a) => eval::eval(ctx, a).await,
-        Command::Artifacts { action } => serve::artifacts(ctx, action).await,
+        Command::Artifacts { action } => artifacts::artifacts(ctx, action).await,
         Command::Keys { action } => auth::keys(ctx, action).await,
         Command::Usage(a) => usage::usage(ctx, a).await,
         Command::Secrets { action } => sources::secrets(ctx, action).await,

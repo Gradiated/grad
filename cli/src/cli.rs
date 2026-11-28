@@ -161,7 +161,7 @@ Examples:
   grad train -f recipe.yaml --set lr_scale=0.5 --wait
 
 -f takes the flat YAML written by `grad runs inspect RUN --yaml`; flags override it.
---wait streams live metrics and prints the eval report and the deploy command.")]
+--wait streams live metrics and prints the eval report and the download command.")]
     Train(TrainArgs),
 
     /// Inspect and control training runs
@@ -1020,7 +1020,7 @@ Examples:
 
 Scopes: admin, datasets:read, datasets:write, runs:read, runs:write,
 artifacts:read, artifacts:write, artifacts:pin, secrets:read, secrets:write,
-sources:read, sources:write, deployments:write")]
+sources:read, sources:write")]
     Create {
         /// Key name
         #[arg(long)]

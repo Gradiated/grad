@@ -277,7 +277,7 @@ async fn posts_retry_on_429_and_honour_retry_after() {
     let c = client(&srv.url);
     let job = c
         .artifacts()
-        .import_hf(
+        .from_hf(
             "hf://acme/lora",
             &ArtifactHfOptions {
                 base: "test/tiny-qwen3".into(),
@@ -319,7 +319,7 @@ async fn queue_limit_is_never_retried() {
     let c = client(&srv.url);
     let e = c
         .artifacts()
-        .import_hf(
+        .from_hf(
             "hf://acme/lora",
             &ArtifactHfOptions {
                 base: "test/tiny-qwen3".into(),

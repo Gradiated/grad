@@ -175,7 +175,7 @@ pub async fn artifacts(ctx: &Ctx, action: ArtifactsCmd) -> CliResult {
         } => {
             let job = c
                 .artifacts()
-                .import_hf(
+                .from_hf(
                     &uri,
                     &ArtifactHfOptions {
                         base: import.base.clone(),

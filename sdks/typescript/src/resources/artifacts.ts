@@ -283,6 +283,11 @@ export class ArtifactsResource {
     return new ArtifactImport(this.core, await this.core.api.getArtifactImport(id, options));
   }
 
+  /** Polls an upload or HF import until it finishes; the same as `(await getImport(id)).wait()`. */
+  async waitImport(id: string, options: WaitOptions = {}): Promise<Artifact> {
+    return (await this.getImport(id, { signal: options.signal })).wait(options);
+  }
+
   /** Deletes an artifact and its bundle (ConflictError `artifact_pinned` while pinned). */
   async delete(ref: ArtifactRef, options?: RequestOptions): Promise<void> {
     await this.core.api.deleteArtifact(artifactRef(ref), options);

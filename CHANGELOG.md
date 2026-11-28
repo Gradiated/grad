@@ -50,6 +50,10 @@ Helm chart, the four SDKs and the CLI) shares one version, and the format follow
 
 ### Changed
 
+- Rust SDK: `datasets().import_hf` and `artifacts().import_hf` are `from_hf`, as in the other
+  SDKs, and `import_hf_with_secret` is gone (set `ImportSource.secret`). TypeScript has
+  `artifacts.waitImport(id)` like the others; Python's `artifacts.download_url` is typed
+  `ArtifactDownloadUrl`.
 - Fewer settings: `USAGE_FLUSH_TOKENS`/`USAGE_FLUSH_SECONDS` (1M tokens / 5 minutes),
   `WAITING_FOR_COMPUTE_SECONDS` (30), `SOURCE_VERSION_INTERVAL_SECONDS` (900),
   `SOURCE_VERSION_MAX_RECORDS` (100k) and `GRAD_CLOUD_JWT_AUDIENCE` (`training`) are now fixed,

@@ -352,17 +352,10 @@ pub async fn datasets(ctx: &Ctx, action: DatasetsCmd) -> CliResult {
                     revision,
                     columns: if cols.is_empty() { None } else { Some(cols) },
                     limit,
+                    secret,
                     ..Default::default()
                 };
-                let datasets = c.datasets();
-                let job = match secret {
-                    Some(s) => {
-                        datasets
-                            .import_hf_with_secret(&name, source, None, s)
-                            .await?
-                    }
-                    None => datasets.import_hf(&name, source, None).await?,
-                };
+                let job = c.datasets().from_hf(&name, source, None).await?;
                 out.note(format!(
                     "Importing {} into dataset {} (job {})",
                     repo, name, job.id

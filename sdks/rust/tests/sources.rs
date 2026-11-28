@@ -247,18 +247,16 @@ async fn source_pagers_stop_on_a_repeated_cursor() {
 }
 
 #[tokio::test]
-async fn import_hf_with_secret_sends_the_name_only() {
+async fn from_hf_with_a_secret_sends_the_name_only() {
     let srv = MockServer::start(|_| Reply::json(202, job()));
     let c = client(&srv.url);
     let source = ImportSource {
         kind: ImportSourceKind::Hf,
         repo: Some("org/gated".into()),
+        secret: Some(SecretRef::named("hf-token").secret_name()),
         ..Default::default()
     };
-    c.datasets()
-        .import_hf_with_secret("gated", source, None, SecretRef::named("hf-token"))
-        .await
-        .unwrap();
+    c.datasets().from_hf("gated", source, None).await.unwrap();
     let sent = srv
         .last("POST", "/v1/datasets/gated/imports")
         .unwrap()
