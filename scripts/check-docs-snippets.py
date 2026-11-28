@@ -38,6 +38,9 @@ Blocks that import another vendor's SDK are skipped.
 (components/docs/training/api-examples.json, next to DOCS) to a live stack, in file order, and
 fails on any the server can't parse (400, or 422 validation_error). The core creates must
 succeed; the rest may answer with a state error (a 404 for a placeholder id, a 409, a 501).
+With --capture FILE it then waits for the run, GETs every read endpoint and writes each 2xx
+response there, redacted: the API reference shows these recorded responses
+(src/docs/training/generated/api-responses.json in the website).
 """
 
 from __future__ import annotations
@@ -711,8 +714,36 @@ API_EXAMPLES_MUST_SUCCEED = {
 }
 
 
-def api_examples_check(examples_path: Path, base_url: str, api_key: str) -> int:
-    """Send each example body of the API reference; see the module docstring."""
+# Path parameters the replay fills from what it created, by the route's collection.
+API_ID_KINDS = {"/v1/runs": "run", "/v1/checkpoints": "checkpoint", "/v1/artifacts": "artifact", "/v1/artifact-imports": "artifact_import",
+                "/v1/imports": "import", "/v1/evals": "eval", "/v1/sources": "source", "/v1/keys": "key"}
+API_CREATES = {"createRun": "run", "createEval": "eval", "createDatasetSource": "source", "createDatasetImport": "import",
+               "createArtifactImport": "artifact_import", "createApiKey": "key"}
+FINAL_RUN = {"completed", "failed", "cancelled", "stopped_budget", "stopped_balance"}
+
+
+def redact(value: object, base_url: str) -> object:
+    """A recorded body as the docs show it: no local hosts, signatures, secrets or long pages."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k in ("secret", "key") and isinstance(v, str) and v.startswith("grad_"):
+                v = "grad_…"
+            out[k] = redact(v, base_url)
+        return out
+    if isinstance(value, list):
+        return [redact(v, base_url) for v in value[:2]]
+    if isinstance(value, str):
+        v = value.replace(base_url, "https://grad.example.com")
+        v = re.sub(r"http://(127\.0\.0\.1|localhost):\d+", "https://storage.example.com", v)
+        v = re.sub(r"(X-Amz-[A-Za-z]+=)[^&\s\"]+", r"\1…", v)
+        return v if len(v) <= 400 else v[:400] + "…"
+    return value
+
+
+def api_examples_check(examples_path: Path, base_url: str, api_key: str, capture: Path | None = None) -> int:
+    """Send each example body of the API reference; see the module docstring. With `capture`,
+    also wait for the run, GET every read endpoint and write each 2xx body there (redacted)."""
     import uuid
 
     import httpx
@@ -724,38 +755,67 @@ def api_examples_check(examples_path: Path, base_url: str, api_key: str) -> int:
         op["operationId"]: (method.upper(), path)
         for path, item in spec["paths"].items()
         for method, op in item.items()
-        if isinstance(op, dict) and "operationId" in op
+        if isinstance(op, dict) and "operationId" in op and not path.startswith("/v1/trainer-jobs")
     }
     created: dict[str, str] = {}
-    owner = {"Runs": "run", "Checkpoints": "checkpoint", "Artifacts": "artifact", "Evals": "eval", "Sources": "source"}
-    failures = 0
-    for op_id, body in examples.items():
-        method, path = ops[op_id]
-        tag = next(op["tags"][0] for item in spec["paths"].values() for op in item.values()
-                   if isinstance(op, dict) and op.get("operationId") == op_id)
+    recorded: dict[str, dict] = {}
 
+    def url_of(path: str) -> str:
         def fill(match: re.Match[str]) -> str:
             name = match.group(1)
             if name == "name":
-                return "support-prod"
-            kind = "checkpoint" if path.startswith("/v1/checkpoints") else owner.get(tag, "obj")
+                return "langfuse" if path.startswith("/v1/secrets") else "support-prod"
+            if name == "holder":
+                return "deploy:support-v3"
+            kind = next((k for prefix, k in API_ID_KINDS.items() if path.startswith(prefix + "/")), "obj")
             return created.get(kind, f"{kind}_01JDS4QW8X3B9N7G6K2M5P0RTV")
 
-        url = re.sub(r"\{(\w+)\}", fill, path)
+        return re.sub(r"\{(\w+)\}", fill, path)
+
+    def send(op_id: str, body: object = None) -> httpx.Response:
+        method, path = ops[op_id]
         headers = {"Idempotency-Key": str(uuid.uuid4())} if method == "POST" else {}
-        res = client.request(method, url, json=body, headers=headers)
+        res = client.request(method, url_of(path), json=body, headers=headers)
+        if res.status_code < 300 and "json" in res.headers.get("content-type", ""):
+            data = res.json()
+            recorded[op_id] = {"status": res.status_code, "body": data}
+            if op_id in API_CREATES and isinstance(data, dict) and isinstance(data.get("id"), str):
+                created[API_CREATES[op_id]] = data["id"]
+        return res
+
+    failures = 0
+    for op_id, body in examples.items():
+        res = send(op_id, body)
         problem = res.json() if "json" in res.headers.get("content-type", "") else {}
         code = problem.get("code") if res.status_code >= 400 else None
         unparsed = res.status_code == 400 or code == "validation_error"
         ok = res.status_code < 300 if op_id in API_EXAMPLES_MUST_SUCCEED else not unparsed
-        if res.status_code < 300 and isinstance(problem, dict) and isinstance(problem.get("id"), str):
-            kind = {"createRun": "run", "createEval": "eval", "createDatasetSource": "source"}.get(op_id)
-            if kind:
-                created[kind] = problem["id"]
         failures += not ok
         detail = f" {code}: {problem.get('detail', '')[:160]}" if code else ""
-        print(f"{'PASS' if ok else 'FAIL'} {op_id} {method} {url} -> {res.status_code}{detail}", flush=True)
+        print(f"{'PASS' if ok else 'FAIL'} {op_id} {ops[op_id][0]} {url_of(ops[op_id][1])} -> {res.status_code}{detail}", flush=True)
     print(f"\n{len(examples) - failures} passed, {failures} failed")
+
+    if capture:
+        deadline = time.monotonic() + 300
+        run: dict = {}
+        while created.get("run") and time.monotonic() < deadline:
+            run = client.get(f"/v1/runs/{created['run']}").json()
+            if run.get("status") in FINAL_RUN:
+                break
+            time.sleep(1)
+        if run.get("artifact_id"):
+            created["artifact"] = run["artifact_id"]
+        checkpoints = client.get(f"/v1/runs/{created.get('run')}/checkpoints").json().get("data", []) if created.get("run") else []
+        if checkpoints:
+            created["checkpoint"] = checkpoints[-1]["id"]
+            send("promoteCheckpoint", examples.get("promoteCheckpoint"))
+        for op_id, (method, path) in ops.items():
+            if method == "GET" and op_id not in recorded and not path.endswith("/download"):
+                send(op_id)
+        out = {"server": spec["info"]["version"], "responses": {k: redact(v, base_url) for k, v in sorted(recorded.items())}}
+        capture.write_text(json.dumps(out, indent=1) + "\n")
+        missing = sorted(set(ops) - set(recorded))
+        print(f"recorded {len(recorded)} of {len(ops)} operations in {capture}; none for: {', '.join(missing)}")
     return 1 if failures else 0
 
 
@@ -773,6 +833,7 @@ def main() -> int:
     ap.add_argument("--offline", action="store_true", help="skip the blocks that download from Hugging Face")
     ap.add_argument("--compile", action="store_true", help="type-check the TypeScript, Go and Rust blocks instead (no stack)")
     ap.add_argument("--api-examples", action="store_true", help="send the API reference's request bodies to the stack instead")
+    ap.add_argument("--capture", type=Path, help="with --api-examples: write every endpoint's recorded response here (the reference's api-responses.json)")
     args = ap.parse_args()
     if args.compile:
         return compile_check(args.docs, args.only)
@@ -804,7 +865,7 @@ def main() -> int:
             stack = Stack(False, "reference", work / "stack.log", online=False)
             args.base_url, args.api_key = stack.info["base_url"], stack.info["api_key"]
         try:
-            return api_examples_check(examples, args.base_url, args.api_key)
+            return api_examples_check(examples, args.base_url, args.api_key, args.capture)
         finally:
             if stack:
                 stack.close()
