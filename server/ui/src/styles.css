@@ -35,6 +35,16 @@ a.link:hover {
   text-decoration-thickness: 1px;
 }
 
+/* A link among other text needs more than colour to stand out (WCAG 1.4.1): a faint underline. */
+a.link {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+}
+
+a.link:hover {
+  text-decoration-color: currentColor;
+}
+
 code,
 .mono {
   font-family: var(--mono);
@@ -509,6 +519,8 @@ textarea {
 
 .table-wrap {
   overflow-x: auto;
+  /* Contains absolutely positioned children (sr-only labels) so they can't widen the page. */
+  position: relative;
 }
 
 table.table {
@@ -743,10 +755,15 @@ table.table {
   animation: pulse 2s ease-in-out infinite;
 }
 
-.led.off::before {
+.led.offline::before {
   background: var(--faint);
   box-shadow: none;
   animation: none;
+}
+
+.led.connecting::before {
+  background: var(--amber);
+  box-shadow: none;
 }
 
 @keyframes pulse {
@@ -922,7 +939,25 @@ table.table {
 
 .search .input {
   padding-left: 32px;
+  padding-right: 30px;
   width: 280px;
+  max-width: 100%;
+}
+
+.search-key {
+  position: absolute;
+  right: 8px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: 11px/16px var(--mono);
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.search .input:focus + .search-key,
+.search .input:not(:placeholder-shown) + .search-key {
+  display: none;
 }
 
 .segmented {
@@ -1443,6 +1478,16 @@ label.field {
   top: 14px;
 }
 
+.timeline li.timeline-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px;
+}
+
+.timeline li.timeline-more::before {
+  display: none;
+}
+
 .timeline li:last-child::before {
   bottom: calc(100% - 14px);
 }
@@ -1574,6 +1619,16 @@ details.disclosure[open] > summary .chev {
 
 details.disclosure:not([open]) > summary.card-header {
   border-bottom: 0;
+}
+
+.code-wrap {
+  position: relative;
+}
+
+.code-wrap > .btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
 }
 
 /* ------------------------------------------------------------ records */

@@ -2,18 +2,20 @@ import { useState, type ReactNode } from "react";
 
 import type { ChatMessage, DatasetRecord, ImportJob, Source } from "@sdk/generated/models.js";
 
-import { IconChevron, IconDatasets, IconImport, IconRefresh } from "../components/icons.js";
-import { Banner, Card, Confirm, Empty, ErrorBanner, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
-import { errorMessage, listAll, useApi } from "../lib/api.js";
+import { IconChevron, IconDatasets, IconImport, IconRefresh, IconSearch } from "../components/icons.js";
+import { Banner, Card, Confirm, Empty, ErrorBanner, LoadMore, SearchBox, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
+import { errorMessage, useApi } from "../lib/api.js";
 import { ago, dateTime, int, num } from "../lib/format.js";
-import { useNow, useResource } from "../lib/hooks.js";
+import { useDebounced, useNow, usePagedList, useResource } from "../lib/hooks.js";
 import { Link, navigate, setQuery, useLocation } from "../lib/router.js";
 
 export const DatasetsPage = () => {
   const { client } = useApi();
+  const { query } = useLocation();
+  const q = query.get("q") ?? "";
+  const search = useDebounced(q.trim());
   const now = useNow();
-  const res = useResource((signal) => listAll((cursor) => client.listDatasets({ limit: 200, cursor }, { signal }), 2000), []);
-  const items = res.data?.items ?? [];
+  const list = usePagedList((cursor, signal) => client.listDatasets({ limit: 50, cursor, q: search || undefined }, { signal }), [search]);
   return (
     <div className="page">
       <div className="page-header">
@@ -22,9 +24,13 @@ export const DatasetsPage = () => {
           <div className="page-sub">Versioned record sets. Every push, import or sync adds a version.</div>
         </div>
       </div>
-      <ErrorBanner error={res.error} onRetry={res.reload} />
+      <div className="toolbar">
+        <div className="grow" />
+        <SearchBox value={q} onChange={(v) => setQuery({ q: v })} placeholder="Filter by name" label="Filter datasets" />
+      </div>
+      <ErrorBanner error={list.error} onRetry={list.reload} />
       <div className="card">
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0}>
           <table className="table">
             <thead>
               <tr>
@@ -35,9 +41,9 @@ export const DatasetsPage = () => {
                 <th className="right">Created</th>
               </tr>
             </thead>
-            <tbody>
-              {res.loading && !res.data && <SkeletonRows cols={5} />}
-              {items.map((d) => {
+            <tbody aria-busy={list.loading}>
+              {list.loading && <SkeletonRows cols={5} />}
+              {list.items.map((d) => {
                 const open = () => navigate(`/datasets/${encodeURIComponent(d.name)}`);
                 return (
                   <tr key={d.id} className="clickable" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
@@ -49,19 +55,27 @@ export const DatasetsPage = () => {
                     </td>
                     <td className="right num">v{d.version}</td>
                     <td className="right num">{int(d.recordCount)}</td>
-                    <td className="right muted">{ago(d.updatedAt, now)}</td>
-                    <td className="right muted">{ago(d.createdAt, now)}</td>
+                    <td className="right muted" title={dateTime(d.updatedAt)}>
+                      {ago(d.updatedAt, now)}
+                    </td>
+                    <td className="right muted" title={dateTime(d.createdAt)}>
+                      {ago(d.createdAt, now)}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
-        {res.data && items.length === 0 && (
-          <Empty title="No datasets yet" icon={<IconDatasets />}>
-            Import a trace export with <code>grad import FILE --dataset NAME</code>, or push records with <code>grad datasets push</code>.
-          </Empty>
-        )}
+        {!list.loading && !list.error && list.items.length === 0 &&
+          (search ? (
+            <Empty title="No datasets match" icon={<IconSearch />} />
+          ) : (
+            <Empty title="No datasets yet" icon={<IconDatasets />}>
+              Import a trace export with <code>grad import FILE --dataset NAME</code>, or push records with <code>grad datasets push</code>.
+            </Empty>
+          ))}
+        <LoadMore list={list} />
       </div>
     </div>
   );
@@ -134,44 +148,22 @@ const PREVIEW = 25;
 
 const Records = ({ name, version }: { name: string; version: number }) => {
   const { client } = useApi();
-  const [pages, setPages] = useState<{ version: number; records: DatasetRecord[]; cursor: string | null } | null>(null);
-  const first = useResource((signal) => client.listDatasetRecords(name, { version: version || undefined, limit: PREVIEW }, { signal }), [name, version]);
-  const [busy, setBusy] = useState(false);
-  const extra = pages?.version === version ? pages : null;
-  const records = [...(first.data?.data ?? []), ...(extra?.records ?? [])];
-  const cursor = extra ? extra.cursor : (first.data?.nextCursor ?? null);
-  const more = async () => {
-    if (!cursor) return;
-    setBusy(true);
-    try {
-      const page = await client.listDatasetRecords(name, { version: version || undefined, limit: PREVIEW, cursor });
-      setPages({ version, records: [...(extra?.records ?? []), ...page.data], cursor: page.nextCursor });
-    } finally {
-      setBusy(false);
-    }
-  };
+  const list = usePagedList((cursor, signal) => client.listDatasetRecords(name, { version: version || undefined, limit: PREVIEW, cursor }, { signal }), [name, version]);
   return (
     <Card title="Records" count={version ? `v${version}` : undefined} tight>
-      <ErrorBanner error={first.error} />
-      {first.loading && !first.data && (
+      <ErrorBanner error={list.error} onRetry={list.reload} />
+      {list.loading && (
         <div className="skeleton-block" aria-label="Loading records">
           <div className="skeleton" />
           <div className="skeleton" />
           <div className="skeleton" />
         </div>
       )}
-      {first.data && records.length === 0 && <Empty title="No records in this version" />}
-      {records.map((r, i) => (
+      {!list.loading && !list.error && list.items.length === 0 && <Empty title="No records in this version" />}
+      {list.items.map((r, i) => (
         <RecordView key={`${r.id ?? i}:${i}`} record={r} />
       ))}
-      {cursor && (
-        <div className="table-foot">
-          <button type="button" className="btn sm" disabled={busy} onClick={() => void more()}>
-            {busy && <span className="spinner" />}
-            Show more
-          </button>
-        </div>
-      )}
+      <LoadMore list={list} label="Show more" />
     </Card>
   );
 };
@@ -275,23 +267,21 @@ const Sources = ({ name, onSynced }: { name: string; onSynced: () => void }) => 
 const Imports = ({ name }: { name: string }) => {
   const { client } = useApi();
   const now = useNow();
-  const res = useResource(
-    async (signal) => (await listAll((cursor) => client.listImports({ limit: 200, cursor }, { signal }), 600)).items.filter((j) => j.dataset === name).slice(0, 20),
-    [name],
-    { pollMs: (jobs) => (jobs?.some((j) => j.status === "queued" || j.status === "running") ? 3000 : 30_000) },
-  );
-  const jobs = res.data ?? [];
+  const list = usePagedList((cursor, signal) => client.listImports({ dataset: name, limit: 10, cursor }, { signal }), [name], {
+    pollMs: (page) => (page?.data.some((j) => j.status === "queued" || j.status === "running") ? 3000 : 30_000),
+  });
   return (
-    <Card title="Imports" count={jobs.length || undefined} tight>
-      <ErrorBanner error={res.error} />
-      {res.data && jobs.length === 0 && (
+    <Card title="Imports" tight>
+      <ErrorBanner error={list.error} onRetry={list.reload} />
+      {!list.loading && !list.error && list.items.length === 0 && (
         <Empty title="No imports" icon={<IconImport />}>
           <code>grad import</code> loads files; <code>grad datasets import hf</code> loads Hugging Face datasets.
         </Empty>
       )}
-      {jobs.map((j) => (
+      {list.items.map((j) => (
         <ImportRow key={j.id} job={j} now={now} />
       ))}
+      <LoadMore list={list} label="Older imports" />
     </Card>
   );
 };

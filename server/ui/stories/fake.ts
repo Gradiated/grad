@@ -390,10 +390,20 @@ const DATASETS = ["support-prod", "support-holdout", "router-labels", "sql-quick
   updated_at: iso(NOW - (i + 1) * 3_600_000),
 }));
 
+/** A list answered like grad-server: `status`, `q` (name substring or id) and `dataset` filter it. */
+const listed = (items: Wire[]) => (url: URL) => {
+  const status = url.searchParams.get("status")?.split(",");
+  const q = url.searchParams.get("q")?.toLowerCase();
+  const ds = url.searchParams.get("dataset");
+  const limit = Number(url.searchParams.get("limit") ?? 50);
+  const data = items.filter((i) => (!status || status.includes(String(i.status))) && (!q || String(i.name).toLowerCase().includes(q) || i.id === q) && (!ds || i.dataset === ds));
+  return json({ data: data.slice(0, limit), next_cursor: null });
+};
+
 export const workspace = (over: Routes = {}): Routes => {
   const allRuns = Object.values(RUNS);
   return {
-    "GET /v1/runs": (url) => (url.searchParams.get("limit") === "1" ? json({ data: allRuns.slice(0, 1), next_cursor: null }) : json({ data: allRuns, next_cursor: null })),
+    "GET /v1/runs": listed(allRuns as Wire[]),
     ...Object.fromEntries(allRuns.map((r) => [`GET /v1/runs/${r.id}`, r])),
     ...Object.fromEntries(
       allRuns.map((r) => [
@@ -405,19 +415,19 @@ export const workspace = (over: Routes = {}): Routes => {
       ]),
     ),
     ...Object.fromEntries(allRuns.map((r) => [`GET /v1/runs/${r.id}/checkpoints`, checkpointsFor(r, Number(r.current_step))])),
-    "GET /v1/artifacts": { data: ARTIFACTS, next_cursor: null },
+    "GET /v1/artifacts": listed(ARTIFACTS as Wire[]),
     "GET /v1/artifacts/:id": (url) => json(ARTIFACTS.find((a) => url.pathname.endsWith(`/${encodeURIComponent(String(a.id))}`)) ?? TRAINED_ARTIFACT),
     "GET /v1/artifacts/:id/download-url": (url) => json({ url: `${location.origin}/story-download${url.pathname}`, expires_at: iso(NOW + 15 * 60_000), sha256: TRAINED_ARTIFACT.sha256, size_bytes: 84_000_000, filename: "artifact.grad.tar.gz" }),
     "DELETE /v1/artifacts/:id": (url) =>
       ARTIFACTS.find((a) => url.pathname.endsWith(`/${encodeURIComponent(String(a.id))}`) && (a.pins as unknown[]).length > 0)
         ? problem(409, "artifact_pinned", "Artifact 'sql-lora@2026-11-27-2' is pinned by inference:version:7b1c (acme/sql v3), inference:version:9d2e (acme/sql-eval (eval lane)), so it can't be deleted. Unpublish it there first (that removes the pin).")
         : new Response(null, { status: 204 }),
-    "GET /v1/datasets": { data: DATASETS, next_cursor: null },
+    "GET /v1/datasets": listed(DATASETS as Wire[]),
     "GET /v1/datasets/:name": (url) => json(DATASETS.find((d) => url.pathname.endsWith(`/${d.name}`)) ?? DATASETS[0]),
     "GET /v1/datasets/:name/records": records as Wire,
     "GET /v1/sources": { data: [SOURCE, FAILING_SOURCE], next_cursor: null },
-    "GET /v1/imports": { data: [IMPORT], next_cursor: null },
-    "GET /v1/evals": { data: [RUNNING_EVAL, EVAL], next_cursor: null },
+    "GET /v1/imports": listed([IMPORT] as Wire[]),
+    "GET /v1/evals": listed([RUNNING_EVAL, EVAL] as Wire[]),
     [`GET /v1/evals/${EVAL.id}`]: EVAL,
     [`GET /v1/evals/${RUNNING_EVAL.id}`]: RUNNING_EVAL,
     [`GET /v1/evals/${EVAL.id}/failures`]: {

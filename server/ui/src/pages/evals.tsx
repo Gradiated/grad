@@ -1,10 +1,10 @@
 import type { EvalModelSummary, EvalRun } from "@sdk/generated/models.js";
 
 import { IconChevron, IconEvals } from "../components/icons.js";
-import { Badge, Banner, Card, Empty, ErrorBanner, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
-import { listAll, useApi } from "../lib/api.js";
+import { Badge, Banner, Card, Empty, ErrorBanner, LoadMore, SkeletonRows, Stat, StatusBadge } from "../components/ui.js";
+import { useApi } from "../lib/api.js";
 import { ago, compact, dateTime, int, num, usd } from "../lib/format.js";
-import { useNow, useResource } from "../lib/hooks.js";
+import { useNow, usePagedList, useResource } from "../lib/hooks.js";
 import { Link, navigate } from "../lib/router.js";
 import { recordTurns } from "./datasets.js";
 
@@ -13,10 +13,9 @@ const TERMINAL_EVAL = new Set(["completed", "failed", "cancelled"]);
 export const EvalsPage = () => {
   const { client } = useApi();
   const now = useNow();
-  const res = useResource((signal) => listAll((cursor) => client.listEvals({ limit: 200, cursor }, { signal }), 1000), [], {
-    pollMs: (d) => (d?.items.some((e) => !TERMINAL_EVAL.has(e.status)) ? 4000 : 15_000),
+  const list = usePagedList((cursor, signal) => client.listEvals({ limit: 50, cursor }, { signal }), [], {
+    pollMs: (page) => (page?.data.some((e) => !TERMINAL_EVAL.has(e.status)) ? 4000 : 15_000),
   });
-  const evals = res.data?.items ?? [];
   return (
     <div className="page">
       <div className="page-header">
@@ -25,9 +24,9 @@ export const EvalsPage = () => {
           <div className="page-sub">Model comparisons and dataset scoring jobs.</div>
         </div>
       </div>
-      <ErrorBanner error={res.error} onRetry={res.reload} />
+      <ErrorBanner error={list.error} onRetry={list.reload} />
       <div className="card">
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0}>
           <table className="table">
             <thead>
               <tr>
@@ -39,9 +38,9 @@ export const EvalsPage = () => {
                 <th className="right">Created</th>
               </tr>
             </thead>
-            <tbody>
-              {res.loading && !res.data && <SkeletonRows cols={6} />}
-              {evals.map((e) => {
+            <tbody aria-busy={list.loading}>
+              {list.loading && <SkeletonRows cols={6} />}
+              {list.items.map((e) => {
                 const open = () => navigate(`/evals/${encodeURIComponent(e.id)}`);
                 const frac = e.progress.totalOutputs > 0 ? e.progress.generated / e.progress.totalOutputs : 0;
                 return (
@@ -84,11 +83,12 @@ export const EvalsPage = () => {
             </tbody>
           </table>
         </div>
-        {res.data && evals.length === 0 && (
+        {!list.loading && !list.error && list.items.length === 0 && (
           <Empty title="No evals yet" icon={<IconEvals />}>
             Compare models with <code>grad eval</code> or <code>client.evals.create(...)</code>.
           </Empty>
         )}
+        <LoadMore list={list} />
       </div>
     </div>
   );
@@ -168,7 +168,7 @@ const Summary = ({ run }: { run: EvalRun }) => {
   const ks = [...new Set(rows.flatMap((r) => Object.keys(r.passAtK)))].sort((a, b) => kOf(a) - kOf(b));
   return (
     <Card title="Summary" tight>
-      <div className="table-wrap">
+      <div className="table-wrap" tabIndex={0}>
         <table className="table">
           <thead>
             <tr>

@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 import { errorMessage } from "../lib/api.js";
 import { humanize } from "../lib/format.js";
-import { IconAlert, IconCheck, IconCopy, IconInbox, IconInfo, IconRefresh } from "./icons.js";
+import type { PagedList } from "../lib/hooks.js";
+import { IconAlert, IconCheck, IconCopy, IconInbox, IconInfo, IconRefresh, IconSearch } from "./icons.js";
 
 // ------------------------------------------------------------ status
 
@@ -10,6 +11,7 @@ export type Tone = "green" | "red" | "amber" | "blue" | "accent" | "";
 
 const STATUS_TONE: Record<string, Tone> = {
   queued: "amber",
+  stopped_balance: "amber",
   running: "blue",
   awaiting_scores: "accent",
   completed: "green",
@@ -18,7 +20,7 @@ const STATUS_TONE: Record<string, Tone> = {
   stopped_budget: "amber",
 };
 
-const STATUS_LABEL: Record<string, string> = { stopped_budget: "stopped at cap", awaiting_scores: "awaiting scores" };
+const STATUS_LABEL: Record<string, string> = { stopped_budget: "stopped at cap", stopped_balance: "out of balance", awaiting_scores: "awaiting scores" };
 
 export const Badge = ({ tone = "", live, status, children }: { tone?: Tone; live?: boolean; status?: string; children: ReactNode }) => (
   <span className={`badge${tone ? ` ${tone}` : ""}${live ? " live" : ""}`} data-status={status}>
@@ -133,6 +135,52 @@ export const Segmented = <T extends string>({ value, options, onChange, label }:
     ))}
   </div>
 );
+
+/** The footer of a paged list: "Load more" while the server has older items. */
+export const LoadMore = ({ list, label = "Load more", note }: { list: Pick<PagedList<unknown>, "hasMore" | "loadMore" | "loadingMore" | "moreError">; label?: string; note?: ReactNode }) =>
+  list.hasMore ? (
+    <div className="table-foot">
+      <button type="button" className="btn sm" onClick={list.loadMore} disabled={list.loadingMore}>
+        {list.loadingMore && <span className="spinner" />}
+        {label}
+      </button>
+      {list.moreError ? <span role="alert">{errorMessage(list.moreError)}</span> : note ? <span>{note}</span> : null}
+    </div>
+  ) : null;
+
+/** A filter box bound to `?q=`; "/" focuses it from anywhere on the page. */
+export const SearchBox = ({ value, onChange, placeholder, label }: { value: string; onChange: (v: string) => void; placeholder: string; label: string }) => {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || t?.closest("input, textarea, select, [contenteditable=true]")) return;
+      e.preventDefault();
+      ref.current?.focus();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <label className="search">
+      <IconSearch />
+      <input
+        ref={ref}
+        className="input"
+        type="search"
+        placeholder={placeholder}
+        aria-label={label}
+        aria-keyshortcuts="/"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => e.key === "Escape" && (onChange(""), e.currentTarget.blur())}
+      />
+      <kbd className="search-key" aria-hidden="true">
+        /
+      </kbd>
+    </label>
+  );
+};
 
 // ------------------------------------------------------------ copy
 

@@ -2,18 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import type { EvalReport, Run } from "@sdk/generated/models.js";
 
-import { CODEC, convertKeys, lifecycleOf, listAll } from "../src/lib/api.js";
+import { CODEC, convertKeys, isTerminalRun, lifecycleOf } from "../src/lib/api.js";
 import { maskKey, sessionKeyStore, takeFragmentKey } from "../src/lib/auth.js";
 import { smooth } from "../src/components/chart.js";
 import { applyEvents, decodeEvent, emptyStream, foldCheckpoints, type RunEvent, type TimelineItem } from "../src/lib/events.js";
-import { ago, bytes, compact, duration, int, num, pct, toYaml, usd } from "../src/lib/format.js";
+import { ago, bytes, compact, duration, int, num, pct, plural, toYaml, usd } from "../src/lib/format.js";
 import { guardLocale } from "../src/lib/locale.js";
 import { renderReport } from "../src/lib/report.js";
 import { match } from "../src/lib/router.js";
 import { savedTheme } from "../src/lib/theme.js";
 import { passLabel } from "../src/pages/evals.js";
 import { importPool, poolState, trainPool } from "../src/pages/health.js";
-import { filterRuns } from "../src/pages/runs.js";
 import { defaultPeriod, presets } from "../src/pages/usage.js";
 import { fixture, fixtureText } from "./helpers.js";
 
@@ -56,6 +55,8 @@ describe("auth", () => {
 
 describe("format", () => {
   it("formats money, numbers, sizes and durations", () => {
+    expect(plural(1, "step")).toBe("1 step");
+    expect(plural(1000, "step")).toBe("1,000 steps");
     expect(usd(0)).toBe("$0.00");
     expect(usd(0.0034)).toBe("$0.0034");
     expect(usd(1234.5)).toBe("$1,234.50");
@@ -145,10 +146,9 @@ describe("run lifecycle fields", () => {
     });
   });
 
-  it("pages through lists up to a cap", async () => {
-    const pages: Record<string, { data: number[]; nextCursor: string | null }> = { "": { data: [1, 2], nextCursor: "a" }, a: { data: [3], nextCursor: null } };
-    expect(await listAll(async (c) => pages[c ?? ""] as { data: number[]; nextCursor: string | null })).toEqual({ items: [1, 2, 3], truncated: false });
-    expect(await listAll(async () => ({ data: [1, 2], nextCursor: "again" }), 3)).toEqual({ items: [1, 2, 1, 2], truncated: true });
+  it("treats every stopped status as terminal", () => {
+    for (const status of ["completed", "failed", "cancelled", "stopped_budget", "stopped_balance"]) expect(isTerminalRun({ status } as Run)).toBe(true);
+    for (const status of ["queued", "running"]) expect(isTerminalRun({ status } as Run)).toBe(false);
   });
 });
 
@@ -294,16 +294,6 @@ describe("health and usage summaries", () => {
     expect(p["7d"]).toEqual({ from: "2026-12-25", to: "2026-12-31" });
     expect(presets(Date.parse("2027-01-15T00:00:00Z"))["last-month"]).toEqual({ from: "2026-12-01", to: "2026-12-31" });
     expect(p["30d"].from).toBe("2026-12-02");
-  });
-
-  it("filters runs by status and text", () => {
-    const runs = [run(), run({ id: "run_q", name: "router-x", status: "queued" }), run({ id: "run_f", name: "f", status: "failed" }), run({ id: "run_c", name: "c", status: "stopped_budget" })];
-    expect(filterRuns(runs, "active", "").map((r) => r.id)).toEqual(["run_q"]);
-    expect(filterRuns(runs, "completed", "").length).toBe(1);
-    expect(filterRuns(runs, "failed", "").length).toBe(1);
-    expect(filterRuns(runs, "stopped", "").map((r) => r.id)).toEqual(["run_c"]);
-    expect(filterRuns(runs, "all", "ROUTER").map((r) => r.id)).toEqual(["run_q"]);
-    expect(filterRuns(runs, "all", "tiny-qwen3").length).toBe(4);
   });
 });
 

@@ -7,18 +7,18 @@ import { IconChevron, IconDownload, IconPlay, IconRuns as IconChart, IconStop } 
 import { Badge, Banner, Card, Command, Confirm, CopyButton, Empty, ErrorBanner, Kv, Meter, SkeletonRows, Stat, StatusBadge, useToast } from "../components/ui.js";
 import { CODEC, convertKeys, errorMessage, isTerminalRun, lifecycleOf, useApi, type RunLifecycle, type RunPhase } from "../lib/api.js";
 import { evalLossOf, foldCheckpoints, PHASE_LABEL, REASON_LABEL, type RunStreamState, type TimelineItem } from "../lib/events.js";
-import { ago, bytes, compact, dateTime, duration, int, num, time, toYaml, usd } from "../lib/format.js";
+import { ago, bytes, compact, dateTime, duration, int, num, plural, time, toYaml, usd } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
 import { renderReport } from "../lib/report.js";
 import { Link } from "../lib/router.js";
 import { useRunStream } from "../lib/stream.js";
 
-const RESUMABLE = new Set(["failed", "cancelled", "stopped_budget"]);
+const RESUMABLE = new Set(["failed", "cancelled", "stopped_budget", "stopped_balance"]);
 
 export const RunDetailPage = ({ id }: { id: string }) => {
   const api = useApi();
   const now = useNow(5000);
-  const { state: stream, error: streamError } = useRunStream(api, id);
+  const { state: stream, error: streamError, connected } = useRunStream(api, id);
   const polled = useResource((signal) => api.client.getRun(id, { signal }), [id], {
     pollMs: (r) => (r && isTerminalRun(r) ? undefined : 3000),
   });
@@ -48,7 +48,7 @@ export const RunDetailPage = ({ id }: { id: string }) => {
           <h1 className="page-title">
             {run.name}
             <StatusBadge status={run.status} />
-            {active && <span className={`led${streamError ? " off" : ""}`}>{streamError ? "offline" : "live"}</span>}
+            {active && <LiveLed error={streamError} connected={connected} />}
           </h1>
           <div className="page-sub">
             <span className="group">
@@ -90,6 +90,7 @@ export const RunDetailPage = ({ id }: { id: string }) => {
       </div>
 
       {run.status === "failed" && run.error && <Banner>{run.error}</Banner>}
+      {run.status === "stopped_balance" && <Banner tone="warn">{run.error ?? "Stopped: the workspace ran out of balance."} Resume it once the balance is topped up.</Banner>}
       {run.status === "stopped_budget" && (
         <Banner tone="warn">
           Stopped at the cost cap of {usd(run.maxCostUsd)}. Resume with a higher cap to continue from the last checkpoint.
@@ -137,6 +138,16 @@ export const RunDetailPage = ({ id }: { id: string }) => {
   );
 };
 
+/** Live, reconnecting (the stream dropped and is retrying), or offline (it gave up). */
+const LiveLed = ({ error, connected }: { error: unknown; connected: boolean }) => {
+  const state = error ? "offline" : connected ? "live" : "connecting";
+  return (
+    <span className={`led ${state}`} role="status" title={state === "connecting" ? "Connecting to the run's event stream; retrying with backoff" : undefined}>
+      {state}
+    </span>
+  );
+};
+
 const pickNewest = (a: Run | undefined, b: Run | null): Run | undefined => {
   if (!b) return a;
   if (!a) return b;
@@ -169,6 +180,8 @@ export const derivePhase = (run: Run, life: RunLifecycle, streamPhase: RunPhase 
   return null;
 };
 
+const ENDED: Record<string, string> = { failed: "with an error", cancelled: "by cancellation", stopped_budget: "at the cost cap", stopped_balance: "out of balance" };
+
 const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; stream: RunStreamState; now: number }) => {
   const active = !isTerminalRun(run);
   const phase = active ? derivePhase(run, life, stream.phase?.phase) : null;
@@ -177,9 +190,9 @@ const Lifecycle = ({ run, life, stream, now }: { run: Run; life: RunLifecycle; s
   const progress = run.totalSteps > 0 ? run.currentStep / run.totalSteps : 0;
   const workersOnline = stream.phase?.workersOnline ?? life.workersOnline;
   const autoscaling = stream.phase?.autoscaling ?? life.autoscaling;
-  const failed = run.status === "failed" || run.status === "cancelled" || run.status === "stopped_budget";
+  const failed = !active && run.status !== "completed";
 
-  const headline = phase ? PHASE_LABEL[phase] : run.status === "completed" ? "Completed" : failed ? `Ended ${run.status === "failed" ? "with an error" : run.status === "cancelled" ? "by cancellation" : "at the cost cap"}` : "—";
+  const headline = phase ? PHASE_LABEL[phase] : run.status === "completed" ? "Completed" : failed ? `Ended ${ENDED[run.status] ?? run.status}` : "—";
   const stepState = (i: number) => (i === groupIdx ? "now" : i < groupIdx || run.status === "completed" ? "done" : "");
   return (
     <section className="card" aria-label="Lifecycle">
@@ -360,7 +373,7 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
   return (
     <Card title="Checkpoints" count={rows.length || undefined} tight>
       <ErrorBanner error={res.error} />
-      <div className="table-wrap">
+      <div className="table-wrap" tabIndex={0}>
         <table className="table">
           <thead>
             <tr>
@@ -370,7 +383,9 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
               <th>Format</th>
               <th className="right">Size</th>
               <th>Expires</th>
-              <th />
+              <th>
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -406,7 +421,7 @@ const Checkpoints = ({ run, checkpointEvents, onPromoted }: { run: Run; checkpoi
           </tbody>
         </table>
       </div>
-      {res.data && rows.length === 0 && <Empty title="No checkpoints yet">{isTerminalRun(run) ? "This run saved no checkpoints." : `Checkpoints appear every ${int(run.resolvedConfig.checkpointEverySteps)} steps.`}</Empty>}
+      {res.data && rows.length === 0 && <Empty title="No checkpoints yet">{isTerminalRun(run) ? "This run saved no checkpoints." : `Checkpoints appear every ${plural(run.resolvedConfig.checkpointEverySteps, "step")}.`}</Empty>}
       {promote && (
         <Confirm
           title={`Promote step ${promote.step}?`}
@@ -567,20 +582,25 @@ const ConfigCard = ({ run }: { run: Run }) => {
           <IconChevron className="chev" />
           Resolved config
         </h2>
-        <span onClick={(e) => e.preventDefault()}>
-          <CopyButton text={yaml} label="Copy YAML" />
-        </span>
       </summary>
-      <pre className="code">{yaml}</pre>
+      <div className="code-wrap">
+        <pre className="code">{yaml}</pre>
+        <CopyButton text={yaml} label="Copy YAML" />
+      </div>
     </details>
   );
 };
 
 // ------------------------------------------------------------ timeline
 
+/** Rows the timeline renders at first; a long run's thousands of events stay one click away, not in the DOM. */
+const TIMELINE_ROWS = 100;
+
 const Timeline = ({ items }: { items: TimelineItem[] }) => {
   const list = useRef<HTMLOListElement>(null);
-  const ordered = foldCheckpoints([...items].reverse());
+  const [limit, setLimit] = useState(TIMELINE_ROWS);
+  const ordered = useMemo(() => foldCheckpoints([...items].reverse()), [items]);
+  const shown = ordered.slice(0, limit);
   useEffect(() => {
     list.current?.scrollTo?.({ top: 0 });
   }, [items.length]);
@@ -589,19 +609,26 @@ const Timeline = ({ items }: { items: TimelineItem[] }) => {
       {ordered.length === 0 ? (
         <Empty title="No events yet">Phases, attempts, checkpoints and warnings appear here as they happen.</Empty>
       ) : (
-        <ol className="timeline" ref={list}>
-          {ordered.map((t) => (
+        <ol className="timeline" ref={list} tabIndex={0} aria-label="Run events, newest first">
+          {shown.map((t) => (
             <li key={t.key} className={t.kind}>
               <span className="mark" />
               <div>
                 <div className="t-title">{t.title}</div>
                 {t.detail && <div className="t-detail">{t.detail}</div>}
               </div>
-              <span className="t-time" title={dateTime(t.timestamp)}>
+              <time className="t-time" dateTime={t.timestamp} title={dateTime(t.timestamp)}>
                 {time(t.timestamp)}
-              </span>
+              </time>
             </li>
           ))}
+          {ordered.length > shown.length && (
+            <li className="timeline-more">
+              <button type="button" className="btn sm" onClick={() => setLimit((n) => n + 500)}>
+                Show {int(Math.min(500, ordered.length - shown.length))} older of {int(ordered.length - shown.length)}
+              </button>
+            </li>
+          )}
         </ol>
       )}
     </Card>

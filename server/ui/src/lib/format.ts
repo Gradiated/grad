@@ -87,6 +87,9 @@ export const time = (iso: string | null | undefined): string => {
   return Number.isNaN(t.getTime()) ? "—" : t.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 };
 
+/** "1 step", "1,000 steps". */
+export const plural = (n: number, noun: string): string => `${int(n)} ${noun}${n === 1 ? "" : "s"}`;
+
 export const humanize = (s: string): string => s.replace(/_/g, " ");
 
 // ------------------------------------------------------------ YAML

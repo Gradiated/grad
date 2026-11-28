@@ -1,21 +1,15 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import type { Artifact } from "@sdk/generated/models.js";
 
 import { IconArtifacts, IconChevron, IconDownload, IconSearch } from "../components/icons.js";
-import { Badge, Card, Command, Confirm, Empty, ErrorBanner, Kv, SkeletonRows, useToast } from "../components/ui.js";
-import { listAll, useApi } from "../lib/api.js";
+import { Badge, Card, Command, Confirm, Empty, ErrorBanner, Kv, LoadMore, SearchBox, SkeletonRows, useToast } from "../components/ui.js";
+import { useApi } from "../lib/api.js";
 import { ago, bytes, dateTime } from "../lib/format.js";
-import { useNow, useResource } from "../lib/hooks.js";
+import { useDebounced, useNow, usePagedList, useResource } from "../lib/hooks.js";
 import { Link, navigate, setQuery, useLocation } from "../lib/router.js";
 
 const hrefOf = (a: Pick<Artifact, "id">) => `/artifacts/${encodeURIComponent(a.id)}`;
-
-export const filterArtifacts = (artifacts: Artifact[], q: string): Artifact[] => {
-  const needle = q.trim().toLowerCase();
-  if (!needle) return artifacts;
-  return artifacts.filter((a) => [a.id, a.baseModel, a.format ?? "", a.provenance.source].some((v) => v.toLowerCase().includes(needle)));
-};
 
 /** Where an artifact came from: the run that trained it, its uploader, or its pinned Hub revision. */
 const ProvenanceValue = ({ artifact }: { artifact: Artifact }) => {
@@ -45,9 +39,8 @@ export const ArtifactsPage = () => {
   const { query } = useLocation();
   const q = query.get("q") ?? "";
   const now = useNow();
-  const res = useResource((signal) => listAll((cursor) => client.listArtifacts({ limit: 200, cursor }, { signal }), 2000), []);
-  const items = useMemo(() => res.data?.items ?? [], [res.data]);
-  const shown = filterArtifacts(items, q);
+  const search = useDebounced(q.trim());
+  const list = usePagedList((cursor, signal) => client.listArtifacts({ limit: 50, cursor, q: search || undefined }, { signal }), [search]);
   return (
     <div className="page">
       <div className="page-header">
@@ -58,14 +51,11 @@ export const ArtifactsPage = () => {
       </div>
       <div className="toolbar">
         <div className="grow" />
-        <label className="search">
-          <IconSearch />
-          <input className="input" type="search" placeholder="Filter by name, model, format" aria-label="Filter artifacts" value={q} onChange={(e) => setQuery({ q: e.target.value })} />
-        </label>
+        <SearchBox value={q} onChange={(v) => setQuery({ q: v })} placeholder="Filter by name" label="Filter artifacts" />
       </div>
-      <ErrorBanner error={res.error} onRetry={res.reload} />
+      <ErrorBanner error={list.error} onRetry={list.reload} />
       <div className="card">
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0}>
           <table className="table">
             <thead>
               <tr>
@@ -78,9 +68,9 @@ export const ArtifactsPage = () => {
                 <th className="right">Pinned</th>
               </tr>
             </thead>
-            <tbody>
-              {res.loading && !res.data && <SkeletonRows cols={7} />}
-              {shown.map((a) => {
+            <tbody aria-busy={list.loading}>
+              {list.loading && <SkeletonRows cols={7} />}
+              {list.items.map((a) => {
                 const open = () => navigate(hrefOf(a));
                 return (
                   <tr key={a.id} className="clickable" tabIndex={0} onClick={open} onKeyDown={(e) => e.key === "Enter" && open()}>
@@ -113,12 +103,15 @@ export const ArtifactsPage = () => {
             </tbody>
           </table>
         </div>
-        {res.data && items.length === 0 && (
-          <Empty title="No artifacts yet" icon={<IconArtifacts />}>
-            A completed run releases one. Bring your own with <code>grad artifacts upload</code> or <code>grad artifacts import</code>.
-          </Empty>
-        )}
-        {res.data && items.length > 0 && shown.length === 0 && <Empty title="No artifacts match" />}
+        {!list.loading && !list.error && list.items.length === 0 &&
+          (search ? (
+            <Empty title="No artifacts match" icon={<IconSearch />} />
+          ) : (
+            <Empty title="No artifacts yet" icon={<IconArtifacts />}>
+              A completed run releases one. Bring your own with <code>grad artifacts upload</code> or <code>grad artifacts import</code>.
+            </Empty>
+          ))}
+        <LoadMore list={list} />
       </div>
     </div>
   );

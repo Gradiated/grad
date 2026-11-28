@@ -162,6 +162,7 @@ export const route = (path: string): { node: ReactNode; title: string } => {
     title: "Not found",
     node: (
       <div className="page">
+        <h1 className="sr-only">Not found</h1>
         <Empty title="Nothing here">
           <Link className="link" href="/runs">
             Go to runs

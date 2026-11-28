@@ -75,7 +75,8 @@ const buildOptions = (width: number, height: number, props: LineChartProps, read
   return {
     width,
     height,
-    padding: [12, 12, 0, 0],
+    // Right padding keeps the last x label ("100,000") inside the card.
+    padding: [12, 24, 0, 0],
     legend: { show: false },
     cursor: { y: false, points: { size: 7, width: 2 }, drag: { x: true, y: false } },
     scales: { x: { time: false } },
@@ -137,7 +138,12 @@ export const LineChart = (props: LineChartProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme, shape, height, hasData]);
 
+  // Redraw only when a series array changed, not on every parent render (a clock tick).
+  const drawn = useRef<AlignedData | null>(null);
   useEffect(() => {
+    const prev = drawn.current;
+    if (prev && plot.current && prev.length === data.length && prev.every((a, i) => a === data[i])) return;
+    drawn.current = data;
     plot.current?.setData(data);
   });
 

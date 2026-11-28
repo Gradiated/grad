@@ -63,8 +63,21 @@ const EVAL = {
   completed_at: "2026-11-27T13:01:00Z",
 };
 
+/** A list answered like grad-server: `status` (comma-separated), `q` (name substring or id) and `dataset` filter it. */
+const listed =
+  (items: Record<string, unknown>[]) =>
+  ({ url }: { url: URL }) => {
+    const status = url.searchParams.get("status")?.split(",");
+    const q = url.searchParams.get("q")?.toLowerCase();
+    const dataset = url.searchParams.get("dataset");
+    const data = items.filter(
+      (i) => (!status || status.includes(String(i.status))) && (!q || String(i.name).toLowerCase().includes(q) || i.id === q) && (!dataset || i.dataset === dataset),
+    );
+    return json({ data, next_cursor: null });
+  };
+
 const routes = (extra: Record<string, unknown> = {}) => ({
-  "GET /v1/runs": { data: [QUEUED, RUN, FAILED], next_cursor: null },
+  "GET /v1/runs": listed([QUEUED, RUN, FAILED]),
   [`GET /v1/runs/${RUN_ID}`]: RUN,
   "GET /v1/runs/run_q1": QUEUED,
   [`GET /v1/runs/${RUN_ID}/metrics`]: () => sse(fixtureText("metrics.sse")),
@@ -90,12 +103,12 @@ const routes = (extra: Record<string, unknown> = {}) => ({
     ],
     next_cursor: null,
   },
-  "GET /v1/imports": {
-    data: [{ id: "imp_1", workspace_id: "ws_e2e", dataset: "support", status: "completed", source: {}, connector: "langfuse", attempt: 1, imported_count: 120, dropped_count: 2, detected_scores: [], drop_reasons: ["no assistant turn"], dataset_version: 1, error: null, created_at: "2026-11-27T13:00:00Z", updated_at: "2026-11-27T13:00:00Z" }],
-    next_cursor: null,
-  },
+  "GET /v1/imports": listed([
+    { id: "imp_1", workspace_id: "ws_e2e", dataset: "support", status: "completed", source: {}, connector: "langfuse", attempt: 1, imported_count: 120, dropped_count: 2, detected_scores: [], drop_reasons: ["no assistant turn"], dataset_version: 1, error: null, created_at: "2026-11-27T13:00:00Z", updated_at: "2026-11-27T13:00:00Z" },
+    { id: "imp_9", workspace_id: "ws_e2e", dataset: "other", status: "completed", source: {}, connector: "jsonl", attempt: 1, imported_count: 999, dropped_count: 0, detected_scores: [], drop_reasons: [], dataset_version: 1, error: null, created_at: "2026-11-27T14:00:00Z", updated_at: "2026-11-27T14:00:00Z" },
+  ]),
   "POST /v1/sources/src_1/sync": { id: "imp_2", workspace_id: "ws_e2e", dataset: "support", status: "queued", source: {}, connector: "langfuse", attempt: 0, imported_count: 0, dropped_count: 0, detected_scores: [], drop_reasons: [], dataset_version: null, error: null, created_at: "t", updated_at: "t" },
-  "GET /v1/evals": { data: [EVAL], next_cursor: null },
+  "GET /v1/evals": listed([EVAL]),
   "GET /v1/evals/eval_1": EVAL,
   "GET /v1/evals/eval_1/failures": { data: [{ task_id: "rec_0001", model: "support-sft@1", score: 0.2, passed: false, sample_scores: [0.2], judge_model: "judge/m", record: { id: "rec_0001", messages: [{ role: "user", content: "Where is my invoice?" }] } }], next_cursor: null },
   "GET /v1/usage": fixture("usage.json"),
@@ -179,8 +192,8 @@ describe("auth", () => {
 });
 
 describe("runs", () => {
-  it("lists runs with status, phase, recipe, model, dataset and cost; filters by status and text", async () => {
-    const { container } = await boot();
+  it("lists runs with status, phase, recipe, model, dataset and cost; the server filters by status and text", async () => {
+    const { container, server } = await boot();
     await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(3));
     const text = container.textContent ?? "";
     expect(text).toContain("support-sft");
@@ -191,11 +204,31 @@ describe("runs", () => {
     await click(byText(container, ".segmented button", "Failed"));
     await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(1));
     expect(location.search).toBe("?status=failed");
+    expect(server.calls.some((c) => c.path === "/v1/runs?limit=50&status=failed")).toBe(true);
+    await click(byText(container, ".segmented button", "Stopped"));
+    await waitFor(() => expect(server.calls.some((c) => c.path.includes("status=cancelled%2Cstopped_budget%2Cstopped_balance"))).toBe(true));
     await click(byText(container, ".segmented button", "All"));
     await type(container.querySelector("input[type=search]"), "router");
     await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(1));
+    expect(location.search).toBe("?q=router");
+    expect(server.calls.some((c) => c.path === "/v1/runs?limit=50&q=router")).toBe(true);
     await type(container.querySelector("input[type=search]"), "zzz");
     await waitFor(() => expect(container.textContent).toContain("No runs match"));
+  });
+
+  it("focuses the filter with / and clears it with Escape", async () => {
+    const { container } = await boot();
+    await waitFor(() => expect(container.querySelectorAll("tbody tr").length).toBe(3));
+    const input = container.querySelector<HTMLInputElement>("input[type=search]");
+    await act(async () => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    });
+    expect(document.activeElement).toBe(input);
+    await type(input, "router");
+    await act(async () => {
+      input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await waitFor(() => expect(location.search).toBe(""));
   });
 
   it("loads older pages", async () => {
@@ -229,7 +262,7 @@ describe("runs", () => {
 
   it("retries a failed page load", async () => {
     let fail = true;
-    const server = fakeServer(routes({ "GET /v1/runs": ({ url }: { url: URL }) => (fail && url.searchParams.get("limit") === "100" ? problem(400, "bad_request", "listing failed") : json({ data: [RUN], next_cursor: null })) }));
+    const server = fakeServer(routes({ "GET /v1/runs": ({ url }: { url: URL }) => (fail && url.searchParams.get("limit") === "50" ? problem(400, "bad_request", "listing failed") : json({ data: [RUN], next_cursor: null })) }));
     const { container } = await boot(server);
     await waitFor(() => expect(container.textContent).toContain("listing failed"));
     fail = false;
@@ -302,6 +335,32 @@ describe("runs", () => {
     expect(byText(container, "button", "Cancel")).toBeUndefined();
   });
 
+  it("ends a stopped_balance run: resumable, not cancellable, not live", async () => {
+    const broke = { ...FAILED, id: "run_b1", name: "broke", status: "stopped_balance", error: "The workspace ran out of balance." };
+    const { container } = await boot(fakeServer(routes({ "GET /v1/runs/run_b1": broke, "GET /v1/runs/:id/events": () => sse(""), "GET /v1/runs/:id/checkpoints": { data: [], next_cursor: null } })), "/runs/run_b1");
+    await waitFor(() => expect(container.textContent).toContain("Ended out of balance"));
+    expect(container.textContent).toContain("Resume it once the balance is topped up");
+    expect(container.querySelector(".status-badge, .badge")?.textContent).toContain("out of balance");
+    expect(byText(container, ".page-header button", "Resume")).toBeTruthy();
+    expect(byText(container, ".page-header button", "Cancel")).toBeUndefined();
+    expect(container.querySelector(".led")).toBeNull();
+  });
+
+  it("renders the newest 100 events and pages older ones in on demand", async () => {
+    const events = Array.from({ length: 250 }, (_, i) => `event: warning\ndata: ${JSON.stringify({ seq: i + 1, attempt: 1, timestamp: "2026-11-27T13:00:00Z", step: i, message: `note ${i}` })}\nid: ${i + 1}\n\n`).join("");
+    const { container } = await boot(fakeServer(routes({ [`GET /v1/runs/${RUN_ID}/events`]: () => sse(events) })), `/runs/${RUN_ID}`);
+    await waitFor(() => expect(container.querySelectorAll(".timeline li").length).toBe(101));
+    expect(container.querySelector(".timeline li .t-detail")?.textContent).toBe("note 249");
+    await click(byText(container, ".timeline button", "Show 150 older of 150"));
+    await waitFor(() => expect(container.querySelectorAll(".timeline li").length).toBe(250));
+  });
+
+  it("shows connecting, not live, while the event stream is down", async () => {
+    const { container } = await boot(fakeServer(routes({ "GET /v1/runs/run_q1/events": () => problem(503, "unavailable") })), "/runs/run_q1");
+    await waitFor(() => expect(container.querySelector(".led")?.textContent).toBe("connecting"));
+    expect(container.querySelector(".led")?.className).toContain("connecting");
+  });
+
   it("promotes a checkpoint", async () => {
     const promoted: string[] = [];
     const server = fakeServer(
@@ -367,6 +426,9 @@ describe("datasets, evals, usage, health", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("prod-traces");
     expect(text).toContain("120 imported · 2 dropped");
+    // The server filters imports by dataset: another dataset's import never shows.
+    expect(text).not.toContain("999 imported");
+    expect(server.calls.some((c) => c.path.startsWith("/v1/imports?") && c.path.includes("dataset=support"))).toBe(true);
     expect(container.querySelector("select#version")).toBeTruthy();
     await click(byText(container, "button", "Sync"));
     await click(byText(container, ".dialog button", "Sync"));
@@ -424,9 +486,13 @@ describe("datasets, evals, usage, health", () => {
     expect(byText(container, "button", "Show older rows")).toBeUndefined();
   });
 
-  it("shows pools and the queue on the health page", async () => {
-    const { container } = await boot(undefined, "/health");
+  it("shows pools and the queue on the health page from in-flight jobs only", async () => {
+    const { container, server } = await boot(undefined, "/health");
     await waitFor(() => expect(container.textContent).toContain("scaling up"));
+    // Small, status-filtered pages: never a walk over every finished job.
+    const lists = server.calls.filter((c) => /^\/v1\/(runs|imports|evals)\?/.test(c.path)).map((c) => c.path);
+    expect(lists.length).toBeGreaterThan(0);
+    expect(lists.filter((p) => p !== "/v1/runs?limit=1").every((p) => p.includes("status=") && !p.includes("cursor="))).toBe(true);
     expect(container.textContent).toContain("router-queued");
     expect(container.textContent).toContain("database reachable");
     expect(container.textContent).toContain("ready");
@@ -463,12 +529,12 @@ describe("artifacts", () => {
   };
   const artifactRoutes = (extra: Record<string, unknown> = {}) =>
     routes({
-      "GET /v1/artifacts": { data: [UPLOADED, IMPORTED, TRAINED], next_cursor: null },
+      "GET /v1/artifacts": listed([UPLOADED, IMPORTED, TRAINED]),
       "GET /v1/artifacts/:id": ({ url }: { url: URL }) => json([UPLOADED, IMPORTED, TRAINED].find((a) => url.pathname.endsWith(`/${encodeURIComponent(String(a.id))}`)) ?? TRAINED),
       ...extra,
     });
 
-  it("lists name@version, format, base model, provenance, size, created and pins; filters by text", async () => {
+  it("lists name@version, format, base model, provenance, size, created and pins; the server filters by name", async () => {
     const { container } = await boot(fakeServer(artifactRoutes()), "/runs");
     await waitFor(() => expect(byText(container, ".nav-item", "Artifacts")).toBeTruthy());
     await click(byText(container, ".nav-item", "Artifacts"));

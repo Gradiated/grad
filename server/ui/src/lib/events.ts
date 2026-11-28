@@ -229,7 +229,9 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
             : ev.event === "gave_up"
               ? "Gave up"
               : `Attempt ${ev.attempt} interrupted${ev.reason ? ` (${REASON_LABEL[ev.reason] ?? ev.reason})` : ""}`;
-        timeline.push({ key: `attempt:${ev.seq}`, kind, timestamp: ev.timestamp, title, step: ev.step, ...(ev.message ? { detail: ev.message } : {}) });
+        // The server's message often restates the title ("attempt 1 started"): show it only when it adds something.
+        const detail = ev.message && ev.message.toLowerCase() !== title.toLowerCase() ? ev.message : undefined;
+        timeline.push({ key: `attempt:${ev.seq}`, kind, timestamp: ev.timestamp, title, step: ev.step, ...(detail ? { detail } : {}) });
         break;
       }
       case "checkpoint":
@@ -249,8 +251,8 @@ export const applyEvents = (state: RunStreamState, events: RunEvent[]): RunStrea
       case "completed": {
         final = ev.run;
         if (!timeline.some((t) => t.key === "completed")) {
-          const title = { completed: "Completed", failed: "Failed", cancelled: "Cancelled", stopped_budget: "Stopped at the cost cap" }[ev.status as string] ?? ev.status;
-          const kind = ev.status === "completed" ? "completed" : ev.status === "failed" ? "failure" : ev.status === "stopped_budget" ? "warning" : "log";
+          const title = { completed: "Completed", failed: "Failed", cancelled: "Cancelled", stopped_budget: "Stopped at the cost cap", stopped_balance: "Stopped: out of balance" }[ev.status as string] ?? ev.status;
+          const kind = ev.status === "completed" ? "completed" : ev.status === "failed" ? "failure" : ev.status === "stopped_budget" || ev.status === "stopped_balance" ? "warning" : "log";
           timeline.push({ key: "completed", kind, timestamp: ev.timestamp, title, ...(ev.run.error ? { detail: ev.run.error } : {}) });
         }
         break;

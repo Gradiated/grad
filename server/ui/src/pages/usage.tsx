@@ -1,12 +1,10 @@
-import { useState } from "react";
-
-import type { UsageGroupBy, UsageKind, UsageRecord, UsageRefTotal } from "@sdk/generated/models.js";
+import type { UsageGroupBy, UsageKind, UsageRefTotal } from "@sdk/generated/models.js";
 
 import { IconUsage } from "../components/icons.js";
-import { Card, Empty, ErrorBanner, Segmented, SkeletonRows, Stat } from "../components/ui.js";
-import { errorMessage, useApi } from "../lib/api.js";
+import { Card, Empty, ErrorBanner, LoadMore, Segmented, SkeletonRows, Stat } from "../components/ui.js";
+import { useApi } from "../lib/api.js";
 import { compact, dateTime, int, usd } from "../lib/format.js";
-import { useResource } from "../lib/hooks.js";
+import { usePagedList, useResource } from "../lib/hooks.js";
 import { Link, setQuery, useLocation } from "../lib/router.js";
 
 export const KIND_LABEL: Record<UsageKind, string> = {
@@ -66,7 +64,7 @@ const TopTable = ({ title, refs }: { title: string; refs: UsageRefTotal[] }) => 
     {refs.length === 0 ? (
       <Empty title="None in this period" />
     ) : (
-      <div className="table-wrap">
+      <div className="table-wrap" tabIndex={0}>
         <table className="table">
           <thead>
             <tr>
@@ -108,29 +106,11 @@ export const UsagePage = () => {
   const rawBy = query.get("by");
   const by: UsageGroupBy = isGroup(rawBy) ? rawBy : "day";
   const summary = useResource((signal) => client.getUsageSummary({ from, to, groupBy: by }, { signal }), [from, to, by], { pollMs: 30_000 });
-  const rows = useResource((signal) => client.listUsage({ from, to, limit: ROWS }, { signal }), [from, to], { pollMs: 30_000 });
+  const rows = usePagedList((cursor, signal) => client.listUsage({ from, to, limit: ROWS, cursor }, { signal }), [from, to], { pollMs: 30_000 });
   const s = summary.data;
   const ranges = presets();
   const active = (Object.keys(ranges) as (keyof typeof ranges)[]).find((k) => ranges[k].from === from && ranges[k].to === to) ?? "custom";
   const maxGroup = Math.max(0, ...(s?.groups ?? []).map((g) => g.costUsd));
-  const [older, setOlder] = useState<{ key: string; rows: UsageRecord[]; cursor: string | null } | null>(null);
-  const [more, setMore] = useState<{ busy: boolean; error: unknown }>({ busy: false, error: null });
-  const period = `${from}:${to}`;
-  const extra = older?.key === period ? older : null;
-  const billed: UsageRecord[] = [...(rows.data?.data ?? []), ...(extra?.rows ?? [])];
-  const cursor = extra ? extra.cursor : (rows.data?.nextCursor ?? null);
-  const loadMore = async () => {
-    if (!cursor) return;
-    setMore({ busy: true, error: null });
-    try {
-      const page = await client.listUsage({ from, to, limit: ROWS, cursor });
-      setOlder({ key: period, rows: [...(extra?.rows ?? []), ...page.data], cursor: page.nextCursor });
-      setMore({ busy: false, error: null });
-    } catch (e) {
-      setMore({ busy: false, error: e });
-    }
-  };
-
   return (
     <div className="page">
       <div className="page-header">
@@ -176,7 +156,7 @@ export const UsagePage = () => {
         actions={<Segmented label="Group by" value={by} onChange={(v) => setQuery({ by: v === "day" ? undefined : v })} options={GROUPS} />}
         tight
       >
-        <div className="table-wrap">
+        <div className="table-wrap" tabIndex={0}>
           <table className="table">
             <thead>
               <tr>
@@ -217,9 +197,9 @@ export const UsagePage = () => {
         <TopTable title="Top evals" refs={s?.topEvals ?? []} />
       </div>
 
-      <Card title="Billed rows" count={rows.data ? int(billed.length) : undefined} tight>
-        <ErrorBanner error={rows.error} />
-        <div className="table-wrap">
+      <Card title="Billed rows" count={rows.loading ? undefined : `${int(rows.items.length)}${rows.hasMore ? "+" : ""}`} tight>
+        <ErrorBanner error={rows.error} onRetry={rows.reload} />
+        <div className="table-wrap" tabIndex={0}>
           <table className="table">
             <thead>
               <tr>
@@ -232,8 +212,8 @@ export const UsagePage = () => {
               </tr>
             </thead>
             <tbody>
-              {rows.loading && !rows.data && <SkeletonRows cols={6} />}
-              {billed.map((r) => (
+              {rows.loading && <SkeletonRows cols={6} />}
+              {rows.items.map((r) => (
                 <tr key={r.id}>
                   <td className="muted">{dateTime(r.createdAt)}</td>
                   <td>
@@ -250,15 +230,7 @@ export const UsagePage = () => {
             </tbody>
           </table>
         </div>
-        {cursor && (
-          <div className="table-foot">
-            <button type="button" className="btn sm" onClick={() => void loadMore()} disabled={more.busy}>
-              {more.busy && <span className="spinner" />}
-              Show older rows
-            </button>
-            {more.error ? <span>{errorMessage(more.error)}</span> : <span>The totals above cover the whole period.</span>}
-          </div>
-        )}
+        <LoadMore list={rows} label="Show older rows" note="The totals above cover the whole period." />
       </Card>
     </div>
   );

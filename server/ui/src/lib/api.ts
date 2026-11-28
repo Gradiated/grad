@@ -103,21 +103,5 @@ export const lifecycleOf = (run: Run): RunLifecycle => {
   };
 };
 
-export const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "stopped_budget"]);
+export const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "stopped_budget", "stopped_balance"]);
 export const isTerminalRun = (run: Pick<Run, "status">): boolean => TERMINAL_RUN.has(run.status);
-
-/** Pages through a cursor-paginated list, up to `max` items. */
-export const listAll = async <T>(
-  page: (cursor: string | undefined) => Promise<{ data: T[]; nextCursor: string | null }>,
-  max = 5_000,
-): Promise<{ items: T[]; truncated: boolean }> => {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const res = await page(cursor);
-    items.push(...res.data);
-    if (!res.nextCursor) return { items, truncated: false };
-    if (items.length >= max) return { items, truncated: true };
-    cursor = res.nextCursor;
-  }
-};

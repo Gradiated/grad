@@ -9,6 +9,8 @@ export interface StreamDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Flushes buffered events to React this often (ms). */
   flushMs?: number;
+  /** Called with true when the stream (re)connects and false when it drops. */
+  onConnected?: (connected: boolean) => void;
 }
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -32,6 +34,12 @@ export const followRun = async (
   let failures = 0;
   let buffer: RunEvent[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let connected = false;
+  const setConnected = (c: boolean) => {
+    if (c === connected) return;
+    connected = c;
+    deps.onConnected?.(c);
+  };
   const flush = () => {
     timer = undefined;
     if (buffer.length === 0) return;
@@ -45,6 +53,7 @@ export const followRun = async (
       try {
         for await (const message of api.transport.sse({ method: "GET", path }, { signal, lastEventId, idleTimeoutMs: 90_000 })) {
           failures = 0;
+          setConnected(true);
           if (message.id !== undefined) lastEventId = message.id;
           const ev = decodeEvent(message.event, message.data);
           if (!ev) continue;
@@ -64,6 +73,7 @@ export const followRun = async (
         if (error instanceof APIError && error.status < 500 && error.status !== 429) throw error;
       }
       flush();
+      setConnected(false);
       failures += 1;
       await sleep(Math.min(15_000, 500 * 2 ** Math.min(failures, 5)));
     }
@@ -73,18 +83,20 @@ export const followRun = async (
   }
 };
 
-/** React state for one run's event stream. */
-export const useRunStream = (api: Api, runId: string): { state: RunStreamState; error: unknown } => {
+/** React state for one run's event stream; `connected` is false until the first event and while reconnecting. */
+export const useRunStream = (api: Api, runId: string): { state: RunStreamState; error: unknown; connected: boolean } => {
   const [state, setState] = useState<RunStreamState>(emptyStream);
   const [error, setError] = useState<unknown>(null);
+  const [connected, setConnected] = useState(false);
   useEffect(() => {
     const ctrl = new AbortController();
     setState(emptyStream());
     setError(null);
-    followRun(api, runId, (batch) => setState((s) => applyEvents(s, batch)), ctrl.signal).catch((e: unknown) => {
+    setConnected(false);
+    followRun(api, runId, (batch) => setState((s) => applyEvents(s, batch)), ctrl.signal, { onConnected: setConnected }).catch((e: unknown) => {
       if (!ctrl.signal.aborted) setError(e);
     });
     return () => ctrl.abort();
   }, [api, runId]);
-  return { state, error };
+  return { state, error, connected };
 };

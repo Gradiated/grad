@@ -4,7 +4,7 @@ import type { ImportJob, Run } from "@sdk/generated/models.js";
 
 import { IconCpu, IconEvals, IconImport, IconRuns } from "../components/icons.js";
 import { Badge, Banner, Card, Empty, ErrorBanner, Stat, StatusBadge, type Tone } from "../components/ui.js";
-import { lifecycleOf, listAll, useApi } from "../lib/api.js";
+import { lifecycleOf, useApi } from "../lib/api.js";
 import { PHASE_LABEL } from "../lib/events.js";
 import { duration, int } from "../lib/format.js";
 import { useNow, useResource } from "../lib/hooks.js";
@@ -67,18 +67,23 @@ const readiness = async (signal: AbortSignal): Promise<{ ok: boolean; detail: st
   }
 };
 
+/** In-flight jobs per kind and status this page reads; more show as "100+". */
+const CAP = 100;
+
 export const HealthPage = () => {
   const { client } = useApi();
   const now = useNow(5000);
   const ready = useResource(readiness, [], { pollMs: 5000 });
+  // Only what is in flight, filtered by the server: four small pages every 5 s however many jobs a workspace has finished.
   const work = useResource(
     async (signal) => {
-      const [runs, imports, evals] = await Promise.all([
-        listAll((cursor) => client.listRuns({ limit: 200, cursor }, { signal }), 1000),
-        listAll((cursor) => client.listImports({ limit: 200, cursor }, { signal }), 600),
-        listAll((cursor) => client.listEvals({ limit: 200, cursor }, { signal }), 600),
+      const [queued, running, imports, evals] = await Promise.all([
+        client.listRuns({ status: "queued", limit: CAP }, { signal }),
+        client.listRuns({ status: "running", limit: CAP }, { signal }),
+        client.listImports({ status: "queued,running", limit: CAP }, { signal }),
+        client.listEvals({ status: "queued,running,awaiting_scores", limit: CAP }, { signal }),
       ]);
-      return { runs: runs.items, imports: imports.items, evals: evals.items };
+      return { queued, running, runs: [...queued.data, ...running.data], imports: imports.data, evals };
     },
     [],
     { pollMs: 5000 },
@@ -86,9 +91,10 @@ export const HealthPage = () => {
   const d = work.data;
   const train = d ? trainPool(d.runs, now) : null;
   const imp = d ? importPool(d.imports, now) : null;
-  const evalsRunning = d?.evals.filter((e) => e.status === "running" || e.status === "queued").length ?? 0;
-  const awaiting = d?.evals.filter((e) => e.status === "awaiting_scores").length ?? 0;
-  const queuedRuns = (d?.runs ?? []).filter((r) => r.status === "queued").sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const evalsRunning = d?.evals.data.filter((e) => e.status !== "awaiting_scores").length ?? 0;
+  const awaiting = d?.evals.data.filter((e) => e.status === "awaiting_scores").length ?? 0;
+  const queuedRuns = [...(d?.queued.data ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const more = (page: { nextCursor: string | null } | undefined) => (page?.nextCursor ? "+" : "");
 
   return (
     <div className="page">
@@ -102,10 +108,10 @@ export const HealthPage = () => {
       <ErrorBanner error={work.error} onRetry={work.reload} />
       <div className="stats">
         <Stat label="Server" value={ready.data ? <Badge tone={ready.data.ok ? "green" : "red"}>{ready.data.ok ? "ready" : "not ready"}</Badge> : "—"} hint={ready.data?.ok ? "database reachable" : ready.data?.detail} />
-        <Stat label="Queued runs" value={train ? int(train.queued) : "—"} hint={train?.oldestQueuedMs ? `oldest ${duration(train.oldestQueuedMs)}` : "none waiting"} />
-        <Stat label="Running runs" value={train ? int(train.running) : "—"} />
+        <Stat label="Queued runs" value={train ? `${int(train.queued)}${more(d?.queued)}` : "—"} hint={train?.oldestQueuedMs ? `oldest ${duration(train.oldestQueuedMs)}` : "none waiting"} />
+        <Stat label="Running runs" value={train ? `${int(train.running)}${more(d?.running)}` : "—"} />
         <Stat label="Imports in flight" value={imp ? int(imp.queued + imp.running) : "—"} />
-        <Stat label="Evals in flight" value={d ? int(evalsRunning) : "—"} hint={awaiting ? `${awaiting} awaiting local scores` : undefined} />
+        <Stat label="Evals in flight" value={d ? `${int(evalsRunning)}${more(d.evals)}` : "—"} hint={awaiting ? `${awaiting} awaiting local scores` : undefined} />
       </div>
       <div className="grid-2">
         <Card title="Worker pools" tight>
@@ -133,7 +139,7 @@ export const HealthPage = () => {
             </div>
           )}
         </Card>
-        <Card title="Queue" count={queuedRuns.length || undefined} tight>
+        <Card title="Queue" count={queuedRuns.length ? `${queuedRuns.length}${more(d?.queued)}` : undefined} tight>
           {d && queuedRuns.length === 0 && (
             <Empty title="Queue is empty" icon={<IconRuns />}>
               Every submitted run has a worker.
