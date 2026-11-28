@@ -114,12 +114,13 @@ if (command === "worker") setLogComponent("eval-worker");
     ? runWorker(process.argv.slice(3))
     : main()
 ).catch((error: unknown) => {
+  // The worker's promise settles when its loop ends, so it fails mid-run too.
   log(
     "error",
-    `grad-server ${command === "worker" ? "worker " : ""}failed to start`,
-    {
-      error,
-    },
+    command === "worker"
+      ? "grad-server worker stopped on an error"
+      : "grad-server failed to start",
+    { error },
   );
   process.exit(1);
 });

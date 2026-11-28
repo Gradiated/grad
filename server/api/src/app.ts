@@ -225,10 +225,14 @@ export const createGradApp = (deps: AppDependencies): GradApp => {
       throw error;
     }
     if (workerRoute) {
+      // AUTH_MODE=none's dev principal is every worker, unauthenticated.
       metrics.workerAuth.inc(
         principal?.worker
           ? { mode: principal.worker.mode, result: "ok" }
-          : { mode: "none", result: "rejected" },
+          : {
+              mode: "none",
+              result: principal?.kind === "dev" ? "ok" : "rejected",
+            },
       );
     }
     if (!principal) {
