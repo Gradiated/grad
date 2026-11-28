@@ -12,7 +12,7 @@ import {
   estimateTextTokens,
   promptTokens,
   type RenderOptions,
-} from "./planner.js";
+} from "./render.js";
 import { recordPromptAndReference } from "./records.js";
 
 /**

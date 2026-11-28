@@ -9,6 +9,7 @@ import type {
   ImportJob,
   TrainerJob,
   UploadTicket,
+  SourceProviderKind,
 } from "../contracts.js";
 import type {
   CompleteJobRequestSchema,
@@ -49,7 +50,7 @@ import {
   loadLeased,
 } from "./jobs.js";
 import type { SecretService, SecretUse } from "./secrets.js";
-import { isSyncPayload, type SourceService } from "./sources.js";
+import type { SourceService } from "./sources.js";
 import {
   artifactKey,
   jobBlobKey,
@@ -77,6 +78,19 @@ type UploadBody = z.infer<typeof WorkerUploadRequestSchema>;
 type CompleteBody = z.infer<typeof CompleteJobRequestSchema>;
 
 const MAX_DROP_REASONS = 101;
+
+/** The `source` payload of a sync's import job (no secret: that is added at claim). */
+export interface SyncPayload {
+  kind: "provider";
+  source_id: string;
+  provider: SourceProviderKind;
+  full: boolean;
+  /** Started by the schedule: its version may wait for version_interval. */
+  scheduled?: boolean;
+}
+
+export const isSyncPayload = (source: Record<string, unknown>): boolean =>
+  source.kind === "provider" && typeof source.source_id === "string";
 
 export const toPublicImport = (job: ImportJobRecord): ImportJob => ({
   id: job.id,

@@ -10,7 +10,7 @@ import type {
 import type { AppDependencies } from "../deps.js";
 import { conflict, invalid, notFound } from "../errors.js";
 import { createOnce, type Created } from "../idempotency.js";
-import { renderMessages } from "../planner.js";
+import { renderMessages } from "../render.js";
 import { recordConversation } from "../records.js";
 import { decodeIntCursor, encodeCursor } from "../store/cursor.js";
 import type {

@@ -31,7 +31,7 @@ import type {
   Store,
 } from "../store/types.js";
 import { log } from "../telemetry/log.js";
-import { toPublicImport } from "./imports.js";
+import { isSyncPayload, toPublicImport, type SyncPayload } from "./imports.js";
 import type { SecretService } from "./secrets.js";
 import { cloudFilters, effectiveFilters } from "./source-filters.js";
 import { loadLeased } from "./jobs.js";
@@ -79,19 +79,6 @@ const syncBudget = (source: SourceRecord, now: Date): number | null => {
 
   return caps.length > 0 ? Math.min(...caps) : null;
 };
-
-/** The `source` payload of a sync's import job (no secret: that is added at claim). */
-interface SyncPayload {
-  kind: "provider";
-  source_id: string;
-  provider: SourceProviderKind;
-  full: boolean;
-  /** Started by the schedule: its version may wait for version_interval. */
-  scheduled?: boolean;
-}
-
-export const isSyncPayload = (source: Record<string, unknown>): boolean =>
-  source.kind === "provider" && typeof source.source_id === "string";
 
 /** Sources due per transaction; a tick takes up to TICK_BATCHES of them. */
 const TICK_BATCH = 50;

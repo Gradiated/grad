@@ -10,7 +10,8 @@ import {
   type ChatMessage,
   type DatasetRecord,
 } from "../src/contracts.js";
-import { planRun, renderMessages } from "../src/planner.js";
+import { planRun } from "../src/planner.js";
+import { renderMessages } from "../src/render.js";
 import {
   assessRecipeUsability,
   correctionPair,
