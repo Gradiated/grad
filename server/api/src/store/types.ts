@@ -310,8 +310,6 @@ interface ClaimInput {
   kinds: readonly JobKind[];
   /** Restrict train jobs to these recipes. */
   recipes?: readonly RecipeKind[] | undefined;
-  /** Restrict to one workspace (workspace-scoped worker keys). */
-  workspaceId?: string | undefined;
   /** The worker's GPU memory: train jobs needing more are left queued (null: no filter). */
   gpuMemoryGb?: number | null | undefined;
   /** Running jobs per workspace and kind past which its queued jobs wait (absent: no cap). */
@@ -375,13 +373,12 @@ export interface JobRepository {
   claimNext(input: ClaimInput): Promise<JobRow | null>;
   /**
    * The job `workerId` holds a lease on under the same key, if any (a claim
-   * retried after a lost response). Scoped like a claim: kinds and workspace.
+   * retried after a lost response). Scoped like a claim: its kinds.
    */
   heldBy(input: {
     workerId: string;
     workerKey: string;
     kinds: readonly JobKind[];
-    workspaceId?: string | undefined;
   }): Promise<JobRow | null>;
   /** Jobs with an open attempt whose lease expired more than lease/3 ago. */
   listExpiredLeases(now: Date, limit: number): Promise<JobRow[]>;

@@ -24,7 +24,6 @@ const principal = (scopes: AuthPrincipal["scopes"]): AuthPrincipal => ({
   workspaceId: "ws",
   actor: "t",
   scopes,
-  workerWorkspaceId: null,
 });
 
 describe("scopes", () => {
@@ -73,7 +72,6 @@ describe("scopes", () => {
     expect(await auth.authenticate("t")).toMatchObject({
       kind: "worker",
       scopes: ["trainer:worker"],
-      workerWorkspaceId: null,
     });
     expect(await auth.authenticate("k")).toMatchObject({
       workspaceId: "ws_k",
@@ -507,65 +505,17 @@ describe("grad-server HTTP API", () => {
     }
   });
 
-  it("restricts workspace-scoped trainer workers to their workspace", async () => {
-    const scopedWorker: AuthAdapter = {
-      authenticate: async (token) =>
-        token === "scoped-worker"
-          ? {
-              kind: "worker",
-              workspaceId: "ws_b",
-              actor: "w",
-              scopes: ["trainer:worker"],
-              workerWorkspaceId: "ws_b",
-            }
-          : token === ADMIN_KEY
-            ? {
-                kind: "workspace",
-                workspaceId: "ws_a",
-                actor: "a",
-                scopes: ["admin"],
-                workerWorkspaceId: null,
-              }
-            : token === TRAINER_KEY
-              ? {
-                  kind: "worker",
-                  workspaceId: "_platform",
-                  actor: "p",
-                  scopes: ["trainer:worker"],
-                  workerWorkspaceId: null,
-                }
-              : null,
-    };
-    const scoped = await makeTestApp({ auth: scopedWorker });
-    await createSftRun(scoped);
-    const wsWorker = new FakeWorker(scoped, "scoped", "scoped-worker");
-    expect(await wsWorker.claim()).toBeNull();
-
-    const platform = new FakeWorker(scoped);
-    const job = await platform.claim();
-    const res = await wsWorker.call(`/v1/trainer-jobs/${job!.id}/heartbeat`, {
-      worker_id: "worker-1",
-      attempt: 1,
-    });
-    expect(res.status).toBe(404);
-    await scoped.close();
-  });
-
   it("never lets a worker id stand in for the key: no claim theft by reusing a worker id (r8 P1-1)", async () => {
-    const worker = (
-      actor: string,
-      workerWorkspaceId: string | null,
-    ): AuthPrincipal => ({
+    const worker = (actor: string, workspaceId: string): AuthPrincipal => ({
       kind: "worker",
-      workspaceId: workerWorkspaceId ?? "_platform",
+      workspaceId,
       actor,
       scopes: ["trainer:worker"],
-      workerWorkspaceId,
     });
     const auth: AuthAdapter = {
       authenticate: async (token) =>
         token === TRAINER_KEY
-          ? worker("platform", null)
+          ? worker("platform", "_platform")
           : token === "scoped-b"
             ? worker("cloud-b", "ws_b")
             : token === "scoped-a"
@@ -576,7 +526,6 @@ describe("grad-server HTTP API", () => {
                     workspaceId: "ws_a",
                     actor: "a",
                     scopes: ["admin"],
-                    workerWorkspaceId: null,
                   }
                 : null,
     };

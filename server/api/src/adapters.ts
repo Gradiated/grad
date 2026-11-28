@@ -15,11 +15,6 @@ export interface AuthPrincipal {
   actor: string;
   scopes: readonly Scope[];
   /**
-   * Trainer workers only: the single workspace this worker may serve, or null
-   * for a platform worker that serves every workspace.
-   */
-  workerWorkspaceId: string | null;
-  /**
    * Trainer workers only: the job kinds this key may claim. Import jobs carry
    * workspace secrets, so a GPU host's key is train-only (TRAINER_KEYS_JSON).
    */
@@ -149,7 +144,6 @@ export const createLocalNoneAuth = (workspaceId = "local"): AuthAdapter => ({
     workspaceId,
     actor: "local-dev",
     scopes: ["admin", "trainer:worker"],
-    workerWorkspaceId: null,
   }),
 });
 
@@ -243,7 +237,6 @@ export const createLocalApiKeyAuth = (options: {
         workspaceId: defaultWorkspaceId,
         actor: "bootstrap-admin",
         scopes: ["admin"],
-        workerWorkspaceId: null,
       };
     }
 
@@ -255,7 +248,6 @@ export const createLocalApiKeyAuth = (options: {
       workspaceId: key.workspace_id,
       actor: `key:${key.name}`,
       scopes: key.scopes as ApiKeyScope[],
-      workerWorkspaceId: null,
     };
   };
 

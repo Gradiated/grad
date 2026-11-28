@@ -347,13 +347,6 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           kinds: ["train", "import"],
           ...input,
         });
-      expect(
-        await claim({
-          kinds: ["train"],
-          recipes: ["sft"],
-          workspaceId: "ws_a",
-        }),
-      ).toBeNull();
       const first = await claim({});
       expect(first).toMatchObject({
         id: imp.id,
@@ -381,14 +374,11 @@ const describeStoreContract = (name: string, factory: StoreFactory) =>
           ...input,
         });
       expect((await held({}))?.id).toBe(imp.id);
-      expect((await held({ workspaceId: "ws_a" }))?.id).toBe(imp.id);
       expect(
         await held({ workerId: "w2", kinds: ["train", "import"] }),
       ).toBeNull();
-      // A worker id is not an authority: another key, or another workspace
-      // scope, reusing "w1" does not get its lease.
+      // A worker id is not an authority: another key reusing "w1" does not get its lease.
       expect(await held({ workerKey: "key-b" })).toBeNull();
-      expect(await held({ workspaceId: "ws_b" })).toBeNull();
     });
 
     it("jobs: 20 concurrent claimers over 10 queued runs get unique runs", async () => {

@@ -68,7 +68,6 @@ export const toAuthPrincipal = (worker: WorkerPrincipal): AuthPrincipal => ({
   workspaceId: "_platform",
   actor: worker.identity,
   scopes: ["trainer:worker"],
-  workerWorkspaceId: null,
   workerKinds: worker.kinds,
   worker,
 });

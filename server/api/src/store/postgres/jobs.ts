@@ -298,10 +298,10 @@ export const onlineWorkers = (kind: string, now: string): string =>
                      WHERE l.worker_id = w.id AND l.lease_expires_at > ${now}::timestamptz))`;
 
 /**
- * The job a claim takes (CTE chain ending in `pick`; $1 kinds, $2 workspace
- * scope, $3 recipes, $4 the worker's GPU memory, $5 running caps per kind,
- * $6 now). Fair share: among workspaces below their running cap for the
- * kind, the one with the fewest running jobs (ties: its oldest job this
+ * The job a claim takes (CTE chain ending in `pick`; $1 kinds, $2 recipes,
+ * $3 the worker's GPU memory, $4 running caps per kind, $5 now). Fair share:
+ * among workspaces below their running cap for the kind, the one with the
+ * fewest running jobs (ties: its oldest job this
  * worker can run), then that job. A GPU worker first takes runs no smaller
  * online GPU fits (fair share among those), so a big run is never starved by
  * small runs that any worker could take.
@@ -309,7 +309,6 @@ export const onlineWorkers = (kind: string, now: string): string =>
 const pickJob = `WITH RECURSIVE running AS (
     SELECT workspace_id, kind, count(*)::int AS n FROM grad_jobs
     WHERE status = 'running' AND kind = ANY($1::text[])
-      AND ($2::text IS NULL OR workspace_id = $2)
     GROUP BY workspace_id, kind
   ), spaces AS (
     -- Each kind's workspaces with queued jobs: a loose index scan,
@@ -320,12 +319,11 @@ const pickJob = `WITH RECURSIVE running AS (
     SELECT s.kind, (
       SELECT min(workspace_id) FROM grad_jobs
       WHERE kind = s.kind AND status = 'queued' AND workspace_id > s.workspace_id
-        AND ($2::text IS NULL OR workspace_id = $2)
     )
     FROM spaces s WHERE s.workspace_id IS NOT NULL
   ), smallest AS (
     -- The smallest GPU an online train worker has.
-    SELECT min(w.gpu_memory_gb) AS gb FROM ${onlineWorkers("'train'", "$6")}
+    SELECT min(w.gpu_memory_gb) AS gb FROM ${onlineWorkers("'train'", "$5")}
       AND w.gpu_memory_gb IS NOT NULL
   ), heads AS (
     -- Each workspace's oldest job this worker can run.
@@ -333,15 +331,15 @@ const pickJob = `WITH RECURSIVE running AS (
       SELECT j.id, j.kind, j.workspace_id, j.created_at, j.min_gpu_memory_gb FROM grad_jobs j
       WHERE j.kind = s.kind AND j.workspace_id = s.workspace_id
         AND j.status = 'queued' AND j.waiting_on IS NULL
-        AND ${fitsWorker("j", "$3", "$4")}
+        AND ${fitsWorker("j", "$2", "$3")}
       ORDER BY j.created_at, j.id COLLATE "C" LIMIT 1
     ) h
     WHERE s.workspace_id IS NOT NULL AND s.workspace_id <> ''
   ), pick AS (
     SELECT h.id FROM heads h
     LEFT JOIN running r ON r.workspace_id = h.workspace_id AND r.kind = h.kind
-    WHERE coalesce(r.n, 0) < coalesce(($5::jsonb ->> h.kind)::int, 1000000000)
-    ORDER BY ($4::float8 IS NOT NULL
+    WHERE coalesce(r.n, 0) < coalesce(($4::jsonb ->> h.kind)::int, 1000000000)
+    ORDER BY ($3::float8 IS NOT NULL
               AND coalesce(h.min_gpu_memory_gb > (SELECT gb FROM smallest), false)) DESC,
              coalesce(r.n, 0), h.created_at, h.id COLLATE "C"
     LIMIT 1
@@ -386,13 +384,11 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
     now,
     kinds,
     recipes,
-    workspaceId,
     gpuMemoryGb,
     maxRunning,
   }) => {
     const params = [
       [...kinds],
-      workspaceId ?? null,
       recipes ? [...recipes] : null,
       gpuMemoryGb ?? null,
       JSON.stringify(maxRunning ?? UNCAPPED),
@@ -428,9 +424,9 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
                FOR UPDATE SKIP LOCKED
              )
              UPDATE grad_jobs
-             SET status = 'running', attempt = attempt + 1, worker_id = $7, worker_key = $8,
-                 lease_expires_at = $9::timestamptz, lease_seconds = $10, updated_at = $6::timestamptz,
-                 billed_through = 0, billed_cost = 0, billed_at = $6::timestamptz,
+             SET status = 'running', attempt = attempt + 1, worker_id = $6, worker_key = $7,
+                 lease_expires_at = $8::timestamptz, lease_seconds = $9, updated_at = $5::timestamptz,
+                 billed_through = 0, billed_cost = 0, billed_at = $5::timestamptz,
                  payload = payload - 'worker_stats' - '${WAITING_MARK}'
              WHERE id = (SELECT id FROM locked)
              RETURNING *`,
@@ -448,15 +444,14 @@ export const createJobRepository = (db: Db, clock: Clock): JobRepository => ({
       }),
     );
   },
-  heldBy: async ({ workerId, workerKey, kinds, workspaceId }) => {
+  heldBy: async ({ workerId, workerKey, kinds }) => {
     const row = first(
       await db.query(
         `SELECT * FROM grad_jobs
          WHERE worker_id = $1 AND worker_key = $2
            AND status IN ('running', 'cancelled') AND kind = ANY($3::text[])
-           AND ($4::text IS NULL OR workspace_id = $4)
          ORDER BY updated_at DESC LIMIT 1`,
-        [workerId, workerKey, [...kinds], workspaceId ?? null],
+        [workerId, workerKey, [...kinds]],
       ),
     );
 

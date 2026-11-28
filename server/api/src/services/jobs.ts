@@ -142,20 +142,6 @@ export const leaseLost = (id: string): ApiError =>
     `This worker no longer holds the lease on job '${id}' (expired, reclaimed, or finished). Stop work on it.`,
   );
 
-/** Throws 404 when a worker may not see a job (workspace-scoped worker keys). */
-const assertWorkerScope = (
-  principal: AuthPrincipal,
-  workspaceId: string,
-  id: string,
-): void => {
-  if (
-    principal.workerWorkspaceId !== null &&
-    principal.workerWorkspaceId !== workspaceId
-  ) {
-    throw notFound("trainer_job", id);
-  }
-};
-
 /**
  * The identity of the key behind a worker request, stored on the lease at
  * claim time. Worker ids are not secret (Helm uses the pod name, compose a
@@ -163,7 +149,8 @@ const assertWorkerScope = (
  * lease check matches the key too.
  */
 export const workerKeyOf = (principal: AuthPrincipal): string =>
-  `${principal.kind}:${principal.actor}@${principal.workerWorkspaceId ?? "*"}`;
+  // "@*": leases stored when keys could be workspace-scoped still match.
+  `${principal.kind}:${principal.actor}@*`;
 
 /** True when `principal` (as `workerId`) holds `attempt`'s lease on `job`. */
 export const holdsLease = (
@@ -294,7 +281,6 @@ export const loadForWorker = async (
 ): Promise<JobRow> => {
   const job = await store.jobs.getById(id);
   if (!job) throw notFound("trainer_job", id);
-  assertWorkerScope(principal, job.workspace_id, id);
   if (claimableKinds(principal, [job.kind]).length === 0) {
     throw notFound("trainer_job", id);
   }
@@ -460,14 +446,12 @@ export const createJobQueue = (
       });
 
       // A worker retrying a claim whose response was lost gets its job back:
-      // only under the same key, kinds and workspace scope as a fresh claim.
+      // only under the same key and kinds as a fresh claim.
       const workerKey = workerKeyOf(principal);
-      const workspaceId = principal.workerWorkspaceId ?? undefined;
       const held = await store.jobs.heldBy({
         workerId: input.workerId,
         workerKey,
         kinds: input.kinds,
-        workspaceId,
       });
       const renewed = held && (await renew(held, input.leaseSeconds));
       if (renewed) {
@@ -487,7 +471,6 @@ export const createJobQueue = (
           now: clock.now(),
           kinds: input.kinds,
           recipes: input.recipes,
-          workspaceId,
           gpuMemoryGb,
           maxRunning: limits.maxRunning,
         });
