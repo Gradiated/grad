@@ -37,7 +37,7 @@ from ..errors import RecipeConfigError, RecipeDataError
 from ..runner_types import BaseArtifact
 from ..trainer import EvalResult
 from .base import RecipeRunner
-from .data import Pair, extract_pairs
+from .data import Pair, iter_pairs
 
 def dpo_loss(
     policy_chosen: torch.Tensor,
@@ -91,11 +91,12 @@ class DPOTask(TorchTask):
         base_lm = self.load_lm(self.resolved)
         self.max_len = tc.model_max_len(base_lm, spec)
         self.truncated = 0
-        train_pairs, dropped_train = extract_pairs(train)
-        eval_pairs, dropped_eval = extract_pairs(held_out)
-        self.dropped = dropped_train + dropped_eval
-        self.train_pairs = [p for p in (self._encode(pair) for pair in train_pairs) if p]
-        self.eval_pairs = [p for p in (self._encode(pair) for pair in eval_pairs) if p]
+        # Pairs are encoded as they are read: only their tokens are kept.
+        self.dropped = 0  # _encode adds pairs with nothing left to train
+        dropped = [0]
+        self.train_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(train, dropped)) if p]
+        self.eval_pairs = [p for p in (self._encode(pair) for pair in iter_pairs(held_out, dropped)) if p]
+        self.dropped += dropped[0]
         if not self.train_pairs:
             raise RecipeDataError(
                 "DPO needs preference pairs: records with non-empty, different 'chosen' and 'rejected' "

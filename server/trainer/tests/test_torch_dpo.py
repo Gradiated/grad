@@ -63,7 +63,7 @@ class DPOMathTests(TorchCase):
                 resolve_beta(bad)
 
     def test_pair_extraction(self) -> None:
-        from grad_trainer.recipes.dpo import extract_pairs
+        from grad_trainer.recipes.data import extract_pairs
 
         pairs, dropped = extract_pairs(
             PAIRS[:2]

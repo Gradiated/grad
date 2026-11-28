@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from ..errors import RecipeDataError
 
@@ -150,11 +150,26 @@ def _completion(value: Any) -> list[dict[str, Any]]:
     return turns
 
 
-def extract_pairs(records: list[dict[str, Any]]) -> tuple[list[Pair], int]:
+def extract_pairs(records: Iterable[dict[str, Any]]) -> tuple[list[Pair], int]:
     """Build (prompt, chosen, rejected, id) pairs. Returns pairs and the count of dropped rows."""
-    pairs: list[Pair] = []
-    dropped = 0
+    dropped = [0]
+    pairs = list(iter_pairs(records, dropped))
+    return pairs, dropped[0]
+
+
+def iter_pairs(records: Iterable[dict[str, Any]], dropped: list[int]) -> Iterator[Pair]:
+    """``extract_pairs`` as it reads: a record with its own chosen/rejected (or a correction)
+    is yielded at once, so a caller that encodes each pair never holds the dataset's messages;
+    trajectory sides are grouped and yielded at the end. ``dropped[0]`` counts dropped rows."""
     groups: dict[str, dict[str, list[dict[str, Any]]]] = {}
+
+    def valid(pair: Pair) -> Pair | None:
+        prompt, chosen, rejected, _ = pair
+        if not prompt or not chosen or not rejected or chosen == rejected:
+            dropped[0] += 1
+            return None
+        return pair
+
     for index, rec in enumerate(records):
         rid = record_id(rec, index)
         role, group = rec.get("role"), rec.get("group_id")
@@ -165,9 +180,9 @@ def extract_pairs(records: list[dict[str, Any]]) -> tuple[list[Pair], int]:
             # A synced correction: the fix (expected_output) is chosen, the logged answer rejected.
             correction = correction_pair(rec)
             if correction is None:
-                dropped += 1
-            else:
-                pairs.append((*correction, rid))
+                dropped[0] += 1
+            elif (pair := valid((*correction, rid))) is not None:
+                yield pair
             continue
         chosen = as_messages(rec["chosen"], "assistant")
         rejected = as_messages(rec["rejected"], "assistant")
@@ -178,26 +193,20 @@ def extract_pairs(records: list[dict[str, Any]]) -> tuple[list[Pair], int]:
         else:
             shared = common_prefix(chosen, rejected)
             prompt, chosen, rejected = chosen[:shared], chosen[shared:], rejected[shared:]
-        pairs.append((prompt, _completion(chosen), _completion(rejected), rid))
+        if (pair := valid((prompt, _completion(chosen), _completion(rejected), rid))) is not None:
+            yield pair
 
     for group_id, sides in sorted(groups.items()):
         if len(sides["chosen"]) != 1 or not sides["rejected"]:
-            dropped += len(sides["chosen"]) + len(sides["rejected"])
+            dropped[0] += len(sides["chosen"]) + len(sides["rejected"])
             continue
         prompt, chosen = trajectory_messages(sides["chosen"][0])
         for rej in sides["rejected"]:
             rej_prompt, rejected = trajectory_messages(rej)
             if rej_prompt != prompt:
                 raise RecipeDataError(f"Preference group '{group_id}' has different prompts on each side.")
-            pairs.append((prompt, _completion(chosen), _completion(rejected), group_id))
-
-    valid: list[Pair] = []
-    for prompt, chosen, rejected, rid in pairs:
-        if not prompt or not chosen or not rejected or chosen == rejected:
-            dropped += 1
-            continue
-        valid.append((prompt, chosen, rejected, rid))
-    return valid, dropped
+            if (pair := valid((prompt, _completion(chosen), _completion(rejected), group_id))) is not None:
+                yield pair
 
 
 def prompt_key(rec: dict[str, Any]) -> str:
