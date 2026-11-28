@@ -2272,6 +2272,9 @@ fn usage_list_filters_and_resolves_names() {
         srv.last("GET", "/v1/usage").unwrap().query(),
         "eval_id=eval_new"
     );
+    // The server narrows evals by name; the CLI keeps exact matches.
+    let listed = srv.last("GET", "/v1/evals").unwrap().query().to_string();
+    assert!(listed.contains("q=nightly"), "{}", listed);
 
     let r = run(
         sb.grad(Some(&srv.url)),

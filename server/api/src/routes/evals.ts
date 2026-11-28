@@ -13,6 +13,7 @@ import {
   PlanEvalResponseSchema,
   PostEvalScoresRequestSchema,
   PostEvalScoresResponseSchema,
+  SearchQuerySchema,
 } from "../contracts.js";
 import type { Services } from "../services/index.js";
 import {
@@ -92,6 +93,7 @@ export const registerEvalRoutes = (
       request: {
         query: PageQuerySchema.extend({
           status: statusFilterSchema(EVAL_STATUSES),
+          q: SearchQuerySchema,
         }),
       },
       responses: {

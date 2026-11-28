@@ -425,6 +425,7 @@ async fn call(c: &Client, case: &str) -> Result<()> {
             .list(
                 &EvalFilter {
                     status: vec![EvalStatus::Running],
+                    search: Some("nightly".into()),
                 },
                 &ListParams::default(),
             )

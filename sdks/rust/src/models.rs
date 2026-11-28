@@ -113,11 +113,14 @@ impl RunFilter {
 pub struct EvalFilter {
     /// Only evals in these statuses.
     pub status: Vec<EvalStatus>,
+    /// Only evals whose name contains this (any case), or whose id is exactly this.
+    pub search: Option<String>,
 }
 
 impl EvalFilter {
     pub(crate) fn query(&self) -> Vec<(String, String)> {
-        filter_query(self.status.iter().map(EvalStatus::as_str).collect(), &[])
+        let status = self.status.iter().map(EvalStatus::as_str).collect();
+        filter_query(status, &[("q", &self.search)])
     }
 }
 

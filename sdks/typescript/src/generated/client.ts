@@ -253,6 +253,8 @@ export interface ListEvalsParams {
   cursor?: string | undefined;
   /** Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled. */
   status?: string | undefined;
+  /** Only items whose name contains this text (any case), or whose id is exactly this. */
+  q?: string | undefined;
 }
 
 export type ListEvalsResponse = {
@@ -746,7 +748,7 @@ export class ApiClient {
    * `GET /v1/evals`
    */
   async listEvals(params?: ListEvalsParams, options?: RequestOptions): Promise<ListEvalsResponse> {
-    const data = await this.transport.json({ method: "GET", path: `/v1/evals`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["status", params?.status]] }, options);
+    const data = await this.transport.json({ method: "GET", path: `/v1/evals`, query: [["limit", params?.limit], ["cursor", params?.cursor], ["status", params?.status], ["q", params?.q]] }, options);
     return convertKeys(CODEC, { o: [["data", "data", { a: "EvalRun" }], ["nextCursor", "next_cursor", 0]] }, data, "decode") as ListEvalsResponse;
   }
 

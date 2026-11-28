@@ -297,6 +297,8 @@ func (s *EvalsService) Get(ctx context.Context, id string) (*Eval, error) {
 type EvalListOptions struct {
 	// Status keeps evals in these statuses.
 	Status []EvalStatus
+	// Search keeps evals whose name contains it (any case) or whose id is exactly it.
+	Search string
 }
 
 // List iterates over evals, newest first.
@@ -306,7 +308,7 @@ func (s *EvalsService) List(ctx context.Context, o EvalListOptions) iter.Seq2[*E
 		if err != nil {
 			return nil, nil, err
 		}
-		page, err := api.ListEvals(ctx, &generated.ListEvalsParams{Cursor: cursor, Status: statusQuery(o.Status)})
+		page, err := api.ListEvals(ctx, &generated.ListEvalsParams{Cursor: cursor, Status: statusQuery(o.Status), Q: optString(o.Search)})
 		if err != nil {
 			return nil, nil, err
 		}

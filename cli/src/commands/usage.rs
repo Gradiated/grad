@@ -1,12 +1,10 @@
 //! `grad usage` (a summary for a period) and `grad usage list` (the billed rows).
 
-use grad_sdk::{
-    Client, UsageBound, UsageGroupBy, UsageKind, UsageQuery, UsageSummary, UsageSummaryQuery,
-};
+use grad_sdk::{UsageBound, UsageGroupBy, UsageKind, UsageQuery, UsageSummary, UsageSummaryQuery};
 
-use super::{more_hint, resolve_run, Ctx};
+use super::{more_hint, resolve_eval, resolve_run, Ctx};
 use crate::cli::{UsageCmd, UsageListArgs, UsagePeriodArgs, UsageSummaryArgs, UsageTop};
-use crate::output::{thousands, usd, when, CliError, CliResult, Out, EXIT_NOT_FOUND};
+use crate::output::{thousands, usd, when, CliError, CliResult, Out};
 
 pub async fn usage(ctx: &Ctx, a: UsageTop) -> CliResult {
     match a.action {
@@ -167,36 +165,4 @@ async fn list(ctx: &Ctx, a: UsageListArgs) -> CliResult {
         res.next_cursor.as_deref(),
     )?;
     out.done(&res)
-}
-
-/// An eval id, or the newest eval with this name (saying so when several share it).
-async fn resolve_eval(c: &Client, out: &Out, arg: &str) -> CliResult<String> {
-    if arg.starts_with("eval_") {
-        return Ok(arg.to_string());
-    }
-    let named: Vec<String> = c
-        .evals()
-        .list_all(&Default::default())
-        .await?
-        .into_iter()
-        .filter(|e| e.name == arg)
-        .map(|e| e.id)
-        .collect();
-    let Some(newest) = named.first() else {
-        return Err(CliError::new(
-            EXIT_NOT_FOUND,
-            "eval_not_found",
-            format!("no eval with id or name '{}'", arg),
-        )
-        .hint("List evals with `grad eval list`."));
-    };
-    if named.len() > 1 {
-        out.warn(format!(
-            "{} evals match '{}'; showing the newest ({}). Pass an eval id to choose.",
-            named.len(),
-            arg,
-            newest
-        ));
-    }
-    Ok(newest.clone())
 }

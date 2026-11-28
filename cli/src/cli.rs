@@ -904,7 +904,7 @@ pub enum EvalCmd {
     /// Show an eval and its summary
     #[command(visible_alias = "get")]
     Status {
-        /// Eval id
+        /// Eval id or name (the newest eval with that name)
         id: String,
     },
     /// List evals (newest first)
@@ -912,12 +912,15 @@ pub enum EvalCmd {
         /// Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled
         #[arg(long, value_name = "STATUS", value_delimiter = ',')]
         status: Vec<String>,
+        /// Only names containing this text (any case), or this exact id
+        #[arg(long, value_name = "TEXT")]
+        search: Option<String>,
         #[command(flatten)]
         page: PageArgs,
     },
     /// Wait for an eval to finish
     Wait {
-        /// Eval id
+        /// Eval id or name (the newest eval with that name)
         id: String,
         /// Give up after this many seconds
         #[arg(long, value_name = "SECS", default_value_t = 86_400)]
@@ -925,7 +928,7 @@ pub enum EvalCmd {
     },
     /// Per-task results
     Results {
-        /// Eval id
+        /// Eval id or name (the newest eval with that name)
         id: String,
         /// Only this model
         #[arg(long)]
@@ -937,7 +940,7 @@ pub enum EvalCmd {
     #[command(after_help = "Example:
   grad eval failures EVAL_ID --threshold 0.8 --json")]
     Failures {
-        /// Eval id
+        /// Eval id or name (the newest eval with that name)
         id: String,
         /// Only this model
         #[arg(long)]
@@ -950,7 +953,7 @@ pub enum EvalCmd {
     },
     /// Cancel a queued or running eval
     Cancel {
-        /// Eval id
+        /// Eval id or name (the newest eval with that name)
         id: String,
     },
 }

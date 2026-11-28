@@ -551,7 +551,8 @@
       "method": "GET",
       "path": "/v1/evals",
       "query": {
-        "status": "running"
+        "status": "running",
+        "q": "nightly"
       },
       "idempotency_key": null,
       "body": null

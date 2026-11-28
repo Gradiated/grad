@@ -9774,6 +9774,15 @@ paths:
           description: "Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled."
           name: status
           in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+            description: Only items whose name contains this text (any case), or whose id is exactly this.
+          required: false
+          description: Only items whose name contains this text (any case), or whose id is exactly this.
+          name: q
+          in: query
       responses:
         "200":
           description: Evaluation runs.

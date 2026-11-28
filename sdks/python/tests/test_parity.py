@@ -161,7 +161,7 @@ def calls(client: grad.Grad) -> dict[str, Callable[[], Any]]:
         "usage_summary": lambda: client.usage.summary(from_="2026-11-01", to=datetime.date(2026, 11, 30), group_by="model"),
         "list_run_events": lambda: list(client.runs.events(PARITY["responses"]["run_events"]["run_id"])),
         "list_runs_filtered": lambda: client.runs.list(status=["failed", "cancelled"], search="sft"),
-        "list_evals_filtered": lambda: client.evals.list(status="running"),
+        "list_evals_filtered": lambda: client.evals.list(status="running", search="nightly"),
         "list_imports_filtered": lambda: client.imports.list(status="failed", dataset="support"),
         "list_datasets_search": lambda: client.datasets.list(search="support"),
         "list_artifacts_search": lambda: client.artifacts.list(search="sft"),

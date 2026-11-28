@@ -296,10 +296,10 @@ export class EvalsResource {
     return new Eval(this.core, await this.core.api.getEval(id, options));
   }
 
-  /** Evals, newest first; `status` keeps these statuses. */
-  list(options: { status?: EvalStatus | readonly EvalStatus[]; limit?: number } & RequestOptions = {}): Paginator<Eval> {
-    const { status, limit, ...request } = options;
-    const filters = { status: statusQuery(status), limit };
+  /** Evals, newest first; `status` keeps these statuses, `search` names containing it (any case) or the exact id. */
+  list(options: { status?: EvalStatus | readonly EvalStatus[]; search?: string; limit?: number } & RequestOptions = {}): Paginator<Eval> {
+    const { status, search, limit, ...request } = options;
+    const filters = { status: statusQuery(status), q: search, limit };
     return new Paginator(async (cursor) => {
       const page = await this.core.api.listEvals({ ...filters, cursor }, request);
       return { data: page.data.map((e) => new Eval(this.core, e)), nextCursor: page.nextCursor };

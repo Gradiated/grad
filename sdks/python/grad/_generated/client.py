@@ -1979,9 +1979,9 @@ class GeneratedApiClient:
         """Per-task, per-model results of a completed evaluation."""
         return cast("ListEvalResultsResponse", self._t.request("GET", f"/v1/evals/{quote_path_param(id, 'id')}/results", query={"limit": limit, "cursor": cursor, "model": model}, timeout=timeout))
 
-    def list_evals(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, timeout: float | None = None) -> ListEvalsResponse:
+    def list_evals(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, q: str | None = None, timeout: float | None = None) -> ListEvalsResponse:
         """List evaluation runs."""
-        return cast("ListEvalsResponse", self._t.request("GET", "/v1/evals", query={"limit": limit, "cursor": cursor, "status": status}, timeout=timeout))
+        return cast("ListEvalsResponse", self._t.request("GET", "/v1/evals", query={"limit": limit, "cursor": cursor, "status": status, "q": q}, timeout=timeout))
 
     def list_imports(self, *, limit: int | None = None, cursor: str | None = None, status: str | None = None, dataset: str | None = None, timeout: float | None = None) -> ListImportsResponse:
         """List dataset import jobs (newest first)."""

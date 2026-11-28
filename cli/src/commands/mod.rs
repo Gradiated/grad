@@ -9,11 +9,11 @@ pub mod train;
 pub mod ui;
 pub mod usage;
 
-use grad_sdk::{Client, CursorTrail, Error as SdkError, ListParams, Run, RunFilter};
+use grad_sdk::{Client, CursorTrail, Error as SdkError, EvalFilter, ListParams, Run, RunFilter};
 use std::sync::Mutex;
 
 use crate::cli::{Global, PageArgs};
-use crate::output::{CliError, CliResult, Out};
+use crate::output::{CliError, CliResult, Out, EXIT_NOT_FOUND};
 
 static INTERRUPT: Mutex<Option<String>> = Mutex::new(None);
 
@@ -134,6 +134,42 @@ pub async fn resolve_run(c: &Client, out: &Out, run: &str) -> CliResult<Run> {
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// An eval id, or the newest eval with this name (saying so when several share it).
+pub async fn resolve_eval(c: &Client, out: &Out, arg: &str) -> CliResult<String> {
+    if arg.starts_with("eval_") {
+        return Ok(arg.to_string());
+    }
+    let by_name = EvalFilter {
+        search: Some(arg.to_string()),
+        ..EvalFilter::default()
+    };
+    let named: Vec<String> = c
+        .evals()
+        .list_all(&by_name)
+        .await?
+        .into_iter()
+        .filter(|e| e.name == arg)
+        .map(|e| e.id)
+        .collect();
+    let Some(newest) = named.first() else {
+        return Err(CliError::new(
+            EXIT_NOT_FOUND,
+            "eval_not_found",
+            format!("no eval with id or name '{}'", arg),
+        )
+        .hint("List evals with `grad eval list`."));
+    };
+    if named.len() > 1 {
+        out.warn(format!(
+            "{} evals match '{}'; showing the newest ({}). Pass an eval id to choose.",
+            named.len(),
+            arg,
+            newest
+        ));
+    }
+    Ok(newest.clone())
 }
 
 /// Resolve a run id or name for a command that changes the run (cancel, resume).

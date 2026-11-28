@@ -233,7 +233,7 @@ func TestParityRequests(t *testing.T) {
 			return firstErr(c.Runs.List(ctx, grad.RunListOptions{Status: []grad.RunStatus{grad.RunFailed, grad.RunCancelled}, Search: "sft"}))
 		},
 		"list_evals_filtered": func() error {
-			return firstErr(c.Evals.List(ctx, grad.EvalListOptions{Status: []grad.EvalStatus{"running"}}))
+			return firstErr(c.Evals.List(ctx, grad.EvalListOptions{Status: []grad.EvalStatus{"running"}, Search: "nightly"}))
 		},
 		"list_imports_filtered": func() error {
 			return firstErr(c.Imports.List(ctx, grad.ImportListOptions{Status: []grad.ImportStatus{"failed"}, Dataset: grad.DatasetName("support")}))
@@ -423,14 +423,6 @@ func TestParityTypedResponses(t *testing.T) {
 	}
 }
 
-// optional is a nullable enum as the parity file writes it: nil or its string.
-func optional[T ~string](p *T) any {
-	if p == nil {
-		return nil
-	}
-	return string(*p)
-}
-
 func queryMap(raw string) map[string]string {
 	values, _ := url.ParseQuery(raw)
 	out := map[string]string{}
@@ -438,4 +430,12 @@ func queryMap(raw string) map[string]string {
 		out[k] = v[0]
 	}
 	return out
+}
+
+// optional is a nullable enum as the parity file writes it: nil or its string.
+func optional[T ~string](p *T) any {
+	if p == nil {
+		return nil
+	}
+	return string(*p)
 }

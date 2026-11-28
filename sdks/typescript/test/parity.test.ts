@@ -173,7 +173,7 @@ const calls = (grad: Grad): Record<string, () => Promise<unknown>> => ({
   usage_summary: () => grad.usage.summary({ from: "2026-11-01", to: "2026-11-30", groupBy: "model" }),
   list_run_events: () => grad.runs.events(parity.responses.run_events.run_id, { limit: 100 }).next(),
   list_runs_filtered: () => grad.runs.list({ status: ["failed", "cancelled"], search: "sft" }).pages().next(),
-  list_evals_filtered: () => grad.evals.list({ status: "running" }).pages().next(),
+  list_evals_filtered: () => grad.evals.list({ status: "running", search: "nightly" }).pages().next(),
   list_imports_filtered: () => grad.imports.list({ status: "failed", dataset: "support" }).pages().next(),
   list_datasets_search: () => grad.datasets.list({ search: "support" }).pages().next(),
   list_artifacts_search: () => grad.artifacts.list({ search: "sft" }).pages().next(),

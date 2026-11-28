@@ -1255,10 +1255,13 @@ class Evals(_Resource):
         """An eval by id."""
         return Eval.from_api(self._wire.get_eval(eval_id), self._client)
 
-    def list(self, *, status: str | Iterable[str] | None = None, limit: int | None = None) -> Page[Eval]:
-        """Evals, newest first; ``status`` keeps these statuses (``"running"`` or a list)."""
+    def list(
+        self, *, status: str | Iterable[str] | None = None, search: str | None = None, limit: int | None = None
+    ) -> Page[Eval]:
+        """Evals, newest first; ``status`` keeps these statuses (``"running"`` or a list), ``search`` names
+        containing it (any case) or the exact id."""
         statuses = _statuses(status)
-        return self._page(Eval, lambda cursor: self._wire.list_evals(limit=limit, cursor=cursor, status=statuses))
+        return self._page(Eval, lambda cursor: self._wire.list_evals(limit=limit, cursor=cursor, status=statuses, q=search))
 
     def cancel(self, eval_id: str) -> Eval:
         """Cancel a queued, running or awaiting_scores eval."""

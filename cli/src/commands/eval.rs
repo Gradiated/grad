@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{in_range, on_interrupt, page, Ctx};
+use super::{in_range, on_interrupt, page, resolve_eval, Ctx};
 use crate::cli::{EvalCmd, EvalRunArgs, EvalTop};
 use crate::output::{num, opt, pct, thousands, usd, when, CliError, CliResult, Out};
 
@@ -261,13 +261,19 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
                     out.done(&plan)
                 }
                 EvalCmd::Status { id } => {
+                    let id = resolve_eval(&c, out, &id).await?;
                     let ev = c.evals().get(&id).await?;
                     print_summary(out, &ev);
                     out.done(&ev)
                 }
-                EvalCmd::List { status, page: p } => {
+                EvalCmd::List {
+                    status,
+                    search,
+                    page: p,
+                } => {
                     let filter = EvalFilter {
                         status: status.iter().map(|s| s.as_str().into()).collect(),
+                        search,
                     };
                     let res = c.evals().list(&filter, &page(&p)).await?;
                     out.table(
@@ -289,11 +295,13 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
                     out.done(&res)
                 }
                 EvalCmd::Wait { id, timeout } => {
+                    let id = resolve_eval(&c, out, &id).await?;
                     let ev = wait_eval(ctx, &c, &id, timeout).await?;
                     print_summary(out, &ev);
                     out.done(&ev)
                 }
                 EvalCmd::Results { id, model, page: p } => {
+                    let id = resolve_eval(&c, out, &id).await?;
                     let res = c.evals().results(&id, model.as_deref(), &page(&p)).await?;
                     out.table(
                         &["task", "model", "score", "passed"],
@@ -318,6 +326,7 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
                     page: p,
                 } => {
                     let threshold = in_range(threshold, "--threshold", 0.0, 1.0)?;
+                    let id = resolve_eval(&c, out, &id).await?;
                     let res = c
                         .evals()
                         .failures(&id, model.as_deref(), threshold, &page(&p))
@@ -339,6 +348,7 @@ pub async fn eval(ctx: &Ctx, top: EvalTop) -> CliResult {
                     out.done(&res)
                 }
                 EvalCmd::Cancel { id } => {
+                    let id = resolve_eval(&c, out, &id).await?;
                     let ev = c.evals().cancel(&id).await?;
                     out.line(format!("✓ Eval {} is {}", ev.id, ev.status));
                     out.done(&ev)

@@ -107,6 +107,14 @@ describe("list filters: an eval's status and an artifact's name", () => {
         );
       expect(await ids("/v1/evals?status=queued")).toEqual([created.body.id]);
       expect(await ids("/v1/evals?status=completed,failed")).toEqual([]);
+      const other = await h.t.json<{ id: string }>("/v1/evals", {
+        body: { models: ["qwen/qwen3-8b"], dataset: "qa", name: "weekly" },
+      });
+      expect(await ids("/v1/evals?q=NIGHT")).toEqual([created.body.id]);
+      expect(await ids(`/v1/evals?q=${other.body.id}`)).toEqual([
+        other.body.id,
+      ]);
+      expect(await ids("/v1/evals?q=night&status=completed")).toEqual([]);
 
       await seedArtifact(h.t, "support-sft");
       h.t.clock.advance(1000);

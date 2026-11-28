@@ -1352,6 +1352,8 @@ type ListEvalsParams struct {
 	Cursor *string
 	// Status Only these statuses, comma-separated: queued, running, awaiting_scores, completed, failed, cancelled.
 	Status *string
+	// Q Only items whose name contains this text (any case), or whose id is exactly this.
+	Q *string
 }
 
 // ListEvalsResponse is generated from the OpenAPI schema.

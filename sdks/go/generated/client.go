@@ -696,6 +696,9 @@ func (c *Client) ListEvals(ctx context.Context, params *ListEvalsParams, opts ..
 		if params.Status != nil {
 			q.Add("status", FormatScalar(*params.Status))
 		}
+		if params.Q != nil {
+			q.Add("q", FormatScalar(*params.Q))
+		}
 	}
 	spec := RequestSpec{Method: "GET", Path: "/v1/evals", Query: q}
 	var out ListEvalsResponse
