@@ -776,7 +776,10 @@ describe("run lifecycle and worker protocol", () => {
       error: "late",
       tokens_processed: 100_000,
     });
-    expect([late.status, late.body.code]).toEqual([409, "lease_lost"]);
+    expect([late.status, (late.body as { code?: string }).code]).toEqual([
+      409,
+      "lease_lost",
+    ]);
 
     // A resumed run gets a fresh attempt budget.
     await t.json(`/v1/runs/${run.id}/resume`, { method: "POST", body: {} });
@@ -834,6 +837,34 @@ describe("run lifecycle and worker protocol", () => {
     expect(await t.services.queue.expireLeases(t.clock.now())).toBe(0);
     t.deps.store.runs.getById = runRead;
     expect(await t.services.queue.expireLeases(t.clock.now())).toBe(1);
+  });
+
+  it("closes an expired lease and clears its worker's key in one commit", async () => {
+    const run = await createSftRun(t);
+    const job = (await worker.claim())!;
+    t.clock.advanceSeconds(120);
+    // The second write of the close fails: the first must not stand alone.
+    const update = t.deps.store.jobs.update;
+    t.deps.store.jobs.update = async (id, patch, expect) => {
+      if ("worker_key" in patch && patch.worker_key === null) {
+        throw new Error("connection lost");
+      }
+      return update(id, patch, expect);
+    };
+    expect(await t.services.queue.expireLeases(t.clock.now())).toBe(0);
+    t.deps.store.jobs.update = update;
+    expect((await t.json(`/v1/runs/${run.id}`)).body).toMatchObject({
+      status: "running",
+      attempt: 1,
+    });
+
+    expect(await t.services.queue.expireLeases(t.clock.now())).toBe(1);
+    // The stale worker's late /complete is lease_lost, not its old result.
+    const late = await worker.complete(job, { status: "failed", error: "x" });
+    expect([late.status, (late.body as { code?: string }).code]).toEqual([
+      409,
+      "lease_lost",
+    ]);
   });
 
   it("fences a worker write on the row its lease check read, not a later read", async () => {

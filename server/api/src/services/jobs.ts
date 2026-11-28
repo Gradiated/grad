@@ -420,22 +420,24 @@ export const createJobQueue = (
     let closed = 0;
     for (const job of await store.jobs.listExpiredLeases(now, 100)) {
       try {
-        await handlers[job.kind].onLeaseLost(
-          job,
-          {
-            ...fenceOf(job),
-            leaseExpiredBefore: leaseGraceCutoff(now, job.lease_seconds),
-          },
-          now,
-        );
-        // Closed without its worker: a late /complete from that worker is
-        // lease_lost, never answered as the result it already reported
-        // (closedBy matches the key that closed the attempt).
-        await store.jobs.update(
-          job.id,
-          { worker_key: null },
-          { attempt: job.attempt, workerId: null },
-        );
+        // One commit: the close, and the cleared key that makes a late
+        // /complete from that worker lease_lost, never answered as the result
+        // it already reported (closedBy matches the key that closed it).
+        await store.transaction(async () => {
+          await handlers[job.kind].onLeaseLost(
+            job,
+            {
+              ...fenceOf(job),
+              leaseExpiredBefore: leaseGraceCutoff(now, job.lease_seconds),
+            },
+            now,
+          );
+          await store.jobs.update(
+            job.id,
+            { worker_key: null },
+            { attempt: job.attempt, workerId: null },
+          );
+        });
         observeInterruption(job, "lease_lost");
         closed += 1;
       } catch (error) {
