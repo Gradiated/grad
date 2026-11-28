@@ -693,6 +693,8 @@ Use --plain or GRAD_NO_TUI=1 for line output.")]
         timeout: u64,
     },
     /// Print a run's lifecycle events (phases, metrics, checkpoints, attempts, warnings); --follow streams them
+    #[command(after_help = "Example:
+  grad runs events support-sft --follow")]
     Events {
         /// Run id or run name
         run: String,
@@ -720,6 +722,8 @@ Use --plain or GRAD_NO_TUI=1 for line output.")]
         latest: bool,
     },
     /// Resume a stopped, failed or cancelled run from its latest checkpoint
+    #[command(after_help = "Example (a run that stopped at its cap):
+  grad runs resume support-sft --max-cost-usd 40 --wait")]
     Resume {
         /// Run id or run name (a name must match one resumable run)
         run: String,
@@ -739,6 +743,8 @@ Use --plain or GRAD_NO_TUI=1 for line output.")]
         run: String,
     },
     /// Promote a checkpoint into a new immutable artifact
+    #[command(after_help = "Example (pick a checkpoint id from `grad runs checkpoints RUN`):
+  grad runs promote ckpt_3f9c0a1b2c3d4e5f60718293 --name support-sft-step-400")]
     Promote {
         /// Checkpoint id
         checkpoint: String,
@@ -899,6 +905,8 @@ pub enum EvalCmd {
         page: PageArgs,
     },
     /// Failing tasks, for mining into a new dataset
+    #[command(after_help = "Example:
+  grad eval failures EVAL_ID --threshold 0.8 --json")]
     Failures {
         /// Eval id
         id: String,
@@ -1054,6 +1062,9 @@ sources:read, sources:write")]
 #[derive(Subcommand, Debug)]
 pub enum SecretsCmd {
     /// Create or replace a secret; the value is read from stdin
+    #[command(after_help = "Examples:
+  grad secrets set langfuse < langfuse-key.txt
+  printf '%s' \"$HF_TOKEN\" | grad secrets set hf-token --allowed-host huggingface.co")]
     Set {
         /// Secret name (lowercase letters, digits, '.', '_', '-')
         name: String,
@@ -1077,6 +1088,10 @@ pub enum SecretsCmd {
 #[derive(Subcommand, Debug)]
 pub enum SourcesCmd {
     /// Connect a provider to a dataset
+    #[command(after_help = "Example:
+  grad secrets set langfuse < langfuse-key.txt
+  grad sources add langfuse --dataset support-prod --secret langfuse \\
+    --filter environment=production --schedule '*/15 * * * *'")]
     Add {
         /// langfuse, langsmith, braintrust, posthog, phoenix or gradiated
         provider: String,
@@ -1113,6 +1128,8 @@ pub enum SourcesCmd {
         id: String,
     },
     /// Change a source's filters, sampling, caps or schedule (from its next sync)
+    #[command(after_help = "Example:
+  grad sources update SOURCE_ID --sample-rate 0.5 --max-records-per-day 10000")]
     Update {
         /// Source id
         id: String,
